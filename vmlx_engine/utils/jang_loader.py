@@ -13,7 +13,6 @@ import gc
 import importlib
 import json
 import logging
-import os
 import shutil
 import struct
 import sys
@@ -72,249 +71,6 @@ def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int
         return int(quant["bits"])
     bit_widths = quant.get("bit_widths_used", fallback or [4])
     return int(min(bit_widths))
-
-
-def _dequantize_gemma4_ple_tensor(
-    weight: mx.array,
-    scales: mx.array,
-    biases: mx.array | None,
-    weight_key: str,
-) -> tuple[mx.array, int, int, str]:
-    """Dequantize Gemma4 per-layer input projection tensors.
-
-    Gemma4 E2B/E4B QAT/native MXFP4 bundles store the PLE Linear as packed
-    uint32 weights plus UE8M0 uint8 scales. This is not affine quantization:
-    passing those scales through the affine mx.dequantize path either fails or,
-    on older runtimes, leaves garbage-producing uint32 weights in a plain
-    nn.Linear. Detect the MXFP shape contract explicitly and use MLX's native
-    MXFP dequant mode.
-    """
-
-    if scales.dtype == mx.uint8:
-        w_cols = int(weight.shape[-1])
-        s_cols = int(scales.shape[-1])
-        if s_cols * 32 == w_cols * 8:
-            dequantized = mx.dequantize(
-                weight,
-                scales,
-                None,
-                group_size=32,
-                bits=4,
-                mode="mxfp4",
-                dtype=mx.float16,
-            )
-            return dequantized, 4, 32, "mxfp4"
-        if s_cols * 32 == w_cols * 4:
-            dequantized = mx.dequantize(
-                weight,
-                scales,
-                None,
-                group_size=32,
-                bits=8,
-                mode="mxfp8",
-                dtype=mx.float16,
-            )
-            return dequantized, 8, 32, "mxfp8"
-        raise RuntimeError(
-            f"jang_loader Gemma4 PLE dequant: unsupported MXFP shape for "
-            f"{weight_key} (shape={weight.shape}, scales={scales.shape}, "
-            f"scale_dtype={scales.dtype})"
-        )
-
-    affine_biases = biases if biases is not None else mx.zeros_like(scales)
-    for try_bits in (8, 6, 4, 3, 2):
-        elem = 32 // try_bits
-        real_cols = int(weight.shape[-1]) * elem
-        if int(scales.shape[-1]) == 0:
-            continue
-        group_size = real_cols // int(scales.shape[-1])
-        if group_size >= 2 and group_size * int(scales.shape[-1]) == real_cols:
-            try:
-                dequantized = mx.dequantize(
-                    weight,
-                    scales,
-                    affine_biases,
-                    group_size=group_size,
-                    bits=try_bits,
-                    dtype=mx.float16,
-                )
-                return dequantized, try_bits, group_size, "affine"
-            except Exception:
-                continue
-
-    raise RuntimeError(
-        f"jang_loader Gemma4 PLE dequant: failed to find a valid bit-width for "
-        f"{weight_key} (shape={weight.shape}, scales={scales.shape}). Tried "
-        f"bits=[8,6,4,3,2]. Without dequant, forward pass produces garbage "
-        f"output (#52). Please verify the JANG file integrity and quant format."
-    )
-
-
-def _resolve_module_for_weight_key(model: Any, weight_key: str) -> Any | None:
-    if not weight_key.endswith(".weight"):
-        return None
-    module_path = weight_key[: -len(".weight")]
-    try:
-        return dict(model.named_modules()).get(module_path)
-    except Exception:
-        return None
-
-
-def _configure_gemma4_quantized_ple_module(
-    model: Any,
-    weight_key: str,
-    weight: mx.array,
-    scales: mx.array,
-) -> tuple[bool, int | None, int | None, str | None]:
-    """Keep native MXFP Gemma4 PLE tensors packed for quantized modules."""
-    module = _resolve_module_for_weight_key(model, weight_key)
-    if module is None:
-        return False, None, None, None
-    if not (hasattr(module, "bits") and hasattr(module, "group_size")):
-        return False, None, None, None
-    if weight.dtype != mx.uint32 or scales.dtype != mx.uint8:
-        return False, None, None, None
-
-    w_cols = int(weight.shape[-1])
-    s_cols = int(scales.shape[-1])
-    if s_cols * 32 == w_cols * 8:
-        mode, bits, group_size = "mxfp4", 4, 32
-    elif s_cols * 32 == w_cols * 4:
-        mode, bits, group_size = "mxfp8", 8, 32
-    else:
-        return False, None, None, None
-
-    module.mode = mode
-    module.bits = bits
-    module.group_size = group_size
-    if hasattr(module, "biases"):
-        try:
-            del module.biases
-        except Exception:
-            module.biases = None
-    return True, bits, group_size, mode
-
-
-def _split_dequantize_gemma4_moe_mxfp_experts(
-    weights: dict[str, mx.array],
-) -> dict[str, mx.array]:
-    """Map Gemma4 fused native-MXFP expert tensors onto SwitchGLU weights.
-
-    Gemma4 A4B QAT bundles store MoE experts as packed native-MXFP tensors:
-    ``experts.gate_up_proj`` contains fused gate/up rows and
-    ``experts.down_proj`` contains down rows. The mlx-vlm runtime exposes plain
-    float ``experts.switch_glu.{gate,up,down}_proj`` SwitchLinear modules, so
-    leaving the packed keys in the shard means they are ignored under
-    ``strict=False`` and the model runs with random expert weights.
-    """
-    out = dict(weights)
-    for key in list(weights):
-        if not key.endswith(".weight"):
-            continue
-        if ".experts.gate_up_proj." not in key and ".experts.down_proj." not in key:
-            continue
-        weight = weights[key]
-        if weight.dtype != mx.uint32:
-            continue
-        base = key[: -len(".weight")]
-        scales_key = f"{base}.scales"
-        scales = weights.get(scales_key)
-        if scales is None or scales.dtype != mx.uint8:
-            continue
-
-        dequantized, bits, group_size, mode = _dequantize_gemma4_ple_tensor(
-            weight,
-            scales,
-            None,
-            key,
-        )
-        if mode not in {"mxfp4", "mxfp8"} or bits not in {4, 8} or group_size != 32:
-            continue
-        mx.eval(dequantized)
-
-        if ".experts.gate_up_proj." in key:
-            mid = int(dequantized.shape[-2]) // 2
-            gate = dequantized[..., :mid, :].astype(mx.float16)
-            up = dequantized[..., mid:, :].astype(mx.float16)
-            gate_base = base.replace(
-                ".experts.gate_up_proj", ".experts.switch_glu.gate_proj"
-            )
-            up_base = base.replace(
-                ".experts.gate_up_proj", ".experts.switch_glu.up_proj"
-            )
-            out[f"{gate_base}.weight"] = gate
-            out[f"{up_base}.weight"] = up
-        else:
-            down_base = base.replace(
-                ".experts.down_proj", ".experts.switch_glu.down_proj"
-            )
-            out[f"{down_base}.weight"] = dequantized.astype(mx.float16)
-
-        out.pop(key, None)
-        out.pop(scales_key, None)
-        out.pop(f"{base}.biases", None)
-    return out
-
-
-def _hydrate_gemma4_moe_mxfp_cross_shard_sidecars(
-    weights: dict[str, mx.array],
-    model_path: Path,
-    weight_map: dict[str, str] | None,
-) -> dict[str, mx.array]:
-    """Add missing Gemma4 MoE MXFP sidecars when index split them across shards.
-
-    The Gemma4 26B-A4B QAT/native-MXFP4 bundle can place
-    ``experts.*.weight`` in one safetensor and its ``.scales`` sidecar in the
-    next safetensor. The loader processes shards one at a time; without this
-    hydration, ``_split_dequantize_gemma4_moe_mxfp_experts`` skips that expert
-    tensor, the packed key is ignored by ``strict=False`` load, and the runtime
-    keeps random SwitchGLU expert weights.
-    """
-    if not weight_map:
-        return weights
-
-    hydrated = dict(weights)
-    loaded_sidecar_shards: dict[str, dict[str, mx.array]] = {}
-    for key, value in list(weights.items()):
-        if not key.endswith(".weight"):
-            continue
-        if value.dtype != mx.uint32:
-            continue
-        if ".experts.gate_up_proj." not in key and ".experts.down_proj." not in key:
-            continue
-
-        base = key[: -len(".weight")]
-        scales_key = f"{base}.scales"
-        if scales_key in hydrated:
-            continue
-        sidecar_name = weight_map.get(scales_key)
-        if not sidecar_name:
-            continue
-        sidecar_tensors = loaded_sidecar_shards.get(sidecar_name)
-        if sidecar_tensors is None:
-            sidecar_path = model_path / sidecar_name
-            if not sidecar_path.exists():
-                continue
-            sidecar_tensors = mx.load(str(sidecar_path))
-            loaded_sidecar_shards[sidecar_name] = sidecar_tensors
-        sidecar = sidecar_tensors.get(scales_key)
-        if sidecar is not None:
-            hydrated[scales_key] = sidecar
-
-        biases_key = f"{base}.biases"
-        if biases_key not in hydrated:
-            biases_name = weight_map.get(biases_key)
-            if biases_name:
-                bias_tensors = loaded_sidecar_shards.get(biases_name)
-                if bias_tensors is None:
-                    bias_path = model_path / biases_name
-                    if bias_path.exists():
-                        bias_tensors = mx.load(str(bias_path))
-                        loaded_sidecar_shards[biases_name] = bias_tensors
-                if bias_tensors is not None and biases_key in bias_tensors:
-                    hydrated[biases_key] = bias_tensors[biases_key]
-
-    return hydrated
 
 
 def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -> dict:
@@ -544,12 +300,11 @@ def _warmup_jangtq_vlm_language_prefill(model: Any, *, log_prefix: str = "  ") -
     cache = make_prompt_cache(lm)
     tiny_ids = mx.zeros((1, 16), dtype=mx.int32)
     calls = (
-        lambda: lm(input_ids=tiny_ids, cache=cache),
-        lambda: lm(tiny_ids, cache=cache),
         lambda: lm(inputs=tiny_ids, cache=cache),
+        lambda: lm(tiny_ids, cache=cache),
         lambda: lm(tiny_ids),
     )
-    last_signature_error = None
+    last_type_error = None
     for call in calls:
         try:
             out = call()
@@ -560,162 +315,12 @@ def _warmup_jangtq_vlm_language_prefill(model: Any, *, log_prefix: str = "  ") -
             mx.synchronize()
             logger.info("%sJANGTQ VLM full-model 16-token prefill warmup complete", log_prefix)
             return
-        except (TypeError, ValueError) as exc:
-            message = str(exc)
-            if not (
-                isinstance(exc, TypeError)
-                or "Specify input_ids or inputs_embeds" in message
-            ):
-                raise
-            last_signature_error = exc
+        except TypeError as exc:
+            last_type_error = exc
             continue
-    if last_signature_error is not None:
-        raise last_signature_error
+    if last_type_error is not None:
+        raise last_type_error
     raise RuntimeError("no JANGTQ VLM warmup call variant executed")
-
-
-def _object_has_mimo_v2_model_type(obj: Any) -> bool:
-    """Return true when a model/config-like object advertises MiMo V2."""
-    seen: set[int] = set()
-    queue = [obj]
-    while queue:
-        current = queue.pop(0)
-        if current is None:
-            continue
-        obj_id = id(current)
-        if obj_id in seen:
-            continue
-        seen.add(obj_id)
-        for key in ("model_type", "model_family", "family"):
-            value = getattr(current, key, None)
-            if isinstance(current, dict):
-                value = current.get(key, value)
-            if str(value or "").lower() == "mimo_v2":
-                return True
-        for key in ("config", "args", "text_config", "model", "language_model"):
-            try:
-                child = current.get(key) if isinstance(current, dict) else getattr(current, key, None)
-            except Exception:
-                child = None
-            if child is not None:
-                queue.append(child)
-    return False
-
-
-def _run_mimo_jangtq_input_ids_prefill_warmup(
-    kimi_module: Any,
-    model: Any,
-    *,
-    verbose: bool = True,
-    log_prefix: str = "  ",
-) -> bool:
-    """Warm MiMo JANGTQ full-model prefill with the signature MiMo expects."""
-    from mlx_lm.models.cache import make_prompt_cache
-
-    lm = getattr(model, "language_model", None) or model
-    warmup_tokens_fn = getattr(kimi_module, "_warmup_prefill_tokens", None)
-    materialize = getattr(kimi_module, "_materialize", None)
-    if not callable(materialize):
-        materialize = mx.eval
-    try:
-        warmup_n = int(warmup_tokens_fn(model, lm)) if callable(warmup_tokens_fn) else 16
-    except Exception:
-        warmup_n = 16
-    warmup_n = max(1, min(warmup_n, 512))
-
-    cache_for_warm = make_prompt_cache(lm)
-    tiny_ids = mx.zeros((1, warmup_n), dtype=mx.int32)
-    call_variants = (
-        lambda: lm(input_ids=tiny_ids, cache=cache_for_warm),
-        lambda: lm(tiny_ids, cache=cache_for_warm),
-        lambda: lm(inputs=tiny_ids, cache=cache_for_warm),
-        lambda: lm(tiny_ids),
-    )
-    last_signature_error: Exception | None = None
-    for call in call_variants:
-        try:
-            out = call()
-            materialize(out.logits if hasattr(out, "logits") else out)
-            mx.synchronize()
-            logger.info(
-                "%svMLX MiMo JANGTQ full-model %s-token input_ids prefill warmup complete",
-                log_prefix,
-                warmup_n,
-            )
-            if verbose:
-                print(
-                    f"{log_prefix}[warmup] vMLX MiMo full-model "
-                    f"{warmup_n}-token input_ids prefill ok",
-                    flush=True,
-                )
-            return True
-        except (TypeError, ValueError) as exc:
-            message = str(exc)
-            if not (
-                isinstance(exc, TypeError)
-                or "Specify input_ids or inputs_embeds" in message
-            ):
-                raise
-            last_signature_error = exc
-            continue
-
-    if verbose and last_signature_error is not None:
-        print(
-            f"{log_prefix}[warmup] vMLX MiMo input_ids prefill skipped: "
-            f"{last_signature_error!r}",
-            flush=True,
-        )
-    return False
-
-
-def _patch_jangtq_kimi_mimo_input_ids_warmup(*, log_prefix: str = "  ") -> bool:
-    """Install a vMLX patch over jang_tools' MiMo full-model warmup handoff."""
-    try:
-        import jang_tools.load_jangtq_kimi_vlm as kimi_module
-    except Exception as exc:
-        logger.debug("%sJANGTQ MiMo warmup patch unavailable: %s", log_prefix, exc)
-        return False
-
-    original = getattr(kimi_module, "_warmup_jit_per_layer", None)
-    if not callable(original):
-        return False
-    if getattr(original, "_vmlx_mimo_input_ids_warmup_patch", False):
-        return True
-
-    def _vmlx_warmup_jit_per_layer(model: Any, *args: Any, **kwargs: Any) -> Any:
-        if not _object_has_mimo_v2_model_type(model):
-            return original(model, *args, **kwargs)
-        verbose = True
-        if args:
-            verbose = bool(args[0])
-        if "verbose" in kwargs:
-            verbose = bool(kwargs["verbose"])
-        if args:
-            original_args = (False, *args[1:])
-            original_kwargs = dict(kwargs)
-        else:
-            original_args = ()
-            original_kwargs = {**kwargs, "verbose": False}
-        result = original(model, *original_args, **original_kwargs)
-        try:
-            _run_mimo_jangtq_input_ids_prefill_warmup(
-                kimi_module,
-                model,
-                verbose=verbose,
-                log_prefix=log_prefix,
-            )
-        except Exception as exc:
-            logger.warning(
-                "%svMLX MiMo JANGTQ input_ids warmup skipped: %s",
-                log_prefix,
-                exc,
-            )
-        return result
-
-    _vmlx_warmup_jit_per_layer._vmlx_mimo_input_ids_warmup_patch = True
-    _vmlx_warmup_jit_per_layer._vmlx_original = original
-    kimi_module._warmup_jit_per_layer = _vmlx_warmup_jit_per_layer
-    return True
 
 
 def _supported_routed_group_size(
@@ -738,6 +343,226 @@ def _supported_routed_group_size(
         default_group_size,
     )
     return default_group_size
+
+
+def _split_gemma4_moe_quantized_expert_sidecars(
+    weights: dict[str, mx.array],
+) -> dict[str, mx.array]:
+    """Map Gemma4 fused quantized expert sidecars onto SwitchGLU sidecars.
+
+    Gemma4 A4B QAT bundles store MoE experts as quantized sidecars:
+    ``experts.gate_up_proj.{weight,scales,biases}`` contains fused gate/up rows
+    and ``experts.down_proj.{weight,scales,biases}`` contains down rows. Split
+    along the output axis and keep the last/input axis untouched so affine and
+    native-MXFP groups stay packed exactly as stored.
+    """
+    out = dict(weights)
+    for key in list(weights):
+        for suffix in (".weight", ".scales", ".biases"):
+            gate_marker = f".experts.gate_up_proj{suffix}"
+            if key.endswith(gate_marker):
+                value = weights[key]
+                if value.shape[-2] % 2:
+                    raise ValueError(
+                        f"Cannot split fused Gemma4 expert sidecar {key}: "
+                        f"output dimension {value.shape[-2]} is not even"
+                    )
+                base = key[: -len(gate_marker)]
+                gate, up = mx.split(value, 2, axis=-2)
+                out[
+                    f"{base}.experts.switch_glu.gate_proj{suffix}"
+                ] = mx.contiguous(gate)
+                out[f"{base}.experts.switch_glu.up_proj{suffix}"] = mx.contiguous(up)
+                out.pop(key, None)
+                break
+
+            down_marker = f".experts.down_proj{suffix}"
+            if key.endswith(down_marker):
+                base = key[: -len(down_marker)]
+                out[f"{base}.experts.switch_glu.down_proj{suffix}"] = weights[key]
+                out.pop(key, None)
+                break
+    return out
+
+
+_split_dequantize_gemma4_moe_mxfp_experts = (
+    _split_gemma4_moe_quantized_expert_sidecars
+)
+
+
+def _gemma_ple_config_state(config: dict) -> tuple[bool, bool]:
+    """Return ``(is_gemma_ple_family, has_ple_module)`` for Gemma PLE tensors."""
+    text_mt = str(config.get("text_config", {}).get("model_type", "")).lower()
+    model_mt = str(config.get("model_type", "")).lower()
+    text_cfg = config.get("text_config", config)
+    eligible = {
+        "gemma4_text",
+        "gemma3n",
+        "gemma3n_text",
+        "gemma4",
+        "gemma4_unified",
+        "gemma4_unified_text",
+    }
+    return (
+        text_mt in eligible or model_mt in eligible,
+        bool(text_cfg.get("hidden_size_per_layer_input")),
+    )
+
+
+def _dequantize_gemma_ple_weight(
+    weight: mx.array,
+    scales: mx.array,
+    biases: mx.array | None,
+    *,
+    quant_mode: str,
+    key: str,
+) -> tuple[mx.array, str, int, int]:
+    """Materialize Gemma PLE weights that cannot stay in QuantizedLinear form."""
+    mode = str(quant_mode or "affine").lower()
+    candidates: list[tuple[str, int]] = []
+    if mode in {"mxfp4", "mxfp8"} and scales.dtype == mx.uint8:
+        candidates.append((mode, 4 if mode == "mxfp4" else 8))
+    candidates.extend(("affine", bits) for bits in (8, 6, 4, 3, 2))
+
+    tried: list[str] = []
+    for candidate_mode, bits in candidates:
+        if bits <= 0 or 32 % bits:
+            continue
+        elems_per_u32 = 32 // bits
+        real_cols = weight.shape[-1] * elems_per_u32
+        if scales.shape[-1] == 0:
+            continue
+        group_size = real_cols // scales.shape[-1]
+        if group_size < 2 or group_size * scales.shape[-1] != real_cols:
+            continue
+        tried.append(f"{candidate_mode}:bits={bits}:gs={group_size}")
+        try:
+            if candidate_mode in {"mxfp4", "mxfp8"}:
+                dq = mx.dequantize(
+                    weight,
+                    scales,
+                    None,
+                    group_size=group_size,
+                    bits=bits,
+                    mode=candidate_mode,
+                    dtype=mx.float16,
+                )
+            else:
+                dq = mx.dequantize(
+                    weight,
+                    scales,
+                    biases if biases is not None else mx.zeros_like(scales),
+                    group_size=group_size,
+                    bits=bits,
+                )
+            mx.eval(dq)
+            return dq.astype(mx.float16), candidate_mode, bits, group_size
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"jang_loader Gemma4 PLE dequant: failed to decode {key} "
+        f"(shape={weight.shape}, scales={scales.shape}, scales_dtype={scales.dtype}, "
+        f"quant_mode={mode}). Tried {tried or '[no shape-valid candidates]'}. "
+        "Without dequant, forward pass produces garbage output (#52). Please "
+        "verify the JANG file integrity and quant format."
+    )
+
+
+def _prepare_gemma_ple_shard_weights(
+    shard_weights: dict[str, mx.array],
+    config: dict,
+    *,
+    quant_mode: str,
+    quantized_module_paths: set[str] | None = None,
+    pending: dict[str, dict[str, mx.array]] | None = None,
+) -> dict[str, dict[str, mx.array]]:
+    """Drop or materialize Gemma PLE sidecars before ``model.load_weights``.
+
+    Gemma 3n/4 PLE modules are ``nn.Linear`` / ``nn.Embedding`` rather than
+    regular quantized linears. QAT/MXFP bundles can store their sidecars across
+    shard boundaries, so a per-shard loader must hold incomplete pairs until
+    both ``weight`` and ``scales`` are available.
+    """
+    pending = pending if pending is not None else {}
+    quantized_module_paths = quantized_module_paths or set()
+    is_gemma_ple_family, has_ple_module = _gemma_ple_config_state(config)
+    if not is_gemma_ple_family:
+        return pending
+
+    ple_prefixes = tuple(
+        f"{root}.{name}"
+        for name in ("per_layer_model_projection", "embed_tokens_per_layer")
+        for root in ("language_model.model", "model.language_model")
+    )
+
+    if not has_ple_module:
+        for prefix in ple_prefixes:
+            pending.pop(prefix, None)
+            for suffix in (".weight", ".scales", ".biases"):
+                key = prefix + suffix
+                if key in shard_weights:
+                    del shard_weights[key]
+                    logger.info(
+                        "  Dropped orphan Gemma PLE key (model has no PLE "
+                        "module due to hidden_size_per_layer_input=0): %s",
+                        key,
+                    )
+        return pending
+
+    for prefix in ple_prefixes:
+        if prefix in quantized_module_paths:
+            # Current MLX has QuantizedLinear / QuantizedEmbedding support for
+            # these PLE modules. In that case the correct representation is the
+            # native sidecar triplet loaded across shards, not an fp16 tensor
+            # stuffed into a quantized module's packed-weight slot.
+            continue
+
+        parts = pending.pop(prefix, {})
+        keys = {
+            "weight": f"{prefix}.weight",
+            "scales": f"{prefix}.scales",
+            "biases": f"{prefix}.biases",
+        }
+        for part_name, key in keys.items():
+            if key in shard_weights:
+                parts[part_name] = shard_weights.pop(key)
+
+        if not parts:
+            continue
+
+        weight = parts.get("weight")
+        if weight is None:
+            pending[prefix] = parts
+            continue
+
+        weight_key = keys["weight"]
+        if getattr(weight, "dtype", None) != mx.uint32:
+            shard_weights[weight_key] = weight
+            continue
+
+        scales = parts.get("scales")
+        if scales is None:
+            pending[prefix] = parts
+            continue
+
+        dq, used_mode, bits, group_size = _dequantize_gemma_ple_weight(
+            weight,
+            scales,
+            parts.get("biases"),
+            quant_mode=quant_mode,
+            key=weight_key,
+        )
+        shard_weights[weight_key] = dq
+        logger.info(
+            "  Dequantized Gemma4 PLE: %s (mode=%s, bits=%s, gs=%s)",
+            weight_key,
+            used_mode,
+            bits,
+            group_size,
+        )
+
+    return pending
 
 
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
@@ -785,32 +610,46 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
                     candidates.add(text_backbone_path.replace(src, dst, 1))
                 if src in raw:
                     candidates.add(raw.replace(src, dst, 1))
+
+    # Gemma4 26B-A4B stores routed experts in fused gate_up/down sidecar keys
+    # while runtime modules are split SwitchGLU gate/up/down projections. The
+    # quantizer predicate sees the runtime module path; include fused on-disk
+    # aliases so `.experts.gate_up_proj.scales` quantizes both split modules.
+    for cand in list(candidates):
+        if ".experts.switch_glu.gate_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.gate_proj", ".experts.gate_up_proj", 1
+                )
+            )
+        if ".experts.switch_glu.up_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.up_proj", ".experts.gate_up_proj", 1
+                )
+            )
+        if ".experts.switch_glu.down_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.down_proj", ".experts.down_proj", 1
+                )
+            )
     return candidates
-
-
-def _weight_targets_quantized_module(model: Any, weight_key: str) -> bool:
-    """Return true when a weight key targets an already-quantized module."""
-    if not weight_key.endswith(".weight"):
-        return False
-    module_path = weight_key[: -len(".weight")]
-    try:
-        modules = dict(model.named_modules())
-    except Exception:
-        return False
-    module = modules.get(module_path)
-    if module is None:
-        return False
-    return hasattr(module, "bits") and hasattr(module, "group_size")
 
 
 def _should_dequantize_vlm_gate_weight(model: Any, weight_key: str) -> bool:
     """Return false when a gate weight targets an already-quantized module."""
-    return not _weight_targets_quantized_module(model, weight_key)
-
-
-def _should_dequantize_gemma_ple_weight(model: Any, weight_key: str) -> bool:
-    """Return false when a Gemma PLE weight targets a quantized module."""
-    return not _weight_targets_quantized_module(model, weight_key)
+    if not weight_key.endswith(".weight"):
+        return True
+    module_path = weight_key[: -len(".weight")]
+    try:
+        modules = dict(model.named_modules())
+    except Exception:
+        return True
+    module = modules.get(module_path)
+    if module is None:
+        return True
+    return not (hasattr(module, "bits") and hasattr(module, "group_size"))
 
 
 def _prepare_gate_dequant_weights(
@@ -918,6 +757,104 @@ def _normalize_step3p7_model_type(config: dict) -> None:
             "Step-3.7 nested text_config.model_type detected; normalizing "
             "text-runtime dispatch to step3p5."
         )
+
+
+def _normalize_gemma4_config_scalar_types(config: dict) -> None:
+    """Normalize real Gemma4 artifact scalar JSON types before typed configs.
+
+    Some Gemma4 JANG artifacts stamp integer-valued floats in config.json
+    (for example final_logit_softcapping=30). Upstream mlx-vlm/mlx-lm typed
+    config constructors reject those ints even though the semantic value is a
+    float. Normalize in-memory only; never mutate the model artifact.
+    """
+    if not isinstance(config, dict):
+        return
+
+    model_types = {
+        str(config.get("model_type") or "").lower(),
+        str((config.get("text_config") or {}).get("model_type") or "").lower()
+        if isinstance(config.get("text_config"), dict)
+        else "",
+    }
+    if not any(mt.startswith("gemma4") for mt in model_types):
+        return
+
+    changed = False
+    for section in (config, config.get("text_config")):
+        if not isinstance(section, dict):
+            continue
+        value = section.get("final_logit_softcapping")
+        if type(value) is int:
+            section["final_logit_softcapping"] = float(value)
+            changed = True
+
+    if changed:
+        logger.info(
+            "  Gemma4 config scalar normalization: "
+            "final_logit_softcapping int -> float"
+        )
+
+
+def _prepare_gemma4_processor_model_path(path: Path) -> tuple[Path, Any | None]:
+    """Return a processor-load path whose config.json satisfies HF strict types.
+
+    Gemma4 Unified processors call Transformers AutoProcessor/AutoTokenizer,
+    which rereads config.json independently of the JANG model loader. Some
+    local JANG_4M artifacts stamp integer-valued float fields, so model load can
+    succeed while processor load fails inside Transformers strict dataclasses.
+
+    Keep the real model bundle immutable: create a temporary directory with
+    symlinks to the original files and a normalized config.json. The caller must
+    keep the returned TemporaryDirectory object alive for as long as the loaded
+    processor might reference local paths.
+    """
+    config_path = path / "config.json"
+    if not config_path.exists():
+        return path, None
+
+    try:
+        config = json.loads(config_path.read_text())
+    except Exception:
+        return path, None
+
+    text_config = config.get("text_config") if isinstance(config, dict) else None
+    model_types = {
+        str(config.get("model_type") or "").lower() if isinstance(config, dict) else "",
+        str((text_config or {}).get("model_type") or "").lower()
+        if isinstance(text_config, dict)
+        else "",
+    }
+    if not any(mt.startswith("gemma4") for mt in model_types):
+        return path, None
+
+    needs_normalization = False
+    for section in (config, text_config):
+        if (
+            isinstance(section, dict)
+            and type(section.get("final_logit_softcapping")) is int
+        ):
+            needs_normalization = True
+            break
+    if not needs_normalization:
+        return path, None
+
+    _normalize_gemma4_config_scalar_types(config)
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="vmlx-gemma4-processor-")
+    temp_path = Path(temp_dir.name)
+    for child in path.iterdir():
+        if child.name == "config.json":
+            continue
+        (temp_path / child.name).symlink_to(
+            child,
+            target_is_directory=child.is_dir(),
+        )
+    (temp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    logger.info(
+        "  Gemma4 processor config normalization: using temporary typed "
+        "config path for AutoProcessor"
+    )
+    return temp_path, temp_dir
 
 
 def _remap_step3p7_moe_weights(
@@ -1150,6 +1087,7 @@ def _load_jang_vlm_processor(path: Path, model):
     """Load a VLM processor while preserving local model-family overrides."""
     from mlx_vlm.utils import load_image_processor, load_processor
 
+    processor_path, processor_temp_dir = _prepare_gemma4_processor_model_path(path)
     eos_token_ids = _resolve_vlm_processor_eos_token_ids(path, model)
     eos_token_id = (
         eos_token_ids
@@ -1163,18 +1101,24 @@ def _load_jang_vlm_processor(path: Path, model):
     if model_type == "step3p7":
         return _build_step3p7_vlm_processor(path, eos_token_id=eos_token_id)
 
-    image_processor = load_image_processor(path)
+    image_processor = load_image_processor(processor_path)
 
     if model_type == "zaya1_vl":
-        processor = _build_vlm_processor(path, eos_token_id)
+        processor = _build_vlm_processor(processor_path, eos_token_id)
     else:
         try:
-            processor = load_processor(path, True, eos_token_ids=eos_token_id)
+            processor = load_processor(
+                processor_path,
+                True,
+                eos_token_ids=eos_token_id,
+            )
         except (ImportError, ValueError):
-            processor = _build_vlm_processor(path, eos_token_id)
+            processor = _build_vlm_processor(processor_path, eos_token_id)
 
     if image_processor is not None:
         processor.image_processor = image_processor
+    if processor_temp_dir is not None:
+        processor._vmlx_processor_config_temp_dir = processor_temp_dir
 
     try:
         from jang_tools.load_jangtq_vlm import _install_video_fallback
@@ -1222,43 +1166,6 @@ def _sanitize_qwen3_next_conv1d_layout(weights: dict) -> dict:
     return _sanitize_grouped_conv1d_layout(weights)
 
 
-def _bytes_gib(value: int) -> float:
-    return float(value) / float(1024**3)
-
-
-def _wired_limit_plan_for_model(
-    total_bytes: int,
-    max_working_set_bytes: int | None = None,
-) -> dict[str, Any]:
-    # Headroom = max(16 GiB, 30% of model size). The previous 8 GiB was tight
-    # on big MoE bundles; this requested headroom is still capped by MLX/Metal.
-    requested_headroom = max(16 * 1024**3, int(total_bytes * 0.30))
-    requested_target = total_bytes + requested_headroom
-    capped_by_ws = bool(max_working_set_bytes and requested_target > max_working_set_bytes)
-    target = int(max_working_set_bytes) if capped_by_ws else requested_target
-    actual_headroom = max(0, target - total_bytes)
-    tight_headroom = actual_headroom < 4 * 1024**3
-    message = (
-        "Wired limit target="
-        f"{_bytes_gib(target):.2f} GiB "
-        f"(model={_bytes_gib(total_bytes):.2f} GiB, "
-        f"requested_headroom={_bytes_gib(requested_headroom):.2f} GiB, "
-        f"headroom={_bytes_gib(actual_headroom):.2f} GiB, "
-        f"capped_by_metal_ws={str(capped_by_ws).lower()})"
-    )
-    return {
-        "target_bytes": target,
-        "total_bytes": total_bytes,
-        "requested_target_bytes": requested_target,
-        "requested_headroom_bytes": requested_headroom,
-        "headroom_bytes": actual_headroom,
-        "max_working_set_bytes": int(max_working_set_bytes or 0),
-        "capped_by_working_set": capped_by_ws,
-        "tight_headroom": tight_headroom,
-        "message": message,
-    }
-
-
 def _set_wired_limit_for_model(weight_files):
     """Raise MLX wired memory limit to fit model + headroom.
 
@@ -1275,26 +1182,29 @@ def _set_wired_limit_for_model(weight_files):
     """
     try:
         total_bytes = sum(sf.stat().st_size for sf in weight_files)
-        max_ws = 0
+        # Headroom = max(16 GB, 30% of model size). The previous 8 GB
+        # was tight on big MoE bundles (MiniMax 38 GB JANGTQ2, etc.):
+        # routed-expert dequant + KV cache + Metal scratch could spike
+        # past 8 GB on first inference and the kernel SIGKILLed the
+        # process. 30%-of-model is plenty for dense models too and stays
+        # under max_recommended_working_set on M-series with ≥96 GB.
+        headroom = max(16 * 1024 * 1024 * 1024, int(total_bytes * 0.30))
+        target = total_bytes + headroom
+        # Cap at OS max working set (sysctl iogpu.wired_limit_mb)
         try:
             _, max_ws = get_effective_metal_working_set_bytes(mx)
+            if max_ws and target > max_ws:
+                target = max_ws
         except Exception:
             pass
-        plan = _wired_limit_plan_for_model(total_bytes, max_ws)
-        target = int(plan["target_bytes"])
         if hasattr(mx, "set_wired_limit"):
             mx.set_wired_limit(target)
         else:
             mx.metal.set_wired_limit(target)
-        if plan["tight_headroom"]:
-            logger.warning(
-                "  %s — tight Metal headroom; large prompt/cache/scratch "
-                "spikes may OOM unless the OS wired limit is raised or the "
-                "artifact/runtime materialization footprint is reduced.",
-                plan["message"],
-            )
-        else:
-            logger.info("  %s", plan["message"])
+        logger.info(
+            f"  Wired limit set to {target / 1e9:.0f} GB "
+            f"(model {total_bytes / 1e9:.0f} GB)"
+        )
     except Exception as e:
         logger.warning(f"  Could not set wired limit: {e}")
 
@@ -1500,7 +1410,7 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
             path=path,
             family="Hy3/hy_v3",
             remediation=(
-                "Install jang>=2.5.30 or bundle the current local "
+                "Install jang>=2.5.29 or bundle the current local "
                 "~/jang/jang-tools checkout"
             ),
         )
@@ -1510,7 +1420,7 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
             family="Hy3/hy_v3",
             remediation=(
                 "Importing jang_tools.hy3 must register mlx_lm.models.hy_v3; "
-                "use jang>=2.5.30 and do not strip the hy3 runtime from the bundle"
+                "use jang>=2.5.29 and do not strip the hy3 runtime from the bundle"
             ),
         )
 
@@ -1641,6 +1551,32 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
             "  TurboQuant KV skipped: mixed sliding/full attention model uses "
             "native RotatingKVCache metadata; flat generic TQ-KV would violate "
             "the mixed_swa_kv_v1 cache contract."
+        )
+        return
+
+    def _is_minimax_m3_config(cfg: dict) -> bool:
+        candidates = [cfg]
+        text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None
+        if text_cfg is not None:
+            candidates.append(text_cfg)
+
+        for candidate in candidates:
+            model_type = str(candidate.get("model_type", "")).lower()
+            if model_type in {"minimax_m3", "minimax_m3_vl"}:
+                return True
+            archs = candidate.get("architectures")
+            if isinstance(archs, list) and any(
+                "minimaxm3" in str(arch).lower() for arch in archs
+            ):
+                return True
+        return False
+
+    if _is_minimax_m3_config(model_config):
+        logger.info(
+            "  TurboQuant KV skipped: MiniMax-M3 uses native MSA cache "
+            "(MiniMaxM3SparseCache with keys/values/idx_keys). Generic "
+            "TurboQuantKVCache has no idx_keys lane, so replacing make_cache "
+            "would violate sparse-attention block selection."
         )
         return
 
@@ -2182,6 +2118,7 @@ def _load_jang_v2(
 
     start = time.perf_counter()
     config = load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
     _normalize_step3p7_model_type(config)
 
@@ -2260,6 +2197,7 @@ def _load_jang_v2(
         _flat["model_type"] = "gemma4"
         _flat["text_config"] = _text_config
         config = _flat
+        _normalize_gemma4_config_scalar_types(config)
         _ensure_jang_family_runtime_supported(path, config)
 
     # Resolve model-weight quantization through tensor-shape inference before
@@ -2356,7 +2294,6 @@ def _load_jang_v2(
                 )
             # Step 2: load. If THIS fails, the model is broken — propagate
             # rather than silently waste 80 s in the fallback path.
-            _patch_jangtq_kimi_mimo_input_ids_warmup(log_prefix="  JANGTQ fast path: ")
             model, tokenizer = _load_jangtq(path, skip_params_eval=skip_eval)
 
             if not hasattr(model, "config"):
@@ -2446,35 +2383,6 @@ def _load_jang_v2(
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
-    # MiniMax-M3 (VL-wrapped JANG text runtime): the per-module quantization
-    # config keys carry the language_model.* prefix and the .block_sparse_moe.
-    # infix, but the instantiated module paths are post-sanitize (model.X,
-    # .mlp.switch_mlp.*). mlx_lm load_model quantize matches per-module config
-    # via `p in config['quantization']`; unmatched switch_mlp (2-bit) experts
-    # fall back to the global bits (4) -> [gather_qmm] shape mismatch -> empty
-    # output. Rewrite the quant-config keys to the post-sanitize module paths
-    # so the correct per-module bits/group_size (switch_mlp=2/128) are applied
-    # at skeleton-quantize time.
-    _m3_qm = config.get('quantization')
-    if isinstance(_m3_qm, dict) and str(config.get('model_type', '')).startswith('minimax_m3'):
-        _qm_scalars = {'bits', 'group_size', 'mode'}
-        _qm_new = {}
-        _qm_remapped = 0
-        for _qk, _qv in _m3_qm.items():
-            if _qk in _qm_scalars:
-                _qm_new[_qk] = _qv
-            else:
-                _nk = _strip_lm_prefix_quant_key(_qk)
-                _qm_new[_nk] = _qv
-                if _nk != _qk:
-                    _qm_remapped += 1
-        config['quantization'] = _qm_new
-        logger.info(
-            '  MiniMax-M3 quant-config key rewrite: %d per-module entries aligned '
-            'to post-sanitize module paths (2-bit switch_mlp experts).',
-            _qm_remapped,
-        )
-
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
     )
@@ -2482,8 +2390,8 @@ def _load_jang_v2(
         model,
         config["quantization"]["bits"],
         config["quantization"]["group_size"],
-        quant_cfg=config.get("quantization"),
     )
+    _rebuild_minimax_m3_switch_experts(model, config)
 
     # Mistral-Small-4-119B (and any future model_type-promoted text load):
     # mlx_lm.utils.load_model's nn.quantize predicate `f"{p}.scales" in
@@ -2873,7 +2781,7 @@ def _load_jang_v2(
                 if ".switch_mlp." in k:
                     k = k.replace(".switch_mlp.", ".experts.switch_glu.")
                 g4_remapped[k] = v
-            weights = g4_remapped
+            weights = _split_gemma4_moe_quantized_expert_sidecars(g4_remapped)
 
         _dsv4_ready_expert_weights = {}
         if _is_dsv4_model and not filter_expert_keys and _dsv4_n_experts > 0:
@@ -3093,19 +3001,6 @@ def _load_jang_v2(
                     "  MiMo-V2 text load runtime-quantized %d passthrough decode hotspot modules",
                     hotspot_count,
                 )
-            coverage = _mimo_v2_quantization_coverage(model)
-            logger.info(
-                "  MiMo-V2 text load quantization coverage: "
-                "lm_head=%s embed_tokens=%s qkv=%d/%d switch_proj=%d/%d dense_mlp=%d/%d",
-                coverage["lm_head_quantized"],
-                coverage["embed_tokens_quantized"],
-                coverage["qkv_quantized"],
-                coverage["qkv_total"],
-                coverage["switch_proj_quantized"],
-                coverage["switch_proj_total"],
-                coverage["dense_mlp_quantized"],
-                coverage["dense_mlp_total"],
-            )
         except Exception:
             logger.exception("  MiMo-V2 text load affine post-load repair failed")
 
@@ -3210,7 +3105,32 @@ def _load_jang_v2_vlm(
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
+
+    # JANG Gemma-4 VL bundles (E2B/E4B/26B-A4B/31B) are early-fusion
+    # "gemma4_unified" architecture, but some converter revisions stamp the
+    # top model_type as plain "gemma4". Upstream mlx_vlm.models.gemma4 is the
+    # WRONG graph for these JANG bundles and produces '---'/'<thought' token-
+    # loop gibberish, while the vendored gemma4_unified Model (used by the 12B
+    # which IS stamped unified) decodes them coherently. This path is JANG-only,
+    # so promote any gemma4 -> gemma4_unified to resolve the correct Model.
+    # PROVEN: 31B-qat '---' -> 'The capital of France is Paris.' under this route.
+    if str(config.get("model_type") or "") == "gemma4":
+        config = dict(config)
+        config["model_type"] = "gemma4_unified"
+        _g4_tc = config.get("text_config")
+        if isinstance(_g4_tc, dict):
+            _g4_tc = dict(_g4_tc)
+            if str(_g4_tc.get("model_type") or "") in ("gemma4", "gemma4_text", ""):
+                _g4_tc["model_type"] = "gemma4_unified_text"
+            config["text_config"] = _g4_tc
+        logger.info(
+            "  JANG Gemma-4 VL promotion: model_type gemma4 -> gemma4_unified "
+            "(routing to vendored unified Model; upstream mlx_vlm gemma4 graph "
+            "is incoherent for JANG bundles)"
+        )
+    _normalize_gemma4_config_scalar_types(config)
 
     # Runtime quantization-shape repair (vmlx#config-repair). See
     # `_load_jang_v2` for the full rationale.
@@ -3221,7 +3141,6 @@ def _load_jang_v2_vlm(
         fallback_bits=[4],
         context="JANG v2 VLM",
     )
-    config = _enable_mimo_v2_media_runtime_overlay(path, config)
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
     quant_mode = str(config["quantization"].get("mode") or "affine")
 
@@ -3471,7 +3390,6 @@ def _load_jang_v2_vlm(
             "MXTQ/JANGTQ VLM detected — using native TurboQuant fast path "
             "(jang_tools.load_jangtq_vlm, P3/P15/P17/P18 Metal kernels)"
         )
-        _patch_jangtq_kimi_mimo_input_ids_warmup(log_prefix="  JANGTQ VLM fast path: ")
         if filter_expert_keys:
             logger.warning(
                 "  filter_expert_keys=True ignored on JANGTQ VLM fast path "
@@ -3489,12 +3407,7 @@ def _load_jang_v2_vlm(
                 f"  seed={_vlm_mxtq_seed}, bits_map={_vlm_bits_map}",
                 flush=True,
             )
-            _vlm_model, _vlm_processor, _, _vlm_model_config = (
-                _with_mimo_v2_media_config_overlay(
-                    path,
-                    lambda: _jangtq_vlm_skeleton(path),
-                )
-            )
+            _vlm_model, _vlm_processor, _, _vlm_model_config = _jangtq_vlm_skeleton(path)
             _hydrate_jangtq_model(
                 model=_vlm_model,
                 model_path=path,
@@ -3503,10 +3416,7 @@ def _load_jang_v2_vlm(
                 model_config=_vlm_model_config,
             )
         else:
-            _vlm_model, _vlm_processor = _with_mimo_v2_media_config_overlay(
-                path,
-                lambda: _load_vlm(path),
-            )
+            _vlm_model, _vlm_processor = _load_vlm(path)
 
         # Match the rest of the VLM-path post-processing that would normally
         # fire at the bottom of this function: attach config if missing and
@@ -3635,7 +3545,9 @@ def _load_jang_v2_vlm(
     _vlm_text_mt = config.get("text_config", {}).get(
         "model_type", config.get("model_type", "")
     )
-    _vlm_needs_gemma4_switch_remap = _vlm_text_mt in ("gemma4", "gemma4_text")
+    _vlm_needs_gemma4_switch_remap = _vlm_text_mt in (
+        "gemma4", "gemma4_text", "gemma4_unified", "gemma4_unified_text"
+    )
 
     # vmlx#114: cross-shard pre-fix for mixed-precision JANG VLMs. Read all shard
     # headers (no data load) into a combined shape map so a module whose .weight
@@ -3645,22 +3557,14 @@ def _load_jang_v2_vlm(
     _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
     del _shape_map_xshard
 
-    _index_weight_map: dict[str, str] = {}
-    _index_path = path / "model.safetensors.index.json"
-    if _index_path.exists():
-        try:
-            _index_payload = json.loads(_index_path.read_text())
-            _maybe_weight_map = _index_payload.get("weight_map", {})
-            if isinstance(_maybe_weight_map, dict):
-                _index_weight_map = {
-                    str(k): str(v) for k, v in _maybe_weight_map.items()
-                }
-        except Exception as _index_err:
-            logger.warning(
-                "Could not read safetensors index for Gemma4 sidecar hydration: %s",
-                _index_err,
-            )
-
+    _gemma_ple_quantized_module_paths = {
+        path
+        for path, module in model.named_modules()
+        if path.endswith(("per_layer_model_projection", "embed_tokens_per_layer"))
+        and hasattr(module, "bits")
+        and hasattr(module, "group_size")
+    }
+    _gemma_ple_pending: dict[str, dict[str, mx.array]] = {}
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
         shard_weights = {
@@ -3793,6 +3697,7 @@ def _load_jang_v2_vlm(
                 (k.replace(".switch_mlp.", ".experts.switch_glu.") if ".switch_mlp." in k else k): v
                 for k, v in shard_weights.items()
             }
+            shard_weights = _split_gemma4_moe_quantized_expert_sidecars(shard_weights)
 
         # Try model.sanitize() — works for dense VL models.
         # Fails on MoE models because it tries to split gate_up_proj which JANG already split.
@@ -3842,14 +3747,6 @@ def _load_jang_v2_vlm(
         except (KeyError, ValueError, AttributeError):
             pass
 
-        if _vlm_text_mt in ("gemma4", "gemma4_text") or config.get("model_type") == "gemma4":
-            shard_weights = _hydrate_gemma4_moe_mxfp_cross_shard_sidecars(
-                shard_weights,
-                path,
-                _index_weight_map,
-            )
-            shard_weights = _split_dequantize_gemma4_moe_mxfp_experts(shard_weights)
-
         # Dequantize vision conv weights that were incorrectly quantized
         for k in list(shard_weights.keys()):
             if ("patch_embed" in k or "temporal_embed" in k) and k.endswith(".weight"):
@@ -3878,120 +3775,13 @@ def _load_jang_v2_vlm(
                                 except Exception:
                                     continue
 
-        # Gemma 3n / 4 PLE: ScaledLinear (per_layer_model_projection) and
-        # nn.Embedding (embed_tokens_per_layer) lack to_quantized(), so
-        # nn.quantize() skips them. JANG packs their weights as uint32 anyway.
-        # Without dequantization, forward pass does matmul/take on uint32 →
-        # garbage → all <pad> output (#52 / #87).
-        #
-        # Previously gated on `gemma4_text` only — broadened to cover Gemma 3n
-        # (same PLE architecture) AND the "no-PLE" variant (Gemma 4 2B/4B-only
-        # gate: if `hidden_size_per_layer_input` is 0/null, the model has
-        # `per_layer_model_projection = None` and the safetensors' scales/
-        # biases orphan → strict load fails with "Received 2 parameters not in
-        # model" (vmlx#87 gyula-coder 2026-04-17). When the module is
-        # disabled in the model, drop the orphan keys instead of dequanting.
-        _text_mt = config.get("text_config", {}).get("model_type", "")
-        _text_cfg_for_ple = config.get("text_config", config)
-        _has_ple_module = bool(_text_cfg_for_ple.get("hidden_size_per_layer_input"))
-        _ple_eligible_types = {"gemma4_text", "gemma3n", "gemma3n_text", "gemma4"}
-        _gemma_family_by_name = _text_mt in _ple_eligible_types or config.get(
-            "model_type", ""
-        ) in _ple_eligible_types
-        # Case 1 — PLE keys exist AND model has the module: dequant to fp16
-        # Case 2 — PLE keys exist AND model does NOT have the module: drop orphans
-        # Case 3 — non-Gemma models: skip entirely (original behavior)
-        if _gemma_family_by_name and not _has_ple_module:
-            # Drop orphan PLE quant keys so strict weight load succeeds.
-            # Model doesn't instantiate per_layer_model_projection in this config.
-            for _orphan_pfx in (
-                "language_model.model.per_layer_model_projection",
-                "model.language_model.per_layer_model_projection",
-                "language_model.model.embed_tokens_per_layer",
-                "model.language_model.embed_tokens_per_layer",
-            ):
-                for _suffix in (".weight", ".scales", ".biases"):
-                    _k = _orphan_pfx + _suffix
-                    if _k in shard_weights:
-                        del shard_weights[_k]
-                        logger.info(
-                            f"  Dropped orphan Gemma PLE key (model has no PLE "
-                            f"module due to hidden_size_per_layer_input=0): {_k}"
-                        )
-        elif _gemma_family_by_name and _has_ple_module:
-            for _ple_name in (
-                "per_layer_model_projection",
-                "embed_tokens_per_layer",
-            ):
-                # Try both mlx_vlm naming conventions
-                for _pfx in (
-                    f"language_model.model.{_ple_name}",
-                    f"model.language_model.{_ple_name}",
-                ):
-                    _w_key = f"{_pfx}.weight"
-                    if _w_key not in shard_weights:
-                        continue
-                    _w = shard_weights[_w_key]
-                    if _w.dtype != mx.uint32:
-                        continue
-                    _s_key = f"{_pfx}.scales"
-                    _b_key = f"{_pfx}.biases"
-                    if not _should_dequantize_gemma_ple_weight(model, _w_key):
-                        if _s_key in shard_weights:
-                            _configured, _bits, _gs, _mode = (
-                                _configure_gemma4_quantized_ple_module(
-                                    model,
-                                    _w_key,
-                                    _w,
-                                    shard_weights[_s_key],
-                                )
-                            )
-                            if _configured:
-                                logger.info(
-                                    f"  Preserved quantized Gemma4 PLE: {_w_key} "
-                                    f"(mode={_mode}, bits={_bits}, gs={_gs})"
-                                )
-                                continue
-                        logger.info(
-                            f"  Preserved quantized Gemma4 PLE: {_w_key} "
-                            f"(target module is already quantized)"
-                        )
-                        continue
-                    if _s_key not in shard_weights:
-                        continue
-                    _s = shard_weights[_s_key]
-                    _b = shard_weights.get(_b_key)
-                    _configured, _bits, _gs, _mode = (
-                        _configure_gemma4_quantized_ple_module(
-                            model,
-                            _w_key,
-                            _w,
-                            _s,
-                        )
-                    )
-                    if _configured:
-                        if _b_key in shard_weights:
-                            del shard_weights[_b_key]
-                        logger.info(
-                            f"  Configured Gemma4 quantized PLE: {_w_key} "
-                            f"(mode={_mode}, bits={_bits}, gs={_gs})"
-                        )
-                        continue
-                    _dq, _bits, _gs, _mode = _dequantize_gemma4_ple_tensor(
-                        _w,
-                        _s,
-                        _b,
-                        _w_key,
-                    )
-                    mx.eval(_dq)
-                    shard_weights[_w_key] = _dq.astype(mx.float16)
-                    del shard_weights[_s_key]
-                    if _b_key in shard_weights:
-                        del shard_weights[_b_key]
-                    logger.info(
-                        f"  Dequantized Gemma4 PLE: {_w_key} "
-                        f"(mode={_mode}, bits={_bits}, gs={_gs})"
-                    )
+        _gemma_ple_pending = _prepare_gemma_ple_shard_weights(
+            shard_weights,
+            config,
+            quant_mode=quant_mode,
+            quantized_module_paths=_gemma_ple_quantized_module_paths,
+            pending=_gemma_ple_pending,
+        )
 
         # Mistral4 MLA text models in mlx-lm expect split
         # embed_q/unembed_out weights, but mlx-vlm's Mistral4 VLM wrapper still
@@ -4097,6 +3887,15 @@ def _load_jang_v2_vlm(
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
+
+    if _gemma_ple_pending:
+        pending_keys = sorted(
+            f"{prefix}.{part}" for prefix, parts in _gemma_ple_pending.items() for part in parts
+        )
+        raise RuntimeError(
+            "jang_loader Gemma4 PLE dequant: unresolved cross-shard PLE "
+            f"sidecars after all shards loaded: {pending_keys}"
+        )
 
     _fix_quantized_bits(
         model,
@@ -4214,182 +4013,6 @@ def _v2_bundle_has_tq_packed(path: Path, weight_files: list[Path] | None = None)
     except Exception:
         pass
     return False
-
-
-def _mimo_v2_index_has_prefixes(path: Path, prefixes: tuple[str, ...]) -> bool:
-    index_path = path / "model.safetensors.index.json"
-    if not index_path.exists():
-        return False
-    try:
-        weight_map = json.loads(index_path.read_text()).get("weight_map", {})
-    except Exception:
-        return False
-    if not isinstance(weight_map, dict):
-        return False
-    return any(str(key).startswith(prefixes) for key in weight_map)
-
-
-def _mimo_v2_config_token(config: dict, names: tuple[str, ...]) -> Any | None:
-    processor = config.get("processor_config") or {}
-    for name in names:
-        value = config.get(name)
-        if value is None and isinstance(processor, dict):
-            value = processor.get(name)
-        if value is not None:
-            return value
-    return None
-
-
-def _mimo_v2_local_media_runtime_available() -> bool:
-    try:
-        from vmlx_engine.models import mllm as _mimo_mllm
-
-        _mimo_mllm._register_mimo_v2_mlx_vlm_runtime()
-        module = sys.modules.get("mlx_vlm.models.mimo_v2")
-    except Exception:
-        return False
-    if module is None:
-        return False
-    vision_ready = all(
-        hasattr(module, name)
-        for name in (
-            "VisionModel",
-            "MiMoVisionPatchEmbed",
-            "MiMoVisionPatchMerger",
-            "MiMoVisionBlock",
-        )
-    )
-    audio_ready = all(
-        hasattr(module, name)
-        for name in (
-            "AudioModel",
-            "MiMoAudioTokenizer",
-            "load_mimo_audio_tokenizer_from_bundle",
-        )
-    )
-    return bool(vision_ready or audio_ready)
-
-
-def _enable_mimo_v2_media_runtime_overlay(path: Path, config: dict) -> dict:
-    """Enable MiMo-V2 media only when preserved runtime assets are complete."""
-
-    if str(config.get("model_type") or "").lower() != "mimo_v2":
-        return config
-    if not _mimo_v2_local_media_runtime_available():
-        return config
-    caps = config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
-    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
-    explicit_modes = {
-        str(caps.get("multimodal_status") or "").lower(),
-        str(runtime.get("multimodal_mode") or "").lower(),
-    }
-    text_runtime_modes = {
-        "weights_preserved_text_runtime",
-        "text_runtime",
-        "text_only",
-        "unwired",
-        "preserved_disabled",
-    }
-    if explicit_modes & text_runtime_modes:
-        enabled = os.environ.get(
-            "VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY",
-            "",
-        ).lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            return config
-
-    processor = config.get("processor_config") or {}
-    has_vision_bundle = (
-        isinstance(config.get("vision_config"), dict)
-        and (path / "preprocessor_config.json").exists()
-        and _mimo_v2_index_has_prefixes(path, ("visual.",))
-        and _mimo_v2_config_token(
-            config,
-            (
-                "image_token_id",
-                "image_token_index",
-                "video_token_id",
-                "video_token_index",
-            ),
-        )
-        is not None
-    )
-    has_audio_bundle = (
-        isinstance(config.get("audio_config"), dict)
-        and (path / "audio_tokenizer" / "model.safetensors").exists()
-        and _mimo_v2_index_has_prefixes(path, ("audio_encoder.",))
-        and _mimo_v2_index_has_prefixes(path, ("speech_embeddings.",))
-        and _mimo_v2_config_token(
-            config,
-            ("audio_token_id", "audio_token_index", "audio_start_token_id"),
-        )
-        is not None
-    )
-    if not has_vision_bundle and not has_audio_bundle:
-        return config
-
-    patched = dict(config)
-    patched["processor_config"] = dict(processor) if isinstance(processor, dict) else {}
-    patched["_vmlx_mimo_v2_media_runtime_auto_enabled"] = True
-
-    capabilities = dict(patched.get("capabilities") or {})
-    modalities = ["text"]
-    if has_vision_bundle:
-        modalities.extend(["image", "video"])
-    if has_audio_bundle:
-        modalities.append("audio")
-    capabilities["modalities"] = modalities
-    capabilities["multimodal_status"] = "mimo_v2_multimodal_runtime"
-    capabilities["preserved_modalities"] = list(
-        capabilities.get("preserved_modalities") or ["vision", "audio"]
-    )
-    unwired = set(capabilities.get("unwired_modalities") or [])
-    if has_vision_bundle:
-        unwired.difference_update({"vision", "image", "video"})
-    if has_audio_bundle:
-        unwired.discard("audio")
-    capabilities["unwired_modalities"] = sorted(unwired)
-    patched["capabilities"] = capabilities
-
-    runtime = dict(patched.get("runtime") or {})
-    runtime["multimodal_mode"] = "mimo_v2_multimodal_runtime"
-    patched["runtime"] = runtime
-    patched["multimodal_status"] = "mimo_v2_multimodal_runtime"
-    logger.info(
-        "MiMo-V2 media runtime auto-enabled from preserved bundle contract: "
-        "vision=%s audio=%s",
-        bool(has_vision_bundle),
-        bool(has_audio_bundle),
-    )
-    return patched
-
-
-def _with_mimo_v2_media_config_overlay(path: Path, call):
-    """Apply the MiMo media overlay inside jang_tools' mlx-vlm skeleton loader."""
-
-    try:
-        from mlx_vlm import utils as _vlm_utils
-    except Exception:
-        return call()
-
-    original_load_config = getattr(_vlm_utils, "load_config", None)
-    if original_load_config is None:
-        return call()
-
-    def _patched_load_config(model_path, *args, **kwargs):
-        cfg = original_load_config(model_path, *args, **kwargs)
-        try:
-            if Path(model_path).expanduser().resolve() == path.expanduser().resolve():
-                return _enable_mimo_v2_media_runtime_overlay(path, cfg)
-        except Exception as exc:
-            logger.debug("MiMo-V2 media config overlay skipped for %s: %s", path, exc)
-        return cfg
-
-    _vlm_utils.load_config = _patched_load_config
-    try:
-        return call()
-    finally:
-        _vlm_utils.load_config = original_load_config
 
 
 def _bind_mimo_v2_preserved_media_weights_from_index(model: Any, path: Path) -> dict[str, int]:
@@ -4759,6 +4382,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     )
 
     config = load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)
     config.pop("quantization_config", None)
@@ -4787,35 +4411,6 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
         ensure_latent_moe_support(str(path))
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
-
-    # MiniMax-M3 (VL-wrapped JANG text runtime): the per-module quantization
-    # config keys carry the language_model.* prefix and the .block_sparse_moe.
-    # infix, but the instantiated module paths are post-sanitize (model.X,
-    # .mlp.switch_mlp.*). mlx_lm load_model quantize matches per-module config
-    # via `p in config['quantization']`; unmatched switch_mlp (2-bit) experts
-    # fall back to the global bits (4) -> [gather_qmm] shape mismatch -> empty
-    # output. Rewrite the quant-config keys to the post-sanitize module paths
-    # so the correct per-module bits/group_size (switch_mlp=2/128) are applied
-    # at skeleton-quantize time.
-    _m3_qm = config.get('quantization')
-    if isinstance(_m3_qm, dict) and str(config.get('model_type', '')).startswith('minimax_m3'):
-        _qm_scalars = {'bits', 'group_size', 'mode'}
-        _qm_new = {}
-        _qm_remapped = 0
-        for _qk, _qv in _m3_qm.items():
-            if _qk in _qm_scalars:
-                _qm_new[_qk] = _qv
-            else:
-                _nk = _strip_lm_prefix_quant_key(_qk)
-                _qm_new[_nk] = _qv
-                if _nk != _qk:
-                    _qm_remapped += 1
-        config['quantization'] = _qm_new
-        logger.info(
-            '  MiniMax-M3 quant-config key rewrite: %d per-module entries aligned '
-            'to post-sanitize module paths (2-bit switch_mlp experts).',
-            _qm_remapped,
-        )
 
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
@@ -4922,6 +4517,7 @@ def _load_jang_v1_vlm(
     logger.info(f"Loading JANG v1 VLM: {source_model}")
 
     config = vlm_load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     # Runtime quantization-shape repair (vmlx#config-repair).
     config, default_bits, block_size = _prepare_runtime_weight_quantization(
         path,
@@ -5490,83 +5086,22 @@ def _stack_per_expert_weights(weights, config):
         )
 
 
-def _strip_lm_prefix_quant_key(k: str) -> str:
-    """Normalize a per-module quantization-config key to the post-sanitize
-    module path (model.X / lm_head.X) used by VL-wrapped JANG text runtimes
-    (e.g. minimax_m3_vl, qwen3.5/3.6 VL). Mirrors the weight LM-strip."""
-    if k.startswith("language_model.model."):
-        return "model." + k[len("language_model.model."):]
-    if k.startswith("language_model.lm_head"):
-        return "lm_head" + k[len("language_model.lm_head"):]
-    if k.startswith("language_model.model."):
-        k = "model." + k[len("language_model.model."):]
-    elif k.startswith("language_model.lm_head"):
-        k = "lm_head" + k[len("language_model.lm_head"):]
-    elif k.startswith("language_model."):
-        k = k[len("language_model."):]
-    # MiniMax-M3 Model.sanitize remaps ".block_sparse_moe." -> ".mlp." so the
-    # instantiated module paths use ".mlp.switch_mlp.*". Mirror that here so the
-    # per-module quant config keys match the live SwitchLinear module names.
-    if ".block_sparse_moe." in k:
-        k = k.replace(".block_sparse_moe.", ".mlp.")
-    return k
-
-
-def _upgrade_switch_to_quantized(model, bits, group_size, quant_cfg=None):
+def _upgrade_switch_to_quantized(model, bits, group_size):
     try:
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear, SwitchLinear
     except ImportError:
         return
 
-    # Per-module bits/group_size: M3 (and other mixed-precision MoE JANG bundles)
-    # quantize routed switch_mlp experts at a DIFFERENT width than the rest
-    # (e.g. M3 switch_mlp = 2-bit/group128 while shared/dense = 6/8-bit). The
-    # caller passes the GLOBAL bits/group_size; without per-module lookup every
-    # SwitchLinear is rebuilt at the global width -> the 2-bit packed expert
-    # weight is interpreted as 4/8-bit -> [gather_qmm] shape mismatch -> garbage.
-    # The model's module paths are post-sanitize (model.X); the quant-config
-    # keys may carry the language_model.* prefix, so normalize before matching.
-    _norm_cfg = {}
-    if isinstance(quant_cfg, dict):
-        for _k, _v in quant_cfg.items():
-            if isinstance(_v, dict) and "bits" in _v:
-                _norm_cfg[_strip_lm_prefix_quant_key(_k)] = _v
-
-    # Handle BOTH plain SwitchLinear and an already-quantized QuantizedSwitchLinear:
-    # mlx_lm's skeleton nn.quantize converts SwitchLinear to QuantizedSwitchLinear but
-    # does NOT honor the per-module bits dict for it (it gets the global width). For
-    # mixed-precision MoE (M3: switch_mlp=2-bit/group128 while the model default is
-    # wider) we must REBUILD at the correct per-module width. The model is lazy here
-    # (no weights bound yet), so rebuilding the module is safe.
     for name, module in model.named_modules():
-        if not isinstance(module, (SwitchLinear, QuantizedSwitchLinear)):
+        if not isinstance(module, SwitchLinear):
             continue
-        _mc = _norm_cfg.get(name)
-        if _mc is None:
-            # No per-module override: leave an already-quantized module as-is;
-            # only upgrade a still-plain SwitchLinear to the global width.
-            if isinstance(module, QuantizedSwitchLinear):
-                continue
-            _bits, _gs = bits, group_size
-        else:
-            _bits = int(_mc.get("bits", bits))
-            _gs = int(_mc.get("group_size", group_size))
-            _cur_bits = getattr(module, "bits", None)
-            _cur_gs = getattr(module, "group_size", None)
-            if isinstance(module, QuantizedSwitchLinear) and _cur_bits == _bits and _cur_gs == _gs:
-                continue  # already correct
-            logger.info(
-                "  SwitchLinear per-module quant: %s -> bits=%d group_size=%d "
-                "(was bits=%s group_size=%s)",
-                name, _bits, _gs, _cur_bits, _cur_gs,
-            )
         ql = QuantizedSwitchLinear(
             module.input_dims,
             module.output_dims,
             module.num_experts,
             bias=hasattr(module, "bias"),
-            group_size=_gs,
-            bits=_bits,
+            group_size=group_size,
+            bits=bits,
         )
         parts = name.rsplit(".", 1)
         if len(parts) == 2:
@@ -5577,6 +5112,147 @@ def _upgrade_switch_to_quantized(model, bits, group_size, quant_cfg=None):
                 else:
                     parent = getattr(parent, p)
             setattr(parent, parts[1], ql)
+
+
+def _is_minimax_m3_config(config: dict | None) -> bool:
+    if not isinstance(config, dict):
+        return False
+    text_config = config.get("text_config")
+    text_model_type = (
+        text_config.get("model_type") if isinstance(text_config, dict) else None
+    )
+    model_type = str(config.get("model_type") or text_model_type or "").lower()
+    architectures = config.get("architectures") or []
+    arch_text = " ".join(str(a).lower() for a in architectures)
+    return model_type in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in arch_text
+
+
+def _minimax_m3_switch_quant_override(config: dict, runtime_path: str) -> dict | None:
+    qcfg = config.get("quantization") if isinstance(config, dict) else None
+    if not isinstance(qcfg, dict):
+        return None
+
+    candidates = {runtime_path}
+    if runtime_path.startswith("model."):
+        candidates.add(f"language_model.{runtime_path}")
+    if runtime_path.startswith("language_model.model."):
+        candidates.add(runtime_path[len("language_model.") :])
+
+    expanded = set(candidates)
+    for cand in candidates:
+        expanded.add(cand.replace(".mlp.switch_mlp.", ".block_sparse_moe.switch_mlp."))
+        if cand.startswith("model."):
+            expanded.add(
+                ("language_model." + cand).replace(
+                    ".mlp.switch_mlp.",
+                    ".block_sparse_moe.switch_mlp.",
+                )
+            )
+
+    for cand in expanded:
+        value = qcfg.get(cand)
+        if isinstance(value, dict) and "bits" in value and "group_size" in value:
+            return {
+                "bits": int(value["bits"]),
+                "group_size": int(value["group_size"]),
+                "mode": str(value.get("mode") or qcfg.get("mode") or "affine"),
+            }
+    return None
+
+
+def _set_module_by_path(root, path: str, value) -> bool:
+    parts = path.rsplit(".", 1)
+    if len(parts) != 2:
+        return False
+    parent = root
+    try:
+        for part in parts[0].split("."):
+            if part.isdigit():
+                parent = parent[int(part)]
+            else:
+                parent = getattr(parent, part)
+        setattr(parent, parts[1], value)
+        return True
+    except Exception:
+        return False
+
+
+def _rebuild_minimax_m3_switch_experts(model, config: dict | None) -> int:
+    """Rebuild MiniMax-M3 routed experts with config-authored quant metadata.
+
+    The generic mlx-lm skeleton path can quantize SwitchGLU children with the
+    bundle defaults (8/64 or 4/64). MiniMax-M3 routed experts are declared per
+    projection as 2-bit/group-128 under
+    language_model.model.layers.N.block_sparse_moe.switch_mlp.*. Rebuild before
+    loading weights so gather_qmm and the affine-2 fast path see the correct
+    projection shape and quant settings.
+    """
+    if not _is_minimax_m3_config(config):
+        return 0
+
+    try:
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+    except ImportError:
+        return 0
+
+    text_cfg = (
+        config.get("text_config") if isinstance(config.get("text_config"), dict) else config
+    )
+    hidden_size = int(text_cfg.get("hidden_size") or config.get("hidden_size") or 0)
+    intermediate_size = int(
+        text_cfg.get("intermediate_size") or config.get("intermediate_size") or 0
+    )
+
+    rebuilt = 0
+    for name, module in list(model.named_modules()):
+        if ".switch_mlp." not in name:
+            continue
+        proj_name = name.rsplit(".", 1)[-1]
+        if proj_name not in {"gate_proj", "up_proj", "down_proj"}:
+            continue
+        override = _minimax_m3_switch_quant_override(config, name)
+        if override is None:
+            continue
+
+        num_experts = getattr(module, "num_experts", None)
+        if num_experts is None:
+            weight = getattr(module, "weight", None)
+            if weight is not None and len(getattr(weight, "shape", ())) >= 1:
+                num_experts = int(weight.shape[0])
+        if not num_experts:
+            continue
+
+        if proj_name == "down_proj":
+            input_dims = intermediate_size or int(getattr(module, "input_dims", 0) or 0)
+            output_dims = hidden_size or int(getattr(module, "output_dims", 0) or 0)
+        else:
+            input_dims = hidden_size or int(getattr(module, "input_dims", 0) or 0)
+            output_dims = intermediate_size or int(
+                getattr(module, "output_dims", 0) or 0
+            )
+        if input_dims <= 0 or output_dims <= 0:
+            continue
+
+        has_bias = hasattr(module, "bias") and getattr(module, "bias", None) is not None
+        rebuilt_module = QuantizedSwitchLinear(
+            input_dims,
+            output_dims,
+            int(num_experts),
+            bias=has_bias,
+            group_size=int(override["group_size"]),
+            bits=int(override["bits"]),
+            mode=str(override.get("mode") or "affine"),
+        )
+        if _set_module_by_path(model, name, rebuilt_module):
+            rebuilt += 1
+
+    if rebuilt:
+        logger.info(
+            "  MiniMax-M3: rebuilt %d switch-expert projection(s) from "
+            "config quantization overrides",
+            rebuilt,
+        )
+    return rebuilt
 
 
 def _upgrade_modules_with_uint32_weights(
@@ -5695,63 +5371,6 @@ def _upgrade_modules_with_uint32_weights(
         except Exception:
             continue
     return upgraded
-
-
-def _mimo_v2_quantization_coverage(model) -> dict[str, int | bool]:
-    """Summarize loaded MiMo quantization coverage for runtime proof logs."""
-
-    import mlx.nn as nn
-
-    try:
-        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
-    except Exception:
-        QuantizedSwitchLinear = ()
-
-    backbone = getattr(model, "model", None)
-    embed_tokens = getattr(backbone, "embed_tokens", None)
-    lm_head = getattr(model, "lm_head", None)
-    layers = getattr(backbone, "layers", None)
-    qkv_total = qkv_quantized = 0
-    switch_total = switch_quantized = 0
-    dense_mlp_total = dense_mlp_quantized = 0
-
-    if isinstance(layers, list):
-        for layer in layers:
-            self_attn = getattr(layer, "self_attn", None)
-            qkv = getattr(self_attn, "qkv_proj", None)
-            if qkv is not None:
-                qkv_total += 1
-                if isinstance(qkv, nn.QuantizedLinear):
-                    qkv_quantized += 1
-            mlp = getattr(layer, "mlp", None)
-            switch_mlp = getattr(mlp, "switch_mlp", None)
-            if switch_mlp is not None:
-                for attr in ("gate_proj", "up_proj", "down_proj"):
-                    proj = getattr(switch_mlp, attr, None)
-                    if proj is None:
-                        continue
-                    switch_total += 1
-                    if QuantizedSwitchLinear and isinstance(proj, QuantizedSwitchLinear):
-                        switch_quantized += 1
-            else:
-                for attr in ("gate_proj", "up_proj", "down_proj"):
-                    proj = getattr(mlp, attr, None)
-                    if proj is None:
-                        continue
-                    dense_mlp_total += 1
-                    if isinstance(proj, nn.QuantizedLinear):
-                        dense_mlp_quantized += 1
-
-    return {
-        "lm_head_quantized": isinstance(lm_head, nn.QuantizedLinear),
-        "embed_tokens_quantized": isinstance(embed_tokens, nn.QuantizedEmbedding),
-        "qkv_quantized": qkv_quantized,
-        "qkv_total": qkv_total,
-        "switch_proj_quantized": switch_quantized,
-        "switch_proj_total": switch_total,
-        "dense_mlp_quantized": dense_mlp_quantized,
-        "dense_mlp_total": dense_mlp_total,
-    }
 
 
 def _pre_fix_bits_from_shard(model, shard_weights, block_size):
@@ -6019,7 +5638,6 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
     post-load heuristic must not reinterpret a proven override into the shorter
     matrix, or the first routed expert gather_qmm crashes at decode time.
     """
-    import mlx.core as mx
     import mlx.nn as nn
 
     try:
@@ -6062,28 +5680,6 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
             w_cols = module.weight.shape[-1]
             s_cols = module.scales.shape[-1]
             fixed = False
-
-            if module.scales.dtype == mx.uint8:
-                # Native MXFP4/MXFP8 bundles store UE8M0 scales as uint8.
-                # Treat those scales as authoritative and route the module
-                # through MLX's MXFP kernel instead of affine quantized_matmul.
-                if s_cols * 32 == w_cols * 8:
-                    module.mode = "mxfp4"
-                    module.bits = 4
-                    module.group_size = 32
-                    fixed = True
-                elif s_cols * 32 == w_cols * 4:
-                    module.mode = "mxfp8"
-                    module.bits = 8
-                    module.group_size = 32
-                    fixed = True
-                if fixed:
-                    if hasattr(module, "biases"):
-                        try:
-                            del module.biases
-                        except Exception:
-                            module.biases = None
-                    continue
 
             override = _override_for_name(name)
             if override is not None:

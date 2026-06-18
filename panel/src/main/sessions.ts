@@ -576,6 +576,49 @@ function markCacheStackStartupDefaultsCurrent(config: Partial<ServerConfig>): bo
   return true
 }
 
+function applyMissingCacheStackStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean {
+  const targetPath = modelPath || config.modelPath
+  let detectedFamily: string | undefined
+  let detectedUsePagedCache = false
+  if (targetPath) {
+    try {
+      const detected = detectModelConfigFromDir(targetPath)
+      detectedFamily = normalizeDetectedFamilyName(detected.family)
+      detectedUsePagedCache = detected.usePagedCache === true
+    } catch {
+      /* detection is best-effort here; buildArgs repeats detection at launch */
+    }
+  }
+
+  const dsv4Active = detectedFamily === 'deepseek-v4'
+  const dsv4PrefixOptIn = dsv4Active && config.dsv4PrefixCache !== false
+  const defaultUsePagedCache = dsv4Active ? dsv4PrefixOptIn : detectedUsePagedCache
+  const defaultEnableDiskCache = dsv4Active ? false : true
+  const defaultEnableBlockDiskCache = dsv4Active ? dsv4PrefixOptIn : defaultUsePagedCache
+  const mutable = config as Record<string, any>
+  let changed = false
+
+  // Fill only missing values. Explicit user toggles and family-specific overrides
+  // must survive, while fresh IPC-created sessions still need a complete config
+  // for the Settings UI and live proof harness.
+  if (mutable.enablePrefixCache === undefined) changed = setConfigValue(mutable, 'enablePrefixCache', dsv4Active ? dsv4PrefixOptIn : true) || changed
+  if (mutable.prefixCacheSize === undefined) changed = setConfigValue(mutable, 'prefixCacheSize', 100) || changed
+  if (mutable.prefixCacheMaxBytes === undefined) changed = setConfigValue(mutable, 'prefixCacheMaxBytes', 0) || changed
+  if (mutable.cacheMemoryMb === undefined) changed = setConfigValue(mutable, 'cacheMemoryMb', 0) || changed
+  if (mutable.cacheMemoryPercent === undefined) changed = setConfigValue(mutable, 'cacheMemoryPercent', 15) || changed
+  if (mutable.noMemoryAwareCache === undefined) changed = setConfigValue(mutable, 'noMemoryAwareCache', false) || changed
+  if (mutable.usePagedCache === undefined) changed = setConfigValue(mutable, 'usePagedCache', defaultUsePagedCache) || changed
+  if (mutable.enableDiskCache === undefined) changed = setConfigValue(mutable, 'enableDiskCache', defaultEnableDiskCache) || changed
+  if (mutable.diskCacheMaxGb === undefined) changed = setConfigValue(mutable, 'diskCacheMaxGb', 10) || changed
+  if (mutable.pagedCacheBlockSize === undefined) changed = setConfigValue(mutable, 'pagedCacheBlockSize', dsv4Active ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64) || changed
+  if (mutable.maxCacheBlocks === undefined) changed = setConfigValue(mutable, 'maxCacheBlocks', 1000) || changed
+  if (mutable.enableBlockDiskCache === undefined) changed = setConfigValue(mutable, 'enableBlockDiskCache', defaultEnableBlockDiskCache) || changed
+  if (mutable.blockDiskCacheMaxGb === undefined) changed = setConfigValue(mutable, 'blockDiskCacheMaxGb', 10) || changed
+  if (mutable.kvCacheQuantization === undefined) changed = setConfigValue(mutable, 'kvCacheQuantization', 'auto') || changed
+
+  return changed
+}
+
 function isZayaCacheStackMigrationTarget(modelPath?: string): boolean {
   const lower = String(modelPath || '').toLowerCase()
   return lower.includes('zaya1') || lower.includes('zaya')
@@ -1106,6 +1149,7 @@ export class SessionManager extends EventEmitter {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
     applyBundleStartupDefaults(config, modelPath)
+    applyMissingCacheStackStartupDefaults(config, modelPath)
     applyFamilyStartupDefaults(config, modelPath)
     markCacheStackStartupDefaultsCurrent(config)
 
@@ -1120,6 +1164,7 @@ export class SessionManager extends EventEmitter {
       applyCacheStackStartupDefaultMigration(existingConfig, modelPath)
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
+      applyMissingCacheStackStartupDefaults(merged, modelPath)
       applyFamilyStartupDefaults(merged, modelPath)
       markCacheStackStartupDefaultsCurrent(merged)
       db.updateSession(existing.id, {
@@ -1250,10 +1295,11 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
     const bundleDefaultsChanged = applyBundleStartupDefaults(config, config.modelPath)
+    const cacheDefaultsFilled = applyMissingCacheStackStartupDefaults(config, config.modelPath)
     const migrated = applyCacheStackStartupDefaultMigration(config, config.modelPath)
     const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)
     const markedCurrent = markCacheStackStartupDefaultsCurrent(config)
-    if (bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent) {
+    if (bundleDefaultsChanged || cacheDefaultsFilled || migrated || familyDefaultsChanged || markedCurrent) {
       // Persist the migrated config so the settings UI reflects the corrected
       // values on next render and the same migration doesn't have to re-fire
       // on every session start. Without this writeback the saved config keeps

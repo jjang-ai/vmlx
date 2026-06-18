@@ -250,16 +250,17 @@ class BatchedEngine(BaseEngine):
         *,
         images: list[str],
         videos: list[str],
+        audio: list[Any],
     ) -> bool:
-        if not self._is_mllm or not (images or videos):
+        if not self._is_mllm or not (images or videos or audio):
             return False
         if os.environ.get("VMLINUX_DISABLE_MLLM_MEDIA_SIMPLE_FALLBACK") == "1":
             return False
         # Gemma4 media is coherent through MLXMultimodalLM.chat(), while the
         # current batched MLLM scheduler path can produce corrupted visible
-        # image output after a valid vision prefill. Keep text-only Gemma4 on
-        # the optimized scheduler/cache path; only media turns use the proven
-        # simple VLM forward until batched media prefill parity is fixed.
+        # image/audio output after a valid media prefill. Keep text-only Gemma4
+        # on the optimized scheduler/cache path; only media turns use the
+        # proven simple VLM forward until batched media prefill parity is fixed.
         return self._model_family_name() == "gemma4"
 
     async def _simple_mllm_chat_output(
@@ -303,13 +304,16 @@ class BatchedEngine(BaseEngine):
             )
 
         result = await loop.run_in_executor(executor, _run_simple_mllm_chat)
-        text = clean_output_text(getattr(result, "text", "") or "")
+        raw_text = getattr(result, "text", "") or ""
+        text = clean_output_text(raw_text)
         return GenerationOutput(
             text=text,
-            new_text=text,
-            raw_text=getattr(result, "text", "") or text,
+            new_text=raw_text or text,
+            raw_text=raw_text or text,
             prompt_tokens=int(getattr(result, "prompt_tokens", 0) or 0),
             completion_tokens=int(getattr(result, "completion_tokens", 0) or 0),
+            cached_tokens=int(getattr(result, "cached_tokens", 0) or 0),
+            cache_detail=getattr(result, "cache_detail", "") or "",
             finish_reason=getattr(result, "finish_reason", None) or "stop",
             finished=True,
         )
@@ -1136,6 +1140,7 @@ class BatchedEngine(BaseEngine):
         extra_template_kwargs: dict | None,
         prompt_with_gen: str,
         num_videos: int = 0,
+        num_audio: int = 0,
     ) -> int:
         """Compute the number of tokens added by add_generation_prompt=True.
 
@@ -1161,6 +1166,7 @@ class BatchedEngine(BaseEngine):
                 tools,
                 num_images=num_images,
                 num_videos=num_videos,
+                num_audio=num_audio,
                 enable_thinking=enable_thinking,
                 extra_template_kwargs=extra_template_kwargs,
                 skip_generation_prompt=True,
@@ -1203,6 +1209,7 @@ class BatchedEngine(BaseEngine):
         enable_thinking: bool,
         extra_template_kwargs: dict | None,
         num_videos: int = 0,
+        num_audio: int = 0,
     ) -> list[tuple[int, str]]:
         """Compute (token_offset, role) boundaries for the chat history.
 
@@ -1254,6 +1261,7 @@ class BatchedEngine(BaseEngine):
                         tools if i == len(messages) else None,
                         num_images=num_images if i == len(messages) else 0,
                         num_videos=num_videos if i == len(messages) else 0,
+                        num_audio=num_audio if i == len(messages) else 0,
                         enable_thinking=enable_thinking,
                         extra_template_kwargs=extra_template_kwargs,
                         skip_generation_prompt=True,
@@ -1284,6 +1292,7 @@ class BatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         num_images: int = 0,
         num_videos: int = 0,
+        num_audio: int = 0,
         enable_thinking: bool = True,
         extra_template_kwargs: dict | None = None,
         skip_generation_prompt: bool = False,
@@ -1340,6 +1349,7 @@ class BatchedEngine(BaseEngine):
             and (
                 num_images > 0
                 or num_videos > 0
+                or num_audio > 0
                 or mllm_model_type == "zaya1_vl"
                 or (
                     mllm_model_type == "mimo_v2"
@@ -1381,6 +1391,7 @@ class BatchedEngine(BaseEngine):
                             mllm_model_type == "zaya1_vl"
                             and num_images == 0
                             and num_videos == 0
+                            and num_audio == 0
                         ):
                             normalizer = MLXMultimodalLM.__new__(MLXMultimodalLM)
                             normalizer.config = {"model_type": "zaya1_vl"}
@@ -1432,7 +1443,7 @@ class BatchedEngine(BaseEngine):
                         tool_parser_id=self._model_tool_parser_name(),
                     )
 
-                if num_images > 0:
+                if num_images > 0 and num_audio == 0:
                     # Two-step pipeline:
                     # 1. Build messages with image tokens via mlx_vlm
                     #    (return_messages=True)
@@ -1928,12 +1939,14 @@ class BatchedEngine(BaseEngine):
         if self._use_simple_mllm_media_fallback(
             images=all_images,
             videos=all_videos,
+            audio=all_audio,
         ):
             logger.info(
-                "Using simple MLLM media fallback for %s with %d image(s), %d video(s)",
+                "Using simple MLLM media fallback for %s with %d image(s), %d video(s), %d audio input(s)",
                 self._model_family_name(),
                 len(all_images),
                 len(all_videos),
+                len(all_audio),
             )
             return await self._simple_mllm_chat_output(
                 messages,
@@ -1961,6 +1974,7 @@ class BatchedEngine(BaseEngine):
             template_tools,
             num_images=len(all_images),
             num_videos=len(all_videos),
+            num_audio=len(all_audio),
             enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
@@ -1976,6 +1990,7 @@ class BatchedEngine(BaseEngine):
                 messages, template_tools, len(all_images),
                 thinking_enabled, extra_tpl, prompt,
                 num_videos=len(all_videos),
+                num_audio=len(all_audio),
             )
 
         # Phase 5 audit fix (F11, 2026-04-08): compute per-segment boundaries
@@ -1988,6 +2003,7 @@ class BatchedEngine(BaseEngine):
             messages, template_tools, len(all_images),
             thinking_enabled, extra_tpl,
             num_videos=len(all_videos),
+            num_audio=len(all_audio),
         )
 
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
@@ -2089,12 +2105,14 @@ class BatchedEngine(BaseEngine):
         if self._use_simple_mllm_media_fallback(
             images=all_images,
             videos=all_videos,
+            audio=all_audio,
         ):
             logger.info(
-                "Using simple MLLM media streaming fallback for %s with %d image(s), %d video(s)",
+                "Using simple MLLM media streaming fallback for %s with %d image(s), %d video(s), %d audio input(s)",
                 self._model_family_name(),
                 len(all_images),
                 len(all_videos),
+                len(all_audio),
             )
             yield await self._simple_mllm_chat_output(
                 messages,
@@ -2123,6 +2141,7 @@ class BatchedEngine(BaseEngine):
             template_tools,
             num_images=len(all_images),
             num_videos=len(all_videos),
+            num_audio=len(all_audio),
             enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
@@ -2138,6 +2157,7 @@ class BatchedEngine(BaseEngine):
                 messages, template_tools, len(all_images),
                 thinking_enabled, extra_tpl, prompt,
                 num_videos=len(all_videos),
+                num_audio=len(all_audio),
             )
 
         # F11 (audit 2026-04-08): per-segment boundaries for cache_type LRU.
@@ -2147,6 +2167,7 @@ class BatchedEngine(BaseEngine):
             messages, template_tools, len(all_images),
             thinking_enabled, extra_tpl,
             num_videos=len(all_videos),
+            num_audio=len(all_audio),
         )
 
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)

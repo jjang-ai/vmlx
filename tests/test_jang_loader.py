@@ -63,6 +63,50 @@ class TestJangDetection:
 
         assert _v2_bundle_has_tq_packed(tmp_path, [tmp_path / "model-00001.safetensors"]) is True
 
+    def test_gemma4_loader_normalizes_integer_softcap_in_nested_text_config(self):
+        from vmlx_engine.utils.jang_loader import _normalize_gemma4_config_scalar_types
+
+        config = {
+            "model_type": "gemma4_unified",
+            "text_config": {
+                "model_type": "gemma4_unified_text",
+                "final_logit_softcapping": 30,
+            },
+        }
+
+        _normalize_gemma4_config_scalar_types(config)
+
+        assert config["text_config"]["final_logit_softcapping"] == 30.0
+        assert type(config["text_config"]["final_logit_softcapping"]) is float
+
+    def test_gemma4_processor_path_uses_temporary_normalized_config(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import _prepare_gemma4_processor_model_path
+
+        original_config = {
+            "model_type": "gemma4_unified",
+            "text_config": {
+                "model_type": "gemma4_unified_text",
+                "final_logit_softcapping": 30,
+            },
+        }
+        (tmp_path / "config.json").write_text(json.dumps(original_config))
+        (tmp_path / "tokenizer_config.json").write_text("{}")
+
+        processor_path, temp_dir = _prepare_gemma4_processor_model_path(tmp_path)
+
+        try:
+            assert temp_dir is not None
+            assert processor_path != tmp_path
+            normalized = json.loads((processor_path / "config.json").read_text())
+            assert normalized["text_config"]["final_logit_softcapping"] == 30.0
+            assert type(normalized["text_config"]["final_logit_softcapping"]) is float
+            assert (processor_path / "tokenizer_config.json").is_symlink()
+            unchanged = json.loads((tmp_path / "config.json").read_text())
+            assert type(unchanged["text_config"]["final_logit_softcapping"]) is int
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
+
     def test_load_jang_model_accepts_affine_weight_format(
         self, tmp_path, monkeypatch
     ):
@@ -151,6 +195,507 @@ class TestJangDetection:
         )
 
         assert jang_loader.load_jang_vlm_model(tmp_path, skip_eval=True) is expected
+
+    def test_gemma4_moe_mxfp_experts_split_to_switch_glu_quantized_sidecars(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import (
+            _split_gemma4_moe_quantized_expert_sidecars,
+        )
+
+        weights = {
+            "language_model.model.layers.0.experts.gate_up_proj.weight": mx.arange(
+                2 * 4 * 4, dtype=mx.uint32
+            ).reshape(2, 4, 4),
+            "language_model.model.layers.0.experts.gate_up_proj.scales": mx.arange(
+                2 * 4 * 1, dtype=mx.uint8
+            ).reshape(2, 4, 1),
+            "language_model.model.layers.0.experts.gate_up_proj.biases": mx.arange(
+                2 * 4 * 1, dtype=mx.float16
+            ).reshape(2, 4, 1),
+            "language_model.model.layers.0.experts.down_proj.weight": mx.ones(
+                (2, 6, 4), dtype=mx.uint32
+            ),
+            "language_model.model.layers.0.experts.down_proj.scales": mx.ones(
+                (2, 6, 1), dtype=mx.uint8
+            ),
+        }
+
+        out = _split_gemma4_moe_quantized_expert_sidecars(weights)
+
+        assert "language_model.model.layers.0.experts.gate_up_proj.weight" not in out
+        assert "language_model.model.layers.0.experts.gate_up_proj.scales" not in out
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].shape == (2, 2, 4)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.up_proj.weight"
+        ].shape == (2, 2, 4)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.down_proj.weight"
+        ].shape == (2, 6, 4)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].dtype == mx.uint32
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.scales"
+        ].dtype == mx.uint8
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.biases"
+        ].dtype == mx.float16
+
+    def test_gemma4_ple_native_mxfp4_preserves_quantized_module_sidecars(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import _prepare_gemma_ple_shard_weights
+
+        source = (mx.arange(32, dtype=mx.float32).reshape(1, 32) / 64).astype(
+            mx.float16
+        )
+        qweight, scales = mx.quantize(source, group_size=32, bits=4, mode="mxfp4")
+        key = "language_model.model.per_layer_model_projection.weight"
+        shard = {
+            key: qweight,
+            "language_model.model.per_layer_model_projection.scales": scales,
+        }
+        config = {
+            "model_type": "gemma4",
+            "text_config": {
+                "model_type": "gemma4_text",
+                "hidden_size_per_layer_input": 256,
+            },
+        }
+
+        pending = _prepare_gemma_ple_shard_weights(
+            shard,
+            config,
+            quant_mode="mxfp4",
+            quantized_module_paths={
+                "language_model.model.per_layer_model_projection"
+            },
+            pending={},
+        )
+
+        assert pending == {}
+        assert shard[key] is qweight
+        assert shard[key].dtype == mx.uint32
+        assert shard["language_model.model.per_layer_model_projection.scales"] is scales
+        assert shard["language_model.model.per_layer_model_projection.scales"].dtype == mx.uint8
+
+    def test_gemma4_ple_native_mxfp4_materializes_legacy_nonquantized_module_across_shards(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import _prepare_gemma_ple_shard_weights
+
+        source = (mx.arange(64, dtype=mx.float32).reshape(2, 32) / 128).astype(
+            mx.float16
+        )
+        qweight, scales = mx.quantize(source, group_size=32, bits=4, mode="mxfp4")
+        key = "language_model.model.embed_tokens_per_layer.weight"
+        scale_key = "language_model.model.embed_tokens_per_layer.scales"
+        config = {
+            "model_type": "gemma4",
+            "text_config": {
+                "model_type": "gemma4_text",
+                "hidden_size_per_layer_input": 256,
+            },
+        }
+        pending = {}
+        weight_shard = {key: qweight}
+
+        pending = _prepare_gemma_ple_shard_weights(
+            weight_shard,
+            config,
+            quant_mode="mxfp4",
+            pending=pending,
+        )
+
+        assert key not in weight_shard
+        assert "language_model.model.embed_tokens_per_layer" in pending
+
+        scale_shard = {scale_key: scales}
+        pending = _prepare_gemma_ple_shard_weights(
+            scale_shard,
+            config,
+            quant_mode="mxfp4",
+            pending=pending,
+        )
+
+        expected = mx.dequantize(
+            qweight,
+            scales,
+            None,
+            group_size=32,
+            bits=4,
+            mode="mxfp4",
+            dtype=mx.float16,
+        )
+        mx.eval(scale_shard[key], expected)
+        assert pending == {}
+        assert scale_key not in scale_shard
+        assert scale_shard[key].dtype == mx.float16
+        assert scale_shard[key].shape == (2, 32)
+        assert bool(mx.allclose(scale_shard[key], expected).item())
+
+    def test_vlm_quant_candidates_map_gemma4_switch_glu_to_fused_expert_sidecars(self):
+        from vmlx_engine.utils.jang_loader import _vlm_quant_module_path_candidates
+
+        gate_candidates = _vlm_quant_module_path_candidates(
+            "language_model.model.layers.0.experts.switch_glu.gate_proj",
+            "gemma4_unified",
+        )
+        up_candidates = _vlm_quant_module_path_candidates(
+            "language_model.model.layers.0.experts.switch_glu.up_proj",
+            "gemma4_unified",
+        )
+        down_candidates = _vlm_quant_module_path_candidates(
+            "language_model.model.layers.0.experts.switch_glu.down_proj",
+            "gemma4_unified",
+        )
+
+        assert "language_model.model.layers.0.experts.gate_up_proj" in gate_candidates
+        assert "language_model.model.layers.0.experts.gate_up_proj" in up_candidates
+        assert "language_model.model.layers.0.experts.down_proj" in down_candidates
+
+    def test_vendored_gemma4_text_sanitize_splits_quantized_fused_expert_sidecars(self):
+        import mlx.core as mx
+
+        from vmlx_engine.models import _gemma4_text_upstream
+
+        model = _gemma4_text_upstream.Model.__new__(_gemma4_text_upstream.Model)
+        weights = model.sanitize(
+            {
+                "model.layers.0.experts.gate_up_proj.weight": mx.arange(
+                    2 * 4 * 4, dtype=mx.uint32
+                ).reshape(2, 4, 4),
+                "model.layers.0.experts.gate_up_proj.scales": mx.arange(
+                    2 * 4 * 1, dtype=mx.uint8
+                ).reshape(2, 4, 1),
+                "model.layers.0.experts.gate_up_proj.biases": mx.arange(
+                    2 * 4 * 1, dtype=mx.float16
+                ).reshape(2, 4, 1),
+                "model.layers.0.experts.down_proj.weight": mx.ones(
+                    (2, 6, 4), dtype=mx.uint32
+                ),
+            }
+        )
+
+        assert "model.layers.0.experts.gate_up_proj.weight" not in weights
+        assert weights[
+            "model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].shape == (2, 2, 4)
+        assert weights[
+            "model.layers.0.experts.switch_glu.up_proj.biases"
+        ].shape == (2, 2, 1)
+        assert weights[
+            "model.layers.0.experts.switch_glu.down_proj.weight"
+        ].dtype == mx.uint32
+
+    def test_vendored_gemma4_unified_sanitize_splits_quantized_fused_expert_sidecars(self):
+        import mlx.core as mx
+
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified import gemma4_unified
+
+        model = gemma4_unified.Model.__new__(gemma4_unified.Model)
+        model.embed_audio = None
+        weights = model.sanitize(
+            {
+                "model.language_model.layers.0.experts.gate_up_proj.weight": mx.arange(
+                    2 * 4 * 4, dtype=mx.uint32
+                ).reshape(2, 4, 4),
+                "model.language_model.layers.0.experts.gate_up_proj.scales": mx.arange(
+                    2 * 4 * 1, dtype=mx.uint8
+                ).reshape(2, 4, 1),
+                "model.language_model.layers.0.experts.gate_up_proj.biases": mx.arange(
+                    2 * 4 * 1, dtype=mx.float16
+                ).reshape(2, 4, 1),
+                "model.language_model.layers.0.experts.down_proj.scales": mx.ones(
+                    (2, 6, 1), dtype=mx.uint8
+                ),
+            }
+        )
+
+        assert "language_model.model.layers.0.experts.gate_up_proj.weight" not in weights
+        assert weights[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].shape == (2, 2, 4)
+        assert weights[
+            "language_model.model.layers.0.experts.switch_glu.up_proj.biases"
+        ].shape == (2, 2, 1)
+        assert weights[
+            "language_model.model.layers.0.experts.switch_glu.down_proj.scales"
+        ].dtype == mx.uint8
+
+    def test_vendored_gemma4_unified_uses_gemma4_audio_tower_config(self):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified.config import ModelConfig
+
+        config = ModelConfig.from_dict(
+            {
+                "model_type": "gemma4_unified",
+                "audio_config": {
+                    "model_type": "gemma4_audio",
+                    "hidden_size": 1024,
+                    "num_hidden_layers": 12,
+                    "num_attention_heads": 8,
+                    "output_proj_dims": 1536,
+                    "subsampling_conv_channels": [128, 32],
+                },
+            }
+        )
+
+        assert config.audio_config.__class__.__module__ == "mlx_vlm.models.gemma4.config"
+        assert config.audio_config.model_type == "gemma4_audio"
+        assert config.audio_config.hidden_size == 1024
+        assert config.audio_config.output_proj_dims == 1536
+        assert config.audio_config.num_hidden_layers == 12
+
+    def test_vendored_gemma4_unified_accepts_integer_text_softcap(self):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified.config import ModelConfig
+
+        config = ModelConfig.from_dict(
+            {
+                "model_type": "gemma4_unified",
+                "text_config": {
+                    "model_type": "gemma4_unified_text",
+                    "final_logit_softcapping": 30,
+                },
+            }
+        )
+
+        assert config.text_config.final_logit_softcapping == 30.0
+        assert type(config.text_config.final_logit_softcapping) is float
+
+    def test_vendored_gemma4_unified_preserves_gemma4_vision_hidden_size(self):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified.config import ModelConfig
+
+        config = ModelConfig.from_dict(
+            {
+                "model_type": "gemma4_unified",
+                "vision_config": {
+                    "model_type": "gemma4_vision",
+                    "hidden_size": 768,
+                    "patch_size": 16,
+                    "default_output_length": 280,
+                    "position_embedding_size": 10240,
+                    "standardize": False,
+                },
+            }
+        )
+
+        assert config.vision_config.model_type == "gemma4_vision"
+        assert config.vision_config.hidden_size == 768
+        assert config.vision_config.default_output_length == 280
+        assert config.vision_config.position_embedding_size == 10240
+        assert config.vision_config.standardize is False
+        assert config.vision_config.output_proj_dims == 3840
+
+    def test_vendored_gemma4_unified_uses_full_vision_tower_for_gemma4_vision(self, monkeypatch):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified import gemma4_unified
+        from mlx_vlm.models.gemma4_unified.config import ModelConfig
+
+        events = []
+
+        class FakeLanguageModel:
+            def __init__(self, config):
+                self.config = config
+                self.model = object()
+
+        class FakeFullVisionTower:
+            def __init__(self, config):
+                events.append(("full_vision", config.hidden_size))
+
+        class FakeUnifiedVisionEmbedder:
+            def __init__(self, config):
+                events.append(("unified_embedder", config.output_proj_dims))
+
+        class FakeMultimodalEmbedder:
+            def __init__(self, embedding_dim, text_hidden_size, eps):
+                self.embedding_dim = embedding_dim
+                self.text_hidden_size = text_hidden_size
+                events.append(("projector", embedding_dim, text_hidden_size))
+
+        monkeypatch.setattr(gemma4_unified, "LanguageModel", FakeLanguageModel)
+        monkeypatch.setattr(gemma4_unified, "Gemma4VisionModel", FakeFullVisionTower)
+        monkeypatch.setattr(gemma4_unified, "VisionEmbedder", FakeUnifiedVisionEmbedder)
+        monkeypatch.setattr(gemma4_unified, "MultimodalEmbedder", FakeMultimodalEmbedder)
+
+        config = ModelConfig.from_dict(
+            {
+                "model_type": "gemma4_unified",
+                "vision_config": {
+                    "model_type": "gemma4_vision",
+                    "hidden_size": 768,
+                },
+                "text_config": {
+                    "model_type": "gemma4_unified_text",
+                    "hidden_size": 1536,
+                },
+                "audio_config": None,
+            }
+        )
+        model = gemma4_unified.Model(config)
+
+        assert model.vision_embedder is None
+        assert model.vision_tower is not None
+        assert model.embed_vision.embedding_dim == 768
+        assert ("full_vision", 768) in events
+        assert ("unified_embedder", 3840) not in events
+        assert ("projector", 768, 1536) in events
+
+    def test_vendored_gemma4_unified_keeps_encoder_free_embedder_for_unified_vision(self, monkeypatch):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified import gemma4_unified
+        from mlx_vlm.models.gemma4_unified.config import ModelConfig
+
+        events = []
+
+        class FakeLanguageModel:
+            def __init__(self, config):
+                self.config = config
+                self.model = object()
+
+        class FakeFullVisionTower:
+            def __init__(self, config):
+                events.append(("full_vision", config.hidden_size))
+
+        class FakeUnifiedVisionEmbedder:
+            def __init__(self, config):
+                events.append(("unified_embedder", config.output_proj_dims))
+
+        class FakeMultimodalEmbedder:
+            def __init__(self, embedding_dim, text_hidden_size, eps):
+                self.embedding_dim = embedding_dim
+                self.text_hidden_size = text_hidden_size
+                events.append(("projector", embedding_dim, text_hidden_size))
+
+        monkeypatch.setattr(gemma4_unified, "LanguageModel", FakeLanguageModel)
+        monkeypatch.setattr(gemma4_unified, "Gemma4VisionModel", FakeFullVisionTower)
+        monkeypatch.setattr(gemma4_unified, "VisionEmbedder", FakeUnifiedVisionEmbedder)
+        monkeypatch.setattr(gemma4_unified, "MultimodalEmbedder", FakeMultimodalEmbedder)
+
+        config = ModelConfig.from_dict(
+            {
+                "model_type": "gemma4_unified",
+                "vision_config": {
+                    "model_type": "gemma4_unified_vision",
+                    "output_proj_dims": 3840,
+                },
+                "text_config": {
+                    "model_type": "gemma4_unified_text",
+                    "hidden_size": 3840,
+                },
+                "audio_config": None,
+            }
+        )
+        model = gemma4_unified.Model(config)
+
+        assert model.vision_tower is None
+        assert model.vision_embedder is not None
+        assert model.embed_vision.embedding_dim == 3840
+        assert ("unified_embedder", 3840) in events
+        assert not any(event[0] == "full_vision" for event in events)
+
+    def test_vendored_gemma4_unified_processor_uses_raw_image_processor_for_gemma4_vision(self):
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4.processing_gemma4 import Gemma4ImageProcessor
+        from mlx_vlm.models.gemma4_unified.processing_gemma4_unified import (
+            Gemma4UnifiedImageProcessor,
+            _make_image_processor_for_model_config,
+        )
+
+        full = _make_image_processor_for_model_config(
+            {"patch_size": 16, "max_soft_tokens": 280},
+            {"vision_config": {"model_type": "gemma4_vision"}},
+        )
+        unified = _make_image_processor_for_model_config(
+            {"patch_size": 16, "max_soft_tokens": 280},
+            {"vision_config": {"model_type": "gemma4_unified_vision"}},
+        )
+
+        assert isinstance(full, Gemma4ImageProcessor)
+        assert not isinstance(full, Gemma4UnifiedImageProcessor)
+        assert isinstance(unified, Gemma4UnifiedImageProcessor)
+
+    def test_vendored_gemma4_unified_audio_tower_uses_padding_mask_and_compacts(self):
+        import mlx.core as mx
+
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified import gemma4_unified
+
+        class FakeAudioTower:
+            def __init__(self):
+                self.padding_mask = None
+
+            def __call__(self, features, padding_mask):
+                self.padding_mask = padding_mask
+                return mx.ones((1, 2, 3)), mx.array([[False, True]])
+
+        class FakeEmbedAudio:
+            def __call__(self, encoded):
+                assert encoded.shape == (1, 2, 3)
+                return mx.ones((1, 2, 5))
+
+        model = gemma4_unified.Model.__new__(gemma4_unified.Model)
+        model.audio_tower = FakeAudioTower()
+        model.embed_audio = FakeEmbedAudio()
+
+        result = gemma4_unified.Model.get_audio_features(
+            model,
+            mx.zeros((1, 4, 128)),
+            mx.array([[True, True, False, False]]),
+        )
+
+        assert model.audio_tower.padding_mask.tolist() == [[False, False, True, True]]
+        assert result.shape == (1, 5)
+
+    def test_vendored_gemma4_unified_sanitize_transposes_audio_tower_convs(self):
+        import mlx.core as mx
+
+        from vmlx_engine.models import gemma4_unified_register
+
+        gemma4_unified_register.register_gemma4_unified_runtime()
+        from mlx_vlm.models.gemma4_unified import gemma4_unified
+
+        model = gemma4_unified.Model.__new__(gemma4_unified.Model)
+        model.embed_audio = object()
+        weights = model.sanitize(
+            {
+                "audio_tower.subsample_conv_projection.layer0.conv.weight": mx.zeros(
+                    (2, 1, 3, 3)
+                ),
+                "audio_tower.layers.0.lconv1d.depthwise_conv1d.weight": mx.zeros(
+                    (4, 1, 5)
+                ),
+            }
+        )
+
+        assert weights[
+            "audio_tower.subsample_conv_projection.layer0.conv.weight"
+        ].shape == (2, 3, 3, 1)
+        assert weights[
+            "audio_tower.layers.0.lconv1d.depthwise_conv1d.weight"
+        ].shape == (4, 5, 1)
 
     def test_jangtq_vlm_bits_map_falls_back_to_config_metadata(self):
         from vmlx_engine.utils.jang_loader import _jangtq_bits_map_from_metadata

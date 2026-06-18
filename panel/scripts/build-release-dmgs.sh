@@ -25,42 +25,35 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="${PYTHON:-python3}"
 fi
 PREPACKAGE_READY_MANIFEST_OUT="${VMLX_PREPACKAGE_READY_MANIFEST_OUT:-${VMLINUX_PREPACKAGE_READY_MANIFEST_OUT:-$ROOT_DIR/build/current-release-regression-manifest-pre-dmg-release-build.json}}"
-case "$PREPACKAGE_READY_MANIFEST_OUT" in
-  /*) ;;
-  *) PREPACKAGE_READY_MANIFEST_OUT="$ROOT_DIR/$PREPACKAGE_READY_MANIFEST_OUT" ;;
-esac
 RELEASE_CODESIGN_IDENTITY="${VMLX_RELEASE_CODESIGN_IDENTITY:-${VMLINUX_RELEASE_CODESIGN_IDENTITY:-${CSC_NAME:-Developer ID Application: ShieldStack LLC (55KGF2S5AY)}}}"
-ELECTRON_BUILDER_CSC_NAME="${VMLINUX_ELECTRON_BUILDER_CSC_NAME:-${VMLX_ELECTRON_BUILDER_CSC_NAME:-${CSC_NAME:-$RELEASE_CODESIGN_IDENTITY}}}"
-ELECTRON_BUILDER_CSC_NAME="${ELECTRON_BUILDER_CSC_NAME#Developer ID Application: }"
-CHECKPOINT_RELEASE_OVERRIDE="${VMLX_CHECKPOINT_RELEASE_OVERRIDE:-${VMLINUX_CHECKPOINT_RELEASE_OVERRIDE:-0}}"
+
+RELEASE_SCOPE="${VMLX_RELEASE_SCOPE:-${VMLINUX_RELEASE_SCOPE:-}}"
 
 echo "==> Checking pre-package release ledger before public DMG build"
-if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]; then
-  echo "WARNING: VMLX_CHECKPOINT_RELEASE_OVERRIDE=1 — building a checkpoint DMG with open rows." >&2
-  echo "WARNING: Release notes must list open rows from: $PREPACKAGE_READY_MANIFEST_OUT" >&2
-  set +e
-  (
-    cd "$ROOT_DIR"
-    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-      --out "$PREPACKAGE_READY_MANIFEST_OUT"
-  )
-  manifest_rc=$?
-  set -e
-  if [[ ! -f "$PREPACKAGE_READY_MANIFEST_OUT" ]]; then
-    echo "ERROR: checkpoint override did not produce pre-package manifest: $PREPACKAGE_READY_MANIFEST_OUT" >&2
-    exit "${manifest_rc:-1}"
-  fi
-  if [[ "$manifest_rc" -ne 0 ]]; then
-    echo "WARNING: checkpoint pre-package manifest exited $manifest_rc; continuing only because override is explicit." >&2
-  fi
-else
-  (
-    cd "$ROOT_DIR"
-    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-      --require-prepackage-ready \
-      --out "$PREPACKAGE_READY_MANIFEST_OUT"
-  )
-fi
+case "$RELEASE_SCOPE" in
+  mm3_gemma_vl)
+    (
+      cd "$ROOT_DIR"
+      "$PYTHON_BIN" "panel/scripts/scoped-release-preflight.py" \
+        --scope mm3_gemma_vl \
+        --out "$PREPACKAGE_READY_MANIFEST_OUT"
+    )
+    ;;
+  "")
+    (
+      cd "$ROOT_DIR"
+      "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
+        --require-prepackage-ready \
+        --out "$PREPACKAGE_READY_MANIFEST_OUT"
+    )
+    ;;
+  *)
+    echo "ERROR: unsupported release scope: $RELEASE_SCOPE" >&2
+    echo "Set VMLX_RELEASE_SCOPE=mm3_gemma_vl (or VMLINUX_RELEASE_SCOPE=mm3_gemma_vl)." >&2
+    echo "Supported scoped release value: mm3_gemma_vl" >&2
+    exit 2
+    ;;
+esac
 
 sign_bundled_python_native_files() {
   local bundled_python="$1"
@@ -80,35 +73,6 @@ sign_bundled_python_native_files() {
     fi
   done < <(find "$bundled_python" -type f \( -name "*.dylib" -o -name "*.so" -o -perm +111 \))
   echo "  signed $signed_count bundled Python native files"
-}
-
-sign_release_macho_file() {
-  local file_path="$1"
-  local identity="$2"
-
-  if [[ ! -f "$file_path" ]]; then
-    echo "ERROR: missing release Mach-O file: $file_path" >&2
-    exit 1
-  fi
-  if ! file "$file_path" | grep -q "Mach-O"; then
-    echo "ERROR: expected Mach-O release file: $file_path" >&2
-    exit 1
-  fi
-
-  codesign --force --timestamp --options runtime --sign "$identity" "$file_path" >/dev/null
-}
-
-sign_electron_nested_runtime_files() {
-  local app_path="$1"
-  local identity="$2"
-  local framework_root="$app_path/Contents/Frameworks"
-
-  echo "==> Signing nested Electron/Squirrel runtime files with release identity"
-  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libEGL.dylib" "$identity"
-  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib" "$identity"
-  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib" "$identity"
-  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib" "$identity"
-  sign_release_macho_file "$framework_root/Squirrel.framework/Versions/A/Resources/ShipIt" "$identity"
 }
 
 finalize_release_app_signature() {
@@ -133,7 +97,6 @@ finalize_release_app_signature() {
   fi
 
   sign_bundled_python_native_files "$bundled_python" "$identity"
-  sign_electron_nested_runtime_files "$app_path" "$identity"
   echo "==> Final release app seal/signature: $app_path"
   codesign --force --deep --timestamp --options runtime --entitlements "$entitlements" --sign "$identity" "$app_path"
   codesign --verify --deep --strict --verbose=2 "$app_path"
@@ -175,12 +138,11 @@ build_one() {
   ./scripts/verify-bundled-python.sh
   npx electron-vite build
   rm -rf "$staged_output"
-  CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir \
-    --config.mac.identity=null \
+  npx electron-builder --mac --dir \
     --config.directories.output="$staged_output"
   app_path="$(find_staged_app "$staged_output")"
   finalize_release_app_signature "$app_path" "$RELEASE_CODESIGN_IDENTITY"
-  CSC_NAME="$ELECTRON_BUILDER_CSC_NAME" npx electron-builder --mac dmg \
+  npx electron-builder --mac dmg \
     --prepackaged "$app_path" \
     --config.directories.output="$DIST_DIR" \
     --config.mac.artifactName="vMLX-\${version}-${flavor}-\${arch}.\${ext}"

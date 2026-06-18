@@ -1109,7 +1109,7 @@ describe('Performance & Generation', () => {
         const helper = readFileSync(resolve(__dirname, '../src/shared/sessionConfigMigrations.ts'), 'utf8')
         expect(source).toContain('function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean')
         expect(source).toContain('const bundleDefaultsChanged = applyBundleStartupDefaults(config, config.modelPath)')
-        expect(source).toContain('bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent')
+        expect(source).toContain('bundleDefaultsChanged || cacheDefaultsFilled || migrated || familyDefaultsChanged || markedCurrent')
         expect(helper).toContain('32768')
     })
 
@@ -2345,26 +2345,47 @@ describe('Default IP and New Settings', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         const serverSource = readFileSync('src/main/server.ts', 'utf8')
         expect(serverSource).toContain('cacheStackStartupDefaultsVersion?: number')
+        expect(source).toContain('function applyMissingCacheStackStartupDefaults')
         expect(source).toContain('Number(config.cacheStackStartupDefaultsVersion || 0) >= CACHE_STACK_STARTUP_DEFAULTS_VERSION')
+        expect(source).toContain('const cacheDefaultsFilled = applyMissingCacheStackStartupDefaults(config, config.modelPath)')
         expect(source).toContain('const markedCurrent = markCacheStackStartupDefaultsCurrent(config)')
         expect(source).toContain('const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)')
-        expect(source).toContain('if (bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent)')
+        expect(source).toContain('if (bundleDefaultsChanged || cacheDefaultsFilled || migrated || familyDefaultsChanged || markedCurrent)')
         expect(source).toContain('markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)')
         expect(source).toContain('cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION')
     })
 
-    it('create-session stamps incoming settings current before saved legacy migration', () => {
+    it('create-session fills missing cache settings before stamping incoming settings current', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         const start = source.indexOf('private async _createSessionInner')
         const existing = source.indexOf('const existing = db.getSessionByModelPath(modelPath)', start)
         const beforeExisting = source.slice(start, existing)
         const existingBlock = source.slice(existing, source.indexOf('const id = uuidv4()', existing))
 
+        expect(beforeExisting).toContain('applyMissingCacheStackStartupDefaults(config, modelPath)')
         expect(beforeExisting).toContain('markCacheStackStartupDefaultsCurrent(config)')
+        expect(beforeExisting.indexOf('applyMissingCacheStackStartupDefaults(config, modelPath)')).toBeLessThan(
+            beforeExisting.indexOf('markCacheStackStartupDefaultsCurrent(config)'),
+        )
         expect(beforeExisting).not.toContain('applyCacheStackStartupDefaultMigration(config')
         expect(existingBlock).toContain('applyCacheStackStartupDefaultMigration(existingConfig, modelPath)')
         expect(existingBlock).toContain('const merged = { ...existingConfig, ...config, modelPath, host, port }')
+        expect(existingBlock).toContain('applyMissingCacheStackStartupDefaults(merged, modelPath)')
         expect(existingBlock).toContain('markCacheStackStartupDefaultsCurrent(merged)')
+    })
+
+    it('fresh minimal session configs get visible paged-off SSD-prefix cache defaults', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const start = source.indexOf('function applyMissingCacheStackStartupDefaults')
+        const end = source.indexOf('function isZayaCacheStackMigrationTarget', start)
+        const helper = source.slice(start, end)
+
+        expect(helper).toContain("setConfigValue(mutable, 'enablePrefixCache'")
+        expect(helper).toContain("setConfigValue(mutable, 'usePagedCache', defaultUsePagedCache)")
+        expect(helper).toContain("setConfigValue(mutable, 'enableDiskCache', defaultEnableDiskCache)")
+        expect(helper).toContain("setConfigValue(mutable, 'kvCacheQuantization', 'auto')")
+        expect(helper).toContain('detectedUsePagedCache = detected.usePagedCache === true')
+        expect(helper).toContain('const defaultEnableDiskCache = dsv4Active ? false : true')
     })
 
     it('adopted running sessions apply bundle generation defaults before saving config', () => {

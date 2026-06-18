@@ -239,6 +239,17 @@ class Gemma4UnifiedAudioFeatureExtractor:
         )
 
 
+def _make_image_processor_for_model_config(ip_config: dict, model_config: dict):
+    vision_type = ""
+    if isinstance(model_config.get("vision_config"), dict):
+        vision_type = str(
+            model_config["vision_config"].get("model_type") or ""
+        ).lower()
+    if vision_type == "gemma4_vision":
+        return Gemma4ImageProcessor(**ip_config)
+    return Gemma4UnifiedImageProcessor(**ip_config)
+
+
 class Gemma4UnifiedProcessor(Gemma4Processor):
     model_type = "gemma4_unified"
     image_processor_class = "Gemma4UnifiedImageProcessor"
@@ -295,12 +306,16 @@ class Gemma4UnifiedProcessor(Gemma4Processor):
         load_chat_template(tokenizer, pretrained_model_name_or_path)
 
         proc_config = {}
+        model_config = {}
         if is_local:
             for name in ("processor_config.json", "preprocessor_config.json"):
                 config_path = model_path / name
                 if config_path.exists():
                     proc_config = json.loads(config_path.read_text())
                     break
+            config_path = model_path / "config.json"
+            if config_path.exists():
+                model_config = json.loads(config_path.read_text())
         else:
             try:
                 from huggingface_hub import hf_hub_download
@@ -327,7 +342,7 @@ class Gemma4UnifiedProcessor(Gemma4Processor):
             fe_config = dict(proc_config["feature_extractor"])
         fe_config.pop("feature_extractor_type", None)
 
-        image_processor = Gemma4UnifiedImageProcessor(**ip_config)
+        image_processor = _make_image_processor_for_model_config(ip_config, model_config)
         feature_extractor = Gemma4UnifiedAudioFeatureExtractor(**fe_config)
 
         image_seq_length = proc_config.get(

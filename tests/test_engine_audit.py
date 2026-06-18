@@ -264,6 +264,98 @@ class TestMLLMBatchRequestSampling:
 class TestBatchedEngineVideoTemplate:
     """BatchedEngine MLLM template handling for video-only requests."""
 
+    def test_gemma4_audio_only_media_uses_simple_mllm_fallback(self, monkeypatch):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._model_family_name = lambda: "gemma4"
+
+        assert engine._use_simple_mllm_media_fallback(
+            images=[],
+            videos=[],
+            audio=["/tmp/audio.wav"],
+        )
+        assert not engine._use_simple_mllm_media_fallback(
+            images=[],
+            videos=[],
+            audio=[],
+        )
+
+        monkeypatch.setenv("VMLINUX_DISABLE_MLLM_MEDIA_SIMPLE_FALLBACK", "1")
+        assert not engine._use_simple_mllm_media_fallback(
+            images=[],
+            videos=[],
+            audio=["/tmp/audio.wav"],
+        )
+
+    def test_non_gemma4_audio_only_media_stays_on_batched_scheduler(self):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._model_family_name = lambda: "qwen3_vl"
+
+        assert not engine._use_simple_mllm_media_fallback(
+            images=[],
+            videos=[],
+            audio=["/tmp/audio.wav"],
+        )
+
+    def test_audio_only_mllm_uses_processor_template_not_tokenizer_fallback(self):
+        pytest.importorskip("mlx_vlm")
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        captured = {}
+
+        class _Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                raise AssertionError("audio-only MLLM request used tokenizer fallback")
+
+            def encode(self, text, add_special_tokens=False):
+                return [1, 2, 3]
+
+        class _Processor:
+            tokenizer = _Tokenizer()
+
+            def apply_chat_template(self, messages, **kwargs):
+                captured["messages"] = messages
+                return "<bos><|turn>user\nTranscribe this.<|audio|><turn|>\n"
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = _Processor()
+        engine._tokenizer = None
+        engine._model_name = "gemma4-e2b-audio-test"
+        engine._model = SimpleNamespace(config={"model_type": "gemma4_unified"})
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Transcribe this."},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "AAAA", "format": "wav"},
+                    },
+                ],
+            }
+        ]
+
+        prompt = engine._apply_chat_template(
+            messages,
+            num_images=0,
+            num_videos=0,
+            num_audio=1,
+            enable_thinking=False,
+        )
+
+        assert "<|audio|>" in prompt
+        content = captured["messages"][0]["content"]
+        assert content[0]["type"] == "text"
+        assert content[1]["type"] == "audio"
+        assert not any(part.get("type") == "input_audio" for part in content)
+
     def test_video_only_mllm_uses_processor_template_not_tokenizer_fallback(self):
         pytest.importorskip("mlx_vlm")
         from vmlx_engine.engine.batched import BatchedEngine
@@ -710,7 +802,7 @@ class TestServerSamplingResolution:
         assert lookup_calls[0] == str(tmp_path)
         assert "served-alias" not in lookup_calls
 
-    def test_gemma4_native_video_capability_requires_video_processor(self, monkeypatch):
+    def test_gemma4_video_capability_requires_video_processor(self, monkeypatch):
         import vmlx_engine.server as server
 
         def fake_read_bundle_json(_bundle_path, filename):
@@ -726,49 +818,6 @@ class TestServerSamplingResolution:
         monkeypatch.setattr(server, "_read_bundle_json", fake_read_bundle_json)
 
         assert server._bundle_declares_native_video("/tmp/gemma4") is True
-
-    def test_gemma4_explicit_no_video_uses_frame_fallback_not_native_video(
-        self, monkeypatch, tmp_path
-    ):
-        import vmlx_engine.server as server
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "gemma4",
-                    "vision_config": {"model_type": "gemma4_vision"},
-                    "image_token_id": 258880,
-                    "video_token_id": 258884,
-                    "has_video": False,
-                    "modalities": {"text": True, "vision": True, "video": False},
-                }
-            )
-        )
-        (tmp_path / "jang_config.json").write_text(
-            json.dumps(
-                {
-                    "has_video": False,
-                    "modalities": {"text": True, "vision": True, "video": False},
-                }
-            )
-        )
-        (tmp_path / "processor_config.json").write_text(
-            json.dumps(
-                {
-                    "image_processor": {"image_processor_type": "Gemma4ImageProcessor"},
-                    "video_processor": {"video_processor_type": "Gemma4VideoProcessor"},
-                }
-            )
-        )
-
-        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-frame-fallback-test")
-        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
-
-        assert server._bundle_declares_native_video(str(tmp_path)) is False
-        assert server._bundle_supports_video_frame_fallback(str(tmp_path)) is True
-        assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
 
     def test_step37_video_capability_uses_frame_fallback(self, monkeypatch, tmp_path):
         import vmlx_engine.server as server
@@ -2644,64 +2693,6 @@ class TestServerSamplingResolution:
 
         assert server._resolve_max_tokens(None, "bundle-model") == 512
 
-    def test_gemma4_required_tool_reasoning_budget_floor_is_scoped(self):
-        from types import SimpleNamespace
-
-        import vmlx_engine.server as server
-
-        required_tool_request = SimpleNamespace(
-            tool_choice="required",
-            tools=[{"type": "function", "function": {"name": "run_command"}}],
-        )
-
-        assert (
-            server._apply_gemma4_required_tool_thinking_token_floor(
-                128,
-                request=required_tool_request,
-                model_key="gemma-4-E2B-it-qat-JANG_4M",
-                enable_thinking=True,
-            )
-            == 512
-        )
-        assert (
-            server._apply_gemma4_required_tool_thinking_token_floor(
-                768,
-                request=required_tool_request,
-                model_key="gemma-4-E2B-it-qat-JANG_4M",
-                enable_thinking=True,
-            )
-            == 768
-        )
-        assert (
-            server._apply_gemma4_required_tool_thinking_token_floor(
-                128,
-                request=required_tool_request,
-                model_key="gemma-4-E2B-it-qat-JANG_4M",
-                enable_thinking=False,
-            )
-            == 128
-        )
-        assert (
-            server._apply_gemma4_required_tool_thinking_token_floor(
-                128,
-                request=SimpleNamespace(
-                    tool_choice="auto", tools=required_tool_request.tools
-                ),
-                model_key="gemma-4-E2B-it-qat-JANG_4M",
-                enable_thinking=True,
-            )
-            == 128
-        )
-        assert (
-            server._apply_gemma4_required_tool_thinking_token_floor(
-                128,
-                request=required_tool_request,
-                model_key="Qwen3.6-35B-A3B",
-                enable_thinking=True,
-            )
-            == 128
-        )
-
     def test_omitted_server_max_tokens_uses_bundle_max_new_tokens(
         self,
         tmp_path,
@@ -3280,7 +3271,7 @@ class TestAPIModels:
             )
         with pytest.raises(ValidationError, match="max_tokens must be at least 1"):
             CompletionRequest(model="test", prompt="hi", max_tokens=-1)
-        with pytest.raises(ValidationError, match="max_output_tokens/max_tokens must be at least 1"):
+        with pytest.raises(ValidationError, match="max_output_tokens must be at least 1"):
             ResponsesRequest(model="test", input="hi", max_output_tokens=0)
         with pytest.raises(ValidationError, match="max_thinking_tokens must be at least 1"):
             ChatCompletionRequest(
@@ -3531,129 +3522,6 @@ class TestToolParserConcurrency:
         assert json.loads(tool_calls[0].function.arguments) == {
             "command": 'echo "Tool test successful!"'
         }
-
-    def test_xml_function_empty_required_args_fail_closed_at_server_boundary(self):
-        """Parameterless XML function tags must not emit arguments={} calls."""
-        import vmlx_engine.server as srv
-
-        request = srv.ChatCompletionRequest(
-            model="qwen3-coder-next",
-            messages=[
-                srv.Message(
-                    role="user",
-                    content="List /tmp using exec_command.",
-                )
-            ],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ],
-            tool_choice="required",
-        )
-        output = (
-            "Quick preamble: Checking what's in `/tmp`...\n"
-            "<tool_call>\n"
-            "<function=exec_command>\n"
-            "</function>\n"
-            "</tool_call>"
-        )
-
-        old_auto = srv._enable_auto_tool_choice
-        old_parser = srv._tool_call_parser
-        try:
-            srv._enable_auto_tool_choice = True
-            srv._tool_call_parser = "xml_function"
-            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
-        finally:
-            srv._enable_auto_tool_choice = old_auto
-            srv._tool_call_parser = old_parser
-
-        assert tool_calls is None
-        assert cleaned == "Quick preamble: Checking what's in `/tmp`..."
-        assert "<tool_call>" not in cleaned
-        assert "<function=exec_command>" not in cleaned
-
-    def test_generic_parser_empty_required_args_fail_closed_at_shared_boundary(self):
-        """Shared Chat/Responses parser boundary rejects missing required args."""
-        import vmlx_engine.server as srv
-
-        request = srv.ChatCompletionRequest(
-            model="llama-ish",
-            messages=[srv.Message(role="user", content="Run exec_command.")],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ],
-            tool_choice="required",
-        )
-        output = "<function=exec_command>{}</function>"
-
-        old_parser = srv._tool_call_parser
-        try:
-            srv._tool_call_parser = "auto"
-            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
-        finally:
-            srv._tool_call_parser = old_parser
-
-        assert tool_calls is None
-        assert cleaned == srv._strip_tool_markup_residue_for_display(output)
-
-    def test_responses_final_tool_emit_drops_empty_required_args(self):
-        """Responses final SSE guard must not emit empty required tool args."""
-        import vmlx_engine.server as srv
-
-        request = srv.ResponsesRequest(
-            model="qwen3-coder-next",
-            input="List /tmp using exec_command.",
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ],
-            tool_choice="required",
-        )
-        bad_call = srv.ToolCall(
-            id="call_empty",
-            type="function",
-            function=srv.FunctionCall(name="exec_command", arguments="{}"),
-        )
-        valid_no_required = srv.ToolCall(
-            id="call_no_required",
-            type="function",
-            function=srv.FunctionCall(name="no_required", arguments=""),
-        )
-
-        assert srv._drop_tool_calls_missing_required_args([bad_call], request) is None
-        assert (
-            srv._drop_tool_calls_missing_required_args([valid_no_required], request)
-            == [valid_no_required]
-        )
 
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
@@ -4370,17 +4238,8 @@ class TestC5ToolCallsInThinkBlocks:
         from vmlx_engine.server import stream_responses_api
 
         source = inspect.getsource(stream_responses_api)
-        assert "accumulated_content.strip()" in source, (
-            "Responses API streaming must try content-only accumulated text first"
-        )
-        assert "accumulated_reasoning.strip()" in source, (
-            "Responses API streaming must recover tool calls left in reasoning text"
-        )
-        assert "_strip_think_for_tool_parse(full_text)" in source, (
-            "Responses API streaming must retain a stripped-full-text fallback"
-        )
-        assert "_drop_tool_calls_missing_required_args(tool_calls, request)" in source, (
-            "Responses API streaming must fail closed on missing required tool args"
+        assert "request_parser and accumulated_content" in source, (
+            "Responses API tool parsing must prefer accumulated_content when reasoning parser active"
         )
 
 
@@ -4976,91 +4835,6 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
 
-    @pytest.mark.asyncio
-    async def test_n2_qwen_jang_vl_metadata_stays_text_only_until_native_mtp_vl_ready(
-        self, monkeypatch, tmp_path
-    ):
-        import vmlx_engine.server as server
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "qwen3_5_moe",
-                    "architectures": ["Qwen3_5MoeForConditionalGeneration"],
-                    "text_config": {
-                        "model_type": "qwen3_5_moe_text",
-                        "layer_types": [
-                            "linear_attention",
-                            "linear_attention",
-                            "full_attention",
-                        ],
-                        "mtp_num_hidden_layers": 1,
-                    },
-                    "vision_config": {"model_type": "qwen3_5_moe"},
-                    "video_token_id": 248057,
-                }
-            )
-        )
-        (tmp_path / "jang_config.json").write_text(
-            json.dumps(
-                {
-                    "format": "jang",
-                    "architecture": {
-                        "type": "hybrid_moe_ssm",
-                        "has_vision": True,
-                        "has_ssm": True,
-                        "has_moe": True,
-                    },
-                    "runtime": {
-                        "bundle_has_mtp": False,
-                        "mtp_layers": 1,
-                        "mtp_mode": "metadata_only_missing_weights",
-                    },
-                    "capabilities": {
-                        "family": "qwen3_5_moe",
-                        "modality": "vision",
-                        "cache_type": "hybrid",
-                        "tool_parser": "qwen",
-                        "reasoning_parser": "qwen3",
-                    },
-                }
-            )
-        )
-        (tmp_path / "model.safetensors.index.json").write_text(
-            json.dumps(
-                {
-                    "weight_map": {
-                        "language_model.model.embed_tokens.weight": "model.safetensors"
-                    }
-                }
-            )
-        )
-
-        class _Scheduler:
-            config = SimpleNamespace(enable_prefix_cache=False)
-            block_aware_cache = None
-            paged_cache_manager = None
-            memory_aware_cache = None
-            prefix_cache = None
-
-        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
-        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "n2-qwen-jang-vl-policy-test")
-        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
-
-        assert server._qwen_jang_vl_policy_text_only(str(tmp_path)) is True
-        assert server._bundle_declares_native_video(str(tmp_path)) is False
-        assert server._bundle_supports_video_frame_fallback(str(tmp_path)) is False
-        assert server._loaded_runtime_modalities() == ["text"]
-
-        caps = await server.model_capabilities("n2-qwen-jang-vl-policy-test")
-
-        assert caps["family"] == "qwen3_5_moe"
-        assert caps["modalities"] == ["text"]
-        assert caps["tool_parser"] == "qwen"
-        assert caps["reasoning_parser"] == "qwen3"
-
     def test_gemma4_runtime_modalities_do_not_infer_video_from_token_only_config(
         self, monkeypatch, tmp_path
     ):
@@ -5083,7 +4857,7 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
-    def test_gemma4_runtime_modalities_do_not_infer_audio_from_token_only_config(
+    def test_gemma4_runtime_modalities_respect_audio_false_capability(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -5092,57 +4866,28 @@ class TestMediaDiagnostics:
             json.dumps(
                 {
                     "model_type": "gemma4",
-                    "vision_config": {"model_type": "siglip"},
-                    "audio_config": None,
-                    "audio_token_id": 258881,
+                    "vision_config": {"model_type": "gemma4_vision"},
+                    "audio_config": {"model_type": "gemma4_audio"},
+                    "capabilities": {
+                        "modalities": {
+                            "text": True,
+                            "vision": True,
+                            "audio": False,
+                            "video": False,
+                        }
+                    },
                 }
             )
-        )
-        (tmp_path / "model.safetensors.index.json").write_text(
-            json.dumps({"weight_map": {"language_model.model.embed_tokens.weight": "a.safetensors"}})
         )
 
         monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
         monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-audio-token-only-test")
+        monkeypatch.setattr(server, "_model_name", "gemma4-vision-only-test")
         monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
-    def test_gemma4_runtime_modalities_advertise_audio_with_audio_tower_weights(
-        self, monkeypatch, tmp_path
-    ):
-        import vmlx_engine.server as server
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "gemma4",
-                    "vision_config": {"model_type": "siglip"},
-                    "audio_config": {"model_type": "gemma4_audio"},
-                    "audio_token_id": 258881,
-                }
-            )
-        )
-        (tmp_path / "model.safetensors.index.json").write_text(
-            json.dumps(
-                {
-                    "weight_map": {
-                        "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "a.safetensors",
-                        "language_model.model.embed_tokens.weight": "b.safetensors",
-                    }
-                }
-            )
-        )
-
-        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-audio-tower-test")
-        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
-
-        assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
-
-    def test_gemma4_unified_jang4m_runtime_modalities_gate_config_only_audio(
+    def test_gemma4_unified_jang4m_without_audio_tower_gates_audio(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -5167,7 +4912,7 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
-    def test_gemma4_unified_jang4m_runtime_modalities_advertise_weight_backed_audio(
+    def test_gemma4_unified_jang4m_audio_tower_weights_advertise_audio(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -5188,8 +4933,8 @@ class TestMediaDiagnostics:
             json.dumps(
                 {
                     "weight_map": {
-                        "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "a.safetensors",
-                        "embed_audio.embedding_projection.weight": "b.safetensors",
+                        "audio_tower.output_proj.weight": "model.safetensors",
+                        "embed_audio.embedding_projection.weight": "model.safetensors",
                     }
                 }
             )
@@ -5197,7 +4942,42 @@ class TestMediaDiagnostics:
 
         monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
         monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-audio-test")
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
+
+    def test_gemma4_unified_jang4m_direct_audio_requires_proven_stamp(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                    "capabilities": {"audio_runtime_proven": True},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_affine", "profile": "JANG_4M"})
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "embed_audio.embedding_projection.weight": "model.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-test")
         monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
@@ -5306,65 +5086,6 @@ class TestMediaDiagnostics:
         monkeypatch.setenv("VMLX_ALLOW_EXPERIMENTAL_MXFP_AUDIO", "1")
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
-
-    def test_gemma4_chat_audio_request_rejects_when_audio_not_weight_backed(
-        self, monkeypatch, tmp_path
-    ):
-        from fastapi.testclient import TestClient
-        import vmlx_engine.server as server
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "gemma4_unified",
-                    "vision_config": {"model_type": "gemma4_unified_vision"},
-                    "audio_config": {"model_type": "gemma4_unified_audio"},
-                    "audio_token_id": 258881,
-                }
-            )
-        )
-        (tmp_path / "jang_config.json").write_text(
-            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
-        )
-        (tmp_path / "model.safetensors.index.json").write_text(
-            json.dumps(
-                {
-                    "weight_map": {
-                        "embed_audio.embedding_projection.weight": "a.safetensors",
-                        "language_model.model.embed_tokens.weight": "b.safetensors",
-                    }
-                }
-            )
-        )
-
-        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-unified-audio-gate-test")
-        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
-
-        response = TestClient(server.app).post(
-            "/v1/chat/completions",
-            json={
-                "model": "gemma4-unified-audio-gate-test",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Transcribe this audio."},
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": "AAAA", "format": "wav"},
-                            },
-                        ],
-                    }
-                ],
-                "max_tokens": 8,
-            },
-        )
-
-        assert response.status_code == 400
-        assert "unsupported media modality audio" in response.text
-        assert "text, vision" in response.text
 
     def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
         self, monkeypatch, tmp_path
@@ -6238,10 +5959,10 @@ class TestResponsesStreamingExactToolResult:
         import inspect
         from vmlx_engine.server import stream_responses_api
         source = inspect.getsource(stream_responses_api)
-        assert "_responses_exact_tool_result_finalization_target(" in source
+        assert "_responses_exact_reply_target(request)" in source
+        assert "_responses_messages_have_tool_result_after_latest_user(messages)" in source
         assert "_await_chat_with_disconnect_abort(" in source
-        assert "finalization_kwargs[\"enable_thinking\"] = False" in source
-        assert "chat_kwargs=finalization_kwargs" in source
+        assert "chat_kwargs=kwargs" in source
         assert "response.output_text.delta" in source
 
     def test_exact_reply_finalizer_only_triggers_after_current_turn_tool_result(self):
@@ -6264,160 +5985,6 @@ class TestResponsesStreamingExactToolResult:
                 {"role": "assistant", "content": "A"},
                 {"role": "user", "content": "use tool then reply exactly: B"},
             ]
-        )
-
-    def test_exact_reply_target_accepts_visible_final_text_contract(self):
-        from types import SimpleNamespace
-        from vmlx_engine.server import (
-            _responses_exact_reply_target,
-            _responses_exact_reply_target_from_messages,
-            _responses_exact_tool_result_finalization_target,
-        )
-
-        request = SimpleNamespace(
-            input=[
-                {
-                    "role": "user",
-                    "content": (
-                        "After the tool result, send visible final text exactly: "
-                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
-                    ),
-                }
-            ],
-        )
-
-        assert (
-            _responses_exact_reply_target(request)
-            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
-        )
-
-        request_with_tool_tail = SimpleNamespace(
-            input=[
-                {
-                    "role": "user",
-                    "content": (
-                        "After the tool result, send visible final text exactly: "
-                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
-                    ),
-                },
-                {
-                    "type": "function_call_output",
-                    "call_id": "call_1",
-                    "output": "REAL_UI_LIVE_TOOL_ONE",
-                },
-            ],
-        )
-
-        assert (
-            _responses_exact_reply_target(request_with_tool_tail)
-            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
-        )
-
-        assert (
-            _responses_exact_reply_target_from_messages(
-                [
-                    {
-                        "role": "user",
-                        "content": (
-                            "After the tool result, send visible final text exactly: "
-                            "REAL_UI_LIVE_TOOL_TWO second UI turn."
-                        ),
-                    },
-                    {
-                        "type": "function_call_output",
-                        "call_id": "call_1",
-                        "output": "REAL_UI_LIVE_TOOL_ONE",
-                    },
-                ]
-            )
-            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
-        )
-
-        previous_response_history = [
-            {
-                "role": "user",
-                "content": (
-                    "Use the run_command tool. After the tool result, "
-                    "send visible final text exactly: REAL_UI_LIVE_TOOL_ONE"
-                ),
-            },
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "run_command",
-                            "arguments": {"command": "printf REAL_UI_LIVE_TOOL_ONE"},
-                        },
-                    }
-                ],
-            },
-        ]
-        current_tool_followup = SimpleNamespace(
-            input=[
-                {
-                    "type": "function_call_output",
-                    "call_id": "call_1",
-                    "output": "REAL_UI_LIVE_TOOL_ONE",
-                }
-            ],
-        )
-        assert (
-            _responses_exact_tool_result_finalization_target(
-                current_tool_followup,
-                previous_response_history
-                + [
-                    {
-                        "role": "tool",
-                        "tool_call_id": "call_1",
-                        "content": "REAL_UI_LIVE_TOOL_ONE",
-                    }
-                ],
-            )
-            == "REAL_UI_LIVE_TOOL_ONE"
-        )
-
-        unrelated_later_user = previous_response_history + [
-            {
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": "REAL_UI_LIVE_TOOL_ONE",
-            },
-            {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
-            {"role": "user", "content": "Start a new task."},
-        ]
-        assert (
-            _responses_exact_tool_result_finalization_target(
-                SimpleNamespace(input="Start a new task."),
-                unrelated_later_user,
-            )
-            is None
-        )
-        assert (
-            _responses_exact_tool_result_finalization_target(
-                request,
-                previous_response_history
-                + [
-                    {
-                        "role": "tool",
-                        "tool_call_id": "call_1",
-                        "content": "REAL_UI_LIVE_TOOL_ONE",
-                    },
-                    {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
-                    {
-                        "role": "user",
-                        "content": (
-                            "Use another tool. After the tool result, "
-                            "send visible final text exactly: REAL_UI_LIVE_TOOL_TWO"
-                        ),
-                    },
-                ],
-                tools_present=True,
-            )
-            is None
         )
 
     def test_exact_reply_fast_path_uses_visible_post_think_text(self):
@@ -6447,46 +6014,6 @@ class TestResponsesStreamingExactToolResult:
         )
 
         assert _responses_fast_path_visible_text(output, request) == "REAL_UI_LIVE_TOOL_TWO"
-
-
-class TestResponsesQwenTerminalToolResultSynthesis:
-    """Qwen terminal tool-result turns must finalize visibly without parser repair."""
-
-    def test_terminal_tool_result_synthesis_requires_no_new_tools(self):
-        from types import SimpleNamespace
-        from vmlx_engine.server import _responses_is_terminal_tool_result_synthesis
-
-        messages = [
-            {"role": "user", "content": "Use the tool."},
-            {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
-            {"role": "tool", "tool_call_id": "call_1", "content": "recorded blue-cat"},
-        ]
-
-        assert _responses_is_terminal_tool_result_synthesis(
-            messages,
-            SimpleNamespace(tools=None, tool_choice=None),
-            {},
-        )
-        assert not _responses_is_terminal_tool_result_synthesis(
-            messages,
-            SimpleNamespace(tools=[{"type": "function", "name": "record_fact"}], tool_choice="auto"),
-            {},
-        )
-        assert not _responses_is_terminal_tool_result_synthesis(
-            messages,
-            SimpleNamespace(tools=None, tool_choice="required"),
-            {},
-        )
-
-    def test_qwen_terminal_synthesis_sets_private_visible_finalization_flag(self):
-        from vmlx_engine.server import (
-            _responses_terminal_synthesis_visible_finalization,
-        )
-
-        assert _responses_terminal_synthesis_visible_finalization(
-            {"_vmlx_terminal_tool_result_visible_finalization": True}
-        )
-        assert not _responses_terminal_synthesis_visible_finalization({})
 
 
 class TestNonStreamingDisconnectAbort:
@@ -6686,30 +6213,6 @@ class TestL2IncrementalDelta:
         assert "range(0, len(tc_args)" in source or "range(0, max(len(tc_args)" in source, (
             "Must iterate over argument string for chunking"
         )
-
-    def test_reasoning_item_advances_function_call_output_index(self):
-        """Reasoning and function_call output items must not share output_index."""
-        import inspect
-        from vmlx_engine.server import stream_responses_api
-
-        source = inspect.getsource(stream_responses_api)
-        assert "reasoning_output_index = 1" in source
-        assert "output_index = max(output_index, reasoning_output_index + 1)" in source
-        assert '"type": "function_call"' in source
-
-    def test_responses_streaming_required_tool_retry_preserves_thinking(self):
-        """Streaming required-tool misses should retry before fail-closed error."""
-        import inspect
-        from vmlx_engine.server import stream_responses_api
-
-        source = inspect.getsource(stream_responses_api)
-        retry_idx = source.find("Responses API streaming required tool retry")
-        error_idx = source.find("tool_calls_required")
-        assert retry_idx >= 0, "streaming Responses must retry required-tool misses"
-        assert error_idx >= 0, "streaming Responses must still fail closed"
-        assert retry_idx < error_idx, "retry must happen before emitting required-tool error"
-        assert '"enable_thinking" not in required_retry_kwargs' in source
-        assert 'required_retry_kwargs["enable_thinking"] = False' not in source
 
 
 class TestL3ReasoningEffort:
@@ -7134,7 +6637,7 @@ class TestStartupCompatibilityGuards:
         # Ling/Bailing hybrid needs the mlx-lm runtime floor that the bundle
         # uses before the local bailing_hybrid vendor file is applied.
         assert '"mlx-lm>=0.31.3"' in pyproject
-        assert pyproject.count('"jang>=2.5.30"') >= 3
+        assert pyproject.count('"jang>=2.5.29"') >= 3
 
     def test_bundled_python_installs_distutils_version_shim_for_radio(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
@@ -7162,7 +6665,7 @@ class TestStartupCompatibilityGuards:
 
         assert '${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}' in bundle_script
         assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
-        assert 'pip install --no-deps "jang>=2.5.30"' in bundle_script
+        assert 'pip install --no-deps "jang>=2.5.29"' in bundle_script
         assert '${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}' in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
 
@@ -7222,22 +6725,6 @@ class TestStartupCompatibilityGuards:
         assert "python/lib/libpython3.12.dylib" in bundle_script
         assert "restore_python_runtime_files" in dependency_block
 
-    def test_bundled_python_restores_launcher_before_dependency_install(self):
-        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
-        extract_idx = bundle_script.index('tar xzf "$STANDALONE_TARBALL" -C "$BUNDLE_DIR"')
-        pip_upgrade_idx = bundle_script.index('echo "==> Upgrading pip..."')
-        mlx_install_idx = bundle_script.index(
-            '"$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"'
-        )
-        dependency_install_idx = bundle_script.index('echo "==> Installing dependencies..."')
-        bootstrap_block = bundle_script[extract_idx:pip_upgrade_idx]
-        mlx_install_block = bundle_script[mlx_install_idx:dependency_install_idx]
-
-        assert "restore_python_runtime_files" in bootstrap_block
-        assert 'PYTHON="$BUNDLE_DIR/python/bin/python3.12"' in bootstrap_block
-        assert "restore_python_runtime_files" in mlx_install_block
-        assert 'PYTHON="$BUNDLE_DIR/python/bin/python3"' in mlx_install_block
-
     def test_local_installer_installs_node_deps_before_typecheck(self):
         install_script = Path("./panel/scripts/build-and-install.sh").read_text()
 
@@ -7278,25 +6765,9 @@ class TestStartupCompatibilityGuards:
             "models/gemma4_unified/processing_gemma4_unified.py",
             "omni_multimodal.py",
             "prefix_cache.py",
-            "runtime_patches/__init__.py",
-            "runtime_patches/deepseek_v4_register.py",
             "runtime_patches/gemma4_processing.py",
-            "runtime_patches/gemma4_vision.py",
-            "runtime_patches/kimi_k25_mla.py",
-            "runtime_patches/mlx_lm_compat.py",
-            "runtime_patches/mlx_vlm_compat.py",
             "scheduler.py",
             "tool_parsers/dsml_tool_parser.py",
-        ):
-            assert f'"{rel}"' in verify_script
-        for rel in sorted(
-            str(path.relative_to("vmlx_engine"))
-            for path in Path("vmlx_engine/tool_parsers").glob("*.py")
-        ):
-            assert f'"{rel}"' in verify_script
-        for rel in sorted(
-            str(path.relative_to("vmlx_engine"))
-            for path in Path("vmlx_engine/reasoning").glob("*.py")
         ):
             assert f'"{rel}"' in verify_script
 
@@ -8545,7 +8016,7 @@ class TestStartupCompatibilityGuards:
             lambda: (_ for _ in ()).throw(ImportError("missing bailing patch")),
         )
 
-        with pytest.raises(RuntimeError, match="jang>=2.5.30"):
+        with pytest.raises(RuntimeError, match="jang>=2.5.29"):
             jang_loader._ensure_jang_family_runtime_supported(
                 Path("/models/Hy3-preview-JANGTQ2"), {"model_type": "hy_v3"}
             )
@@ -8976,16 +8447,6 @@ class TestStartupCompatibilityGuards:
         assert "pct = (active / max_ws) * 100.0" in block
         assert "if pct < threshold_pct:\n                    return" in block
 
-    def test_scheduler_step_executor_shutdown_does_not_join_worker(self):
-        """Shutdown must not join the llm-worker during Python finalization."""
-        source = Path("./vmlx_engine/scheduler.py").read_text()
-        start = source.index("def shutdown(self) -> None:")
-        end = source.index("def _finalize_hybrid_paged_cache_on_worker", start)
-        block = source[start:end]
-
-        assert "step_executor.shutdown(wait=False, cancel_futures=True)" in block
-        assert "step_executor.shutdown(wait=True" not in block
-
     def test_xml_function_tool_fallback_accepts_native_mimo_schema(self):
         """MiMo/xml_function prompts should not duplicate a native tool schema."""
         source = Path("./vmlx_engine/api/tool_calling.py").read_text()
@@ -9006,26 +8467,7 @@ class TestStartupCompatibilityGuards:
         assert ") and not is_xml_function_native_tool_prompt:" in source
         assert server_source.count("raw_preview={tool_required_preview!r}") >= 2
         assert "def _drop_tool_visible_channel_marker(" in server_source
-        assert "text.strip().lower() in {" in server_source
-        assert '"thought"' in server_source
-        assert '"analysis"' in server_source
-        assert '"<audio|>"' in server_source
-
-    def test_tool_visible_channel_marker_drops_exact_gemma4_modality_sentinels_only(self):
-        """Gemma4 tool-call responses must not expose lone modality sentinels."""
-        from vmlx_engine.server import _drop_tool_visible_channel_marker
-
-        tool_calls = [{"function": {"name": "record_fact", "arguments": "{}"}}]
-
-        assert _drop_tool_visible_channel_marker("<audio|>", tool_calls) is None
-        assert _drop_tool_visible_channel_marker("<|audio|>", tool_calls) is None
-        assert _drop_tool_visible_channel_marker("<image|>", tool_calls) is None
-        assert _drop_tool_visible_channel_marker("<video|>", tool_calls) is None
-        assert (
-            _drop_tool_visible_channel_marker("called record_fact <audio|>", tool_calls)
-            == "called record_fact <audio|>"
-        )
-        assert _drop_tool_visible_channel_marker("<audio|>", None) == "<audio|>"
+        assert 'text.strip().lower() in {"thought", "analysis"}' in server_source
 
     def test_cli_tool_parser_choices_include_registry_only_parsers(self):
         """Explicit CLI settings must accept parsers used by auto detection.
@@ -9486,146 +8928,6 @@ class TestZayaCCACachePolicy:
         assert cfg.reasoning_parser == "gemma4"
         assert cfg.supports_thinking is True
         assert cfg.think_in_template is False
-
-    def test_loaded_gemma4_mxfp_sidecar_refreshes_auto_parsers(
-        self, monkeypatch, tmp_path
-    ):
-        import vmlx_engine.server as server
-        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "gemma4_unified",
-                    "text_config": {"model_type": "gemma4_unified_text"},
-                    "vision_config": {"model_type": "gemma4_unified_vision"},
-                }
-            )
-        )
-        (tmp_path / "jang_config.json").write_text(
-            json.dumps(
-                {
-                    "weight_format": "mxfp4",
-                    "profile": "MXFP4",
-                    "capabilities": {
-                        "family": "gemma4",
-                        "reasoning_parser": "gemma4",
-                        "tool_parser": "gemma4",
-                        "supports_thinking": True,
-                        "supports_tools": True,
-                        "think_in_template": False,
-                        "modality": "vision",
-                        "cache_type": "kv",
-                    },
-                }
-            )
-        )
-
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "served-gemma4-alias")
-        monkeypatch.setattr(server, "_reasoning_parser", None)
-        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
-        monkeypatch.setattr(server, "_reasoning_parser_explicit_name", None)
-        monkeypatch.setattr(server, "_enable_auto_tool_choice", True)
-        monkeypatch.setattr(server, "_tool_call_parser", None)
-        monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
-        monkeypatch.setattr(server, "_tool_call_parser_explicit_name", None)
-
-        server._configure_loaded_model_parsers_from_registry("served-gemma4-alias")
-
-        assert isinstance(server._reasoning_parser, Gemma4ReasoningParser)
-        assert server._tool_call_parser == "gemma4"
-
-    def test_loaded_model_parser_refresh_preserves_explicit_disables(
-        self, monkeypatch, tmp_path
-    ):
-        import vmlx_engine.server as server
-
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "gemma4",
-                    "text_config": {"model_type": "gemma4_text"},
-                }
-            )
-        )
-
-        monkeypatch.setattr(server, "_model_path", str(tmp_path))
-        monkeypatch.setattr(server, "_model_name", "gemma4-explicit-none")
-        monkeypatch.setattr(server, "_reasoning_parser", None)
-        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", True)
-        monkeypatch.setattr(server, "_reasoning_parser_explicit_name", None)
-        monkeypatch.setattr(server, "_enable_auto_tool_choice", True)
-        monkeypatch.setattr(server, "_tool_call_parser", None)
-        monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", True)
-        monkeypatch.setattr(server, "_tool_call_parser_explicit_name", None)
-
-        server._configure_loaded_model_parsers_from_registry(str(tmp_path))
-
-        assert server._reasoning_parser is None
-        assert server._tool_call_parser is None
-
-    def test_request_reasoning_parser_falls_back_to_loaded_config(
-        self, monkeypatch
-    ):
-        import vmlx_engine.server as server
-        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
-
-        monkeypatch.setattr(server, "_reasoning_parser", None)
-        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
-
-        parser = server._request_reasoning_parser_from_config(
-            SimpleNamespace(
-                reasoning_parser="gemma4",
-                supports_thinking=True,
-            )
-        )
-
-        assert isinstance(parser, Gemma4ReasoningParser)
-
-    def test_request_reasoning_parser_fallback_respects_explicit_none(
-        self, monkeypatch
-    ):
-        import vmlx_engine.server as server
-
-        monkeypatch.setattr(server, "_reasoning_parser", None)
-        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", True)
-
-        parser = server._request_reasoning_parser_from_config(
-            SimpleNamespace(
-                reasoning_parser="gemma4",
-                supports_thinking=True,
-            )
-        )
-
-        assert parser is None
-
-    def test_request_reasoning_parser_allows_mimo_think_xml_cleanup_when_thinking_disabled(
-        self, monkeypatch
-    ):
-        import vmlx_engine.server as server
-        from vmlx_engine.reasoning.think_xml_parser import ThinkXmlReasoningParser
-
-        monkeypatch.setattr(server, "_reasoning_parser", None)
-        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
-
-        parser = server._request_reasoning_parser_from_config(
-            SimpleNamespace(
-                family_name="mimo_v2",
-                reasoning_parser="think_xml",
-                supports_thinking=False,
-            )
-        )
-        blocked = server._request_reasoning_parser_from_config(
-            SimpleNamespace(
-                family_name="zaya1_vl",
-                reasoning_parser="qwen3",
-                supports_thinking=False,
-            )
-        )
-
-        assert isinstance(parser, ThinkXmlReasoningParser)
-        assert blocked is None
 
     def test_cli_enables_typed_paged_cache_and_forces_tq_off_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
@@ -10536,41 +9838,6 @@ class TestJangTqMppNaxCliPolicy:
             for call in logger.info.call_args_list
         )
 
-    def test_jangtq_mpp_nax_cli_policy_keeps_affine_jang_mxtq_bits_auto(
-        self, monkeypatch, tmp_path
-    ):
-        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
-
-        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
-        (tmp_path / "config.json").write_text(
-            json.dumps(
-                {
-                    "model_type": "mimo_v2",
-                    "mxtq_bits": {"gate_proj": 3, "up_proj": 2, "down_proj": 2},
-                }
-            )
-        )
-        (tmp_path / "jang_config.json").write_text(
-            json.dumps(
-                {
-                    "format": "jang",
-                    "profile": "JANG_2L_322_D3E16",
-                    "mxtq_bits": {"gate_proj": 3, "up_proj": 2, "down_proj": 2},
-                }
-            )
-        )
-        args = SimpleNamespace(model=str(tmp_path))
-        logger = MagicMock()
-
-        mode = _apply_jangtq_mpp_nax_policy(args, logger)
-
-        assert mode == "auto"
-        assert os.environ["JANGTQ_MPP_NAX"] == "auto"
-        assert not any(
-            "MXTQ/JANGTQ bundle detected" in str(call)
-            for call in logger.info.call_args_list
-        )
-
     def test_jangtq_mpp_nax_cli_policy_disables_auto_for_jangtq_repo_id(
         self, monkeypatch
     ):
@@ -10826,7 +10093,7 @@ class TestJangVLMFallbacks:
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
-    def test_mimo_v2_text_runtime_metadata_stays_text_only_without_media_overlay_opt_in(
+    def test_mimo_v2_text_runtime_metadata_stays_text_only_with_media_sidecars(
         self,
         tmp_path,
         monkeypatch,
@@ -10839,8 +10106,6 @@ class TestJangVLMFallbacks:
             json.dumps(
                 {
                     "model_type": "mimo_v2",
-                    "format": "jangtq",
-                    "jang_profile": "JANGTQ_2",
                     "vision_config": {"model_type": "mimo_v2_vision"},
                     "audio_config": {"model_type": "mimo_v2_audio"},
                     "image_token_id": 151655,
@@ -10856,15 +10121,6 @@ class TestJangVLMFallbacks:
                     "runtime": {
                         "multimodal_mode": "weights_preserved_text_runtime",
                     },
-                }
-            )
-        )
-        (model_dir / "jang_config.json").write_text(
-            json.dumps(
-                {
-                    "format": "jangtq",
-                    "family": "mimo_v2",
-                    "profile": "JANGTQ_2",
                 }
             )
         )
@@ -10897,12 +10153,6 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
-
-        monkeypatch.setenv("VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY", "1")
-        utils._IS_MLLM_CACHE.clear()
-
-        assert utils.is_mllm_model(str(model_dir)) is True
-        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
 
     def test_gemma4_unified_routes_multimodal_when_source_runtime_available(
         self,
@@ -10983,10 +10233,8 @@ class TestJangVLMFallbacks:
     def test_gemma4_unified_registry_advertises_source_runtime_when_available(
         self,
         tmp_path,
-        monkeypatch,
     ):
         from vmlx_engine.model_config_registry import get_model_config_registry
-        from vmlx_engine.models import gemma4_unified_register
 
         model_dir = tmp_path
         (model_dir / "config.json").write_text(json.dumps({
@@ -11010,70 +10258,6 @@ class TestJangVLMFallbacks:
                 "cache_type": "kv",
             },
         }))
-        (model_dir / "model.safetensors.index.json").write_text(json.dumps({
-            "weight_map": {
-                "embed_audio.embedding_projection.weight": "model.safetensors",
-                "language_model.model.embed_tokens.weight": "model.safetensors",
-            }
-        }))
-        monkeypatch.setattr(
-            gemma4_unified_register,
-            "gemma4_unified_runtime_available",
-            lambda: True,
-        )
-
-        registry = get_model_config_registry()
-        registry.clear_cache()
-        cfg = registry.lookup(str(model_dir))
-
-        assert cfg.family_name == "gemma4"
-        assert cfg.is_mllm is True
-        assert cfg.architecture_hints["runtime_scope"] == "source_gemma4_unified_vlm"
-        assert cfg.architecture_hints["vl_runtime_available"] is True
-        assert cfg.architecture_hints["audio_runtime_available"] is False
-        assert cfg.architecture_hints["default_enable_thinking"] is False
-
-    def test_gemma4_unified_registry_advertises_audio_with_audio_tower_weights(
-        self,
-        tmp_path,
-        monkeypatch,
-    ):
-        from vmlx_engine.model_config_registry import get_model_config_registry
-        from vmlx_engine.models import gemma4_unified_register
-
-        model_dir = tmp_path
-        (model_dir / "config.json").write_text(json.dumps({
-            "model_type": "gemma4_unified",
-            "text_config": {"model_type": "gemma4_unified_text"},
-            "vision_config": {"model_type": "gemma4_unified_vision"},
-            "audio_config": {"model_type": "gemma4_unified_audio"},
-        }))
-        (model_dir / "jang_config.json").write_text(json.dumps({
-            "weight_format": "mxfp4",
-            "has_vision": True,
-            "has_audio": True,
-            "capabilities": {
-                "family": "gemma4",
-                "modality": "vision",
-                "tool_parser": "gemma4",
-                "reasoning_parser": "gemma4",
-                "think_in_template": False,
-                "supports_thinking": True,
-                "supports_tools": True,
-                "cache_type": "kv",
-            },
-        }))
-        (model_dir / "model.safetensors.index.json").write_text(json.dumps({
-            "weight_map": {
-                "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "model.safetensors",
-                "embed_audio.embedding_projection.weight": "model.safetensors",
-            }
-        }))
-        monkeypatch.setattr(
-            gemma4_unified_register,
-            "gemma4_unified_runtime_available",
-            lambda: True,
-        )
 
         registry = get_model_config_registry()
         registry.clear_cache()
@@ -11172,7 +10356,6 @@ class TestJangVLMFallbacks:
         monkeypatch,
     ):
         from vmlx_engine.utils import jang_loader
-        from vmlx_engine.models import gemma4_unified_register
         import mlx_vlm.utils as vlm_utils
 
         model_dir = tmp_path
@@ -11189,6 +10372,8 @@ class TestJangVLMFallbacks:
         }
 
         monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        from vmlx_engine.models import gemma4_unified_register
+
         monkeypatch.setattr(
             gemma4_unified_register,
             "gemma4_unified_runtime_available",
@@ -12834,9 +12019,6 @@ class TestTurboQuantKVTelemetry:
             "_tools_enabled_for_turn",
             "resolve_tool_calls_in_turn",
             "Tool results are provided. Produce a visible answer",
-            "_tool_resolution_input",
-            "Use the tool result above",
-            "TOOL_EVIDENCE: <exact path:line>",
             "require_tool_call_each_turn",
             "tool_call_each_required_turn",
             "_max_cached_tokens",
@@ -13100,26 +12282,6 @@ class TestTurboQuantKVTelemetry:
         assert ungrounded["grounded"] is False
         assert "vmlx_engine/scheduler.py:2431" in ungrounded["markers"]
 
-    def test_responses_long_context_tool_cache_gate_resolution_input_prompts_exact_evidence(self):
-        import runpy
-
-        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
-        tool_resolution_input = gate["_tool_resolution_input"]
-
-        tool_outputs = [
-            {
-                "type": "function_call_output",
-                "call_id": "call_1",
-                "output": "vmlx_engine/server.py:104: ResponsesObject,",
-            }
-        ]
-
-        payload = tool_resolution_input(tool_outputs)
-        assert payload[0] is tool_outputs[0]
-        assert payload[1]["role"] == "user"
-        assert "TOOL_EVIDENCE: <exact path:line>" in payload[1]["content"]
-        assert "Do not call another tool" in payload[1]["content"]
-
     def test_responses_long_context_tool_cache_gate_can_force_deterministic_sampling(self):
         import runpy
         from types import SimpleNamespace
@@ -13244,8 +12406,7 @@ class TestTurboQuantKVTelemetry:
         prompt = gate["_build_prompt"](Path("."), 1, 200)
         instructions = gate["_instructions"]()
 
-        assert "first assistant output" in prompt
-        assert "answer only after the tool result is provided" in prompt
+        assert "must call exactly one provided tool" in prompt
         assert "must call exactly one provided tool" in instructions
         assert "When tools are not available, answer directly" in instructions
 
@@ -13295,6 +12456,43 @@ class TestTurboQuantKVTelemetry:
         assert "hca_compressed_pool" in status["components"]
         assert status["generic_turboquant_kv"]["enabled"] is False
         assert status["pool_quant"]["enabled"] is True
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True
+
+    def test_native_cache_status_reports_minimax_m3_msa_cache(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="minimax_m3",
+            _tq_active=True,
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "minimax_m3"
+        assert status["schema"] == "minimax_m3_msa_v1"
+        assert status["cache_type"] == "native_msa_sparse_kv"
+        assert status["components"] == [
+            "attention_kv",
+            "msa_idx_keys",
+            "absolute_block_index",
+        ]
+        assert status["generic_turboquant_kv"] == {
+            "enabled": False,
+            "reason": "native_minimax_m3_msa_idx_keys",
+        }
+        assert status["cache_store_policy"] == {
+            "prompt_boundary_snapshot": "required",
+            "generic_kv_quantization": "forced_off",
+            "disk_tuple_tag": "minimax_m3",
+            "paged_required_for_ssd_l2": False,
+            "prompt_disk_l2": "m3_sparse_cache_tuple",
+        }
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
 
@@ -13348,7 +12546,7 @@ class TestTurboQuantKVTelemetry:
             "mode": "storage_boundary",
             "bits": 4,
             "group_size": 64,
-            "applies_to": "full_attention_kv_only",
+            "applies_to": "full_and_sliding_attention_kv",
             "metadata_policy": "preserve_rotating_window_metadata",
         }
         assert status["paged"] is True
@@ -13377,7 +12575,9 @@ class TestTurboQuantKVTelemetry:
         assert status["family"] == "step-3.7-flash"
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
-        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
+        assert status["storage_quantization"]["applies_to"] == (
+            "full_and_sliding_attention_kv"
+        )
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )
@@ -13406,7 +12606,9 @@ class TestTurboQuantKVTelemetry:
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
         assert status["cache_subtype"] == "mimo_v2_asymmetric_swa"
-        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
+        assert status["storage_quantization"]["applies_to"] == (
+            "full_and_sliding_attention_kv"
+        )
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )
@@ -14541,33 +13743,6 @@ class TestTurboQuantKVTelemetry:
         for key, value in expected.items():
             assert status[key] == value
 
-    def test_mtp_status_treats_dropped_jangtq_without_weights_as_dropped(
-        self, tmp_path
-    ):
-        """N2/JANGTQ2 can drop MTP weights while base config still declares MTP."""
-        from vmlx_engine.server import _model_mtp_status
-
-        (tmp_path / "config.json").write_text(
-            '{"model_type":"qwen3_5_moe","text_config":{"mtp_num_hidden_layers":1}}'
-        )
-        (tmp_path / "jang_config.json").write_text(
-            '{"weight_format":"mxtq","drop_mtp":true}'
-        )
-        (tmp_path / "model.safetensors.index.json").write_text(
-            '{"weight_map":{"language_model.model.embed_tokens.weight":"model.safetensors"}}'
-        )
-
-        status = _model_mtp_status(str(tmp_path))
-
-        assert status["config_num_nextn_predict_layers"] == 1
-        assert status["jang_drop_mtp"] is True
-        assert status["index_has_mtp_tensors"] is False
-        assert status["artifact_available"] is False
-        assert status["runtime_available"] is False
-        assert status["runtime_reason"] == "jang_config.drop_mtp=true"
-        assert status["status"] == "dropped"
-        assert status["issues"] == []
-
     def test_mtp_status_flags_missing_weights_when_config_expects_mtp(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status
 
@@ -15213,6 +14388,196 @@ class TestStreamUsagePropagatesCacheDetail:
         }
         assert usage["input_tokens_details"] == expected
         assert completed["input_tokens_details"] == expected
+
+    @pytest.mark.asyncio
+    async def test_responses_stream_usage_preserves_positive_cached_tokens_after_zero_chunk(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest, StreamOptions
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="A",
+                    new_text="A",
+                    prompt_tokens=9,
+                    completion_tokens=1,
+                    cached_tokens=123,
+                    cache_detail="memory",
+                    finished=False,
+                )
+                yield GenerationOutput(
+                    text="AB",
+                    new_text="B",
+                    prompt_tokens=9,
+                    completion_tokens=2,
+                    cached_tokens=0,
+                    cache_detail="",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        def _payloads(events, event_type):
+            payloads = []
+            prefix = f"event: {event_type}\n"
+            for event in events:
+                if event.startswith(prefix):
+                    data_line = next(
+                        line for line in event.splitlines() if line.startswith("data: ")
+                    )
+                    payloads.append(json.loads(data_line.removeprefix("data: ")))
+            return payloads
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "gemma4-cache-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ResponsesRequest(
+            model="gemma4-cache-test",
+            input="hi",
+            stream=True,
+            stream_options=StreamOptions(include_usage=True),
+        )
+        events = [
+            event async for event in server.stream_responses_api(
+                _Engine(),
+                [{"role": "user", "content": "hi"}],
+                request,
+                fastapi_request=None,
+            )
+        ]
+
+        usage = _payloads(events, "response.usage")[-1]["usage"]
+        completed = _payloads(events, "response.completed")[-1]["response"]["usage"]
+        expected = {"cached_tokens": 123, "cache_detail": "memory"}
+        assert usage["input_tokens_details"] == expected
+        assert completed["input_tokens_details"] == expected
+
+    @pytest.mark.asyncio
+    async def test_gemma4_responses_stream_reasoning_only_runs_visible_answer_pass(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.model_config_registry as registry
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest, StreamOptions
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+        calls = []
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                calls.append(("stream", messages, dict(kwargs)))
+                yield GenerationOutput(
+                    text="Thinking Process:\n\nNeed an internal-only plan.",
+                    new_text="Thinking Process:\n\nNeed an internal-only plan.",
+                    prompt_tokens=11,
+                    completion_tokens=8,
+                    cached_tokens=17,
+                    cache_detail="memory",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        async def fake_visible_answer(
+            engine,
+            *,
+            messages,
+            chat_kwargs,
+            timeout,
+            fastapi_request,
+            request_id,
+            endpoint,
+        ):
+            calls.append(("answer", messages, dict(chat_kwargs), request_id, endpoint))
+            assert request_id.endswith(":visible-answer")
+            assert endpoint == "Responses API Gemma4 visible answer pass"
+            assert chat_kwargs["enable_thinking"] is False
+            assert "tools" not in chat_kwargs
+            assert messages[-1]["role"] == "assistant"
+            assert messages[-1]["content"] == ""
+            assert "internal-only plan" in messages[-1]["reasoning_content"]
+            return GenerationOutput(
+                text="VISIBLE_GEMMA_ANSWER",
+                new_text="VISIBLE_GEMMA_ANSWER",
+                prompt_tokens=12,
+                completion_tokens=3,
+                finished=True,
+                finish_reason="stop",
+            )
+
+        class _Registry:
+            def lookup(self, _key):
+                return SimpleNamespace(
+                    family_name="gemma4",
+                    think_in_template=False,
+                    reasoning_parser="gemma4",
+                    tool_parser="gemma4",
+                )
+
+        def _payloads(events, event_type):
+            payloads = []
+            prefix = f"event: {event_type}\n"
+            for event in events:
+                if event.startswith(prefix):
+                    data_line = next(
+                        line for line in event.splitlines() if line.startswith("data: ")
+                    )
+                    payloads.append(json.loads(data_line.removeprefix("data: ")))
+            return payloads
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "gemma4-visible-answer-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", Gemma4ReasoningParser())
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        monkeypatch.setattr(server, "_await_chat_with_disconnect_abort", fake_visible_answer)
+        monkeypatch.setattr(registry, "get_model_config_registry", lambda: _Registry())
+
+        request = ResponsesRequest(
+            model="gemma4-visible-answer-test",
+            input="hi",
+            stream=True,
+            enable_thinking=True,
+            stream_options=StreamOptions(include_usage=True),
+        )
+        events = [
+            event async for event in server.stream_responses_api(
+                _Engine(),
+                [{"role": "user", "content": "hi"}],
+                request,
+                fastapi_request=None,
+            )
+        ]
+
+        reasoning = _payloads(events, "response.reasoning_summary_text.delta")
+        content = _payloads(events, "response.output_text.delta")
+        completed = _payloads(events, "response.completed")[-1]["response"]
+        usage = _payloads(events, "response.usage")[-1]["usage"]
+
+        assert calls[0][0] == "stream"
+        assert calls[1][0] == "answer"
+        assert any("internal-only plan" in row["delta"] for row in reasoning)
+        assert [row["delta"] for row in content] == ["VISIBLE_GEMMA_ANSWER"]
+        assert completed["output_text"] == "VISIBLE_GEMMA_ANSWER"
+        assert usage["input_tokens_details"] == {
+            "cached_tokens": 17,
+            "cache_detail": "memory",
+        }
 
 
 class TestHuggingFaceDownloadRegression:

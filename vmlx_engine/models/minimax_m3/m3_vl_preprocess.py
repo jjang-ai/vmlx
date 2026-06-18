@@ -86,49 +86,37 @@ def _normalize_messages_for_template(messages: List[dict]) -> Tuple[List[dict], 
     placeholder, and collect the raw image inputs in document order so they line
     up 1:1 with the placeholders.
     """
-    # Keep ONLY the images from the most-recent image-bearing turn. A chat thread
-    # re-sends prior-turn images in the message history every turn; M3's single-image
-    # vision stack blends multiple concatenated images (e.g. a red then a blue image
-    # -> "purple"), so collecting the whole history corrupts the answer. Using just the
-    # latest image-bearing turn preserves "upload an image, then ask a follow-up" (that
-    # turn stays the latest image-bearing one) while a NEW image replaces the old one.
-    def _content_has_image(content) -> bool:
-        return isinstance(content, list) and any(
-            isinstance(it, dict) and it.get("type") in ("image_url", "image", "input_image")
-            for it in content
-        )
-
-    last_img_idx = -1
-    for i, msg in enumerate(messages):
-        if _content_has_image(msg.get("content")):
-            last_img_idx = i
-
     out_msgs: List[dict] = []
     raw_images: List[Any] = []
-    for i, msg in enumerate(messages):
+    for msg in messages:
         content = msg.get("content")
         if not isinstance(content, list):
             out_msgs.append(msg)
             continue
         new_content = []
+        image_placeholders = []
         for item in content:
             if not isinstance(item, dict):
                 new_content.append(item)
                 continue
             itype = item.get("type")
             if itype in ("image_url", "image", "input_image"):
-                if i != last_img_idx:
-                    # Drop stale prior-turn images entirely (no placeholder, no raw).
-                    continue
+                # collect raw source
                 src = item.get("image_url", item.get("image", item.get("url")))
                 if isinstance(src, dict):
                     src = src.get("url", src)
                 if src is not None:
                     raw_images.append(src)
-                new_content.append({"type": "image"})
+                image_placeholders.append({"type": "image"})
             else:
                 new_content.append(item)
-        out_msgs.append({**msg, "content": new_content})
+        # MiniMax-M3's proven diagnostic path places image placeholders before
+        # the text in the same user turn. The panel/OpenAI content-array shape
+        # naturally arrives as text then image; preserving that order makes the
+        # model behave as if no image was available on mixed text+image turns.
+        # Keep raw_images in document order, but render image tokens before the
+        # textual prompt for this M3-only preprocessing path.
+        out_msgs.append({**msg, "content": image_placeholders + new_content})
     return out_msgs, raw_images
 
 
@@ -161,13 +149,7 @@ def preprocess_m3_vl_messages(
         # one {"type":"image"} placeholder per extra image into the LAST user
         # turn (matching the diag layout: image(s) precede the text). This is the
         # path exercised by the real /v1/chat/completions server flow.
-        #
-        # MiniMax-M3's vision stack handles ONE image: a multi-turn chat thread
-        # re-sends every prior-turn image here, and concatenating them makes M3
-        # blend (red + blue -> "purple"). extract_multimodal_content yields images
-        # in document order, so the LAST entry is the most-recent turn's image —
-        # keep only that one so a new image replaces the old instead of blending.
-        raw_images = list(extra_images)[-1:]
+        raw_images = list(extra_images)
         placeholders = [{"type": "image"} for _ in raw_images]
         injected = False
         for i in range(len(norm_msgs) - 1, -1, -1):
@@ -188,12 +170,15 @@ def preprocess_m3_vl_messages(
     if not raw_images:
         return None
 
-    tmpl_kwargs = {}
-    if enable_thinking is not None:
-        # The MiniMax-M3 chat template branches on thinking_mode (enabled/disabled/adaptive),
-        # NOT enable_thinking. Mirror server._normalize_minimax_m3_thinking_mode: off->disabled,
-        # on/auto->adaptive (model emits its own <mm:think>...; scheduler backstop bounds runaways).
-        tmpl_kwargs["thinking_mode"] = "disabled" if enable_thinking is False else "adaptive"
+    # MiniMax-M3 templates ignore the common enable_thinking kwarg and branch on
+    # thinking_mode only. Keep VL preprocessing aligned with server text routes:
+    # off -> disabled; on -> enabled; omitted/auto -> adaptive.
+    if enable_thinking is False:
+        tmpl_kwargs = {"thinking_mode": "disabled"}
+    elif enable_thinking is True:
+        tmpl_kwargs = {"thinking_mode": "enabled"}
+    else:
+        tmpl_kwargs = {"thinking_mode": "adaptive"}
     try:
         txt = tok.apply_chat_template(
             norm_msgs,
@@ -202,7 +187,7 @@ def preprocess_m3_vl_messages(
             **tmpl_kwargs,
         )
     except TypeError:
-        # Template doesn't accept enable_thinking — retry without it.
+        # Template doesn't accept thinking_mode — retry without it.
         txt = tok.apply_chat_template(
             norm_msgs,
             add_generation_prompt=add_generation_prompt,

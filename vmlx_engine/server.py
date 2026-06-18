@@ -605,11 +605,6 @@ _FALLBACK_TOP_P = 1.0
 # Defaults come from explicit request values, explicit CLI flags, bundle
 # metadata, or generic server fallback.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # MiMo-V2.5 bundles currently ship generation_config do_sample=false even
-    # though live JANG_2L chat proof shows greedy decode runs into visible
-    # planning/repetition tails. Keep the family default stochastic unless the
-    # API request or CLI explicitly overrides it.
-    "mimo_v2": (0.7, 0.95, None),
 }
 
 # Ling/Bailing bundles on this host omit top_k metadata, but live multilingual
@@ -618,11 +613,6 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
 # resolved kwargs and remains overrideable by request/CLI/bundle metadata.
 _FAMILY_TOP_K_DEFAULTS: dict[str, int] = {
     "ling": 20,
-    # MiMo-V2.5 JANG_2L ships no top_k and do_sample=false, but live source
-    # proof showed unbounded top-p sampling spends seconds/token in full-vocab
-    # logsoftmax/categorical while model forward is ~2ms. Bound omitted top_k
-    # to use vMLX's compact sampler unless the caller or bundle overrides it.
-    "mimo_v2": 64,
 }
 
 
@@ -870,23 +860,13 @@ def _drop_tool_visible_channel_marker(
 ) -> str | None:
     if not text or not tool_calls:
         return text
-    if text.strip().lower() in {
-        "thought",
-        "analysis",
-        "<|image|>",
-        "<image|>",
-        "<|audio|>",
-        "<audio|>",
-        "<|video|>",
-        "<video|>",
-    }:
+    if text.strip().lower() in {"thought", "analysis"}:
         return None
     return text
 
 
 _RESPONSES_EXACT_REPLY_RE = re.compile(
-    r"(?:reply exactly|send visible final text exactly|output visible final text exactly):\s*"
-    r"[\"'“”`]?(?P<target>[^\r\n\"'“”`]+?)[\"'“”`]?\s*(?=\r?\n|$)",
+    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
     re.IGNORECASE,
 )
 
@@ -896,82 +876,7 @@ def _responses_exact_reply_target(request: Any) -> str | None:
     matches = list(_RESPONSES_EXACT_REPLY_RE.finditer(text))
     if not matches:
         return None
-    return matches[-1].group("target").strip()
-
-
-def _responses_exact_reply_target_from_messages(messages: list[dict] | None) -> str | None:
-    if not messages:
-        return None
-    fragments: list[str] = []
-
-    def add_content(value: Any) -> None:
-        if value is None:
-            return
-        if isinstance(value, str):
-            fragments.append(value)
-            return
-        if isinstance(value, list):
-            for item in value:
-                add_content(item)
-            return
-        if isinstance(value, dict):
-            for key in ("text", "content", "input_text", "output_text"):
-                if key in value:
-                    add_content(value.get(key))
-
-    for message in messages:
-        add_content(message)
-    if not fragments:
-        return None
-    matches = list(_RESPONSES_EXACT_REPLY_RE.finditer("\n".join(fragments)))
-    if not matches:
-        return None
-    return matches[-1].group("target").strip()
-
-
-def _responses_request_has_function_call_output(request: Any) -> bool:
-    input_data = getattr(request, "input", None)
-    if not isinstance(input_data, list):
-        return False
-    for item in input_data:
-        if isinstance(item, dict):
-            if item.get("type") == "function_call_output":
-                return True
-            continue
-        if getattr(item, "type", None) == "function_call_output":
-            return True
-    return False
-
-
-def _responses_message_exact_reply_target(message: dict) -> str | None:
-    fragments: list[str] = []
-
-    def add_content(value: Any) -> None:
-        if value is None:
-            return
-        if isinstance(value, str):
-            fragments.append(value)
-            return
-        if isinstance(value, list):
-            for item in value:
-                add_content(item)
-            return
-        if isinstance(value, dict):
-            for key in ("text", "content", "input_text", "output_text"):
-                if key in value:
-                    add_content(value.get(key))
-
-    add_content(message)
-    if not fragments:
-        return None
-    matches = list(_RESPONSES_EXACT_REPLY_RE.finditer("\n".join(fragments)))
-    if not matches:
-        return None
-    return matches[-1].group("target").strip()
-
-
-def _responses_message_is_tool_result(message: dict) -> bool:
-    return message.get("role") == "tool" or message.get("type") == "function_call_output"
+    return matches[-1].group(1)
 
 
 def _responses_messages_have_tool_result_after_latest_user(messages: list[dict]) -> bool:
@@ -987,97 +892,9 @@ def _responses_messages_have_tool_result_after_latest_user(messages: list[dict])
     return False
 
 
-def _responses_exact_tool_result_finalization_target(
-    request: Any,
-    messages: list[dict] | None,
-    *,
-    tools_present: bool = False,
-) -> str | None:
-    """Return exact-output target when the current turn is post-tool synthesis."""
-    current_request_has_tool_result = _responses_request_has_function_call_output(request)
-    if tools_present and not current_request_has_tool_result:
-        return None
-
-    target_from_request = _responses_exact_reply_target(request)
-    if target_from_request and (
-        _responses_messages_have_tool_result_after_latest_user(messages or [])
-        or current_request_has_tool_result
-    ):
-        return target_from_request
-
-    candidate_target: str | None = None
-    saw_tool_result_after_candidate = False
-    for message in messages or []:
-        if not isinstance(message, dict):
-            continue
-        role = message.get("role")
-        if role == "user":
-            next_target = _responses_message_exact_reply_target(message)
-            candidate_target = next_target
-            saw_tool_result_after_candidate = False
-            continue
-        if candidate_target and _responses_message_is_tool_result(message):
-            saw_tool_result_after_candidate = True
-
-    if candidate_target and saw_tool_result_after_candidate:
-        return candidate_target
-    return None
-
-
-def _responses_is_terminal_tool_result_synthesis(
-    messages: list[dict],
-    request: Any,
-    chat_kwargs: dict[str, Any],
-) -> bool:
-    """Return True when a Responses continuation should produce final text.
-
-    A previous tool result followed by no new tool schema is a synthesis turn,
-    not another tool-selection turn. Qwen3-style templates otherwise open a
-    fresh ``<think>`` rail for the assistant prefix and the model can spend the
-    whole max-output budget reasoning about the already-completed tool result.
-    """
-    if not _responses_messages_have_tool_result_after_latest_user(messages):
-        return False
-    if getattr(request, "tools", None):
-        return False
-    if chat_kwargs.get("tools"):
-        return False
-    tool_choice = getattr(request, "tool_choice", None)
-    if tool_choice not in (None, "auto", "none"):
-        return False
-    return True
-
-
-def _reasoning_parser_is_qwen3(parser: Any) -> bool:
-    return type(parser).__name__ == "Qwen3ReasoningParser"
-
-
-def _responses_terminal_synthesis_visible_finalization(kwargs: dict[str, Any]) -> bool:
-    return bool(kwargs.get("_vmlx_terminal_tool_result_visible_finalization"))
-
-
-def _prompt_suffix_completes_qwen3_thinking(kwargs: dict[str, Any]) -> bool:
-    if not kwargs.get("skip_generation_prompt"):
-        return False
-    suffix = str(kwargs.get("prompt_suffix") or "")
-    return (
-        suffix.startswith("<|im_start|>assistant")
-        and "<think>" in suffix
-        and "</think>" in suffix
-    )
-
-
-def _responses_fast_path_visible_text(
-    output: Any,
-    request: Any,
-    *,
-    thinking_disabled: bool = False,
-) -> str:
+def _responses_fast_path_visible_text(output: Any, request: Any) -> str:
     text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
-    if (
-        (thinking_disabled or getattr(request, "enable_thinking", None) is False)
-        and "</think>" in text
-    ):
+    if getattr(request, "enable_thinking", None) is False and "</think>" in text:
         text = text.rsplit("</think>", 1)[1]
     else:
         text = getattr(output, "text", "") or text
@@ -1394,7 +1211,6 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
     if _default_top_k is not None:
         return max(0, int(_default_top_k))
     bundle_path = _model_path or model_name
-    family = _model_family_for_defaults(model_name)
     v = _bundle_sampling_default(model_name, "top_k")
     if v is not None:
         if (
@@ -1403,12 +1219,11 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
         ):
             return 0
         return max(0, int(v))
-    if family in _FAMILY_TOP_K_DEFAULTS and (
-        family == "mimo_v2" or not _generation_config_declares_greedy_sampling(model_name)
-    ):
-        return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))
     if _generation_config_declares_greedy_sampling(model_name):
         return 0
+    family = _model_family_for_defaults(model_name)
+    if family in _FAMILY_TOP_K_DEFAULTS:
+        return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))
     return 0
 
 
@@ -1493,57 +1308,6 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     if v is not None and v > 0:
         return int(v)
     return _FALLBACK_MAX_OUTPUT_TOKENS
-
-
-GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS = 512
-
-
-def _is_gemma4_model_key(model_key: str | None) -> bool:
-    if not model_key:
-        return False
-    try:
-        from .model_config_registry import get_model_config_registry
-
-        cfg = get_model_config_registry().lookup(model_key)
-        family = str(getattr(cfg, "family_name", "") or "").lower()
-        if family in {"gemma4", "gemma4-text"}:
-            return True
-    except Exception:
-        pass
-    lowered = str(model_key).lower()
-    return "gemma-4" in lowered or "gemma4" in lowered
-
-
-def _apply_gemma4_required_tool_thinking_token_floor(
-    max_tokens: int,
-    *,
-    request: Any,
-    model_key: str | None,
-    enable_thinking: bool | None,
-) -> int:
-    """Give Gemma4 reasoning-on required-tool turns room to reach the tool call.
-
-    This does not synthesize a tool call, relax schema validation, or disable
-    reasoning. It only avoids a known failure mode where a tiny output cap ends
-    while Gemma4 is still in its reasoning channel before the required native
-    tool call.
-    """
-    if enable_thinking is not True:
-        return max_tokens
-    if not _is_required_tool_choice(getattr(request, "tool_choice", None)):
-        return max_tokens
-    if not getattr(request, "tools", None):
-        return max_tokens
-    if not _is_gemma4_model_key(model_key):
-        return max_tokens
-    if max_tokens >= GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS:
-        return max_tokens
-    logger.info(
-        "Gemma4 required-tool reasoning output budget raised from %d to %d",
-        max_tokens,
-        GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS,
-    )
-    return GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS
 
 
 @dataclass(frozen=True)
@@ -2099,6 +1863,23 @@ def _responses_input_requested_modalities(input_data) -> set[str]:
     return _requested_modalities_from_summary(_responses_input_multimodal_summary(input_data))
 
 
+def _m3_vl_response_image_only(engine, modalities: set[str]) -> bool:
+    normalized = _normalize_modality_set(modalities)
+    return bool(normalized) and _m3_vl_image_ok(engine) and normalized <= {"image", "vision"}
+
+
+def _responses_modalities_unsupported_after_m3_vl_carveout(
+    engine,
+    modalities: set[str],
+) -> set[str]:
+    if not modalities or not _m3_vl_image_ok(engine):
+        return set(modalities or set())
+    return {
+        m for m in modalities
+        if str(m).lower() not in ("image", "vision")
+    }
+
+
 def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
     """Log redacted media request shape for user-exported diagnostics."""
     if not summary or int(summary.get("total") or 0) <= 0:
@@ -2155,26 +1936,8 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
         return True
     if Path(str(bundle_path or "")).joinpath("video_preprocessor_config.json").is_file():
         return True
-    if _qwen_jang_vl_policy_text_only(bundle_path):
-        return False
     model_type = str(cfg.get("model_type") or "").lower()
     if model_type in {"gemma4", "gemma4_unified"}:
-        jang = _read_bundle_json(bundle_path, "jang_config.json")
-        explicit_video_values = [
-            cfg.get("has_video"),
-            (cfg.get("modalities") or {}).get("video")
-            if isinstance(cfg.get("modalities"), dict)
-            else None,
-            jang.get("has_video") if isinstance(jang, dict) else None,
-            (jang.get("modalities") or {}).get("video")
-            if isinstance(jang.get("modalities"), dict)
-            else None,
-            ((jang.get("capabilities") or {}).get("modalities") or {}).get("video")
-            if isinstance((jang.get("capabilities") or {}).get("modalities"), dict)
-            else None,
-        ]
-        if any(value is False for value in explicit_video_values):
-            return False
         proc = _read_bundle_json(bundle_path, "processor_config.json")
         return bool(
             cfg.get("video_token_id") is not None
@@ -2199,69 +1962,12 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     cfg = _read_bundle_json(bundle_path, "config.json")
     if not cfg:
         return False
-    if _qwen_jang_vl_policy_text_only(bundle_path):
-        return False
     model_type = str(cfg.get("model_type") or "").lower()
-    if model_type in {"gemma4", "gemma4_unified"}:
-        proc = _read_bundle_json(bundle_path, "processor_config.json")
-        return bool(
-            cfg.get("video_token_id") is not None
-            and cfg.get("image_token_id") is not None
-            and isinstance(cfg.get("vision_config"), dict)
-            and isinstance(proc.get("video_processor") if proc else None, dict)
-        )
     if model_type != "step3p7":
         return False
     return bool(
         cfg.get("image_token_id") is not None
         and isinstance(cfg.get("vision_config"), dict)
-    )
-
-
-def _qwen_jang_vl_policy_text_only(bundle_path: str | None) -> bool:
-    """Return true for Qwen/N2 JANG media-shaped bundles that must stay text-only."""
-    cfg = _read_bundle_json(bundle_path, "config.json")
-    if not isinstance(cfg, dict):
-        return False
-    model_types = {
-        str(cfg.get("model_type") or "").lower(),
-        str((cfg.get("text_config") or {}).get("model_type") or "").lower()
-        if isinstance(cfg.get("text_config"), dict)
-        else "",
-    }
-    if not (model_types & {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}):
-        return False
-    if not isinstance(cfg.get("vision_config"), dict):
-        return False
-    jang = _read_bundle_json(bundle_path, "jang_config.json")
-    if not isinstance(jang, dict):
-        return False
-    candidates = (
-        jang.get("format"),
-        jang.get("weight_format"),
-        jang.get("profile"),
-        (jang.get("quantization") or {}).get("format")
-        if isinstance(jang.get("quantization"), dict)
-        else None,
-        (jang.get("architecture") or {}).get("format")
-        if isinstance(jang.get("architecture"), dict)
-        else None,
-    )
-    lowered = {str(value or "").lower() for value in candidates if value is not None}
-    if not any("jang" in value or "mxtq" in value for value in lowered):
-        return False
-    try:
-        from .native_mtp import inspect_native_mtp_bundle
-
-        mtp = inspect_native_mtp_bundle(str(bundle_path))
-    except Exception:
-        mtp = {}
-    return not bool(
-        mtp.get("artifact_available")
-        and mtp.get("has_vision_config")
-        and mtp.get("has_vision_weights")
-        and mtp.get("runtime_bundle_has_mtp")
-        and mtp.get("runtime_scope") == "text+vl"
     )
 
 
@@ -2319,23 +2025,6 @@ def _mimo_v2_media_runtime_enabled(cfg: dict[str, Any]) -> bool:
     return False
 
 
-def _mimo_v2_text_runtime_media_overlay_opt_in() -> bool:
-    """Whether to promote MiMo text-runtime bundles to the media loader.
-
-    Complete preserved sidecars prove that media weights exist, not that the
-    full MLLM working-set envelope is safe for normal chat. Keep explicit
-    ``weights_preserved_text_runtime`` artifacts text-only unless a proof run or
-    diagnostic launch opts into the media bridge.
-    """
-
-    return os.environ.get("VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[str, ...]) -> bool:
     try:
         index = _read_bundle_json(bundle_path, "model.safetensors.index.json")
@@ -2348,46 +2037,6 @@ def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[st
         isinstance(name, str) and name.startswith(prefix)
         for name in weight_map
         for prefix in prefixes
-    )
-
-
-def _mimo_v2_bundle_can_use_media_runtime_overlay(
-    bundle_path: str | None,
-    cfg: dict[str, Any],
-) -> bool:
-    """Return True for promoted MiMo JANG/JANGTQ bundles eligible for overlay.
-
-    Older local MiMo artifacts can be stamped ``weights_preserved_text_runtime``
-    because media wiring landed after conversion. Only let source override that
-    stamp for known quantized MiMo runtime bundles; generic preserved-media
-    fixtures or incomplete artifacts must remain text-only.
-    """
-    if not isinstance(cfg, dict):
-        return False
-    if str(cfg.get("model_type") or "").lower() != "mimo_v2":
-        return False
-    jang = _read_bundle_json(bundle_path, "jang_config.json")
-    candidates = (
-        cfg.get("format"),
-        cfg.get("weight_format"),
-        cfg.get("jang_profile"),
-        cfg.get("jang_version"),
-        cfg.get("profile"),
-        jang.get("format") if isinstance(jang, dict) else None,
-        jang.get("weight_format") if isinstance(jang, dict) else None,
-        jang.get("profile") if isinstance(jang, dict) else None,
-        jang.get("family") if isinstance(jang, dict) else None,
-        (jang.get("quantization") or {}).get("format")
-        if isinstance(jang.get("quantization"), dict)
-        else None,
-        (jang.get("quantization") or {}).get("weight_format")
-        if isinstance(jang.get("quantization"), dict)
-        else None,
-    )
-    lowered = {str(value or "").lower() for value in candidates if value is not None}
-    return any(
-        "jang" in value or "mxtq" in value
-        for value in lowered
     )
 
 
@@ -2412,22 +2061,15 @@ def _mimo_v2_media_runtime_auto_enabled(
         str(caps.get("multimodal_status") or "").lower(),
         str(runtime.get("multimodal_mode") or "").lower(),
     }
-    text_runtime_modes = {
+    if explicit_modes & {
         "weights_preserved_text_runtime",
         "text_runtime",
         "text_only",
         "unwired",
         "preserved_disabled",
-    }
-    if explicit_modes & text_runtime_modes:
-        if not _mimo_v2_text_runtime_media_overlay_opt_in():
-            return False
-        if not _mimo_v2_bundle_can_use_media_runtime_overlay(bundle_path, cfg):
-            return False
+    }:
+        return False
     bundle = Path(bundle_path or "")
-    processor_config = cfg.get("processor_config")
-    if not isinstance(processor_config, dict):
-        processor_config = {}
     has_vision_runtime = all(
         hasattr(module, name)
         for name in (
@@ -2448,24 +2090,13 @@ def _mimo_v2_media_runtime_auto_enabled(
     has_vision_bundle = (
         has_vision_runtime
         and isinstance(cfg.get("vision_config"), dict)
-        and (
-            cfg.get("image_token_id") is not None
-            or cfg.get("video_token_id") is not None
-            or processor_config.get("image_token_id") is not None
-            or processor_config.get("video_token_id") is not None
-        )
+        and (cfg.get("image_token_id") is not None or cfg.get("video_token_id") is not None)
         and (bundle / "preprocessor_config.json").is_file()
         and _mimo_v2_bundle_has_index_prefix(bundle_path, ("visual.",))
     )
     has_audio_bundle = (
         has_audio_runtime
         and isinstance(cfg.get("audio_config"), dict)
-        and (
-            cfg.get("audio_token_id") is not None
-            or cfg.get("audio_token_index") is not None
-            or processor_config.get("audio_token_id") is not None
-            or processor_config.get("audio_token_index") is not None
-        )
         and (bundle / "audio_tokenizer" / "model.safetensors").is_file()
         and _mimo_v2_bundle_has_index_prefix(
             bundle_path,
@@ -2498,22 +2129,9 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
         and hasattr(module, "MiMoVisionBlock")
         and isinstance(cfg.get("vision_config"), dict)
     )
-    processor_config = cfg.get("processor_config")
-    if not isinstance(processor_config, dict):
-        processor_config = {}
-    if has_vision_runtime and (
-        cfg.get("image_token_id") is not None
-        or cfg.get("image_token_index") is not None
-        or processor_config.get("image_token_id") is not None
-        or processor_config.get("image_token_index") is not None
-    ):
+    if has_vision_runtime and cfg.get("image_token_id") is not None:
         modalities.append("vision")
-    if has_vision_runtime and (
-        cfg.get("video_token_id") is not None
-        or cfg.get("video_token_index") is not None
-        or processor_config.get("video_token_id") is not None
-        or processor_config.get("video_token_index") is not None
-    ):
+    if has_vision_runtime and cfg.get("video_token_id") is not None:
         modalities.append("video")
 
     has_audio_runtime = bool(
@@ -2528,6 +2146,9 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     # still needs an audio token ID to splice those embeddings into the text
     # stream. Do not advertise API-level audio until the bundle/runtime exposes
     # that token path.
+    processor_config = cfg.get("processor_config")
+    if not isinstance(processor_config, dict):
+        processor_config = {}
     if has_audio_runtime and (
         cfg.get("audio_token_id") is not None
         or cfg.get("audio_token_index") is not None
@@ -2629,24 +2250,23 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         return False
     jang = _read_bundle_json(bundle_path, "jang_config.json")
     model_type = str(cfg.get("model_type") or "").lower()
+    caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
+    if not caps and isinstance((jang or {}).get("capabilities"), dict):
+        caps = (jang or {}).get("capabilities") or {}
+    cap_modalities = caps.get("modalities") if isinstance(caps, dict) else None
+    if (
+        model_type.startswith("gemma4")
+        and isinstance(cap_modalities, dict)
+        and cap_modalities.get("audio") is False
+    ):
+        # Some Gemma4 vision-only bundles carry a leftover audio_config stub.
+        # The model-owned capabilities field is the stronger truth: do not
+        # advertise audio unless the artifact says it is runtime-supported.
+        return False
     weight_format = str((jang or {}).get("weight_format") or "").lower()
     profile = str((jang or {}).get("profile") or "").lower()
     quant = (jang or {}).get("quantization") if isinstance(jang, dict) else {}
     selective = quant.get("selective_passthrough") if isinstance(quant, dict) else {}
-
-    def _has_audio_tower_weights() -> bool:
-        try:
-            index = _read_bundle_json(bundle_path, "model.safetensors.index.json")
-        except Exception:
-            index = {}
-        weight_map = index.get("weight_map") if isinstance(index, dict) else {}
-        if not isinstance(weight_map, dict):
-            return False
-        return any(
-            isinstance(key, str) and key.startswith("audio_tower.")
-            for key in weight_map
-        )
-
     has_audio_safe_mxfp_repair = bool(
         model_type == "gemma4_unified"
         and weight_format == "mxfp8"
@@ -2671,9 +2291,28 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         # raw `Audio present.` content, but the API path is not stable enough to
         # advertise audio.
         return False
-    if model_type in {"gemma4", "gemma4_unified"}:
-        return bool(isinstance(cfg.get("audio_config"), dict) and _has_audio_tower_weights())
+    if model_type == "gemma4_unified" and cfg.get("audio_config") is not None:
+        if _bundle_weight_map_has_prefix(bundle_path, "audio_tower."):
+            return True
+        audio_proven = bool(
+            (cfg.get("capabilities") or {}).get("audio_runtime_proven")
+            or (jang or {}).get("audio_runtime_proven")
+            or ((jang or {}).get("capabilities") or {}).get("audio_runtime_proven")
+        )
+        if audio_proven or (
+            os.environ.get("VMLINUX_ALLOW_EXPERIMENTAL_GEMMA4_DIRECT_AUDIO") == "1"
+            or os.environ.get("VMLX_ALLOW_EXPERIMENTAL_GEMMA4_DIRECT_AUDIO") == "1"
+        ):
+            return True
+        # Gemma4 Unified direct-audio bundles can contain an audio token and
+        # embed_audio projection without a real audio_tower. The 12B JANG_4M
+        # artifact reaches the audio projection but installed UI/Chat/Responses
+        # live proof still answers as if no audio was attached. Keep
+        # capabilities honest until a bundle is explicitly stamped/proven.
+        return False
     if cfg.get("audio_config") is not None:
+        return True
+    if model_type == "gemma4_unified":
         return True
     for obj in (cfg, cfg.get("text_config")):
         if not isinstance(obj, dict):
@@ -2697,8 +2336,6 @@ def _loaded_mllm_modalities() -> list[str] | None:
         if gate.get("applicable") and not gate.get("safe"):
             return ["text"]
         return mimo_modalities
-    if _qwen_jang_vl_policy_text_only(_model_path or _model_name):
-        return ["text"]
     modalities = ["text", "vision"]
     if _bundle_declares_native_audio(_model_path or _model_name):
         modalities.append("audio")
@@ -2713,6 +2350,8 @@ def _loaded_runtime_modalities() -> list[str]:
     modalities = _loaded_omni_modalities()
     if modalities is not None:
         return modalities
+    if _m3_vl_image_ok(_engine):
+        return ["text", "vision"]
     modalities = _loaded_mllm_modalities()
     if modalities is not None:
         return modalities
@@ -3035,90 +2674,6 @@ def _effective_tools_for_tool_parsing(request: Any) -> Any:
     return getattr(request, "tools", None)
 
 
-def _request_tool_function_schemas(request: Any) -> dict[str, dict[str, Any]]:
-    effective_tools = _effective_tools_for_tool_parsing(request)
-    if not request or not effective_tools:
-        return {}
-    schemas: dict[str, dict[str, Any]] = {}
-    try:
-        template_tools = convert_tools_for_template(effective_tools) or []
-    except Exception:
-        template_tools = []
-    for tool in template_tools:
-        fn = tool.get("function") if isinstance(tool, dict) else None
-        name = fn.get("name") if isinstance(fn, dict) else None
-        if isinstance(name, str) and name:
-            schemas[name] = fn
-    return schemas
-
-
-def _tool_call_name_args_id(tc: Any) -> tuple[str | None, Any, str]:
-    try:
-        return tc.function.name, tc.function.arguments, getattr(tc, "id", "")
-    except Exception:
-        fn = tc.get("function") if isinstance(tc, dict) else None
-        if isinstance(fn, dict):
-            return fn.get("name"), fn.get("arguments") or "", tc.get("id", "")
-        if isinstance(tc, dict):
-            return tc.get("name"), tc.get("arguments") or "", tc.get("id", "")
-        return None, "", ""
-
-
-def _tool_call_missing_required_args(
-    tc: Any,
-    request: ChatCompletionRequest | ResponsesRequest | None = None,
-) -> list[str]:
-    name, raw_args, _ = _tool_call_name_args_id(tc)
-    if not name:
-        return []
-    schema = _request_tool_function_schemas(request).get(name) or {}
-    params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
-    required = params.get("required", []) if isinstance(params, dict) else []
-    if not isinstance(required, list) or not required:
-        return []
-    if isinstance(raw_args, dict):
-        args = dict(raw_args)
-    elif isinstance(raw_args, str) and raw_args.strip():
-        try:
-            parsed_args = json.loads(raw_args)
-        except Exception:
-            parsed_args = {}
-        args = parsed_args if isinstance(parsed_args, dict) else {}
-    else:
-        args = {}
-    missing: list[str] = []
-    for key in required:
-        if not isinstance(key, str) or not key:
-            continue
-        value = args.get(key)
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            missing.append(key)
-    return missing
-
-
-def _drop_tool_calls_missing_required_args(
-    tool_calls: list | None,
-    request: ChatCompletionRequest | ResponsesRequest | None = None,
-) -> list | None:
-    if not tool_calls:
-        return tool_calls
-    kept = []
-    for tc in tool_calls:
-        name, _, call_id = _tool_call_name_args_id(tc)
-        missing = _tool_call_missing_required_args(tc, request)
-        if missing:
-            logger.warning(
-                "Dropping parsed tool call %s for %r because required "
-                "argument(s) are missing or empty: %s",
-                call_id or "<no-id>",
-                name,
-                ", ".join(missing),
-            )
-            continue
-        kept.append(tc)
-    return kept or None
-
-
 def _attach_effective_tools_for_tool_parsing(request: Any, tools: list[Any]) -> None:
     """Attach merged request+MCP tools without mutating the public API payload."""
     if request is None:
@@ -3273,7 +2828,7 @@ _VISUAL_GROUNDING_MARKERS = (
     "<|box_end|>",
 )
 _VISUAL_GROUNDING_SPAN_RE = re.compile(
-    r"<\|(?:point|box)_start\|>[\s\S]*?(?:<\|(?:point|box)_end\|>|$)",
+    r"<\|(?:point|box)_start\|>(?P<inner>[\s\S]*?)(?:<\|(?:point|box)_end\|>|$)",
     re.DOTALL,
 )
 _VISUAL_GROUNDING_END_RE = re.compile(r"<\|(?:point|box)_end\|>")
@@ -3291,11 +2846,26 @@ def _strip_partial_visual_grounding_suffix(text: str) -> str:
 
 
 def _strip_visual_grounding_markup_for_display(text: str) -> str:
-    """Remove VL point/box control spans from user-visible assistant text."""
+    """Hide VL point/box control *tokens* from user-visible assistant text.
+
+    Issue #196: the special-token markers are always removed, but a span's
+    literal inner text is preserved when it is coordinate-bearing (contains a
+    digit), e.g. UI-TARS ``<|box_start|>(371,60)<|box_end|>`` -> ``(371,60)``,
+    so grounding VLMs stay usable via the OpenAI API. Pure control-markup
+    spans with no coordinates (ZAYA-VL ``<|point_start|>tool<|point_end|>``)
+    are still dropped entirely.
+    """
     if not text:
         return text
-    cleaned = _VISUAL_GROUNDING_SPAN_RE.sub("", text)
-    cleaned = _VISUAL_GROUNDING_END_RE.sub("", cleaned)
+
+    def _span_sub(match: "re.Match[str]") -> str:
+        inner = match.group("inner") or ""
+        return inner if any(ch.isdigit() for ch in inner) else ""
+
+    cleaned = _VISUAL_GROUNDING_SPAN_RE.sub(_span_sub, text)
+    # Remove any stray/unpaired markers left after coordinate spans.
+    for _marker in _VISUAL_GROUNDING_MARKERS:
+        cleaned = cleaned.replace(_marker, "")
     return _strip_partial_visual_grounding_suffix(cleaned)
 
 
@@ -3330,6 +2900,20 @@ def _strip_tool_markup_residue_for_display(text: str) -> str:
     return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned).strip()
 
 
+def _parser_routes_tools_via_reasoning_channel(request_parser, harmony_active: bool) -> bool:
+    """GPT-OSS/Harmony emit tool calls through the commentary channel that the
+    reasoning parser surfaces alongside reasoning text, so the reasoning tail must
+    be inspected for tool markers there. ALL OTHER reasoning families emit tool
+    calls in the content/action channel after reasoning closes — inspecting their
+    reasoning tail only yields false positives where reasoning that merely MENTIONS
+    tool syntax stalls visible output (issue #199-2A). Gate the reasoning-channel
+    tool-marker buffering trigger on this predicate."""
+    if harmony_active:
+        return True
+    name = type(request_parser).__name__.lower() if request_parser is not None else ""
+    return "gptoss" in name or "gpt_oss" in name or "harmony" in name
+
+
 def _has_tool_marker_or_partial_suffix(text: str) -> bool:
     """Return True for full native tool markers or a marker split at stream tail."""
     if not text:
@@ -3343,6 +2927,49 @@ def _has_tool_marker_or_partial_suffix(text: str) -> bool:
             if text.endswith(marker[:n]):
                 return True
     return False
+
+
+def _text_ends_with_tool_marker(text: str) -> bool:
+    """True only when ``text`` ENDS with a complete tool marker or a partial-
+    marker suffix — i.e. a tool call is being actively emitted at the growing
+    tail. Unlike _has_tool_marker_or_partial_suffix (which matches a marker
+    ANYWHERE), this does NOT fire when a marker appears earlier and is followed
+    by other text, so reasoning prose that merely MENTIONS tool syntax does not
+    trigger tool-call buffering / stall visible output (#199-2A), while a real
+    reasoning-channel tool call (marker at the tail) is still captured."""
+    if not text:
+        return False
+    for marker in _TOOL_CALL_MARKERS:
+        if text.endswith(marker):
+            return True
+        max_prefix = min(len(marker) - 1, len(text))
+        for n in range(max_prefix, 0, -1):
+            if text.endswith(marker[:n]):
+                return True
+    return False
+
+
+_RAW_JSON_TOOL_ANCHOR = '{"name":"'
+
+
+def _content_forms_raw_json_tool_call(text: str) -> bool:
+    """True when visible content is forming a BARE-JSON tool call
+    (``{\"name\": \"...\", \"arguments\": {...}}``) with no XML/bracket marker —
+    the Hermes-style raw-JSON fallback. ``_TOOL_CALL_MARKERS`` only covers
+    tagged markers, so without this such a call streams out as visible content
+    before the post-stream extractor can pull it into tool_calls (a leak).
+    Only consulted inside the ``tool_call_active`` guard. Matches a growing
+    prefix so a split-across-chunk start is caught before any delta is
+    emitted; a false trigger (a genuine JSON answer) finds no tool call at the
+    end and is flushed as content by the no-tool-calls branch — deferred,
+    never lost."""
+    if not text:
+        return False
+    compact = re.sub(r"\s+", "", text.lstrip())
+    if not compact:
+        return False
+    anchor = _RAW_JSON_TOOL_ANCHOR
+    return compact.startswith(anchor) or anchor.startswith(compact)
 
 
 def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
@@ -3598,105 +3225,6 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
 _tool_call_parser_disabled_explicitly: bool = False
-_reasoning_parser_disabled_explicitly: bool = False
-_reasoning_parser_explicit_name: str | None = None
-_tool_call_parser_explicit_name: str | None = None
-
-
-def _configure_loaded_model_parsers_from_registry(model_key: str | None = None) -> None:
-    """Refresh auto-detected parsers after the loaded model path is known."""
-    global _reasoning_parser, _tool_call_parser
-
-    registry_key = _registry_model_key(model_key)
-    if not registry_key:
-        return
-
-    try:
-        from .model_config_registry import get_model_config_registry
-
-        cfg = get_model_config_registry().lookup(registry_key)
-    except Exception as e:
-        logger.debug("Parser auto-detection skipped for %s: %s", registry_key, e)
-        return
-
-    if (
-        not _reasoning_parser_disabled_explicitly
-        and _reasoning_parser_explicit_name is None
-    ):
-        parser_name = getattr(cfg, "reasoning_parser", None)
-        if parser_name:
-            try:
-                from .reasoning import get_parser
-
-                parser_cls = get_parser(parser_name)
-                if _reasoning_parser is None or _reasoning_parser.__class__ is not parser_cls:
-                    _reasoning_parser = parser_cls()
-                    logger.info(
-                        "Auto-detected reasoning parser after model load: %s "
-                        "(registry key: %s)",
-                        parser_name,
-                        registry_key,
-                    )
-            except KeyError:
-                logger.warning(
-                    "Reasoning parser %r from loaded model config is not registered",
-                    parser_name,
-                )
-        elif _reasoning_parser is not None:
-            _reasoning_parser = None
-            logger.info(
-                "Cleared auto-detected reasoning parser after model load "
-                "(registry key: %s has no parser)",
-                registry_key,
-            )
-
-    if (
-        _enable_auto_tool_choice
-        and not _tool_call_parser_disabled_explicitly
-        and _tool_call_parser_explicit_name is None
-    ):
-        parser_name = getattr(cfg, "tool_parser", None)
-        if parser_name and _tool_call_parser != parser_name:
-            _tool_call_parser = parser_name
-            logger.info(
-                "Auto-detected tool call parser after model load: %s "
-                "(registry key: %s)",
-                parser_name,
-                registry_key,
-            )
-        elif not parser_name and _tool_call_parser not in (None, "auto"):
-            _tool_call_parser = None
-            logger.info(
-                "Cleared auto-detected tool call parser after model load "
-                "(registry key: %s has no parser)",
-                registry_key,
-            )
-
-
-def _request_reasoning_parser_from_config(model_config: Any) -> Any | None:
-    if _reasoning_parser is not None:
-        return _reasoning_parser
-    if _reasoning_parser_disabled_explicitly:
-        return None
-    parser_name = getattr(model_config, "reasoning_parser", None)
-    if not parser_name or parser_name == "none":
-        return None
-    if (
-        getattr(model_config, "supports_thinking", None) is False
-        and str(parser_name) != "think_xml"
-    ):
-        return None
-    try:
-        from .reasoning import get_parser
-
-        return get_parser(parser_name)()
-    except Exception as e:
-        logger.debug(
-            "Request reasoning parser fallback skipped for %s: %s",
-            parser_name,
-            e,
-        )
-        return None
 
 # reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior).
 # DSV4-Flash adds a "max" effort tier beyond OpenAI's low/medium/high
@@ -4621,6 +4149,29 @@ def _parse_tool_calls_with_parser(
         allowed = _allowed_tool_names()
         if not allowed:
             return tool_calls
+        schemas_by_name: dict[str, dict[str, Any]] = {}
+        try:
+            for tool in convert_tools_for_template(
+                _effective_tools_for_tool_parsing(request)
+            ) or []:
+                fn = tool.get("function") if isinstance(tool, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if isinstance(name, str) and name:
+                    schemas_by_name[name] = fn
+        except Exception:
+            schemas_by_name = {}
+
+        def _function_payload(tc: Any) -> tuple[str | None, str, str]:
+            try:
+                return tc.function.name, tc.function.arguments, getattr(tc, "id", "")
+            except Exception:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if isinstance(fn, dict):
+                    return fn.get("name"), fn.get("arguments") or "{}", tc.get("id", "")
+                if isinstance(tc, dict):
+                    return tc.get("name"), tc.get("arguments") or "{}", tc.get("id", "")
+                return None, "{}", ""
+
         def _coerce_json_args(raw_args: Any) -> dict[str, Any]:
             if isinstance(raw_args, dict):
                 return dict(raw_args)
@@ -4636,7 +4187,7 @@ def _parse_tool_calls_with_parser(
         def _missing_required_args(name: str | None, raw_args: Any) -> list[str]:
             if not name:
                 return []
-            schema = _request_tool_function_schemas(request).get(name) or {}
+            schema = schemas_by_name.get(name) or {}
             params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
             required = params.get("required", []) if isinstance(params, dict) else []
             if not isinstance(required, list) or not required:
@@ -4652,7 +4203,7 @@ def _parse_tool_calls_with_parser(
             return missing
 
         def _rewrite_tool_alias(tc: Any) -> Any | None:
-            name, raw_args, call_id = _tool_call_name_args_id(tc)
+            name, raw_args, call_id = _function_payload(tc)
             if name != "create_file" or "write_file" not in allowed:
                 return None
             args = _coerce_json_args(raw_args)
@@ -4685,7 +4236,7 @@ def _parse_tool_calls_with_parser(
 
         filtered = []
         for tc in tool_calls:
-            name, raw_args, call_id = _tool_call_name_args_id(tc)
+            name, raw_args, call_id = _function_payload(tc)
             if name in allowed:
                 missing = _missing_required_args(name, raw_args)
                 if missing:
@@ -4889,11 +4440,8 @@ def _parse_tool_calls_with_parser(
         cleaned, calls = parse_tool_calls(text)
         if calls:
             calls = _filter_to_request_tools(calls)
-            calls = _drop_tool_calls_missing_required_args(calls, request)
             if calls:
                 return cleaned, calls
-            if _has_tool_marker_or_partial_suffix(text):
-                return _strip_tool_markup_residue_for_display(text), None
             return text, None
         repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
         if repaired_calls:
@@ -4901,8 +4449,6 @@ def _parse_tool_calls_with_parser(
         bare_cleaned, bare_calls = _repair_required_single_tool_bare_json_args(text)
         if bare_calls:
             return bare_cleaned, bare_calls
-        if _has_tool_marker_or_partial_suffix(text):
-            return _strip_tool_markup_residue_for_display(text), None
         return text, None
 
     # Determine which parser to use.
@@ -4937,7 +4483,7 @@ def _parse_tool_calls_with_parser(
         parser_instance = parser_cls(tokenizer)
     except Exception as e:
         logger.warning(f"Failed to initialize tool parser '{active_parser}': {e}")
-        return _generic_parse_filtered(output_text)
+        return parse_tool_calls(output_text)
 
     # Use the configured parser, fall back to generic if it finds nothing
     try:
@@ -4965,18 +4511,12 @@ def _parse_tool_calls_with_parser(
                 for tc in result.tool_calls
             ]
             filtered_tool_calls = _filter_to_request_tools(tool_calls)
-            filtered_tool_calls = _drop_tool_calls_missing_required_args(
-                filtered_tool_calls,
-                request,
-            )
             if filtered_tool_calls:
                 return result.content or "", filtered_tool_calls
             # Parser consumed only unavailable tool names. Treat as plain text
             # so clients do not receive hallucinated function calls like
             # README.md()/src()/tests() when the request only exposed
             # list_directory().
-            if _has_tool_marker_or_partial_suffix(output_text):
-                return _strip_tool_markup_residue_for_display(output_text), None
             return output_text, None
         else:
             # Specific parser found nothing — try generic parser as fallback
@@ -5000,8 +4540,6 @@ def _clean_suppressed_tool_markup_for_display(
         return output_text
     if tool_calls:
         return _strip_tool_markup_residue_for_display(cleaned_text or "")
-    if _has_tool_marker_or_partial_suffix(output_text):
-        return _strip_tool_markup_residue_for_display(output_text)
     return output_text
 
 
@@ -5337,21 +4875,7 @@ def _registry_model_key(requested_model: str | None = None) -> str:
     loaded artifact path/name so they can read config.json/jang_config.json and
     avoid false warnings like ``alias/config.json`` missing.
     """
-    fallback = ""
-    for candidate in (_model_path, _model_name, requested_model):
-        if not candidate:
-            continue
-        if not fallback:
-            fallback = candidate
-        try:
-            from .api.utils import resolve_to_local_path
-
-            resolved = resolve_to_local_path(candidate)
-            if resolved and (resolved != candidate or os.path.isdir(resolved)):
-                return resolved
-        except Exception:
-            pass
-    return fallback
+    return _model_path or _model_name or requested_model or ""
 
 
 def _normalize_minimax_m3_thinking_mode(ct_kwargs: dict, request, model_key: str) -> None:
@@ -5640,7 +5164,6 @@ def load_model(
     _served_model_name = served_model_name  # Custom name override (may be None)
     if _served_model_name:
         logger.info(f"Serving model as: {_served_model_name} (actual: {_model_name})")
-    _configure_loaded_model_parsers_from_registry(model_name)
 
     # Log system memory before model load for diagnostics
     try:
@@ -6104,6 +5627,24 @@ def _read_bundle_json(bundle_path: str | None, filename: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _bundle_weight_map_has_prefix(bundle_path: str | None, prefix: str) -> bool:
+    if not bundle_path or not prefix:
+        return False
+    try:
+        from pathlib import Path
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return False
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return False
+        return any(str(key).startswith(prefix) for key in weight_map)
+    except Exception:
+        return False
 
 
 def _bundle_has_prestacked_jangtq(bundle_path: str | None) -> bool:
@@ -6581,26 +6122,6 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         drop_mtp_raw is not None and not isinstance(drop_mtp_raw, bool)
     )
     drop_mtp = drop_mtp_raw if isinstance(drop_mtp_raw, bool) else None
-    mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
-    mtp_sidecar_declares_dropped = (
-        mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False
-    )
-    runtime_sidecar = (
-        jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
-    )
-    runtime_bundle_has_mtp = runtime_sidecar.get("bundle_has_mtp")
-    runtime_mtp_mode = runtime_sidecar.get("mtp_mode")
-    runtime_declares_dropped_mtp = (
-        runtime_bundle_has_mtp is False
-        and isinstance(runtime_mtp_mode, str)
-        and (
-            "drop" in runtime_mtp_mode.lower()
-            or "missing_weight" in runtime_mtp_mode.lower()
-            or "metadata_only" in runtime_mtp_mode.lower()
-        )
-    )
-    if mtp_sidecar_declares_dropped or runtime_declares_dropped_mtp:
-        drop_mtp = True
     has_mtp_tensors, index_error = _bundle_index_tensor_prefix_status(
         bundle_path,
         "mtp.",
@@ -6634,6 +6155,11 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
     if config_layers in (None, 0) and drop_mtp is not True and has_mtp_tensors:
         issues.append(
             "bundle indexes mtp.* tensors but config disables MTP runtime"
+        )
+    if drop_mtp is True and config_layers not in (None, 0):
+        issues.append(
+            "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
+            f"{config_layers}"
         )
     if (
         config_layers is not None
@@ -6672,15 +6198,7 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         runtime_reason = "metadata_inconsistent"
     elif drop_mtp is True:
         status = "dropped"
-        runtime_reason = (
-            "jang_config.runtime.bundle_has_mtp=false"
-            if runtime_declares_dropped_mtp
-            else "jang_config.mtp.enabled=false"
-            if mtp_sidecar.get("enabled") is False
-            else "jang_config.mtp.kept=false"
-            if mtp_sidecar.get("kept") is False
-            else "jang_config.drop_mtp=true"
-        )
+        runtime_reason = "jang_config.drop_mtp=true"
     elif artifact_available:
         status = "weights_present_runtime_unwired"
         if runtime_supported:
@@ -7558,7 +7076,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                 "mode": "storage_boundary",
                 "bits": stored_kv_bits if stored_kv_bits > 0 else None,
                 "group_size": stored_kv_group if stored_kv_bits > 0 else None,
-                "applies_to": "full_attention_kv_only",
+                "applies_to": "full_and_sliding_attention_kv",
                 "metadata_policy": "preserve_rotating_window_metadata",
             },
             "prefix": bool(block_aware_cache is not None),
@@ -8264,7 +7782,9 @@ async def admin_wake():
                             model=_spec_model,
                             num_tokens=_cli_args.get("num_draft_tokens", 3),
                         )
-                        await asyncio.to_thread(load_draft_model, _spec_cfg)
+                        # issue #200: reload draft model on the model worker
+                        # thread to avoid a Metal eval race with generation.
+                        await _run_on_model_executor(load_draft_model, _spec_cfg)
                         logger.info(f"Draft model reloaded: {_spec_model}")
                     except Exception as e:
                         logger.warning(f"Failed to reload draft model on wake: {e}")
@@ -8484,6 +8004,61 @@ async def cache_entries():
     }
 
 
+def _get_model_owner_executor():
+    """Return the single-thread executor that owns MLX model eval, or None.
+
+    Issue #200: background MLX work (cache-warm prefill, draft-model reload)
+    must run on the SAME thread as scheduler.step()/model load. Using
+    asyncio.to_thread()/run_in_executor(None, ...) picks arbitrary default-
+    pool threads; concurrent Metal kernel/library cache population then races
+    the model worker thread and crashes (objc_retain / newFunctionWithName).
+    All three engine shapes expose a single-thread step/model executor.
+    """
+    eng = _engine
+    if eng is None:
+        return None
+    # SimpleEngine (direct / no continuous-batching)
+    ex = getattr(eng, "_model_executor", None)
+    if ex is not None:
+        return ex
+    _ensure = getattr(eng, "_ensure_model_executor", None)
+    if callable(_ensure):
+        try:
+            return _ensure()
+        except Exception:
+            pass
+    # BatchedEngine (MLLM) — scheduler owns the step executor
+    ex = getattr(getattr(eng, "_mllm_scheduler", None), "_step_executor", None)
+    if ex is not None:
+        return ex
+    # BatchedEngine (LLM) — EngineCore.scheduler._step_executor
+    for _attr in ("_engine_core", "engine_core", "_core", "scheduler", "_scheduler"):
+        obj = getattr(eng, _attr, None)
+        if obj is None:
+            continue
+        ex = getattr(obj, "_step_executor", None)
+        if ex is not None:
+            return ex
+        ex = getattr(getattr(obj, "scheduler", None), "_step_executor", None)
+        if ex is not None:
+            return ex
+    return None
+
+
+async def _run_on_model_executor(fn, /, *args, **kwargs):
+    """Run a blocking MLX call on the model-owner thread (issue #200).
+
+    Falls back to asyncio.to_thread only when no model executor is
+    discoverable (e.g. between deep-sleep teardown and reload).
+    """
+    ex = _get_model_owner_executor()
+    if ex is not None:
+        loop = asyncio.get_running_loop()
+        call = functools.partial(fn, *args, **kwargs)
+        return await loop.run_in_executor(ex, call)
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 @app.post("/v1/cache/warm", dependencies=[Depends(verify_api_key)])
 async def cache_warm(request: dict):
     """
@@ -8567,6 +8142,12 @@ async def cache_warm(request: dict):
             "errors": errors if errors else None,
         }
 
+    # issue #200: serialize warm prefill on the model worker thread, not
+    # an arbitrary default-pool thread (would race scheduler.step()).
+    _warm_executor = getattr(scheduler, "_step_executor", None) or _get_model_owner_executor()
+    if _warm_executor is not None:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_warm_executor, _do_warm)
     return await asyncio.to_thread(_do_warm)
 
 
@@ -8886,7 +8467,6 @@ async def model_capabilities(model_id: str) -> dict:
         and engine_is_mllm
         and family != "mimo_v2"
         and mimo_runtime_modalities is None
-        and not _qwen_jang_vl_policy_text_only(_model_path or model_key)
     ):
         modalities = ["text", "vision"]
     supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None
@@ -12030,12 +11610,6 @@ async def create_chat_completion(
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
         request.enable_thinking = _et
-    chat_kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
-        int(chat_kwargs["max_tokens"]),
-        request=request,
-        model_key=_model_path or _model_name or request.model,
-        enable_thinking=_et,
-    )
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Map it to template-side thinking_budget only; output length remains owned
@@ -12245,8 +11819,6 @@ async def create_chat_completion(
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
         chat_kwargs["_vmlx_tools_present"] = True
-        if _tool_call_parser:
-            chat_kwargs["_tool_parser_id"] = _tool_call_parser
 
     # Inject Harmony analysis prefix for GPT-OSS models when thinking is enabled.
     # The suffix replaces the template's generation prompt (<|start|>assistant<|message|>)
@@ -12559,78 +12131,36 @@ async def create_chat_completion(
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
     if _is_required_tool_choice(_tool_choice) and not tool_calls:
-        _retry_output = await _retry_required_tool_call_once(
-            engine=engine,
-            messages=messages,
-            chat_kwargs=chat_kwargs,
-            invalid_text=_cc_parse_text or content_for_parsing or "",
-            timeout=timeout,
-            fastapi_request=fastapi_request,
-            request_id=f"{response_id}-required-tool-retry",
-            endpoint="Chat Completions",
+        tool_required_preview = (_cc_parse_text or content_for_parsing or "")
+        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
+        logger.warning(
+            f"tool_choice='required' but model produced no tool calls. "
+            f"Returning error to client. raw_preview={tool_required_preview!r}"
         )
-        if _retry_output is not None:
-            _retry_parse_text = _strip_think_for_tool_parse(
-                getattr(_retry_output, "raw_text", "") or _retry_output.text or ""
-            )
-            _retry_cleaned, _retry_calls = _parse_tool_calls_with_parser(
-                _retry_parse_text,
-                request,
-            )
-            if _retry_calls:
-                output = _retry_output
-                reasoning_text = None
-                content_for_parsing = _retry_output.text or ""
-                _cc_parse_text = _retry_parse_text
-                cleaned_text = _retry_cleaned
-                tool_calls = _retry_calls
-        if tool_calls:
-            logger.info("Chat Completions: required tool_choice retry produced tool calls")
-        else:
-            tool_required_preview = (_cc_parse_text or content_for_parsing or "")
-            tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
-            logger.warning(
-                f"tool_choice='required' but model produced no tool calls. "
-                f"Returning error to client. raw_preview={tool_required_preview!r}"
-            )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": (
-                        "tool_choice='required' was set but the model did not produce "
-                        "any tool calls. Try rephrasing your prompt or using a model "
-                        "with better tool-calling support."
-                    ),
-                    "raw_preview": tool_required_preview,
-                },
-            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "raw_preview": tool_required_preview,
+            },
+        )
+
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
     response_content = clean_output_text(cleaned_text) if cleaned_text else None
     if response_content:
         response_content = _finalize_visible_text_for_request(response_content, request)
     response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
-    blank_generation_warnings = _blank_visible_generation_warning(
-        response_content,
-        reasoning_text,
-        tool_calls,
-        output,
-        endpoint="Chat Completions",
-    )
-    if blank_generation_warnings:
-        _log_blank_visible_generation_diagnostics(
-            output,
-            engine.tokenizer,
-            endpoint="Chat Completions",
-            response_id=response_id,
-        )
     response_warnings = _merge_responses_warnings(
         _chat_completion_warnings_for_reasoning_only(
             response_content,
             reasoning_text,
             tool_calls,
         ),
-        blank_generation_warnings,
         structured_output_warnings,
     )
 
@@ -12902,97 +12432,6 @@ def _chat_completion_warnings_for_reasoning_only(
     )
 
 
-def _blank_visible_generation_warning(
-    content: str | None,
-    reasoning: str | None,
-    tool_calls: list | None,
-    output: Any,
-    *,
-    endpoint: str,
-) -> list[str] | None:
-    has_visible_content = bool((content or "").strip())
-    has_reasoning = bool((reasoning or "").strip())
-    has_tool_calls = bool(tool_calls)
-    if has_visible_content or has_reasoning or has_tool_calls:
-        return None
-    completion_tokens = int(getattr(output, "completion_tokens", 0) or 0)
-    if completion_tokens <= 0:
-        return None
-    finish_reason = getattr(output, "finish_reason", None) or "unknown"
-    endpoint_name = endpoint.strip() or "response"
-    return [
-        f"{endpoint_name} generated {completion_tokens} completion tokens but "
-        "produced no visible message, reasoning, or tool calls "
-        f"(finish_reason={finish_reason}). This is a runtime/model decode "
-        "health failure; vMLX preserved usage/cache telemetry and did not "
-        "synthesize content."
-    ]
-
-
-def _blank_visible_generation_diagnostics(
-    output: Any,
-    tokenizer: Any,
-    *,
-    max_tokens: int = 32,
-    max_chars: int = 500,
-) -> dict[str, Any]:
-    token_ids = list(getattr(output, "tokens", []) or [])
-    head_ids = token_ids[: max(0, max_tokens)]
-
-    def _decode(skip_special_tokens: bool) -> str | None:
-        if not head_ids or tokenizer is None:
-            return None
-        decode = getattr(tokenizer, "decode", None)
-        if not callable(decode):
-            return None
-        try:
-            text = decode(head_ids, skip_special_tokens=skip_special_tokens)
-        except TypeError:
-            try:
-                text = decode(head_ids)
-            except Exception as exc:
-                return f"<decode_error:{type(exc).__name__}:{exc}>"
-        except Exception as exc:
-            return f"<decode_error:{type(exc).__name__}:{exc}>"
-        return str(text)[:max_chars]
-
-    return {
-        "completion_tokens": int(getattr(output, "completion_tokens", 0) or 0),
-        "finish_reason": getattr(output, "finish_reason", None),
-        "token_ids_head": head_ids,
-        "token_ids_count": len(token_ids),
-        "raw_text_head": (getattr(output, "raw_text", "") or "")[:max_chars],
-        "text_head": (getattr(output, "text", "") or "")[:max_chars],
-        "decode_keep_specials_head": _decode(False),
-        "decode_skip_specials_head": _decode(True),
-    }
-
-
-def _log_blank_visible_generation_diagnostics(
-    output: Any,
-    tokenizer: Any,
-    *,
-    endpoint: str,
-    response_id: str,
-) -> None:
-    try:
-        diag = _blank_visible_generation_diagnostics(output, tokenizer)
-        logger.warning(
-            "Blank visible generation diagnostic endpoint=%s response_id=%s %s",
-            endpoint,
-            response_id,
-            json.dumps(diag, ensure_ascii=False, sort_keys=True),
-        )
-    except Exception as exc:
-        logger.warning(
-            "Blank visible generation diagnostic failed endpoint=%s "
-            "response_id=%s error=%r",
-            endpoint,
-            response_id,
-            exc,
-        )
-
-
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
     merged: list[str] = []
     seen: set[str] = set()
@@ -13236,60 +12675,6 @@ async def _retry_structured_output_xml_once(
     if retry_report.get("is_valid"):
         retry_report = _structured_xml_retry_report(retry_report)
     return retry_output, retry_report
-
-
-async def _retry_required_tool_call_once(
-    *,
-    engine: Any,
-    messages: list[dict[str, Any]],
-    chat_kwargs: dict[str, Any],
-    invalid_text: str,
-    timeout: float,
-    fastapi_request: Request | None,
-    request_id: str,
-    endpoint: str,
-) -> GenerationOutput | None:
-    retry_messages = list(messages or [])
-    if invalid_text:
-        retry_messages.append({"role": "assistant", "content": invalid_text})
-    retry_messages.append(
-        {
-            "role": "user",
-            "content": (
-                "The previous assistant output violated tool_choice=required "
-                "because it answered in prose without a tool call. Retry this "
-                "turn now. Your entire next assistant output must be exactly "
-                "one native tool call using the available schema, with all "
-                "required arguments present and non-empty. Do not include "
-                "review prose, markdown, analysis, or a tool result."
-            ),
-        }
-    )
-
-    retry_kwargs = dict(chat_kwargs)
-    retry_kwargs["enable_thinking"] = False
-
-    logger.info(
-        "%s: retrying required tool_choice turn after model emitted prose",
-        endpoint,
-    )
-    try:
-        return await _await_chat_with_disconnect_abort(
-            engine,
-            messages=retry_messages,
-            chat_kwargs=retry_kwargs,
-            timeout=timeout,
-            fastapi_request=fastapi_request,
-            request_id=request_id,
-            endpoint=f"{endpoint} required tool retry",
-        )
-    except Exception:
-        logger.warning(
-            "%s: required tool_choice retry failed before producing output",
-            endpoint,
-            exc_info=True,
-        )
-        return None
 
 
 def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
@@ -14007,6 +13392,17 @@ async def create_response(
         _model_path or _model_name or request.model,
         _responses_input_multimodal_summary(request.input),
     )
+    # M3 VL is intentionally loaded through the text-routed M3 engine
+    # (VMLX_M3_VL=1) because the upstream mlx-vlm wrapper is not published.
+    # Chat Completions, Anthropic, and Ollama already allow image-only M3
+    # requests through this path; Responses is the UI default, so it must
+    # preserve the same image carve-out instead of rejecting as text-only.
+    _responses_requested_modalities = (
+        _responses_modalities_unsupported_after_m3_vl_carveout(
+            engine,
+            _responses_requested_modalities,
+        )
+    )
     if _responses_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/responses",
@@ -14016,6 +13412,10 @@ async def create_response(
         _responses_has_media
         and not engine.is_mllm
         and _loaded_omni_modalities() is None
+        and not _m3_vl_response_image_only(
+            engine,
+            _responses_input_requested_modalities(request.input),
+        )
     ):
         _reject_unsupported_multimodal("/v1/responses")
 
@@ -14027,6 +13427,10 @@ async def create_response(
     # for omni bundles too, otherwise input_image gets collapsed to text and the
     # encoder never sees the image.
     _preserve_mm = bool(engine.is_mllm)
+    if not _preserve_mm:
+        _resp_modalities_for_preserve = _responses_input_requested_modalities(request.input)
+        if _m3_vl_response_image_only(engine, _resp_modalities_for_preserve):
+            _preserve_mm = True
     if not _preserve_mm:
         try:
             from .omni_multimodal import is_omni_multimodal_bundle
@@ -14127,15 +13531,9 @@ async def create_response(
             cleaned.append(msg)
         messages = cleaned
 
-    _responses_request_max_tokens = (
-        request.max_output_tokens
-        if request.max_output_tokens is not None
-        else request.max_tokens
-    )
-
     # Build kwargs
     chat_kwargs = {
-        "max_tokens": _resolve_max_tokens(_responses_request_max_tokens, request.model),
+        "max_tokens": _resolve_max_tokens(request.max_output_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature, request.model),
         "top_p": _resolve_top_p(request.top_p, request.model),
         "max_prompt_tokens": _responses_max_prompt_tokens,
@@ -14180,12 +13578,6 @@ async def create_response(
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
         request.enable_thinking = _et
-    chat_kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
-        int(chat_kwargs["max_tokens"]),
-        request=request,
-        model_key=_model_path or _model_name or request.model,
-        enable_thinking=_et,
-    )
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Map it to template-side thinking_budget only; output length remains owned
@@ -14420,18 +13812,6 @@ async def create_response(
                 len(historical_tools),
             )
 
-    if (
-        _reasoning_parser_is_qwen3(_reasoning_parser)
-        and chat_kwargs.get("enable_thinking") is True
-        and _responses_is_terminal_tool_result_synthesis(messages, request, chat_kwargs)
-    ):
-        chat_kwargs["enable_thinking"] = False
-        chat_kwargs["_vmlx_terminal_tool_result_visible_finalization"] = True
-        logger.info(
-            "Qwen3 Responses terminal tool-result synthesis: using model-owned "
-            "closed thinking branch for visible finalization"
-        )
-
     # Inject Harmony analysis prefix for GPT-OSS models (same as Chat Completions path)
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
@@ -14476,7 +13856,7 @@ async def create_response(
                 messages=messages,  # already preserved-multimodal above
                 temperature=request.temperature,
                 top_p=request.top_p,
-                max_tokens=_responses_request_max_tokens,
+                max_tokens=request.max_output_tokens,
                 stream=False,
                 enable_thinking=request.enable_thinking,
                 reasoning_effort=request.reasoning_effort,
@@ -14520,21 +13900,10 @@ async def create_response(
             _omni_resp_err,
         )
 
-    _terminal_tool_result_visible_finalization = bool(
-        chat_kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
-    )
-
     if request.stream:
         return StreamingResponse(
             stream_responses_api(
-                engine,
-                messages,
-                request,
-                fastapi_request,
-                _vmlx_terminal_tool_result_visible_finalization=(
-                    _terminal_tool_result_visible_finalization
-                ),
-                **chat_kwargs,
+                engine, messages, request, fastapi_request, **chat_kwargs
             ),
             media_type="text/event-stream",
         )
@@ -14863,51 +14232,23 @@ async def create_response(
     # Enforce tool_choice="required": model MUST produce at least one tool call
     _resp_tool_choice = getattr(request, "tool_choice", None)
     if _is_required_tool_choice(_resp_tool_choice) and not tool_calls:
-        _retry_output = await _retry_required_tool_call_once(
-            engine=engine,
-            messages=messages,
-            chat_kwargs=chat_kwargs,
-            invalid_text=parse_text or content_for_parsing or "",
-            timeout=timeout,
-            fastapi_request=fastapi_request,
-            request_id=f"{response_id}-required-tool-retry",
-            endpoint="Responses API",
+        tool_required_preview = (parse_text or content_for_parsing or "")
+        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
+        logger.warning(
+            f"tool_choice='required' but model produced no tool calls. "
+            f"Returning error to client. raw_preview={tool_required_preview!r}"
         )
-        if _retry_output is not None:
-            _retry_parse_text = _strip_think_for_tool_parse(
-                getattr(_retry_output, "raw_text", "") or _retry_output.text or ""
-            )
-            _retry_cleaned, _retry_calls = _parse_tool_calls_with_parser(
-                _retry_parse_text,
-                request,
-            )
-            if _retry_calls:
-                output = _retry_output
-                reasoning_text = None
-                content_for_parsing = _retry_output.text or ""
-                parse_text = _retry_parse_text
-                cleaned_text = _retry_cleaned
-                tool_calls = _retry_calls
-        if tool_calls:
-            logger.info("Responses API: required tool_choice retry produced tool calls")
-        else:
-            tool_required_preview = (parse_text or content_for_parsing or "")
-            tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
-            logger.warning(
-                f"tool_choice='required' but model produced no tool calls. "
-                f"Returning error to client. raw_preview={tool_required_preview!r}"
-            )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": (
-                        "tool_choice='required' was set but the model did not produce "
-                        "any tool calls. Try rephrasing your prompt or using a model "
-                        "with better tool-calling support."
-                    ),
-                    "raw_preview": tool_required_preview,
-                },
-            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "raw_preview": tool_required_preview,
+            },
+        )
 
     # Build output array
     output_items = []
@@ -14960,20 +14301,6 @@ async def create_response(
     # shells do not count as visible output. Tracked so chained turns surface
     # a warning.
     _reasoning_only = _responses_output_is_reasoning_only(output_items)
-    _blank_generation_warnings = _blank_visible_generation_warning(
-        final_text,
-        reasoning_text,
-        tool_calls,
-        output,
-        endpoint="Responses API",
-    )
-    if _blank_generation_warnings:
-        _log_blank_visible_generation_diagnostics(
-            output,
-            engine.tokenizer,
-            endpoint="Responses API",
-            response_id=response_id,
-        )
 
     response_obj = ResponsesObject(
         id=response_id,
@@ -14984,7 +14311,6 @@ async def create_response(
         warnings=_merge_responses_warnings(
             _chain_warnings_for_previous_response_id(request.previous_response_id),
             _current_response_warnings_for_reasoning_only(_reasoning_only),
-            _blank_generation_warnings,
             structured_output_warnings,
         ),
     )
@@ -15297,13 +14623,6 @@ async def stream_chat_completion(
         engine=engine,
         auto_detect=True,
     )
-    if "max_tokens" in kwargs:
-        kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
-            int(kwargs["max_tokens"]),
-            request=request,
-            model_key=_model_path or _model_name or request.model,
-            enable_thinking=_effective_thinking,
-        )
 
     # Check if model's chat template injects <think> in the assistant prefix
     # Use _model_name (actual model path) not request.model (which may be "default")
@@ -15312,7 +14631,7 @@ async def stream_chat_completion(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
-    _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
+    _family_name = getattr(_model_config, "family_name", None)
     _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
         "minimax_m3",
         "minimax_m3_vl",
@@ -15328,7 +14647,7 @@ async def stream_chat_completion(
     # tokens in vocab without opening a reasoning rail in the rendered prompt.
     think_in_template = _apply_tokenizer_thinking_vocab_fallback(
         think_in_template,
-        reasoning_parser=_active_reasoning_parser,
+        reasoning_parser=_reasoning_parser,
         tokenizer=engine.tokenizer,
         model_config=_model_config,
     )
@@ -15349,7 +14668,7 @@ async def stream_chat_completion(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    if _active_reasoning_parser:
+    if _reasoning_parser:
         _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
         _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
         if _engine_prompt_starts_in_reasoning(
@@ -15397,7 +14716,7 @@ async def stream_chat_completion(
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
     # The template adds <think> to the prompt, so the model output starts inside the think block
-    is_thinking_model = effective_think_in_template and not _active_reasoning_parser
+    is_thinking_model = effective_think_in_template and not _reasoning_parser
     think_prefix_sent = False
 
     # Suppress reasoning output when user explicitly disabled thinking.
@@ -15412,8 +14731,8 @@ async def stream_chat_completion(
         "prompt_suffix", ""
     ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
-    if _active_reasoning_parser:
-        request_parser = _active_reasoning_parser.__class__()
+    if _reasoning_parser:
+        request_parser = _reasoning_parser.__class__()
         request_parser.reset_state(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,
@@ -15560,15 +14879,19 @@ async def stream_chat_completion(
                     if delta_msg.content and accumulated_content:
                         tool_call_buffering = _has_tool_marker_or_partial_suffix(
                             accumulated_content
-                        )
+                        ) or _content_forms_raw_json_tool_call(accumulated_content)
                     if not tool_call_buffering and delta_msg.reasoning:
-                        # Use trailing window (last 30 chars covers longest marker)
                         _reasoning_tail = (
                             accumulated_reasoning[-30:]
                             if len(accumulated_reasoning) > 30
                             else accumulated_reasoning
                         )
-                        tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                        # #199-2A: buffer only when the reasoning tail is ACTIVELY
+                        # emitting a tool marker (ends with a complete/partial
+                        # marker) — a real reasoning-channel tool call is still
+                        # captured, but reasoning prose that merely MENTIONS tool
+                        # syntax earlier and continues does not stall output.
+                        tool_call_buffering = _text_ends_with_tool_marker(
                             _reasoning_tail
                         )
                     # GPT-OSS/Harmony native tool format: to=<name> code{...}
@@ -15578,7 +14901,12 @@ async def stream_chat_completion(
                             accumulated_content
                             or (
                                 accumulated_reasoning[-30:]
-                                if accumulated_reasoning
+                                if (
+                                    accumulated_reasoning
+                                    and _parser_routes_tools_via_reasoning_channel(
+                                        request_parser, _harmony_prefix_active
+                                    )
+                                )
                                 else ""
                             )
                             or ""
@@ -16152,24 +15480,6 @@ async def stream_chat_completion(
             reasoning=accumulated_reasoning,
             tool_calls=None,
         )
-    _stream_blank_generation_warnings = _blank_visible_generation_warning(
-        streamed_content,
-        accumulated_reasoning,
-        [{"emitted": True}] if tool_calls_emitted else None,
-        last_output,
-        endpoint="Chat Completions stream",
-    )
-    if _stream_blank_generation_warnings:
-        _log_blank_visible_generation_diagnostics(
-            last_output,
-            engine.tokenizer,
-            endpoint="Chat Completions stream",
-            response_id=response_id,
-        )
-    _stream_chat_warnings = _merge_responses_warnings(
-        _stream_chat_warnings,
-        _stream_blank_generation_warnings,
-    )
     if _stream_chat_warnings:
         warning_chunk = ChatCompletionChunk(
             id=response_id,
@@ -16324,9 +15634,6 @@ async def stream_responses_api(
     markers are detected mid-stream, switches to buffered mode and emits
     structured function_call events at the end.
     """
-    _terminal_tool_result_visible_finalization = bool(
-        kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
-    )
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
     kwargs["request_id"] = response_id
     seq = 0
@@ -16385,9 +15692,6 @@ async def stream_responses_api(
     )
 
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
-    _required_tool_choice_stream = _is_required_tool_choice(
-        getattr(request, "tool_choice", None)
-    )
     _request_has_tools = bool(getattr(request, "tools", None))
     _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
     tool_call_active = _stream_tools_available and not _suppress_tools
@@ -16399,8 +15703,6 @@ async def stream_responses_api(
     accumulated_reasoning = ""  # Reasoning text for fallback
     content_was_emitted = False
     reasoning_was_streamed = False  # Whether reasoning was sent to client as deltas
-    reasoning_item_id: str | None = None
-    reasoning_output_index = 1
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
@@ -16422,13 +15724,6 @@ async def stream_responses_api(
         engine=engine,
         auto_detect=True,
     )
-    if "max_tokens" in kwargs:
-        kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
-            int(kwargs["max_tokens"]),
-            request=request,
-            model_key=_model_path or _model_name or request.model,
-            enable_thinking=_effective_thinking,
-        )
 
     # Reasoning parser setup (mirrors stream_chat_completion)
     from .model_config_registry import get_model_config_registry
@@ -16436,8 +15731,8 @@ async def stream_responses_api(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
-    _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
-    _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
+    _family_name = getattr(_model_config, "family_name", None)
+    _is_minimax_m3 = _family_name in (
         "minimax_m3",
         "minimax_m3_vl",
     )
@@ -16452,7 +15747,7 @@ async def stream_responses_api(
     # tokens in vocab without opening a reasoning rail in the rendered prompt.
     think_in_template = _apply_tokenizer_thinking_vocab_fallback(
         think_in_template,
-        reasoning_parser=_active_reasoning_parser,
+        reasoning_parser=_reasoning_parser,
         tokenizer=engine.tokenizer,
         model_config=_model_config,
     )
@@ -16468,7 +15763,7 @@ async def stream_responses_api(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    if _active_reasoning_parser:
+    if _reasoning_parser:
         _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
         _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
         if _engine_prompt_starts_in_reasoning(
@@ -16495,8 +15790,6 @@ async def stream_responses_api(
         engine=engine,
     ):
         think_in_template = True
-    if _terminal_tool_result_visible_finalization:
-        think_in_template = False
 
     # MiniMax-M3's enabled mode prompt-opens <mm:think> in the rendered
     # generation prompt, so streamed output starts inside reasoning without
@@ -16517,13 +15810,16 @@ async def stream_responses_api(
     effective_think_in_template = think_in_template
 
     # For thinking models without reasoning parser, prepend <think>
-    is_thinking_model = effective_think_in_template and not _active_reasoning_parser
+    is_thinking_model = effective_think_in_template and not _reasoning_parser
     think_prefix_sent = False
 
     # Suppress reasoning output when user explicitly disabled thinking
     suppress_reasoning = _effective_thinking is False
     m3_reasoning_only_answer_budget: int | None = None
     m3_reasoning_only_answer_enabled = False
+    reasoning_only_answer_budget: int | None = None
+    reasoning_only_answer_enabled = False
+    reasoning_only_answer_family = ""
     if (
         _is_minimax_m3
         and _m3_thinking_mode in ("enabled", "adaptive")
@@ -16541,6 +15837,25 @@ async def stream_responses_api(
         except Exception:
             m3_reasoning_only_answer_budget = None
             m3_reasoning_only_answer_enabled = False
+    if (
+        _family_name == "gemma4"
+        and _effective_thinking is not False
+        and not _stream_tools_available
+    ):
+        try:
+            _requested_output_budget = int(kwargs.get("max_tokens") or 256)
+            reasoning_only_answer_budget = max(32, _requested_output_budget)
+            reasoning_only_answer_enabled = True
+            reasoning_only_answer_family = "Gemma4"
+            _requested_thinking_budget = getattr(request, "max_thinking_tokens", None)
+            if _requested_thinking_budget is not None:
+                _requested_thinking_budget = max(1, int(_requested_thinking_budget))
+                kwargs = dict(kwargs)
+                kwargs["max_tokens"] = min(_requested_output_budget, _requested_thinking_budget)
+        except Exception:
+            reasoning_only_answer_budget = None
+            reasoning_only_answer_enabled = False
+            reasoning_only_answer_family = ""
 
     # Create a per-request parser instance to avoid mutable-state conflicts
     # when multiple requests stream concurrently.
@@ -16548,8 +15863,8 @@ async def stream_responses_api(
         "prompt_suffix", ""
     ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
-    if _active_reasoning_parser:
-        request_parser = _active_reasoning_parser.__class__()
+    if _reasoning_parser:
+        request_parser = _reasoning_parser.__class__()
         request_parser.reset_state(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,
@@ -16565,29 +15880,15 @@ async def stream_responses_api(
         request.timeout if request.timeout is not None else _default_timeout
     )
 
-    _exact_reply_target = _responses_exact_tool_result_finalization_target(
-        request,
-        messages,
-        tools_present=bool(getattr(request, "tools", None) or kwargs.get("tools")),
-    )
-    _exact_tool_result_finalization = bool(_exact_reply_target)
-    if _exact_tool_result_finalization:
-        finalization_kwargs = dict(kwargs)
-        finalization_kwargs["enable_thinking"] = False
-        finalization_kwargs.setdefault(
-            "_vmlx_terminal_tool_result_visible_finalization",
-            True,
-        )
-        logger.info(
-            "Responses API streaming exact-reply finalization: target=%r, "
-            "forcing enable_thinking=False for terminal synthesis",
-            _exact_reply_target,
-        )
+    if (
+        _responses_exact_reply_target(request)
+        and _responses_messages_have_tool_result_after_latest_user(messages)
+    ):
         try:
             output = await _await_chat_with_disconnect_abort(
                 engine,
                 messages=messages,
-                chat_kwargs=finalization_kwargs,
+                chat_kwargs=kwargs,
                 timeout=_stream_timeout,
                 fastapi_request=fastapi_request,
                 request_id=response_id,
@@ -16659,11 +15960,7 @@ async def stream_responses_api(
             )
             return
 
-        display_text = _responses_fast_path_visible_text(
-            output,
-            request,
-            thinking_disabled=True,
-        )
+        display_text = _responses_fast_path_visible_text(output, request)
         if display_text:
             yield _sse(
                 "response.output_text.delta",
@@ -16774,7 +16071,9 @@ async def stream_responses_api(
                 prompt_tokens = output.prompt_tokens
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
-            _cached = getattr(output, "cached_tokens", 0)
+            _chunk_cached = int(getattr(output, "cached_tokens", 0) or 0)
+            if _chunk_cached > 0:
+                _cached = _chunk_cached
             _detail_chunk = getattr(output, "cache_detail", "") or None
             if _detail_chunk is not None:
                 _cache_detail = _detail_chunk
@@ -16822,14 +16121,17 @@ async def stream_responses_api(
                             if delta_msg.content and accumulated_content:
                                 tool_call_buffering = _has_tool_marker_or_partial_suffix(
                                     accumulated_content
-                                )
+                                ) or _content_forms_raw_json_tool_call(accumulated_content)
                             if not tool_call_buffering and delta_msg.reasoning:
                                 _reasoning_tail = (
                                     accumulated_reasoning[-30:]
                                     if len(accumulated_reasoning) > 30
                                     else accumulated_reasoning
                                 )
-                                tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                                # #199-2A: see stream_chat_completion — buffer only
+                                # when the reasoning tail is ACTIVELY emitting a
+                                # tool marker, not on a mere mention in prose.
+                                tool_call_buffering = _text_ends_with_tool_marker(
                                     _reasoning_tail
                                 )
                             # GPT-OSS/Harmony native tool format: to=<name> code{...}
@@ -16838,7 +16140,12 @@ async def stream_responses_api(
                                     accumulated_content
                                     or (
                                         accumulated_reasoning[-30:]
-                                        if accumulated_reasoning
+                                        if (
+                                            accumulated_reasoning
+                                            and _parser_routes_tools_via_reasoning_channel(
+                                                request_parser, _harmony_prefix_active
+                                            )
+                                        )
                                         else ""
                                     )
                                     or ""
@@ -16890,28 +16197,13 @@ async def stream_responses_api(
 
                             # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
-                                if reasoning_item_id is None:
-                                    reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
-                                    yield _sse(
-                                        "response.output_item.added",
-                                        {
-                                            "type": "response.output_item.added",
-                                            "output_index": reasoning_output_index,
-                                            "item": {
-                                                "id": reasoning_item_id,
-                                                "type": "reasoning",
-                                                "status": "in_progress",
-                                                "content": [],
-                                            },
-                                        },
-                                    )
                                 reasoning_was_streamed = True
                                 yield _sse(
                                     "response.reasoning_summary_text.delta",
                                     {
                                         "type": "response.reasoning_summary_text.delta",
-                                        "item_id": reasoning_item_id,
-                                        "output_index": reasoning_output_index,
+                                        "item_id": msg_id,
+                                        "output_index": 0,
                                         "summary_index": 0,
                                         "delta": emit_reasoning,
                                     },
@@ -16919,18 +16211,17 @@ async def stream_responses_api(
                             # Emit content as standard text delta
                             if emit_content:
                                 content_was_emitted = True
-                                if not _required_tool_choice_stream:
-                                    streamed_text += emit_content
-                                    yield _sse(
-                                        "response.output_text.delta",
-                                        {
-                                            "type": "response.output_text.delta",
-                                            "item_id": msg_id,
-                                            "output_index": 0,
-                                            "content_index": 0,
-                                            "delta": emit_content,
-                                        },
-                                    )
+                                streamed_text += emit_content
+                                yield _sse(
+                                    "response.output_text.delta",
+                                    {
+                                        "type": "response.output_text.delta",
+                                        "item_id": msg_id,
+                                        "output_index": 0,
+                                        "content_index": 0,
+                                        "delta": emit_content,
+                                    },
+                                )
                 else:
                     # Standard path without reasoning parsing
                     content = delta_text
@@ -16971,18 +16262,17 @@ async def stream_responses_api(
 
                         if content:
                             content_was_emitted = True
-                            if not _required_tool_choice_stream:
-                                streamed_text += content
-                                yield _sse(
-                                    "response.output_text.delta",
-                                    {
-                                        "type": "response.output_text.delta",
-                                        "item_id": msg_id,
-                                        "output_index": 0,
-                                        "content_index": 0,
-                                        "delta": content,
-                                    },
-                                )
+                            streamed_text += content
+                            yield _sse(
+                                "response.output_text.delta",
+                                {
+                                    "type": "response.output_text.delta",
+                                    "item_id": msg_id,
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "delta": content,
+                                },
+                            )
 
             # Emit per-chunk usage when include_usage is enabled (for real-time metrics)
             if include_usage and (prompt_tokens or completion_tokens):
@@ -17088,43 +16378,15 @@ async def stream_responses_api(
         return
 
     # Emit reasoning summary done event if reasoning was produced (skip when suppressed)
-    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
-        reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
-        yield _sse(
-            "response.output_item.added",
-            {
-                "type": "response.output_item.added",
-                "output_index": reasoning_output_index,
-                "item": {
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "status": "in_progress",
-                    "content": [],
-                },
-            },
-        )
     if accumulated_reasoning and not suppress_reasoning:
         yield _sse(
             "response.reasoning_summary_text.done",
             {
                 "type": "response.reasoning_summary_text.done",
-                "item_id": reasoning_item_id,
-                "output_index": reasoning_output_index,
+                "item_id": msg_id,
+                "output_index": 0,
                 "summary_index": 0,
                 "text": accumulated_reasoning,
-            },
-        )
-        yield _sse(
-            "response.output_item.done",
-            {
-                "type": "response.output_item.done",
-                "output_index": reasoning_output_index,
-                "item": {
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "status": "completed",
-                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
-                },
             },
         )
 
@@ -17137,56 +16399,26 @@ async def stream_responses_api(
     # (mirrors the Chat Completions streaming path at lines 2468-2475).
     tool_calls = None
     cleaned_text = full_text
+    _tool_parse_from_reasoning_only = False
     if not _suppress_tools:
-        # Try the real parser against the separated content/reasoning streams
-        # before falling back to stripped full text. Reasoning-capable models can
-        # emit native tool syntax after a thinking pass, while content may be
-        # empty or contain a partial/empty dialect fragment. Prefer parsed calls
-        # with non-empty arguments, but never synthesize missing arguments.
-        parse_candidates: list[str] = []
-        if request_parser:
-            parse_candidates.extend(
-                [
-                    accumulated_content.strip(),
-                    accumulated_reasoning.strip(),
-                ]
-            )
-        parse_candidates.append(_strip_think_for_tool_parse(full_text))
-        parse_candidates.append(full_text)
-
-        fallback_cleaned = ""
-        fallback_tool_calls = None
-        seen_parse_candidates: set[str] = set()
-
-        def _responses_tool_call_arguments(tc: Any) -> str:
-            func = tc.function if hasattr(tc, "function") else tc
-            if hasattr(func, "arguments"):
-                return str(func.arguments or "")
-            if isinstance(func, dict):
-                return str(func.get("arguments", "") or "")
-            return ""
-
-        for parse_text in parse_candidates:
-            if not parse_text or parse_text in seen_parse_candidates:
-                continue
-            seen_parse_candidates.add(parse_text)
-            candidate_cleaned, candidate_calls = _parse_tool_calls_with_parser(
-                parse_text, request
-            )
-            if not candidate_calls:
-                continue
-            if fallback_tool_calls is None:
-                fallback_cleaned = candidate_cleaned
-                fallback_tool_calls = candidate_calls
-            if any(_responses_tool_call_arguments(tc) for tc in candidate_calls):
-                cleaned_text = candidate_cleaned
-                tool_calls = candidate_calls
-                break
+        # Use content-only text when reasoning parser separated it (avoids losing
+        # tool calls that appear inside <think> blocks during regex stripping).
+        # If content is empty but reasoning has tool markers, check reasoning too.
+        if request_parser and accumulated_content.strip():
+            parse_text = accumulated_content.strip()
+        elif request_parser and accumulated_reasoning.strip():
+            parse_text = accumulated_reasoning.strip()
+            _tool_parse_from_reasoning_only = True
         else:
-            if fallback_tool_calls is not None:
-                cleaned_text = fallback_cleaned
-                tool_calls = fallback_tool_calls
-        tool_calls = _drop_tool_calls_missing_required_args(tool_calls, request)
+            parse_text = _strip_think_for_tool_parse(full_text)
+        cleaned_text, tool_calls = _parse_tool_calls_with_parser(
+            parse_text or full_text, request
+        )
+        if _tool_parse_from_reasoning_only and not tool_calls:
+            # Reasoning-only text is only a candidate tool-call source. If it is
+            # not actually a tool call, never recycle it as visible output_text;
+            # that creates hidden-only/empty UI rows or pollutes chat history.
+            cleaned_text = ""
     else:
         cleaned_text = _clean_suppressed_tool_markup_for_display(
             full_text,
@@ -17213,191 +16445,6 @@ async def stream_responses_api(
 
     display_text = ""
 
-    if _required_tool_choice_stream and not tool_calls:
-        required_retry_messages = list(messages or [])
-        required_retry_invalid_text = (
-            full_text
-            or accumulated_content
-            or accumulated_reasoning
-            or ""
-        )
-        if required_retry_invalid_text:
-            required_retry_messages.append(
-                {"role": "assistant", "content": required_retry_invalid_text}
-            )
-        required_retry_messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "The previous assistant output violated tool_choice=required "
-                    "because it did not emit a valid tool call. Retry this turn "
-                    "now. Your entire next assistant output must be exactly one "
-                    "native tool call using the available schema, with all "
-                    "required arguments present and non-empty. Do not include "
-                    "review prose, markdown, analysis, or a tool result."
-                ),
-            }
-        )
-        required_retry_kwargs = dict(kwargs)
-        if "enable_thinking" not in required_retry_kwargs and request.enable_thinking is not None:
-            required_retry_kwargs["enable_thinking"] = request.enable_thinking
-        logger.info(
-            "Responses API streaming required tool retry: preserving enable_thinking=%r",
-            required_retry_kwargs.get("enable_thinking"),
-        )
-        try:
-            required_retry_output = await _await_chat_with_disconnect_abort(
-                engine,
-                messages=required_retry_messages,
-                chat_kwargs=required_retry_kwargs,
-                timeout=_stream_timeout,
-                fastapi_request=fastapi_request,
-                request_id=f"{response_id}-required-tool-retry",
-                endpoint="Responses API streaming required tool retry",
-            )
-        except Exception:
-            required_retry_output = None
-            logger.warning(
-                "Responses API streaming required tool retry failed before producing output",
-                exc_info=True,
-            )
-        if required_retry_output is not None:
-            retry_full_text = (
-                getattr(required_retry_output, "raw_text", None)
-                or getattr(required_retry_output, "text", None)
-                or ""
-            )
-            retry_parse_candidates = [
-                _strip_think_for_tool_parse(retry_full_text),
-                retry_full_text,
-            ]
-            for retry_parse_text in retry_parse_candidates:
-                if not retry_parse_text:
-                    continue
-                retry_cleaned, retry_calls = _parse_tool_calls_with_parser(
-                    retry_parse_text,
-                    request,
-                )
-                retry_calls = _drop_tool_calls_missing_required_args(
-                    retry_calls,
-                    request,
-                )
-                if retry_calls:
-                    logger.info(
-                        "Responses API streaming required tool retry produced tool calls"
-                    )
-                    full_text = retry_full_text
-                    cleaned_text = retry_cleaned
-                    tool_calls = retry_calls
-                    prompt_tokens = max(
-                        prompt_tokens,
-                        int(getattr(required_retry_output, "prompt_tokens", 0) or 0),
-                    )
-                    completion_tokens += int(
-                        getattr(required_retry_output, "completion_tokens", 0) or 0
-                    )
-                    break
-
-    if _required_tool_choice_stream and not tool_calls:
-        logger.warning(
-            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
-        )
-        yield _sse(
-            "response.output_text.done",
-            {
-                "type": "response.output_text.done",
-                "item_id": msg_id,
-                "output_index": 0,
-                "content_index": 0,
-                "text": "",
-            },
-        )
-        yield _sse(
-            "response.content_part.done",
-            {
-                "type": "response.content_part.done",
-                "item_id": msg_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "output_text", "text": "", "annotations": []},
-            },
-        )
-        yield _sse(
-            "response.output_item.done",
-            {
-                "type": "response.output_item.done",
-                "output_index": 0,
-                "item": {
-                    "id": msg_id,
-                    "type": "message",
-                    "status": "incomplete",
-                    "role": "assistant",
-                    "content": [],
-                },
-            },
-        )
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls. Try rephrasing your prompt or using a model "
-                    "with better tool-calling support."
-                ),
-                "code": "tool_calls_required",
-            },
-        )
-        completed_response = {
-            "id": response_id,
-            "object": "response",
-            "created_at": created_at,
-            "status": "failed",
-            "model": request.model,
-            "output_text": "",
-            "output": [],
-            "error": {
-                "type": "invalid_request_error",
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls."
-                ),
-                "code": "tool_calls_required",
-            },
-            "usage": {
-                "input_tokens": prompt_tokens,
-                "output_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                **(
-                    {
-                        "input_tokens_details": (
-                            {"cached_tokens": _cached, "cache_detail": _cache_detail}
-                            if _cache_detail
-                            else {"cached_tokens": _cached}
-                        )
-                    }
-                    if _cached > 0 or _cache_detail
-                    else {}
-                ),
-            },
-        }
-        _responses_store_history(response_id, messages, reasoning_only=False)
-        yield _sse(
-            "response.failed",
-            {
-                "type": "response.failed",
-                "response": completed_response,
-            },
-        )
-        yield _sse(
-            "response.completed",
-            {
-                "type": "response.completed",
-                "response": completed_response,
-            },
-        )
-        return
-
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
         if request_parser and cleaned_text:
@@ -17410,7 +16457,7 @@ async def stream_responses_api(
                 cleaned_text = reasoning_text
 
         # Finalize the text message with whatever content was before the tool call
-        final_text = "" if _required_tool_choice_stream else (cleaned_text or "").strip()
+        final_text = (cleaned_text or "").strip()
         final_text = _finalize_visible_text_for_request(final_text, request)
         yield _sse(
             "response.output_text.done",
@@ -17451,16 +16498,6 @@ async def stream_responses_api(
         )
         all_output_items.append(message_item)
         output_index += 1
-        if reasoning_item_id is not None:
-            all_output_items.append(
-                {
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "status": "completed",
-                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
-                }
-            )
-            output_index = max(output_index, reasoning_output_index + 1)
 
         # Emit each tool call as a function_call output item
         for tc in tool_calls:
@@ -17590,16 +16627,27 @@ async def stream_responses_api(
                 display_text = clean_output_text(full_text) if full_text else ""
         if (
             not display_text
-            and m3_reasoning_only_answer_enabled
+            and (m3_reasoning_only_answer_enabled or reasoning_only_answer_enabled)
             and accumulated_reasoning.strip()
             and not tool_calls
         ):
+            _answer_family = (
+                "MiniMax-M3"
+                if m3_reasoning_only_answer_enabled
+                else (reasoning_only_answer_family or "reasoning model")
+            )
+            _answer_budget = (
+                m3_reasoning_only_answer_budget
+                if m3_reasoning_only_answer_enabled
+                else reasoning_only_answer_budget
+            )
             logger.info(
-                "MiniMax-M3 forced reasoning produced no visible content; "
+                "%s reasoning produced no visible content; "
                 "running bounded thinking-off answer pass "
                 "(reasoning_chars=%d, answer_budget=%s)",
+                _answer_family,
                 len(accumulated_reasoning),
-                m3_reasoning_only_answer_budget,
+                _answer_budget,
             )
             answer_messages = list(messages) + [
                 {
@@ -17610,9 +16658,10 @@ async def stream_responses_api(
             ]
             answer_kwargs = dict(kwargs)
             answer_kwargs["enable_thinking"] = False
-            answer_kwargs["max_tokens"] = int(m3_reasoning_only_answer_budget or 256)
+            answer_kwargs["max_tokens"] = int(_answer_budget or 256)
             answer_ct_kwargs = dict(answer_kwargs.get("chat_template_kwargs") or {})
-            answer_ct_kwargs["thinking_mode"] = "disabled"
+            if _answer_family == "MiniMax-M3":
+                answer_ct_kwargs["thinking_mode"] = "disabled"
             answer_ct_kwargs.pop("enable_thinking", None)
             answer_kwargs["chat_template_kwargs"] = answer_ct_kwargs
             answer_kwargs.pop("tools", None)
@@ -17625,8 +16674,8 @@ async def stream_responses_api(
                     chat_kwargs=answer_kwargs,
                     timeout=_stream_timeout,
                     fastapi_request=fastapi_request,
-                    request_id=f"{response_id}:m3-visible-answer",
-                    endpoint="Responses API MiniMax-M3 visible answer pass",
+                    request_id=f"{response_id}:visible-answer",
+                    endpoint=f"Responses API {_answer_family} visible answer pass",
                 )
                 answer_text = _responses_fast_path_visible_text(answer_output, request)
                 answer_text = _finalize_visible_text_for_request(answer_text, request)
@@ -17649,7 +16698,8 @@ async def stream_responses_api(
                     )
             except Exception as e:
                 logger.error(
-                    "MiniMax-M3 visible answer pass failed for %s: %s",
+                    "%s visible answer pass failed for %s: %s",
+                    _answer_family,
                     response_id,
                     e,
                     exc_info=True,
@@ -17707,8 +16757,6 @@ async def stream_responses_api(
                 display_text,
                 request,
             )
-        elif display_text and _has_tool_marker_or_partial_suffix(full_text):
-            display_text = _strip_tool_markup_residue_for_display(display_text)
         if display_text:
             display_text = _finalize_visible_text_for_request(display_text, request)
 
@@ -17763,15 +16811,6 @@ async def stream_responses_api(
                 ],
             }
         )
-        if reasoning_item_id is not None:
-            all_output_items.append(
-                {
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "status": "completed",
-                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
-                }
-            )
 
     # H4: Validate text format at end of stream.
     _text_fmt = getattr(request, "text", None)
@@ -17831,13 +16870,32 @@ async def stream_responses_api(
                         f"Stream {response_id}: JSON validation failed: {_err}"
                     )
 
+    # Enforce tool_choice="required" in Responses API streaming
+    _resp_stream_tc = getattr(request, "tool_choice", None)
+    if _is_required_tool_choice(_resp_stream_tc) and not tool_calls:
+        logger.warning(
+            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
+        )
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "code": "tool_calls_required",
+            },
+        )
+
     # Emit response.completed — use "incomplete" status when max_tokens was hit
     _resp_finish = getattr(last_output, "finish_reason", None) if last_output else None
     _resp_status = "incomplete" if _resp_finish == "length" else "completed"
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
-    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
+    if accumulated_reasoning and not suppress_reasoning:
         all_output_items.append(
             {
                 "id": f"rs_{uuid.uuid4().hex[:12]}",
@@ -17854,24 +16912,9 @@ async def stream_responses_api(
     _stream_chain_warnings = _chain_warnings_for_previous_response_id(
         getattr(request, "previous_response_id", None)
     )
-    _stream_blank_generation_warnings = _blank_visible_generation_warning(
-        display_text,
-        accumulated_reasoning,
-        [item for item in all_output_items if item.get("type") == "function_call"],
-        last_output,
-        endpoint="Responses API stream",
-    )
-    if _stream_blank_generation_warnings:
-        _log_blank_visible_generation_diagnostics(
-            last_output,
-            engine.tokenizer,
-            endpoint="Responses API stream",
-            response_id=response_id,
-        )
     _stream_warnings = _merge_responses_warnings(
         _stream_chain_warnings,
         _current_response_warnings_for_reasoning_only(_stream_reasoning_only),
-        _stream_blank_generation_warnings,
     )
 
     completed_response = {
@@ -18242,25 +17285,9 @@ Examples:
     global _native_mtp_sampling_policy
     global _inference_endpoints, _wake_timeout
     global _smelt_enabled, _smelt_experts
-    global _reasoning_parser_disabled_explicitly, _reasoning_parser_explicit_name
-    global _tool_call_parser_disabled_explicitly, _tool_call_parser_explicit_name
 
     _api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     _default_timeout = args.timeout
-    _reasoning_parser_disabled_explicitly = args.reasoning_parser == "none"
-    _reasoning_parser_explicit_name = (
-        args.reasoning_parser
-        if args.reasoning_parser not in (None, "auto", "none")
-        else None
-    )
-    _tool_call_parser_disabled_explicitly = (
-        bool(args.enable_auto_tool_choice) and args.tool_call_parser == "none"
-    )
-    _tool_call_parser_explicit_name = (
-        args.tool_call_parser
-        if args.enable_auto_tool_choice and args.tool_call_parser not in (None, "auto", "none")
-        else None
-    )
     if getattr(args, "inference_endpoints", None):
         _inference_endpoints = [
             e.strip() for e in args.inference_endpoints.split(",") if e.strip()

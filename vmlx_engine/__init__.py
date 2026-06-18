@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.5.62"
+__version__ = "1.5.63"
 
 # mlx_lm 0.31.x changed create_attention_mask() to require return_array and
 # window_size positional args.  mlx_vlm's qwen3_5/language.py calls
@@ -110,10 +110,24 @@ def _install_mlx_vlm_registry_patches() -> None:
     try:
         import importlib
         import sys
+        import types
 
-        _assistant = importlib.import_module(
-            "mlx_vlm.speculative.drafters.gemma4_assistant"
-        )
+        try:
+            _assistant = importlib.import_module(
+                "mlx_vlm.speculative.drafters.gemma4_assistant"
+            )
+        except ModuleNotFoundError:
+            _gemma4 = importlib.import_module("mlx_vlm.models.gemma4")
+            _assistant = types.ModuleType(
+                "mlx_vlm.speculative.drafters.gemma4_assistant"
+            )
+            _assistant.Model = _gemma4.Model
+            _assistant.ModelConfig = _gemma4.ModelConfig
+            _assistant.__all__ = ["Model", "ModelConfig"]
+            sys.modules.setdefault(
+                "mlx_vlm.speculative.drafters.gemma4_assistant",
+                _assistant,
+            )
         sys.modules.setdefault("mlx_vlm.models.gemma4_assistant", _assistant)
         sys.modules.setdefault("mlx_vlm.models.gemma4_unified_assistant", _assistant)
         sys.modules.setdefault(

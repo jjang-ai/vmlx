@@ -61,45 +61,7 @@ function shouldForwardReasoningEffort(
   if (typeof reasoningEffort !== "string" || !reasoningEffort) return false;
   if (enableThinking === false) return false;
   if (detectedFamily === "hy3" && enableThinking !== true) return false;
-  return sessionHasReasoningParser || familyAcceptsExplicitReasoningControls(detectedFamily);
-}
-
-const EXPLICIT_REASONING_CONTROL_FAMILIES = new Set([
-  "deepseek-v4",
-  "qwen3.5",
-  "qwen3.5-moe",
-  "qwen3-next",
-  "qwen3-vl",
-  "qwen3-moe",
-  "qwen3",
-  "gemma4",
-  "gemma4-text",
-  "zaya",
-  "laguna",
-  "step-vl",
-  "step-3.7-flash",
-  "step-3.5-flash",
-  "step",
-  "mistral4",
-  "gpt-oss",
-  "glm47-flash",
-  "glm5",
-  "glm47",
-  "deepseek-r1",
-  "deepseek-v3",
-  "deepseek-v2",
-  "deepseek",
-  "nemotron",
-  "nemotron-h",
-  "lfm2",
-  "kimi-k25",
-  "kimi-k2",
-  "minimax",
-]);
-
-function familyAcceptsExplicitReasoningControls(detectedFamily?: string): boolean {
-  if (!detectedFamily) return false;
-  return EXPLICIT_REASONING_CONTROL_FAMILIES.has(detectedFamily);
+  return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
 }
 
 function shouldSuppressGenericAgenticPromptForNativeTools(
@@ -207,6 +169,45 @@ function mimeFromDataUrl(dataUrl?: string): string | undefined {
   return dataUrl?.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase();
 }
 
+function summarizeHistoricalMediaPart(part: any): string {
+  const partType = String(part?.type || "media");
+  if (partType === "image_url" || partType === "input_image" || partType === "image") {
+    const url = part.image_url?.url || part.image_url || part.url || part.image;
+    const mime = mimeFromDataUrl(typeof url === "string" ? url : undefined) || "image";
+    return `[Prior ${mime} attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  if (partType === "video_url" || partType === "input_video" || partType === "video") {
+    const url = part.video_url?.url || part.video_url || part.url || part.video;
+    const mime = mimeFromDataUrl(typeof url === "string" ? url : undefined) || "video";
+    return `[Prior ${mime} attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  if (partType === "input_audio" || partType === "audio") {
+    const format = part.input_audio?.format || part.audio?.format || "audio";
+    return `[Prior ${format} audio attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  return `[Prior ${partType} attachment omitted from replay.]`;
+}
+
+function stripHistoricalMediaPartsForReplay(parts: any[]): any[] {
+  const out: any[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const partType = String(part.type || "");
+    if (partType === "text") {
+      const text = String(part.text || "");
+      if (text.trim()) out.push({ type: "text", text });
+      continue;
+    }
+    if (partType === "input_text") {
+      const text = String(part.text || "");
+      if (text.trim()) out.push({ type: "text", text });
+      continue;
+    }
+    out.push({ type: "text", text: summarizeHistoricalMediaPart(part) });
+  }
+  return out.length ? out : [{ type: "text", text: "[Prior media attachment omitted from replay.]" }];
+}
+
 function redactContentForLog(content: any): any {
   if (Array.isArray(content)) {
     return content.map((part: any) => {
@@ -271,12 +272,6 @@ function summarizeRequestForLog(bodyJson: string, useResponsesApi: boolean): Rec
       thinking_budget: body.chat_template_kwargs?.thinking_budget,
       previous_response_id: body.previous_response_id ? "<present>" : undefined,
       has_tools: Array.isArray(body.tools) && body.tools.length > 0,
-      tool_choice:
-        typeof body.tool_choice === "string"
-          ? body.tool_choice
-          : body.tool_choice
-            ? "<present>"
-            : undefined,
       messages: Array.isArray(items)
         ? items.slice(-8).map((m: any) => ({
             role: m.role || m.type || "item",
@@ -613,36 +608,6 @@ function filterTools(
   }
   if (disabled.size === 0) return BUILTIN_TOOLS;
   return BUILTIN_TOOLS.filter((t: any) => !disabled.has(t.function.name));
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function toolNameOf(tool: any): string | undefined {
-  const name = tool?.function?.name ?? tool?.name;
-  return typeof name === "string" && name ? name : undefined;
-}
-
-function inferExplicitBuiltinToolChoice(
-  latestUserText: string,
-  tools: any[] | undefined,
-  responseApi: boolean,
-): any | undefined {
-  if (!Array.isArray(tools) || tools.length === 0 || !latestUserText) return undefined;
-  const namedTools = tools
-    .map(toolNameOf)
-    .filter((name): name is string => typeof name === "string" && name.length > 0)
-    .filter((name) =>
-      new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(name)}([^A-Za-z0-9_]|$)`).test(
-        latestUserText,
-      ),
-    );
-  const unique = Array.from(new Set(namedTools));
-  if (unique.length !== 1) return undefined;
-  return responseApi
-    ? { type: "function", name: unique[0] }
-    : { type: "function", function: { name: unique[0] } };
 }
 
 // Track active requests per chat for abort/concurrency (B5/B6)
@@ -988,7 +953,6 @@ export function registerChatHandlers(
       // AND for endpoint resolution (remote sessions need remoteUrl/apiKey/type)
       let timeoutSeconds = 300;
       let sessionHasReasoningParser = false;
-      let sessionSupportsThinking: boolean | undefined;
       let isHarmonyModel = false;
       let chatIsMultimodal = false;
       let chatDetectedFamily: string | undefined;
@@ -999,8 +963,6 @@ export function registerChatHandlers(
       let sessionVideoFps: number | undefined;
       let sessionVideoMaxFrames: number | undefined;
       let chatSession: import("../database").Session | undefined;
-      let capabilityModelPath = chat.modelPath;
-      let modelAudioRuntimeAvailable: boolean | undefined;
       if (chat.modelPath) {
         chatSession = sessionManager.getSessionByModelPath(
           chat.modelPath.replace(/\/+$/, ""),
@@ -1035,9 +997,6 @@ export function registerChatHandlers(
           sessionManager.touchSession(chatSession.id);
           try {
             const sessionConfig = JSON.parse(chatSession.config);
-            if (typeof sessionConfig.capabilityModelPath === "string") {
-              capabilityModelPath = sessionConfig.capabilityModelPath;
-            }
             if (sessionConfig.timeout === 0) {
               // "No limit" — match the 86400s (24h) that sessions.ts sends via --timeout
               timeoutSeconds = 86400;
@@ -1045,19 +1004,14 @@ export function registerChatHandlers(
               timeoutSeconds = sessionConfig.timeout;
             }
             // Check if model has a reasoning parser (for enable_thinking default)
-            const detectionPath = capabilityModelPath || chat.modelPath;
-            const detected = detectModelConfigFromDir(detectionPath);
+            const detected = detectModelConfigFromDir(chat.modelPath);
             try {
-              const generationDefaults = await readGenerationDefaults(detectionPath);
+              const generationDefaults = await readGenerationDefaults(chat.modelPath);
               thinkingBudgetSupported = generationDefaults?.thinkingBudgetSupported;
             } catch {
               thinkingBudgetSupported = undefined;
             }
             chatDetectedFamily = detected.family;
-            sessionSupportsThinking = detected.supportsThinking;
-            if (typeof detected.architectureHints?.audioRuntimeAvailable === "boolean") {
-              modelAudioRuntimeAvailable = detected.architectureHints.audioRuntimeAvailable;
-            }
             timeoutSeconds = effectiveDsv4RequestTimeoutSeconds(
               timeoutSeconds,
               chatDetectedFamily,
@@ -1074,7 +1028,7 @@ export function registerChatHandlers(
                       ? false
                       : false;
 
-            if (!detected.reasoningParser) {
+            if (detected.supportsThinking === false || !detected.reasoningParser) {
               sessionHasReasoningParser = false;
               isHarmonyModel = false;
             } else if (
@@ -1141,20 +1095,6 @@ export function registerChatHandlers(
       // Detect remote session and compute base URL + auth headers
       const resolvedSession = resolved.session;
       const isRemote = resolvedSession?.type === "remote";
-      let resolvedSessionConfig: Record<string, any> = {};
-      if (resolvedSession?.config) {
-        try {
-          resolvedSessionConfig = JSON.parse(resolvedSession.config);
-        } catch (_) {
-          resolvedSessionConfig = {};
-        }
-        if (
-          typeof resolvedSessionConfig.capabilityModelPath === "string" &&
-          !resolvedSessionConfig.capabilityModelPath.startsWith("remote://")
-        ) {
-          capabilityModelPath = resolvedSessionConfig.capabilityModelPath;
-        }
-      }
       const rawBaseUrl =
         isRemote && resolvedSession?.remoteUrl
           ? resolvedSession.remoteUrl.replace(/\/+$/, "")
@@ -1254,26 +1194,7 @@ export function registerChatHandlers(
       // Add user message AFTER health check passes — this prevents orphaned
       // user messages when the server isn't ready yet.
       // When attachments are present, store content as JSON array of content parts.
-      if (
-        modelAudioRuntimeAvailable === undefined &&
-        capabilityModelPath &&
-        !capabilityModelPath.startsWith("remote://")
-      ) {
-        try {
-          const detected = detectModelConfigFromDir(capabilityModelPath);
-          if (!chatDetectedFamily) chatDetectedFamily = detected.family;
-          if (typeof detected.architectureHints?.audioRuntimeAvailable === "boolean") {
-            modelAudioRuntimeAvailable = detected.architectureHints.audioRuntimeAvailable;
-          }
-        } catch (_) {}
-      }
-      const modelDisallowsAudioAttachments =
-        !isRemote &&
-        modelAudioRuntimeAvailable === false;
-      const effectiveAttachments = modelDisallowsAudioAttachments
-        ? (attachments || []).filter((a) => inferKind(a) !== "audio")
-        : attachments;
-      const hasAttachments = effectiveAttachments && effectiveAttachments.length > 0;
+      const hasAttachments = attachments && attachments.length > 0;
       // mlxstudio#69: explicit media attachments override chatIsMultimodal
       // detection. The user clicked "attach image" — that intent must be
       // honored even when (a) the session lookup failed, (b) the session
@@ -1283,42 +1204,30 @@ export function registerChatHandlers(
       // handle media, which is far better than silently dropping it. Text-file
       // attachments are plain text context and do not need multimodal routing.
       const hasMediaAttachments =
-        hasAttachments && effectiveAttachments!.some((a) => inferKind(a) !== "text");
+        hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
         try {
-          if (!capabilityModelPath) return false;
-          const det = detectModelConfigFromDir(capabilityModelPath);
-          // MiniMax-M3 VL route: M3 is stamped forceTextOnly=true to suppress the
-          // unpublished mlx_vlm.minimax_m3_vl --is-mllm path, but its vision forward
-          // runs in-engine via SingleBatchGenerator behind VMLX_M3_VL=1. m3VlRoute
-          // marks that exemption — images MUST be kept for M3. Mirrors the
-          // m3VlRoute carve-out in sessions.ts buildArgs (--text-only branch).
-          if (det.m3VlRoute === true) return false;
-          return det.forceTextOnly === true;
+          return !!chat.modelPath &&
+            detectModelConfigFromDir(chat.modelPath).forceTextOnly === true;
         } catch (_) {
           return false;
         }
       })();
       if (hasMediaAttachments && modelForceTextOnly) {
-        const imgs = effectiveAttachments!.filter((a) => inferKind(a) === "image").length;
-        const vids = effectiveAttachments!.filter((a) => inferKind(a) === "video").length;
-        const auds = effectiveAttachments!.filter((a) => inferKind(a) === "audio").length;
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Keeping multimodal=false for ${chatId} — model is forceTextOnly and user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
       } else if (hasMediaAttachments && !chatIsMultimodal) {
-        const imgs = effectiveAttachments!.filter((a) => inferKind(a) === "image").length;
-        const vids = effectiveAttachments!.filter((a) => inferKind(a) === "video").length;
-        const auds = effectiveAttachments!.filter((a) => inferKind(a) === "audio").length;
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
         chatIsMultimodal = true;
-      }
-      if (modelDisallowsAudioAttachments && (attachments || []).some((a) => inferKind(a) === "audio")) {
-        console.log(
-          `[CHAT] Omitting audio attachment(s) for ${chatId} — ${chatDetectedFamily} bundle lacks weight-backed audio runtime`,
-        );
       }
       if (hasAttachments || chatIsMultimodal) {
         pushChatSessionLog(
@@ -1326,15 +1235,10 @@ export function registerChatHandlers(
           `[CHAT_DIAG] attachment_route=${JSON.stringify({
             chatId: chatId.slice(0, 8),
             modelPath: chat.modelPath,
-            capabilityModelPath,
             detectedFamily: chatDetectedFamily,
             modelForceTextOnly,
-            modelAudioRuntimeAvailable,
             chatIsMultimodal,
-            attachments: summarizeAttachmentsForLog(effectiveAttachments),
-            originalAttachments: modelDisallowsAudioAttachments
-              ? summarizeAttachmentsForLog(attachments)
-              : undefined,
+            attachments: summarizeAttachmentsForLog(attachments),
           })}`,
         );
       }
@@ -1351,7 +1255,7 @@ export function registerChatHandlers(
       const userContentForDb = hasAttachments
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),
-            ...effectiveAttachments!.map((a) => {
+            ...attachments.map((a) => {
               const kind = inferKind(a);
               if (kind === "audio") {
                 return {
@@ -1415,10 +1319,7 @@ export function registerChatHandlers(
         ?.content || "";
       const suppressAgenticToolPromptForExactOutput =
         overrides?.builtinToolsEnabled === true &&
-        /\b(?:reply exactly|send visible final text exactly|output visible final text exactly)\s*:/i.test(latestUserText);
-      const exactOutputFollowupInstruction = suppressAgenticToolPromptForExactOutput
-        ? latestUserText
-        : "";
+        /\breply exactly\s*:/i.test(latestUserText);
       const suppressGenericAgenticToolPromptForNativeTools =
         overrides?.builtinToolsEnabled === true &&
         shouldSuppressGenericAgenticPromptForNativeTools(
@@ -1472,10 +1373,6 @@ export function registerChatHandlers(
       const wireApi =
         overrides?.wireApi || (isRemote ? "completions" : "responses");
       const useResponsesApi = wireApi === "responses";
-      const filterUnsupportedMediaParts = (parts: any[]): any[] => {
-        if (!modelDisallowsAudioAttachments) return parts;
-        return parts.filter((part: any) => part?.type !== "input_audio");
-      };
 
       // Add conversation messages (skip any existing system messages to avoid duplicates)
       // Messages with JSON content arrays (multimodal) are parsed back to content parts for the API
@@ -1538,16 +1435,26 @@ export function registerChatHandlers(
           try {
             const parsed = JSON.parse(msgContent);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) {
-              if (chatIsMultimodal || (isRemote && !modelForceTextOnly)) {
-                msgContent = filterUnsupportedMediaParts(parsed);
+              if (chatIsMultimodal || isRemote) {
+                // Keep only the current turn's media bytes in the API replay.
+                // Re-sending historical image/audio/video parts on every later
+                // text/tool turn keeps local engines on the media route, which
+                // breaks native tool prompting for families like MiniMax-M3 and
+                // wastes prefix-cache/storage budget. The prior assistant text
+                // remains in history, and the media user turn is represented by
+                // a text placeholder for continuity.
+                msgContent =
+                  !isRemote && m.id !== userMessage.id
+                    ? stripHistoricalMediaPartsForReplay(parsed)
+                    : parsed;
               } else {
                 // Multimodal is disabled for this model.
-                // Strip media entirely to prevent standard text-only engines from throwing 400 Bad Request
+                // Strip images entirely to prevent standard text-only engines from throwing 400 Bad Request
                 msgContent =
                   parsed
                     .filter((p: any) => p.type === "text")
                     .map((p: any) => p.text)
-                    .join("\n") || "[Media omitted]";
+                    .join("\n") || "[Image omitted]";
               }
             }
           } catch {
@@ -1786,15 +1693,6 @@ export function registerChatHandlers(
         const apiUrl = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`;
-        const loopbackModelIdentity = `${chatDetectedFamily || ""} ${chat.modelPath || ""} ${chat.modelId || ""} ${resolvedSession?.remoteModel || ""}`.toLowerCase();
-        const allowPinnedToolChoiceForLoopback =
-          chatDetectedFamily === "gemma4" ||
-          loopbackModelIdentity.includes("gemma-4") ||
-          loopbackModelIdentity.includes("gemma4");
-        const suppressPinnedToolChoiceForLoopback =
-          isRemote &&
-          isLoopbackUrl(apiUrl) &&
-          !allowPinnedToolChoiceForLoopback;
         console.log(
           `[CHAT] Sending to: ${apiUrl} (wire: ${wireApi}, remote: ${isRemote})`,
         );
@@ -1826,15 +1724,6 @@ export function registerChatHandlers(
               .map((s: string) => s.trim())
               .filter(Boolean)
           : undefined;
-        let latestResponsesResponseId: string | undefined;
-        let responsesToolFollowupPreviousResponseId: string | undefined;
-        let responsesToolFollowupInput:
-          | Array<
-              | { type: "function_call_output"; call_id: string; output: string }
-              | { type: "message"; role: "user"; content: string }
-            >
-          | undefined;
-        let suppressExplicitToolChoiceForToolFollowup = false;
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
@@ -1843,7 +1732,6 @@ export function registerChatHandlers(
             overrides?.enableThinking,
             chatDetectedFamily,
             overrides?.reasoningEffort,
-            overrides?.builtinToolsEnabled,
           );
           const resolvedThinkingBudget =
             typeof overrides?.maxThinkingTokens === "number" &&
@@ -1852,13 +1740,11 @@ export function registerChatHandlers(
               ? Math.floor(overrides.maxThinkingTokens)
               : undefined;
           const effectiveEnableThinkingOverride =
-            sessionSupportsThinking === false
+            !isRemote &&
+            !sessionHasReasoningParser &&
+            chatDetectedFamily !== "deepseek-v4"
               ? undefined
-              : !isRemote &&
-                  !sessionHasReasoningParser &&
-                  !familyAcceptsExplicitReasoningControls(chatDetectedFamily)
-                ? undefined
-                : overrides?.enableThinking;
+              : overrides?.enableThinking;
           const applyLocalThinkingBudget = (obj: Record<string, any>) => {
             if (isRemote || resolvedThinkingBudget == null || obj.enable_thinking === false) {
               return;
@@ -1866,10 +1752,7 @@ export function registerChatHandlers(
             if (thinkingBudgetSupported === false) {
               return;
             }
-            if (
-              !sessionHasReasoningParser &&
-              !familyAcceptsExplicitReasoningControls(chatDetectedFamily)
-            ) {
+            if (!sessionHasReasoningParser && chatDetectedFamily !== "deepseek-v4") {
               return;
             }
             obj.max_thinking_tokens = resolvedThinkingBudget;
@@ -1892,15 +1775,9 @@ export function registerChatHandlers(
             const inputMessages = requestMessages.filter(
               (m: any) => m.role !== "system",
             );
-            const isResponsesToolFollowup =
-              !!responsesToolFollowupPreviousResponseId &&
-              Array.isArray(responsesToolFollowupInput) &&
-              responsesToolFollowupInput.length > 0;
             const obj: Record<string, any> = {
               model: modelName,
-              input: isResponsesToolFollowup
-                ? responsesToolFollowupInput
-                : inputMessages,
+              input: inputMessages,
               instructions,
               // Only send temperature/top_p when explicitly set in chat overrides.
               // When omitted, the server resolves bundle metadata/family fallback.
@@ -1914,9 +1791,6 @@ export function registerChatHandlers(
               stream: true,
               stream_options: { include_usage: true },
             };
-            if (isResponsesToolFollowup) {
-              obj.previous_response_id = responsesToolFollowupPreviousResponseId;
-            }
             if (stopSequences) obj.stop = stopSequences;
             const effectiveTopK = overrides?.topK;
             if (effectiveTopK != null && effectiveTopK > 0)
@@ -1928,40 +1802,22 @@ export function registerChatHandlers(
             if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
-              const filteredTools = filterTools(overrides, {
+              obj.tools = filterTools(overrides, {
                 hasDirectMediaAttachments: hasMediaAttachments,
-              });
-              obj.tools = filteredTools.map((t) => ({
+              }).map((t) => ({
                 type: "function",
                 name: t.function.name,
                 description: t.function.description,
                 parameters: t.function.parameters,
               }));
-              const explicitToolChoice = inferExplicitBuiltinToolChoice(
-                latestUserText,
-                filteredTools,
-                true,
-              );
-              const suppressExplicitToolChoice =
-                explicitToolChoice && suppressPinnedToolChoiceForLoopback;
-              if (
-                explicitToolChoice &&
-                !isResponsesToolFollowup &&
-                !suppressExplicitToolChoice
-              ) {
-                obj.tool_choice = explicitToolChoice;
-              } else if (
-                suppressExplicitToolChoice &&
-                !isResponsesToolFollowup
-              ) {
-                obj.tool_choice = "auto";
-              }
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), omit the field so the model/template/provider
-            // default decides. Parser presence is not a thinking default.
+            // When undefined (auto), local omits the field so the native
+            // model/template default decides; remote gets sessionHasReasoningParser as hint.
             if (effectiveEnableThinkingOverride !== undefined) {
               obj.enable_thinking = effectiveEnableThinkingOverride;
+            } else if (isRemote) {
+              obj.enable_thinking = sessionHasReasoningParser;
             }
             // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
             if (!isRemote && obj.enable_thinking !== undefined)
@@ -2025,29 +1881,10 @@ export function registerChatHandlers(
               obj.tools = filterTools(overrides, {
                 hasDirectMediaAttachments: hasMediaAttachments,
               });
-              const explicitToolChoice = inferExplicitBuiltinToolChoice(
-                latestUserText,
-                obj.tools,
-                false,
-              );
-              const suppressExplicitToolChoice =
-                explicitToolChoice && suppressPinnedToolChoiceForLoopback;
-              if (
-                explicitToolChoice &&
-                !suppressExplicitToolChoiceForToolFollowup &&
-                !suppressExplicitToolChoice
-              ) {
-                obj.tool_choice = explicitToolChoice;
-              } else if (
-                suppressExplicitToolChoice &&
-                !suppressExplicitToolChoiceForToolFollowup
-              ) {
-                obj.tool_choice = "auto";
-              }
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), omit the field so the model/template/provider
-            // default decides. Parser presence is not a thinking default.
+            // When undefined (auto), local omits the field so the native
+            // model/template default decides; remote gets sessionHasReasoningParser as hint.
             // STRICT ENV: Filter out enable_thinking for strict generic 3rd-party API hosts that throw 400 Bad Request.
             const isStrictApi =
               isRemote &&
@@ -2062,6 +1899,8 @@ export function registerChatHandlers(
             if (!isStrictApi) {
               if (effectiveEnableThinkingOverride !== undefined) {
                 obj.enable_thinking = effectiveEnableThinkingOverride;
+              } else if (isRemote) {
+                obj.enable_thinking = sessionHasReasoningParser;
               }
             }
 
@@ -2514,7 +2353,6 @@ export function registerChatHandlers(
               // Server wraps in { response: { id: "resp_..." } }
               const respId = parsed.response?.id || parsed.id;
               if (responsesEventType === "response.created" && respId) {
-                latestResponsesResponseId = respId;
                 const entry = activeRequests.get(chatId);
                 if (entry && !entry.responseId) {
                   entry.responseId = respId;
@@ -2640,9 +2478,6 @@ export function registerChatHandlers(
                   parsed.output_index,
                 );
                 if (argsBuffer) argsBuffer.value += parsed.delta;
-                console.log(
-                  `[CHAT] Responses function_call_arguments.delta: output_index=${parsed.output_index ?? ""} item_id=${parsed.item_id || ""} delta_len=${parsed.delta.length}`,
-                );
               }
               if (
                 responsesEventType === "response.function_call_arguments.done" &&
@@ -2653,9 +2488,6 @@ export function registerChatHandlers(
                   parsed.output_index,
                 );
                 if (argsBuffer) argsBuffer.value = parsed.arguments;
-                console.log(
-                  `[CHAT] Responses function_call_arguments.done: output_index=${parsed.output_index ?? ""} item_id=${parsed.item_id || ""} arguments_len=${parsed.arguments.length}`,
-                );
               }
               if (
                 responsesEventType === "response.output_item.done" &&
@@ -2670,9 +2502,6 @@ export function registerChatHandlers(
                 const toolCallId =
                   item.call_id ||
                   `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
-                console.log(
-                  `[CHAT] Responses function_call item: output_index=${parsed.output_index ?? ""} item_id=${item.id || ""} call_id=${toolCallId} name=${item.name || ""} arguments_len=${String(finalArguments).length}`,
-                );
                 receivedToolCalls.push({
                   id: toolCallId,
                   function: {
@@ -3049,7 +2878,6 @@ export function registerChatHandlers(
                 "[CHAT] Error processing SSE line:",
                 (e as Error).message,
               );
-              throw e;
             }
           }
         };
@@ -3171,11 +2999,6 @@ export function registerChatHandlers(
 
         // ─── Helper: execute tool calls and push results to messages ───────
         const executeToolCalls = async () => {
-          const responsesToolOutputItems: Array<{
-            type: "function_call_output";
-            call_id: string;
-            output: string;
-          }> = [];
           if (useResponsesApi) {
             // Responses API: push individual output items (not Chat Completions format)
             if (fullContent) {
@@ -3229,15 +3052,11 @@ export function registerChatHandlers(
                 );
                 requestMessages.push(
                   useResponsesApi
-                    ? (() => {
-                        const item = {
-                          type: "function_call_output",
-                          call_id: tc.id,
-                          output: resultText,
-                        } as const;
-                        responsesToolOutputItems.push(item);
-                        return item;
-                      })()
+                    ? {
+                        type: "function_call_output",
+                        call_id: tc.id,
+                        output: resultText,
+                      }
                     : {
                         role: "tool",
                         tool_call_id: tc.id,
@@ -3338,7 +3157,7 @@ export function registerChatHandlers(
                   // reject image_url/video_url content when the loaded runtime
                   // is not multimodal. Remote endpoints may be multimodal even
                   // when the local session registry cannot infer it.
-                  if ((result.imageDataUrl || result.videoDataUrl) && !(chatIsMultimodal || (isRemote && !modelForceTextOnly))) {
+                  if ((result.imageDataUrl || result.videoDataUrl) && !(chatIsMultimodal || isRemote)) {
                     resultText += "\n\n[Media bytes were not sent because this local session is text-only. Use a VL-compatible model/session to inspect the file visually.]";
                     console.log(
                       `[CHAT] Skipping tool media bytes for text-only local session (${tc.function.name})`,
@@ -3440,44 +3259,14 @@ export function registerChatHandlers(
 
             requestMessages.push(
               useResponsesApi
-                ? (() => {
-                    const item = {
-                      type: "function_call_output",
-                      call_id: tc.id,
-                      output: resultText,
-                    } as const;
-                    responsesToolOutputItems.push(item);
-                    return item;
-                  })()
+                ? {
+                    type: "function_call_output",
+                    call_id: tc.id,
+                    output: resultText,
+                  }
                 : { role: "tool", tool_call_id: tc.id, content: resultText },
             );
           }
-          if (
-            useResponsesApi &&
-            latestResponsesResponseId &&
-            responsesToolOutputItems.length > 0
-          ) {
-            responsesToolFollowupPreviousResponseId = latestResponsesResponseId;
-            responsesToolFollowupInput = [
-              ...(exactOutputFollowupInstruction
-                ? [{
-                    type: "message" as const,
-                    role: "user" as const,
-                    content: exactOutputFollowupInstruction,
-                  }]
-                : []),
-              ...responsesToolOutputItems.map((item) => ({
-                ...item,
-              })),
-            ];
-            console.log(
-              `[CHAT] Responses tool follow-up using previous_response_id=${latestResponsesResponseId} with ${responsesToolOutputItems.length} function_call_output item(s)`,
-            );
-          } else {
-            responsesToolFollowupPreviousResponseId = undefined;
-            responsesToolFollowupInput = undefined;
-          }
-          suppressExplicitToolChoiceForToolFollowup = receivedToolCalls.length > 0;
 
           // Inject media from read_image/read_video tool results as multimodal
           // content parts. VL models can only process media in content arrays,
@@ -4149,7 +3938,7 @@ export function registerChatHandlers(
           partialContent ||
           abortReasoningContent.trim() ||
           collectedToolStatuses.length > 0 ||
-          (wasAborted && abortTotalTokens > 0);
+          abortTotalTokens > 0;
 
         // Save message if we have any content, reasoning, or visible tool activity
         if (hadVisibleActivity) {

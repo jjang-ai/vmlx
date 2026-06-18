@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from ..base import BaseModelConfig
+from ..gemma4.config import AudioConfig as Gemma4AudioConfig
 from ..gemma4.config import TextConfig as Gemma4TextConfig
 
 
@@ -15,6 +16,16 @@ class AudioConfig(BaseModelConfig):
     rms_norm_eps: float = 1e-6
     initializer_range: float = 0.02
 
+    @classmethod
+    def from_dict(cls, params):
+        if isinstance(params, dict):
+            model_type = str(params.get("model_type") or "").lower()
+            if model_type == "gemma4_audio" or "num_hidden_layers" in params:
+                config = Gemma4AudioConfig.from_dict(params)
+                config.model_type = model_type or "gemma4_audio"
+                return config
+        return super().from_dict(params)
+
 
 @dataclass
 class VisionConfig(BaseModelConfig):
@@ -22,6 +33,24 @@ class VisionConfig(BaseModelConfig):
     patch_size: int = 16
     pooling_kernel_size: int = 3
     model_patch_size: int = 48
+    hidden_size: int = 3840
+    intermediate_size: int = 3072
+    num_hidden_layers: int = 16
+    num_attention_heads: int = 12
+    num_key_value_heads: int = 12
+    head_dim: int = 64
+    global_head_dim: int = 64
+    hidden_activation: str = "gelu_pytorch_tanh"
+    max_position_embeddings: int = 131072
+    attention_bias: bool = False
+    attention_dropout: float = 0.0
+    use_bidirectional_attention: str = "vision"
+    layer_types: Optional[List[str]] = None
+    rope_parameters: Optional[Dict] = None
+    default_output_length: int = 280
+    position_embedding_size: int = 10240
+    use_clipped_linears: bool = False
+    standardize: bool = False
     mm_embed_dim: int = 3840
     mm_posemb_size: int = 1120
     num_soft_tokens: int = 280
@@ -29,9 +58,11 @@ class VisionConfig(BaseModelConfig):
     output_proj_dims: int = 3840
     initializer_range: float = 0.02
 
-    @property
-    def hidden_size(self) -> int:
-        return self.output_proj_dims
+    def __post_init__(self):
+        if self.layer_types is None:
+            self.layer_types = ["full_attention"] * self.num_hidden_layers
+        if self.rope_parameters is None:
+            self.rope_parameters = {"rope_theta": 100.0, "rope_type": "default"}
 
 
 @dataclass
@@ -57,6 +88,15 @@ class TextConfig(Gemma4TextConfig):
     use_bidirectional_attention: Optional[str] = "vision"
     rope_parameters: Optional[Dict] = None
     layer_types: Optional[List[str]] = None
+
+    @classmethod
+    def from_dict(cls, params):
+        if isinstance(params, dict):
+            params = dict(params)
+            softcap = params.get("final_logit_softcapping")
+            if type(softcap) is int:
+                params["final_logit_softcapping"] = float(softcap)
+        return super().from_dict(params)
 
     def __post_init__(self):
         if self.rope_parameters is None:

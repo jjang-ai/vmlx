@@ -33,7 +33,7 @@ def test_chat_extractor_accepts_responses_style_input_media_parts():
 def test_mllm_extractor_accepts_responses_style_input_media_parts():
     from vmlx_engine.models.mllm import MLXMultimodalLM
 
-    chat_messages, images, videos = MLXMultimodalLM._extract_multimodal_messages(
+    chat_messages, images, videos, audio_inputs = MLXMultimodalLM._extract_multimodal_messages(
         [
             {
                 "role": "user",
@@ -54,6 +54,7 @@ def test_mllm_extractor_accepts_responses_style_input_media_parts():
 
     assert images == ["data:image/png;base64,AAAA"]
     assert videos == ["data:video/mp4;base64,BBBB"]
+    assert audio_inputs == []
     assert chat_messages == [
         {
             "role": "user",
@@ -153,6 +154,60 @@ def test_server_detects_media_before_text_only_responses_flattening():
             }
         ]
     )
+
+
+def test_responses_m3_vl_image_only_carveout_preserves_ui_default_path(monkeypatch):
+    import vmlx_engine.server as server
+
+    engine = object()
+    monkeypatch.setattr(server, "_m3_vl_image_ok", lambda candidate: candidate is engine)
+    image_input = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what color"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+            ],
+        }
+    ]
+    mixed_input = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "describe"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+            ],
+        }
+    ]
+
+    image_modalities = server._responses_input_requested_modalities(image_input)
+    mixed_modalities = server._responses_input_requested_modalities(mixed_input)
+
+    assert image_modalities == {"image"}
+    assert server._m3_vl_response_image_only(engine, image_modalities)
+    assert server._responses_modalities_unsupported_after_m3_vl_carveout(
+        engine, image_modalities
+    ) == set()
+
+    assert mixed_modalities == {"audio", "image"}
+    assert not server._m3_vl_response_image_only(engine, mixed_modalities)
+    assert server._responses_modalities_unsupported_after_m3_vl_carveout(
+        engine, mixed_modalities
+    ) == {"audio"}
+
+
+def test_m3_vl_text_runtime_reports_vision_capability(monkeypatch):
+    import vmlx_engine.server as server
+
+    engine = object()
+    monkeypatch.setattr(server, "_engine", engine)
+    monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+    monkeypatch.setattr(server, "_m3_vl_image_ok", lambda candidate: candidate is engine)
+
+    assert server._loaded_runtime_modalities() == ["text", "vision"]
 
 
 def test_server_rejects_text_only_multimodal_instead_of_silent_drop(monkeypatch):

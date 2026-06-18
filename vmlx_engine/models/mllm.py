@@ -3762,6 +3762,8 @@ class MLLMOutput:
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
+    cache_detail: str = ""
 
 
 def is_base64_image(s: str) -> bool:
@@ -5578,6 +5580,7 @@ class MLXMultimodalLM:
         prompt_cache = None
         prompt_cache_state = None
         cache_hit = False
+        prefix_match_len = 0
         _cache_token_ids: list[int] | None = None  # reused by store path below
         media_cache_safe = _supports_simple_media_prompt_cache(self.model)
 
@@ -5705,6 +5708,8 @@ class MLXMultimodalLM:
             finish_reason=finish_reason,
             prompt_tokens=prompt_tokens,
             completion_tokens=generation_tokens,
+            cached_tokens=prefix_match_len if cache_hit else 0,
+            cache_detail="memory" if cache_hit and prefix_match_len > 0 else "",
         )
 
     def stream_generate(
@@ -6226,6 +6231,8 @@ class MLXMultimodalLM:
             finish_reason=finish_reason,
             prompt_tokens=prompt_tokens,
             completion_tokens=generation_tokens,
+            cached_tokens=prefix_match_len if cache_hit else 0,
+            cache_detail="memory" if cache_hit and prefix_match_len > 0 else "",
         )
 
     def stream_chat(
@@ -6472,6 +6479,8 @@ class MLXMultimodalLM:
                         finish_reason=None,
                         prompt_tokens=last_prompt_tokens,
                         completion_tokens=token_count,
+                        cached_tokens=prefix_match_len if cache_hit else 0,
+                        cache_detail="memory" if cache_hit and prefix_match_len > 0 else "",
                     )
         except Exception as e:
             clear_mlx_memory_cache(log=logger)
@@ -6519,6 +6528,8 @@ class MLXMultimodalLM:
             finish_reason=finish_reason,
             prompt_tokens=last_prompt_tokens,
             completion_tokens=token_count,
+            cached_tokens=prefix_match_len if cache_hit else 0,
+            cache_detail="memory" if cache_hit and prefix_match_len > 0 else "",
         )
 
     def describe_image(

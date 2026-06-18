@@ -190,7 +190,7 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
         or getattr(request, "audio_codes", None) is not None
         or getattr(request, "audio_embeds", None) is not None
         or getattr(request, "audio_features", None) is not None
-        or getattr(request, "audio_input_features", None) is not None
+        or getattr(request, "audio_features_mask", None) is not None
         or getattr(request, "audio", None)
         or getattr(request, "audios", None)
         or getattr(request, "pixel_values", None) is not None
@@ -237,11 +237,7 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
     _hash_array("audio_codes", getattr(request, "audio_codes", None))
     _hash_array("audio_embeds", getattr(request, "audio_embeds", None))
     _hash_array("audio_features", getattr(request, "audio_features", None))
-    _hash_array("audio_input_features", getattr(request, "audio_input_features", None))
-    _hash_array(
-        "audio_input_features_mask",
-        getattr(request, "audio_input_features_mask", None),
-    )
+    _hash_array("audio_features_mask", getattr(request, "audio_features_mask", None))
     if not media_sources:
         # Fallback for callers that hand us preprocessed pixel tensors without
         # source URLs/paths. Do not hash attention_mask: it changes with text
@@ -879,6 +875,20 @@ def _gen_stream() -> Any:
                 _GENERATION_STREAM = mx.default_stream(mx.default_device())
             except Exception:
                 _GENERATION_STREAM = None
+    # P0 VL/audio stream bug: mlx_vlm.generate.generation_stream is a module
+    # global bound to the IMPORT thread; mlx_vlm internals (wired_limit /
+    # generate) call mx.synchronize(generation_stream), which raises "There is
+    # no Stream(gpu, 0) in current thread" when MLLM generation (image OR audio)
+    # runs on the mllm-worker executor. Rebind it to OUR worker-thread stream so
+    # those syncs resolve. Extends the simple-MLLM FIX#7 to MLLMBatchGenerator /
+    # the /v1/responses + dev-build-UI VL+audio path. Idempotent + cheap.
+    if _GENERATION_STREAM is not None:
+        try:
+            import mlx_vlm.generate as _mvg
+            if getattr(_mvg, "generation_stream", None) is not _GENERATION_STREAM:
+                _mvg.generation_stream = _GENERATION_STREAM
+        except Exception:
+            pass
     return _GENERATION_STREAM
 
 
@@ -969,6 +979,48 @@ def _shape_images_for_processor_call(
     return images
 
 
+def _processor_audio_sampling_rate(processor: Any) -> int:
+    """Best-effort source sampling rate a VLM audio processor expects (Hz)."""
+    for obj in (
+        getattr(processor, "feature_extractor", None),
+        getattr(processor, "audio_processor", None),
+        getattr(processor, "audio_feature_extractor", None),
+        processor,
+    ):
+        sr = getattr(obj, "sampling_rate", None) or getattr(obj, "sample_rate", None)
+        if isinstance(sr, (int, float)) and sr > 0:
+            return int(sr)
+    return 16000
+
+
+def _load_audio_waveforms_for_processor(processor: Any, audio: List[Any]) -> List[Any]:
+    """Load file-path / data-URL audio entries into float32 waveforms.
+
+    process_audio_input() returns a file PATH string (base64 -> temp .wav ->
+    path). Strict HF audio processors (e.g. Gemma 4) expect a list of float32
+    waveform arrays, not paths, and otherwise try to float() the path string
+    ("could not convert string to float: '/.../tmp.wav'"). Load each path with
+    librosa at the processor's source sampling rate. Entries that are already
+    arrays pass through untouched. (MiMo uses its own mel path and is excluded by
+    the caller.)
+    """
+    import numpy as np
+    sr = _processor_audio_sampling_rate(processor)
+    out: List[Any] = []
+    for a in audio:
+        if isinstance(a, str):
+            try:
+                import librosa
+                wf, _ = librosa.load(a, sr=sr, mono=True)
+                out.append(np.asarray(wf, dtype=np.float32))
+            except Exception as exc:
+                logger.warning("Audio waveform load failed for %s: %s", a, exc)
+                out.append(a)
+        else:
+            out.append(a)
+    return out
+
+
 def _call_processor_direct(
     processor: Any,
     *,
@@ -1035,41 +1087,17 @@ def _call_processor_direct(
     if videos:
         kwargs["videos"] = videos
     if audio:
-        kwargs["audio"] = audio
+        processor_audio = (
+            audio
+            if skip_audios_alias
+            else _load_audio_waveforms_for_processor(processor, audio)
+        )
+        kwargs["audio"] = processor_audio
         if not skip_audios_alias and "audios" in params:
-            kwargs["audios"] = audio
+            kwargs["audios"] = processor_audio
     if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))
-
-
-def _ensure_gemma4_audio_placeholders(
-    prompt: str,
-    *,
-    processor: Any,
-    audio_count: int,
-) -> str:
-    """Ensure Gemma4 processor can expand OpenAI input_audio into audio tokens."""
-
-    if audio_count <= 0:
-        return prompt
-    tokenizer = getattr(processor, "tokenizer", None)
-    audio_token = (
-        getattr(processor, "audio_token", None)
-        or getattr(tokenizer, "audio_token", None)
-    )
-    if not audio_token:
-        return prompt
-    audio_token = str(audio_token)
-    missing = max(0, int(audio_count) - prompt.count(audio_token))
-    if missing == 0:
-        return prompt
-    addition = " ".join(audio_token for _ in range(missing))
-    for marker in ("<turn|>", "<end_of_turn>", "<|im_end|>", "</s>"):
-        idx = prompt.rfind(marker)
-        if idx >= 0:
-            return prompt[:idx] + addition + prompt[idx:]
-    return prompt + "\n" + addition
 
 
 def _resolve_mimo_audio_bundle_path(model: Any, processor: Any) -> Optional[Path]:
@@ -1325,34 +1353,6 @@ def _build_mimo_audio_codes_from_paths(
         return None
     codes = mx.concatenate([mx.array(c).astype(mx.int32) for c in codes_per_audio], axis=0)
     return codes[:, :channels]
-
-
-def _gemma4_audio_waveforms_from_paths(
-    audio_paths: List[str],
-    processor: Any,
-) -> List[Any]:
-    """Decode Gemma4 raw audio file paths to waveform arrays for its processor.
-
-    Gemma4/Gemma4 Unified audio processors expect raw waveform arrays. Passing
-    temp WAV path strings reaches ``np.asarray(path, dtype=float32)`` and fails
-    with ``could not convert string to float`` before the model forward starts.
-    """
-
-    if not audio_paths:
-        return []
-    import numpy as np
-    import librosa
-
-    audio_processor = getattr(processor, "audio_processor", None)
-    target_sr = int(getattr(audio_processor, "sampling_rate", 16000) or 16000)
-    waveforms: List[Any] = []
-    for path in audio_paths:
-        waveform, _ = librosa.load(str(path), sr=target_sr, mono=True)
-        waveform = np.asarray(waveform, dtype=np.float32).reshape(-1)
-        if waveform.size == 0:
-            raise ValueError(f"Gemma4 audio input is empty: {path}")
-        waveforms.append(waveform)
-    return waveforms
 
 def _should_use_safe_processor_path(
     processor: Any,
@@ -2220,7 +2220,32 @@ def _native_mtp_async_eval(*arrays: Any) -> None:
         mx.eval(*arrays)
 
 
-def _mllm_decode_sync_eval_enabled() -> bool:
+def _m3_affine2_decode_needs_sync(cache: Any = None) -> bool:
+    """MiniMax-M3 + affine-2 fast path requires SYNCHRONOUS decode-token eval.
+
+    The async_eval decode pipeline races with the custom affine-2 SwitchGLU Metal
+    kernel + the lazily-grown MSA cache state and RARELY corrupts long-context
+    decode (degenerate / null-byte output). Evidence (2026-06-15): synchronous
+    decode ~15/15 coherent across fresh processes vs async ~10-25% corrupt; the
+    per-call kernel is numerically exact + deterministic, so this is an eval/
+    materialization-ordering hazard, not a kernel or architecture bug. Forcing
+    mx.eval each step materializes the cache state in lockstep and removes it.
+    Scoped to M3+affine-2 so all other models keep async CPU/GPU overlap.
+    """
+    if cache is None:
+        return False
+    try:
+        if not any(type(c).__name__ == "MiniMaxM3SparseCache" for c in cache):
+            return False
+        from .models.minimax_m3.m3_affine2_switch import _disabled as _aff_disabled
+        return not _aff_disabled()
+    except Exception:
+        return False
+
+
+def _mllm_decode_sync_eval_enabled(cache: Any = None) -> bool:
+    if _m3_affine2_decode_needs_sync(cache):
+        return True
     return os.environ.get("VMLINUX_MLLM_DECODE_SYNC_EVAL", "").lower() in {
         "1",
         "true",
@@ -2229,8 +2254,8 @@ def _mllm_decode_sync_eval_enabled() -> bool:
     }
 
 
-def _submit_decode_token_eval(value: Any) -> None:
-    if _mllm_decode_sync_eval_enabled():
+def _submit_decode_token_eval(value: Any, cache: Any = None) -> None:
+    if _mllm_decode_sync_eval_enabled(cache):
         mx.eval(value)
     else:
         mx.async_eval(value)
@@ -3025,8 +3050,8 @@ class MLLMBatchRequest:
     audio_codes: Optional[mx.array] = None
     audio_embeds: Optional[mx.array] = None
     audio_features: Optional[mx.array] = None
-    audio_input_features: Optional[mx.array] = None
-    audio_input_features_mask: Optional[mx.array] = None
+    audio_features_mask: Optional[mx.array] = None
+    audio_features_are_raw_input_features: bool = False
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Generation state
@@ -3779,8 +3804,6 @@ class MLLMBatchGenerator:
         )
         self._decode_trace_count = 0
         self._decode_trace_model_s = 0.0
-        self._decode_trace_logits_s = 0.0
-        self._decode_trace_processor_s = 0.0
         self._decode_trace_sample_s = 0.0
 
         self.prefill_batch_size = prefill_batch_size
@@ -4214,8 +4237,8 @@ class MLLMBatchGenerator:
             request.pixel_values = cached_pixels.pixel_values
             request.attention_mask = cached_pixels.attention_mask
             request.image_grid_thw = cached_pixels.image_grid_thw
-            request.video_pixel_values = getattr(cached_pixels, "video_pixel_values", None)
-            request.video_grid_thw = getattr(cached_pixels, "video_grid_thw", None)
+            request.video_pixel_values = None
+            request.video_grid_thw = None
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
             self._raise_if_prompt_over_limit(
                 request,
@@ -4241,32 +4264,17 @@ class MLLMBatchGenerator:
         # get their images processed through that path. When the prompt has images but
         # no "<image>" literal, bypass prepare_inputs and call process_inputs directly
         # which invokes the processor's native __call__ (handles any image token format).
-        processor_audio = all_audio
-        if all_audio and str(self._model_type or "").lower() in {
-            "gemma4",
-            "gemma4_unified",
-        }:
-            request.prompt = _ensure_gemma4_audio_placeholders(
-                request.prompt,
-                processor=self.processor,
-                audio_count=len(all_audio),
-            )
-            processor_audio = _gemma4_audio_waveforms_from_paths(
-                all_audio,
-                self.processor,
-            )
-
         if _should_use_safe_processor_path(
             self.processor,
             has_image_literal="<image>" in request.prompt,
             has_images=bool(all_images),
-        ) or bool(video_inputs) or bool(processor_audio):
+        ) or bool(video_inputs) or bool(all_audio):
             inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
                 images=all_images,
                 videos=video_inputs,
-                audio=processor_audio,
+                audio=all_audio,
                 add_special_tokens=False,
             )
         else:
@@ -4347,15 +4355,16 @@ class MLLMBatchGenerator:
         request.audio_embeds = _ensure_mx_array(
             request.extra_kwargs.pop("audio_embeds", None)
         )
+        input_features = request.extra_kwargs.pop("input_features", None)
+        input_features_mask = request.extra_kwargs.pop("input_features_mask", None)
+        audio_features = request.extra_kwargs.pop("audio_features", None)
         request.audio_features = _ensure_mx_array(
-            request.extra_kwargs.pop("audio_features", None)
+            input_features if input_features is not None else audio_features
         )
-        request.audio_input_features = _ensure_mx_array(
-            request.extra_kwargs.pop("input_features", None)
+        request.audio_features_mask = _ensure_mx_array(
+            input_features_mask if input_features is not None else None, mx.bool_
         )
-        request.audio_input_features_mask = _ensure_mx_array(
-            request.extra_kwargs.pop("input_features_mask", None)
-        )
+        request.audio_features_are_raw_input_features = input_features is not None
         if (
             all_audio
             and self._model_type == "mimo_v2"
@@ -4365,7 +4374,6 @@ class MLLMBatchGenerator:
                     request.audio_codes,
                     request.audio_embeds,
                     request.audio_features,
-                    request.audio_input_features,
                 )
             )
         ):
@@ -4400,16 +4408,15 @@ class MLLMBatchGenerator:
                 request.audio_codes,
                 request.audio_embeds,
                 request.audio_features,
-                request.audio_input_features,
             )
         ):
             raise UnsupportedMediaModalityError(
                 "audio",
                 (
                     "raw audio reached the VLM processor, but the processor "
-                    "returned no audio_codes, audio_embeds, audio_features, "
-                    "or Gemma4 input_features. Continuing as text-only would "
-                    "hide an unsupported audio path."
+                    "returned no audio_codes, audio_embeds, or audio_features. "
+                    "A real waveform-to-MiMo-audio-codes bridge is required; "
+                    "continuing as text-only would hide an unsupported audio path."
                 ),
                 family=str(self._model_type or "mllm"),
                 request_id=request.request_id,
@@ -4426,10 +4433,7 @@ class MLLMBatchGenerator:
         if (
             not _mllm_bypass
             and media_cache_sources
-            and (
-                request.pixel_values is not None
-                or request.video_pixel_values is not None
-            )
+            and request.pixel_values is not None
         ):
             self.vision_cache.set_pixel_cache(
                 images=media_cache_sources,
@@ -4438,8 +4442,6 @@ class MLLMBatchGenerator:
                 input_ids=request.input_ids,
                 attention_mask=request.attention_mask,
                 image_grid_thw=request.image_grid_thw,
-                video_pixel_values=request.video_pixel_values,
-                video_grid_thw=request.video_grid_thw,
                 extra_kwargs=request.extra_kwargs,
                 processing_time=processing_time,
             )
@@ -4806,8 +4808,6 @@ class MLLMBatchGenerator:
 
     def _run_vision_encoding_inner(self, request: "MLLMBatchRequest", cache: Optional[List[Any]] = None) -> "mx.array":
         kwargs = dict(request.extra_kwargs)
-        audio_input_features = getattr(request, "audio_input_features", None)
-        audio_input_features_mask = getattr(request, "audio_input_features_mask", None)
         # Only pass pixel_values when non-None. Smelt-loaded models use a
         # text-only wrapper whose __call__ does NOT accept pixel_values at
         # all — passing even None triggers `unexpected keyword argument
@@ -4825,7 +4825,6 @@ class MLLMBatchGenerator:
                 or request.audio_codes is not None
                 or request.audio_embeds is not None
                 or request.audio_features is not None
-                or audio_input_features is not None
             )
         )
         if request.attention_mask is not None and not has_mimo_media_payload:
@@ -4839,15 +4838,20 @@ class MLLMBatchGenerator:
         if request.audio_embeds is not None:
             kwargs["audio_embeds"] = request.audio_embeds
         elif request.audio_features is not None:
-            # Some processors name already-computed audio embeddings
-            # `audio_features`. Treat them as precomputed embeddings for the
-            # model bridge. Raw waveform/mel-to-code tokenization is a separate
-            # runtime component and must not be implied by this alias.
-            kwargs["audio_embeds"] = request.audio_features
-        if audio_input_features is not None:
-            kwargs["input_features"] = audio_input_features
-        if audio_input_features_mask is not None:
-            kwargs["input_features_mask"] = audio_input_features_mask
+            if getattr(request, "audio_features_are_raw_input_features", False):
+                # Gemma4 processors return raw acoustic input features as
+                # `input_features`/`input_features_mask`; the model's audio
+                # embedder must still project them. Do not alias these to
+                # MiMo-style precomputed embeddings.
+                kwargs["input_features"] = request.audio_features
+                if request.audio_features_mask is not None:
+                    kwargs["input_features_mask"] = request.audio_features_mask
+            else:
+                # Some processors name already-computed audio embeddings
+                # `audio_features`. Treat them as precomputed embeddings for the
+                # model bridge. Raw waveform/mel-to-code tokenization is a separate
+                # runtime component and must not be implied by this alias.
+                kwargs["audio_embeds"] = request.audio_features
         if cache is not None:
             kwargs["cache"] = cache
 
@@ -4863,7 +4867,6 @@ class MLLMBatchGenerator:
             request.audio_codes is not None
             or request.audio_embeds is not None
             or request.audio_features is not None
-            or audio_input_features is not None
         )
         has_media_payload = has_images or has_audio_payload
         seq_len = input_ids.shape[1]
@@ -4991,7 +4994,7 @@ class MLLMBatchGenerator:
             ),
             seq_len=seq_len,
             generation_tokens=int(getattr(request, "max_tokens", 0) or 0),
-            request_id=getattr(request, "request_id", "unknown"),
+            request_id=request.request_id,
         )
         if (
             not has_media_payload
@@ -6938,11 +6941,12 @@ class MLLMBatchGenerator:
         """Return MiMo V2 thinking-off decode processors for batched MLLM.
 
         Mirrors SimpleEngine's MiMo policy for the continuous-batching/cache
-        route: suppress the primary EOS marker only before the first generated
-        token. Do not suppress literal XML thinking delimiters: MiMo can then
-        emit untagged reasoning prose as visible text. The active think_xml
-        parser handles tagged reasoning cleanup while the first-token EOS guard
-        still avoids the proven immediate ``<|im_end|>`` stop.
+        route: suppress native thinking delimiters whenever API thinking is
+        off, and suppress the primary EOS marker only before the first
+        generated token. The first-token test must use request output state,
+        not the processor's token vector, because batched processors see prompt
+        tokens too. This avoids the proven first-token ``<|im_end|>`` stop
+        without preventing natural stop later.
         """
 
         token_ids = getattr(self, "_mimo_v2_thinking_off_token_ids", None)
@@ -6963,6 +6967,11 @@ class MLLMBatchGenerator:
                 except Exception:
                     return None
 
+            think_ids = {
+                token_id
+                for token_id in (_encode_single("<think>"), _encode_single("</think>"))
+                if token_id is not None
+            }
             eos_ids = {token_id for token_id in (_encode_single("<|im_end|>"),) if token_id is not None}
             eos_id = getattr(tokenizer, "eos_token_id", None)
             if isinstance(eos_id, int):
@@ -6973,12 +6982,22 @@ class MLLMBatchGenerator:
                 except Exception:
                     continue
             token_ids = {
+                "think_ids": think_ids,
                 "eos_ids": eos_ids,
             }
             self._mimo_v2_thinking_off_token_ids = token_ids
+        think_ids = token_ids["think_ids"]
         eos_ids = token_ids["eos_ids"]
 
         processors: list[Callable[[mx.array, mx.array], mx.array]] = []
+        if think_ids:
+
+            def _suppress_thinking_tags(_, logits):
+                indices = mx.array(sorted(think_ids))
+                return logits.at[:, indices].add(-float("inf"))
+
+            processors.append(_suppress_thinking_tags)
+
         if eos_ids:
 
             def _suppress_first_token_eos(tokens, logits, _request=request):
@@ -7548,13 +7567,6 @@ class MLLMBatchGenerator:
             logits = output
 
         logits = logits[:, -1, :]
-        if trace:
-            logits_t0 = time.perf_counter()
-            mx.eval(logits)
-            mx.synchronize()
-            logits_s = time.perf_counter() - logits_t0
-            processor_s = 0.0
-            sample_t0 = time.perf_counter()
 
         # Per-request sampling using each request's sampling parameters.
         # VLM logprobs are rejected at the API layer, so do not materialize a
@@ -7572,18 +7584,7 @@ class MLLMBatchGenerator:
                     pass
             if _batch_shares_sampler_params(batch.requests):
                 shared_sampler = self._make_request_sampler(batch.requests[0])
-                if trace:
-                    sampled = shared_sampler(logits)
-                    mx.eval(sampled)
-                    mx.synchronize()
-                    sample_s = time.perf_counter() - sample_t0
-                    # Processor timing is folded into sample unless the sampler
-                    # exposes its own detailed counters; keep the field explicit
-                    # so live logs distinguish logits materialization from the
-                    # remaining processor+sampler work.
-                    processor_s = 0.0
-                else:
-                    sampled = shared_sampler(logits)
+                sampled = shared_sampler(logits)
             else:
                 tokens = []
                 for i, req in enumerate(batch.requests):
@@ -7594,31 +7595,21 @@ class MLLMBatchGenerator:
             sampled = self.sampler(logits)
 
         if trace:
-            if "sample_s" not in locals():
-                mx.eval(sampled)
-                mx.synchronize()
-                sample_s = time.perf_counter() - sample_t0
+            mx.synchronize()
+            sample_s = time.perf_counter() - sample_t0
             self._decode_trace_count += 1
             self._decode_trace_model_s += model_s
-            self._decode_trace_logits_s += logits_s
-            self._decode_trace_processor_s += processor_s
             self._decode_trace_sample_s += sample_s
             if self._decode_trace_count % self._decode_trace_every == 0:
                 n = self._decode_trace_count
                 logger.info(
                     "VMLINUX_DECODE_TRACE mllm steps=%d avg_model_ms=%.2f "
-                    "avg_logits_ms=%.2f avg_processor_ms=%.2f "
-                    "avg_sample_ms=%.2f last_model_ms=%.2f "
-                    "last_logits_ms=%.2f last_processor_ms=%.2f "
-                    "last_sample_ms=%.2f batch=%d",
+                    "avg_sample_ms=%.2f last_model_ms=%.2f last_sample_ms=%.2f "
+                    "batch=%d",
                     n,
                     (self._decode_trace_model_s / n) * 1000.0,
-                    (self._decode_trace_logits_s / n) * 1000.0,
-                    (self._decode_trace_processor_s / n) * 1000.0,
                     (self._decode_trace_sample_s / n) * 1000.0,
                     model_s * 1000.0,
-                    logits_s * 1000.0,
-                    processor_s * 1000.0,
                     sample_s * 1000.0,
                     int(logits.shape[0]),
                 )
@@ -7742,7 +7733,7 @@ class MLLMBatchGenerator:
                             f"native MTP AR fallback unsafe: {fallback_reason}"
                         )
                     batch.y, batch.logprobs = self._step(batch.y[:, None], batch.cache)
-                    _submit_decode_token_eval(batch.y)
+                    _submit_decode_token_eval(batch.y, batch.cache)
                     _native_mtp_log_stats(
                         batch.requests[0].request_id,
                         mtp_state.stats,
@@ -7799,7 +7790,7 @@ class MLLMBatchGenerator:
             batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
             _step_s = time.perf_counter() - _step_t0 if _next_trace else 0.0
             _async_t0 = time.perf_counter() if _next_trace else 0.0
-            _submit_decode_token_eval(batch.y)
+            _submit_decode_token_eval(batch.y, batch.cache)
             _async_s = time.perf_counter() - _async_t0 if _next_trace else 0.0
             _materialize_t0 = time.perf_counter() if _next_trace else 0.0
 

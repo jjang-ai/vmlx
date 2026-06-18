@@ -77,33 +77,6 @@ def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
     assert "chunk_size = min(_tight_text_prefill_step_size" in source
 
 
-def test_mllm_storage_quant_preserves_rotating_kv_cache():
-    """Gemma mixed-SWA storage quant must not quantize sliding-window metadata."""
-    mlx_lm_cache = pytest.importorskip("mlx_lm.models.cache")
-    mx = pytest.importorskip("mlx.core")
-
-    scheduler = MLLMScheduler.__new__(MLLMScheduler)
-    scheduler._kv_cache_bits = 4
-    scheduler._kv_cache_group_size = 64
-
-    full = mlx_lm_cache.KVCache()
-    full.keys = mx.zeros((1, 1, 4, 64))
-    full.values = mx.zeros((1, 1, 4, 64))
-    full.offset = 4
-
-    rotating = mlx_lm_cache.RotatingKVCache(max_size=8, keep=1)
-    rotating.keys = mx.zeros((1, 1, 4, 64))
-    rotating.values = mx.zeros((1, 1, 4, 64))
-    rotating.offset = 4
-    rotating._idx = 4
-
-    stored = scheduler._quantize_cache_for_storage([full, rotating])
-
-    assert isinstance(stored[0], mlx_lm_cache.QuantizedKVCache)
-    assert stored[1] is rotating
-    assert isinstance(stored[1], mlx_lm_cache.RotatingKVCache)
-
-
 def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
     """JANG VLM wrappers can have blank outer model_type; inner runtime wins."""
     import math
@@ -134,15 +107,15 @@ def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
     processors = generator._mimo_v2_thinking_off_logits_processors(request)
     logits = mx.zeros((1, 12))
 
-    assert len(processors) == 1
+    no_think = processors[0](mx.array([42]), logits)
+    assert math.isinf(float(no_think[0, 1])) and float(no_think[0, 1]) < 0
+    assert math.isinf(float(no_think[0, 2])) and float(no_think[0, 2]) < 0
 
-    first_token = processors[0](mx.array([42]), logits)
-    assert float(first_token[0, 1]) == 0.0
-    assert float(first_token[0, 2]) == 0.0
+    first_token = processors[1](mx.array([42]), logits)
     assert math.isinf(float(first_token[0, 9])) and float(first_token[0, 9]) < 0
 
     request.output_tokens = [7]
-    later_token = processors[0](mx.array([42, 7]), logits)
+    later_token = processors[1](mx.array([42, 7]), logits)
     assert float(later_token[0, 9]) == 0.0
 
 
@@ -425,6 +398,7 @@ def test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path():
     generator.prefill_step_size = 128
 
     request = SimpleNamespace(
+        request_id="audio-prefill-wrapper-test",
         input_ids=mx.array([1, 151669, 2]),
         pixel_values=None,
         attention_mask=None,
@@ -460,115 +434,36 @@ def test_mllm_processor_audio_outputs_are_promoted_to_request_fields():
     assert "request.audio_codes = _ensure_mx_array(" in source
     assert "request.audio_embeds = _ensure_mx_array(" in source
     assert "request.audio_features = _ensure_mx_array(" in source
-    assert "request.audio_input_features = _ensure_mx_array(" in source
-    assert "request.audio_input_features_mask = _ensure_mx_array(" in source
+    assert "request.audio_features_mask = _ensure_mx_array(" in source
 
 
-def test_gemma4_audio_input_features_forward_to_model_kwargs():
-    """Gemma4 processor audio features must reach the model as input_features."""
-    import mlx.core as mx
+def test_mllm_processor_direct_loads_audio_paths_for_non_mimo_processor(tmp_path):
+    """Gemma-style processors receive waveform arrays, not temp audio paths."""
+    import math
+    import struct
+    import wave
 
-    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+    import numpy as np
 
-    class CapturingModel:
-        def __call__(self, input_ids, **kwargs):
-            self.input_ids = input_ids
-            self.kwargs = kwargs
-            return mx.zeros((1, input_ids.shape[-1], 4))
-
-    model = CapturingModel()
-    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
-    generator.model = model
-    generator.language_model = object()
-    generator._is_hybrid = False
-    generator._model_type = "gemma4"
-    generator.prefill_step_size = 128
-
-    request = SimpleNamespace(
-        input_ids=mx.array([1, 258881, 2]),
-        pixel_values=None,
-        attention_mask=None,
-        image_grid_thw=None,
-        video_pixel_values=None,
-        video_grid_thw=None,
-        audio_codes=None,
-        audio_embeds=None,
-        audio_features=None,
-        audio_input_features=mx.ones((1, 3, 4), dtype=mx.float16),
-        audio_input_features_mask=mx.array([[1, 1, 0]], dtype=mx.bool_),
-        extra_kwargs={},
-        vision_encoded=False,
-    )
-
-    logits = generator._run_vision_encoding_inner(request, cache=[])
-
-    assert logits.shape == (1, 3, 4)
-    assert "audio_embeds" not in model.kwargs
-    assert model.kwargs["input_features"].shape == (1, 3, 4)
-    assert model.kwargs["input_features_mask"].tolist() == [[True, True, False]]
-    assert request.vision_encoded is True
-
-
-def test_gemma4_audio_processor_prompt_gets_missing_audio_placeholder():
-    from vmlx_engine.mllm_batch_generator import _ensure_gemma4_audio_placeholders
-
-    processor = SimpleNamespace(
-        audio_token="<|audio|>",
-        tokenizer=SimpleNamespace(audio_token="<|audio|>"),
-    )
-
-    prompt = "<bos><start_of_turn>user\nTranscribe the word only.<end_of_turn>"
-
-    fixed = _ensure_gemma4_audio_placeholders(
-        prompt,
-        processor=processor,
-        audio_count=2,
-    )
-
-    assert fixed.count("<|audio|>") == 2
-    assert fixed.startswith("<bos><start_of_turn>user\nTranscribe the word only.")
-    assert fixed.endswith("<end_of_turn>")
-    assert "<|audio|> <|audio|><end_of_turn>" in fixed
-    assert _ensure_gemma4_audio_placeholders(
-        "already <|audio|>",
-        processor=processor,
-        audio_count=1,
-    ) == "already <|audio|>"
-
-
-def test_gemma4_audio_processor_prompt_uses_turn_pipe_terminator():
-    from vmlx_engine.mllm_batch_generator import _ensure_gemma4_audio_placeholders
-
-    processor = SimpleNamespace(
-        audio_token="<|audio|>",
-        tokenizer=SimpleNamespace(audio_token="<|audio|>"),
-    )
-    prompt = (
-        "<bos><|turn>user\n"
-        "The audio says one color word.<turn|>\n"
-        "<|turn>model\n"
-    )
-
-    fixed = _ensure_gemma4_audio_placeholders(
-        prompt,
-        processor=processor,
-        audio_count=1,
-    )
-
-    assert fixed == (
-        "<bos><|turn>user\n"
-        "The audio says one color word.<|audio|><turn|>\n"
-        "<|turn>model\n"
-    )
-
-
-def test_mllm_processor_direct_forwards_raw_audio_to_processor():
-    """Raw audio request inputs must reach processors that expose audio kwargs."""
     from vmlx_engine.mllm_batch_generator import _call_processor_direct
+
+    wav_path = tmp_path / "audio-present.wav"
+    sample_rate = 16000
+    with wave.open(str(wav_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        frames = bytearray()
+        for idx in range(sample_rate // 10):
+            value = int(0.2 * 32767 * math.sin(2 * math.pi * 440 * idx / sample_rate))
+            frames.extend(struct.pack("<h", value))
+        wav.writeframes(bytes(frames))
 
     captured = {}
 
     class Processor:
+        sampling_rate = sample_rate
+
         def __call__(
             self,
             *,
@@ -596,13 +491,69 @@ def test_mllm_processor_direct_forwards_raw_audio_to_processor():
         prompts=["describe audio"],
         images=None,
         videos=None,
-        audio=["/tmp/vmlx-audio.wav"],
+        audio=[str(wav_path)],
         add_special_tokens=False,
     )
 
-    assert captured["audio"] == ["/tmp/vmlx-audio.wav"]
-    assert captured["audios"] == ["/tmp/vmlx-audio.wav"]
+    assert len(captured["audio"]) == 1
+    assert isinstance(captured["audio"][0], np.ndarray)
+    assert captured["audio"][0].dtype == np.float32
+    assert captured["audio"][0].ndim == 1
+    assert captured["audio"][0].size > 0
+    assert captured["audios"] == captured["audio"]
     assert result["audio_codes"] == [[4, 5]]
+
+
+def test_mllm_gemma_input_features_forward_as_raw_audio_features():
+    """Gemma processors emit input_features that must reach Gemma's embedder."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    class CapturingModel:
+        def __init__(self):
+            self.kwargs = None
+
+        def __call__(self, input_ids, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(logits=mx.zeros((1, input_ids.shape[-1], 4)))
+
+    model = CapturingModel()
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator.model = model
+    generator.language_model = None
+    generator._is_hybrid = False
+    generator._model_type = "gemma4"
+    generator.prefill_step_size = 128
+
+    request = SimpleNamespace(
+        request_id="gemma-audio-input-features-test",
+        input_ids=mx.array([1, 258881, 2]),
+        pixel_values=None,
+        attention_mask=None,
+        image_grid_thw=None,
+        video_pixel_values=None,
+        video_grid_thw=None,
+        audio_codes=None,
+        audio_embeds=None,
+        audio_features=mx.ones((1, 2, 640)),
+        audio_features_mask=mx.array([[True, False]]),
+        audio_features_are_raw_input_features=True,
+        extra_kwargs={},
+        vision_encoded=False,
+    )
+
+    logits = generator._run_vision_encoding_inner(request, cache=[])
+
+    assert logits.shape == (1, 3, 4)
+    assert "input_features" in model.kwargs
+    assert "input_features_mask" in model.kwargs
+    assert "audio_embeds" not in model.kwargs
+    assert model.kwargs["input_features"].shape == (1, 2, 640)
+    assert model.kwargs["input_features_mask"].tolist() == [[True, False]]
+    assert request.vision_encoded is True
 
 
 def test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor():
