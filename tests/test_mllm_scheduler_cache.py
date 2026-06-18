@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
 from vmlx_engine.mllm_batch_generator import (
     MLLMBatchGenerator,
+    _disk_prefix_hit_tail_and_cached_tokens as _mllm_disk_prefix_hit_tail_and_cached_tokens,
     _prefix_hit_tail_and_cached_tokens as _mllm_prefix_hit_tail_and_cached_tokens,
     _trace_mimo_v2_generated_token,
 )
@@ -736,6 +737,30 @@ def test_mllm_exact_prefix_hit_without_suffix_counts_n_minus_one_cached_tokens()
 
     assert remaining == []
     assert cached_tokens == 3
+
+
+def test_mllm_disk_prefix_hit_does_not_refeed_last_matched_token():
+    """Disk L2 payload offset equals matched length; duplicating boundary corrupts Gemma 12B."""
+
+    remaining, cached_tokens = _mllm_disk_prefix_hit_tail_and_cached_tokens(
+        token_list=[10, 11, 12, 13, 14, 15],
+        matched_tokens=[10, 11, 12, 13],
+        gen_prompt_suffix=[90, 91],
+    )
+
+    assert remaining == [14, 15, 90, 91]
+    assert cached_tokens == 4
+
+
+def test_mllm_disk_exact_hit_with_generation_suffix_uses_suffix_only():
+    remaining, cached_tokens = _mllm_disk_prefix_hit_tail_and_cached_tokens(
+        token_list=[10, 11, 12, 13],
+        matched_tokens=[10, 11, 12, 13],
+        gen_prompt_suffix=[90, 91],
+    )
+
+    assert remaining == [90, 91]
+    assert cached_tokens == 4
 
 
 # ============================================================
@@ -1716,7 +1741,7 @@ class TestCleanupFinishedCacheStore:
         scheduler._cleanup_finished({"req-memory"})
 
         scheduler.disk_cache.store.assert_called_once_with(
-            [10, 11, 12, 13, 14],
+            [10, 11, 12, 13],
             ["prompt-cache"],
         )
         scheduler.memory_aware_cache.store.assert_called_once_with(

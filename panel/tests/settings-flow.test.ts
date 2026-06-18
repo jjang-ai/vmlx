@@ -3022,6 +3022,18 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
     })
 
+    it('settings form renders effective paged capacity and ignored memory-budget state', () => {
+        const source = readFileSync(
+            resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'),
+            'utf-8',
+        )
+        expect(source).toContain('pagedCacheCapacityText')
+        expect(source).toContain('pagedCacheMemoryIgnoredText')
+        expect(source).toContain('pagedCacheControlsState')
+        expect(source).toContain('memoryBudgetControlsDisabled')
+        expect(source).toContain('cacheTtlDisabled')
+    })
+
     it('defaultTopP minimum boundary stays out of startup CLI', () => {
         const out = preview({ defaultTopP: 1 })
         expect(hasFlag(out, '--default-top-p')).toBe(false)

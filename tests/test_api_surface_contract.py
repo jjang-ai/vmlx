@@ -214,11 +214,12 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail" in required
 
     for command in gate.COMMANDS.values():
-        if command[:3] == ["npm", "--prefix", "panel"]:
+        if "pytest" in command:
+            assert "-vv" in command
+        else:
+            assert "vitest" in command
             assert "--reporter" in command
             assert "verbose" in command
-        else:
-            assert "-vv" in command
 
 
 def test_noheavy_api_cache_contract_cache_stats_telemetry_is_first_class_check(monkeypatch):
@@ -248,3 +249,28 @@ def test_noheavy_api_cache_contract_cache_stats_telemetry_is_first_class_check(m
     assert missing in artifact["missing_markers"]
     assert artifact["checks"]["cache_stats_reuse_skip_telemetry"] is False
     assert artifact["checks"]["cache_reuse_endpoints"] is False
+
+
+def test_metal_headroom_guard_contract_covers_all_public_text_surfaces():
+    source = (
+        Path("tests") / "cross_matrix" / "run_metal_headroom_guard_contract.py"
+    ).read_text(encoding="utf-8")
+
+    for surface in (
+        "chat_completions",
+        "chat_completions_stream",
+        "responses",
+        "responses_stream",
+        "anthropic_messages",
+        "anthropic_messages_stream",
+        "ollama_chat",
+        "ollama_chat_stream",
+        "ollama_generate",
+        "ollama_generate_stream",
+        "cli_server_main_explicit_max_tokens",
+        "cli_vmlx_engine_serve_explicit_max_tokens",
+    ):
+        assert surface in source
+    assert "requested=8192" in source
+    assert "safe_cap=1" in source
+    assert "projected safe Metal headroom" in source

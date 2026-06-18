@@ -825,6 +825,39 @@ class TestMixedAttentionRotatingCacheSupport:
             "mllm_scheduler.py reintroduced the mixed-attention prefix-cache bypass"
         )
 
+    def test_mllm_disk_l2_fetch_uses_longest_prefix(self):
+        """Fresh-process VLM restore must behave like a prefix cache.
+
+        Exact-only disk lookup makes restarted Gemma/MM3-style VLM sessions
+        miss whenever the current prompt extends a previously stored prompt.
+        """
+        src = self._read("vmlx_engine/mllm_batch_generator.py")
+        assert "fetch_longest_prefix" in src, (
+            "mllm_batch_generator.py must use DiskCacheManager.fetch_longest_prefix "
+            "before exact fetch so MLLM SSD L2 can restore prompt prefixes"
+        )
+        assert "disk_matched_tokens" in src and "len(disk_matched_tokens)" in src, (
+            "mllm_batch_generator.py must replay the unmatched prompt tail after "
+            "an SSD L2 longest-prefix hit"
+        )
+
+    def test_mllm_memory_aware_mixed_swa_store_uses_clean_prefill(self):
+        """Memory-aware Gemma mixed-SWA store must not truncate wrapped state.
+
+        RotatingKVCache layers are path-dependent once they wrap. The memory
+        path must mirror paged cache by re-prefilling the N-1 prompt key before
+        writing memory/L2 cache entries.
+        """
+        src = self._read("vmlx_engine/mllm_scheduler.py")
+        memory_store = src.split("# --- Cache store: memory-aware path ---", 1)[1]
+        memory_store = memory_store.split("# --- Cache store: legacy prefix cache path ---", 1)[0]
+        assert "_uses_mixed_attention_cache" in memory_store
+        assert "_prefill_for_clean_path_dependent_cache" in memory_store
+        assert "clean typed prompt " in memory_store
+        assert '"prefill unavailable (prompt_tokens=%d)"' in memory_store
+        assert "disk_stored = self.disk_cache.store(" in memory_store
+        assert "cache_key_tokens, cache_to_store" in memory_store
+
     def test_mixed_attention_helper_detects_gemma4_layer_types(self):
         """Feed the helper a mock model whose args.layer_types look like
         Gemma 4 (25 sliding + 5 full) and assert it returns True."""

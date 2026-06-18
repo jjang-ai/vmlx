@@ -2760,7 +2760,7 @@ def _candidate_logprob(case: dict[str, Any], label: str) -> float | None:
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate.get("label") == label:
             value = candidate.get("first_token_logprob")
-            return value if isinstance(value, int | float) else None
+            return value if isinstance(value, (int, float)) else None
     return None
 
 
@@ -2802,13 +2802,13 @@ def _dsv4_prompt_variant_logit_probe_detail(
     original_camera_pers = _candidate_logprob(original_camera, "whole_Pers")
     copy_camera_pers = _candidate_logprob(copy_camera, "whole_Pers")
     camera_ers_improves = (
-        isinstance(original_camera_ers, int | float)
-        and isinstance(copy_camera_ers, int | float)
+        isinstance(original_camera_ers, (int, float))
+        and isinstance(copy_camera_ers, (int, float))
         and copy_camera_ers > original_camera_ers
     )
     camera_pers_reduces = (
-        isinstance(original_camera_pers, int | float)
-        and isinstance(copy_camera_pers, int | float)
+        isinstance(original_camera_pers, (int, float))
+        and isinstance(copy_camera_pers, (int, float))
         and copy_camera_pers < original_camera_pers
     )
 
@@ -2827,8 +2827,8 @@ def _dsv4_prompt_variant_logit_probe_detail(
         "original_list_corrupt_IVE_logprob": original_list_corrupt,
         "copy_block_list_corrupt_IVE_logprob": copy_list_corrupt,
         "copy_block_reduces_list_corrupt_IVE_logprob": (
-            isinstance(original_list_corrupt, int | float)
-            and isinstance(copy_list_corrupt, int | float)
+            isinstance(original_list_corrupt, (int, float))
+            and isinstance(copy_list_corrupt, (int, float))
             and copy_list_corrupt < original_list_corrupt
         ),
         "original_camera_whole_Pers_rank": original_camera_pers_rank,

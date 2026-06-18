@@ -769,6 +769,34 @@ def _prefix_hit_tail_and_cached_tokens(
     return cache_remaining + suffix, cached_tokens
 
 
+def _disk_prefix_hit_tail_and_cached_tokens(
+    *,
+    token_list: List[int],
+    matched_tokens: List[int],
+    gen_prompt_suffix: List[int],
+) -> Tuple[List[int], int]:
+    """Return prefill tail + cached count for disk L2 prefix hits.
+
+    Disk prompt L2 stores the clean prompt-boundary cache under the same token
+    key length it reports from ``fetch_longest_prefix``. The restored cache
+    offset is therefore ``len(matched_tokens)``. Re-feeding the last matched
+    token duplicates one position and corrupts path-sensitive mixed-SWA caches
+    such as Gemma4 12B. Only replay the unmatched tail plus generation prompt.
+    """
+    fetch_tokens = list(token_list or [])
+    matched = list(matched_tokens or [])
+    suffix = list(gen_prompt_suffix or [])
+    if matched:
+        tail = list(fetch_tokens[len(matched):]) + suffix
+        if tail:
+            return tail, len(matched)
+    return _prefix_hit_tail_and_cached_tokens(
+        token_list=matched or fetch_tokens,
+        remaining=[],
+        gen_prompt_suffix=suffix,
+    )
+
+
 def _cache_offset_for_position_ids(cache: Optional[List[Any]], language_model: Any) -> int:
     """Return the first usable attention-cache offset for absolute positions."""
     if not cache:
@@ -6026,8 +6054,9 @@ class MLLMBatchGenerator:
                         logger.warning(f"Failed to fetch VLM cache for {req.request_id}: {e}")
 
             # L2: Disk cache fallback when in-memory cache missed.
-            # DiskCacheManager.fetch() returns Optional[List[Any]] (exact match only,
-            # no partial prefix), NOT a tuple like prefix_cache.fetch_cache().
+            # Prefer longest-prefix lookup so fresh-process MLLM restore has
+            # the same prefix-cache semantics as the text scheduler. Exact
+            # fetch remains the fallback for older DiskCacheManager instances.
             if (
                 self._prefix_cache_enabled
                 and req.prompt_cache is None
@@ -6046,7 +6075,14 @@ class MLLMBatchGenerator:
                         else:
                             token_list = _full_token_list
                             _gpl_suffix = []
-                        disk_result = self.disk_cache.fetch(token_list)
+                        disk_matched_tokens = list(token_list)
+                        if hasattr(self.disk_cache, "fetch_longest_prefix"):
+                            disk_result, disk_matched_tokens = (
+                                self.disk_cache.fetch_longest_prefix(token_list)
+                            )
+                            disk_matched_tokens = list(disk_matched_tokens or [])
+                        else:
+                            disk_result = self.disk_cache.fetch(token_list)
                         if disk_result is not None:
                             if not self._is_hybrid:
                                 # Check for image tokens in remaining suffix
@@ -6071,14 +6107,30 @@ class MLLMBatchGenerator:
                                         pass
                                     else:
                                         req.prompt_cache = disk_result
-                                        (
-                                            _tail,
-                                            num_cached,
-                                        ) = _prefix_hit_tail_and_cached_tokens(
-                                            token_list=token_list,
-                                            remaining=[],
-                                            gen_prompt_suffix=list(_gpl_suffix),
-                                        )
+                                        if (
+                                            disk_matched_tokens
+                                            and len(disk_matched_tokens)
+                                            < len(token_list)
+                                        ):
+                                            (
+                                                _tail,
+                                                num_cached,
+                                            ) = _disk_prefix_hit_tail_and_cached_tokens(
+                                                token_list=token_list,
+                                                matched_tokens=disk_matched_tokens,
+                                                gen_prompt_suffix=list(_gpl_suffix),
+                                            )
+                                        else:
+                                            if not disk_matched_tokens:
+                                                disk_matched_tokens = list(token_list)
+                                            (
+                                                _tail,
+                                                num_cached,
+                                            ) = _prefix_hit_tail_and_cached_tokens(
+                                                token_list=disk_matched_tokens,
+                                                remaining=[],
+                                                gen_prompt_suffix=list(_gpl_suffix),
+                                            )
                                         req._cached_tokens = num_cached
                                         # Disk cache is exact-match on the gpl-stripped
                                         # prefix. Feed gpl suffix + last stripped token

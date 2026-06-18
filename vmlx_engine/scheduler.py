@@ -3147,6 +3147,32 @@ class Scheduler:
             cached_tokens = max(len(key_tokens) - len(cache_remaining), 0)
         return cache_remaining + suffix, cached_tokens
 
+    @staticmethod
+    def _disk_prefix_hit_tail_and_cached_tokens(
+        *,
+        fetch_tokens: List[int],
+        matched_tokens: List[int],
+        gen_prompt_suffix: List[int],
+    ) -> Tuple[List[int], int]:
+        """Return prefill tail + cached count for disk L2 prefix hits.
+
+        Disk prompt L2 entries store cache state for the matched key length.
+        The restored cache offset is therefore ``len(matched_tokens)``; do not
+        re-feed the last matched token on a prefix hit.
+        """
+        key_tokens = list(fetch_tokens or [])
+        matched = list(matched_tokens or [])
+        suffix = list(gen_prompt_suffix or [])
+        if matched:
+            tail = list(key_tokens[len(matched):]) + suffix
+            if tail:
+                return tail, len(matched)
+        return Scheduler._prefix_hit_tail_and_cached_tokens(
+            fetch_tokens=matched or key_tokens,
+            remaining=[],
+            gen_prompt_suffix=suffix,
+        )
+
     def _cache_selection_hot_advantage_threshold(self) -> int:
         raw = os.environ.get("VMLINUX_CACHE_SELECTION_HOT_ADVANTAGE_TOKENS", "64")
         try:
@@ -5087,15 +5113,12 @@ class Scheduler:
                         _disk_matched_tokens
                         and len(_disk_matched_tokens) < len(_disk_fetch_tokens)
                     ):
-                        # SSD L2 prefix hit: payload is cached through
-                        # matched_len - 1, so replay the last matched token,
-                        # then the uncached stripped-prompt tail, then any
-                        # generation-prompt suffix.
-                        cached_tokens = max(len(_disk_matched_tokens) - 1, 0)
-                        remaining = (
-                            list(_disk_matched_tokens[-1:])
-                            + list(_disk_fetch_tokens[len(_disk_matched_tokens):])
-                            + list(_disk_suffix_tokens)
+                        remaining, cached_tokens = (
+                            self._disk_prefix_hit_tail_and_cached_tokens(
+                                fetch_tokens=_disk_fetch_tokens,
+                                matched_tokens=_disk_matched_tokens,
+                                gen_prompt_suffix=_disk_suffix_tokens,
+                            )
                         )
                     else:
                         if not _disk_matched_tokens:

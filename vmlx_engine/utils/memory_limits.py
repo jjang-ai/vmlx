@@ -29,6 +29,111 @@ def _parse_float_env(name: str, default: float) -> float:
         return float(default)
 
 
+def _cfg_get(config, name: str, default=None):
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+
+def _dtype_scalar_bytes(dtype) -> int:
+    raw = str(dtype or "").lower()
+    if any(marker in raw for marker in ("float32", "fp32", "f32")):
+        return 4
+    if any(marker in raw for marker in ("float64", "fp64", "f64")):
+        return 8
+    if any(marker in raw for marker in ("int8", "uint8", "fp8", "float8")):
+        return 1
+    # MLX KV cache for these local LLM paths is normally fp16/bf16.
+    return 2
+
+
+def estimate_kv_bytes_per_token_from_config(config) -> int:
+    """Estimate live KV-cache bytes added per generated token.
+
+    The estimate intentionally uses standard K+V cache geometry and leaves
+    family-specific temporary/fragmentation safety to callers via their
+    projected-budget multiplier. Dict and attr-style configs are both accepted,
+    including multimodal wrappers that store text fields under ``text_config``.
+    """
+    text_config = _cfg_get(config, "text_config")
+    candidates = [text_config, config] if text_config is not None else [config]
+    for cfg in candidates:
+        n_layers = (
+            _cfg_get(cfg, "num_hidden_layers")
+            or _cfg_get(cfg, "n_layers")
+            or _cfg_get(cfg, "num_layers")
+            or 0
+        )
+        n_heads = (
+            _cfg_get(cfg, "num_attention_heads")
+            or _cfg_get(cfg, "n_heads")
+            or _cfg_get(cfg, "attention_heads")
+            or 0
+        )
+        n_kv_heads = (
+            _cfg_get(cfg, "num_key_value_heads")
+            or _cfg_get(cfg, "n_kv_heads")
+            or _cfg_get(cfg, "num_kv_heads")
+            or n_heads
+            or 0
+        )
+        head_dim = _cfg_get(cfg, "head_dim") or 0
+        if not head_dim:
+            hidden = _cfg_get(cfg, "hidden_size") or _cfg_get(cfg, "d_model") or 0
+            head_dim = int(hidden) // int(n_heads) if hidden and n_heads else 0
+        dtype = (
+            _cfg_get(cfg, "torch_dtype")
+            or _cfg_get(cfg, "dtype")
+            or _cfg_get(cfg, "mlx_dtype")
+        )
+        try:
+            n_layers = int(n_layers)
+            n_kv_heads = int(n_kv_heads)
+            head_dim = int(head_dim)
+        except (TypeError, ValueError):
+            continue
+        if n_layers > 0 and n_kv_heads > 0 and head_dim > 0:
+            return n_layers * 2 * n_kv_heads * head_dim * _dtype_scalar_bytes(dtype)
+    return 0
+
+
+def projected_output_token_cap(
+    *,
+    active_bytes: int,
+    max_working_set_bytes: int,
+    bytes_per_token: int,
+    budget_fraction: float = 0.50,
+    transient_multiplier: float = 4.0,
+) -> int:
+    """Return safe generated-token cap from current Metal headroom.
+
+    ``budget_fraction`` reserves headroom for non-KV temporaries. The
+    ``transient_multiplier`` accounts for attention workspaces, allocator
+    fragmentation, paged/native cache metadata, and media tensors that are not
+    represented by the steady-state KV bytes/token estimate.
+    """
+    try:
+        active = int(active_bytes)
+        max_ws = int(max_working_set_bytes)
+        bpt = int(bytes_per_token)
+        fraction = float(budget_fraction)
+        multiplier = float(transient_multiplier)
+    except (TypeError, ValueError):
+        return 0
+    if active < 0 or max_ws <= 0 or bpt <= 0:
+        return 0
+    if fraction <= 0 or fraction > 1:
+        fraction = 0.50
+    if multiplier < 1:
+        multiplier = 1.0
+    headroom = max(0, max_ws - active)
+    effective_budget = int(headroom * fraction)
+    effective_bpt = max(1, int(bpt * multiplier))
+    return max(0, effective_budget // effective_bpt)
+
+
 def _parse_working_set_bytes(raw: str) -> Optional[int]:
     raw = (raw or "").strip().replace(",", "")
     if not raw:

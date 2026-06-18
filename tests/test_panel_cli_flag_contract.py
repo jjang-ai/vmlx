@@ -287,3 +287,40 @@ def test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags() -> Non
     ):
         assert expression in runtime_body
         assert expression in preview_body
+
+
+def test_paged_cache_capacity_is_visible_and_not_memory_mb_driven() -> None:
+    """Paged cache UI/CLI must surface the real token capacity knob."""
+
+    panel = (ROOT / "panel" / "src" / "main" / "sessions.ts").read_text(encoding="utf-8")
+    cli = (ROOT / "vmlx_engine" / "cli.py").read_text(encoding="utf-8")
+
+    assert "pagedCacheCapacityLogLine" in panel
+    assert "tokens/block x" in panel
+    assert "--cache-memory-mb/--cache-memory-percent are ignored while paged cache is active" in panel
+    assert "Max Cache Blocks" in panel
+    assert "capacity={capacity} tokens" in cli
+    assert "--cache-memory-mb ignored for paged cache" in cli
+
+
+def test_live_metal_headroom_ui_proof_checks_paged_capacity_log() -> None:
+    source = (ROOT / "panel" / "scripts" / "live-metal-headroom-ui-proof.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Paged cache capacity: 64 tokens/block x 64 blocks = 4096 tokens." in source
+    assert "--cache-memory-mb/--cache-memory-percent are ignored while paged cache is active" in source
+    assert "window.api.sessions.create" in source
+    assert "window.api.sessions.getLogs" in source
+
+
+def test_live_metal_headroom_chat_ui_proof_checks_visible_safety_block() -> None:
+    source = (
+        ROOT / "panel" / "scripts" / "live-metal-headroom-chat-ui-proof.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "Requested max output tokens exceed projected safe Metal headroom" in source
+    assert "Generation blocked" in source
+    assert "window.api.sessions.createRemote" in source
+    assert "window.api.chat.sendMessage" in source
+    assert "window.api.chat.isStreaming" in source

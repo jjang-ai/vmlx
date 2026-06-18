@@ -619,6 +619,21 @@ function applyMissingCacheStackStartupDefaults(config: Partial<ServerConfig>, mo
   return changed
 }
 
+function numericArgValue(args: string[], flag: string): number | null {
+  const idx = args.indexOf(flag)
+  if (idx < 0 || idx + 1 >= args.length) return null
+  const n = Number(args[idx + 1])
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
+}
+
+function pagedCacheCapacityLogLine(args: string[]): string | null {
+  if (!args.includes('--use-paged-cache')) return null
+  const blockSize = numericArgValue(args, '--paged-cache-block-size') ?? 64
+  const maxBlocks = numericArgValue(args, '--max-cache-blocks') ?? 1000
+  const capacity = blockSize * maxBlocks
+  return `Paged cache capacity: ${blockSize} tokens/block x ${maxBlocks} blocks = ${capacity} tokens. --cache-memory-mb/--cache-memory-percent are ignored while paged cache is active; use Max Cache Blocks for the in-RAM paged capacity.\n`
+}
+
 function isZayaCacheStackMigrationTarget(modelPath?: string): boolean {
   const lower = String(modelPath || '').toLowerCase()
   return lower.includes('zaya1') || lower.includes('zaya')
@@ -1545,6 +1560,10 @@ export class SessionManager extends EventEmitter {
     this.emit('session:starting', { sessionId, modelPath: session.modelPath })
 
     const args = this.buildArgs(config)
+    const pagedCapacityLine = pagedCacheCapacityLogLine(args)
+    if (pagedCapacityLine) {
+      this.pushLog(sessionId, pagedCapacityLine)
+    }
 
     // Ensure PATH includes pyenv/homebrew so the engine finds its Python
     const extraPath = [

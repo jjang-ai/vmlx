@@ -2802,11 +2802,15 @@ class MLLMScheduler:
             if trace_enabled:
                 logger.info(
                     "VMLINUX_MLLM_CLEANUP_STATE request_id=%s request_present=%s "
-                    "block_cache=%s skip_store=%s extracted_cache=%s "
+                    "block_cache=%s memory_cache=%s prefix_cache=%s disk_cache=%s "
+                    "skip_store=%s extracted_cache=%s "
                     "extracted_tokens=%d prompt_tokens=%d completion_tokens=%d",
                     request_id,
                     request is not None,
-                    self.block_aware_cache is not None,
+                    getattr(self, "block_aware_cache", None) is not None,
+                    getattr(self, "memory_aware_cache", None) is not None,
+                    getattr(self, "prefix_cache", None) is not None,
+                    getattr(self, "disk_cache", None) is not None,
                     _skip_cache_store,
                     bool(
                         request is not None
@@ -3159,23 +3163,104 @@ class MLLMScheduler:
                         raw_cache = request._extracted_cache
                         if callable(raw_cache):
                             raw_cache = raw_cache()
+                        if not raw_cache:
+                            logger.info(
+                                "Skipping VLM memory-aware cache store for %s: "
+                                "extracted prompt cache resolved empty "
+                                "(raw_type=%s, prompt_tokens=%d)",
+                                request_id,
+                                type(raw_cache).__name__,
+                                prompt_len,
+                            )
                         if raw_cache:
-                            cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
+                            cache_key_tokens = (
+                                prompt_tokens[:prompt_len - 1]
+                                if prompt_len > 1
+                                else list(prompt_tokens)
+                            )
+                            _uses_zaya_cache = bool(
+                                getattr(self, "_uses_zaya_cache", False)
+                            )
+                            _uses_mixed_attention_cache = bool(
+                                getattr(self, "_mixed_attention_cache_model", False)
+                            )
+                            if (
+                                not _uses_mixed_attention_cache
+                                and isinstance(raw_cache, list)
+                                and any(
+                                    type(layer).__name__ == "RotatingKVCache"
+                                    for layer in raw_cache
+                                )
+                            ):
+                                _uses_mixed_attention_cache = True
+                                logger.info(
+                                    "Detected mixed-SWA VLM memory-aware cache "
+                                    "layout for %s from extracted RotatingKVCache "
+                                    "layers; using clean prompt-boundary store",
+                                    request_id,
+                                )
+                            if _uses_zaya_cache or _uses_mixed_attention_cache:
+                                # ZAYA CCA and Gemma-style mixed-SWA caches are
+                                # path-dependent. A post-generation
+                                # RotatingKVCache has already advanced beyond
+                                # the prompt boundary and may be circularly
+                                # wrapped, so generic truncation either returns
+                                # None or corrupts temporal order. Re-prefill
+                                # exactly the N-1 cache key and store that
+                                # typed state, matching the paged-cache path.
+                                cache_to_store = None
+                                prefill_fn = getattr(
+                                    self.batch_generator,
+                                    "_prefill_for_clean_path_dependent_cache",
+                                    None,
+                                )
+                                if not callable(prefill_fn):
+                                    prefill_fn = getattr(
+                                        self.batch_generator,
+                                        "_prefill_for_clean_ssm",
+                                        None,
+                                    )
+                                if cache_key_tokens and callable(prefill_fn):
+                                    cache_to_store = prefill_fn(cache_key_tokens)
+                                if cache_to_store is None:
+                                    logger.info(
+                                        "Skipping %s VLM memory-aware cache "
+                                        "store for %s: clean typed prompt "
+                                        "prefill unavailable (prompt_tokens=%d)",
+                                        "ZAYA" if _uses_zaya_cache else "mixed-SWA",
+                                        request_id,
+                                        prompt_len,
+                                    )
+                            else:
+                                cache_to_store = self._truncate_hybrid_cache(
+                                    raw_cache, prompt_len
+                                )
                             if cache_to_store is not None and self._validate_cache(
                                 cache_to_store,
                                 source=f"mllm-memory-store:{request_id}",
                             ):
-                                cache_key_tokens = (
-                                    prompt_tokens[:prompt_len - 1]
-                                    if prompt_len > 1
-                                    else list(prompt_tokens)
-                                )
                                 # L2: persist to disk (skip hybrid — SSM can't be reconstructed on fetch)
                                 if self.disk_cache is not None and not self._is_hybrid:
                                     try:
-                                        self.disk_cache.store(prompt_tokens, cache_to_store)
+                                        disk_stored = self.disk_cache.store(
+                                            cache_key_tokens, cache_to_store
+                                        )
+                                        logger.info(
+                                            "VLM memory-aware disk cache store "
+                                            "%s for %s (%d cache-key tokens from "
+                                            "%d prompt tokens, %d layers)",
+                                            "queued" if disk_stored else "rejected",
+                                            request_id,
+                                            len(cache_key_tokens),
+                                            len(prompt_tokens),
+                                            len(cache_to_store)
+                                            if isinstance(cache_to_store, list)
+                                            else -1,
+                                        )
                                     except Exception as de:
-                                        logger.debug(f"VLM disk store failed for {request_id}: {de}")
+                                        logger.warning(
+                                            f"VLM disk store failed for {request_id}: {de}"
+                                        )
                                 if getattr(self, '_kv_cache_bits', 0):
                                     cache_to_store = self._quantize_cache_for_storage(cache_to_store)
                                     if not self._validate_cache(
@@ -3194,6 +3279,16 @@ class MLLMScheduler:
                                             f"VLM stored memory-aware cache for {request_id} "
                                             f"({len(cache_key_tokens)} cache-key tokens from "
                                             f"{prompt_len} prompt tokens)"
+                                        )
+                                    else:
+                                        logger.info(
+                                            "VLM memory-aware cache store rejected "
+                                            "for %s (%d cache-key tokens, %d layers)",
+                                            request_id,
+                                            len(cache_key_tokens),
+                                            len(cache_to_store)
+                                            if isinstance(cache_to_store, list)
+                                            else -1,
                                         )
                     except Exception as e:
                         logger.warning(f"VLM memory-aware cache store failed for {request_id}: {e}")
