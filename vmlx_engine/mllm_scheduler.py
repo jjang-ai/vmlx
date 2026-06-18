@@ -226,7 +226,11 @@ class MLLMSchedulerConfig:
 
     # Prefix/Paged cache settings
     enable_prefix_cache: bool = True
-    use_paged_cache: bool = True
+    # Eric mandatory cache policy: default paged cache OFF for all families.
+    # Typed cache families opt into paged only when their native cache requires
+    # it (e.g. ZAYA/CCA or hybrid Mamba). MM3 and Gemma mixed-SWA stay paged-off
+    # on the current native memory-aware/prompt-L2 path.
+    use_paged_cache: bool = False
     paged_cache_block_size: int = 64
     max_cache_blocks: int = 1000
 
