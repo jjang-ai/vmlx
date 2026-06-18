@@ -807,7 +807,7 @@ class TestMLLMSchedulerConfigParity:
         assert hasattr(config, "paged_cache_block_size")
         assert hasattr(config, "max_cache_blocks")
         assert config.enable_prefix_cache is True
-        assert config.use_paged_cache is True
+        assert config.use_paged_cache is False
         assert config.paged_cache_block_size == 64
         assert config.max_cache_blocks == 1000
 
@@ -1059,6 +1059,7 @@ class TestHybridSSMStateCache:
             "matched": True,
             "checkpoint_tokens": 4,
             "is_complete": True,
+            "source": "l1_or_l2",
         }
 
         miss = cache.fetch_longest_prefix([9, 2, 3, 4], 4)

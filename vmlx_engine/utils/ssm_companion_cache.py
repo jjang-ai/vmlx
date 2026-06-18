@@ -565,6 +565,7 @@ class SSMCompanionCache:
                 "matched": True,
                 "checkpoint_tokens": int(n),
                 "is_complete": bool(is_complete),
+                "source": "l1_or_l2",
             }
             return (n, states, is_complete)
         self.last_prefix_lookup = {
