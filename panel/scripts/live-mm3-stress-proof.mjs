@@ -93,6 +93,32 @@ function scoreText(text) {
   }
 }
 
+function labelText(text) {
+  return String(text || '')
+    .replace(/\\_/g, '_')
+    .replace(/&lowbar;/gi, '_')
+}
+
+function hasExactMarker(text, expected) {
+  return labelText(text).includes(expected)
+}
+
+function equalsText(text, expected) {
+  return labelText(text).trim().toLowerCase() === String(expected).toLowerCase()
+}
+
+function toolCallingCount(row, toolName = '') {
+  try {
+    const events = JSON.parse(row?.toolCallsJson || '[]')
+    return events.filter((event) => (
+      event?.phase === 'calling'
+      && (!toolName || event?.toolName === toolName)
+    )).length
+  } catch {
+    return 0
+  }
+}
+
 function parseMetrics(message) {
   try {
     return message?.metricsJson ? JSON.parse(message.metricsJson) : {}
@@ -393,7 +419,9 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
   let content = ''
   let reasoning = ''
   let toolArgs = ''
+  let responseToolDeltaArgs = ''
   let toolCallSignals = 0
+  const completedToolCalls = []
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -427,11 +455,22 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
           if (obj?.type === 'response.output_text.delta') content += obj.delta || ''
           if (obj?.type === 'response.reasoning.delta') reasoning += obj.delta || ''
           if (String(obj?.type || '').includes('function_call')) toolCallSignals += 1
-          if (obj?.type === 'response.function_call_arguments.delta') toolArgs += obj.delta || ''
+          if (obj?.type === 'response.function_call_arguments.delta') {
+            responseToolDeltaArgs += obj.delta || ''
+            toolArgs += obj.delta || ''
+          }
           const item = obj?.item || obj?.output_item || obj?.response?.output?.[0]
           if (item?.type === 'function_call') {
             toolCallSignals += 1
-            toolArgs += item.arguments || ''
+            completedToolCalls.push({
+              name: item.name || '',
+              arguments: item.arguments || '',
+              call_id: item.call_id || '',
+              status: item.status || '',
+            })
+            if (!responseToolDeltaArgs || !responseToolDeltaArgs.includes(item.arguments || '')) {
+              toolArgs += item.arguments || ''
+            }
           }
         }
       }
@@ -442,6 +481,7 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
       content,
       reasoning,
       toolArgs,
+      completedToolCalls,
       hasToolCallSignal: toolCallSignals > 0,
       eventTypes: [...new Set(events.map((e) => e.event || e.obj?.type).filter(Boolean))],
       eventsTail: events.slice(-24),
@@ -628,9 +668,9 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir) {
     gitEnabled: false,
     utilityToolsEnabled: true,
     workingDirectory: toolDir,
-    maxToolIterations: 4,
+    maxToolIterations: 1,
     toolResultMaxChars: 8000,
-  }, 'Mixed turn 4. Reasoning ON and tool required. Use run_command exactly once to create m3_mixed_tool_on.txt containing exactly M3_MIX_TOOL_ON. After the tool result, reply with M3_MIX_TOOL_ON_DONE.')
+  }, 'Mixed turn 4. Reasoning ON and tool required. Use run_command exactly once to create m3_mixed_tool_on.txt containing exactly M3_MIX_TOOL_ON. Do not read, cat, verify, or call any second tool. After the tool result, reply with M3_MIX_TOOL_ON_DONE.')
 
   await step('tool_reasoning_auto', {
     wireApi: 'responses',
@@ -648,9 +688,9 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir) {
     gitEnabled: false,
     utilityToolsEnabled: true,
     workingDirectory: toolDir,
-    maxToolIterations: 4,
+    maxToolIterations: 1,
     toolResultMaxChars: 8000,
-  }, 'Mixed turn 5. Reasoning AUTO and tool required. Use run_command exactly once to create m3_mixed_tool_auto.txt containing exactly M3_MIX_TOOL_AUTO. After the tool result, reply with M3_MIX_TOOL_AUTO_DONE.')
+  }, 'Mixed turn 5. Reasoning AUTO and tool required. Use run_command exactly once to create m3_mixed_tool_auto.txt containing exactly M3_MIX_TOOL_AUTO. Do not read, cat, verify, or call any second tool. After the tool result, reply with M3_MIX_TOOL_AUTO_DONE.')
 
   await step('final_recall_cache', {
     wireApi: 'responses',
@@ -726,6 +766,7 @@ function deriveVerdict(result) {
   const tool = result.ui?.toolUse
   if (!tool || tool.fileContent !== 'M3_TOOL_OK') failures.push('UI tool execution file proof missing')
   if (tool?.score?.empty || tool?.hiddenOnly) failures.push('UI tool final answer empty or hidden-only')
+  if (tool && !hasExactMarker(tool.content || '', 'M3_TOOL_OK_DONE')) failures.push('UI tool final marker missing M3_TOOL_OK_DONE')
   const long = result.ui?.longContextPrefix
   if (!/PROFILE_OPTION_SENTINEL_ZETA_173/i.test(long?.turn2?.content || '')) failures.push('long-context sentinel recall failed')
   if (Number(long?.turn2?.metrics?.cachedTokens || 0) <= 0) failures.push('long-context turn2 cachedTokens=0')
@@ -762,6 +803,12 @@ function deriveVerdict(result) {
     if ((byLabel.text_reasoning_off?.reasoningChars || 0) > 0) failures.push('mixed reasoning-off turn emitted reasoning')
     if ((byLabel.image_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on image turn emitted no reasoning')
     if ((byLabel.tool_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on tool turn emitted no reasoning')
+    if (!hasExactMarker(byLabel.tool_reasoning_on?.content || '', 'M3_MIX_TOOL_ON_DONE')) failures.push('mixed reasoning-on tool final marker missing M3_MIX_TOOL_ON_DONE')
+    if (!hasExactMarker(byLabel.tool_reasoning_auto?.content || '', 'M3_MIX_TOOL_AUTO_DONE')) failures.push('mixed reasoning-auto tool final marker missing M3_MIX_TOOL_AUTO_DONE')
+    const onToolCalls = toolCallingCount(byLabel.tool_reasoning_on, 'run_command')
+    const autoToolCalls = toolCallingCount(byLabel.tool_reasoning_auto, 'run_command')
+    if (onToolCalls !== 1) failures.push(`mixed reasoning-on expected exactly 1 run_command call, saw ${onToolCalls}`)
+    if (autoToolCalls !== 1) failures.push(`mixed reasoning-auto expected exactly 1 run_command call, saw ${autoToolCalls}`)
     const mixedImageContent = byLabel.image_reasoning_on?.content || ''
     if (
       !/MM3_MIX_IMAGE_RED/i.test(mixedImageContent)
@@ -783,6 +830,14 @@ function deriveVerdict(result) {
     if (row?.textScore?.leakedThinkTags) failures.push(`API ${name} raw think tag leak`)
   }
   if (!result.api?.chatTool?.hasToolCalls) failures.push('API Chat required tool did not return tool_calls')
+  if (result.api?.chat?.ok && !hasExactMarker(result.api.chat.text || '', 'API_CHAT_OK')) failures.push('API Chat missing exact marker API_CHAT_OK')
+  if (result.api?.responses1?.ok && !hasExactMarker(result.api.responses1.text || '', 'API_RESP_OK')) failures.push('API Responses turn1 missing exact marker API_RESP_OK')
+  if (result.api?.responses2?.ok && !equalsText(result.api.responses2.text || '', 'violet')) failures.push(`API Responses previous_response_id recall mismatch: ${result.api.responses2.text || ''}`)
+  if (result.api?.anthropicMessages?.ok && !/route ok/i.test(result.api.anthropicMessages.text || '')) failures.push('Anthropic route missing exact phrase route ok')
+  if (result.api?.ollamaChat?.ok && !hasExactMarker(result.api.ollamaChat.text || '', 'OLLAMA_CHAT_OK')) failures.push('Ollama chat missing exact marker OLLAMA_CHAT_OK')
+  if (result.api?.ollamaGenerate?.ok && !hasExactMarker(result.api.ollamaGenerate.text || '', 'OLLAMA_GENERATE_OK')) failures.push('Ollama generate missing exact marker OLLAMA_GENERATE_OK')
+  const apiToolArgs = JSON.stringify(result.api?.chatTool?.message?.tool_calls || [])
+  if (result.api?.chatTool?.hasToolCalls && !hasExactMarker(apiToolArgs, 'API_TOOL_OK')) failures.push('API Chat tool arguments missing API_TOOL_OK')
   for (const [name, row] of Object.entries(result.streaming || {})) {
     if (!row?.ok) failures.push(`stream ${name} HTTP failed`)
     if (row?.textScore?.empty && !row?.hasToolCallSignal) failures.push(`stream ${name} reconstructed empty content/tool signal`)
@@ -790,6 +845,18 @@ function deriveVerdict(result) {
   }
   if (!result.streaming?.chatTool?.hasToolCallSignal) failures.push('streaming Chat tool call signal missing')
   if (!result.streaming?.responsesTool?.hasToolCallSignal) failures.push('streaming Responses tool call signal missing')
+  if (result.streaming?.chatText?.ok && !hasExactMarker(result.streaming.chatText.content || '', 'MM3_STREAM_CHAT_OK')) failures.push('streaming Chat missing exact marker MM3_STREAM_CHAT_OK')
+  if (result.streaming?.responsesImage?.ok && (!hasExactMarker(result.streaming.responsesImage.content || '', 'MM3_STREAM_IMAGE_RED') || rejectsRedImageLabel(result.streaming.responsesImage.content || ''))) failures.push('streaming Responses image missing exact MM3_STREAM_IMAGE_RED')
+  if (result.streaming?.chatTool?.hasToolCallSignal && !hasExactMarker(result.streaming.chatTool.toolArgs || '', 'MM3_STREAM_CHAT_TOOL')) failures.push('streaming Chat tool arguments missing MM3_STREAM_CHAT_TOOL')
+  if (result.streaming?.responsesTool?.hasToolCallSignal && !hasExactMarker(result.streaming.responsesTool.toolArgs || '', 'MM3_STREAM_RESP_TOOL')) failures.push('streaming Responses tool arguments missing MM3_STREAM_RESP_TOOL')
+  const responseStreamToolCalls = result.streaming?.responsesTool?.completedToolCalls || []
+  const exactResponseStreamToolCalls = responseStreamToolCalls.filter((call) => (
+    call?.name === 'record_mm3_stream_response_label'
+    && hasExactMarker(call?.arguments || '', 'MM3_STREAM_RESP_TOOL')
+  ))
+  if (result.streaming?.responsesTool?.hasToolCallSignal && exactResponseStreamToolCalls.length !== 1) {
+    failures.push(`streaming Responses expected exactly 1 completed record_mm3_stream_response_label call with MM3_STREAM_RESP_TOOL, saw ${exactResponseStreamToolCalls.length}`)
+  }
   return { status: failures.length ? 'fail' : 'pass', failures }
 }
 
@@ -890,7 +957,7 @@ async function main() {
     writeResult(result)
 
     const chat = await page.evaluate(async ({ modelPath }) => {
-      return window.api.chat.create('MM3 1.5.63 10-turn stress', modelPath.split('/').pop(), undefined, modelPath)
+      return window.api.chat.create('MM3 1.5.64 10-turn stress', modelPath.split('/').pop(), undefined, modelPath)
     }, { modelPath })
     await page.evaluate(async ({ chatId }) => {
       await window.api.chat.setOverrides(chatId, {
