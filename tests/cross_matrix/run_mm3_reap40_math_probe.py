@@ -206,18 +206,51 @@ def _chat_prompt_ids(tokenizer: Any, task: MathTask, *, thinking_mode: str) -> t
     return rendered, tokenizer.encode(rendered)
 
 
+def _seq_len(value: Any) -> int | None:
+    shape = getattr(value, "shape", None)
+    if shape is None or len(shape) < 3:
+        return None
+    return int(shape[2])
+
+
+def _logical_cache_tensors(layer: Any) -> tuple[Any, Any, Any]:
+    """Return logical K/V/idx tensors, preferring sliced ``state``.
+
+    MLX ``KVCache`` may over-allocate backing buffers, so raw ``keys.shape[2]``
+    can be larger than the valid logical cache length. MiniMax-M3 invariants
+    must be checked against the serialized/logical state that prefix/SSD cache
+    tiers use, not against spare buffer capacity.
+    """
+    state = None
+    try:
+        state = getattr(layer, "state", None)
+    except Exception:
+        state = None
+    if isinstance(state, tuple):
+        if len(state) >= 3:
+            return state[0], state[1], state[2]
+        if len(state) == 2:
+            return state[0], state[1], getattr(layer, "idx_keys", None)
+    return (
+        getattr(layer, "keys", None),
+        getattr(layer, "values", None),
+        getattr(layer, "idx_keys", None),
+    )
+
+
 def _cache_snapshot(cache: Any) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     mismatches: list[int] = []
     for i, layer in enumerate(cache or []):
         class_name = type(layer).__name__
         offset = getattr(layer, "offset", None)
-        keys = getattr(layer, "keys", None)
-        values = getattr(layer, "values", None)
-        idx_keys = getattr(layer, "idx_keys", None)
-        key_len = getattr(keys, "shape", [None, None, None])[2] if keys is not None else None
-        value_len = getattr(values, "shape", [None, None, None])[2] if values is not None else None
-        idx_len = getattr(idx_keys, "shape", [None, None, None])[2] if idx_keys is not None else None
+        keys, values, idx_keys = _logical_cache_tensors(layer)
+        key_len = _seq_len(keys)
+        value_len = _seq_len(values)
+        idx_len = _seq_len(idx_keys)
+        buffer_key_len = _seq_len(getattr(layer, "keys", None))
+        buffer_value_len = _seq_len(getattr(layer, "values", None))
+        buffer_idx_len = _seq_len(getattr(layer, "idx_keys", None))
         if class_name == "MiniMaxM3SparseCache":
             if not (offset == key_len == value_len == idx_len):
                 mismatches.append(i)
@@ -229,6 +262,9 @@ def _cache_snapshot(cache: Any) -> dict[str, Any]:
                 "keys_len": key_len,
                 "values_len": value_len,
                 "idx_keys_len": idx_len,
+                "buffer_keys_len": buffer_key_len,
+                "buffer_values_len": buffer_value_len,
+                "buffer_idx_keys_len": buffer_idx_len,
             }
         )
     return {

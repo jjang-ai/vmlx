@@ -61,7 +61,35 @@ def test_mm3_reap40_probe_records_msa_cache_invariant_mismatch():
         "keys_len": 3,
         "values_len": 3,
         "idx_keys_len": 2,
+        "buffer_keys_len": 3,
+        "buffer_values_len": 3,
+        "buffer_idx_keys_len": 2,
     }
+
+
+def test_mm3_reap40_probe_uses_logical_state_not_overallocated_buffers():
+    class MiniMaxM3SparseCache:
+        offset = 2
+        keys = mx.zeros((1, 4, 8, 8))
+        values = mx.zeros((1, 4, 8, 8))
+        idx_keys = mx.zeros((1, 1, 8, 8))
+
+        @property
+        def state(self):
+            return (
+                self.keys[..., : self.offset, :],
+                self.values[..., : self.offset, :],
+                self.idx_keys[..., : self.offset, :],
+            )
+
+    snapshot = probe._cache_snapshot([MiniMaxM3SparseCache()])
+
+    assert snapshot["m3_sparse_invariants_ok"] is True
+    assert snapshot["mismatch_layers"] == []
+    assert snapshot["layers"][0]["keys_len"] == 2
+    assert snapshot["layers"][0]["idx_keys_len"] == 2
+    assert snapshot["layers"][0]["buffer_keys_len"] == 8
+    assert snapshot["layers"][0]["buffer_idx_keys_len"] == 8
 
 
 def test_mm3_reap40_probe_runtime_template_uses_m3_thinking_vocab():
