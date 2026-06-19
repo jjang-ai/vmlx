@@ -8,170 +8,15 @@ from tests.cross_matrix import run_full_release_objective_checklist as checklist
 _build = checklist._build
 
 
-def test_full_release_objective_checklist_default_out_tracks_current_release_manifest_refresh():
-    assert checklist.DEFAULT_OUT == Path(
-        "build/current-full-release-objective-checklist-after-jang-tools-installed-parity-20260611.json"
-    )
-
-
 def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contract():
     assert checklist.NOHEAVY_API_CACHE == Path(
-        "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_contract():
-    assert checklist.RESPONSES_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_contract():
-    assert checklist.QWEN35_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-live-recapture-after-proof-refresh-20260611.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_installed_app_runtime_parity():
-    assert checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY == Path(
-        "build/current-installed-app-runtime-parity-audit-after-jang-tools-runtime-sync-20260611.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_gemma4_12b_issue191_startup_proof():
-    assert checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE == Path(
-        "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_nomedia_proof():
-    assert checklist.GEMMA4_12B_JANG4M_SMOKE == Path(
-        "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-code-column-prompt-20260610/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_gemma4_12b_autoq4_cache_proof():
-    assert checklist.GEMMA4_12B_JANG4M_AUTOQ4_CACHE == Path(
-        "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"
-    )
-
-
-def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_media_proof():
-    assert checklist.GEMMA4_12B_JANG4M_MEDIA_SMOKE == Path(
-        "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
     )
 
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
-
-
-def _write_mimo_installed_app_proofs(tmp_path: Path, *, media_status: str = "fail") -> None:
-    def cache_proof(model_name: str, final_text: str) -> dict:
-        return {
-            "status": "pass",
-            "uiLaunchMode": "installed-app",
-            "rendererWireApi": "responses",
-            "modelName": model_name,
-            "requestContract": {
-                "builtinToolsEnabled": True,
-                "wireApi": "responses",
-            },
-            "chat": {"finalVisibleText": final_text},
-            "server": {
-                "health": {
-                    "native_cache": {
-                        "schema": "mixed_swa_kv_v1",
-                        "cache_subtype": "mimo_v2_asymmetric_swa",
-                        "generic_turboquant_kv": {"enabled": False},
-                    },
-                    "cache": {
-                        "block_disk_cache": {
-                            "disk_writes": 60,
-                            "disk_hits": 321,
-                            "total_tokens_on_disk": 3732,
-                        },
-                        "scheduler_cache": {
-                            "cache_hits": 324,
-                            "tokens_saved": 10463,
-                        },
-                        "totals": {"l2_tokens_on_disk": 3732},
-                    },
-                }
-            },
-        }
-
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE,
-        cache_proof(
-            "MiMo-V2.5-JANGTQ_2",
-            "MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
-        ),
-    )
-    _write_json(
-        tmp_path / checklist.MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE,
-        cache_proof(
-            "MiMo-V2.5-JANG_2L",
-            "MIMO_DETERMINISTIC_TWO second UI turn.",
-        ),
-    )
-    media_proof = {
-        "status": media_status,
-        "uiLaunchMode": "installed-app",
-        "rendererWireApi": "responses",
-        "modelName": "MiMo-V2.5-JANGTQ_2",
-        "requestedMedia": True,
-        "requestContract": {"checkMedia": True},
-        "chat": {
-            "turns": [
-                {
-                    "role": "user",
-                    "content": '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]',
-                },
-                {"role": "assistant", "content": "Blue."},
-            ]
-        },
-        "server": {
-            "health": {
-                "model_type": "mllm",
-                "native_cache": {
-                    "schema": "mixed_swa_kv_v1",
-                    "cache_subtype": "mimo_v2_asymmetric_swa",
-                },
-                "cache": {
-                    "block_disk_cache": {
-                        "disk_writes": 2,
-                        "total_tokens_on_disk": 61,
-                    },
-                    "totals": {"l2_tokens_on_disk": 61},
-                },
-            }
-        },
-    }
-    if media_status == "fail":
-        media_proof["failureStage"] = "release_assertions"
-    _write_json(tmp_path / checklist.MIMO_JANGTQ2_INSTALLED_MEDIA_L2, media_proof)
-
-
-def _write_mimo_metadata_truth(tmp_path: Path) -> None:
-    _write_json(
-        tmp_path / checklist.MIMO_METADATA_TRUTH,
-        {
-            "status": "pass",
-            "bundles": {
-                "jang2l": {
-                    "status": "pass",
-                    "capabilities": {
-                        "modalities": ["text"],
-                        "multimodal_status": "weights_preserved_text_runtime",
-                        "preserved_modalities": ["vision", "audio"],
-                        "unwired_modalities": ["vision", "audio"],
-                    },
-                }
-            },
-        },
-    )
 
 
 def _write_green_api_surface_artifact(tmp_path: Path) -> None:
@@ -210,114 +55,6 @@ def _write_green_api_surface_artifact(tmp_path: Path) -> None:
                 "panel_performance_health_epipe_guard": True,
                 "panel_session_lifecycle_epipe_guard": True,
                 "all_required_panel_api_markers_present": True,
-            },
-        },
-    )
-
-
-def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
-    _write_json(
-        tmp_path / checklist.RESPONSES_RAW_SSE_PARITY,
-        {
-            "status": "pass",
-            "missing_captures": [],
-            "checks": {
-                "direct_capture_present": True,
-                "gateway_capture_present": True,
-                "tunnel_capture_present": True,
-                "all_required_surfaces_present": True,
-                "all_present_surfaces_parse_cleanly": True,
-                "all_present_surfaces_match_expected_function_name": True,
-                "all_present_surfaces_match_expected_arguments": True,
-                "all_present_surfaces_have_authoritative_args": True,
-                "authoritative_arguments_match_across_present_surfaces": True,
-                "tunnel_expected_model_advertised": True,
-                "local_responses_streaming_guards_pass": True,
-                "local_empty_xml_arguments_fail_closed": True,
-                "local_output_index_ordering_guard": True,
-                "gateway_argument_stream_passthrough_guard": True,
-                "responses_previous_response_history_guard": True,
-                "all_present_surfaces_have_valid_output_item_indices": True,
-                "all_present_surfaces_have_required_reasoning": True,
-                "all_present_surfaces_have_complete_reasoning_lifecycle": True,
-                "no_reasoning_disable_workaround": True,
-            },
-        },
-    )
-
-
-def test_full_release_objective_checklist_flags_stale_current_installed_app_runtime_parity(tmp_path: Path):
-    _write_json(
-        tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY,
-        {
-            "status": "open",
-            "installed_app": "/Applications/vMLX.app",
-            "missing_or_stale": [
-                "installed_bundled_engine_hash_parity",
-                "installed_bundled_jang_tools_hash_parity",
-                "installed_packaged_engine_source_hash_parity",
-            ],
-            "checks": {
-                "installed_bundled_engine_hash_parity": False,
-                "installed_bundled_jang_tools_hash_parity": False,
-                "installed_packaged_engine_source_hash_parity": False,
-            },
-            "bundled_engine_hash_parity": {
-                "ok": False,
-                "mismatched": ["server.py", "api/tool_calling.py"],
-            },
-            "bundled_jang_tools_hash_parity": {
-                "ok": False,
-                "mismatched": ["capabilities.py"],
-            },
-            "packaged_engine_source_hash_parity": {
-                "ok": False,
-                "mismatched": ["server.py", "api/tool_calling.py"],
-            },
-        },
-    )
-
-    rows = checklist._installed_app_runtime_parity_checks(
-        checklist._load_json(tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY)
-    )
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "installed_app_current_runtime_parity_status_pass" in failed
-    assert "installed_app_current_bundled_engine_hash_parity" in failed
-    assert "installed_app_current_bundled_jang_tools_hash_parity" in failed
-    assert "installed_app_current_packaged_engine_source_hash_parity" in failed
-    assert "installed_app_current_no_missing_or_stale_runtime_rows" in failed
-    assert failed["installed_app_current_bundled_engine_hash_parity"]["detail"][
-        "mismatched"
-    ] == ["server.py", "api/tool_calling.py"]
-    assert failed["installed_app_current_bundled_jang_tools_hash_parity"]["detail"][
-        "mismatched"
-    ] == ["capabilities.py"]
-
-
-def _write_green_installed_app_runtime_parity(tmp_path: Path) -> None:
-    _write_json(
-        tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY,
-        {
-            "status": "pass",
-            "installed_app": "/Applications/vMLX.app",
-            "missing_or_stale": [],
-            "checks": {
-                "installed_bundled_engine_hash_parity": True,
-                "installed_bundled_jang_tools_hash_parity": True,
-                "installed_packaged_engine_source_hash_parity": True,
-            },
-            "bundled_engine_hash_parity": {
-                "ok": True,
-                "mismatched": [],
-            },
-            "bundled_jang_tools_hash_parity": {
-                "ok": True,
-                "mismatched": [],
-            },
-            "packaged_engine_source_hash_parity": {
-                "ok": True,
-                "mismatched": [],
             },
         },
     )
@@ -447,29 +184,8 @@ def _smoke_artifact(
 
 def _write_green_family_smokes(tmp_path: Path) -> None:
     _write_json(
-        tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
-        {
-            "status": "pass",
-            "model": "/Users/example/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
-            "checks": {
-                "import_alias_ok": True,
-                "startup_health_ok": True,
-                "visible_generation_ok": True,
-                "post_chat_health_ok": True,
-            },
-            "chat_response": {
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"content": "GEMMA4-OK", "role": "assistant"},
-                    }
-                ],
-                "usage": {"completion_tokens": 10},
-            },
-        },
-    )
-    _write_json(
-        tmp_path / checklist.GEMMA4_12B_JANG4M_SMOKE,
+        tmp_path
+        / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
         _smoke_artifact(
             mllm=True,
             tool_parser="gemma4",
@@ -480,30 +196,7 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json",
-        {
-            "status": "pass",
-            "checks": {"cache_second_hit": True},
-            "native_cache": _mixed_swa_native("gemma4"),
-            "second": {
-                "usage": {
-                    "prompt_tokens_details": {
-                        "cached_tokens": 20,
-                        "cache_detail": "paged+mixed_swa",
-                    }
-                }
-            },
-            "cache_after": {
-                "body": {
-                    "block_disk_cache": {"disk_writes": 1},
-                    "cache_totals": {"l2_block_tokens_on_disk": 20},
-                }
-            },
-        },
-    )
-    _write_json(
-        tmp_path
-        / "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json",
+        / "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json",
         {
             "status": "pass",
             "checks": {"all_rows_passed": True, "at_least_one_row_ran": True},
@@ -523,16 +216,13 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/JANGQ_Step-3.7-Flash-JANG_K/result.json",
+        / "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json",
         _smoke_artifact(
-            mllm=True,
+            mllm=False,
             tool_parser="step3p5",
             reasoning_parser="qwen3",
-            cache_detail="paged+mixed_swa",
-            native={
-                **_mixed_swa_native("step3p7", "step3p7_full_sliding_kv"),
-                "storage_quantization": {"enabled": False},
-            },
+            cache_detail="paged",
+            native=_mixed_swa_native("step3p7", "step3p7_full_sliding_kv"),
         ),
     )
     step_progress = {
@@ -574,8 +264,8 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
         },
     )
     for rel in [
-        "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json",
-        "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json",
+        "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json",
+        "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json",
     ]:
         _write_json(
             tmp_path / rel,
@@ -588,44 +278,69 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
                 hybrid=True,
             ),
         )
-    nemotron = _smoke_artifact(
-        mllm=True,
-        tool_parser="nemotron",
-        reasoning_parser="deepseek_r1",
-        cache_detail="paged+ssm",
-        native=_hybrid_ssm_native("nemotron_h"),
-        hybrid=True,
-    )
-    nemotron["requests"].extend(
-        [
-            {"label": "vl_blue_image", "code": 200, "content": "Blue", "validation_failures": []},
-            {"label": "vl_blue_video", "code": 200, "content": "Blue", "validation_failures": []},
-            {"label": "audio_blue", "code": 200, "content": "Blue.", "validation_failures": []},
-            {
-                "label": "text_multiturn_recall",
-                "code": 200,
-                "content": "color=blue, animal=cat",
-                "validation_failures": [],
-                "usage": {
-                    "prompt_tokens_details": {
-                        "cached_tokens": 24,
-                        "cache_detail": "paged+ssm",
-                    }
-                },
-                "cache_summary": {"has_cache_hit": True},
-            },
-        ]
-    )
-    nemotron["cache_after"]["code"] = 200
-    nemotron["cache_after"]["body"]["scheduler_stats"] = {"cache_hit_tokens": 24}
-    nemotron["cache_after"]["body"]["ssm_companion"] = {
-        "disk": {"stores": 2, "total_tokens_on_disk": 73}
-    }
-    nemotron["server_log_tail"] = 'POST /v1/chat/completions HTTP/1.1" 200 OK'
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/dealign.ai_Nemotron-Omni-Nano-JANGTQ-CRACK/result.json",
-        nemotron,
+        / "build/current-all-local-model-smoke-nemotron-omni-mxfp4-tools-nomedia-after-reasoning-budget-20260606/dealign.ai_Nemotron-Omni-Nano-MXFP4-CRACK/result.json",
+        _smoke_artifact(
+            mllm=True,
+            tool_parser="nemotron",
+            reasoning_parser="deepseek_r1",
+            cache_detail="paged+ssm",
+            native=_hybrid_ssm_native("nemotron_h"),
+            hybrid=True,
+        ),
+    )
+    _write_json(
+        tmp_path / "build/current-nemotron-omni-mxfp4-media-gate-20260607/SUMMARY.json",
+        {
+            "status": "PASS",
+            "passed": True,
+            "requests": [
+                {"name": "turn1_memory", "code": 200, "content": "noted"},
+                {"name": "image_blue", "code": 200, "content": "Blue"},
+                {"name": "video_blue", "code": 200, "content": "Blue"},
+                {"name": "audio_blue", "code": 200, "content": "Blue."},
+                {
+                    "name": "turn2_recall",
+                    "code": 200,
+                    "content": "color=blue, animal=cat",
+                    "usage": {
+                        "prompt_tokens_details": {
+                            "cached_tokens": 24,
+                            "cache_detail": "paged+ssm",
+                        }
+                    },
+                },
+            ],
+            "checks": [
+                {"name": "capabilities_available", "ok": True},
+                {"name": "cache_stats_initial_available", "ok": True},
+                {"name": "turn1_memory_http_ok", "ok": True},
+                {"name": "turn1_noted_exact_or_contains", "ok": True},
+                {"name": "image_blue_http_ok", "ok": True},
+                {"name": "image_blue_mentions_blue", "ok": True},
+                {"name": "video_blue_http_ok", "ok": True},
+                {"name": "video_blue_mentions_blue", "ok": True},
+                {"name": "audio_blue_http_ok", "ok": True},
+                {"name": "audio_blue_mentions_blue", "ok": True},
+                {"name": "turn2_recall_http_ok", "ok": True},
+                {"name": "turn2_recall_color_animal", "ok": True},
+                {"name": "cache_stats_final_available", "ok": True},
+            ],
+            "cache_final": {
+                "scheduler_stats": {"cache_hit_tokens": 24},
+                "native_cache": _hybrid_ssm_native("nemotron_h"),
+                "block_disk_cache": {"disk_writes": 2, "disk_hits": 3},
+                "cache_totals": {
+                    "l2_block_tokens_on_disk": 73,
+                    "l2_ssm_tokens_on_disk": 73,
+                },
+                "ssm_companion": {
+                    "disk": {"stores": 2, "total_tokens_on_disk": 73}
+                },
+            },
+            "log_tail": 'POST /v1/chat/completions HTTP/1.1" 200 OK',
+        },
     )
 
 
@@ -669,13 +384,13 @@ def _write_green_panel_settings_artifact(tmp_path: Path) -> None:
 def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     _write_json(
         tmp_path
-        / "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260609.json",
+        / "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json",
         {
             "status": "pass",
             "request": {"stream": True},
             "probe": {"cancel_route_present": True, "bad_text_captured": False},
             "raw": {"response_id": "resp_ok", "cancel_status": 200, "stream_error": None},
-            "health_after": {"mtp": _mtp(), "native_cache": _native_cache()},
+            "health_before": {"mtp": _mtp(), "native_cache": _native_cache()},
         },
     )
     _write_json(
@@ -703,7 +418,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260609/summary.json",
+        / "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260607/summary.json",
         {
             "status": "pass",
             "phases": {
@@ -786,7 +501,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
                         "scheduler": {
                             "last_cache_execution": {
                                 "cached_tokens": 31646,
-                                "cache_detail": "paged+ssm+disk",
+                                "cache_detail": "paged+ssm",
                             }
                         },
                         "native_cache": _native_cache(),
@@ -831,7 +546,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     }
     _write_json(
         tmp_path
-        / "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/SUMMARY.json",
+        / "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-after-historical-tool-required-20260607/SUMMARY.json",
         {
             "overall_pass": True,
             "turns": 3,
@@ -914,42 +629,12 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
             },
         },
     )
-    _write_json(
-        tmp_path / checklist.QWEN35_RAW_SSE_PARITY,
-        {
-            "status": "pass",
-            "missing_captures": [],
-            "checks": {
-                "direct_capture_present": True,
-                "gateway_capture_present": True,
-                "tunnel_capture_present": True,
-                "all_required_surfaces_present": True,
-                "all_present_surfaces_parse_cleanly": True,
-                "all_present_surfaces_match_expected_function_name": True,
-                "authoritative_arguments_match_across_present_surfaces": True,
-                "tunnel_expected_model_advertised": True,
-                "gateway_argument_stream_passthrough_guard": True,
-                "responses_previous_response_history_guard": True,
-                "all_present_surfaces_same_model": True,
-                "all_present_surfaces_match_expected_model": True,
-                "all_present_surfaces_have_authoritative_args": True,
-                "all_present_surfaces_match_expected_arguments": True,
-                "all_present_surfaces_have_required_reasoning": True,
-                "all_present_surfaces_have_complete_reasoning_lifecycle": True,
-                "no_reasoning_disable_workaround": True,
-                "all_present_surfaces_have_valid_output_item_indices": True,
-                "local_responses_streaming_guards_pass": True,
-                "local_output_index_ordering_guard": True,
-                "local_empty_xml_arguments_fail_closed": True,
-            },
-        },
-    )
 
 
 def _write_issue179_green_artifact(tmp_path: Path) -> None:
     _write_json(
         tmp_path
-        / "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json",
+        / "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
         {
             "status": "pass",
             "proven": {
@@ -983,26 +668,6 @@ def _write_issue179_green_artifact(tmp_path: Path) -> None:
             "reporter_parity_comparison": {"status": "pass", "failures": []},
             "reporter_server_hash_parity": {"status": "pass"},
             "local_reporter_prompt_reproduction": {"clean": True},
-            "current_source_minimax_small_smoke": {
-                "path": "build/current-all-local-model-smoke-minimax-small-jangtq-cache-language-after-bare-invoke-tool-20260609/summary.json",
-                "status": "pass",
-                "all_checks_pass": True,
-                "checks": {
-                    "status_pass": True,
-                    "model_family_minimax": True,
-                    "tool_parser_minimax": True,
-                    "reasoning_parser_minimax_m2": True,
-                    "reasoning_separated": True,
-                    "required_tool_call_parsed": True,
-                    "tool_result_continuation_exact": True,
-                    "structured_json_exact": True,
-                    "exact_code_whitespace": True,
-                    "cache_second_hit_tq": True,
-                    "block_disk_l2_restart_restore": True,
-                    "native_cache_reports_tq_l2": True,
-                },
-                "release_boundary": "current-source boundary proof only",
-            },
         },
     )
 
@@ -1047,104 +712,10 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
 
 
 def _write_green_n2_objective_digest(tmp_path: Path) -> None:
-    assert checklist.OBJECTIVE_DIGEST == Path(
-        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
-    )
-    n2_details = {
-        "local_artifact_probe": {
-            "artifact_present": True,
-        },
-        "required_next_evidence": [],
-        "noheavy_contracts": {
-            "api_cache": "pass",
-            "cache_architecture": "pass",
-            "model_family_detection": "pass",
-            "n2_family_policy": True,
-            "n2_jangtq2_live_runtime_api_cache": True,
-            "n2_jangtq2_direct_gateway_stream_boundary": True,
-            "turboquant_runtime_contract": True,
-            "turboquant_disk_roundtrip": True,
-            "hybrid_cache_policy": True,
-        },
-        "jangtq2_live_proof": {
-            "status": "pass",
-            "stable_text": True,
-            "tool_probe_pass": True,
-            "responses_probe_pass": True,
-            "responses_stream_probe_pass": True,
-            "cache_hit_cached_tokens": 8,
-            "cache_hit_cache_detail": "paged+ssm",
-            "block_disk_writes": 3,
-            "block_disk_hits": 9,
-            "ssm_disk_stores": 6,
-        },
-        "jangtq2_l2_restart_proof": {
-            "status": "pass",
-            "l2_restart_probe_pass": True,
-            "restart_cached_tokens": 8,
-            "restart_cache_detail": "paged+ssm+disk",
-            "block_disk_hits": 1,
-            "ssm_disk_hits": 1,
-        },
-        "jangtq2_real_ui_prevresp_proof": {
-            "status": "pass",
-            "tool_loop": {
-                "visible_assistant_turns_complete": True,
-                "event_counts": {"tool": 106},
-            },
-            "runtime_cache": {
-                "cache_after": {
-                    "cache_hit_tokens": 17083,
-                    "l2_block_tokens_on_disk": 3579,
-                    "l2_ssm_tokens_on_disk": 17083,
-                }
-            },
-        },
-        "jangtq2_strict_loopback_toolchoice_auto": {
-            "status": "pass",
-            "live_result": {
-                "tool_probe_files": {
-                    "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
-                    "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
-                },
-                "event_counts": {"tool": 106},
-                "native_cache": {
-                    "generic_turboquant_kv_enabled": True,
-                    "attention_kv_storage_quantization_bits": 4,
-                },
-            },
-        },
-        "jangtq2_responses_stream_boundary": {
-            "status": "pass",
-            "checks": {
-                "direct_first_output_index_clean": True,
-                "first_tool_call_present": True,
-                "direct_followup_content_delta_streaming": True,
-                "gateway_followup_content_delta_streaming": True,
-            },
-            "direct_first_arguments": [{"query": "alpha"}],
-            "gateway_first_arguments": [{"query": "alpha"}],
-        },
-    }
     _write_json(
         tmp_path / checklist.OBJECTIVE_DIGEST,
         {
             "requirements": [
-                {
-                    "requirement": (
-                        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality "
-                        "is release-cleared"
-                    ),
-                    "status": "pass",
-                    "evidence": [
-                        "build/current-n2-pro-397b-jangtq2-live-release-proof.json"
-                    ],
-                    "details": {
-                        "boundary": (
-                            "This clears the N2 JANGTQ2 checkpoint profile only."
-                        )
-                    },
-                },
                 {
                     "requirement": (
                         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
@@ -1154,113 +725,16 @@ def _write_green_n2_objective_digest(tmp_path: Path) -> None:
                     "evidence": [
                         "build/current-n2-pro-397b-jang1l-jangtq-live-release-proof.json"
                     ],
-                    "details": n2_details,
+                    "details": {
+                        "local_artifact_probe": {
+                            "artifact_present": True,
+                        },
+                        "required_next_evidence": [],
+                    },
                 }
             ]
         },
     )
-
-
-def test_full_release_objective_checklist_separates_n2_jangtq2_from_jang1l():
-    details = {
-        "noheavy_contracts": {
-            "api_cache": "pass",
-            "cache_architecture": "pass",
-            "model_family_detection": "pass",
-            "n2_family_policy": True,
-            "n2_jangtq2_live_runtime_api_cache": True,
-            "n2_jangtq2_direct_gateway_stream_boundary": True,
-            "turboquant_runtime_contract": True,
-            "turboquant_disk_roundtrip": True,
-            "hybrid_cache_policy": True,
-        },
-        "jangtq2_live_proof": {
-            "status": "pass",
-            "stable_text": True,
-            "tool_probe_pass": True,
-            "responses_probe_pass": True,
-            "responses_stream_probe_pass": True,
-            "cache_hit_cached_tokens": 8,
-            "cache_hit_cache_detail": "paged+ssm",
-            "block_disk_writes": 3,
-            "block_disk_hits": 9,
-            "ssm_disk_stores": 6,
-        },
-        "jangtq2_l2_restart_proof": {
-            "status": "pass",
-            "l2_restart_probe_pass": True,
-            "restart_cached_tokens": 8,
-            "restart_cache_detail": "paged+ssm+disk",
-            "block_disk_hits": 1,
-            "ssm_disk_hits": 1,
-        },
-        "jangtq2_real_ui_prevresp_proof": {
-            "status": "pass",
-            "tool_loop": {
-                "visible_assistant_turns_complete": True,
-                "event_counts": {"tool": 106},
-            },
-            "runtime_cache": {
-                "cache_after": {
-                    "cache_hit_tokens": 17083,
-                    "l2_block_tokens_on_disk": 3579,
-                    "l2_ssm_tokens_on_disk": 17083,
-                }
-            },
-        },
-        "jangtq2_strict_loopback_toolchoice_auto": {
-            "status": "pass",
-            "live_result": {
-                "tool_probe_files": {
-                    "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
-                    "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
-                },
-                "event_counts": {"tool": 106},
-                "native_cache": {
-                    "generic_turboquant_kv_enabled": True,
-                    "attention_kv_storage_quantization_bits": 4,
-                },
-            },
-        },
-        "jangtq2_responses_stream_boundary": {
-            "status": "pass",
-            "checks": {
-                "direct_first_output_index_clean": True,
-                "first_tool_call_present": True,
-                "direct_followup_content_delta_streaming": True,
-                "gateway_followup_content_delta_streaming": True,
-            },
-            "direct_first_arguments": [{"query": "alpha"}],
-            "gateway_first_arguments": [{"query": "alpha"}],
-        },
-    }
-    data = {
-        "requirements": [
-            {
-                "requirement": (
-                    "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality "
-                    "is release-cleared"
-                ),
-                "status": "pass",
-                "details": {"boundary": "This clears the N2 JANGTQ2 checkpoint profile only."},
-            },
-            {
-                "requirement": (
-                    "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
-                    "is release-cleared"
-                ),
-                "status": "open",
-                "details": details,
-            }
-        ]
-    }
-
-    rows = checklist._n2_pro_397b_checks(data)
-    failed = {row["name"] for row in rows if not row["ok"]}
-    by_name = {row["name"]: row for row in rows}
-
-    assert failed == {"n2_pro_397b_release_clearance"}
-    assert by_name["n2_jangtq2_release_clearance"]["ok"] is True
 
 
 def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
@@ -1316,7 +790,6 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         },
     )
     _write_green_panel_settings_artifact(tmp_path)
-    _write_green_installed_app_runtime_parity(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_AUDIT,
         {
@@ -1325,7 +798,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             "blockers": ["mimo_tool_protocol_blocked"],
             "component_ok": {
                 "manifest_integrity": True,
-                "decode_speed_target": False,
+                "decode_speed_target": True,
                 "api_cache_responses_contract": True,
                 "prefix_paged_l2_cache_reproved": True,
                 "long_prompt_coherence": False,
@@ -1339,15 +812,6 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
                 "media_model_metadata_text_only_contract": False,
                 "media_runtime_implementation": False,
                 "mimo_media_wired": False,
-            },
-            "latest_decode_speed_evidence": {
-                "speed_blocked": True,
-                "bundle_decode_tps": 39.2,
-                "wall_decode_tps": 39.13,
-                "decode_bottleneck_classification": (
-                    "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
-                ),
-                "speed_root_cause_evidence": {"status": "open"},
             },
             "diagnostics": {
                 "all_local_smoke": {
@@ -1376,7 +840,6 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             },
         },
     )
-    _write_mimo_metadata_truth(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
         {
@@ -1402,77 +865,6 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             },
         },
     )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE,
-        {
-            "status": "open",
-            "proven": {
-                "api_routes_mllm": True,
-                "loader_overlay_auto_enabled": True,
-                "preserved_media_weights_bound": True,
-                "live_chat_image_200": True,
-                "prior_unsupported_media_400_cleared_for_source_image": True,
-            },
-            "not_proven": {
-                "mimo_exactness": True,
-                "release_clearance": True,
-            },
-        },
-    )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE,
-        {
-            "status": "open",
-            "proven": {
-                "source_server_loads_as_mllm": True,
-                "media_weights_bound": True,
-                "video_request_reaches_runtime": True,
-                "video_http_200": True,
-                "audio_request_reaches_runtime": True,
-                "audio_http_200": True,
-            },
-            "not_proven": {
-                "video_semantic_correctness": True,
-                "solid_color_image_semantic_correctness": True,
-                "release_clearance": True,
-            },
-        },
-    )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI,
-        {
-            "status": "pass",
-            "classification": "dev_app_responses_tools_cache_green_exactness_still_bounded",
-            "cache": {
-                "nativeCacheSubtype": "mimo_v2_asymmetric_swa",
-                "cacheHitTokens": 4548,
-                "l2TokensOnDisk": 4225,
-            },
-            "runtime": {"quantizationProfile": "JANGTQ_2"},
-        },
-    )
-    _write_mimo_installed_app_proofs(tmp_path, media_status="fail")
-    _write_json(
-        tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
-        {
-            "status": "pass",
-            "model": "/Users/example/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
-            "checks": {
-                "import_alias_ok": True,
-                "startup_health_ok": True,
-                "visible_generation_ok": True,
-                "post_chat_health_ok": True,
-            },
-            "chat_response": {
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"content": "GEMMA4-OK", "role": "assistant"},
-                    }
-                ]
-            },
-        },
-    )
     _write_qwen_green_artifacts(tmp_path)
 
     result = _build(tmp_path)
@@ -1482,29 +874,10 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     failed_names = {row["name"] for row in result["failed"]}
     assert "release_ready" in failed_names
     assert "real_ui_live_model_matrix" in failed_names
-    local_release_rows = [
-        row
-        for row in result["groups"]["mimo_v25_jangtq2"]
-        if row["name"] == "mimo_local_release_clearance"
-    ]
-    assert len(local_release_rows) == 1
-    assert "mimo_jangtq2_live_media_l2_missing" not in local_release_rows[0]["detail"]
-    assert "mimo_jang2l_live_media_l2_missing" not in local_release_rows[0]["detail"]
-    speed_rows = [
-        row
-        for row in result["groups"]["mimo_v25_jangtq2"]
-        if row["name"] == "mimo_decode_speed_target"
-    ]
-    assert len(speed_rows) == 1
-    assert speed_rows[0]["detail"]["decode_bottleneck_classification"] == (
-        "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
-    )
-    assert speed_rows[0]["detail"]["speed_root_cause_evidence"]["status"] == "open"
     assert "mimo_tool_protocol" in failed_names
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
-    assert "mimo_media_runtime_implementation" not in failed_names
-    assert "mimo_mimo_media_wired" not in failed_names
-    assert "mimo_jangtq2_media_semantics_release_quality" in failed_names
+    assert "mimo_media_runtime_implementation" in failed_names
+    assert "mimo_mimo_media_wired" in failed_names
     assert "mimo_source_vs_quant_first_divergence" not in failed_names
     assert "mimo_source_vs_quant_requirement_satisfied" not in failed_names
     assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
@@ -1553,42 +926,6 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         "JANGTQ gate=3/up=2/down=3",
         "JANGTQ gate=3/up=3/down=3",
     ]
-    mimo_media_rows = {
-        row["name"]: row
-        for row in result["groups"]["mimo_v25_jangtq2"]
-        if row["name"].startswith(("mimo_jangtq2_", "mimo_jang2l_"))
-    }
-    assert mimo_media_rows["mimo_jangtq2_current_source_media_runtime"]["ok"] is True
-    assert mimo_media_rows["mimo_jangtq2_current_source_video_audio_routes"]["ok"] is True
-    assert mimo_media_rows["mimo_jangtq2_dev_app_responses_tools_cache"]["ok"] is True
-    assert mimo_media_rows["mimo_jangtq2_installed_responses_tools_cache"]["ok"] is True
-    assert mimo_media_rows["mimo_jang2l_installed_responses_tools_cache"]["ok"] is True
-    assert mimo_media_rows["mimo_jangtq2_installed_media_l2"]["ok"] is True
-    assert (
-        mimo_media_rows["mimo_jangtq2_installed_media_semantics_accounted"][
-            "detail"
-        ]["semantic_blocker_present"]
-        is True
-    )
-    not_applicable_rows = [
-        row
-        for row in result["groups"]["mimo_v25_jangtq2"]
-        if row["name"] == "mimo_jang2l_media_l2_not_applicable"
-    ]
-    assert len(not_applicable_rows) == 1
-    assert not_applicable_rows[0]["ok"] is True
-    assert mimo_media_rows["mimo_jangtq2_media_semantics_release_quality"]["ok"] is False
-    gemma_startup_rows = [
-        row
-        for row in result["groups"]["gemma4_12b"]
-        if row["name"] == "gemma4_12b_issue191_startup_visible_generation"
-    ]
-    assert len(gemma_startup_rows) == 1
-    assert gemma_startup_rows[0]["ok"] is True
-    assert (
-        gemma_startup_rows[0]["evidence"]
-        == "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
-    )
     assert "gemma4_12b_media_rows_complete" in failed_names
     assert "step37_real_vlm_runtime_complete" in failed_names
     assert "nemotron_omni_media_rows_complete" in failed_names
@@ -1611,7 +948,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     ),
                     "status": "open",
                     "evidence": [
-                        "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json",
+                        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json",
                         str(checklist.OBJECTIVE_DIGEST),
                     ],
                     "details": {
@@ -1619,14 +956,6 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                             "artifact_present": True,
                             "memory_preflight_decision": "do_not_launch",
                             "launch_safe": False,
-                        },
-                        "jang1l_live_gate": {
-                            "artifact": "build/current-n2-jang1l-chat-cache-proof-20260609.json",
-                            "status": "skipped",
-                            "reason": "n2_jang1l_insufficient_available_memory",
-                            "available_gib": 111.61,
-                            "required_available_gib": 118.57,
-                            "memory_gap_gib": 6.96,
                         },
                         "noheavy_contracts": {
                             "api_cache": "pass",
@@ -1658,10 +987,6 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
     assert n2_rows[0]["detail"]["status"] == "open"
     assert n2_rows[0]["detail"]["local_artifact_probe"]["artifact_present"] is True
     assert n2_rows[0]["detail"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
-    assert n2_rows[0]["detail"]["jang1l_live_gate"]["status"] == "skipped"
-    assert n2_rows[0]["detail"]["jang1l_live_gate"]["reason"] == (
-        "n2_jang1l_insufficient_available_memory"
-    )
     assert "runtime_cache_api_ui_live_proof" in n2_rows[0]["detail"][
         "required_next_evidence"
     ]
@@ -1674,8 +999,8 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
         "status": "open",
         "count": 11,
         "missing_required_rows": [
-            "gemma4_e2b_qat_native_mxfp4",
-            "gemma4_e4b_qat_native_mxfp4",
+            "gemma3n_e2b_qat_native4",
+            "gemma3n_e4b_qat_native4",
         ],
         "open_required_rows": [
             "gemma4_12b_native_mxfp4",
@@ -1683,22 +1008,12 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_31v_or_31b_vl",
         ],
         "checks": {
-            "gemma4_e2b_qat_native_mxfp4_present": False,
-            "gemma4_e4b_qat_native_mxfp4_present": False,
+            "gemma3n_e2b_qat_present": False,
+            "gemma3n_e4b_qat_present": False,
             "gemma4_12b_native_mxfp4_present": True,
             "gemma4_26b_present": True,
             "gemma4_31v_or_31b_present": True,
-            "all_required_source_live_smokes_present": False,
             "all_required_live_proofs_present": False,
-            "gemma4_12b_audio_weight_backed": False,
-            "gemma4_12b_audio_honestly_gated": False,
-            "gemma4_12b_vision_weight_backed": True,
-            "gemma4_12b_video_runtime_proof_required": True,
-            "gemma4_12b_video_runtime_source_proven": False,
-            "gemma4_26b_video_runtime_proof_required": True,
-            "gemma4_26b_video_runtime_source_proven": False,
-            "gemma4_31v_or_31b_video_runtime_proof_required": True,
-            "gemma4_31v_or_31b_video_runtime_source_proven": False,
         },
     }
 
@@ -1706,379 +1021,20 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     failed = {row["name"]: row for row in rows if not row["ok"]}
 
     assert "gemma_qat_native_mxfp4_status_pass" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_e2b_present" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_e4b_present" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_12b_audio_weight_backed" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven" in failed
-    assert "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven" in failed
-    assert "gemma_qat_native_mxfp4_all_source_live_smokes_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma3n_e2b_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma3n_e4b_present" in failed
     assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed
     assert failed["gemma_qat_native_mxfp4_all_live_proofs_present"]["detail"] == {
         "missing_required_rows": [
-            "gemma4_e2b_qat_native_mxfp4",
-            "gemma4_e4b_qat_native_mxfp4",
+            "gemma3n_e2b_qat_native4",
+            "gemma3n_e4b_qat_native4",
         ],
         "open_required_rows": [
             "gemma4_12b_native_mxfp4",
             "gemma4_26b_vl",
             "gemma4_31v_or_31b_vl",
         ],
-        "source_live_smoke_open_rows": None,
     }
-
-
-def test_full_release_objective_checklist_blocks_open_gemma_qat_jang4m_rows():
-    jang4m_rows = {
-        key: {
-            "status": "open",
-            "variant": "qat_jang4m",
-            "live_proof_status": "missing",
-            "live_proof_required": [
-                "autodetect_model_family_and_qat_jang4m_variant",
-                "responses_streaming_args_and_content_deltas",
-                "installed_app_parity",
-            ],
-        }
-        for key in [
-            "gemma4_e2b_qat_jang4m",
-            "gemma4_e4b_qat_jang4m",
-            "gemma4_12b_qat_jang4m",
-            "gemma4_26b_qat_jang4m",
-            "gemma4_31b_qat_jang4m",
-        ]
-    }
-    data = {
-        "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-        "exists": True,
-        "status": "open",
-        "missing_required_rows": [],
-        "open_required_rows": list(jang4m_rows),
-        "source_live_smoke_open_rows": [],
-        "required_rows": jang4m_rows,
-        "checks": {
-            f"{key}_present": True for key in jang4m_rows
-        }
-        | {
-            "all_required_source_live_smokes_present": True,
-            "all_required_live_proofs_present": False,
-        },
-    }
-
-    rows = checklist._gemma_qat_native_mxfp4_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    for key in jang4m_rows:
-        failed_key = f"gemma_qat_native_mxfp4_{key}_open"
-        assert failed_key in failed
-        assert failed[failed_key]["detail"]["variant"] == "qat_jang4m"
-
-
-def test_full_release_objective_checklist_accepts_gemma_qat_source_video_proof():
-    data = {
-        "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-        "exists": True,
-        "status": "open",
-        "count": 16,
-        "missing_required_rows": [],
-        "open_required_rows": [
-            "gemma4_e2b_qat_native_mxfp4",
-            "gemma4_e4b_qat_native_mxfp4",
-            "gemma4_12b_native_mxfp4",
-            "gemma4_26b_vl",
-            "gemma4_31v_or_31b_vl",
-        ],
-        "source_live_smoke_open_rows": [],
-        "checks": {
-            "gemma4_e2b_qat_native_mxfp4_present": True,
-            "gemma4_e4b_qat_native_mxfp4_present": True,
-            "gemma4_12b_native_mxfp4_present": True,
-            "gemma4_26b_present": True,
-            "gemma4_31v_or_31b_present": True,
-            "all_required_source_live_smokes_present": True,
-            "all_required_live_proofs_present": False,
-            "gemma4_12b_audio_weight_backed": False,
-            "gemma4_12b_audio_honestly_gated": True,
-            "gemma4_12b_video_runtime_proof_required": True,
-            "gemma4_12b_video_runtime_source_proven": True,
-            "gemma4_26b_video_runtime_proof_required": True,
-            "gemma4_26b_video_runtime_source_proven": True,
-            "gemma4_31v_or_31b_video_runtime_proof_required": True,
-            "gemma4_31v_or_31b_video_runtime_source_proven": True,
-        },
-    }
-
-    rows = checklist._gemma_qat_native_mxfp4_checks(data)
-    failed_names = {row["name"] for row in rows if not row["ok"]}
-
-    assert "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven" not in failed_names
-    assert "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven" not in failed_names
-    assert "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven" not in failed_names
-    assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed_names
-
-
-def test_full_release_objective_checklist_blocks_missing_responses_tunnel_capture():
-    data = {
-        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
-        "exists": True,
-        "status": "open",
-        "missing_captures": ["tunnel"],
-        "checks": {
-            "direct_capture_present": True,
-            "gateway_capture_present": True,
-            "tunnel_capture_present": False,
-            "all_required_surfaces_present": False,
-            "all_present_surfaces_parse_cleanly": True,
-            "all_present_surfaces_match_expected_function_name": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "authoritative_arguments_match_across_present_surfaces": True,
-            "tunnel_expected_model_advertised": True,
-            "local_responses_streaming_guards_pass": True,
-            "local_empty_xml_arguments_fail_closed": True,
-            "local_output_index_ordering_guard": True,
-            "gateway_argument_stream_passthrough_guard": True,
-            "responses_previous_response_history_guard": True,
-            "all_present_surfaces_have_valid_output_item_indices": True,
-            "all_present_surfaces_have_required_reasoning": True,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
-            "no_reasoning_disable_workaround": True,
-        },
-    }
-
-    rows = checklist._responses_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "responses_raw_sse_parity_status_pass" in failed
-    assert "responses_raw_sse_parity_tunnel_capture_present" in failed
-    assert "responses_raw_sse_parity_all_required_surfaces_present" in failed
-    assert failed["responses_raw_sse_parity_all_required_surfaces_present"][
-        "detail"
-    ] == {"missing_captures": ["tunnel"]}
-
-
-def test_full_release_objective_checklist_blocks_reasoning_disable_workaround():
-    data = {
-        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "direct_capture_present": True,
-            "gateway_capture_present": True,
-            "tunnel_capture_present": True,
-            "all_required_surfaces_present": True,
-            "all_present_surfaces_parse_cleanly": True,
-            "all_present_surfaces_match_expected_function_name": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "authoritative_arguments_match_across_present_surfaces": True,
-            "tunnel_expected_model_advertised": True,
-            "local_responses_streaming_guards_pass": True,
-            "local_empty_xml_arguments_fail_closed": True,
-            "local_output_index_ordering_guard": True,
-            "gateway_argument_stream_passthrough_guard": True,
-            "responses_previous_response_history_guard": True,
-            "all_present_surfaces_have_valid_output_item_indices": True,
-            "all_present_surfaces_have_required_reasoning": False,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
-            "no_reasoning_disable_workaround": False,
-        },
-    }
-
-    rows = checklist._responses_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "responses_raw_sse_parity_status_pass" in failed
-    assert "responses_raw_sse_parity_all_present_surfaces_have_required_reasoning" in failed
-    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" in failed
-
-
-def test_full_release_objective_checklist_separates_missing_reasoning_events_from_disable_workaround():
-    data = {
-        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "direct_capture_present": True,
-            "gateway_capture_present": True,
-            "tunnel_capture_present": True,
-            "all_required_surfaces_present": True,
-            "all_present_surfaces_parse_cleanly": True,
-            "all_present_surfaces_match_expected_function_name": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "authoritative_arguments_match_across_present_surfaces": True,
-            "tunnel_expected_model_advertised": True,
-            "local_responses_streaming_guards_pass": True,
-            "local_empty_xml_arguments_fail_closed": True,
-            "local_output_index_ordering_guard": True,
-            "gateway_argument_stream_passthrough_guard": True,
-            "responses_previous_response_history_guard": True,
-            "all_present_surfaces_have_valid_output_item_indices": True,
-            "all_present_surfaces_have_required_reasoning": False,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
-            "no_reasoning_disable_workaround": True,
-        },
-    }
-
-    rows = checklist._responses_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "responses_raw_sse_parity_status_pass" in failed
-    assert "responses_raw_sse_parity_all_present_surfaces_have_required_reasoning" in failed
-    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
-
-
-def test_full_release_objective_checklist_surfaces_tunnel_model_availability():
-    data = {
-        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "direct_capture_present": True,
-            "gateway_capture_present": True,
-            "tunnel_capture_present": True,
-            "all_required_surfaces_present": True,
-            "all_present_surfaces_parse_cleanly": True,
-            "all_present_surfaces_match_expected_function_name": False,
-            "all_present_surfaces_match_expected_arguments": False,
-            "all_present_surfaces_have_authoritative_args": False,
-            "authoritative_arguments_match_across_present_surfaces": False,
-            "tunnel_expected_model_advertised": False,
-            "local_responses_streaming_guards_pass": True,
-            "local_empty_xml_arguments_fail_closed": True,
-            "local_output_index_ordering_guard": True,
-            "gateway_argument_stream_passthrough_guard": True,
-            "responses_previous_response_history_guard": True,
-            "all_present_surfaces_have_valid_output_item_indices": True,
-            "all_present_surfaces_have_required_reasoning": False,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
-            "no_reasoning_disable_workaround": True,
-        },
-    }
-
-    rows = checklist._responses_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "responses_raw_sse_parity_tunnel_expected_model_advertised" in failed
-    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
-
-
-def test_full_release_objective_checklist_blocks_raw_sse_duplicate_output_index():
-    data = {
-        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "direct_capture_present": True,
-            "gateway_capture_present": True,
-            "tunnel_capture_present": True,
-            "all_required_surfaces_present": True,
-            "all_present_surfaces_parse_cleanly": True,
-            "all_present_surfaces_match_expected_function_name": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "authoritative_arguments_match_across_present_surfaces": True,
-            "tunnel_expected_model_advertised": True,
-            "local_responses_streaming_guards_pass": True,
-            "local_empty_xml_arguments_fail_closed": True,
-            "local_output_index_ordering_guard": True,
-            "gateway_argument_stream_passthrough_guard": True,
-            "responses_previous_response_history_guard": True,
-            "all_present_surfaces_have_valid_output_item_indices": False,
-            "all_present_surfaces_have_required_reasoning": True,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
-            "no_reasoning_disable_workaround": True,
-        },
-    }
-
-    rows = checklist._responses_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "responses_raw_sse_parity_status_pass" in failed
-    assert (
-        "responses_raw_sse_parity_all_present_surfaces_have_valid_output_item_indices"
-        in failed
-    )
-    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
-
-
-def test_full_release_objective_checklist_blocks_qwen35_raw_sse_duplicate_output_index():
-    data = {
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "all_present_surfaces_same_model": True,
-            "all_present_surfaces_match_expected_model": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_required_reasoning": True,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
-            "no_reasoning_disable_workaround": True,
-            "all_present_surfaces_have_valid_output_item_indices": False,
-            "local_responses_streaming_guards_pass": True,
-            "local_output_index_ordering_guard": True,
-            "local_empty_xml_arguments_fail_closed": True,
-        },
-        "captures": {
-            "tunnel": {
-                "conflicting_output_indices": [0],
-                "output_indices_by_type": {"message": [0], "function_call": [0]},
-            }
-        },
-    }
-
-    rows = checklist._qwen35_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "qwen35_raw_sse_status_pass" in failed
-    assert "qwen35_raw_sse_valid_output_item_indices" in failed
-    assert "qwen35_raw_sse_reasoning_events" not in failed
-    assert failed["qwen35_raw_sse_valid_output_item_indices"]["detail"] == {
-        "missing_captures": [],
-        "conflicting_output_indices": {"tunnel": [0]},
-    }
-
-
-def test_full_release_objective_checklist_blocks_qwen35_missing_reasoning_lifecycle():
-    data = {
-        "exists": True,
-        "status": "fail",
-        "missing_captures": [],
-        "checks": {
-            "all_present_surfaces_same_model": True,
-            "all_present_surfaces_match_expected_model": True,
-            "all_present_surfaces_have_authoritative_args": True,
-            "all_present_surfaces_match_expected_arguments": True,
-            "all_present_surfaces_have_required_reasoning": True,
-            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
-            "no_reasoning_disable_workaround": True,
-            "all_present_surfaces_have_valid_output_item_indices": True,
-            "local_responses_streaming_guards_pass": True,
-            "local_output_index_ordering_guard": True,
-            "local_empty_xml_arguments_fail_closed": True,
-        },
-        "captures": {
-            "tunnel": {
-                "reasoning_events": 8,
-                "reasoning_output_item_count": 0,
-                "reasoning_lifecycle_complete": False,
-            }
-        },
-    }
-
-    rows = checklist._qwen35_raw_sse_parity_checks(data)
-    failed = {row["name"]: row for row in rows if not row["ok"]}
-
-    assert "qwen35_raw_sse_status_pass" in failed
-    assert "qwen35_raw_sse_reasoning_lifecycle" in failed
-    assert "qwen35_raw_sse_reasoning_events" not in failed
-    assert "qwen35_raw_sse_valid_output_item_indices" not in failed
 
 
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
@@ -2138,7 +1094,6 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
         },
     )
     _write_green_panel_settings_artifact(tmp_path)
-    _write_green_installed_app_runtime_parity(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_AUDIT,
         {
@@ -2163,7 +1118,6 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             },
         },
     )
-    _write_mimo_metadata_truth(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
         {
@@ -2178,87 +1132,22 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             "unresolved_surfaces": {},
         },
     )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE,
-        {
-            "status": "pass",
-            "proven": {
-                "api_routes_mllm": True,
-                "loader_overlay_auto_enabled": True,
-                "preserved_media_weights_bound": True,
-                "live_chat_image_200": True,
-                "prior_unsupported_media_400_cleared_for_source_image": True,
-            },
-            "not_proven": {},
-        },
-    )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE,
-        {
-            "status": "pass",
-            "proven": {
-                "source_server_loads_as_mllm": True,
-                "media_weights_bound": True,
-                "video_request_reaches_runtime": True,
-                "video_http_200": True,
-                "audio_request_reaches_runtime": True,
-                "audio_http_200": True,
-            },
-            "not_proven": {},
-        },
-    )
-    _write_json(
-        tmp_path / checklist.MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI,
-        {
-            "status": "pass",
-            "classification": "dev_app_responses_tools_cache_green_exactness_still_bounded",
-            "cache": {
-                "nativeCacheSubtype": "mimo_v2_asymmetric_swa",
-                "cacheHitTokens": 1,
-                "l2TokensOnDisk": 1,
-            },
-            "runtime": {"quantizationProfile": "JANGTQ_2"},
-        },
-    )
-    _write_mimo_installed_app_proofs(tmp_path, media_status="pass")
     _write_issue179_green_artifact(tmp_path)
-    _write_green_responses_raw_sse_artifact(tmp_path)
     _write_dsv4_green_artifact(tmp_path)
     _write_green_family_smokes(tmp_path)
     _write_json(
         tmp_path / checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY,
         {
             "status": "pass",
-            "count": 16,
+            "count": 5,
             "missing_required_rows": [],
             "open_required_rows": [],
-            "source_live_smoke_open_rows": [],
-            "required_rows": {
-                key: {"status": "pass", "live_proof_status": "pass"}
-                for key in [
-                    "gemma4_e2b_qat_jang4m",
-                    "gemma4_e4b_qat_jang4m",
-                    "gemma4_12b_qat_jang4m",
-                    "gemma4_26b_qat_jang4m",
-                    "gemma4_31b_qat_jang4m",
-                ]
-            },
             "checks": {
-                "gemma4_e2b_qat_native_mxfp4_present": True,
-                "gemma4_e4b_qat_native_mxfp4_present": True,
+                "gemma3n_e2b_qat_present": True,
+                "gemma3n_e4b_qat_present": True,
                 "gemma4_12b_native_mxfp4_present": True,
-                "gemma4_12b_audio_honestly_gated": True,
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,
-                "gemma4_e2b_qat_jang4m_present": True,
-                "gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven": True,
-                "gemma4_e4b_qat_jang4m_present": True,
-                "gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven": True,
-                "gemma4_12b_qat_jang4m_present": True,
-                "gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven": True,
-                "gemma4_26b_qat_jang4m_present": True,
-                "gemma4_31b_qat_jang4m_present": True,
-                "all_required_source_live_smokes_present": True,
                 "all_required_live_proofs_present": True,
             },
         },

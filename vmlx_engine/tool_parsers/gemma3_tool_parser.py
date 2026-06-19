@@ -184,10 +184,6 @@ class Gemma3ToolParser(ToolParser):
                 args_obj: dict[str, Any] = {}
                 for k, v in kwargs:
                     args_obj[k] = _parse_py_value(v)
-                if not self._arguments_satisfy_required_schema(
-                    name, args_obj, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),

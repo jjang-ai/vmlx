@@ -96,38 +96,3 @@ def test_cache_vs_nocache_runner_classifies_mllm_logprobs_as_unsupported():
             "requests; multimodal/VLM logprobs are not implemented."
         ),
     }
-
-
-def test_cache_vs_nocache_runner_memory_preflight_labels_binary_units(monkeypatch):
-    monkeypatch.setattr(
-        runner,
-        "resource_snapshot",
-        lambda name: {
-            "name": name,
-            "system_memory": {
-                "unit": "GiB",
-                "available_gib": 82.5,
-                "available_gb": 82.5,
-            },
-        },
-    )
-
-    skipped = runner.memory_preflight(90.0)
-
-    assert skipped["status"] == "skipped"
-    assert skipped["unit"] == "GiB"
-    assert skipped["available_gib"] == 82.5
-    assert skipped["required_available_gib"] == 90.0
-    assert skipped["memory_gap_gib"] == 7.5
-    assert skipped["available_gb"] == 82.5
-    assert skipped["required_available_gb"] == 90.0
-
-
-def test_cache_vs_nocache_runner_treats_preflight_skip_as_success_exit(
-    tmp_path, monkeypatch
-):
-    out = tmp_path / "preflight.json"
-    monkeypatch.setattr(runner, "parse_args", lambda: SimpleNamespace(out=out))
-    monkeypatch.setattr(runner, "run", lambda args: {"status": "skipped"})
-
-    assert runner.main() == 0

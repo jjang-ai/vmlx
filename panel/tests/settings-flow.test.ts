@@ -115,7 +115,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     cacheMemoryPercent: 15,
     cacheTtlMinutes: 0,
     noMemoryAwareCache: false,
-    usePagedCache: true,
+    usePagedCache: false,
     pagedCacheBlockSize: 64,
     maxCacheBlocks: 1000,
     kvCacheQuantization: 'auto',
@@ -124,7 +124,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     enableDiskCache: true,
     diskCacheMaxGb: 10,
     diskCacheDir: '',
-    enableBlockDiskCache: true,
+    enableBlockDiskCache: false,
     blockDiskCacheMaxGb: 10,
     blockDiskCacheDir: '',
     streamInterval: 1,
@@ -209,12 +209,13 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-    return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv' || cacheSubtype === 'mimo_v2_asymmetric_swa'
+    return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+const MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900
 
 function extractFlagSetFromSource(sourceRel: string, constName: string): Set<string> {
     const source = readFileSync(sourceRel, 'utf8')
@@ -274,6 +275,9 @@ function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?:
     const normalizedFamily = normalizeDetectedFamilyName(family)
     if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
         return DSV4_DEFAULT_TIMEOUT_SECONDS
+    }
+    if (normalizedFamily === 'minimax_m3' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+        return MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
     }
     return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
@@ -613,6 +617,16 @@ describe('Server Settings', () => {
     it('deepseek-v4 preserves explicit non-default timeout values', () => {
         const out = preview({ timeout: 600 }, { family: 'deepseek-v4' })
         expect(getFlagValue(out, '--timeout')).toBe('600')
+    })
+
+    it('minimax-m3 uses a 900s default timeout for long reasoning and streaming turns', () => {
+        const out = preview({ timeout: 300 }, { family: 'minimax_m3' })
+        expect(getFlagValue(out, '--timeout')).toBe('900')
+    })
+
+    it('minimax-m3 preserves explicit non-default timeout values', () => {
+        const out = preview({ timeout: 1200 }, { family: 'minimax_m3' })
+        expect(getFlagValue(out, '--timeout')).toBe('1200')
     })
 
     it('includes API key comment when set', () => {
@@ -1036,7 +1050,8 @@ describe('Disk Cache', () => {
         expect(source).toContain('cacheControlUpdatesForDiskToggle')
         expect(source).toContain('cacheControlUpdatesForPagedToggle')
         expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
-        expect(source).toContain('disabled={!dsv4Active && cachePolicy.pagedCacheDisabled}')
+        expect(source).toContain('const genericPagedCacheToggleDisabled = m3Active || (!dsv4Active && cachePolicy.pagedCacheDisabled)')
+        expect(source).toContain('disabled={genericPagedCacheToggleDisabled}')
         expect(source).toContain('disabled={cachePolicy.legacyDiskCacheDisabled}')
         expect(source).toContain('checked={cachePolicy.legacyDiskCacheChecked}')
         expect(source).not.toContain('disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged}')
@@ -1091,6 +1106,11 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('8192')
     })
 
+    it('minimax-m3 explicit startup max tokens is reflected in CLI preview', () => {
+        const out = preview({ maxTokens: 8192 }, { family: 'minimax_m3' })
+        expect(getFlagValue(out, '--max-tokens')).toBe('8192')
+    })
+
     it('surfaces Max Output Tokens separately from Max Context Tokens', () => {
         const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
         const maxOutputIndex = formSource.indexOf('label="Max Output Tokens"')
@@ -1102,6 +1122,7 @@ describe('Performance & Generation', () => {
         expect(formSource).toContain("onChange={v => onChange('maxTokens', v)}")
         expect(formSource).toContain('maps to --max-tokens')
         expect(formSource).toContain('does not change prompt/context length')
+        expect(formSource).toContain('Leave on Model-owned unless you intentionally want a server-level cap')
     })
 
     it('persists bundle/default migration so stale 32768 sessions do not keep relaunching huge output caps', () => {
@@ -1125,16 +1146,16 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('4096')
     })
 
-    it('casual preset maxTokens uses an explicit server output cap without changing model-owned defaults or context', () => {
+    it('casual preset leaves maxTokens model-owned instead of forcing a hidden output cap', () => {
         const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
         const casualStart = formSource.indexOf('export const CASUAL_CONFIG')
         const casualEnd = formSource.indexOf('\n}\n', casualStart)
         const casualBlock = formSource.slice(casualStart, casualEnd)
 
         expect(DEFAULT_CONFIG.maxTokens).toBe(0)
-        expect(casualBlock).toContain('maxTokens: 8192')
+        expect(casualBlock).toContain('maxTokens: 0')
         expect(casualBlock).not.toContain('maxContextLength')
-        expect(formSource).toContain('limits runaway long replies')
+        expect(formSource).toContain('Model-owned output cap')
         expect(formSource).not.toContain('prevents huge KV allocation')
     })
 
@@ -2001,8 +2022,8 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing pagedCacheBlockSize produces different CLI output', () => {
-        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
-        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
     })
 
     it('deepseek-v4 enables native composite prefix cache by default even with stale cache config', () => {
@@ -2254,8 +2275,8 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {
-        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
-        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
     })
 
     it('changing startup generation defaults does not change CLI output', () => {
@@ -2298,7 +2319,7 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--host')).toBe('127.0.0.1')
     })
 
-    it('current startup defaults keep the single-user cache stack enabled', () => {
+    it('current startup defaults use the paged-off SSD-prefix single-user cache stack', () => {
         const out = preview()
 
         expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
@@ -2307,9 +2328,10 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--completion-batch-size')).toBe('512')
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
         expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
-        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
-        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
-        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
         expect(hasFlag(out, '--default-temperature')).toBe(false)
         expect(hasFlag(out, '--default-top-p')).toBe(false)
         expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
@@ -2339,6 +2361,13 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.enableBlockDiskCache = true')
         expect(source).toContain('config.blockDiskCacheMaxGb = 10')
         expect(source).toContain('config.cacheMemoryPercent = 15')
+        // Phase-1: migration branches outcome by path-dependence.
+        // Generic (non-path-dependent) upgraders flip to paged-OFF + SSD prefix.
+        expect(source).toContain('const staleV2GenericPagedOn =')
+        expect(source).toContain('if (zayaCacheMigrationTarget) {')
+        expect(source).toContain('config.usePagedCache = false')
+        expect(source).toContain('config.enableDiskCache = true')
+        expect(source).toContain('config.enableBlockDiskCache = false')
     })
 
     it('cache-stack migration is one-time versioned so saved user toggles stick', () => {
@@ -2353,6 +2382,25 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('if (bundleDefaultsChanged || cacheDefaultsFilled || migrated || familyDefaultsChanged || markedCurrent)')
         expect(source).toContain('markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)')
         expect(source).toContain('cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION')
+    })
+
+    it('MiniMax-M3 fills long-generation timeout but keeps max output model-owned before launch/adoption', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const familyStart = source.indexOf("detectedFamily === 'minimax_m3'")
+        const familyBlock = source.slice(familyStart, source.indexOf('return changed', familyStart))
+        const adoptStart = source.indexOf('async detectAndAdoptAll()')
+        const defaultConfigStart = source.indexOf('const defaultConfig: ServerConfig = {', adoptStart)
+        const createSession = source.indexOf('db.createSession(session)', defaultConfigStart)
+        const adoptCreateBlock = source.slice(defaultConfigStart, createSession)
+
+        expect(source).toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900')
+        expect(source).not.toContain('MINIMAX_M3_DEFAULT_MAX_OUTPUT_TOKENS')
+        expect(familyBlock).toContain('config.timeout = MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS')
+        expect(familyBlock).toContain('config.maxTokens = 0')
+        expect(familyBlock).toContain('LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))')
+        expect(adoptCreateBlock).toContain("detectedFamily === 'minimax_m3'")
+        expect(adoptCreateBlock).toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS')
+        expect(adoptCreateBlock).toContain('maxTokens: 0')
     })
 
     it('create-session fills missing cache settings before stamping incoming settings current', () => {
@@ -2716,6 +2764,20 @@ describe('JIT Toggle', () => {
         expect(form).toContain('nativeCacheRequiresPaged')
     })
 
+    it('settings form surfaces the macOS Metal wired-limit sudo command near memory/cache controls', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const shared = fs.readFileSync('src/shared/metalWiredLimit.ts', 'utf-8')
+
+        expect(form).toContain('metalWiredLimitHelpText')
+        expect(form).toContain('<InfoNote text={metalWiredLimitHelpText} />')
+        expect(shared).toContain('sudo sysctl iogpu.wired_limit_mb=120000')
+        expect(shared).toContain('kIOGPUCommandBufferCallbackErrorOutOfMemory')
+    })
+
     it('settings form and launch code treat Step3.7 full/sliding KV subtype as architecture-paged cache', () => {
         const fs = require('fs')
         const form = fs.readFileSync(
@@ -2776,7 +2838,8 @@ describe('JIT Toggle', () => {
         expect(form).not.toContain('DSV4 Flash composite prefix cache is disabled')
         expect(form).not.toContain("dsv4Active ? applyDsv4CompositeCacheToggle(v) : applyCacheControlUpdates(cacheControlUpdatesForPagedToggle")
         expect(form).toContain("dsv4Active ? cacheControlUpdatesForDsv4BlockDiskToggle(v) : cacheControlUpdatesForBlockDiskToggle")
-        expect(form).toContain('disabled={!dsv4Active && cachePolicy.pagedCacheDisabled}')
+        expect(form).toContain('const genericPagedCacheToggleDisabled = m3Active || (!dsv4Active && cachePolicy.pagedCacheDisabled)')
+        expect(form).toContain('disabled={genericPagedCacheToggleDisabled}')
         expect(form).toContain('block size is fixed to 256 tokens')
         expect(form).toContain('checked={config.dsv4PrefixCache !== false}')
         expect(form).not.toContain('checked={dsv4Active ? true : config.enablePrefixCache}')
@@ -2798,12 +2861,42 @@ describe('JIT Toggle', () => {
         expect(countOccurrences(form, 'label="DSV4 CSA/HCA Pool Codec"')).toBe(1)
         expect(countOccurrences(form, 'label={dsv4Active ? "DSV4 Block Disk Cache (L2)" : "Block Disk Cache (L2)"}')).toBe(1)
         expect(countOccurrences(form, 'label="Use Paged KV Cache"')).toBe(1)
-        expect(form).toContain('{!dsv4Active && <CheckField label="Use Paged KV Cache"')
+        expect(form).toContain('!dsv4Active && m3Active ? (')
+        expect(form).toContain('LOCKED OFF')
+        expect(form).toContain(') : !dsv4Active && (')
+        expect(form).toContain('<CheckField label="Use Paged KV Cache"')
         expect(form).toContain('disabled={dsv4CompositeRequiresPaged}')
-        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}')
+        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || nativeTypedCacheOwnsStoredCodec}')
         expect(form).not.toContain('DSV4 Native Cache')
         expect(form).not.toContain('DSV4 Composite Prefix Cache')
         expect(form).not.toContain('DSV4 Pool Quantization')
+    })
+
+    it('settings form disables generic stored KV codec controls for MiniMax-M3 native MSA cache', () => {
+        const form = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain("const nativeTypedCacheOwnsStoredCodec = dsv4Active || m3Active")
+        expect(form).toContain("const effectiveStoredCacheQuantization = nativeTypedCacheOwnsStoredCodec ? 'auto' : config.kvCacheQuantization")
+        expect(form).toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
+        expect(form).toContain('native MSA snapshots with keys, values, idx_keys, and absolute offsets')
+        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || nativeTypedCacheOwnsStoredCodec}')
+    })
+
+    it('settings form disables the ignored generic paged-cache toggle for MiniMax-M3', () => {
+        const form = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain('const genericPagedCacheToggleDisabled = m3Active || (!dsv4Active && cachePolicy.pagedCacheDisabled)')
+        expect(form).toContain('MiniMax-M3 uses native MSA SSD prefix cache with keys, values, idx_keys, and absolute offsets')
+        expect(form).toContain('Generic paged KV cache is locked OFF')
+        expect(form).toContain('LOCKED OFF')
+        expect(form).toContain('m3Active ? (')
+        expect(form).toContain('disabled={genericPagedCacheToggleDisabled}')
     })
 
     it('settings form hides generic paged-cache warnings for the DSV4 native cache path', () => {
@@ -3277,7 +3370,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
         expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
         expect(normalized).not.toContain('--disable-prefix-cache')  // cache stack is enabled by default
-        expect(normalized).not.toContain('--enable-disk-cache')     // paged cache uses block L2, not legacy prompt L2
+        expect(normalized).toContain('--enable-disk-cache')         // Phase-1: paged RAM cache OFF, SSD prompt L2 is the default prefix cache
         expect(normalized).not.toContain('--speculative-model')     // no speculative model
         expect(normalized).not.toContain('--embedding-model')       // empty
         expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
@@ -3293,8 +3386,8 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--timeout')
         expect(normalized).not.toContain('--max-tokens')
         expect(normalized).toContain('--continuous-batching')
-        expect(normalized).toContain('--use-paged-cache')
-        expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).not.toContain('--use-paged-cache')        // Phase-1: paged RAM block pool OFF by default
+        expect(normalized).not.toContain('--enable-block-disk-cache') // block L2 is paged-coupled; off when paged off
         expect(normalized).not.toContain('--default-temperature')
         expect(normalized).not.toContain('--default-top-p')
         expect(normalized).not.toContain('--default-repetition-penalty')
@@ -3342,6 +3435,30 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(numberInput).not.toContain('disabled || isUnlimited')
         expect(numberInput).toContain('disabled={disabled}')
         expect(sliderBody).toContain('onChange(isUnlimited ? unlimitedValue : defaultValue)')
+    })
+
+    it('slider settings expose stable value metadata and active unlimited state for live UI parity proof', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const sliderStart = source.indexOf('export function SliderField')
+        const sliderEnd = source.indexOf('\nexport ', sliderStart + 1)
+        const sliderBody = source.slice(sliderStart, sliderEnd > 0 ? sliderEnd : undefined)
+
+        expect(sliderBody).toContain('data-setting-label={label}')
+        expect(sliderBody).toContain('data-setting-value={String(value)}')
+        expect(sliderBody).toContain('data-unlimited-active={String(isUnlimited)}')
+        expect(sliderBody).toContain('aria-pressed={isUnlimited}')
+        expect(sliderBody).toContain("aria-label={`${label}: ${unlimitedLabel} ${isUnlimited ? 'active' : 'inactive'}`}")
+    })
+
+    it('Gemma live stress harness checks actual settings input values, not body text labels', () => {
+        const source = readFileSync('scripts/live-gemma4-media-stress-proof.mjs', 'utf8')
+
+        expect(source).toContain('captureSettingsControlValues')
+        expect(source).toContain("controls['Timeout (seconds)']")
+        expect(source).toContain('settings UI timeout value')
+        expect(source).toContain("controls['Max Output Tokens']")
+        expect(source).toContain('settings UI max output value')
+        expect(source).toContain('Model-owned active despite explicit maxTokens')
     })
 
     it('all local session settings surfaces pass detected model context to Max Context Tokens', () => {
@@ -3407,15 +3524,18 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(perfSource).not.toContain('JANGTQ MPP/NAX')
     })
 
-    it('DSV4 timeout default is wired through launch, chat IPC, and gateway proxy', () => {
+    it('DSV4 and MiniMax-M3 timeout defaults are wired through launch, chat IPC, and gateway proxy', () => {
         const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
         const chatSource = readFileSync('src/main/ipc/chat.ts', 'utf8')
         const gatewaySource = readFileSync('src/main/api-gateway.ts', 'utf8')
 
         expect(sessionsSource).toContain('DSV4_DEFAULT_TIMEOUT_SECONDS = 900')
+        expect(sessionsSource).toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900')
         expect(sessionsSource).toContain('effectiveSessionTimeoutSeconds')
-        expect(chatSource).toContain('effectiveDsv4RequestTimeoutSeconds')
+        expect(chatSource).toContain('effectiveFamilyRequestTimeoutSeconds')
+        expect(chatSource).toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900')
         expect(gatewaySource).toContain('effectiveGatewayProxyTimeoutMs')
+        expect(gatewaySource).toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {

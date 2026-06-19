@@ -73,10 +73,6 @@ class GraniteToolParser(ToolParser):
                     func_name = call.get("name") or call.get("type")
                     if func_name:
                         args = call.get("arguments", {})
-                        if not self._arguments_satisfy_required_schema(
-                            func_name, args, request
-                        ):
-                            continue
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),
@@ -126,7 +122,7 @@ class GraniteToolParser(ToolParser):
 
         # Try to parse when we have a complete JSON array
         if "]" in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

@@ -26,42 +26,6 @@ interface ChatOverrides {
     reasoningEffort?: string
 }
 
-function familyAcceptsExplicitReasoningControls(detectedFamily?: string): boolean {
-    if (!detectedFamily) return false
-    return new Set([
-        'deepseek-v4',
-        'qwen3.5',
-        'qwen3.5-moe',
-        'qwen3-next',
-        'qwen3-vl',
-        'qwen3-moe',
-        'qwen3',
-        'gemma4',
-        'gemma4-text',
-        'zaya',
-        'laguna',
-        'step-vl',
-        'step-3.7-flash',
-        'step-3.5-flash',
-        'step',
-        'mistral4',
-        'gpt-oss',
-        'glm47-flash',
-        'glm5',
-        'glm47',
-        'deepseek-r1',
-        'deepseek-v3',
-        'deepseek-v2',
-        'deepseek',
-        'nemotron',
-        'nemotron-h',
-        'lfm2',
-        'kimi-k25',
-        'kimi-k2',
-        'minimax',
-    ]).has(detectedFamily)
-}
-
 function buildRequestBody(
     wireApi: 'completions' | 'responses',
     modelName: string,
@@ -72,8 +36,6 @@ function buildRequestBody(
     tools?: any[],
     detectedFamily?: string,
     thinkingBudgetSupported?: boolean,
-    suppressPinnedToolChoiceForLoopback = false,
-    sessionSupportsThinking?: boolean,
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
@@ -82,13 +44,12 @@ function buildRequestBody(
         !!overrides?.reasoningEffort &&
         overrides.enableThinking !== false &&
         (detectedFamily !== 'hy3' || overrides.enableThinking === true) &&
-        (sessionHasReasoningParser || familyAcceptsExplicitReasoningControls(detectedFamily))
+        (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
     const outputBudget = dsv4OutputBudget(
         overrides?.maxTokens,
         overrides?.enableThinking,
         detectedFamily,
         overrides?.reasoningEffort,
-        overrides?.builtinToolsEnabled,
     )
     const thinkingBudget = typeof overrides?.maxThinkingTokens === 'number' &&
         Number.isFinite(overrides.maxThinkingTokens) &&
@@ -96,39 +57,20 @@ function buildRequestBody(
         ? Math.floor(overrides.maxThinkingTokens)
         : undefined
     const effectiveEnableThinkingOverride =
-        sessionSupportsThinking === false
+        !isRemote &&
+        !sessionHasReasoningParser &&
+        detectedFamily !== 'deepseek-v4'
             ? undefined
-            : !isRemote &&
-                !sessionHasReasoningParser &&
-                !familyAcceptsExplicitReasoningControls(detectedFamily)
-                ? undefined
-                : overrides?.enableThinking
+            : overrides?.enableThinking
     const applyLocalThinkingBudget = (obj: Record<string, any>) => {
         if (isRemote || thinkingBudget == null || obj.enable_thinking === false) return
         if (thinkingBudgetSupported === false) return
-        if (!sessionHasReasoningParser && !familyAcceptsExplicitReasoningControls(detectedFamily)) return
+        if (!sessionHasReasoningParser && detectedFamily !== 'deepseek-v4') return
         obj.max_thinking_tokens = thinkingBudget
         obj.chat_template_kwargs = {
             ...(obj.chat_template_kwargs || {}),
             thinking_budget: thinkingBudget,
         }
-    }
-    const toolNameOf = (tool: any): string | undefined => {
-        const name = tool?.function?.name ?? tool?.name
-        return typeof name === 'string' && name ? name : undefined
-    }
-    const inferExplicitToolChoice = (responseApi: boolean): any | undefined => {
-        if (!overrides?.builtinToolsEnabled || !Array.isArray(tools) || tools.length === 0) return undefined
-        const latestUserText = [...requestMessages].reverse()
-            .find((m: any) => m?.role === 'user' && typeof m.content === 'string')
-            ?.content || ''
-        const names = tools.map(toolNameOf).filter(Boolean) as string[]
-        const named = names.filter(name => new RegExp(`(^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_]|$)`).test(latestUserText))
-        const unique = [...new Set(named)]
-        if (unique.length !== 1) return undefined
-        return responseApi
-            ? { type: 'function', name: unique[0] }
-            : { type: 'function', function: { name: unique[0] } }
     }
 
     if (wireApi === 'responses') {
@@ -161,12 +103,10 @@ function buildRequestBody(
                 parameters: t.function.parameters
             }))
         }
-        const explicitToolChoice = inferExplicitToolChoice(true)
-        const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
-        if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
-        else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
+        } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         applyLocalThinkingBudget(obj)
@@ -190,12 +130,10 @@ function buildRequestBody(
         if (tools) {
             obj.tools = tools
         }
-        const explicitToolChoice = inferExplicitToolChoice(false)
-        const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
-        if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
-        else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
+        } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         applyLocalThinkingBudget(obj)
@@ -210,16 +148,6 @@ describe('buildRequestBody — Chat Completions API', () => {
     const messages = [
         { role: 'system', content: 'You are helpful.' },
         { role: 'user', content: 'Hello' }
-    ]
-    const sampleTools = [
-        {
-            type: 'function',
-            function: {
-                name: 'run_command',
-                description: 'Run a command',
-                parameters: { type: 'object', properties: { command: { type: 'string' } } }
-            }
-        }
     ]
 
     it('omits sampling and token defaults when unset so the engine resolves bundle metadata', () => {
@@ -335,59 +263,6 @@ describe('buildRequestBody — Chat Completions API', () => {
             expect(body.max_context_tokens).toBeUndefined()
             expect(body.max_context).toBeUndefined()
         }
-    })
-
-    it('raises undersized Gemma4 reasoning tool budgets for Responses API', () => {
-        const body = buildRequestBody(
-            'responses',
-            'gemma4',
-            messages,
-            { maxTokens: 128, enableThinking: true, builtinToolsEnabled: true },
-            true,
-            true,
-            sampleTools,
-            'gemma4',
-        )
-
-        expect(body.max_output_tokens).toBe(512)
-        expect(body.enable_thinking).toBe(true)
-    })
-
-    it('does not raise Gemma4 budgets without reasoning tools or when already large enough', () => {
-        const noTools = buildRequestBody(
-            'responses',
-            'gemma4',
-            messages,
-            { maxTokens: 128, enableThinking: true },
-            true,
-            true,
-            sampleTools,
-            'gemma4',
-        )
-        const thinkingOff = buildRequestBody(
-            'responses',
-            'gemma4',
-            messages,
-            { maxTokens: 128, enableThinking: false, builtinToolsEnabled: true },
-            true,
-            true,
-            sampleTools,
-            'gemma4',
-        )
-        const alreadyLarge = buildRequestBody(
-            'responses',
-            'gemma4',
-            messages,
-            { maxTokens: 768, enableThinking: true, builtinToolsEnabled: true },
-            true,
-            true,
-            sampleTools,
-            'gemma4',
-        )
-
-        expect(noTools.max_output_tokens).toBe(128)
-        expect(thinkingOff.max_output_tokens).toBe(128)
-        expect(alreadyLarge.max_output_tokens).toBe(768)
     })
 
     it('omits invalid persisted maxTokens values instead of poisoning Chat Completions', () => {
@@ -554,42 +429,6 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.reasoning_effort).toBeUndefined()
     })
 
-    it('forwards Qwen-family reasoning controls from detected family when parser state is stale', () => {
-        const body = buildRequestBody(
-            'completions',
-            'qwen35',
-            messages,
-            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
-            false,
-            false,
-            undefined,
-            'qwen3.5-moe',
-        )
-
-        expect(body.enable_thinking).toBe(true)
-        expect(body.reasoning_effort).toBe('high')
-        expect(body.max_thinking_tokens).toBe(2048)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
-    })
-
-    it('forwards Gemma-family reasoning controls from detected family when parser state is stale', () => {
-        const body = buildRequestBody(
-            'completions',
-            'gemma4',
-            messages,
-            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
-            false,
-            false,
-            undefined,
-            'gemma4',
-        )
-
-        expect(body.enable_thinking).toBe(true)
-        expect(body.reasoning_effort).toBe('high')
-        expect(body.max_thinking_tokens).toBe(2048)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
-    })
-
     it('preserves explicit DSV4 standard thinking max_tokens', () => {
         const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_tokens).toBe(128)
@@ -642,26 +481,14 @@ describe('buildRequestBody — Remote vs Local gating', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('omits enable_thinking for remote Auto sessions with a reasoning parser', () => {
+    it('enable_thinking defaults to true when session has reasoning parser', () => {
         const body = buildRequestBody('completions', 'model', messages, undefined, true, true)
-        expect(body.enable_thinking).toBeUndefined()
+        expect(body.enable_thinking).toBe(true)
     })
 
     it('enable_thinking can be explicitly set via overrides', () => {
         const body = buildRequestBody('completions', 'model', messages, { enableThinking: false }, true, true)
         expect(body.enable_thinking).toBe(false)
-    })
-
-    it('remote explicit thinking on forwards enable_thinking without chat_template_kwargs', () => {
-        const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, true, true)
-        expect(body.enable_thinking).toBe(true)
-        expect(body.chat_template_kwargs).toBeUndefined()
-    })
-
-    it('suppresses stale remote explicit thinking when detection says thinking is unsupported', () => {
-        const body = buildRequestBody('responses', 'mimo', messages, { enableThinking: true }, true, false, undefined, 'mimo_v2', undefined, false, false)
-        expect(body.enable_thinking).toBeUndefined()
-        expect(body.chat_template_kwargs).toBeUndefined()
     })
 })
 
@@ -866,42 +693,6 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.chat_template_kwargs.reasoning_effort).toBeUndefined()
         expect(body.chat_template_kwargs.thinking_budget).toBeUndefined()
     })
-
-    it('forwards Qwen-family Responses reasoning controls from detected family when parser state is stale', () => {
-        const body = buildRequestBody(
-            'responses',
-            'qwen35',
-            messages,
-            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
-            false,
-            false,
-            undefined,
-            'qwen3.5',
-        )
-
-        expect(body.enable_thinking).toBe(true)
-        expect(body.reasoning_effort).toBe('high')
-        expect(body.max_thinking_tokens).toBe(2048)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
-    })
-
-    it('forwards Gemma-family Responses reasoning controls from detected family when parser state is stale', () => {
-        const body = buildRequestBody(
-            'responses',
-            'gemma4',
-            messages,
-            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
-            false,
-            false,
-            undefined,
-            'gemma4-text',
-        )
-
-        expect(body.enable_thinking).toBe(true)
-        expect(body.reasoning_effort).toBe('high')
-        expect(body.max_thinking_tokens).toBe(2048)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
-    })
 })
 
 describe('buildRequestBody — Tool format', () => {
@@ -913,14 +704,6 @@ describe('buildRequestBody — Tool format', () => {
                 name: 'read_file',
                 description: 'Read a file',
                 parameters: { type: 'object', properties: { path: { type: 'string' } } }
-            }
-        },
-        {
-            type: 'function',
-            function: {
-                name: 'run_command',
-                description: 'Run a command',
-                parameters: { type: 'object', properties: { command: { type: 'string' } } }
             }
         }
     ]
@@ -959,139 +742,6 @@ describe('buildRequestBody — Tool format', () => {
         expect(body.tools[0].name).toBe('read_file')
     })
 
-    it('pins Chat tool_choice when latest user explicitly names one available built-in tool', () => {
-        const body = buildRequestBody(
-            'completions',
-            'model',
-            [
-                { role: 'system', content: 'You are helpful.' },
-                { role: 'user', content: 'Use the run_command tool exactly once.' },
-            ],
-            { builtinToolsEnabled: true },
-            false,
-            false,
-            sampleTools,
-        )
-
-        expect(body.tool_choice).toEqual({
-            type: 'function',
-            function: { name: 'run_command' },
-        })
-    })
-
-    it('pins Responses tool_choice when latest user explicitly names one available built-in tool', () => {
-        const body = buildRequestBody(
-            'responses',
-            'model',
-            [
-                { role: 'system', content: 'You are helpful.' },
-                { role: 'user', content: 'Use the run_command tool exactly once.' },
-            ],
-            { builtinToolsEnabled: true },
-            false,
-            false,
-            sampleTools,
-        )
-
-        expect(body.tool_choice).toEqual({
-            type: 'function',
-            name: 'run_command',
-        })
-    })
-
-    it('downgrades explicit tool_choice to auto for non-Gemma loopback remote vMLX sessions', () => {
-        const body = buildRequestBody(
-            'responses',
-            'model',
-            [
-                { role: 'system', content: 'You are helpful.' },
-                { role: 'user', content: 'Use the run_command tool exactly once.' },
-            ],
-            { builtinToolsEnabled: true },
-            true,
-            false,
-            sampleTools,
-            'qwen3',
-            undefined,
-            true,
-        )
-
-        expect(body.tools?.[0]?.name).toBe('read_file')
-        expect(body.tool_choice).toBe('auto')
-    })
-
-    it('downgrades Chat explicit tool_choice to auto for non-Gemma loopback remote vMLX sessions', () => {
-        const body = buildRequestBody(
-            'completions',
-            'model',
-            [
-                { role: 'system', content: 'You are helpful.' },
-                { role: 'user', content: 'Use the run_command tool exactly once.' },
-            ],
-            { builtinToolsEnabled: true },
-            true,
-            false,
-            sampleTools,
-            'qwen3',
-            undefined,
-            true,
-        )
-
-        expect(body.tools?.[0]?.function?.name).toBe('read_file')
-        expect(body.tool_choice).toBe('auto')
-    })
-
-    it('pins tool_choice for Gemma4 loopback remote vMLX sessions', () => {
-        const body = buildRequestBody(
-            'responses',
-            'model',
-            [
-                { role: 'system', content: 'You are helpful.' },
-                { role: 'user', content: 'Use the run_command tool exactly once.' },
-            ],
-            { builtinToolsEnabled: true },
-            true,
-            false,
-            sampleTools,
-            'gemma4',
-            undefined,
-            true,
-        )
-
-        expect(body.tool_choice).toEqual({
-            type: 'function',
-            name: 'run_command',
-        })
-    })
-
-    it('does not pin Chat tool_choice when no available tool is explicitly named', () => {
-        const body = buildRequestBody(
-            'completions',
-            'model',
-            [{ role: 'user', content: 'Explain the current project.' }],
-            { builtinToolsEnabled: true },
-            false,
-            false,
-            sampleTools,
-        )
-
-        expect(body.tool_choice).toBeUndefined()
-    })
-
-    it('does not pin tool_choice when the latest user names multiple available tools', () => {
-        const body = buildRequestBody(
-            'completions',
-            'model',
-            [{ role: 'user', content: 'Use read_file first, then run_command.' }],
-            { builtinToolsEnabled: true },
-            false,
-            false,
-            sampleTools,
-        )
-
-        expect(body.tool_choice).toBeUndefined()
-    })
-
     it('agentic tool prompts do not override explicit exact-output user formats', () => {
         const registry = readFileSync('src/main/tools/registry.ts', 'utf8')
         const chat = readFileSync('src/main/ipc/chat.ts', 'utf8')
@@ -1100,7 +750,7 @@ describe('buildRequestBody — Tool format', () => {
         expect(registry).not.toContain('MUST ALWAYS provide a substantive response')
         expect(chat).toContain('If the user explicitly requested exact final wording or a strict output format, follow that format exactly')
         expect(chat).toContain('suppressAgenticToolPromptForExactOutput')
-        expect(chat).toContain('/\\b(?:reply exactly|send visible final text exactly|output visible final text exactly)\\s*:/i.test(latestUserText)')
+        expect(chat).toContain('/\\breply exactly\\s*:/i.test(latestUserText)')
         expect(chat).toContain('!suppressAgenticToolPromptForExactOutput')
     })
 })

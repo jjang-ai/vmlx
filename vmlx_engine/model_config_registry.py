@@ -247,27 +247,6 @@ def _is_native_mtp_qwen_vl_artifact_ready(model_path: str | None) -> bool:
     )
 
 
-def _has_indexed_weight(model_path: str | None, prefix: str) -> bool:
-    if not model_path or not prefix:
-        return False
-    try:
-        import json
-        from pathlib import Path
-
-        index_path = Path(model_path) / "model.safetensors.index.json"
-        data = json.loads(index_path.read_text())
-        weight_map = data.get("weight_map") if isinstance(data, dict) else None
-        if not isinstance(weight_map, dict):
-            return False
-        return any(str(key).startswith(prefix) for key in weight_map)
-    except Exception:
-        return False
-
-
-def _gemma4_audio_runtime_available(model_path: str | None) -> bool:
-    return _has_indexed_weight(model_path, "audio_tower.")
-
-
 def _with_linear_attention_cache_override(
     config: ModelConfig,
     model_config: dict[str, Any],
@@ -661,12 +640,10 @@ class ModelConfigRegistry:
                 # MiMo-V2.5 uses generic XML function calls. Current live proof
                 # shows advertised thinking can produce hidden-only output with
                 # no visible final answer, so keep thinking disabled even when
-                # stale sidecars claim support. Still attach the generic XML
-                # reasoning parser as a cleanup/separation boundary; never use
-                # stale Qwen-family reasoning extraction for MiMo.
+                # stale sidecars claim a reasoning parser.
                 # Do not let stale sidecars promote it to unrelated Qwen/JSON
                 # tool formats or qwen3-specific reasoning extraction.
-                updates["reasoning_parser"] = "think_xml"
+                updates["reasoning_parser"] = None
                 updates["tool_parser"] = "xml_function"
                 updates["supports_native_tools"] = True
                 updates["supports_thinking"] = False
@@ -721,9 +698,7 @@ class ModelConfigRegistry:
                 hints = dict(getattr(base, "architecture_hints", None) or {})
                 hints["runtime_scope"] = "source_gemma4_unified_vlm"
                 hints["vl_runtime_available"] = True
-                hints["audio_runtime_available"] = _gemma4_audio_runtime_available(
-                    model_name
-                )
+                hints["audio_runtime_available"] = True
                 hints["default_enable_thinking"] = False
                 updates["is_mllm"] = True
                 updates["architecture_hints"] = hints

@@ -17,41 +17,17 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-jang-tools-installed-parity-20260611.json"
+    "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
-)
-MIMO_METADATA_TRUTH = Path(
-    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
-)
-MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE = Path(
-    "build/current-mimo-v25-jangtq2-media-runtime-source-proof-20260610.json"
-)
-MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE = Path(
-    "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json"
-)
-MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI = Path(
-    "build/current-real-ui-dev-app-mimo-v25-jangtq2-responses-tools-cache-20260610.json"
-)
-MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE = Path(
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
-)
-MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE = Path(
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jang2l-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
-)
-MIMO_JANGTQ2_INSTALLED_MEDIA_L2 = Path(
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-image-overlay-after-rebuild-pass-20260611-proof.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
 )
 NOHEAVY_API_CACHE = Path(
-    "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json"
-)
-RESPONSES_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
+    "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
@@ -63,25 +39,22 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
-)
-CURRENT_INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-after-jang-tools-runtime-sync-20260611.json"
+    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
 )
 OBJECTIVE_DIGEST = Path(
-    "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
 )
 ISSUE179_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 QWEN27_RESPONSES_CANCEL = Path(
-    "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260609.json"
+    "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json"
 )
 QWEN27_API_PARITY = Path(
     "build/current-qwen27-mxfp4-mtp-api-parity-20260607/summary.json"
 )
 QWEN27_RESTART_L2_RESTORE = Path(
-    "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260609/summary.json"
+    "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260607/summary.json"
 )
 QWEN27_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
@@ -93,49 +66,40 @@ QWEN35_STARTUP_MTP = Path(
     "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-deterministic-20260607/00_startup.json"
 )
 QWEN35_LONG_TOOL_CACHE = Path(
-    "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/SUMMARY.json"
+    "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-after-historical-tool-required-20260607/SUMMARY.json"
 )
 QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
-)
-QWEN35_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-live-recapture-after-proof-refresh-20260611.json"
 )
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
 )
 GEMMA4_12B_JANG4M_SMOKE = Path(
-    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-code-column-prompt-20260610/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
-)
-GEMMA4_12B_JANG4M_AUTOQ4_CACHE = Path(
-    "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"
-)
-GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
-    "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
+    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
 )
 GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
-    "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
+    "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
-    "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/JANGQ_Step-3.7-Flash-JANG_K/result.json"
+    "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
 )
 STEP37_VLM_RUNTIME_AUDIT = Path(
-    "build/current-step37-vlm-runtime-audit-after-bundled-vlm-proof-20260611.json"
+    "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
 )
 LFM25_MXFP4_SMOKE = Path(
-    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
+    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
 )
 LFM25_MXFP8_SMOKE = Path(
-    "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json"
+    "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json"
 )
 NEMOTRON_OMNI_SMOKE = Path(
-    "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/dealign.ai_Nemotron-Omni-Nano-JANGTQ-CRACK/result.json"
+    "build/current-all-local-model-smoke-nemotron-omni-mxfp4-tools-nomedia-after-reasoning-budget-20260606/dealign.ai_Nemotron-Omni-Nano-MXFP4-CRACK/result.json"
 )
 NEMOTRON_OMNI_MEDIA_GATE = Path(
-    "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/dealign.ai_Nemotron-Omni-Nano-JANGTQ-CRACK/result.json"
+    "build/current-nemotron-omni-mxfp4-media-gate-20260607/SUMMARY.json"
 )
 DSV4_EXACTNESS_PREFLIGHT = Path(
     "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-classifier-refresh-20260608.json"
@@ -181,73 +145,6 @@ def _check(name: str, ok: bool, evidence: str, detail: Any = None) -> dict[str, 
     if detail is not None:
         row["detail"] = detail
     return row
-
-
-def _installed_app_runtime_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
-    bundled_hash = data.get("bundled_engine_hash_parity")
-    if not isinstance(bundled_hash, dict):
-        bundled_hash = {}
-    bundled_jang_hash = data.get("bundled_jang_tools_hash_parity")
-    if not isinstance(bundled_jang_hash, dict):
-        bundled_jang_hash = {}
-    packaged_hash = data.get("packaged_engine_source_hash_parity")
-    if not isinstance(packaged_hash, dict):
-        packaged_hash = {}
-    missing_or_stale = data.get("missing_or_stale")
-    if not isinstance(missing_or_stale, list):
-        missing_or_stale = []
-    return [
-        _check(
-            "installed_app_current_runtime_parity_status_pass",
-            data.get("status") == "pass",
-            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
-            {
-                "status": data.get("status"),
-                "missing_or_stale": missing_or_stale,
-                "installed_app": data.get("installed_app"),
-            },
-        ),
-        _check(
-            "installed_app_current_bundled_engine_hash_parity",
-            checks.get("installed_bundled_engine_hash_parity") is True
-            and bundled_hash.get("ok") is True
-            and not bundled_hash.get("mismatched"),
-            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
-            {
-                "check": checks.get("installed_bundled_engine_hash_parity"),
-                "mismatched": bundled_hash.get("mismatched"),
-            },
-        ),
-        _check(
-            "installed_app_current_bundled_jang_tools_hash_parity",
-            checks.get("installed_bundled_jang_tools_hash_parity") is True
-            and bundled_jang_hash.get("ok") is True
-            and not bundled_jang_hash.get("mismatched"),
-            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
-            {
-                "check": checks.get("installed_bundled_jang_tools_hash_parity"),
-                "mismatched": bundled_jang_hash.get("mismatched"),
-            },
-        ),
-        _check(
-            "installed_app_current_packaged_engine_source_hash_parity",
-            checks.get("installed_packaged_engine_source_hash_parity") is True
-            and packaged_hash.get("ok") is True
-            and not packaged_hash.get("mismatched"),
-            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
-            {
-                "check": checks.get("installed_packaged_engine_source_hash_parity"),
-                "mismatched": packaged_hash.get("mismatched"),
-            },
-        ),
-        _check(
-            "installed_app_current_no_missing_or_stale_runtime_rows",
-            data.get("status") == "pass" and not missing_or_stale,
-            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
-            missing_or_stale,
-        ),
-    ]
 
 
 def _get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -386,297 +283,7 @@ def _mimo_classifier_checks(
     ]
 
 
-def _mimo_health_cache(proof: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    server = proof.get("server")
-    server = server if isinstance(server, dict) else {}
-    health = server.get("health")
-    health = health if isinstance(health, dict) else {}
-    cache = health.get("cache")
-    cache = cache if isinstance(cache, dict) else {}
-    block_disk = cache.get("block_disk_cache")
-    block_disk = block_disk if isinstance(block_disk, dict) else {}
-    scheduler_cache = cache.get("scheduler_cache")
-    scheduler_cache = scheduler_cache if isinstance(scheduler_cache, dict) else {}
-    totals = cache.get("totals")
-    totals = totals if isinstance(totals, dict) else {}
-    native = health.get("native_cache")
-    native = native if isinstance(native, dict) else {}
-    return block_disk, scheduler_cache, totals, native
-
-
-def _mimo_installed_cache_detail(proof: dict[str, Any]) -> dict[str, Any]:
-    block_disk, scheduler_cache, totals, native = _mimo_health_cache(proof)
-    return {
-        "status": proof.get("status"),
-        "failureStage": proof.get("failureStage"),
-        "uiLaunchMode": proof.get("uiLaunchMode"),
-        "rendererWireApi": proof.get("rendererWireApi"),
-        "modelName": proof.get("modelName"),
-        "requestedMedia": proof.get("requestedMedia"),
-        "block_disk": {
-            "disk_writes": block_disk.get("disk_writes"),
-            "disk_hits": block_disk.get("disk_hits"),
-            "total_tokens_on_disk": block_disk.get("total_tokens_on_disk"),
-        },
-        "scheduler_cache": {
-            "cache_hits": scheduler_cache.get("cache_hits"),
-            "tokens_saved": scheduler_cache.get("tokens_saved"),
-        },
-        "totals": {"l2_tokens_on_disk": totals.get("l2_tokens_on_disk")},
-        "native_cache": {
-            "schema": native.get("schema"),
-            "cache_subtype": native.get("cache_subtype"),
-            "generic_turboquant_kv": native.get("generic_turboquant_kv"),
-        },
-    }
-
-
-def _installed_mimo_tools_cache_green(
-    proof: dict[str, Any],
-    *,
-    expected_model: str,
-    expected_final_text: str,
-) -> bool:
-    request_contract = proof.get("requestContract")
-    request_contract = request_contract if isinstance(request_contract, dict) else {}
-    chat = proof.get("chat")
-    chat = chat if isinstance(chat, dict) else {}
-    block_disk, scheduler_cache, totals, native = _mimo_health_cache(proof)
-    generic_tq = native.get("generic_turboquant_kv")
-    generic_tq = generic_tq if isinstance(generic_tq, dict) else {}
-    return (
-        proof.get("exists") is True
-        and proof.get("status") == "pass"
-        and proof.get("uiLaunchMode") == "installed-app"
-        and proof.get("rendererWireApi") == "responses"
-        and proof.get("modelName") == expected_model
-        and request_contract.get("builtinToolsEnabled") is True
-        and request_contract.get("wireApi") == "responses"
-        and chat.get("finalVisibleText") == expected_final_text
-        and _positive_number(block_disk.get("disk_writes"))
-        and _positive_number(block_disk.get("disk_hits"))
-        and _positive_number(totals.get("l2_tokens_on_disk"))
-        and _positive_number(scheduler_cache.get("cache_hits"))
-        and _positive_number(scheduler_cache.get("tokens_saved"))
-        and native.get("schema") == "mixed_swa_kv_v1"
-        and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
-        and generic_tq.get("enabled") is False
-    )
-
-
-def _installed_mimo_media_l2_green(proof: dict[str, Any]) -> bool:
-    request_contract = proof.get("requestContract")
-    request_contract = request_contract if isinstance(request_contract, dict) else {}
-    chat = proof.get("chat")
-    chat = chat if isinstance(chat, dict) else {}
-    turns = chat.get("turns")
-    turns = turns if isinstance(turns, list) else []
-    server = proof.get("server")
-    server = server if isinstance(server, dict) else {}
-    health = server.get("health")
-    health = health if isinstance(health, dict) else {}
-    block_disk, _scheduler_cache, totals, native = _mimo_health_cache(proof)
-    return (
-        proof.get("exists") is True
-        and proof.get("uiLaunchMode") == "installed-app"
-        and proof.get("rendererWireApi") == "responses"
-        and proof.get("modelName") == "MiMo-V2.5-JANGTQ_2"
-        and proof.get("requestedMedia") is True
-        and request_contract.get("checkMedia") is True
-        and health.get("model_type") == "mllm"
-        and any(
-            isinstance(turn, dict)
-            and turn.get("role") == "user"
-            and "image_url" in str(turn.get("content") or "")
-            for turn in turns
-        )
-        and _positive_number(block_disk.get("disk_writes"))
-        and _positive_number(totals.get("l2_tokens_on_disk"))
-        and native.get("schema") == "mixed_swa_kv_v1"
-        and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
-    )
-
-
-def _mimo_jang2l_media_l2_not_applicable(metadata: dict[str, Any]) -> bool:
-    bundles = metadata.get("bundles")
-    bundles = bundles if isinstance(bundles, dict) else {}
-    jang2l = bundles.get("jang2l")
-    jang2l = jang2l if isinstance(jang2l, dict) else {}
-    caps = jang2l.get("capabilities")
-    caps = caps if isinstance(caps, dict) else {}
-    return (
-        metadata.get("exists") is True
-        and metadata.get("status") == "pass"
-        and jang2l.get("status") == "pass"
-        and caps.get("modalities") == ["text"]
-        and caps.get("multimodal_status") == "weights_preserved_text_runtime"
-        and set(caps.get("preserved_modalities") or []) >= {"vision", "audio"}
-        and set(caps.get("unwired_modalities") or []) >= {"vision", "audio"}
-    )
-
-
-def _mimo_media_current_checks(
-    media_runtime: dict[str, Any],
-    video_audio: dict[str, Any],
-    responses_tools_cache_ui: dict[str, Any],
-    installed_jangtq2_tools_cache: dict[str, Any],
-    installed_jang2l_tools_cache: dict[str, Any],
-    installed_jangtq2_media_l2: dict[str, Any],
-) -> list[dict[str, Any]]:
-    runtime_proven = media_runtime.get("proven")
-    runtime_proven = runtime_proven if isinstance(runtime_proven, dict) else {}
-    runtime_not_proven = media_runtime.get("not_proven")
-    runtime_not_proven = runtime_not_proven if isinstance(runtime_not_proven, dict) else {}
-    video_audio_proven = video_audio.get("proven")
-    video_audio_proven = video_audio_proven if isinstance(video_audio_proven, dict) else {}
-    video_audio_not_proven = video_audio.get("not_proven")
-    video_audio_not_proven = (
-        video_audio_not_proven if isinstance(video_audio_not_proven, dict) else {}
-    )
-    ui_cache = responses_tools_cache_ui.get("cache")
-    ui_cache = ui_cache if isinstance(ui_cache, dict) else {}
-    ui_runtime = responses_tools_cache_ui.get("runtime")
-    ui_runtime = ui_runtime if isinstance(ui_runtime, dict) else {}
-    installed_jangtq2_tools_green = _installed_mimo_tools_cache_green(
-        installed_jangtq2_tools_cache,
-        expected_model="MiMo-V2.5-JANGTQ_2",
-        expected_final_text="MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
-    )
-    installed_jang2l_tools_green = _installed_mimo_tools_cache_green(
-        installed_jang2l_tools_cache,
-        expected_model="MiMo-V2.5-JANG_2L",
-        expected_final_text="MIMO_DETERMINISTIC_TWO second UI turn.",
-    )
-    installed_jangtq2_media_l2_green = _installed_mimo_media_l2_green(
-        installed_jangtq2_media_l2
-    )
-    installed_jangtq2_media_semantics_blocked = (
-        installed_jangtq2_media_l2_green
-        and installed_jangtq2_media_l2.get("status") == "fail"
-        and installed_jangtq2_media_l2.get("failureStage") == "release_assertions"
-    )
-    source_media_runtime_green = (
-        media_runtime.get("exists") is True
-        and runtime_proven.get("api_routes_mllm") is True
-        and runtime_proven.get("loader_overlay_auto_enabled") is True
-        and runtime_proven.get("preserved_media_weights_bound") is True
-        and runtime_proven.get("live_chat_image_200") is True
-        and runtime_proven.get("prior_unsupported_media_400_cleared_for_source_image")
-        is True
-    )
-    source_video_audio_route_green = (
-        video_audio.get("exists") is True
-        and video_audio_proven.get("source_server_loads_as_mllm") is True
-        and video_audio_proven.get("media_weights_bound") is True
-        and video_audio_proven.get("video_request_reaches_runtime") is True
-        and video_audio_proven.get("video_http_200") is True
-        and video_audio_proven.get("audio_request_reaches_runtime") is True
-        and video_audio_proven.get("audio_http_200") is True
-    )
-    ui_responses_cache_green = (
-        responses_tools_cache_ui.get("exists") is True
-        and responses_tools_cache_ui.get("status") == "pass"
-        and responses_tools_cache_ui.get("classification")
-        == "dev_app_responses_tools_cache_green_exactness_still_bounded"
-        and ui_cache.get("nativeCacheSubtype") == "mimo_v2_asymmetric_swa"
-        and _positive_number(ui_cache.get("cacheHitTokens"))
-        and _positive_number(ui_cache.get("l2TokensOnDisk"))
-        and ui_runtime.get("quantizationProfile") == "JANGTQ_2"
-    )
-    return [
-        _check(
-            "mimo_jangtq2_current_source_media_runtime",
-            source_media_runtime_green,
-            str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
-            {
-                "status": media_runtime.get("status"),
-                "proven": runtime_proven,
-                "not_proven": runtime_not_proven,
-            },
-        ),
-        _check(
-            "mimo_jangtq2_current_source_video_audio_routes",
-            source_video_audio_route_green,
-            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
-            {
-                "status": video_audio.get("status"),
-                "proven": video_audio_proven,
-                "not_proven": video_audio_not_proven,
-            },
-        ),
-        _check(
-            "mimo_jangtq2_dev_app_responses_tools_cache",
-            ui_responses_cache_green,
-            str(MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI),
-            {
-                "status": responses_tools_cache_ui.get("status"),
-                "classification": responses_tools_cache_ui.get("classification"),
-                "cache": ui_cache,
-                "runtime": ui_runtime,
-            },
-        ),
-        _check(
-            "mimo_jangtq2_installed_responses_tools_cache",
-            installed_jangtq2_tools_green,
-            str(MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE),
-            _mimo_installed_cache_detail(installed_jangtq2_tools_cache),
-        ),
-        _check(
-            "mimo_jang2l_installed_responses_tools_cache",
-            installed_jang2l_tools_green,
-            str(MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE),
-            _mimo_installed_cache_detail(installed_jang2l_tools_cache),
-        ),
-        _check(
-            "mimo_jangtq2_installed_media_l2",
-            installed_jangtq2_media_l2_green,
-            str(MIMO_JANGTQ2_INSTALLED_MEDIA_L2),
-            _mimo_installed_cache_detail(installed_jangtq2_media_l2),
-        ),
-        _check(
-            "mimo_jangtq2_installed_media_semantics_accounted",
-            installed_jangtq2_media_l2_green
-            and (
-                installed_jangtq2_media_l2.get("status") == "pass"
-                or installed_jangtq2_media_semantics_blocked
-            ),
-            str(MIMO_JANGTQ2_INSTALLED_MEDIA_L2),
-            {
-                "status": installed_jangtq2_media_l2.get("status"),
-                "failureStage": installed_jangtq2_media_l2.get("failureStage"),
-                "semantic_blocker_present": installed_jangtq2_media_semantics_blocked,
-                "release_boundary": (
-                    "installed app media transport/L2 can be proven separately "
-                    "from semantic image correctness"
-                ),
-            },
-        ),
-        _check(
-            "mimo_jangtq2_media_semantics_release_quality",
-            video_audio_not_proven.get("video_semantic_correctness") is not True
-            and video_audio_not_proven.get("solid_color_image_semantic_correctness")
-            is not True
-            and runtime_not_proven.get("mimo_exactness") is not True,
-            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
-            {
-                "source_not_proven": video_audio_not_proven,
-                "runtime_not_proven": runtime_not_proven,
-            },
-        ),
-    ]
-
-
-def _mimo_checks(
-    data: dict[str, Any],
-    metadata: dict[str, Any],
-    classifier: dict[str, Any],
-    media_runtime: dict[str, Any],
-    video_audio: dict[str, Any],
-    responses_tools_cache_ui: dict[str, Any],
-    installed_jangtq2_tools_cache: dict[str, Any],
-    installed_jang2l_tools_cache: dict[str, Any],
-    installed_jangtq2_media_l2: dict[str, Any],
-) -> list[dict[str, Any]]:
+def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[str, Any]]:
     component_ok = data.get("component_ok")
     component_ok = component_ok if isinstance(component_ok, dict) else {}
     blockers = data.get("blockers")
@@ -691,40 +298,8 @@ def _mimo_checks(
     classifier_unresolved = (
         classifier_unresolved if isinstance(classifier_unresolved, dict) else {}
     )
-    media_runtime_rows = _mimo_media_current_checks(
-        media_runtime,
-        video_audio,
-        responses_tools_cache_ui,
-        installed_jangtq2_tools_cache,
-        installed_jang2l_tools_cache,
-        installed_jangtq2_media_l2,
-    )
-    media_current_by_name = {row["name"]: row for row in media_runtime_rows}
-    current_source_media_runtime = media_current_by_name[
-        "mimo_jangtq2_current_source_media_runtime"
-    ]["ok"]
-    current_source_video_audio_routes = media_current_by_name[
-        "mimo_jangtq2_current_source_video_audio_routes"
-    ]["ok"]
-    current_installed_jangtq2_media_l2 = media_current_by_name[
-        "mimo_jangtq2_installed_media_l2"
-    ]["ok"]
-    jang2l_media_l2_not_applicable = _mimo_jang2l_media_l2_not_applicable(metadata)
-    effective_blockers = list(blockers)
-    if current_installed_jangtq2_media_l2:
-        effective_blockers = [
-            blocker
-            for blocker in effective_blockers
-            if blocker != "mimo_jangtq2_live_media_l2_missing"
-        ]
-    if jang2l_media_l2_not_applicable:
-        effective_blockers = [
-            blocker
-            for blocker in effective_blockers
-            if blocker != "mimo_jang2l_live_media_l2_missing"
-        ]
     artifact_exactness_detail = {
-        "blockers": effective_blockers,
+        "blockers": blockers,
         "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
         "jang2l_boundary": jang2l_smoke.get("artifact_exactness_boundary"),
         "prompt_shape_first_token": diagnostics.get("prompt_shape_first_token"),
@@ -766,62 +341,22 @@ def _mimo_checks(
             data.get("status"),
         ),
         _check(
-            "mimo_jang2l_media_l2_not_applicable",
-            jang2l_media_l2_not_applicable,
-            str(MIMO_METADATA_TRUTH),
-            {
-                "status": metadata.get("status"),
-                "release_boundary": (
-                    "JANG_2L media/L2 live proof is not applicable when the "
-                    "bundle is text-runtime with preserved/unwired media weights"
-                ),
-            },
-        ),
-        _check(
             "mimo_local_release_clearance",
             data.get("local_release_clearance") is True,
             str(MIMO_AUDIT),
-            effective_blockers,
+            blockers,
         ),
     ]
-    latest_decode_speed = data.get("latest_decode_speed_evidence")
-    latest_decode_speed = (
-        latest_decode_speed if isinstance(latest_decode_speed, dict) else None
-    )
     for name in required:
         detail = artifact_exactness_detail if name == "artifact_exactness" else None
-        ok = component_ok.get(name) is True
-        if name == "decode_speed_target":
-            detail = latest_decode_speed
-        if name == "media_runtime_implementation":
-            ok = ok or current_source_media_runtime
-            detail = {
-                "audit_component_ok": component_ok.get(name),
-                "current_source_media_runtime": current_source_media_runtime,
-                "source_evidence": str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
-            }
-        elif name == "mimo_media_wired":
-            ok = ok or (
-                current_source_media_runtime and current_source_video_audio_routes
-            )
-            detail = {
-                "audit_component_ok": component_ok.get(name),
-                "current_source_media_runtime": current_source_media_runtime,
-                "current_source_video_audio_routes": current_source_video_audio_routes,
-                "source_evidence": [
-                    str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
-                    str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
-                ],
-            }
         rows.append(
             _check(
                 f"mimo_{name}",
-                ok,
+                component_ok.get(name) is True,
                 str(MIMO_AUDIT),
                 detail,
             )
         )
-    rows.extend(media_runtime_rows)
     rows.extend(_mimo_classifier_checks(data, classifier))
     return rows
 
@@ -985,46 +520,6 @@ def _panel_settings_contract_checks(data: dict[str, Any]) -> list[dict[str, Any]
     return rows
 
 
-def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
-    detail = {"missing_captures": data.get("missing_captures")}
-    required = [
-        "direct_capture_present",
-        "gateway_capture_present",
-        "tunnel_capture_present",
-        "all_required_surfaces_present",
-        "all_present_surfaces_parse_cleanly",
-        "all_present_surfaces_match_expected_function_name",
-        "all_present_surfaces_match_expected_arguments",
-        "all_present_surfaces_have_authoritative_args",
-        "authoritative_arguments_match_across_present_surfaces",
-        "tunnel_expected_model_advertised",
-        "local_responses_streaming_guards_pass",
-        "local_empty_xml_arguments_fail_closed",
-        "local_output_index_ordering_guard",
-        "gateway_argument_stream_passthrough_guard",
-        "responses_previous_response_history_guard",
-        "all_present_surfaces_have_valid_output_item_indices",
-        "all_present_surfaces_have_required_reasoning",
-        "all_present_surfaces_have_complete_reasoning_lifecycle",
-        "no_reasoning_disable_workaround",
-    ]
-    rows = _simple_artifact_checks("responses_raw_sse_parity", data)
-    rows.extend(
-        _check(
-            f"responses_raw_sse_parity_{name}",
-            data.get("status") == "pass"
-            and checks.get(name) is True
-            if name == "all_required_surfaces_present"
-            else checks.get(name) is True,
-            str(RESPONSES_RAW_SSE_PARITY),
-            detail if name == "all_required_surfaces_present" else checks.get(name),
-        )
-        for name in required
-    )
-    return rows
-
-
 def _tool_call_contract_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     checks = data.get("checks")
     checks = checks if isinstance(checks, dict) else {}
@@ -1070,47 +565,13 @@ def _objective_requirement(
 
 def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     row = _objective_requirement(data, "N2 Pro 397B JANG1L/JANGTQ")
-    jangtq2_row = _objective_requirement(data, "N2 Pro 397B JANGTQ2")
     details = row.get("details") if isinstance(row, dict) else {}
     details = details if isinstance(details, dict) else {}
-    jangtq2_details = (
-        jangtq2_row.get("details") if isinstance(jangtq2_row, dict) else {}
-    )
-    jangtq2_details = jangtq2_details if isinstance(jangtq2_details, dict) else {}
-    noheavy = details.get("noheavy_contracts") if isinstance(details.get("noheavy_contracts"), dict) else {}
-    live = details.get("jangtq2_live_proof") if isinstance(details.get("jangtq2_live_proof"), dict) else {}
-    l2 = details.get("jangtq2_l2_restart_proof") if isinstance(details.get("jangtq2_l2_restart_proof"), dict) else {}
-    ui = (
-        details.get("jangtq2_real_ui_prevresp_proof")
-        if isinstance(details.get("jangtq2_real_ui_prevresp_proof"), dict)
-        else {}
-    )
-    ui_tool_loop = ui.get("tool_loop") if isinstance(ui.get("tool_loop"), dict) else {}
-    ui_runtime_cache = (
-        ui.get("runtime_cache") if isinstance(ui.get("runtime_cache"), dict) else {}
-    )
-    strict_loop = (
-        details.get("jangtq2_strict_loopback_toolchoice_auto")
-        if isinstance(details.get("jangtq2_strict_loopback_toolchoice_auto"), dict)
-        else {}
-    )
-    strict_live = (
-        strict_loop.get("live_result")
-        if isinstance(strict_loop.get("live_result"), dict)
-        else {}
-    )
-    stream = (
-        details.get("jangtq2_responses_stream_boundary")
-        if isinstance(details.get("jangtq2_responses_stream_boundary"), dict)
-        else {}
-    )
-    stream_checks = stream.get("checks") if isinstance(stream.get("checks"), dict) else {}
     detail = {
         "status": row.get("status") if isinstance(row, dict) else "missing",
         "requirement": row.get("requirement") if isinstance(row, dict) else None,
         "evidence": row.get("evidence") if isinstance(row, dict) else None,
         "local_artifact_probe": details.get("local_artifact_probe"),
-        "jang1l_live_gate": details.get("jang1l_live_gate"),
         "required_next_evidence": details.get("required_next_evidence"),
     }
     return [
@@ -1125,120 +586,6 @@ def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
             isinstance(row, dict) and row.get("status") == "pass",
             str(OBJECTIVE_DIGEST),
             detail,
-        ),
-        _check(
-            "n2_jangtq2_release_clearance",
-            isinstance(jangtq2_row, dict) and jangtq2_row.get("status") == "pass",
-            str(OBJECTIVE_DIGEST),
-            {
-                "status": (
-                    jangtq2_row.get("status")
-                    if isinstance(jangtq2_row, dict)
-                    else "missing"
-                ),
-                "requirement": (
-                    jangtq2_row.get("requirement")
-                    if isinstance(jangtq2_row, dict)
-                    else None
-                ),
-                "evidence": (
-                    jangtq2_row.get("evidence")
-                    if isinstance(jangtq2_row, dict)
-                    else None
-                ),
-                "boundary": jangtq2_details.get("boundary"),
-            },
-        ),
-        _check(
-            "n2_jangtq2_source_runtime_api_cache",
-            live.get("status") == "pass"
-            and live.get("stable_text") is True
-            and live.get("tool_probe_pass") is True
-            and live.get("responses_probe_pass") is True
-            and live.get("responses_stream_probe_pass") is True
-            and _positive_number(live.get("cache_hit_cached_tokens"))
-            and live.get("cache_hit_cache_detail") == "paged+ssm"
-            and _positive_number(live.get("block_disk_writes"))
-            and _positive_number(live.get("block_disk_hits"))
-            and _positive_number(live.get("ssm_disk_stores")),
-            str(OBJECTIVE_DIGEST),
-            live,
-        ),
-        _check(
-            "n2_jangtq2_fresh_process_l2_restart",
-            l2.get("status") == "pass"
-            and l2.get("l2_restart_probe_pass") is True
-            and _positive_number(l2.get("restart_cached_tokens"))
-            and l2.get("restart_cache_detail") == "paged+ssm+disk"
-            and _positive_number(l2.get("block_disk_hits"))
-            and _positive_number(l2.get("ssm_disk_hits")),
-            str(OBJECTIVE_DIGEST),
-            l2,
-        ),
-        _check(
-            "n2_jangtq2_real_ui_prevresp_tool_cache",
-            ui.get("status") == "pass"
-            and ui_tool_loop.get("visible_assistant_turns_complete") is True
-            and _positive_number(_get(ui_tool_loop, "event_counts", "tool"))
-            and _positive_number(_get(ui_runtime_cache, "cache_after", "cache_hit_tokens"))
-            and _positive_number(
-                _get(ui_runtime_cache, "cache_after", "l2_block_tokens_on_disk")
-            )
-            and _positive_number(
-                _get(ui_runtime_cache, "cache_after", "l2_ssm_tokens_on_disk")
-            ),
-            str(OBJECTIVE_DIGEST),
-            {
-                "artifact": ui.get("artifact"),
-                "status": ui.get("status"),
-                "tool_loop": ui_tool_loop,
-                "runtime_cache": ui_runtime_cache,
-            },
-        ),
-        _check(
-            "n2_jangtq2_strict_loopback_toolchoice_auto",
-            strict_loop.get("status") == "pass"
-            and _get(strict_live, "tool_probe_files", "real_ui_tool_probe_1.txt")
-            == "REAL_UI_LIVE_TOOL_ONE"
-            and _get(strict_live, "tool_probe_files", "real_ui_tool_probe_2.txt")
-            == "REAL_UI_LIVE_TOOL_TWO"
-            and _positive_number(_get(strict_live, "event_counts", "tool"))
-            and _get(strict_live, "native_cache", "generic_turboquant_kv_enabled")
-            is True
-            and _get(
-                strict_live,
-                "native_cache",
-                "attention_kv_storage_quantization_bits",
-            )
-            == 4,
-            str(OBJECTIVE_DIGEST),
-            strict_loop,
-        ),
-        _check(
-            "n2_jangtq2_direct_gateway_responses_stream_boundary",
-            stream.get("status") == "pass"
-            and stream_checks.get("direct_first_output_index_clean") is True
-            and stream_checks.get("first_tool_call_present") is True
-            and stream_checks.get("direct_followup_content_delta_streaming") is True
-            and stream_checks.get("gateway_followup_content_delta_streaming") is True
-            and bool(stream.get("direct_first_arguments"))
-            and bool(stream.get("gateway_first_arguments")),
-            str(OBJECTIVE_DIGEST),
-            stream,
-        ),
-        _check(
-            "n2_jangtq2_noheavy_policy_cache_contracts",
-            noheavy.get("api_cache") == "pass"
-            and noheavy.get("cache_architecture") == "pass"
-            and noheavy.get("model_family_detection") == "pass"
-            and noheavy.get("n2_family_policy") is True
-            and noheavy.get("n2_jangtq2_live_runtime_api_cache") is True
-            and noheavy.get("n2_jangtq2_direct_gateway_stream_boundary") is True
-            and noheavy.get("turboquant_runtime_contract") is True
-            and noheavy.get("turboquant_disk_roundtrip") is True
-            and noheavy.get("hybrid_cache_policy") is True,
-            str(OBJECTIVE_DIGEST),
-            noheavy,
         ),
     ]
 
@@ -1301,16 +648,9 @@ def _native_mixed_swa_cache_ok(
     *,
     family: str,
     subtype: str | None = None,
-    require_storage_quantization: bool = True,
 ) -> bool:
     native = native if isinstance(native, dict) else {}
     subtype_ok = True if subtype is None else native.get("cache_subtype") == subtype
-    storage_ok = (
-        _get(native, "storage_quantization", "enabled") is True
-        and _get(native, "storage_quantization", "bits") == 4
-    )
-    if not require_storage_quantization:
-        storage_ok = _get(native, "storage_quantization", "enabled") is False
     return (
         native.get("family") == family
         and native.get("schema") == "mixed_swa_kv_v1"
@@ -1320,7 +660,8 @@ def _native_mixed_swa_cache_ok(
         and native.get("paged") is True
         and native.get("block_disk_l2") is True
         and _get(native, "generic_turboquant_kv", "enabled") is False
-        and storage_ok
+        and _get(native, "storage_quantization", "enabled") is True
+        and _get(native, "storage_quantization", "bits") == 4
     )
 
 
@@ -1335,49 +676,21 @@ def _smoke_mixed_swa_checks(
     expected_mllm: bool,
     cache_detail: str,
     subtype: str | None = None,
-    cache_proof: dict[str, Any] | None = None,
-    cache_path: Path | None = None,
-    require_storage_quantization: bool = True,
 ) -> list[dict[str, Any]]:
     row = data.get("row") if isinstance(data.get("row"), dict) else {}
     capabilities = _get(data, "capabilities", "body", default={})
-    cache_source = cache_proof if isinstance(cache_proof, dict) else data
-    cache_evidence = cache_path or path
-    native = (
-        cache_source.get("native_cache")
-        if isinstance(cache_source.get("native_cache"), dict)
-        else _get(cache_source, "cache_after", "body", "native_cache", default={})
-    )
-    block_disk = _get(cache_source, "cache_after", "block_disk_cache", default={})
-    if not isinstance(block_disk, dict) or not block_disk:
-        block_disk = _get(cache_source, "cache_after", "body", "block_disk_cache", default={})
-    totals = _get(cache_source, "cache_after", "cache_totals", default={})
-    if not isinstance(totals, dict) or not totals:
-        totals = _get(cache_source, "cache_after", "body", "cache_totals", default={})
-    cache_reuse_ok = _has_cache_reuse_request(data, cache_detail) or (
-        _get(cache_source, "checks", "cache_second_hit") is True
-        and _get(cache_source, "second", "usage", "prompt_tokens_details", "cache_detail")
-        == cache_detail
-    )
+    native = _get(data, "cache_after", "body", "native_cache", default={})
+    block_disk = _get(data, "cache_after", "body", "block_disk_cache", default={})
+    totals = _get(data, "cache_after", "body", "cache_totals", default={})
     return _simple_artifact_checks(name, data) + [
         _check(f"{name}_request_validations_clean", _all_request_validations_clean(data), str(path), data.get("failures")),
         _check(f"{name}_mllm_classification", row.get("is_mllm") is expected_mllm, str(path), row.get("is_mllm")),
         _check(f"{name}_tool_parser", capabilities.get("tool_parser") == tool_parser, str(path), capabilities.get("tool_parser")),
         _check(f"{name}_reasoning_parser", capabilities.get("reasoning_parser") == reasoning_parser, str(path), capabilities.get("reasoning_parser")),
         _check(f"{name}_tool_call_record_fact", _has_record_fact_tool_call(data), str(path)),
-        _check(f"{name}_cache_reuse_detail", cache_reuse_ok, str(cache_evidence), cache_detail),
-        _check(
-            f"{name}_native_mixed_swa_cache",
-            _native_mixed_swa_cache_ok(
-                native,
-                family=family,
-                subtype=subtype,
-                require_storage_quantization=require_storage_quantization,
-            ),
-            str(cache_evidence),
-            native,
-        ),
-        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(cache_evidence), block_disk),
+        _check(f"{name}_cache_reuse_detail", _has_cache_reuse_request(data, cache_detail), str(path), cache_detail),
+        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(path), native),
+        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(path), block_disk),
     ]
 
 
@@ -1411,113 +724,26 @@ def _gemma4_12b_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _gemma4_12b_issue191_startup_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
-    content = _get(data, "chat_response", "choices", default=[])
-    first_choice = content[0] if isinstance(content, list) and content else {}
-    message = first_choice.get("message") if isinstance(first_choice, dict) else {}
-    visible = message.get("content") if isinstance(message, dict) else None
-    return _simple_artifact_checks("gemma4_12b_issue191_startup", data) + [
-        _check(
-            "gemma4_12b_issue191_startup_visible_generation",
-            data.get("status") == "pass"
-            and checks.get("import_alias_ok") is True
-            and checks.get("startup_health_ok") is True
-            and checks.get("visible_generation_ok") is True
-            and checks.get("post_chat_health_ok") is True
-            and visible == "GEMMA4-OK"
-            and first_choice.get("finish_reason") == "stop",
-            str(GEMMA4_12B_ISSUE191_STARTUP_VISIBLE),
-            {
-                "status": data.get("status"),
-                "model": data.get("model"),
-                "checks": checks,
-                "content": visible,
-                "finish_reason": first_choice.get("finish_reason"),
-            },
-        )
-    ]
-
-
 def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
-    gemma12b_audio_ok = (
-        checks.get("gemma4_12b_audio_weight_backed") is True
-        or checks.get("gemma4_12b_audio_honestly_gated") is True
-    )
     detail = {
         "missing_required_rows": data.get("missing_required_rows"),
         "open_required_rows": data.get("open_required_rows"),
-        "source_live_smoke_open_rows": data.get("source_live_smoke_open_rows"),
     }
-    required_rows = data.get("required_rows", {})
-    required_rows = required_rows if isinstance(required_rows, dict) else {}
-    qat_jang4m_keys = (
-        "gemma4_e2b_qat_jang4m",
-        "gemma4_e4b_qat_jang4m",
-        "gemma4_12b_qat_jang4m",
-        "gemma4_26b_qat_jang4m",
-        "gemma4_31b_qat_jang4m",
-    )
-    qat_jang4m_checks: list[dict[str, Any]] = []
-    for row_key in qat_jang4m_keys:
-        row = required_rows.get(row_key)
-        row = row if isinstance(row, dict) else {}
-        check_prefix = f"gemma_qat_native_mxfp4_{row_key}"
-        qat_jang4m_checks.extend(
-            [
-                _check(
-                    f"{check_prefix}_present",
-                    checks.get(f"{row_key}_present") is True or bool(row),
-                    str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-                    row,
-                ),
-                _check(
-                    f"{check_prefix}_open",
-                    row.get("status") == "pass"
-                    and row.get("live_proof_status") == "pass",
-                    str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-                    row
-                    or (
-                        "Gemma4 QAT JANG_4M must remain open until autodetect, "
-                        "generation_config defaults, Gemma4 parser, mixed-SWA/prefix "
-                        "cache, TurboQuant KV boundary, L2, Responses streaming "
-                        "args/content deltas, media honesty, UI/CLI, and installed-app "
-                        "parity are live-proven."
-                    ),
-                ),
-            ]
-        )
-    return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + qat_jang4m_checks + [
+    return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + [
         _check(
-            "gemma_qat_native_mxfp4_gemma4_e2b_present",
-            checks.get("gemma4_e2b_qat_native_mxfp4_present") is True,
+            "gemma_qat_native_mxfp4_gemma3n_e2b_present",
+            checks.get("gemma3n_e2b_qat_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma4_e2b_qat_native_mxfp4")
+            data.get("required_rows", {}).get("gemma3n_e2b_qat_native4")
             if isinstance(data.get("required_rows"), dict)
             else None,
         ),
         _check(
-            "gemma_qat_native_mxfp4_gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven",
-            checks.get("gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
+            "gemma_qat_native_mxfp4_gemma3n_e4b_present",
+            checks.get("gemma3n_e4b_qat_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma4_e2b_qat_jang4m")
-            if isinstance(data.get("required_rows"), dict)
-            else None,
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_e4b_present",
-            checks.get("gemma4_e4b_qat_native_mxfp4_present") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma4_e4b_qat_native_mxfp4")
-            if isinstance(data.get("required_rows"), dict)
-            else None,
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven",
-            checks.get("gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma4_e4b_qat_jang4m")
+            data.get("required_rows", {}).get("gemma3n_e4b_qat_native4")
             if isinstance(data.get("required_rows"), dict)
             else None,
         ),
@@ -1525,14 +751,6 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
             "gemma_qat_native_mxfp4_gemma4_12b_present",
             checks.get("gemma4_12b_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven",
-            checks.get("gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma4_12b_qat_jang4m")
-            if isinstance(data.get("required_rows"), dict)
-            else None,
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_26b_present",
@@ -1543,79 +761,6 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
             "gemma_qat_native_mxfp4_gemma4_31v_or_31b_present",
             checks.get("gemma4_31v_or_31b_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_12b_audio_weight_backed",
-            gemma12b_audio_ok,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            {
-                "gemma4_12b_audio_weight_backed": checks.get("gemma4_12b_audio_weight_backed"),
-                "gemma4_12b_audio_honestly_gated": checks.get(
-                    "gemma4_12b_audio_honestly_gated"
-                ),
-                "row": data.get("required_rows", {}).get("gemma4_12b_native_mxfp4")
-                if isinstance(data.get("required_rows"), dict)
-                else None,
-            },
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven",
-            checks.get("gemma4_12b_video_runtime_proof_required") is not True
-            or checks.get("gemma4_12b_video_runtime_source_proven") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            {
-                "gemma4_12b_video_runtime_proof_required": checks.get(
-                    "gemma4_12b_video_runtime_proof_required"
-                ),
-                "gemma4_12b_video_runtime_source_proven": checks.get(
-                    "gemma4_12b_video_runtime_source_proven"
-                ),
-                "row": data.get("required_rows", {}).get("gemma4_12b_native_mxfp4")
-                if isinstance(data.get("required_rows"), dict)
-                else None,
-            },
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven",
-            checks.get("gemma4_26b_video_runtime_proof_required") is not True
-            or checks.get("gemma4_26b_video_runtime_source_proven") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            {
-                "gemma4_26b_video_runtime_proof_required": checks.get(
-                    "gemma4_26b_video_runtime_proof_required"
-                ),
-                "gemma4_26b_video_runtime_source_proven": checks.get(
-                    "gemma4_26b_video_runtime_source_proven"
-                ),
-                "row": data.get("required_rows", {}).get("gemma4_26b_vl")
-                if isinstance(data.get("required_rows"), dict)
-                else None,
-            },
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven",
-            checks.get("gemma4_31v_or_31b_video_runtime_proof_required") is not True
-            or checks.get("gemma4_31v_or_31b_video_runtime_source_proven") is True,
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            {
-                "gemma4_31v_or_31b_video_runtime_proof_required": checks.get(
-                    "gemma4_31v_or_31b_video_runtime_proof_required"
-                ),
-                "gemma4_31v_or_31b_video_runtime_source_proven": checks.get(
-                    "gemma4_31v_or_31b_video_runtime_source_proven"
-                ),
-                "row": data.get("required_rows", {}).get("gemma4_31v_or_31b_vl")
-                if isinstance(data.get("required_rows"), dict)
-                else None,
-            },
-        ),
-        _check(
-            "gemma_qat_native_mxfp4_all_source_live_smokes_present",
-            checks.get("all_required_source_live_smokes_present") is True
-            and data.get("missing_required_rows") == []
-            and data.get("source_live_smoke_open_rows") == [],
-            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            detail,
         ),
         _check(
             "gemma_qat_native_mxfp4_all_live_proofs_present",
@@ -1735,15 +880,7 @@ def _native_hybrid_ssm_cache_ok(native: dict[str, Any], *, family: str) -> bool:
 
 def _request_by_name(data: dict[str, Any], name: str) -> dict[str, Any]:
     for row in _requests(data):
-        if row.get("name") == name or row.get("label") == name:
-            return row
-    return {}
-
-
-def _request_by_any_name(data: dict[str, Any], *names: str) -> dict[str, Any]:
-    for name in names:
-        row = _request_by_name(data, name)
-        if row:
+        if row.get("name") == name:
             return row
     return {}
 
@@ -1768,23 +905,17 @@ def _all_named_checks_pass(data: dict[str, Any]) -> bool:
 
 
 def _nemotron_omni_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    image = _request_by_any_name(data, "image_blue", "vl_blue_image")
-    video = _request_by_any_name(data, "video_blue", "vl_blue_video")
+    image = _request_by_name(data, "image_blue")
+    video = _request_by_name(data, "video_blue")
     audio = _request_by_name(data, "audio_blue")
-    recall = _request_by_any_name(data, "turn2_recall", "text_multiturn_recall")
+    recall = _request_by_name(data, "turn2_recall")
     cache_final = data.get("cache_final") if isinstance(data.get("cache_final"), dict) else {}
-    if not cache_final:
-        cache_final = _get(data, "cache_after", "body", default={})
     native = cache_final.get("native_cache") if isinstance(cache_final.get("native_cache"), dict) else {}
     block_disk = cache_final.get("block_disk_cache") if isinstance(cache_final.get("block_disk_cache"), dict) else {}
     totals = cache_final.get("cache_totals") if isinstance(cache_final.get("cache_totals"), dict) else {}
     ssm_disk = _get(cache_final, "ssm_companion", "disk", default={})
     recall_details = _get(recall, "usage", "prompt_tokens_details", default={})
-    if not recall_details:
-        recall_details = _get(data, "cache_after", "body", "scheduler_stats", "last_cache_execution", default={})
     log_tail = data.get("log_tail") if isinstance(data.get("log_tail"), str) else ""
-    if not log_tail:
-        log_tail = data.get("server_log_tail") if isinstance(data.get("server_log_tail"), str) else ""
     required_requests = {
         "image_blue": image,
         "video_blue": video,
@@ -1793,8 +924,8 @@ def _nemotron_omni_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     }
     media_rows_ok = (
         str(data.get("status")).lower() == "pass"
-        and (data.get("passed") is True or data.get("passed") is None)
-        and (_all_named_checks_pass(data) or _all_request_validations_clean(data))
+        and data.get("passed") is True
+        and _all_named_checks_pass(data)
         and all(row.get("code") == 200 for row in required_requests.values())
         and "blue" in str(image.get("content", "")).lower()
         and "blue" in str(video.get("content", "")).lower()
@@ -1806,10 +937,7 @@ def _nemotron_omni_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
         _positive_number(recall_details.get("cached_tokens"))
         and recall_details.get("cache_detail") == "paged+ssm"
         and _get(cache_final, "scheduler_stats", "cache_hit_tokens") == recall_details.get("cached_tokens")
-        and (
-            _get(_check_row_by_name(data, "cache_stats_final_available"), "ok") is True
-            or _get(data, "cache_after", "code") == 200
-        )
+        and _get(_check_row_by_name(data, "cache_stats_final_available"), "ok") is True
     )
     l2_ok = (
         _positive_number(block_disk.get("disk_writes"))
@@ -1927,9 +1055,7 @@ def _mtp_runtime_active(data: dict[str, Any]) -> bool:
 
 
 def _qwen27_cancel_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    health = data.get("health_after") if isinstance(data.get("health_after"), dict) else {}
-    if not health:
-        health = data.get("health_before") if isinstance(data.get("health_before"), dict) else {}
+    health = data.get("health_before") if isinstance(data.get("health_before"), dict) else {}
     probe = data.get("probe") if isinstance(data.get("probe"), dict) else {}
     raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
     request = data.get("request") if isinstance(data.get("request"), dict) else {}
@@ -1969,49 +1095,14 @@ def _qwen27_api_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
 def _qwen27_restart_l2_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     phase1 = _get(data, "phases", "phase1", default={})
     phase2 = _get(data, "phases", "phase2", default={})
-    if not phase1 or not phase2:
-        results = data.get("results") if isinstance(data.get("results"), list) else []
-        if results and isinstance(results[0], dict):
-            phase1 = results[0].get("first") if isinstance(results[0].get("first"), dict) else phase1
-            phase2 = results[0].get("second") if isinstance(results[0].get("second"), dict) else phase2
-    phase1_block = (
-        _get(phase1, "block_disk_cache", default={})
-        or _get(phase1, "cache_stats", "block_disk_cache", default={})
-        or _get(phase1, "cache_after", "body", "block_disk_cache", default={})
-        or _get(phase1, "health_after", "cache", "block_disk_cache", default={})
-    )
-    phase1_ssm = (
-        _get(phase1, "ssm_companion_disk", default={})
-        or _get(phase1, "cache_stats", "ssm_companion", "disk", default={})
-        or _get(phase1, "cache_after", "body", "ssm_companion", "disk", default={})
-        or _get(phase1, "health_after", "cache", "ssm_companion", "disk", default={})
-    )
-    phase2_block = (
-        _get(phase2, "block_disk_cache", default={})
-        or _get(phase2, "cache_stats", "block_disk_cache", default={})
-        or _get(phase2, "cache_after", "body", "block_disk_cache", default={})
-        or _get(phase2, "health_after", "cache", "block_disk_cache", default={})
-    )
-    phase2_usage_detail = (
-        _get(phase2, "usage", "prompt_tokens_details", default={})
-        or _get(phase2, "response", "usage", "prompt_tokens_details", default={})
-    )
-    phase2_cache_hit_tokens = (
-        _get(phase2, "cache_hit_tokens")
-        or _get(phase2, "cached_tokens")
-        or _get(phase2_usage_detail, "cached_tokens")
-        or _get(phase2, "health_after", "scheduler", "cache_hit_tokens")
-    )
-    phase2_native = _get(phase2, "native_cache", default={}) or _get(phase2, "health_after", "native_cache", default={})
-    phase2_mtp = _get(phase2, "mtp", default={}) or _get(phase2, "health_after", "mtp", default={})
     return [
         _check("qwen27_restart_artifact_exists", data.get("exists") is True, str(QWEN27_RESTART_L2_RESTORE), data.get("status")),
         _check("qwen27_restart_status_pass", data.get("status") == "pass", str(QWEN27_RESTART_L2_RESTORE), data.get("status")),
-        _check("qwen27_restart_phase1_store", _positive_number(_get(phase1_block, "disk_writes")) and _positive_number(_get(phase1_ssm, "stores")), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_disk_hit", _positive_number(phase2_cache_hit_tokens) and _get(phase2_usage_detail, "cache_detail") == "paged+ssm+disk", str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_block_l2_hit", _positive_number(_get(phase2_block, "disk_hits")), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_native_cache", _native_hybrid_cache_ok(phase2_native), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_mtp_active", _mtp_runtime_active(phase2_mtp), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase1_store", _positive_number(_get(phase1, "block_disk_cache", "disk_writes")) and _positive_number(_get(phase1, "ssm_companion_disk", "stores")), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_disk_hit", _positive_number(_get(phase2, "cache_hit_tokens")) and _get(phase2, "usage", "prompt_tokens_details", "cache_detail") == "paged+ssm+disk", str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_block_l2_hit", _positive_number(_get(phase2, "block_disk_cache", "disk_hits")), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_native_cache", _native_hybrid_cache_ok(_get(phase2, "native_cache", default={})), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_mtp_active", _mtp_runtime_active(_get(phase2, "mtp", default={})), str(QWEN27_RESTART_L2_RESTORE)),
     ]
 
 
@@ -2118,29 +1209,6 @@ def _qwen35_restart_l2_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _qwen35_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
-    captures = data.get("captures") if isinstance(data.get("captures"), dict) else {}
-    detail = {
-        "missing_captures": data.get("missing_captures"),
-        "conflicting_output_indices": {
-            name: row.get("conflicting_output_indices")
-            for name, row in captures.items()
-            if isinstance(row, dict) and row.get("conflicting_output_indices")
-        },
-    }
-    return [
-        _check("qwen35_raw_sse_artifact_exists", data.get("exists") is True, str(QWEN35_RAW_SSE_PARITY), data.get("status")),
-        _check("qwen35_raw_sse_status_pass", data.get("status") == "pass", str(QWEN35_RAW_SSE_PARITY), data.get("status")),
-        _check("qwen35_raw_sse_same_model_surfaces", checks.get("all_present_surfaces_same_model") is True and checks.get("all_present_surfaces_match_expected_model") is True, str(QWEN35_RAW_SSE_PARITY), checks.get("all_present_surfaces_same_model")),
-        _check("qwen35_raw_sse_authoritative_args", checks.get("all_present_surfaces_have_authoritative_args") is True and checks.get("all_present_surfaces_match_expected_arguments") is True, str(QWEN35_RAW_SSE_PARITY)),
-        _check("qwen35_raw_sse_reasoning_events", checks.get("all_present_surfaces_have_required_reasoning") is True and checks.get("no_reasoning_disable_workaround") is True, str(QWEN35_RAW_SSE_PARITY)),
-        _check("qwen35_raw_sse_reasoning_lifecycle", checks.get("all_present_surfaces_have_complete_reasoning_lifecycle") is True, str(QWEN35_RAW_SSE_PARITY)),
-        _check("qwen35_raw_sse_valid_output_item_indices", checks.get("all_present_surfaces_have_valid_output_item_indices") is True, str(QWEN35_RAW_SSE_PARITY), detail),
-        _check("qwen35_raw_sse_local_source_guards", checks.get("local_responses_streaming_guards_pass") is True and checks.get("local_output_index_ordering_guard") is True and checks.get("local_empty_xml_arguments_fail_closed") is True, str(QWEN35_RAW_SSE_PARITY)),
-    ]
-
-
 def _qwen_installed_video_checks(
     name: str,
     data: dict[str, Any],
@@ -2211,7 +1279,7 @@ def _qwen27_long_context_cache_tail_checks(data: dict[str, Any]) -> list[dict[st
         _check("qwen27_long_context_status_pass", data.get("status") == "pass", str(QWEN27_LONG_CONTEXT_CACHE_TAIL), data.get("status")),
         _check("qwen27_long_context_prompt_large", _positive_number(_get(cold_usage, "input_tokens")) and _get(cold_usage, "input_tokens") >= 30000 and _get(warm_usage, "input_tokens") == _get(cold_usage, "input_tokens"), str(QWEN27_LONG_CONTEXT_CACHE_TAIL), {"cold": cold_usage, "warm": warm_usage}),
         _check("qwen27_long_context_tail_markers", checks.get("cold_visible_tail_markers") is True and checks.get("warm_visible_tail_markers") is True, str(QWEN27_LONG_CONTEXT_CACHE_TAIL), checks),
-        _check("qwen27_long_context_warm_cache_hit", _positive_number(_get(warm_details, "cached_tokens")) and _get(warm_details, "cached_tokens") >= 30000 and _get(warm_details, "cache_detail") in {"paged+ssm", "paged+ssm+disk"}, str(QWEN27_LONG_CONTEXT_CACHE_TAIL), warm_details),
+        _check("qwen27_long_context_warm_cache_hit", _positive_number(_get(warm_details, "cached_tokens")) and _get(warm_details, "cached_tokens") >= 30000 and _get(warm_details, "cache_detail") == "paged+ssm", str(QWEN27_LONG_CONTEXT_CACHE_TAIL), warm_details),
         _check("qwen27_long_context_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(block_disk, "total_tokens_on_disk")) and _get(block_disk, "total_tokens_on_disk") >= 30000, str(QWEN27_LONG_CONTEXT_CACHE_TAIL), block_disk),
         _check("qwen27_long_context_block_l2_hits", _positive_number(_get(block_disk, "disk_hits")), str(QWEN27_LONG_CONTEXT_CACHE_TAIL), block_disk),
         _check("qwen27_long_context_ssm_l2_written", _positive_number(_get(ssm_disk, "stores")) and _positive_number(_get(ssm_disk, "total_tokens_on_disk")) and _get(ssm_disk, "total_tokens_on_disk") >= 30000, str(QWEN27_LONG_CONTEXT_CACHE_TAIL), ssm_disk),
@@ -2242,16 +1310,6 @@ def _issue179_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     reporter_repro = (
         data.get("local_reporter_prompt_reproduction")
         if isinstance(data.get("local_reporter_prompt_reproduction"), dict)
-        else {}
-    )
-    current_source_smoke = (
-        data.get("current_source_minimax_small_smoke")
-        if isinstance(data.get("current_source_minimax_small_smoke"), dict)
-        else {}
-    )
-    current_source_smoke_checks = (
-        current_source_smoke.get("checks")
-        if isinstance(current_source_smoke.get("checks"), dict)
         else {}
     )
     not_proven = data.get("not_proven") if isinstance(data.get("not_proven"), list) else []
@@ -2343,18 +1401,6 @@ def _issue179_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
                     "reporter_log_has_abort_before_visible_content"
                 ),
                 "reporter_repro": reporter_repro,
-            },
-        ),
-        _check(
-            "issue179_current_source_minimax_small_smoke",
-            current_source_smoke.get("all_checks_pass") is True
-            and all(current_source_smoke_checks.values()),
-            str(ISSUE179_AUDIT),
-            {
-                "path": current_source_smoke.get("path"),
-                "status": current_source_smoke.get("status"),
-                "checks": current_source_smoke_checks,
-                "release_boundary": current_source_smoke.get("release_boundary"),
             },
         ),
     ]
@@ -2458,30 +1504,11 @@ def _dsv4_exactness_preflight_checks(data: dict[str, Any]) -> list[dict[str, Any
 def _build(root: Path) -> dict[str, Any]:
     release_manifest = _load_json(root / RELEASE_MANIFEST)
     mimo = _load_json(root / MIMO_AUDIT)
-    mimo_metadata = _load_json(root / MIMO_METADATA_TRUTH)
     mimo_classifier = _load_json(root / MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER)
-    mimo_media_runtime = _load_json(root / MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE)
-    mimo_video_audio = _load_json(root / MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE)
-    mimo_responses_tools_cache_ui = _load_json(
-        root / MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI
-    )
-    mimo_jangtq2_installed_tools_cache = _load_json(
-        root / MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE
-    )
-    mimo_jang2l_installed_tools_cache = _load_json(
-        root / MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE
-    )
-    mimo_jangtq2_installed_media_l2 = _load_json(
-        root / MIMO_JANGTQ2_INSTALLED_MEDIA_L2
-    )
     noheavy = _load_json(root / NOHEAVY_API_CACHE)
-    responses_raw_sse = _load_json(root / RESPONSES_RAW_SSE_PARITY)
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
     panel_settings = _load_json(root / PANEL_SETTINGS_CONTRACT)
     tool_call = _load_json(root / TOOL_CALL_CONTRACT)
-    installed_app_runtime_parity = _load_json(
-        root / CURRENT_INSTALLED_APP_RUNTIME_PARITY
-    )
     objective_digest = _load_json(root / OBJECTIVE_DIGEST)
     issue179 = _load_json(root / ISSUE179_AUDIT)
     qwen27 = _load_json(root / QWEN27_RESPONSES_CANCEL)
@@ -2492,11 +1519,8 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_startup = _load_json(root / QWEN35_STARTUP_MTP)
     qwen35_long_tool_cache = _load_json(root / QWEN35_LONG_TOOL_CACHE)
     qwen35_restart = _load_json(root / QWEN35_RESTART_L2_RESTORE)
-    qwen35_raw_sse = _load_json(root / QWEN35_RAW_SSE_PARITY)
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
-    gemma4_autoq4_cache = _load_json(root / GEMMA4_12B_JANG4M_AUTOQ4_CACHE)
-    gemma4_issue191_startup = _load_json(root / GEMMA4_12B_ISSUE191_STARTUP_VISIBLE)
     gemma4_media = _load_json(root / GEMMA4_12B_JANG4M_MEDIA_SMOKE)
     gemma_qat = _load_json(root / GEMMA_QAT_NATIVE_MXFP4_INVENTORY)
     step37 = _load_json(root / STEP37_TEXTONLY_SMOKE)
@@ -2510,27 +1534,11 @@ def _build(root: Path) -> dict[str, Any]:
     groups = {
         "release_packaging_ui": _release_manifest_checks(release_manifest),
         "api_cache_responses_contract": _noheavy_api_cache_checks(noheavy),
-        "responses_raw_sse_parity": _responses_raw_sse_parity_checks(
-            responses_raw_sse
-        ),
         "api_surface_endpoints_contract": _api_surface_contract_checks(api_surface),
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),
-        "installed_app_runtime_parity": _installed_app_runtime_parity_checks(
-            installed_app_runtime_parity
-        ),
         "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
-        "mimo_v25_jangtq2": _mimo_checks(
-            mimo,
-            mimo_metadata,
-            mimo_classifier,
-            mimo_media_runtime,
-            mimo_video_audio,
-            mimo_responses_tools_cache_ui,
-            mimo_jangtq2_installed_tools_cache,
-            mimo_jang2l_installed_tools_cache,
-            mimo_jangtq2_installed_media_l2,
-        ),
+        "mimo_v25_jangtq2": _mimo_checks(mimo, mimo_classifier),
         "qwen36_mtp": _qwen27_cancel_checks(qwen27)
         + _qwen27_api_parity_checks(qwen27_api)
         + _qwen27_restart_l2_checks(qwen27_restart)
@@ -2545,7 +1553,6 @@ def _build(root: Path) -> dict[str, Any]:
         + _qwen35_startup_checks(qwen35_startup)
         + _qwen35_long_tool_cache_checks(qwen35_long_tool_cache)
         + _qwen35_restart_l2_checks(qwen35_restart)
-        + _qwen35_raw_sse_parity_checks(qwen35_raw_sse)
         + _qwen_installed_video_checks(
             "qwen35",
             qwen35_installed_video,
@@ -2562,10 +1569,7 @@ def _build(root: Path) -> dict[str, Any]:
             reasoning_parser="gemma4",
             expected_mllm=True,
             cache_detail="paged+mixed_swa",
-            cache_proof=gemma4_autoq4_cache,
-            cache_path=GEMMA4_12B_JANG4M_AUTOQ4_CACHE,
         )
-        + _gemma4_12b_issue191_startup_checks(gemma4_issue191_startup)
         + _gemma4_12b_media_checks(gemma4_media),
         "gemma_qat_native_mxfp4": _gemma_qat_native_mxfp4_checks(gemma_qat),
         "step37_flash": _smoke_mixed_swa_checks(
@@ -2576,9 +1580,8 @@ def _build(root: Path) -> dict[str, Any]:
             subtype="step3p7_full_sliding_kv",
             tool_parser="step3p5",
             reasoning_parser="qwen3",
-            expected_mllm=True,
-            cache_detail="paged+mixed_swa",
-            require_storage_quantization=False,
+            expected_mllm=False,
+            cache_detail="paged",
         )
         + _step37_vlm_runtime_checks(step37_vlm),
         "lfm25": _smoke_hybrid_ssm_checks(

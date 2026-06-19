@@ -835,13 +835,8 @@ class TestParameterValidation:
             ResponsesRequest(model="test", input="hi", top_p=0)
 
     def test_responses_max_output_tokens_rejected(self):
-        with pytest.raises(ValueError, match="max_output_tokens/max_tokens must be at least 1"):
+        with pytest.raises(ValueError, match="max_output_tokens must be at least 1"):
             ResponsesRequest(model="test", input="hi", max_output_tokens=0)
-
-    def test_responses_accepts_max_tokens_alias(self):
-        req = ResponsesRequest(model="test", input="hi", max_tokens=37)
-        assert req.max_tokens == 37
-        assert req.max_output_tokens is None
 
     def test_responses_valid_params(self):
         req = ResponsesRequest(

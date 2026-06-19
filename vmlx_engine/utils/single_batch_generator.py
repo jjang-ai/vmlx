@@ -28,80 +28,6 @@ from .mamba_cache import _should_capture_generation_logprobs
 
 logger = logging.getLogger(__name__)
 
-_PRESERVE_MAKE_CACHE_MAX_KV_MODEL_TYPES = {
-    "gemma4",
-    "gemma4_text",
-    "gemma4_unified",
-    "gemma4_unified_text",
-    "mimo_v2",
-    "qwen3_5",
-    "qwen3_5_text",
-    "qwen3_5_moe",
-    "qwen3_5_moe_text",
-}
-
-
-def _config_get(config: Any, key: str, default: Any = None) -> Any:
-    if isinstance(config, dict):
-        return config.get(key, default)
-    return getattr(config, key, default)
-
-
-def _model_type_values(model: Any) -> set[str]:
-    values: set[str] = set()
-    queue = [getattr(model, "config", None)]
-    seen: set[int] = set()
-    while queue:
-        config = queue.pop(0)
-        if config is None or id(config) in seen:
-            continue
-        seen.add(id(config))
-        model_type = _config_get(config, "model_type")
-        if isinstance(model_type, str) and model_type:
-            values.add(model_type)
-        for key in ("text_config", "language_config", "vision_config"):
-            child = _config_get(config, key)
-            if child is not None:
-                queue.append(child)
-    return values
-
-
-def _layer_types(config: Any) -> list[str]:
-    value = _config_get(config, "layer_types")
-    if isinstance(value, (list, tuple)):
-        return [str(item).lower() for item in value]
-    return []
-
-
-def _preserve_model_make_cache_max_kv_size(model: Any) -> bool:
-    """Keep architecture-owned mixed/hybrid caches out of generic KV rotation.
-
-    Upstream mlx-lm PR #1343 applies ``max_kv_size`` to plain KVCache entries
-    returned by ``model.make_cache()``. That can be a reasonable explicit memory
-    cap for ordinary KV models, but it changes full/global attention semantics
-    in mixed-cache families such as Gemma4, MiMo V2, and Qwen3.6/N2.
-    """
-    model_types = _model_type_values(model)
-    if model_types & _PRESERVE_MAKE_CACHE_MAX_KV_MODEL_TYPES:
-        return True
-    for config_name in ("config", "args"):
-        config = getattr(model, config_name, None)
-        if not config:
-            continue
-        cache_type = str(_config_get(config, "cache_type", "") or "").lower()
-        cache_subtype = str(_config_get(config, "cache_subtype", "") or "").lower()
-        if cache_type == "hybrid" or any(
-            marker in cache_subtype
-            for marker in ("hybrid", "mixed", "swa", "ssm", "mamba")
-        ):
-            return True
-        layer_types = _layer_types(config)
-        if layer_types and any("sliding" in item for item in layer_types) and any(
-            "full" in item or "global" in item for item in layer_types
-        ):
-            return True
-    return False
-
 
 @dataclass
 class _Request:
@@ -205,66 +131,7 @@ class SingleBatchGenerator:
         )
         self._decode_trace_count = 0
         self._decode_trace_model_s = 0.0
-        self._decode_trace_logits_s = 0.0
         self._decode_trace_sample_s = 0.0
-
-    def _reset_decode_trace_counters(self) -> None:
-        self._decode_trace_count = 0
-        self._decode_trace_model_s = 0.0
-        self._decode_trace_logits_s = 0.0
-        self._decode_trace_sample_s = 0.0
-
-    def warm_decode_graph(self, tokens: Optional[Sequence[int]] = None) -> bool:
-        """Warm the real single-active prefill/decode/logits graph.
-
-        MiMo V2.5 JANG_2L live traces showed the first user request spending
-        tens of seconds materializing the decode logits graph even though model
-        forward and sampler were fast. This method runs the same internal
-        SingleBatch path with an isolated dummy request so startup can pay that
-        one-time compile cost before user traffic.
-        """
-
-        if "mimo_v2" not in _model_type_values(self.model):
-            return False
-        if self._request is not None or self._unprocessed:
-            return False
-        if os.environ.get("VMLINUX_MIMO_V2_DISABLE_DECODE_WARMUP", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            return False
-
-        prompt_tokens = [int(t) for t in (tokens or (0, 0))]
-        if not prompt_tokens:
-            return False
-        if len(prompt_tokens) == 1:
-            prompt_tokens.append(prompt_tokens[0])
-
-        t0 = time.perf_counter()
-        uids: list[int] = []
-        try:
-            uids = self.insert([prompt_tokens], max_tokens=[1])
-            self.next()
-            elapsed = time.perf_counter() - t0
-            logger.info(
-                "MiMo-V2 SingleBatch decode graph warmup complete in %.2fs",
-                elapsed,
-            )
-            return True
-        except Exception:
-            logger.exception("MiMo-V2 SingleBatch decode graph warmup failed")
-            return False
-        finally:
-            try:
-                if uids:
-                    self.remove(uids)
-            except Exception:
-                pass
-            self._unprocessed.clear()
-            self._request = None
-            self._reset_decode_trace_counters()
 
     def close(self):
         return None
@@ -329,18 +196,7 @@ class SingleBatchGenerator:
                 mx.synchronize()
 
     def _make_new_cache(self):
-        max_kv_size = self.max_kv_size
-        if max_kv_size is not None and _preserve_model_make_cache_max_kv_size(
-            self.model
-        ):
-            logger.warning(
-                "Ignoring generic max_kv_size=%s for architecture-owned "
-                "mixed/hybrid make_cache() model; use a family-proven cache "
-                "policy instead.",
-                max_kv_size,
-            )
-            max_kv_size = None
-        return mlx_cache.make_prompt_cache(self.model, max_kv_size=max_kv_size)
+        return mlx_cache.make_prompt_cache(self.model, max_kv_size=self.max_kv_size)
 
     @staticmethod
     def _clone_array(value):
@@ -582,10 +438,26 @@ class SingleBatchGenerator:
         synchronous runtime path. Detect via the M3 MSA cache type (robust to
         model wrappers). Gated to M3+affine-2 only.
         """
+        # M3 MSA cache needs a FULL materialize-sync each decode step: the
+        # append-only idx_keys concatenation desyncs from K/V under the default
+        # one-token-lookahead async overlap on long generations (>~2048 tok),
+        # corrupting the Lightning-Indexer block selection -> incoherent loops.
+        # This is a property of the MSA cache ITSELF, independent of the affine-2
+        # fast path. (Previously gated on `not _disabled()` i.e. affine-2 ON; when
+        # affine-2 went default-OFF the MSA sync silently turned off too -> the
+        # server long-gen loop. Pure runtime is synchronous and never hit this.)
         try:
-            # affine-2 is M3-specific (only M3 reads this flag), so "enabled"
-            # uniquely means M3+affine-2. Avoids cache/model-wrapper detection
-            # failures (paged-cache wraps the raw MSA cache).
+            _caches = cache if isinstance(cache, (list, tuple)) else (
+                [cache] if cache is not None else [])
+            for _c in _caches:
+                if _c is None:
+                    continue
+                if type(_c).__name__ == "MiniMaxM3SparseCache" or hasattr(_c, "idx_keys"):
+                    return True
+        except Exception:
+            pass
+        # Fallback: the affine-2 fast path (M3-only) also requires the sync.
+        try:
             from vmlx_engine.models.minimax_m3.m3_affine2_switch import _disabled
             return not _disabled()
         except Exception:
@@ -604,13 +476,8 @@ class SingleBatchGenerator:
             if trace:
                 self._sync()
                 model_s = time.perf_counter() - model_t0
-                logits_t0 = time.perf_counter()
-            logits = logits[:, -1, :]
-            if trace:
-                self._eval_on_stream(logits)
-                self._sync()
-                logits_s = time.perf_counter() - logits_t0
                 sample_t0 = time.perf_counter()
+            logits = logits[:, -1, :]
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
@@ -644,21 +511,17 @@ class SingleBatchGenerator:
                 sample_s = time.perf_counter() - sample_t0
                 self._decode_trace_count += 1
                 self._decode_trace_model_s += model_s
-                self._decode_trace_logits_s += logits_s
                 self._decode_trace_sample_s += sample_s
                 if self._decode_trace_count % self._decode_trace_every == 0:
                     n = self._decode_trace_count
                     logger.info(
                         "VMLINUX_DECODE_TRACE single steps=%d avg_model_ms=%.2f "
-                        "avg_logits_ms=%.2f avg_sample_ms=%.2f "
-                        "last_model_ms=%.2f last_logits_ms=%.2f "
+                        "avg_sample_ms=%.2f last_model_ms=%.2f "
                         "last_sample_ms=%.2f",
                         n,
                         (self._decode_trace_model_s / n) * 1000.0,
-                        (self._decode_trace_logits_s / n) * 1000.0,
                         (self._decode_trace_sample_s / n) * 1000.0,
                         model_s * 1000.0,
-                        logits_s * 1000.0,
                         sample_s * 1000.0,
                     )
 

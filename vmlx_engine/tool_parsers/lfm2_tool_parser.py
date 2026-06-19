@@ -59,9 +59,7 @@ class Lfm2ToolParser(ToolParser):
             return ".".join(reversed(parts)).split(".")[-1]
         return ast.unparse(func).split(".")[-1]
 
-    def _parse_calls(
-        self, payload: str, request: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
+    def _parse_calls(self, payload: str) -> list[dict[str, Any]]:
         expr = ast.parse(payload.strip(), mode="eval").body
         nodes = expr.elts if isinstance(expr, (ast.List, ast.Tuple)) else [expr]
         tool_calls: list[dict[str, Any]] = []
@@ -78,13 +76,10 @@ class Lfm2ToolParser(ToolParser):
                         args.update(expanded)
                     continue
                 args[keyword.arg] = self._literal(keyword.value)
-            name = self._call_name(node.func).strip()
-            if not self._arguments_satisfy_required_schema(name, args, request):
-                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
-                    "name": name,
+                    "name": self._call_name(node.func).strip(),
                     "arguments": json.dumps(args, ensure_ascii=False),
                 }
             )
@@ -110,7 +105,7 @@ class Lfm2ToolParser(ToolParser):
         content = cleaned_output[:start].strip() or None
         payload = cleaned_output[payload_start:end]
         try:
-            tool_calls = self._parse_calls(payload, request=request)
+            tool_calls = self._parse_calls(payload)
         except SyntaxError:
             tool_calls = []
         if not tool_calls:

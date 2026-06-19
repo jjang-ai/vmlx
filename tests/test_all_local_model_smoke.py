@@ -96,33 +96,6 @@ def test_classify_model_keeps_zaya_text_non_reasoning(tmp_path):
     assert row["supports_thinking"] is False
 
 
-def test_classify_model_keeps_ling_non_reasoning_despite_stale_capability(tmp_path):
-    mod = load_module()
-    model_dir = tmp_path / "Ling-2.6-flash-JANGTQ"
-    model_dir.mkdir()
-    (model_dir / "config.json").write_text(
-        '{"model_type": "bailing_hybrid"}',
-        encoding="utf-8",
-    )
-    (model_dir / "jang_config.json").write_text(
-        json.dumps(
-            {
-                "capabilities": {
-                    "supports_thinking": True,
-                    "reasoning": {"supported": True},
-                    "tools": {"supported": True},
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    row = mod.classify_model_dir(model_dir)
-
-    assert row["supports_thinking"] is False
-    assert row["supports_tools"] is True
-
-
 def test_classify_model_does_not_infer_nemotron_omni_video_from_name_only(tmp_path):
     mod = load_module()
     model_dir = tmp_path / "Nemotron-Omni-Nano-JANGTQ-CRACK"
@@ -289,7 +262,7 @@ def test_classify_model_marks_mimo_v2_jang2l_as_multimodal_xml_tools_no_mtp(tmp_
     assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
     assert row["capabilities"]["reasoning"]["supported"] is False
-    assert row["capabilities"]["reasoning"]["parser"] == "think_xml"
+    assert row["capabilities"]["reasoning"]["parser"] is None
     assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert row["has_mtp"] is False
     assert row["cache_family"] == "mimo_v2_hybrid_swa"
@@ -340,7 +313,7 @@ def test_classify_model_reads_mimo_v2_embedded_config_capabilities(tmp_path):
     assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
     assert row["capabilities"]["reasoning"]["supported"] is False
-    assert row["capabilities"]["reasoning"]["parser"] == "think_xml"
+    assert row["capabilities"]["reasoning"]["parser"] is None
     assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert mod.probe_options_from_capabilities(
         row,
@@ -371,7 +344,7 @@ def test_classify_model_marks_mimo_v2_without_jang_config_as_xml_tool_family(tmp
     assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
     assert row["capabilities"]["reasoning"]["supported"] is False
-    assert row["capabilities"]["reasoning"]["parser"] == "think_xml"
+    assert row["capabilities"]["reasoning"]["parser"] is None
     assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert row["has_mtp"] is False
     assert row["cache_family"] == "mimo_v2_hybrid_swa"
@@ -710,9 +683,7 @@ def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
     assert repeat["expected_content"] == "blue"
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    assert "Stable sequence" in messages[0]["content"]
-    assert "Reply with exactly the single lowercase word blue" in messages[0]["content"]
-    assert "Do not add any other words." in messages[0]["content"]
+    assert "Which color word repeats" in messages[0]["content"]
     assert "Output exactly ACK" not in messages[0]["content"]
 
 
@@ -854,10 +825,7 @@ def test_zaya_vl_no_media_probe_uses_attached_none_contract():
 
     assert len(image_messages) == 1
     assert image_messages[0]["role"] == "user"
-    assert "No image is attached" in image_messages[0]["content"]
-    assert "What should you output? NONE" in image_messages[0]["content"]
-    assert "Output only NONE." in image_messages[0]["content"]
-    assert "answer ATTACHED" not in image_messages[0]["content"]
+    assert "answer ATTACHED. Otherwise answer NONE" in image_messages[0]["content"]
     assert "answer exactly IMAGE" not in image_messages[0]["content"]
     assert "zero image attachments" not in image_messages[0]["content"]
 
@@ -1530,17 +1498,6 @@ def test_validate_probe_response_checks_media_color_and_no_media_carryover():
         )
         == []
     )
-    failures = mod.validate_probe_response(
-        "text_no_media_after_image",
-        200,
-        "I'm unable to provide a response as the text-only request is not clear enough.",
-        "",
-    )
-    assert {
-        "label": "text_no_media_after_image",
-        "reason": "expected_no_media_missing",
-        "expected": "no-or-none",
-    } in failures
 
     failures = mod.validate_probe_response("vl_blue_video", 200, "red", "")
     assert failures == [
@@ -1634,22 +1591,12 @@ def test_validate_probe_response_accepts_exact_tool_result_sentence():
     failures = mod.validate_probe_response(
         "tool_result_continuation",
         200,
-        "blue-cat.",
+        "STORED blue-cat.",
         "",
         tool_calls=[],
     )
 
     assert failures == []
-
-
-def test_tool_result_continuation_payload_places_exact_target_on_own_line():
-    mod = load_module()
-
-    payload = mod._tool_result_continuation_payload("model-id", 24)
-    final_user_message = payload["messages"][-1]["content"]
-
-    assert final_user_message.endswith("\nblue-cat.")
-    assert "The final character must be a period." in final_user_message
 
 
 def test_collect_probe_failures_uses_semantic_validation():

@@ -15,6 +15,7 @@ import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../shared/toolParserAliases'
 import { canonicalizeReasoningParserForCli } from '../shared/reasoningParserAliases'
 import { GENERATION_STARTUP_DEFAULTS_VERSION, LEGACY_GENERIC_MAX_OUTPUT_TOKENS } from '../shared/sessionConfigMigrations'
+import { appendMetalWiredLimitGuidance } from '../shared/metalWiredLimit'
 import {
   BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE,
   normalizeBackendStderrChunk,
@@ -88,16 +89,13 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv' || cacheSubtype === 'mimo_v2_asymmetric_swa'
-}
-
-function cacheSubtypeOwnsStoredKvQuantization(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'mimo_v2_asymmetric_swa'
+  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+const MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900
 
 function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: string): number {
   const configured = config.timeout
@@ -105,6 +103,9 @@ function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: 
   const normalizedFamily = normalizeDetectedFamilyName(family)
   if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
     return DSV4_DEFAULT_TIMEOUT_SECONDS
+  }
+  if (normalizedFamily === 'minimax_m3' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+    return MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
   }
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
@@ -175,6 +176,17 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         changed = true
       }
     } else if (detectedFamily === 'minimax_m3') {
+      if (config.timeout == null || config.timeout === GENERIC_DEFAULT_TIMEOUT_SECONDS) {
+        config.timeout = MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
+        changed = true
+      }
+      // Keep MiniMax-M3 output length model-owned by default. Do not silently
+      // force a larger --max-tokens cap; explicit user values are preserved and
+      // legacy generic caps are scrubbed back to model-owned below.
+      if (config.maxTokens != null && LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))) {
+        config.maxTokens = 0
+        changed = true
+      }
       if (config.enablePrefixCache !== true) {
         config.enablePrefixCache = true
         changed = true
@@ -464,25 +476,13 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
-  let modelType: string | undefined
-  try {
-    const cfg = JSON.parse(readFileSync(join(modelPath, 'config.json'), 'utf8'))
-    modelType = typeof cfg?.model_type === 'string' ? cfg.model_type.toLowerCase() : undefined
-  } catch { /* config.json is optional for remote/custom rows */ }
   try {
     const gen = JSON.parse(readFileSync(join(modelPath, 'generation_config.json'), 'utf8'))
-    const mimoV2ChatDefault = modelType === 'mimo_v2'
-    const generationConfigDisablesSampling = gen.do_sample === false && !mimoV2ChatDefault
+    const generationConfigDisablesSampling = gen.do_sample === false
     if (typeof gen.do_sample === 'boolean') out.doSample = gen.do_sample
-    if (mimoV2ChatDefault) {
-      out.defaultTemperature = 70
-      out.defaultTopP = 95
-      out.defaultTopK = 64
-    } else {
-      if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
-      if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
-      if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
-    }
+    if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
+    if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
+    if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
     if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
     if (hasSamplingDefaultsRecord(gen, ['temperature', 'top_p', 'top_k', 'min_p', 'repetition_penalty'])) {
@@ -1218,31 +1218,17 @@ export class SessionManager extends EventEmitter {
     remoteApiKey?: string
     remoteModel: string
     remoteOrganization?: string
-    capabilityModelPath?: string
   }): Promise<Session> {
     const url = new URL(params.remoteUrl)
     const modelPath = `remote://${params.remoteModel}@${url.host}`
-    const capabilityModelPath =
-      params.capabilityModelPath &&
-      !params.capabilityModelPath.startsWith('remote://') &&
-      existsSync(params.capabilityModelPath) &&
-      existsSync(join(params.capabilityModelPath, 'config.json'))
-        ? params.capabilityModelPath
-        : undefined
 
     const existing = db.getSessionByModelPath(modelPath)
     if (existing) {
-      let existingConfig: Record<string, any> = {}
-      try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) {}
       db.updateSession(existing.id, {
         remoteUrl: params.remoteUrl,
         remoteApiKey: params.remoteApiKey,
         remoteModel: params.remoteModel,
-        remoteOrganization: params.remoteOrganization,
-        config: JSON.stringify({
-          ...existingConfig,
-          ...(capabilityModelPath ? { capabilityModelPath } : {}),
-        }),
+        remoteOrganization: params.remoteOrganization
       })
       return db.getSession(existing.id)!
     }
@@ -1262,10 +1248,7 @@ export class SessionManager extends EventEmitter {
       host,
       port,
       status: 'stopped',
-      config: JSON.stringify({
-        timeout: 300,
-        ...(capabilityModelPath ? { capabilityModelPath } : {}),
-      }),
+      config: JSON.stringify({ timeout: 300 }),
       createdAt: now,
       updatedAt: now,
       type: 'remote',
@@ -1770,6 +1753,7 @@ export class SessionManager extends EventEmitter {
         } else {
           reason = `Process exited with code ${code}`
         }
+        reason = appendMetalWiredLimitGuidance(reason)
         this.pushLog(sessionId, `[ERROR] ${reason}`)
         this.emit('session:error', { sessionId, error: reason })
       } else {
@@ -2073,7 +2057,9 @@ export class SessionManager extends EventEmitter {
           port: proc.port,
           timeout: detectedFamily === 'deepseek-v4'
             ? DSV4_DEFAULT_TIMEOUT_SECONDS
-            : GENERIC_DEFAULT_TIMEOUT_SECONDS,
+            : detectedFamily === 'minimax_m3'
+              ? MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
+              : GENERIC_DEFAULT_TIMEOUT_SECONDS,
           maxNumSeqs: 1,
           prefillBatchSize: 512,
           prefillStepSize: 2048,
@@ -3036,17 +3022,13 @@ export class SessionManager extends EventEmitter {
     // KV cache quantization for stored prefix cache entries
     // TurboQuant handles live generation cache compression (always active).
     // q8/q4 here is ADDITIONAL compression for stored cache entries.
-    const nativeStoredKvQuantization = cacheSubtypeOwnsStoredKvQuantization(detected.cacheSubtype)
     if (!prefixCacheOff && detectedFamily === 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       console.log(`[SESSION] DSV4-Flash detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native SWA+CSA/HCA cache policy owns compression`)
     }
     if (!prefixCacheOff && detectedFamily === 'minimax_m3' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       console.log(`[SESSION] MiniMax-M3 detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native MSA cache stores keys/values/idx_keys without generic KV codecs`)
     }
-    if (!prefixCacheOff && nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
-      console.log(`[SESSION] ${detected.cacheSubtype} detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native mixed full/SWA cache policy owns stored prefix state`)
-    }
-    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && detectedFamily !== 'minimax_m3' && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && detectedFamily !== 'minimax_m3' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
       if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
@@ -3498,6 +3480,7 @@ export class SessionManager extends EventEmitter {
           } else {
             reason = managed.lastStderr || `exit code ${managed.exitCode ?? 'unknown'}`
           }
+          reason = appendMetalWiredLimitGuidance(reason)
           throw new Error(`Process exited before becoming ready: ${reason}`)
         }
         if (!managed) {

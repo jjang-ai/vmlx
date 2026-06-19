@@ -13,6 +13,7 @@ describe('chat error display policy', () => {
     expect(content).toContain('requested=8192')
     expect(content).toContain('safe_cap=1')
     expect(content).toContain('Metal OOM / kernel-panic risk')
+    expect(content).toContain('sudo sysctl iogpu.wired_limit_mb=120000')
   })
 
   it('does not convert ordinary connection errors into assistant content', () => {

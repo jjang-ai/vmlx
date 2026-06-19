@@ -10,6 +10,10 @@ const bodySource = readFileSync(
   resolve(process.cwd(), "src/main/gateway-body.ts"),
   "utf8",
 );
+const codeSnippetsSource = readFileSync(
+  resolve(process.cwd(), "src/renderer/src/components/api/CodeSnippets.tsx"),
+  "utf8",
+);
 
 describe("Ollama gateway parity contracts", () => {
   it("translates Ollama image messages into OpenAI content parts", () => {
@@ -116,6 +120,24 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain('version: "0.12.6"');
     expect(source).toContain('method === "HEAD"');
     expect(source).toContain('url === "/" || url === "/api/version"');
+  });
+
+  it("shows API key auth in copied Ollama gateway snippets when configured", () => {
+    expect(codeSnippetsSource).toContain("function buildOllamaAuthHeader");
+    expect(codeSnippetsSource).toContain("Authorization: Bearer ${apiKey}");
+    expect(codeSnippetsSource).toContain("headers=headers");
+    expect(codeSnippetsSource).not.toContain("function buildOllamaCurl(baseUrl: string, _apiKey");
+    expect(codeSnippetsSource).not.toContain("function buildOllamaPython(baseUrl: string, _apiKey");
+  });
+
+  it("enforces gateway-side API keys for local model lists and routed sessions", () => {
+    expect(source).toContain("private requireAnyGatewayAuth");
+    expect(source).toContain("private requireSessionAuth");
+    expect(source).toContain("private gatewayApiKeys");
+    expect(source).toContain('code: "invalid_api_key"');
+    expect(source).toContain("if (!this.requireAnyGatewayAuth(req, res)) return;");
+    expect(source).toContain("if (!this.requireSessionAuth(req, res, session)) return;");
+    expect(source).toContain("headers: this.jsonProxyHeadersWithAuth(req)");
   });
 
   it("returns the actual active gateway port after restart", () => {
@@ -288,7 +310,10 @@ describe("Ollama gateway parity contracts", () => {
       'if (isExpectedChatBackendDisconnectError(err)) {',
     );
     expect(chatSource).toContain(
-      'if (!isExpectedChatBackendDisconnectError(error)) {\n          console.error("[CHAT] Error caught:",',
+      '!projectedMetalHeadroomErrorContent &&\n          !isExpectedChatBackendDisconnectError(error)',
+    );
+    expect(chatSource).toContain(
+      'console.error("[CHAT] Error caught:",',
     );
     expect(chatSource).not.toContain(
       'console.error("[CHAT] Error caught:", {\n          message: _err?.message,',

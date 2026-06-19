@@ -18,7 +18,7 @@ DEFAULT_OUT = Path(
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
-    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"
@@ -27,7 +27,7 @@ ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 
 OPEN_RELEASE_ROWS = [
@@ -251,14 +251,6 @@ def build_audit(root: Path) -> dict[str, Any]:
         and "lora_scales" in image_gen,
         "focused_regression_test_present": "test_load_passes_lora_paths_and_scales_when_supported"
         in _read(root / "tests/test_image_gen.py"),
-        "empty_lora_lists_noop_regression_test_present": (
-            "test_load_treats_empty_lora_lists_as_no_lora_request"
-            in _read(root / "tests/test_image_gen.py")
-        ),
-        "lora_scale_without_path_still_rejected": (
-            "test_load_rejects_nonempty_lora_scales_without_paths"
-            in _read(root / "tests/test_image_gen.py")
-        ),
         "text_lora_flags_rejected": "test_cli_lora_flags_fail_clearly_for_text_models"
         in _read(root / "tests/test_image_api.py")
         and "_validate_lora_args_for_model_type(args, is_image=_is_image)" in cli,

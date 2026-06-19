@@ -141,7 +141,7 @@ def test_decode_speed_gate_tracks_mimo_v25_jang2l_release_floor():
     assert row.path == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2"
     assert row.is_mllm is True
     assert row.tool_parser == "xml_function"
-    assert row.reasoning_parser == "think_xml"
+    assert row.reasoning_parser is None
     assert row.max_tokens == 96
     assert row.expected_min_tps == 40.0
     assert row.expected_min_pp == 400.0
@@ -329,37 +329,6 @@ def test_current_regression_suite_hashes_gemma_qat_inventory_gate_sources():
     assert all(Path(path).exists() for path in required)
 
 
-def test_current_regression_suite_hashes_mlx_lm_runtime_patch_sources():
-    from tests.cross_matrix import run_current_regression_suite as suite
-
-    required = {
-        "vmlx_engine/runtime_patches/__init__.py",
-        "vmlx_engine/runtime_patches/deepseek_v4_register.py",
-        "vmlx_engine/runtime_patches/gemma4_processing.py",
-        "vmlx_engine/runtime_patches/gemma4_vision.py",
-        "vmlx_engine/runtime_patches/kimi_k25_mla.py",
-        "vmlx_engine/runtime_patches/mlx_lm_compat.py",
-        "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
-        "tests/test_kimi_k25_mla_patch.py",
-        "tests/test_mlx_lm_runtime_patches.py",
-        "tests/test_single_active_batch_generator.py",
-        "vmlx_engine/utils/single_batch_generator.py",
-    }
-
-    assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
-    assert all(Path(path).exists() for path in required)
-
-
-def test_current_regression_suite_runs_single_active_cache_policy_guard():
-    from tests.cross_matrix import run_current_regression_suite as suite
-
-    command = suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"]
-    joined = " ".join(command)
-
-    assert "tests/test_single_active_batch_generator.py" in command
-    assert "single_active_generator" in joined
-
-
 def test_current_regression_suite_runs_gemma_qat_inventory_gate():
     from tests.cross_matrix import run_current_regression_suite as suite
 
@@ -372,7 +341,7 @@ def test_current_regression_suite_runs_gemma_qat_inventory_gate():
     assert "--out" in command
     assert (
         command[command.index("--out") + 1]
-        == "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
+        == "build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json"
     )
 
 
@@ -586,7 +555,7 @@ def test_current_regression_suite_refreshes_release_boundary_artifacts():
     assert "--app" in staged_cmd
     assert (
         staged_cmd[staged_cmd.index("--app") + 1]
-        == "panel/release/tahoe-app/mac-arm64/vMLX.app"
+        == "panel/release/sequoia-app/mac-arm64/vMLX.app"
     )
     assert "--user-data" not in staged_cmd
     assert "--diagnostic-reports" not in staged_cmd
@@ -763,8 +732,6 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
         "tests/test_agents_release_control_plane.py",
         "tests/cross_matrix/run_mimo_v2_cache_vs_nocache_next_token.py",
         "tests/test_mimo_v2_cache_vs_nocache_next_token.py",
-        "tests/cross_matrix/run_n2_jang1l_memory_preflight.py",
-        "tests/test_n2_jang1l_memory_preflight.py",
         "tests/cross_matrix/run_n2_chat_cache_gate.py",
         "tests/test_n2_chat_cache_gate.py",
         "tests/test_mimo_v2_no_source_exactness_classifier.py",
@@ -781,7 +748,6 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
         "tests/test_dsv4_batch_generator_speed.py",
         "tests/test_scheduler_repetition_context.py",
         "tests/test_dsv4_paged_cache.py",
-        "tests/test_mlx_lm_runtime_patches.py",
     }
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
@@ -860,7 +826,6 @@ def test_current_regression_suite_hashes_dirty_contract_unit_sources():
         "tests/test_reasoning_modes.py",
         "tests/test_runtime_memory_stress_probe.py",
         "tests/test_server.py",
-        "tests/test_tool_parser_required_args_fail_closed.py",
         "tests/test_tool_format.py",
         "tests/test_tool_parsers.py",
         "vmlx_engine/image_gen.py",
@@ -868,12 +833,11 @@ def test_current_regression_suite_hashes_dirty_contract_unit_sources():
         "vmlx_engine/model_configs.py",
         "vmlx_engine/mlx_memory.py",
         "vmlx_engine/reasoning/__init__.py",
+        "vmlx_engine/reasoning/think_xml_parser.py",
         "vmlx_engine/tool_parsers/__init__.py",
-        "vmlx_engine/tool_parsers/qwen_tool_parser.py",
         "vmlx_engine/tool_parsers/xml_function_tool_parser.py",
         "vmlx_engine/tool_parsers/zaya_tool_parser.py",
     }
-    required |= {str(path) for path in Path("vmlx_engine/reasoning").glob("*.py")}
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
     assert all(Path(path).exists() for path in required)
@@ -1153,15 +1117,8 @@ def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_po
     markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
 
     assert "passes Responses function-call argument SSE through unchanged" in markers
-    assert (
-        "passes Responses argument SSE with reasoning and empty final item arguments"
-        in markers
-    )
     assert "returns backend-unavailable for stale Responses session ports" in markers
     assert "gateway_responses_function_call_arguments_streaming" in (
-        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
-    )
-    assert "gateway_responses_reasoning_empty_final_arguments_streaming" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
     assert "gateway_stale_responses_port_rejection" in (
@@ -1170,10 +1127,6 @@ def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_po
     assert "panel/tests/api-gateway-single-model.behavior.test.ts" in gate.SOURCE_HASH_FILES
     command = " ".join(gate.COMMANDS["panel_gateway_contracts"])
     assert "passes Responses function-call argument SSE through unchanged" in command
-    assert (
-        "passes Responses argument SSE with reasoning and empty final item arguments"
-        in command
-    )
     assert "returns backend-unavailable for stale Responses session ports" in command
 
 
@@ -1193,87 +1146,26 @@ def test_noheavy_api_cache_contract_includes_panel_tool_status_responses_argumen
     assert "recovers Responses function-call arguments from argument delta and done events" in command
 
 
-def test_noheavy_api_cache_contract_includes_qwen_gemma_panel_reasoning_request_controls():
-    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
-    from tests.cross_matrix import release_regression_manifest as manifest
-
-    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
-
-    assert (
-        "forwards Qwen-family reasoning controls from detected family when parser state is stale"
-        in markers
-    )
-    assert (
-        "forwards Gemma-family reasoning controls from detected family when parser state is stale"
-        in markers
-    )
-    assert (
-        "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale"
-        in markers
-    )
-    assert (
-        "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
-        in markers
-    )
-    assert "panel_qwen_gemma_reasoning_request_controls" in (
-        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
-    )
-    assert "panel/tests/request-builder.test.ts" in gate.SOURCE_HASH_FILES
-    command = " ".join(gate.COMMANDS["panel_request_builder_contracts"])
-    assert "tests/request-builder.test.ts" in command
-    assert (
-        "forwards Qwen-family reasoning controls from detected family when parser state is stale"
-        in command
-    )
-    assert (
-        "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
-        in command
-    )
-
-
 def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_order():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
     from tests.cross_matrix import release_regression_manifest as manifest
 
     markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
 
-    assert "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup" in markers
     assert "test_streaming_responses_tool_call_arguments_survive_buffering" in markers
     assert "test_streaming_responses_reasoning_tool_call_keeps_arguments" in markers
     assert "test_streaming_responses_tool_call_uses_next_output_index_without_text" in markers
     assert "test_streaming_responses_required_empty_xml_tool_call_is_rejected" in markers
-    assert "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
-    assert "test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in markers
-    assert "test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
-    assert "test_required_arguments_missing_fail_closed_but_valid_calls_survive" in markers
     assert "responses_streaming_tool_call_arguments_and_indexes" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
-    assert "responses_no_tool_invalid_markup_cleanup" in (
-        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
-    )
-    assert "qwen_xml_function_required_args_fail_closed" in (
-        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
-    )
     assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
-    assert "tests/test_responses_history.py" in gate.SOURCE_HASH_FILES
-    assert "tests/test_tool_parser_required_args_fail_closed.py" in gate.SOURCE_HASH_FILES
-    assert "vmlx_engine/tool_parsers/qwen_tool_parser.py" in gate.SOURCE_HASH_FILES
-    history_command = " ".join(gate.COMMANDS["responses_history_contracts"])
-    assert "tests/test_responses_history.py" in history_command
-    assert "responses_streaming_tool_choice_none_strips_invalid_tool_markup" in history_command
     command = " ".join(gate.COMMANDS["responses_streaming_tool_contracts"])
     assert "tests/test_server.py" in command
     assert "streaming_responses_tool_call_arguments_survive_buffering" in command
     assert "streaming_responses_reasoning_tool_call_keeps_arguments" in command
     assert "streaming_responses_tool_call_uses_next_output_index_without_text" in command
     assert "streaming_responses_required_empty_xml_tool_call_is_rejected" in command
-    assert "streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
-    assert "tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in command
-    assert "streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
-    qwen_command = " ".join(gate.COMMANDS["qwen_xml_required_args_parser_contracts"])
-    assert "tests/test_tool_parser_required_args_fail_closed.py" in qwen_command
-    assert "QwenToolParser or required_arguments_missing" in qwen_command
 
 
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
@@ -1292,59 +1184,11 @@ def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     )
 
 
-def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
-    from tests.cross_matrix import run_current_regression_suite as suite
-
-    required = {
-        "tests/cross_matrix/run_responses_raw_sse_parity_contract.py",
-        "tests/test_responses_raw_sse_parity_contract.py",
-        "tests/cross_matrix/run_qwen35_responses_raw_sse_capture.py",
-        "tests/test_qwen35_responses_raw_sse_capture.py",
-        "panel/tests/api-gateway-qwen35-live-capture.test.ts",
-    }
-
-    assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
-    assert "responses_raw_sse_parity_contract" in suite.CURRENT_SUITE_COMMANDS
-    command = " ".join(suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"])
-    assert "tests/test_responses_raw_sse_parity_contract.py" in command
-    assert "tests/test_qwen35_responses_raw_sse_capture.py" in command
-    assert "responses_raw_sse_parity" in command
-    assert "qwen35_raw_sse_capture" in command
-    parity_command = " ".join(
-        suite.CURRENT_SUITE_COMMANDS["responses_raw_sse_parity_contract"]
-    )
-    assert (
-        "--direct-sse build/responses-sse-captures-20260610/"
-        "direct-gemma4-12b-mxfp8-crack-tool-20260610.sse"
-    ) in parity_command
-    assert (
-        "--gateway-sse build/responses-sse-captures-20260610/"
-        "gateway-gemma4-12b-mxfp8-crack-tool-20260610.sse"
-    ) in parity_command
-    assert (
-        "--tunnel-sse build/responses-sse-captures-20260610/"
-        "tunnel-gemma4-12b-mxfp8-crack-tool-20260610.sse"
-    ) in parity_command
-    assert (
-        "--gateway-log build/responses-sse-captures-20260610/"
-        "gateway-gemma4-12b-mxfp8-crack-tool-20260610.log"
-    ) in parity_command
-    assert "--expected-function-name record_fact" in parity_command
-    assert '--expected-arguments {"value": "blue-cat"}' in parity_command
-    assert "--expected-model models/Gemma-4-12B-it-MXFP8-CRACK" in parity_command
-    assert "--require-reasoning-events" in parity_command
-    assert "--require-same-model" in parity_command
-    assert (
-        "--out build/current-responses-raw-sse-parity-direct-gateway-tunnel-"
-        "gemma4-12b-mxfp8-crack-20260610.json"
-    ) in parity_command
-
-
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
     )
 
 
@@ -1354,7 +1198,7 @@ def test_current_regression_suite_runs_noheavy_api_cache_to_current_artifact():
     command = " ".join(suite.CURRENT_SUITE_COMMANDS["noheavy_api_cache_contract"])
 
     assert (
-        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
         in command
     )
     assert (
@@ -1367,7 +1211,7 @@ def test_current_regression_suite_default_out_tracks_pr_intake_artifact():
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert suite.DEFAULT_OUT == Path(
-        "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
     )
 
 
@@ -1505,13 +1349,13 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     assert any(
         name == "real_ui_dsv4_memory_preflight"
         and "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py" in " ".join(cmd)
-        and "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
+        and "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
+        and "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1943,7 +1787,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+        "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
     )
     assert any(
         name == "objective_digest"
@@ -2366,7 +2210,7 @@ def test_current_regression_suite_runs_full_release_objective_checklist(
     assert any(name == "full_release_objective_checklist" for name, _cmd in seen_steps)
     assert any(
         "run_full_release_objective_checklist.py" in " ".join(cmd)
-        and "current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json"
+        and "current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -2377,7 +2221,7 @@ def test_current_regression_suite_allows_open_full_release_objective_checklist(
 ):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    path = tmp_path / "build/current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json"
+    path = tmp_path / "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"status": "open"}) + "\n")
 

@@ -6,8 +6,6 @@ Tests clean_output_text, is_mllm_model, and extract_multimodal_content
 from vmlx_engine/api/utils.py. No MLX dependency.
 """
 
-from pathlib import Path
-
 from vmlx_engine.api.utils import (
     _IS_MLLM_CACHE,
     clean_output_text,
@@ -165,6 +163,22 @@ class TestIsMllmModel:
         config = {"model_type": "qwen3_5", "vision_config": {"hidden_size": 1024}}
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert is_mllm_model(str(tmp_path)) is True
+
+    def test_minimax_m3_vl_routes_text_runtime_even_when_force_mllm(self, tmp_path):
+        """MiniMax-M3 VL must never route to generic mlx_vlm minimax_m3_vl."""
+        import json
+
+        _IS_MLLM_CACHE.clear()
+        config = {
+            "model_type": "minimax_m3_vl",
+            "architectures": ["MiniMaxM3SparseForConditionalGeneration"],
+            "vision_config": {"hidden_size": 1024},
+            "text_config": {"model_type": "minimax_m3"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert is_mllm_model(str(tmp_path)) is False
+        assert is_mllm_model(str(tmp_path), force_mllm=True) is False
 
     def test_remote_model_name_returns_false(self):
         """Remote HF names without local config.json default to non-VLM.
@@ -503,18 +517,6 @@ class TestResolveToLocalPath:
 
         result = resolve_to_local_path("org/model-name")
         assert result == str(snapshot_dir)
-
-    def test_hf_repo_id_resolved_from_local_models_cache(self, tmp_path, monkeypatch):
-        """Repo IDs are resolved from ~/models before falling through to HF cache."""
-        local_model = tmp_path / "models" / "JANGQ-AI" / "gemma-4-12B-it-qat-MXFP4"
-        local_model.mkdir(parents=True)
-        (local_model / "config.json").write_text("{}")
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        result = resolve_to_local_path("JANGQ-AI/gemma-4-12B-it-qat-MXFP4")
-
-        assert result == str(local_model)
 
     def test_most_recent_revision_selected(self, tmp_path, monkeypatch):
         """When multiple revisions exist, the most recently modified is chosen."""

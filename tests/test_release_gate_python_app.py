@@ -158,7 +158,7 @@ def test_release_gate_objective_digest_default_tracks_current_release_matrix():
         "--out",
         str(
             Path.cwd()
-            / "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+            / "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
         ),
     ]
 
@@ -415,36 +415,6 @@ def test_release_dmg_final_sign_preserves_hardened_runtime_entitlements():
     assert "build/entitlements.mac.plist" in final_sign_block
 
 
-def test_release_dmg_build_default_still_requires_prepackage_ready():
-    script = Path("panel/scripts/build-release-dmgs.sh").read_text()
-
-    strict_block = script[
-        script.index('else\n  (') : script.index("fi\n\nsign_bundled_python_native_files")
-    ]
-
-    assert "VMLX_CHECKPOINT_RELEASE_OVERRIDE" in script
-    assert 'PREPACKAGE_READY_MANIFEST_OUT="$ROOT_DIR/$PREPACKAGE_READY_MANIFEST_OUT"' in script
-    assert "--require-prepackage-ready" in strict_block
-    assert "run_release_regression_manifest.py" in strict_block
-
-
-def test_release_dmg_checkpoint_override_records_open_manifest_without_require_flag():
-    script = Path("panel/scripts/build-release-dmgs.sh").read_text()
-
-    override_block = script[
-        script.index('if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]')
-        : script.index("else\n  (")
-    ]
-
-    assert "building a checkpoint DMG with open rows" in override_block
-    assert "Release notes must list open rows" in override_block
-    assert "manifest_rc=$?" in override_block
-    assert "did not produce pre-package manifest" in override_block
-    assert "continuing only because override is explicit" in override_block
-    assert "--out" in override_block
-    assert "--require-prepackage-ready" not in override_block
-
-
 def test_bundled_verifier_rejects_non_relocatable_console_shebangs():
     verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
 
@@ -587,7 +557,6 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "api/anthropic_adapter.py",
         "api/ollama_adapter.py",
         "block_disk_store.py",
-        "cache_record_validator.py",
         "cli.py",
         "disk_cache.py",
         "engine/batched.py",
@@ -598,42 +567,19 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "model_config_registry.py",
         "models/mllm.py",
         "models/step3p7_mlx_vlm.py",
-        "models/gemma4_unified_register.py",
-        "models/gemma4_unified/__init__.py",
-        "models/gemma4_unified/config.py",
-        "models/gemma4_unified/gemma4_unified.py",
-        "models/gemma4_unified/processing_gemma4_unified.py",
-        "native_mtp.py",
         "omni_multimodal.py",
         "paged_cache.py",
         "prefix_cache.py",
-        "runtime_patches/__init__.py",
-        "runtime_patches/deepseek_v4_register.py",
         "runtime_patches/gemma4_processing.py",
-        "runtime_patches/gemma4_vision.py",
-        "runtime_patches/kimi_k25_mla.py",
-        "runtime_patches/mlx_lm_compat.py",
-        "runtime_patches/mlx_vlm_compat.py",
         "scheduler.py",
-        "patches/mlx_lm_mtp/__init__.py",
-        "patches/mlx_lm_mtp/batch_generator.py",
-        "patches/mlx_lm_mtp/cache_rollback.py",
-        "patches/mlx_lm_mtp/deepseek_v4_model.py",
-        "patches/mlx_lm_mtp/qwen35_model.py",
         "patches/mlx_vlm_mtp/qwen35_vl.py",
-        "tq_disk_store.py",
         "utils/single_batch_generator.py",
         "utils/head_dim_detection.py",
-        "utils/hybrid_tq_cache.py",
         "utils/mlx_vlm_compat.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
         "utils/jang_loader.py",
         "utils/tokenizer.py",
-    }
-    expected |= {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/reasoning").glob("*.py")
     }
 
     assert expected.issubset(set(gate_module.BUNDLED_SOURCE_HASH_PATHS))
@@ -790,7 +736,6 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "api/anthropic_adapter.py",
         "api/ollama_adapter.py",
         "block_disk_store.py",
-        "cache_record_validator.py",
         "cli.py",
         "disk_cache.py",
         "engine/batched.py",
@@ -801,40 +746,17 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "model_config_registry.py",
         "models/mllm.py",
         "models/step3p7_mlx_vlm.py",
-        "models/gemma4_unified_register.py",
-        "models/gemma4_unified/__init__.py",
-        "models/gemma4_unified/config.py",
-        "models/gemma4_unified/gemma4_unified.py",
-        "models/gemma4_unified/processing_gemma4_unified.py",
-        "native_mtp.py",
         "omni_multimodal.py",
         "paged_cache.py",
         "prefix_cache.py",
-        "runtime_patches/__init__.py",
-        "runtime_patches/deepseek_v4_register.py",
         "runtime_patches/gemma4_processing.py",
-        "runtime_patches/gemma4_vision.py",
-        "runtime_patches/kimi_k25_mla.py",
-        "runtime_patches/mlx_lm_compat.py",
-        "runtime_patches/mlx_vlm_compat.py",
         "scheduler.py",
-        "patches/mlx_lm_mtp/__init__.py",
-        "patches/mlx_lm_mtp/batch_generator.py",
-        "patches/mlx_lm_mtp/cache_rollback.py",
-        "patches/mlx_lm_mtp/deepseek_v4_model.py",
-        "patches/mlx_lm_mtp/qwen35_model.py",
-        "tq_disk_store.py",
         "utils/single_batch_generator.py",
         "utils/head_dim_detection.py",
-        "utils/hybrid_tq_cache.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
         "utils/jang_loader.py",
         "utils/tokenizer.py",
-    }
-    expected_engine_files |= {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/tool_parsers").glob("*.py")
     }
     expected_jang_tools_files = {
         "capabilities.py",

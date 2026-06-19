@@ -127,6 +127,19 @@ function scoreText(text) {
   }
 }
 
+function extractLaunchCommand(logLines) {
+  const lines = Array.isArray(logLines) ? logLines : []
+  return [...lines].reverse().find((line) => /\b(?:vmlx_engine\.cli|vmlx-engine)\b/.test(line) && /\bserve\b/.test(line)) || ''
+}
+
+function commandHasFlag(command, flag) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
+}
+
+function commandHasFlagValue(command, flag, value) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+${String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
+}
+
 async function postJson(url, body) {
   const res = await fetch(url, {
     method: 'POST',
@@ -272,6 +285,7 @@ function verdict(result) {
   const failures = []
   const cfg = result.sessionConfigAfterStart || {}
   const logs = (result.sessionLogsEnd || result.sessionLogsStart || []).join('\n')
+  const launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsStart || result.sessionLogsEnd || [])
   const nativeCache = result.healthEnd?.native_cache || result.healthReady?.native_cache || {}
   const modalities = new Set(result.capabilities?.modalities || [])
   const hasDefault = (key) => Object.prototype.hasOwnProperty.call(cfg, key) && typeof cfg[key] === 'number'
@@ -325,6 +339,19 @@ function verdict(result) {
     if (!components.includes('msa_idx_keys')) failures.push(`MM3 native cache missing msa_idx_keys: ${components.join(',')}`)
     if (nativeCache.generic_turboquant_kv?.enabled !== false) failures.push('MM3 generic TQ-KV unexpectedly enabled')
     if (!/MiniMax-M3 AUTODETECTED|tq_kv=SKIP|paged_cache=OFF|jit=OFF|msa_per_step_sync=ON/i.test(logs)) failures.push('MM3 autodetect/cache log evidence missing')
+    if (!launchCommand) failures.push('MM3 launch command missing from UI logs')
+    if (launchCommand && !commandHasFlag(launchCommand, '--enable-disk-cache')) failures.push('MM3 launch argv missing --enable-disk-cache')
+    if (launchCommand && commandHasFlag(launchCommand, '--disable-prefix-cache')) failures.push('MM3 launch argv incorrectly disabled prefix cache')
+    if (launchCommand && commandHasFlag(launchCommand, '--use-paged-cache')) failures.push('MM3 launch argv incorrectly enabled generic paged KV cache')
+    if (launchCommand && commandHasFlag(launchCommand, '--enable-block-disk-cache')) failures.push('MM3 launch argv incorrectly enabled generic block disk cache')
+    if (launchCommand && commandHasFlag(launchCommand, '--kv-cache-quantization')) failures.push('MM3 launch argv incorrectly passed generic --kv-cache-quantization')
+    if (launchCommand && commandHasFlag(launchCommand, '--enable-jit')) failures.push('MM3 launch argv incorrectly passed --enable-jit')
+    if (launchCommand && commandHasFlag(launchCommand, '--is-mllm')) failures.push('MM3 launch argv incorrectly passed generic --is-mllm')
+    if (launchCommand && !commandHasFlagValue(launchCommand, '--tool-call-parser', 'minimax_m3')) failures.push('MM3 launch argv missing --tool-call-parser minimax_m3')
+    if (launchCommand && !commandHasFlagValue(launchCommand, '--reasoning-parser', 'minimax_m3')) failures.push('MM3 launch argv missing --reasoning-parser minimax_m3')
+    if (launchCommand && !commandHasFlag(launchCommand, '--enable-auto-tool-choice')) failures.push('MM3 launch argv missing --enable-auto-tool-choice')
+    if (launchCommand && !commandHasFlagValue(launchCommand, '--timeout', '900')) failures.push('MM3 launch argv missing --timeout 900 long-generation default')
+    if (launchCommand && commandHasFlag(launchCommand, '--max-tokens')) failures.push('MM3 launch argv incorrectly forced --max-tokens; default must remain model-owned')
   }
 
   return { status: failures.length ? 'fail' : 'pass', failures }
@@ -437,6 +464,7 @@ async function main() {
 
     result.healthReady = await waitForHealth(page, port, sessionId, result)
     result.sessionLogsStart = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: sessionId })
+    result.launchCommand = extractLaunchCommand(result.sessionLogsStart)
     result.cacheStart = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint: { host: '127.0.0.1', port }, id: sessionId }).catch((error) => ({ error: String(error?.message || error) }))
     const modelsRes = await fetch(`http://127.0.0.1:${port}/v1/models`).then((r) => r.json()).catch((error) => ({ error: String(error?.message || error) }))
     result.models = modelsRes
@@ -467,6 +495,7 @@ async function main() {
     result.healthEnd = await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.json()).catch((error) => ({ error: String(error?.message || error) }))
     result.cacheEnd = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint: { host: '127.0.0.1', port }, id: sessionId }).catch((error) => ({ error: String(error?.message || error) }))
     result.sessionLogsEnd = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: sessionId })
+    result.launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsEnd)
     result.appLogTail = appLog.slice(-200)
     await page.screenshot({ path: shotPath, fullPage: false }).catch(() => null)
     result.screenshot = shotPath

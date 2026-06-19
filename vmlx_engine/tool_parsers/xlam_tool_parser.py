@@ -101,14 +101,11 @@ class xLAMToolParser(ToolParser):
         tool_calls = []
         for call in tool_calls_data:
             if isinstance(call, dict) and "name" in call:
-                name = call["name"]
                 args = call.get("arguments", call.get("parameters", {}))
-                if not self._arguments_satisfy_required_schema(name, args, request):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name,
+                        "name": call["name"],
                         "arguments": (
                             json.dumps(args, ensure_ascii=False)
                             if isinstance(args, dict)
@@ -155,7 +152,7 @@ class xLAMToolParser(ToolParser):
 
         # Try to parse when we see completion markers
         if "]" in delta_text or "```" in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

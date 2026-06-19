@@ -35,6 +35,10 @@ _RUNTIME_SUPPORTED_FAMILIES = {
     "qwen3_5",
     "qwen3_5_moe",
 }
+_EAGLE3_NATIVE_MTP_FAMILIES = {
+    "minimax_m3",
+    "minimax_m3_vl",
+}
 
 _ENABLE_ENV_VALUES = {"1", "true", "TRUE", "yes", "YES", "on", "ON"}
 _ACTIVE_NATIVE_MTP_MODEL_PATH: Path | None = None
@@ -192,6 +196,125 @@ def _model_tuning_depth(
         if depth is not None:
             return depth, source
     return None, None
+
+
+def _read_eagle3_sidecar(
+    bundle_path: str | Path | None,
+) -> tuple[dict[str, Any], list[str]]:
+    cfg = _read_json(bundle_path, "eagle3_config.json")
+    if not cfg:
+        return {}, []
+
+    issues: list[str] = []
+    if str(cfg.get("method", "")).lower() != "eagle3":
+        issues.append("eagle3_config.json method must be 'eagle3'")
+
+    weights_file = cfg.get("weights_file")
+    if not isinstance(weights_file, str) or not weights_file:
+        issues.append("eagle3_config.json weights_file must be a non-empty string")
+    elif bundle_path and not (Path(bundle_path) / weights_file).is_file():
+        issues.append(f"eagle3 weights file is missing: {weights_file}")
+
+    aux_layers = cfg.get("aux_hidden_state_layers")
+    if (
+        not isinstance(aux_layers, list)
+        or len(aux_layers) != 3
+        or not all(isinstance(layer, int) for layer in aux_layers)
+    ):
+        issues.append(
+            "eagle3_config.json aux_hidden_state_layers must be a list of 3 integers"
+        )
+
+    if cfg.get("draft_to_target_id_map") not in (None, "identity"):
+        issues.append("MiniMax-M3 EAGLE3 runtime currently requires identity token map")
+
+    return cfg, issues
+
+
+def _eagle3_native_mtp_status(
+    bundle_path: str | Path | None,
+    cfg: dict[str, Any],
+    jang_cfg: dict[str, Any],
+    family: str | None,
+) -> dict[str, Any] | None:
+    eagle_cfg, issues = _read_eagle3_sidecar(bundle_path)
+    if not eagle_cfg:
+        return None
+
+    normalized_family = _normalize_family(family)
+    family_supported = normalized_family in _EAGLE3_NATIVE_MTP_FAMILIES
+    if not family_supported:
+        issues.append(
+            "eagle3_config.json is present but the bundle family is not MiniMax-M3"
+        )
+
+    runtime_env_enabled = _runtime_enabled_by_env()
+    artifact_available = bool(not issues)
+    measured_accept = eagle_cfg.get("measured_accept")
+    if not isinstance(measured_accept, dict):
+        measured_accept = {}
+
+    has_vision_config = bool(cfg.get("vision_config")) or bool(
+        isinstance(cfg.get("text_config"), dict)
+        and (cfg.get("text_config") or {}).get("vision_config")
+    )
+    capabilities = (
+        jang_cfg.get("capabilities")
+        if isinstance(jang_cfg.get("capabilities"), dict)
+        else {}
+    )
+    cache_type = capabilities.get("cache_type") if isinstance(capabilities, dict) else None
+
+    if issues:
+        status = "metadata_inconsistent"
+        runtime_reason = "metadata_inconsistent"
+    elif not runtime_env_enabled:
+        status = "runtime_disabled"
+        runtime_reason = "VMLINUX_NATIVE_MTP disables native MTP runtime"
+    else:
+        status = "weights_present_runtime_unwired"
+        runtime_reason = (
+            "MiniMax-M3 EAGLE3 native-MTP sidecar is present; draft loader "
+            "scaffold is available, but the target verify loop and MSA cache "
+            "rollback are not wired into live decode yet"
+        )
+
+    return {
+        "config_num_nextn_predict_layers": None,
+        "config_mtp_layer_source": "eagle3_config.json",
+        "jang_mtp_layers": None,
+        "jang_drop_mtp": None,
+        "index_has_mtp_tensors": False,
+        "index_mtp_layer_count": None,
+        "mtp_tensor_count": 0,
+        "artifact_available": artifact_available,
+        "family": family,
+        "has_vision_config": has_vision_config,
+        "has_vision_weights": False,
+        "vision_tensor_count": 0,
+        "cache_type": cache_type,
+        "runtime_supported": bool(family_supported and artifact_available),
+        "runtime_available": False,
+        "runtime_active": False,
+        "runtime_validation_blocked": False,
+        "effective_depth": None,
+        "effective_depth_source": None,
+        "runtime_scope": "text" if family_supported else None,
+        "vl_runtime_available": False,
+        "runtime_bundle_has_mtp": True if artifact_available else None,
+        "runtime_mtp_mode": "eagle3_sidecar",
+        "runtime_adapter": "minimax_m3_eagle3",
+        "native_mtp_method": "eagle3",
+        "eagle3_weights_file": eagle_cfg.get("weights_file"),
+        "eagle3_aux_hidden_state_layers": eagle_cfg.get("aux_hidden_state_layers"),
+        "eagle3_draft_to_target_id_map": eagle_cfg.get("draft_to_target_id_map"),
+        "eagle3_tokens_per_target_forward": measured_accept.get(
+            "tokens_per_target_forward"
+        ),
+        "runtime_reason": runtime_reason,
+        "status": status,
+        "issues": issues,
+    }
 
 
 def _config_mtp_layer_count(
@@ -405,6 +528,10 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
     cfg = _read_json(bundle_path, "config.json")
     jang_cfg = _read_json(bundle_path, "jang_config.json")
     family = _bundle_family(cfg, jang_cfg)
+    eagle3_status = _eagle3_native_mtp_status(bundle_path, cfg, jang_cfg, family)
+    if eagle3_status is not None:
+        return eagle3_status
+
     config_layers, layer_source, issues, jang_layers = _config_mtp_layer_count(
         cfg, jang_cfg
     )
@@ -421,10 +548,7 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         )
 
     mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
-    mtp_sidecar_declares_dropped = (
-        mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False
-    )
-    if mtp_sidecar_declares_dropped:
+    if mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False:
         drop_mtp = True
     runtime_sidecar = (
         jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
@@ -434,11 +558,7 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
     runtime_declares_dropped_mtp = (
         runtime_bundle_has_mtp is False
         and isinstance(runtime_mtp_mode, str)
-        and (
-            "drop" in runtime_mtp_mode.lower()
-            or "missing_weight" in runtime_mtp_mode.lower()
-            or "metadata_only" in runtime_mtp_mode.lower()
-        )
+        and "drop" in runtime_mtp_mode.lower()
     )
     if runtime_declares_dropped_mtp:
         drop_mtp = True
@@ -462,6 +582,15 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         )
     if config_layers in (None, 0) and drop_mtp is not True and has_mtp_tensors:
         issues.append("bundle indexes mtp.* tensors but config disables MTP runtime")
+    if (
+        drop_mtp is True
+        and config_layers not in (None, 0)
+        and not runtime_declares_dropped_mtp
+    ):
+        issues.append(
+            "jang_config.drop_mtp=true but config declares "
+            f"{config_layers} MTP layer(s)"
+        )
     if drop_mtp is True and has_mtp_tensors:
         issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")
     if (
@@ -524,10 +653,6 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         runtime_reason = (
             "jang_config.runtime.bundle_has_mtp=false"
             if runtime_declares_dropped_mtp
-            else "jang_config.mtp.enabled=false"
-            if mtp_sidecar.get("enabled") is False
-            else "jang_config.mtp.kept=false"
-            if mtp_sidecar.get("kept") is False
             else "jang_config.drop_mtp=true"
         )
     elif runtime_available:
@@ -622,8 +747,10 @@ def maybe_apply_native_mtp(
     """Apply sanitize/runtime patches before loading a native-MTP bundle."""
     global _ACTIVE_NATIVE_MTP_MODEL_PATH
     status = inspect_native_mtp_bundle(model_path)
+    runtime_adapter = status.get("runtime_adapter", "mlx_lm_mtp_patch")
     should_patch_for_sanitize = bool(
         status["artifact_available"] and status["runtime_supported"]
+        and runtime_adapter == "mlx_lm_mtp_patch"
     )
     runtime_active = bool(
         should_patch_for_sanitize and status["runtime_available"] and allow_runtime

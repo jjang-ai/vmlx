@@ -1109,32 +1109,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
             # Fail loudly if the artifact names a module that the MiMo runtime
             # does not expose. This distinguishes runtime incompatibility from
-            # corruption instead of silently dropping expert weights. Use the
-            # existing module's declared input width as source of truth instead
-            # of deriving blindly from packed columns; that matches the current
-            # jang_tools JANGTQ hydrator contract and keeps future bit layouts
-            # from silently widening inputs.
-            existing = _mimo_v2_get_module(model, base)
+            # corruption instead of silently dropping expert weights.
+            _mimo_v2_get_module(model, base)
 
             num_experts, out_features, packed_cols = packed.shape
-            derived_in_features = int(packed_cols) * (32 // bits)
-            expected_in_features = (
-                getattr(existing, "in_features", None)
-                or getattr(existing, "input_dims", None)
-            )
-            if not isinstance(expected_in_features, int) or expected_in_features <= 0:
-                expected_in_features = None
-            if (
-                expected_in_features is not None
-                and expected_in_features != derived_in_features
-                and bits in (2, 4, 8)
-            ):
-                raise RuntimeError(
-                    f"MiMo-V2 prestacked JANGTQ group {base} input width mismatch: "
-                    f"expected={expected_in_features}, derived={derived_in_features}, "
-                    f"bits={bits}, packed_cols={packed_cols}"
-                )
-            in_features = expected_in_features or derived_in_features
+            in_features = packed_cols * (32 // bits)
             tq_module = TurboQuantSwitchLinear(
                 in_features=in_features,
                 out_features=out_features,
@@ -1330,14 +1309,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
         @classmethod
         def from_dict(cls, params):
-            media_auto_enabled = bool(
-                params.get("_vmlx_mimo_v2_media_runtime_auto_enabled")
-            )
-            merged_text = {
-                key: value
-                for key, value in dict(params).items()
-                if key != "_vmlx_mimo_v2_media_runtime_auto_enabled"
-            }
+            merged_text = dict(params)
             if isinstance(params.get("text_config"), dict):
                 merged_text.update(params["text_config"])
             params["text_config"] = merged_text
@@ -1376,20 +1348,12 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     or params.get("preserved_modalities")
                 ),
                 unwired_modalities=(
-                    []
-                    if media_auto_enabled
-                    else (
-                        (params.get("capabilities") or {}).get("unwired_modalities")
-                        or params.get("unwired_modalities")
-                    )
+                    (params.get("capabilities") or {}).get("unwired_modalities")
+                    or params.get("unwired_modalities")
                 ),
                 multimodal_status=(
-                    "mimo_v2_multimodal_runtime"
-                    if media_auto_enabled
-                    else (
-                        (params.get("capabilities") or {}).get("multimodal_status")
-                        or params.get("multimodal_status")
-                    )
+                    (params.get("capabilities") or {}).get("multimodal_status")
+                    or params.get("multimodal_status")
                 ),
             )
 
@@ -1431,7 +1395,9 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             num_kv_heads = int(
                 getattr(self.config, "num_key_value_heads", num_heads) or num_heads
             )
-            head_dim = int(getattr(self.config, "qk_channels", 64) or 64)
+            head_dim = int(getattr(self.config, "qk_channels", 0) or 0)
+            if head_dim <= 0:
+                head_dim = max(1, self.hidden_size // max(1, num_heads))
             self.vision_head_dim = head_dim
             rms_norm_eps = float(getattr(self.config, "rms_norm_eps", 1e-6) or 1e-6)
             hidden_act = str(getattr(self.config, "hidden_act", "silu") or "silu")
@@ -1546,9 +1512,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 col_based_embeddings = None
                 window_index_1d_col = None
                 reverse_window_index_1d_col = None
-                cu_seqlens = None
             else:
-                grid_rows = self._grid_rows(grid_thw)
                 emb = self.rot_pos_emb(grid_thw)
                 emb = mx.concatenate([emb, emb], axis=-1)
                 row_based_embeddings = (mx.cos(emb), mx.sin(emb))
@@ -1556,22 +1520,6 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 reverse_window_index_1d_col = mx.argsort(window_index_1d_col)
                 col_emb = self.apply_index(emb, window_index_1d_col)
                 col_based_embeddings = (mx.cos(col_emb), mx.sin(col_emb))
-                # Match the bundled MiMo-V2 PyTorch reference: attention
-                # segments are per temporal frame, not one segment per media
-                # item. This is neutral for still images (grid_t=1) but avoids
-                # cross-frame leakage for video grids.
-                frame_lengths = [
-                    int(grid_h) * int(grid_w)
-                    for grid_t, grid_h, grid_w in grid_rows
-                    for _ in range(int(grid_t))
-                ]
-                cu_seqlens = mx.concatenate(
-                    [
-                        mx.array([0], dtype=mx.int32),
-                        mx.cumsum(mx.array(frame_lengths, dtype=mx.int32)),
-                    ],
-                    axis=0,
-                )
 
             for i, block in enumerate(self.blocks):
                 window_attn_type = (
@@ -1605,7 +1553,6 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     hidden_states,
                     full_attn=full_attn,
                     position_embeddings=position_embeddings,
-                    cu_seqlens=cu_seqlens,
                 )
             return hidden_states
 
@@ -2760,7 +2707,6 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             hidden_states,
             full_attn: bool = False,
             position_embeddings=None,
-            cu_seqlens=None,
         ):
             hidden_states = mx.array(hidden_states)
             if hidden_states.ndim != 2 or int(hidden_states.shape[-1]) != self.dim:
@@ -2785,49 +2731,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             if self.num_kv_groups > 1:
                 k = mx.repeat(k, self.num_kv_groups, axis=1)
                 v = mx.repeat(v, self.num_kv_groups, axis=1)
-
-            segment_bounds: list[int] | None = None
-            if cu_seqlens is not None:
-                try:
-                    segment_bounds = [int(v) for v in mx.array(cu_seqlens).tolist()]
-                except Exception:
-                    segment_bounds = None
-                if segment_bounds and segment_bounds[0] != 0:
-                    segment_bounds = [0, *segment_bounds]
-                if not segment_bounds or segment_bounds[-1] != seq_len:
-                    segment_bounds = None
-
-            def _attend_segment(start: int, end: int):
-                seg_len = end - start
-                seg_q = q[:, :, start:end, :]
-                seg_k = k[:, :, start:end, :]
-                seg_v = v[:, :, start:end, :]
-                mask = None if full_attn else self._window_mask(seg_len)
-                if self.sinks is not None:
-                    sink_bias = mx.zeros((1, self.num_heads, seg_len, seg_len))
-                    sink_bias = sink_bias + self.sinks[None, :, None, None] * (
-                        mx.arange(seg_len)[None, None, None, :] == 0
-                    )
-                    mask = sink_bias if mask is None else mask + sink_bias
-                return mx.fast.scaled_dot_product_attention(
-                    seg_q,
-                    seg_k,
-                    seg_v,
-                    scale=self.scaling,
-                    mask=mask,
+            mask = None if full_attn else self._window_mask(seq_len)
+            if self.sinks is not None:
+                sink_bias = mx.zeros((1, self.num_heads, seq_len, seq_len))
+                sink_bias = sink_bias + self.sinks[None, :, None, None] * (
+                    mx.arange(seq_len)[None, None, None, :] == 0
                 )
-
-            if segment_bounds and len(segment_bounds) > 2:
-                attn_output = mx.concatenate(
-                    [
-                        _attend_segment(segment_bounds[i], segment_bounds[i + 1])
-                        for i in range(len(segment_bounds) - 1)
-                        if segment_bounds[i + 1] > segment_bounds[i]
-                    ],
-                    axis=2,
-                )
-            else:
-                attn_output = _attend_segment(0, seq_len)
+                mask = sink_bias if mask is None else mask + sink_bias
+            attn_output = mx.fast.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.scaling,
+                mask=mask,
+            )
             attn_output = mx.reshape(
                 mx.transpose(attn_output, (0, 2, 1, 3)),
                 (seq_len, self.num_heads * self.head_dim),
@@ -2870,13 +2787,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             hidden_states,
             full_attn: bool = False,
             position_embeddings=None,
-            cu_seqlens=None,
         ):
             hidden_states = hidden_states + self.attn(
                 self.norm1(hidden_states),
                 full_attn=full_attn,
                 position_embeddings=position_embeddings,
-                cu_seqlens=cu_seqlens,
             )
             return hidden_states + self.mlp(self.norm2(hidden_states))
 
@@ -3122,10 +3037,16 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             cache=None,
             **kwargs,
         ):
+            if pixel_values is not None:
+                inputs_embeds = self.get_input_embeddings(
+                    input_ids=input_ids,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                ).inputs_embeds
+                input_ids = None
             if any(
                 item is not None
                 for item in (
-                    pixel_values,
                     image_embeds,
                     video_pixel_values,
                     video_embeds,
@@ -3135,8 +3056,6 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             ):
                 inputs_embeds = self.get_input_embeddings(
                     input_ids=input_ids,
-                    pixel_values=pixel_values,
-                    image_grid_thw=image_grid_thw,
                     image_embeds=image_embeds,
                     video_pixel_values=video_pixel_values,
                     video_grid_thw=video_grid_thw,
@@ -3191,30 +3110,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     assigned += 1
                 except Exception as exc:
                     failures.append(f"{key}: {type(exc).__name__}: {exc}")
-            zero_filled = []
-            for key in (
-                "visual.merger.ln_q.bias",
-                "visual.merger.mlp.0.bias",
-                "visual.merger.mlp.2.bias",
-            ):
-                if key in self._mimo_v2_media_weights:
-                    continue
-                try:
-                    existing = _mimo_v2_get_module(self, key)
-                    _mimo_v2_assign_weight(self, key, mx.zeros_like(existing))
-                    zero_filled.append(key)
-                except Exception:
-                    pass
             if failures:
                 preview = "; ".join(failures[:8])
                 raise RuntimeError(
                     "MiMo-V2 media-enabled load could not bind preserved media "
                     f"weights ({len(failures)} failures): {preview}"
-                )
-            if zero_filled:
-                logger.info(
-                    "MiMo-V2 media load zero-filled missing visual bias tensors: %s",
-                    ", ".join(zero_filled),
                 )
             return assigned
 
@@ -5966,7 +5866,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
+        if model_type in {"gemma4_unified", "step3p7"} and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,
@@ -6306,7 +6206,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
+        if model_type == "gemma4_unified" and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,

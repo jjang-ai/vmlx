@@ -59,10 +59,8 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
         "installed_bundled_python_launch_crashes_not_reproduced" in audit["checks"]
     )
     assert "installed_bundled_engine_hash_parity" in audit["checks"]
-    assert "installed_bundled_jang_tools_hash_parity" in audit["checks"]
     assert "installed_packaged_engine_source_hash_parity" in audit["checks"]
     assert "bundled_engine_hash_parity" in audit
-    assert "bundled_jang_tools_hash_parity" in audit
     assert "packaged_engine_source_hash_parity" in audit
     assert "vmlx_bundled_python_launch_crash_reports" in audit
     assert audit["installed_versioned_python"].endswith(
@@ -78,51 +76,8 @@ def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
     assert "api/utils.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "tool_parsers/dsml_tool_parser.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "patches/mlx_vlm_mtp/qwen35_vl.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "cache_record_validator.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "native_mtp.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/batch_generator.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/cache_rollback.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/deepseek_v4_model.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/qwen35_model.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "tq_disk_store.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "utils/hybrid_tq_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "utils/ssm_companion_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "models/gemma4_unified_register.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/config.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/gemma4_unified.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert (
-        "models/gemma4_unified/processing_gemma4_unified.py"
-        in gate.CRITICAL_ENGINE_HASH_FILES
-    )
-    assert "runtime_patches/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "runtime_patches/deepseek_v4_register.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "runtime_patches/gemma4_processing.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "runtime_patches/gemma4_vision.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "runtime_patches/kimi_k25_mla.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "runtime_patches/mlx_lm_compat.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert "runtime_patches/mlx_vlm_compat.py" in gate.CRITICAL_ENGINE_HASH_FILES
-    assert _expected_tool_parser_hash_files().issubset(
-        set(gate.CRITICAL_ENGINE_HASH_FILES)
-    )
-    assert _expected_reasoning_parser_hash_files().issubset(
-        set(gate.CRITICAL_ENGINE_HASH_FILES)
-    )
-
-
-def _expected_tool_parser_hash_files() -> set[str]:
-    return {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/tool_parsers").glob("*.py")
-    }
-
-
-def _expected_reasoning_parser_hash_files() -> set[str]:
-    return {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/reasoning").glob("*.py")
-    }
 
 
 def test_installed_app_runtime_parity_default_out_tracks_manifest():
@@ -391,56 +346,6 @@ def test_installed_app_runtime_parity_accepts_matching_bundled_engine_file(tmp_p
     assert result["ok"] is True
     assert result["mismatched"] == []
     assert result["files"]["server.py"]["match"] is True
-
-
-def test_installed_app_runtime_parity_rejects_stale_bundled_jang_file(tmp_path):
-    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
-
-    root = tmp_path / "repo"
-    source_jang = root / "jang-tools/jang_tools"
-    bundled_python = tmp_path / "Staged.app/Contents/Resources/bundled-python/python"
-    bundled_jang = bundled_python / "lib/python3.12/site-packages/jang_tools"
-    source_jang.mkdir(parents=True)
-    bundled_jang.mkdir(parents=True)
-    (source_jang / "capabilities.py").write_text("source\n", encoding="utf-8")
-    (bundled_jang / "capabilities.py").write_text("stale\n", encoding="utf-8")
-
-    result = gate._check_bundled_jang_tools_hash_parity(
-        root,
-        bundled_python / "bin/python3",
-        relpaths=("capabilities.py",),
-        source_jang_tools=root / "jang-tools",
-    )
-
-    assert result["ok"] is False
-    assert result["missing_source"] == []
-    assert result["missing_bundled"] == []
-    assert result["mismatched"] == ["capabilities.py"]
-    assert result["files"]["capabilities.py"]["match"] is False
-
-
-def test_installed_app_runtime_parity_accepts_matching_bundled_jang_file(tmp_path):
-    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
-
-    root = tmp_path / "repo"
-    source_jang = root / "jang-tools/jang_tools"
-    bundled_python = tmp_path / "Staged.app/Contents/Resources/bundled-python/python"
-    bundled_jang = bundled_python / "lib/python3.12/site-packages/jang_tools"
-    source_jang.mkdir(parents=True)
-    bundled_jang.mkdir(parents=True)
-    (source_jang / "capabilities.py").write_text("same\n", encoding="utf-8")
-    (bundled_jang / "capabilities.py").write_text("same\n", encoding="utf-8")
-
-    result = gate._check_bundled_jang_tools_hash_parity(
-        root,
-        bundled_python / "bin/python3",
-        relpaths=("capabilities.py",),
-        source_jang_tools=root / "jang-tools",
-    )
-
-    assert result["ok"] is True
-    assert result["mismatched"] == []
-    assert result["files"]["capabilities.py"]["match"] is True
 
 
 def test_installed_app_runtime_parity_rejects_stale_packaged_engine_source_file(

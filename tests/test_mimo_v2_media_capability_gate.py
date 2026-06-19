@@ -89,19 +89,6 @@ def test_mimo_v2_runtime_modalities_fail_closed_for_preserved_text_runtime(
     from vmlx_engine import server
 
     _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=False)
-    (tmp_path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "model.safetensors.index.json").write_text(
-        json.dumps(
-            {
-                "weight_map": {
-                    "visual.patch_embed.proj.weight": "model-00001.safetensors",
-                    "audio_encoder.input_local_transformer.weight": "model-00002.safetensors",
-                    "speech_embeddings.weight": "model-00002.safetensors",
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
     _install_fake_mimo_runtime(monkeypatch)
 
     assert server._mimo_v2_runtime_modalities(str(tmp_path)) == ["text"]
@@ -196,30 +183,6 @@ def test_mimo_v2_runtime_modalities_use_processor_audio_token_id(
         "vision",
         "video",
         "audio",
-    ]
-
-
-def test_mimo_v2_runtime_modalities_use_processor_image_video_token_ids(
-    tmp_path,
-    monkeypatch,
-):
-    from vmlx_engine import server
-
-    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
-    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
-    cfg.pop("image_token_id")
-    cfg.pop("video_token_id")
-    cfg["processor_config"] = {
-        "image_token_id": 151655,
-        "video_token_id": 151656,
-    }
-    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
-    _install_fake_mimo_runtime(monkeypatch)
-
-    assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
-        "text",
-        "vision",
-        "video",
     ]
 
 

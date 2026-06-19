@@ -14579,6 +14579,273 @@ class TestStreamUsagePropagatesCacheDetail:
             "cache_detail": "memory",
         }
 
+    @pytest.mark.asyncio
+    async def test_minimax_m3_chat_stream_reasoning_only_runs_visible_answer_pass(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.model_config_registry as registry
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import (
+            ChatCompletionRequest,
+            Message,
+            StreamOptions,
+        )
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.minimax_m3_parser import MiniMaxM3ReasoningParser
+
+        calls = []
+
+        class _Tokenizer:
+            has_thinking = False
+
+        class _Engine:
+            tokenizer = _Tokenizer()
+
+            async def stream_chat(self, *, messages, **kwargs):
+                calls.append(("stream", messages, dict(kwargs)))
+                yield GenerationOutput(
+                    text="Need an internal M3 plan.",
+                    new_text="Need an internal M3 plan.",
+                    prompt_tokens=19,
+                    completion_tokens=7,
+                    cached_tokens=13,
+                    cache_detail="memory",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        async def fake_visible_answer(
+            engine,
+            *,
+            messages,
+            chat_kwargs,
+            timeout,
+            fastapi_request,
+            request_id,
+            endpoint,
+        ):
+            calls.append(("answer", messages, dict(chat_kwargs), request_id, endpoint))
+            assert request_id.endswith(":visible-answer")
+            assert endpoint == "Chat Completions MiniMax-M3 visible answer pass"
+            assert chat_kwargs["enable_thinking"] is False
+            assert chat_kwargs["chat_template_kwargs"]["thinking_mode"] == "disabled"
+            assert "tools" not in chat_kwargs
+            assert "_vmlx_tools_present" not in chat_kwargs
+            assert "_vmlx_template_tools" not in chat_kwargs
+            assert messages[-1]["role"] == "assistant"
+            assert messages[-1]["content"] == ""
+            assert "internal M3 plan" in messages[-1]["reasoning_content"]
+            return GenerationOutput(
+                text="VISIBLE_M3_ANSWER",
+                new_text="VISIBLE_M3_ANSWER",
+                prompt_tokens=20,
+                completion_tokens=4,
+                finished=True,
+                finish_reason="stop",
+            )
+
+        class _Registry:
+            def lookup(self, _key):
+                return SimpleNamespace(
+                    family_name="minimax_m3",
+                    think_in_template=False,
+                    reasoning_parser="minimax_m3",
+                    tool_parser="minimax_m3",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "minimax-m3-visible-answer-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", MiniMaxM3ReasoningParser())
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        monkeypatch.setattr(server, "_await_chat_with_disconnect_abort", fake_visible_answer)
+        monkeypatch.setattr(registry, "get_model_config_registry", lambda: _Registry())
+
+        request = ChatCompletionRequest(
+            model="minimax-m3-visible-answer-test",
+            messages=[Message(role="user", content="hi")],
+            stream=True,
+            enable_thinking=True,
+            chat_template_kwargs={"thinking_mode": "enabled"},
+            stream_options=StreamOptions(include_usage=True),
+        )
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+            chat_template_kwargs={"thinking_mode": "enabled"},
+            max_tokens=128,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        assert calls[0][0] == "stream"
+        assert calls[1][0] == "answer"
+        reasoning_deltas = [
+            choice["delta"].get("reasoning_content") or choice["delta"].get("reasoning")
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            if choice.get("delta", {}).get("reasoning_content")
+            or choice.get("delta", {}).get("reasoning")
+        ]
+        content_deltas = [
+            choice["delta"].get("content")
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            if choice.get("delta", {}).get("content")
+        ]
+        usage_chunks = [chunk for chunk in chunks if chunk.get("usage")]
+
+        assert any("internal M3 plan" in delta for delta in reasoning_deltas)
+        assert content_deltas == ["VISIBLE_M3_ANSWER"]
+        assert usage_chunks[-1]["usage"]["prompt_tokens_details"] == {
+            "cached_tokens": 13,
+            "cache_detail": "memory",
+        }
+
+    @pytest.mark.asyncio
+    async def test_minimax_m3_chat_stream_length_truncated_visible_prefix_uses_answer_pass(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.model_config_registry as registry
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import (
+            ChatCompletionRequest,
+            Message,
+            StreamOptions,
+        )
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.minimax_m3_parser import MiniMaxM3ReasoningParser
+
+        calls = []
+
+        class _Tokenizer:
+            has_thinking = False
+
+        class _Engine:
+            tokenizer = _Tokenizer()
+
+            async def stream_chat(self, *, messages, **kwargs):
+                calls.append(("stream", messages, dict(kwargs)))
+                yield GenerationOutput(
+                    text=(
+                        "The user asked for MM3_STREAM_CHAT_OK."
+                        "</mm:think>MM3_STREAM_CHAT"
+                    ),
+                    new_text=(
+                        "The user asked for MM3_STREAM_CHAT_OK."
+                        "</mm:think>MM3_STREAM_CHAT"
+                    ),
+                    prompt_tokens=31,
+                    completion_tokens=120,
+                    cached_tokens=21,
+                    cache_detail="memory",
+                    finished=True,
+                    finish_reason="length",
+                )
+
+        async def fake_visible_answer(
+            engine,
+            *,
+            messages,
+            chat_kwargs,
+            timeout,
+            fastapi_request,
+            request_id,
+            endpoint,
+        ):
+            calls.append(("answer", messages, dict(chat_kwargs), request_id, endpoint))
+            assert request_id.endswith(":visible-answer")
+            assert endpoint == "Chat Completions MiniMax-M3 visible answer pass"
+            assert chat_kwargs["enable_thinking"] is False
+            assert chat_kwargs["chat_template_kwargs"]["thinking_mode"] == "disabled"
+            assert chat_kwargs["max_tokens"] == 180
+            assert messages[-1]["role"] == "assistant"
+            assert messages[-1]["content"] == ""
+            assert "MM3_STREAM_CHAT_OK" in messages[-1]["reasoning_content"]
+            return GenerationOutput(
+                text="MM3_STREAM_CHAT_OK Oracle EBS is an integrated Oracle business application suite.",
+                new_text="MM3_STREAM_CHAT_OK Oracle EBS is an integrated Oracle business application suite.",
+                prompt_tokens=35,
+                completion_tokens=15,
+                finished=True,
+                finish_reason="stop",
+            )
+
+        class _Registry:
+            def lookup(self, _key):
+                return SimpleNamespace(
+                    family_name="minimax_m3",
+                    think_in_template=False,
+                    reasoning_parser="minimax_m3",
+                    tool_parser="minimax_m3",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "minimax-m3-visible-answer-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", MiniMaxM3ReasoningParser())
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        monkeypatch.setattr(server, "_await_chat_with_disconnect_abort", fake_visible_answer)
+        monkeypatch.setattr(registry, "get_model_config_registry", lambda: _Registry())
+
+        request = ChatCompletionRequest(
+            model="minimax-m3-visible-answer-test",
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        "Streaming Chat mixed check: with reasoning on, reply visibly "
+                        "with MM3_STREAM_CHAT_OK and define Oracle EBS in one sentence."
+                    ),
+                )
+            ],
+            stream=True,
+            enable_thinking=True,
+            max_thinking_tokens=120,
+            chat_template_kwargs={"thinking_mode": "enabled"},
+            stream_options=StreamOptions(include_usage=True),
+        )
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+            chat_template_kwargs={"thinking_mode": "enabled"},
+            max_tokens=180,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        assert [call[0] for call in calls] == ["stream", "answer"]
+        content_deltas = [
+            choice["delta"].get("content")
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            if choice.get("delta", {}).get("content")
+        ]
+        reasoning_deltas = [
+            choice["delta"].get("reasoning_content") or choice["delta"].get("reasoning")
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            if choice.get("delta", {}).get("reasoning_content")
+            or choice.get("delta", {}).get("reasoning")
+        ]
+
+        assert any("MM3_STREAM_CHAT_OK" in delta for delta in reasoning_deltas)
+        assert content_deltas == [
+            "MM3_STREAM_CHAT_OK Oracle EBS is an integrated Oracle business application suite."
+        ]
+
 
 class TestHuggingFaceDownloadRegression:
     """Issue #118: stale saved HF mirrors or tokens must not poison public GUI

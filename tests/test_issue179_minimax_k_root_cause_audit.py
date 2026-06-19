@@ -59,7 +59,7 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked_count"
         ]
-        == 2
+        == 6
     )
     assert (
         audit["reporter_server_hash_parity"]["reporter_installed_server_sha256"]
@@ -74,122 +74,9 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "reporter chat/session/settings database state matches local diagnostic state",
         "the 404 cancel response caused the screenshot rather than followed the stream abort",
     ]
-    assert audit["local_reporter_prompt_reproduction"]["exists"] is True
     assert audit["local_reporter_prompt_reproduction"]["clean"] is True
     assert audit["local_reporter_prompt_reproduction"]["observed_stream_text"] is True
-    assert audit["local_reporter_prompt_reproduction"]["selected_fallback_path"] is None
-    assert audit["local_reporter_prompt_reproduction"]["path"] == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
-    )
     assert "#179 remains open" in audit["release_boundary"]
-
-
-def test_issue179_audit_tracks_language_planning_leak_isolation_axes():
-    audit = gate.build_audit(Path("."))
-
-    isolation = audit["language_planning_leak_isolation"]
-    rows = {row["axis"]: row for row in isolation["axes"]}
-
-    assert isolation["status"] == "open"
-    assert set(rows) == {
-        "reporter_exact_prompt_reproduction",
-        "generation_config_and_sampling",
-        "parser_template_reasoning",
-        "paged_prefix_cache",
-        "block_disk_l2",
-        "turboquant_kv",
-    }
-    assert rows["reporter_exact_prompt_reproduction"]["status"] == "open"
-    assert rows["generation_config_and_sampling"]["status"] in {"partial", "open"}
-    assert rows["parser_template_reasoning"]["status"] in {"partial", "open"}
-    assert rows["paged_prefix_cache"]["status"] in {"partial", "open"}
-    assert rows["block_disk_l2"]["status"] in {"partial", "open"}
-    assert rows["turboquant_kv"]["status"] in {"partial", "open"}
-    assert (
-        "current_source_minimax_small_tool_and_reasoning_clean"
-        in rows["parser_template_reasoning"]["current_evidence"]
-    )
-    assert (
-        "current_source_minimax_small_paged_tq_second_hit"
-        in rows["paged_prefix_cache"]["current_evidence"]
-    )
-    assert (
-        "current_source_minimax_small_l2_restart_restore"
-        in rows["block_disk_l2"]["current_evidence"]
-    )
-    assert (
-        "current_source_minimax_small_native_tq_cache_reported"
-        in rows["turboquant_kv"]["current_evidence"]
-    )
-    assert "cache_on_off_same_prompt" in rows["paged_prefix_cache"]["required_next_evidence"]
-    assert "fresh_process_l2_restore_same_prompt" in rows["block_disk_l2"]["required_next_evidence"]
-    assert "tq_kv_off_same_prompt" in rows["turboquant_kv"]["required_next_evidence"]
-    assert "rendered_chat_template_hash" in rows["parser_template_reasoning"]["required_next_evidence"]
-    assert "generation_config_hash_match" in rows["generation_config_and_sampling"]["required_next_evidence"]
-    assert isolation["current_source_minimax_small"]["all_checks_pass"] is True
-    assert (
-        "does not prove reporter MiniMax-K artifact/session parity"
-        in isolation["current_source_minimax_small"]["release_boundary"]
-    )
-    assert "single_axis_runtime_ab_required" in isolation["release_boundary"]
-
-
-def test_issue179_current_source_minimax_small_smoke_is_scoped_boundary():
-    smoke = gate.analyze_current_source_minimax_small_smoke(Path("."))
-
-    assert smoke["exists"] is True
-    assert smoke["status"] == "pass"
-    assert smoke["all_checks_pass"] is True
-    assert smoke["checks"] == {
-        "status_pass": True,
-        "model_family_minimax": True,
-        "tool_parser_minimax": True,
-        "reasoning_parser_minimax_m2": True,
-        "reasoning_separated": True,
-        "required_tool_call_parsed": True,
-        "tool_result_continuation_exact": True,
-        "structured_json_exact": True,
-        "exact_code_whitespace": True,
-        "cache_second_hit_tq": True,
-        "block_disk_l2_restart_restore": True,
-        "native_cache_reports_tq_l2": True,
-    }
-    assert "tool_required" in smoke["request_labels"]
-    assert "text_cache_repeat_2" in smoke["request_labels"]
-    assert "Current-source MiniMax Small JANGTQ proof only" in smoke["release_boundary"]
-
-
-def test_issue179_local_model_manifest_falls_back_to_direct_metadata(
-    tmp_path, monkeypatch
-):
-    model = tmp_path / "MiniMax-M2.7-JANGTQ_K-CRACK"
-    model.mkdir()
-    for name in (
-        "config.json",
-        "generation_config.json",
-        "jang_config.json",
-        "model.safetensors.index.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-    ):
-        (model / name).write_text(json.dumps({"name": name}) + "\n", encoding="utf-8")
-    (model / "modeling_minimax_m2.py").write_text("# model\n", encoding="utf-8")
-    (model / "configuration_minimax_m2.py").write_text("# config\n", encoding="utf-8")
-    for index in range(1, 68):
-        (model / f"model-{index:05d}-of-00067.safetensors").write_bytes(b"")
-
-    monkeypatch.setattr(gate, "LOCAL_MODEL_PATH_CANDIDATES", (model,))
-
-    manifest = gate.analyze_local_model_manifest(tmp_path)
-
-    assert manifest["status"] == "metadata_fallback"
-    assert manifest["exists"] is False
-    assert manifest["checks"]["has_generation_config"] is True
-    assert manifest["checks"]["model_shard_count_is_67"] is True
-    assert manifest["local_full_k_artifact_shape_recorded"] is True
-    assert manifest["hash_shards"] is False
-    assert manifest["unhashed_safetensors_count"] == 67
-    assert "generation_config.json" in manifest["metadata_fallback"]["metadata_files_hashed"]
 
 
 def test_issue179_local_reporter_repro_accepts_reasoning_only_clean_cancel(tmp_path):

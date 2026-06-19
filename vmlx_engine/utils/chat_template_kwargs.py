@@ -87,20 +87,29 @@ def ensure_thinking_off_sentinel(
     fam = (family_name or "").lower()
     name = (model_name or "").lower()
     is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
-    is_step37 = fam in {"step3p7", "step37"} or "step3" in name or "step-3" in name
     is_minimax_m3 = fam in {"minimax_m3", "minimax_m3_vl"} or "minimax-m3" in name
     is_minimax = (
         not is_minimax_m3
         and (fam == "minimax" or "minimax" in name)
     )
-    if tools_present and not (is_lfm2 or is_step37):
-        return prompt
 
     last_open = prompt.rfind("<think>")
     if last_open >= 0:
         after_open = prompt[last_open + len("<think>") :]
         if "</think>" not in after_open:
+            # #199-2B: MiniMax tool requests keep the planning rail open so the
+            # model can still select tools; every other family closes the forced
+            # <think> (e.g. Step-3.7) so the visible budget is not spent in
+            # hidden-thought punctuation.
+            if tools_present and is_minimax:
+                return prompt
             return prompt[: last_open + len("<think>")] + "\n</think>\n\n"
+        return prompt
+
+    # No open <think> in the prompt: most tool requests keep the rail off (no
+    # forced sentinel); LFM2 is the exception (native tool format follows the
+    # assistant prefix directly).
+    if tools_present and not is_lfm2:
         return prompt
 
     needs_empty_think = is_minimax or is_lfm2

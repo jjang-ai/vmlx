@@ -481,35 +481,6 @@ class SSMCompanionDiskStore:
                 self._hits += 1
         return entry
 
-    def candidate_lengths(self, max_len: int) -> List[int]:
-        """Return persisted checkpoint lengths that could prefix ``max_len``.
-
-        The in-memory SSM companion cache maintains its own length index, but
-        that index is empty after an engine restart. The disk sidecars carry
-        the stored token count, which is enough for callers to reconstruct the
-        exact hash for each candidate length and then call ``fetch(key)``.
-        """
-        if self._dir is None or max_len <= 0:
-            return []
-        lengths = set()
-        try:
-            for sub in self._dir.iterdir() if self._dir.exists() else []:
-                if not sub.is_dir():
-                    continue
-                for side in sub.iterdir():
-                    if side.suffix != ".json":
-                        continue
-                    try:
-                        sidecar = json.loads(side.read_text())
-                        n = int(sidecar.get("num_tokens") or 0)
-                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    if 0 < n <= max_len:
-                        lengths.add(n)
-        except OSError:
-            return []
-        return sorted(lengths, reverse=True)
-
     def delete(self, key: str) -> None:
         if self._dir is None:
             return

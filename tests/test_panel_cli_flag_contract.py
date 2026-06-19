@@ -314,6 +314,19 @@ def test_live_metal_headroom_ui_proof_checks_paged_capacity_log() -> None:
     assert "window.api.sessions.getLogs" in source
 
 
+def test_live_metal_headroom_ui_proof_checks_minimax_m3_native_cache_controls() -> None:
+    source = (ROOT / "panel" / "scripts" / "live-metal-headroom-ui-proof.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    assert "collectMinimaxM3SettingsUi" in source
+    assert "minimax_m3_vl" in source
+    assert "MiniMax-M3 uses paged-off SSD prefix cache with native MSA idx_keys" in source
+    assert "MiniMax-M3 keeps generic KV q4/q8 disabled" in source
+    assert "generic stored-KV codecs cannot preserve that cache format" in source
+    assert "Stored Cache Quantization" in source
+
+
 def test_live_metal_headroom_chat_ui_proof_checks_visible_safety_block() -> None:
     source = (
         ROOT / "panel" / "scripts" / "live-metal-headroom-chat-ui-proof.mjs"
@@ -324,3 +337,209 @@ def test_live_metal_headroom_chat_ui_proof_checks_visible_safety_block() -> None
     assert "window.api.sessions.createRemote" in source
     assert "window.api.chat.sendMessage" in source
     assert "window.api.chat.isStreaming" in source
+
+
+def test_metal_oom_startup_errors_surface_wired_limit_guidance() -> None:
+    shared = (ROOT / "panel" / "src" / "shared" / "metalWiredLimit.ts").read_text(
+        encoding="utf-8"
+    )
+    sessions = (ROOT / "panel" / "src" / "main" / "sessions.ts").read_text(
+        encoding="utf-8"
+    )
+    form = (
+        ROOT
+        / "panel"
+        / "src"
+        / "renderer"
+        / "src"
+        / "components"
+        / "sessions"
+        / "SessionConfigForm.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "sudo sysctl iogpu.wired_limit_mb=120000" in shared
+    assert "115000-120000 MB" in shared
+    assert "Do not set it equal to physical RAM" in shared
+    assert "SIGKILL" in shared
+    assert "kIOGPUCommandBufferCallbackErrorOutOfMemory" in shared
+    assert "Command buffer execution failed" in shared
+    assert "Insufficient Memory" in shared
+    assert "appendMetalWiredLimitGuidance(reason)" in sessions
+    assert "Process exited before becoming ready" in sessions
+    assert "metalWiredLimitHelpText" in form
+
+
+def test_jang_loader_wired_limit_keeps_physical_ram_headroom() -> None:
+    source = (ROOT / "vmlx_engine" / "utils" / "jang_loader.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "VMLINUX_METAL_WIRED_RESERVE_FRACTION" in source
+    assert "VMLX_METAL_WIRED_RESERVE_FRACTION" in source
+    assert "VMLINUX_METAL_WIRED_RESERVE_GB" in source
+    assert "ram_capped_target" in source
+    assert "capped to %.0f GB to leave %.0f GB system/Metal headroom" in source
+
+
+def test_jang_loader_wired_limit_caps_rich_128gb_case(monkeypatch) -> None:
+    """A 128GiB Mac with sysctl at 128000MiB must not pass the full cap to MLX."""
+
+    from vmlx_engine.utils import jang_loader
+
+    class FakeStat:
+        st_size = 113_000_000_000
+
+    class FakeWeight:
+        def stat(self):
+            return FakeStat()
+
+    class FakeMx:
+        def __init__(self) -> None:
+            self.targets: list[int] = []
+
+        def set_wired_limit(self, target: int) -> None:
+            self.targets.append(target)
+
+    fake_mx = FakeMx()
+    total_ram = 128 * 1024**3
+    page_size = 4096
+    phys_pages = total_ram // page_size
+
+    monkeypatch.delenv("VMLX_METAL_WIRED_RESERVE_FRACTION", raising=False)
+    monkeypatch.delenv("VMLINUX_METAL_WIRED_RESERVE_FRACTION", raising=False)
+    monkeypatch.delenv("VMLINUX_METAL_WIRED_RESERVE_PCT", raising=False)
+    monkeypatch.delenv("VMLX_METAL_WIRED_RESERVE_GB", raising=False)
+    monkeypatch.delenv("VMLINUX_METAL_WIRED_RESERVE_GB", raising=False)
+    monkeypatch.setattr(jang_loader, "mx", fake_mx)
+    monkeypatch.setattr(
+        jang_loader,
+        "get_effective_metal_working_set_bytes",
+        lambda _mx: (0, 134_000_000_000),
+    )
+    monkeypatch.setattr(
+        jang_loader.os,
+        "sysconf",
+        lambda name: page_size if name == "SC_PAGE_SIZE" else phys_pages,
+    )
+
+    jang_loader._set_wired_limit_for_model([FakeWeight()])
+
+    assert fake_mx.targets, "expected MLX wired limit to be set"
+    expected_cap = total_ram - int(total_ram * 0.16)
+    assert fake_mx.targets[0] <= expected_cap
+    assert fake_mx.targets[0] < 120_000_000_000
+    assert fake_mx.targets[0] > FakeStat.st_size
+
+
+def test_cli_minimax_m3_vl_autoroutes_to_text_msa_runtime() -> None:
+    """Direct CLI must match the panel's MiniMax-M3 text-routed VL path."""
+
+    source = (ROOT / "vmlx_engine" / "cli.py").read_text(encoding="utf-8")
+    utils = (ROOT / "vmlx_engine" / "api" / "utils.py").read_text(encoding="utf-8")
+
+    assert '_m3_mt == "minimax_m3_vl"' in source
+    assert 'os.environ["VMLX_M3_VL"] = "1"' in source
+    assert "ignoring --is-mllm" in source
+    assert source.index('os.environ["VMLX_M3_VL"] = "1"') < source.index(
+        "MiniMax-M3 AUTODETECTED"
+    )
+    assert "MiniMax-M3 overrides force_mllm" in utils
+    assert "mlx_vlm has no minimax_m3_vl runtime" in utils
+
+
+def test_live_clean_start_proof_checks_mm3_actual_launch_argv() -> None:
+    """The UI clean-start proof must validate the spawned MM3 CLI, not config alone."""
+
+    source = (
+        ROOT / "panel" / "scripts" / "live-clean-start-autodetect-proof.mjs"
+    ).read_text(encoding="utf-8")
+
+    assert "extractLaunchCommand" in source
+    assert "result.launchCommand" in source
+    assert "MM3 launch argv missing --enable-disk-cache" in source
+    assert "MM3 launch argv incorrectly disabled prefix cache" in source
+    assert "MM3 launch argv incorrectly enabled generic paged KV cache" in source
+    assert "MM3 launch argv incorrectly enabled generic block disk cache" in source
+    assert "MM3 launch argv incorrectly passed generic --kv-cache-quantization" in source
+    assert "MM3 launch argv incorrectly passed --enable-jit" in source
+    assert "MM3 launch argv incorrectly passed generic --is-mllm" in source
+    assert "MM3 launch argv missing --tool-call-parser minimax_m3" in source
+    assert "MM3 launch argv missing --reasoning-parser minimax_m3" in source
+    assert "MM3 launch argv missing --enable-auto-tool-choice" in source
+    assert "MM3 launch argv missing --timeout 900 long-generation default" in source
+    assert (
+        "MM3 launch argv incorrectly forced --max-tokens; default must remain model-owned"
+        in source
+    )
+
+
+def test_mm3_and_gemma_live_stress_harnesses_cover_api_auth_matrix() -> None:
+    """Release live proof must exercise missing/wrong/right bearer auth."""
+
+    for rel in (
+        "panel/scripts/live-mm3-stress-proof.mjs",
+        "panel/scripts/live-gemma4-media-stress-proof.mjs",
+    ):
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        assert "apiKey:" in source, rel
+        assert "runApiAuthMatrix" in source, rel
+        assert "Authorization: `Bearer ${apiKey}`" in source, rel
+        assert "auth missing request did not return 401" in source, rel
+        assert "auth wrong request did not return 401" in source, rel
+        assert "auth correct request did not return 200" in source, rel
+        assert "gatewayAuth" in source, rel
+        assert "gateway auth missing request did not return 401" in source, rel
+        assert "gateway auth wrong request did not return 401" in source, rel
+        assert "gateway auth correct request did not return 200" in source, rel
+
+
+def test_mm3_and_gemma_live_stress_harnesses_gate_actual_launch_argv() -> None:
+    """Stress proof must validate the UI-spawned engine argv, not just settings state."""
+
+    mm3 = (ROOT / "panel" / "scripts" / "live-mm3-stress-proof.mjs").read_text(
+        encoding="utf-8"
+    )
+    gemma = (
+        ROOT / "panel" / "scripts" / "live-gemma4-media-stress-proof.mjs"
+    ).read_text(encoding="utf-8")
+
+    for rel, source in (
+        ("live-mm3-stress-proof.mjs", mm3),
+        ("live-gemma4-media-stress-proof.mjs", gemma),
+    ):
+        assert "extractLaunchCommand" in source, rel
+        assert "result.launchCommand" in source, rel
+        assert "stress launch command missing from UI logs" in source, rel
+        assert "--enable-disk-cache" in source, rel
+        assert "--disable-prefix-cache" in source, rel
+        assert "--use-paged-cache" in source, rel
+        assert "--tool-call-parser" in source, rel
+        assert "--reasoning-parser" in source, rel
+        assert "--enable-auto-tool-choice" in source, rel
+
+    assert "MM3 stress launch argv missing --enable-disk-cache" in mm3
+    assert "MM3 stress launch argv incorrectly disabled prefix cache" in mm3
+    assert "MM3 stress launch argv incorrectly enabled generic paged KV cache" in mm3
+    assert "MM3 stress launch argv incorrectly enabled generic block disk cache" in mm3
+    assert "MM3 stress launch argv incorrectly passed generic --kv-cache-quantization" in mm3
+    assert "MM3 stress launch argv incorrectly passed --enable-jit" in mm3
+    assert "MM3 stress launch argv incorrectly passed generic --is-mllm" in mm3
+    assert "MM3 stress launch argv missing --tool-call-parser minimax_m3" in mm3
+    assert "MM3 stress launch argv missing --reasoning-parser minimax_m3" in mm3
+    assert "MM3 stress launch argv missing --enable-auto-tool-choice" in mm3
+    assert "MM3 stress launch argv missing --timeout 900 long-generation default" in mm3
+    assert (
+        "MM3 stress launch argv incorrectly forced --max-tokens; default must remain model-owned"
+        in mm3
+    )
+
+    assert "Gemma4 stress launch argv missing --enable-disk-cache" in gemma
+    assert "Gemma4 stress launch argv incorrectly disabled prefix cache" in gemma
+    assert "Gemma4 stress launch argv enabled generic paged KV despite usePagedCache=false" in gemma
+    assert "Gemma4 stress launch argv unexpectedly enabled block disk cache for default row" in gemma
+    assert "Gemma4 stress launch argv passed explicit --kv-cache-quantization despite auto defaults" in gemma
+    assert "Gemma4 stress launch argv missing --tool-call-parser gemma4" in gemma
+    assert "Gemma4 stress launch argv missing --reasoning-parser gemma4" in gemma
+    assert "Gemma4 stress launch argv missing --enable-auto-tool-choice" in gemma
+    assert "cfg.usePagedCache === false" in gemma
+    assert "cfg.kvCacheQuantization === 'auto'" in gemma

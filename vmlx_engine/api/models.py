@@ -821,9 +821,6 @@ class ResponsesRequest(BaseModel):
     frequency_penalty: float | None = None  # Accepted for API compat (not implemented)
     presence_penalty: float | None = None  # Accepted for API compat (not implemented)
     max_output_tokens: int | None = None
-    # Compatibility alias accepted by several OpenAI-compatible harnesses.
-    # Responses API canonical spelling remains max_output_tokens.
-    max_tokens: int | None = None
     stop: str | list[str] | None = None
     stream: bool = False
     stream_options: StreamOptions | None = None  # Streaming options (include_usage)
@@ -926,11 +923,11 @@ class ResponsesRequest(BaseModel):
             raise ValueError("top_p must be between 0 (exclusive) and 1")
         return v
 
-    @field_validator("max_output_tokens", "max_tokens")
+    @field_validator("max_output_tokens")
     @classmethod
     def validate_max_output_tokens(cls, v):
         if v is not None and v < 1:
-            raise ValueError("max_output_tokens/max_tokens must be at least 1")
+            raise ValueError("max_output_tokens must be at least 1")
         return v
 
     @field_validator("max_thinking_tokens")

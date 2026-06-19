@@ -30,10 +30,6 @@ _TOOL_CALL_PATTERN = re.compile(
     r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>',
     re.DOTALL,
 )
-_TOOL_CALL_AT_END_PATTERN = re.compile(
-    r'<\|tool_call>call:(\w+)\{(.*?)\}\s*$',
-    re.DOTALL,
-)
 
 # Gemma 4 escape token for string quoting
 _ESCAPE_OPEN = '<|"|>'
@@ -147,18 +143,10 @@ class Gemma4ToolParser(ToolParser):
         cleaned_text = self.strip_think_tags(cleaned_text)
 
         # Parse Gemma 4 native format: <|tool_call>call:name{args}<tool_call|>
-        pattern = _TOOL_CALL_PATTERN
-        matches = pattern.findall(cleaned_text)
-        if not matches:
-            pattern = _TOOL_CALL_AT_END_PATTERN
-            matches = pattern.findall(cleaned_text)
+        matches = _TOOL_CALL_PATTERN.findall(cleaned_text)
         for name, args_str in matches:
             arguments = _parse_gemma4_args(args_str)
             if name:
-                if not self._arguments_satisfy_required_schema(
-                    name, arguments, request
-                ):
-                    continue
                 tool_calls.append({
                     "id": generate_tool_id(),
                     "name": name,
@@ -166,7 +154,7 @@ class Gemma4ToolParser(ToolParser):
                 })
 
         if matches:
-            cleaned_text = pattern.sub("", cleaned_text).strip()
+            cleaned_text = _TOOL_CALL_PATTERN.sub("", cleaned_text).strip()
 
         # Fallback: try Hermes format
         if not tool_calls:
@@ -177,10 +165,6 @@ class Gemma4ToolParser(ToolParser):
                     name = data.get("name", "")
                     arguments = data.get("arguments", {})
                     if name:
-                        if not self._arguments_satisfy_required_schema(
-                            name, arguments, request
-                        ):
-                            continue
                         tool_calls.append({
                             "id": generate_tool_id(),
                             "name": name,
@@ -354,9 +338,6 @@ class Gemma4ToolParser(ToolParser):
             '<|tool_response>', '<tool_response|>',
             '<|tool>', '<tool|>',
             '<|channel>', '<channel|>',
-            '<|image|>', '<image|>',
-            '<|audio|>', '<audio|>',
-            '<|video|>', '<video|>',
         ]
         for token in tokens_to_strip:
             text = text.replace(token, '')

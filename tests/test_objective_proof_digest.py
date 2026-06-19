@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+        "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
     )
 
 
@@ -26,7 +26,7 @@ def test_objective_proof_digest_uses_current_noheavy_api_cache_contract():
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.API_CACHE_CONTRACT_REL == (
-        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
     )
 
 
@@ -35,239 +35,17 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
 
     digest = objective.build_digest(Path("."))
     rows = {item["requirement"]: item for item in digest["requirements"]}
-    jangtq2_row = rows[
-        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared"
-    ]
     row = rows[
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared"
     ]
 
-    assert jangtq2_row["status"] == "pass"
-    assert jangtq2_row["details"]["boundary"].startswith(
-        "This clears the N2 JANGTQ2 checkpoint profile only"
-    )
-    assert (
-        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
-        in jangtq2_row["evidence"]
-    )
-    assert (
-        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
-        not in jangtq2_row["evidence"]
-    )
     assert row["status"] == "open"
     assert "JANG1L" in row["caveat"]
     assert "JANGTQ" in row["caveat"]
     assert row["details"]["local_artifact_probe"]["artifact_present"] is True
-    assert row["details"]["local_artifact_probe"]["memory_preflight_decision"] in {
-        "do_not_launch",
-        "schedule_live_proof",
-    }
-    assert row["details"]["local_artifact_probe"]["boundary"].startswith(
-        "The local N2 JANG_1L artifact/index is registered"
-    )
-    assert row["details"]["local_artifact_probe"]["classification"] == (
-        "careful_ram_live_proof_pending"
-    )
-    assert row["details"]["local_artifact_probe"]["no_load"] is True
-    assert row["details"]["local_artifact_probe"]["indexed_payload_gib"] == 110.57
-    assert row["details"]["local_artifact_probe"]["required_available_gib"] == 118.57
+    assert row["details"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
     assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
-    assert (
-        row["details"]["noheavy_contracts"]["n2_jangtq2_live_runtime_api_cache"]
-        is True
-    )
-    assert (
-        row["details"]["noheavy_contracts"][
-            "n2_jangtq2_direct_gateway_stream_boundary"
-        ]
-        is True
-    )
-    assert (
-        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
-        in row["evidence"]
-    )
-    assert (
-        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
-        in row["evidence"]
-    )
-    assert (
-        "build/current-real-ui-dev-app-n2-jang1l-one-turn-visible-proof-20260610.json"
-        in row["evidence"]
-    )
-    assert row["details"]["jang1l_live_gate"]["artifact"] == (
-        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
-    )
-    assert row["details"]["jang1l_live_gate"]["status"] == "fail"
-    assert row["details"]["jang1l_live_gate"]["first_chat_status_code"] == 200
-    assert row["details"]["jang1l_live_gate"]["first_chat_visible_text"] == ""
-    assert row["details"]["jang1l_live_gate"]["cache_warm_status_code"] == 503
-    assert row["details"]["jang1l_live_gate"]["cache_hit_status_code"] == 503
-    assert row["details"]["jang1l_live_gate"]["visible_quality_pass"] is False
-    assert row["details"]["jang1l_live_gate"]["cache_reuse_pass"] is False
-    assert row["details"]["jang1l_real_ui_one_turn"]["status"] == "fail"
-    assert row["details"]["jang1l_real_ui_one_turn"]["classification"] == (
-        "first_turn_whitespace_visible_output"
-    )
-    assert row["details"]["jang1l_real_ui_one_turn"]["runtime_detection"][
-        "model_type"
-    ] == "qwen3_5_moe"
-    assert row["details"]["jang1l_real_ui_one_turn"]["runtime_cache"][
-        "schema"
-    ] == "hybrid_ssm_v1"
-    assert row["details"]["jang1l_real_ui_one_turn"]["cache_after"][
-        "l2_ssm_tokens_on_disk"
-    ] > 0
-    assert row["details"]["jang1l_real_ui_bounded"]["status"] == "fail"
-    assert (
-        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
-        in row["evidence"]
-    )
-    assert (
-        "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
-        in row["evidence"]
-    )
-    assert (
-        "build/current-n2-jangtq2-loopback-toolchoice-auto-longdelta-pass-20260611.json"
-        in row["evidence"]
-    )
-    assert row["details"]["jangtq2_live_proof"]["status"] == "pass"
-    assert row["details"]["jangtq2_live_proof"]["stable_text"] is True
-    assert row["details"]["jangtq2_live_proof"]["tool_probe_pass"] is True
-    assert row["details"]["jangtq2_live_proof"]["responses_probe_pass"] is True
-    assert row["details"]["jangtq2_live_proof"]["responses_stream_probe_pass"] is True
-    assert row["details"]["jangtq2_live_proof"]["cache_hit_cache_detail"] == "paged+ssm"
-    assert row["details"]["jangtq2_live_proof"]["cache_hit_cached_tokens"] > 0
-    assert row["details"]["jangtq2_live_proof"]["block_disk_writes"] > 0
-    assert row["details"]["jangtq2_live_proof"]["ssm_disk_stores"] > 0
-    assert row["details"]["jangtq2_l2_restart_proof"]["status"] == "pass"
-    assert row["details"]["jangtq2_l2_restart_proof"]["l2_restart_probe_pass"] is True
-    assert (
-        row["details"]["jangtq2_l2_restart_proof"]["restart_cache_detail"]
-        == "paged+ssm+disk"
-    )
-    assert row["details"]["jangtq2_l2_restart_proof"]["restart_cached_tokens"] > 0
-    assert row["details"]["jangtq2_l2_restart_proof"]["block_disk_hits"] > 0
-    assert row["details"]["jangtq2_l2_restart_proof"]["ssm_disk_hits"] > 0
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["status"] == "pass"
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["model"]["profile"] == (
-        "JANGTQ2"
-    )
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
-        "visible_assistant_turns_complete"
-    ] is True
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
-        "probe_files"
-    ] == {
-        "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
-        "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
-    }
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
-        "event_counts"
-    ]["tool"] > 0
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
-        "native_cache"
-    ]["schema"] == "hybrid_ssm_v1"
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
-        "native_cache"
-    ]["live_attention_tq_kv"] is True
-    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
-        "cache_after"
-    ]["l2_tokens_on_disk"] > 0
-    strict_loopback = row["details"]["jangtq2_strict_loopback_toolchoice_auto"]
-    assert strict_loopback["status"] == "pass"
-    assert strict_loopback["live_result"]["tool_probe_files"] == {
-        "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
-        "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
-    }
-    assert strict_loopback["live_result"]["event_counts"]["tool"] > 0
-    assert strict_loopback["live_result"]["cache"]["cache_detail"] == "paged+ssm"
-    assert strict_loopback["live_result"]["cache"]["ssm_l2_tokens_on_disk"] > 0
-    assert strict_loopback["live_result"]["native_cache"]["schema"] == (
-        "hybrid_ssm_v1"
-    )
-    assert strict_loopback["live_result"]["native_cache"][
-        "generic_turboquant_kv_enabled"
-    ] is True
-    assert (
-        "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
-        in row["evidence"]
-    )
-    stream_boundary = row["details"]["jangtq2_responses_stream_boundary"]
-    assert stream_boundary["status"] == "pass"
-    assert stream_boundary["checks"]["direct_first_output_index_clean"] is True
-    assert stream_boundary["checks"]["direct_followup_content_delta_streaming"] is True
-    assert stream_boundary["checks"]["gateway_followup_content_delta_streaming"] is True
-    assert stream_boundary["direct_first_arguments"] == [{"query": "alpha"}]
-    assert stream_boundary["gateway_first_arguments"] == [{"query": "alpha"}]
-    assert "JANG_1L runtime/cache/API/UI live proof" in row["details"][
-        "required_next_evidence"
-    ]
-
-
-def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
-    from tests.cross_matrix import summarize_objective_proof as objective
-
-    digest = objective.build_digest(Path("."))
-    rows = {item["requirement"]: item for item in digest["requirements"]}
-    row = rows[
-        "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared"
-    ]
-
-    assert row["status"] == "pass"
-    assert row.get("caveat") is None
-    assert row["details"]["missing_required_rows"] == []
-    assert row["details"]["open_required_rows"] == []
-    assert row["details"]["source_live_smoke_open_rows"] == []
-    assert row["details"]["checks"]["all_required_source_live_smokes_present"] is True
-    assert row["details"]["checks"]["all_required_live_proofs_present"] is True
-    assert row["details"]["source_live_smoke_artifacts"] == {
-        "gemma4_31b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-31b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-31B-it-qat-JANG_4M/result.json",
-        "gemma4_26b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-26b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-26B-A4B-it-qat-JANG_4M/result.json",
-        "gemma4_e4b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-e4b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-E4B-it-qat-JANG_4M/result.json",
-        "gemma4_e2b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-e2b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-E2B-it-qat-JANG_4M/result.json",
-        "gemma4_12b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-tools-nomedia-l2-after-modality-token-clean-20260609/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json",
-        "gemma4_e2b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
-        "gemma4_e4b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
-        "gemma4_12b_native_mxfp4": "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
-        "gemma4_26b_vl": "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
-        "gemma4_31v_or_31b_vl": "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
-    }
-    assert set(row["details"]["qat_jang4m_rows"]) == {
-        "gemma4_e2b_qat_jang4m",
-        "gemma4_e4b_qat_jang4m",
-        "gemma4_12b_qat_jang4m",
-        "gemma4_26b_qat_jang4m",
-        "gemma4_31b_qat_jang4m",
-    }
-    assert row["details"]["qat_jang4m_rows"]["gemma4_e2b_qat_jang4m"][
-        "variant"
-    ] == "qat_jang4m"
-    assert row["details"]["media_backing"]["gemma4_12b_native_mxfp4"] == {
-        "audio_weight_backed": False,
-        "audio_embed_only": True,
-        "vision_weight_backed": True,
-        "video_runtime_proof_required": True,
-        "video_runtime_source_proven": True,
-        "post_video_text_recovery_source_proven": True,
-    }
-    assert row["details"]["media_backing"]["gemma4_e2b_qat_native_mxfp4"][
-        "audio_weight_backed"
-    ] is True
-    for key in sorted(row["details"]["qat_jang4m_rows"]):
-        qrow = row["details"]["qat_jang4m_rows"][key]
-        assert qrow["status"] == "pass"
-        assert qrow["variant"] == "qat_jang4m"
-        assert qrow["live_proof_status"] == "pass"
-        assert "autodetect_model_family_and_qat_jang4m_variant" in qrow[
-            "live_proof_required"
-        ]
-        assert "responses_streaming_args_and_content_deltas" in qrow[
-            "live_proof_required"
-        ]
-        assert "installed_app_parity" in qrow["live_proof_required"]
-    assert "installed-app startup and UI settings parity" in row["details"][
-        "required_next_evidence"
-    ]
+    assert "runtime_cache_api_ui_live_proof" in row["details"]["required_next_evidence"]
 
 
 def test_objective_proof_digest_live_smoke_pointers_match_release_manifest_current_map():
@@ -442,31 +220,6 @@ def test_objective_digest_prefers_current_issue179_open_artifact_over_stale_mani
 
 
 def _write_passing_base_artifacts(tmp_path: Path) -> None:
-    _write_json(
-        tmp_path,
-        "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json",
-        {
-            "status": "pass",
-            "missing_required_rows": [],
-            "open_required_rows": [],
-            "source_live_smoke_open_rows": [],
-            "required_rows": {},
-            "checks": {
-                "all_required_source_live_smokes_present": True,
-                "all_required_live_proofs_present": True,
-            },
-        },
-    )
-    _write_json(
-        tmp_path,
-        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json",
-        {"status": "fixture"},
-    )
-    _write_json(
-        tmp_path,
-        "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json",
-        {"status": "fixture"},
-    )
     _write_json(
         tmp_path,
         "build/current-production-family-live-ling-bundled-current-20260606.json",
@@ -1254,30 +1007,6 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
         "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
         speed_base,
     )
-    _write_json(
-        tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json",
-        speed_base,
-    )
-    sequoia_review = json.loads(json.dumps(speed_base))
-    sequoia_review["results"][0]["status"] = "review"
-    sequoia_review["results"][0]["notes"] = [
-        "PP below expected 600.00: 220.10, 258.61, 236.70"
-    ]
-    sequoia_review["results"][0]["runtime_wheels"] = {
-        "mlx": ["cp312-cp312-macosx_14_0_arm64"],
-        "mlx-metal": ["py3-none-macosx_14_0_arm64"],
-    }
-    sequoia_review["results"][0]["pp_rows"] = [
-        {"target_tokens": 1024, "pp_wall_tok_s": 220.10, "loopish": False},
-        {"target_tokens": 4096, "pp_wall_tok_s": 258.61, "loopish": False},
-        {"target_tokens": 16384, "pp_wall_tok_s": 236.70, "loopish": False},
-    ]
-    _write_json(
-        tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json",
-        sequoia_review,
-    )
     mtp_speed_base = {
         "created_at": 1779498428.0,
         "results": [
@@ -1518,7 +1247,6 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
-        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
@@ -7845,15 +7573,13 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
+        "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
         {
-            "status": "fail",
             "completed": 1,
-            "failed": 1,
             "row_count": 1,
             "results": [
                 {
-                    "status": "probe_failed",
+                    "status": "pass",
                     "row": {
                         "name": "ZAYA1-VL-8B-JANGTQ4",
                         "model_type": "zaya1_vl",
@@ -7895,12 +7621,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
                             "label": "text_no_media_after_image",
                             "validation_failures": [],
                             "content": "No.",
-                        },
-                    ],
-                    "failures": [
-                        {
-                            "label": "text_no_media_after_image",
-                            "reason": "expected_no_media_missing",
                         },
                     ],
                 }
@@ -8488,7 +8208,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-text-bundled-after-parser-fix-20260611/summary.json",
+        "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
         {
             "status": "pass",
             "completed": 1,
@@ -8592,6 +8312,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "gemma4",
         "minimax",
         "zaya_text",
+        "zaya_vl",
     ]
     assert row["details"]["missing_required_family_keys"] == [
         "hy3",
@@ -8601,7 +8322,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
-        "zaya_vl",
     ]
     assert row["details"]["non_mimo_status"] == "open"
     assert row["details"]["non_mimo_missing_required_family_keys"] == [
@@ -8611,16 +8331,9 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
-        "zaya_vl",
     ]
-    assert row["details"]["non_mimo_not_pass_artifacts"] == [
-        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
-    ]
-    assert row["details"]["not_pass_required_family_artifacts"] == {
-        "zaya_vl": [
-            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
-        ]
-    }
+    assert row["details"]["non_mimo_not_pass_artifacts"] == []
+    assert row["details"]["not_pass_required_family_artifacts"] == {}
 
 
 def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mimo_is_red(
@@ -8736,8 +8449,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
             "lfm",
             "minimax",
             "qwen36",
-        ),
-        "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/summary.json": (
             "step3p7",
         ),
         "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json": (
@@ -9543,7 +9254,7 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert row["details"]["packaged"]["status"] == "pass"
     assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
-    assert "staged-tahoe-pp-repeat" in QWEN_JANG_PACKAGED_SPEED_REL
+    assert "installed-app-deterministic-pp" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
 def test_objective_proof_digest_keeps_qwen_prefill_review_as_historical_diagnostic(tmp_path):
@@ -10575,7 +10286,6 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
-        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
@@ -10953,37 +10663,6 @@ def test_objective_proof_digest_surfaces_current_mimo_model_upload_boundary(
 def test_objective_proof_digest_uses_current_mimo_no_source_classifier_artifact():
     from tests.cross_matrix import summarize_objective_proof as objective
 
-    assert objective.MIMO_V2_JANG2L_CURRENT_AUDIT_REL == (
-        "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
-    )
     assert objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL == (
         "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
-    )
-
-
-def test_objective_proof_digest_tracks_current_mimo_evidence_without_stale_missing():
-    from tests.cross_matrix import summarize_objective_proof as objective
-
-    digest = objective.build_digest(Path("."))
-    rows = {item["requirement"]: item for item in digest["requirements"]}
-    row = rows[
-        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared"
-    ]
-
-    assert row["status"] == "open"
-    assert row["evidence"] == [
-        objective.MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
-        objective.MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
-        objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
-        objective.MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
-    ]
-    assert row["details"]["missing_evidence"] == []
-    assert row["details"]["current_evidence_missing"] == []
-    assert row["details"]["cache_vs_nocache_status"] == "pass"
-    assert row["details"]["classifier_classification"] == (
-        "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair"
-    )
-    assert (
-        "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
-        not in row["evidence"]
     )

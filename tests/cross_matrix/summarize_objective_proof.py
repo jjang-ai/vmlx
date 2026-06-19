@@ -62,10 +62,10 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -193,23 +193,10 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = (
-    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
-)
-CACHE_ARCHITECTURE_CONTRACT_REL = (
-    "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
-)
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
 N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
-)
-N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL = (
-    "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
-)
-N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL = (
-    "build/current-real-ui-dev-app-n2-jang1l-one-turn-visible-proof-20260610.json"
-)
-N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL = (
-    "build/current-real-ui-dev-app-n2-jang1l-bounded-chat-proof-20260610.json"
 )
 N2_API_CACHE_CONTRACT_REL = (
     "build/current-noheavy-api-cache-contract-after-mimo-n2-runtime-refresh-20260609.json"
@@ -217,37 +204,18 @@ N2_API_CACHE_CONTRACT_REL = (
 N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
     "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
 )
-N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL = (
-    "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
-)
-N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL = (
-    "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
-)
-N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL = (
-    "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
-)
-N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL = (
-    "build/current-n2-jangtq2-loopback-toolchoice-auto-longdelta-pass-20260611.json"
-)
-N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
-    "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
-)
-GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
-)
-TOOL_CALL_CONTRACT_REL = str(TOOL_CALL_CONTRACT_DEFAULT_OUT)
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
-MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-zaya-vl-prompt-fix-20260611.json"
+MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
-MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-n2-audio-zaya-refresh-20260611.json"
-PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-n2-audio-zaya-refresh-20260611.json"
-MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-n2-audio-zaya-refresh-20260611.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-n2-audio-zaya-refresh-20260611.json"
-NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-n2-audio-zaya-refresh-20260611.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-n2-audio-zaya-refresh-20260611.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json"
+PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json"
+MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
-QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json"
-QWEN_JANG_PACKAGED_SEQUOIA_DIAGNOSTIC_REL = "build/current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json"
+QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
 QWEN_NATIVE_MTP_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json"
 QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json"
@@ -361,7 +329,7 @@ GEMMA4_LOCAL_METADATA_AUDIT_REL = (
     "build/current-local-generation-metadata-audit-20260524-gemma4-visible-budget.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
-    "build/current-all-local-model-smoke-zaya-text-bundled-after-parser-fix-20260611/summary.json"
+    "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
     "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json"
@@ -370,10 +338,10 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
@@ -402,9 +370,6 @@ ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
 ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
     "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
-ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL = (
-    "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/summary.json"
-)
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
     "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
 )
@@ -412,22 +377,22 @@ MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
 )
 MIMO_V2_JANG2L_TEXT_CACHE_REL = (
-    "build/current-mimo-v25-jang2l-live-cb-cache-text-20260610.json"
+    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
 )
 MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL = (
-    "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
+    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
 )
 MIMO_V2_JANG2L_LENGTH_SWEEP_REL = (
-    "build/current-mimo-v2-jang2l-long-prompt-first-request-oom-20260606.json"
+    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
 )
 MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
-    "build/current-mimo-v25-jang2l-chat-tool-boundary-20260610.json"
+    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
-    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
+    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
 )
 MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
@@ -437,9 +402,6 @@ MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
 )
 MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL = (
     "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
-)
-MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL = (
-    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
@@ -486,10 +448,7 @@ ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
     "mimo_v2": [ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL],
     "nemotron": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
     "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
-    "step3p7": [
-        ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL,
-        ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
-    ],
+    "step3p7": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
     "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
     "zaya_vl": [
         ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
@@ -4920,24 +4879,12 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
         "nomedia_tool_cache": MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
         "no_source_exactness_classifier": MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
-        "cache_vs_nocache": MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
-    current_evidence_artifacts = {
-        "structural_verify": MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
-        "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
-        "no_source_exactness_classifier": MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
-        "cache_vs_nocache": MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
-    }
     missing = [
         rel
-        for rel in current_evidence_artifacts.values()
+        for rel in artifacts.values()
         if not (root / rel).exists()
-    ]
-    legacy_missing = [
-        rel
-        for key, rel in artifacts.items()
-        if key not in current_evidence_artifacts and not (root / rel).exists()
     ]
     current_audit = payloads["current_audit"]
     current_audit_component_ok = current_audit.get("component_ok")
@@ -4950,57 +4897,24 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
 
     structural_pass = payloads["structural_verify"].get("status") == "pass"
     metadata_truth = payloads["metadata_truth"]
-    metadata_jang2l = {}
-    metadata_bundles = metadata_truth.get("bundles")
-    if isinstance(metadata_bundles, dict) and isinstance(
-        metadata_bundles.get("jang2l"), dict
-    ):
-        metadata_jang2l = metadata_bundles["jang2l"]
-    metadata_jang2l_caps = metadata_jang2l.get("capabilities")
-    if not isinstance(metadata_jang2l_caps, dict):
-        metadata_jang2l_caps = {}
     metadata_truth_pass = (
         metadata_truth.get("status") == "pass"
-        and (
-            (
-                metadata_truth.get("runtime_modalities") == ["text"]
-                and metadata_truth.get("preserved_modalities") == ["vision", "audio"]
-                and metadata_truth.get("unwired_modalities") == ["vision", "audio"]
-                and metadata_truth.get("multimodal_status")
-                == "weights_preserved_text_runtime"
-            )
-            or (
-                metadata_truth.get("expected_runtime_modalities") == ["text"]
-                and metadata_truth.get("expected_preserved_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l.get("status") == "pass"
-                and metadata_jang2l_caps.get("modalities") == ["text"]
-                and metadata_jang2l_caps.get("preserved_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l_caps.get("unwired_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l_caps.get("multimodal_status")
-                == "weights_preserved_text_runtime"
-            )
-        )
+        and metadata_truth.get("runtime_modalities") == ["text"]
+        and metadata_truth.get("preserved_modalities") == ["vision", "audio"]
+        and metadata_truth.get("unwired_modalities") == ["vision", "audio"]
+        and metadata_truth.get("multimodal_status") == "weights_preserved_text_runtime"
     )
 
     text_requests = payloads["text_cache"].get("requests")
     if not isinstance(text_requests, list):
         text_requests = []
-    text_rows = payloads["text_cache"].get("rows")
-    if not isinstance(text_rows, list):
-        text_rows = []
-    text_summary = payloads["text_cache"].get("summary")
-    if not isinstance(text_summary, dict):
-        text_summary = {}
     text_outputs = [
         str(item.get("content") or "")
         for item in text_requests
         if isinstance(item, dict)
     ]
     cached_tokens = []
-    for item in [*text_requests, *text_rows]:
+    for item in text_requests:
         if not isinstance(item, dict):
             continue
         usage = item.get("usage")
@@ -5008,26 +4922,10 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         value = details.get("cached_tokens") if isinstance(details, dict) else None
         if isinstance(value, int):
             cached_tokens.append(value)
-    summary_texts = text_summary.get("texts")
-    if not isinstance(summary_texts, dict):
-        summary_texts = {}
-    text_cache_current_summary_pass = (
-        payloads["text_cache"].get("status") == "pass"
-        and text_summary.get("all_requests_http_ok") is True
-        and text_summary.get("exact_repeat_1") is True
-        and text_summary.get("exact_repeat_2") is True
-        and int(text_summary.get("cache_hit_tokens") or 0) > 0
-        and int(text_summary.get("l2_tokens_on_disk") or 0) > 0
-        and summary_texts.get("exact_repeat_1") == "ACK-CB-742"
-        and summary_texts.get("exact_repeat_2") == "ACK-CB-742"
-    )
     text_cache_narrow_pass = (
-        (
-            len(text_outputs) >= 2
-            and all(output == "cache ok" for output in text_outputs[:2])
-            and any(value > 0 for value in cached_tokens)
-        )
-        or text_cache_current_summary_pass
+        len(text_outputs) >= 2
+        and all(output == "cache ok" for output in text_outputs[:2])
+        and any(value > 0 for value in cached_tokens)
     )
 
     switchglu_max_abs_diff = payloads["switchglu_parity"].get("max_abs_diff")
@@ -5077,15 +4975,6 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
             for item in tool_observations
         )
     )
-    tool_checks = payloads["tool_dialect"].get("checks")
-    if not isinstance(tool_checks, dict):
-        tool_checks = {}
-    if (
-        tool_checks.get("required_mode_tool_call_present") is True
-        and tool_checks.get("auto_mode_tool_call_present") is True
-        and tool_checks.get("cache_positive") is True
-    ):
-        tool_protocol_blocked = False
     conservative_diagnostic = payloads["conservative_diagnostic"]
     conservative_rows = conservative_diagnostic.get("rows")
     if not isinstance(conservative_rows, list):
@@ -5237,10 +5126,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     )
     return ok, {
         "artifacts": artifacts,
-        "current_evidence_artifacts": current_evidence_artifacts,
         "missing": missing,
-        "current_evidence_missing": missing,
-        "legacy_evidence_missing": legacy_missing,
         "current_audit_status": current_audit.get("status"),
         "manifest_integrity_passed": manifest_integrity_passed,
         "stale_local_state_absent": stale_local_state_absent,
@@ -5267,7 +5153,6 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "classifier_status": classifier.get("status"),
         "classifier_classification": classifier.get("classification"),
         "classifier_secondary_classification": classifier.get("secondary_classification"),
-        "cache_vs_nocache_status": payloads["cache_vs_nocache"].get("status"),
         "mimo_media_wired": audit_media_wired,
         "conservative_tool_failures": conservative_tool_failures,
         "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
@@ -5633,27 +5518,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_api_cache_contract = _load(root, N2_API_CACHE_CONTRACT_REL)
     n2_cache_architecture_contract = _load(root, N2_CACHE_ARCHITECTURE_CONTRACT_REL)
     n2_local_memory_preflight = _load(root, N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL)
-    n2_jangtq2_live_proof = _load(root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL)
-    n2_jangtq2_l2_proof = _load(
-        root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL
-    )
-    n2_jangtq2_real_ui_prevresp_proof = _load(
-        root, N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL
-    )
-    n2_jangtq2_strict_loopback_proof = _load(
-        root, N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL
-    )
-    n2_jangtq2_stream_boundary_proof = _load(
-        root, N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL
-    )
-    n2_jang1l_chat_cache_proof = _load(root, N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL)
-    n2_jang1l_real_ui_one_turn_proof = _load(
-        root, N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL
-    )
-    n2_jang1l_real_ui_bounded_proof = _load(
-        root, N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL
-    )
-    gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
         root,
@@ -5724,10 +5588,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         (
             ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL,
             _load(root, ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL),
-        ),
-        (
-            ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL),
         ),
         (
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
@@ -7158,12 +7018,10 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         [
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL,
-            ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
             ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
             ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
@@ -7175,140 +7033,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             else "Current live all-local smoke coverage is incomplete. Do not claim broad family support until DSV4, Gemma4, Hy3, Ling/Bailing, MiniMax, MiMo-V2, Nemotron, Qwen3.6, ZAYA text, and ZAYA-VL live rows pass cache, recall, visible-output, and gibberish checks."
         ),
         details=all_local_smoke_details,
-    )
-    gemma_qat_checks = (
-        gemma_qat_inventory.get("checks")
-        if isinstance(gemma_qat_inventory.get("checks"), dict)
-        else {}
-    )
-    gemma_qat_missing = gemma_qat_inventory.get("missing_required_rows")
-    gemma_qat_open = gemma_qat_inventory.get("open_required_rows")
-    gemma_qat_source_open = gemma_qat_inventory.get("source_live_smoke_open_rows")
-    gemma_qat_required_rows = (
-        gemma_qat_inventory.get("required_rows")
-        if isinstance(gemma_qat_inventory.get("required_rows"), dict)
-        else {}
-    )
-    gemma_qat_source_smoke_artifacts: dict[str, str] = {}
-    gemma_qat_media_backing: dict[str, dict[str, Any]] = {}
-    for key, row in gemma_qat_required_rows.items():
-        if not isinstance(row, dict):
-            continue
-        source_smoke = row.get("source_live_smoke")
-        if isinstance(source_smoke, dict) and source_smoke.get("artifact"):
-            gemma_qat_source_smoke_artifacts[str(key)] = str(
-                source_smoke.get("artifact")
-            )
-        matching_rows = row.get("matching_rows")
-        first_match = (
-            matching_rows[0]
-            if isinstance(matching_rows, list)
-            and matching_rows
-            and isinstance(matching_rows[0], dict)
-            else {}
-        )
-        backing = first_match.get("modality_backing")
-        if isinstance(backing, dict):
-            gemma_qat_media_backing[str(key)] = {
-                "audio_weight_backed": backing.get("audio_weight_backed"),
-                "audio_embed_only": backing.get("audio_embed_only"),
-                "vision_weight_backed": backing.get("vision_weight_backed"),
-                "video_runtime_proof_required": backing.get(
-                    "video_runtime_proof_required"
-                ),
-                "video_runtime_source_proven": (
-                    source_smoke.get("video_runtime_proven")
-                    if isinstance(source_smoke, dict)
-                    else None
-                ),
-                "post_video_text_recovery_source_proven": (
-                    source_smoke.get("post_video_text_recovery_proven")
-                    if isinstance(source_smoke, dict)
-                    else None
-                ),
-            }
-    gemma_qat_jang4m_keys = (
-        "gemma4_e2b_qat_jang4m",
-        "gemma4_e4b_qat_jang4m",
-        "gemma4_12b_qat_jang4m",
-        "gemma4_26b_qat_jang4m",
-        "gemma4_31b_qat_jang4m",
-    )
-    gemma_qat_jang4m_rows: dict[str, Any] = {}
-    for key in gemma_qat_jang4m_keys:
-        row = gemma_qat_required_rows.get(key)
-        gemma_qat_jang4m_rows[key] = (
-            row
-            if isinstance(row, dict)
-            else {
-                "status": "missing",
-                "variant": "qat_jang4m",
-                "live_proof_status": "missing",
-                "live_proof_required": [
-                    "autodetect_model_family_and_qat_jang4m_variant",
-                    "model_owned_generation_config_defaults",
-                    "Gemma4 tool/reasoning parser",
-                    "mixed_swa_prefix_cache_first_miss_second_hit",
-                    "turboquant_kv_encode_decode_boundary_where_valid",
-                    "block_disk_l2_write",
-                    "responses_streaming_args_and_content_deltas",
-                    "media_honesty",
-                    "ui_cli_parity",
-                    "installed_app_parity",
-                ],
-            }
-        )
-    gemma_qat_release_ok = (
-        gemma_qat_inventory.get("status") == "pass"
-        and gemma_qat_checks.get("all_required_live_proofs_present") is True
-        and gemma_qat_missing == []
-        and gemma_qat_open == []
-    )
-    _add(
-        requirements,
-        "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
-        _status(gemma_qat_release_ok),
-        [
-            GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL,
-            str(DEFAULT_OUT),
-            CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
-        ],
-        caveat=(
-            None
-            if gemma_qat_release_ok
-            else (
-                "Gemma QAT/native MXFP4 source-smoke coverage is tracked "
-                "separately from release clearance. Do not release-claim E2B, "
-                "E4B, 12B, 26B, or 31B/31V QAT/native MXFP4 rows until full "
-                "live media/tool/Responses/cache/UI/installed-app proof exists "
-                "for the advertised modalities and model-owned defaults."
-            )
-        ),
-        details={
-            "inventory_status": gemma_qat_inventory.get("status"),
-            "missing_required_rows": gemma_qat_missing,
-            "open_required_rows": gemma_qat_open,
-            "source_live_smoke_open_rows": gemma_qat_source_open,
-            "source_live_smoke_artifacts": gemma_qat_source_smoke_artifacts,
-            "media_backing": gemma_qat_media_backing,
-            "qat_jang4m_rows": gemma_qat_jang4m_rows,
-            "checks": {
-                "all_required_source_live_smokes_present": gemma_qat_checks.get(
-                    "all_required_source_live_smokes_present"
-                ),
-                "all_required_live_proofs_present": gemma_qat_checks.get(
-                    "all_required_live_proofs_present"
-                ),
-            },
-            "required_next_evidence": [
-                "same-model raw SSE direct/gateway/tunnel Responses tool-argument streaming",
-                "installed-app startup and UI settings parity",
-                "visual/audio/video live proof for each advertised bundle modality",
-                "mixed-SWA cache telemetry, TurboQuant KV boundaries, and L2 restart restore",
-                "model-owned generation defaults plus parser/reasoning/tool behavior",
-                "Gemma4 QAT JANG_4M autodetect, Responses streaming args/content deltas, media honesty, UI/CLI, and installed-app parity",
-            ],
-        },
     )
     mimo_quality_ok, mimo_quality_details = _mimo_v2_jang2l_quality_detail(root)
     mimo_quality_open = []
@@ -7338,9 +7062,12 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         _status(mimo_quality_ok),
         [
             MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
+            MIMO_V2_JANG2L_TEXT_CACHE_REL,
+            MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
+            MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
+            MIMO_V2_JANG2L_TOOL_DIALECT_REL,
             MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
-            MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
-            MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
+            MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
         ],
         caveat=(
             None
@@ -7356,192 +7083,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         details=mimo_quality_details,
     )
-    n2_jangtq2_noheavy = {
-        "api_cache": n2_api_cache_contract.get("status"),
-        "cache_architecture": n2_cache_architecture_contract.get("status"),
-        "model_family_detection": model_family_contract.get("status"),
-        "n2_family_policy": (
-            (model_family_contract.get("checks") or {}).get(
-                "n2_pro_qwen35_moe_hybrid_vl_policy"
-            )
-            is True
-        ),
-        "turboquant_runtime_contract": (
-            (n2_api_cache_contract.get("checks") or {}).get(
-                "turboquant_kv_runtime_contract"
-            )
-            is True
-        ),
-        "turboquant_disk_roundtrip": (
-            (n2_api_cache_contract.get("checks") or {}).get(
-                "turboquant_disk_roundtrip"
-            )
-            is True
-        ),
-        "hybrid_cache_policy": (
-            (n2_cache_architecture_contract.get("checks") or {}).get(
-                "named_family_registry_cache_parser_contracts"
-            )
-            is True
-        ),
-    }
-    n2_jangtq2_live_ok = (
-        n2_jangtq2_live_proof.get("status") == "pass"
-        and n2_jangtq2_live_proof.get("stable_text") is True
-        and n2_jangtq2_live_proof.get("tool_probe_pass") is True
-        and n2_jangtq2_live_proof.get("responses_probe_pass") is True
-        and n2_jangtq2_live_proof.get("responses_stream_probe_pass") is True
-        and n2_jangtq2_live_proof.get("l2_restart_probe_pass") is True
-    )
-    n2_jangtq2_l2_ok = (
-        n2_jangtq2_l2_proof.get("status") == "pass"
-        and n2_jangtq2_l2_proof.get("l2_restart_probe_pass") is True
-    )
-    n2_jangtq2_ui = (
-        n2_jangtq2_real_ui_prevresp_proof.get("tool_loop")
-        if isinstance(n2_jangtq2_real_ui_prevresp_proof.get("tool_loop"), dict)
-        else {}
-    )
-    n2_jangtq2_runtime_cache = (
-        n2_jangtq2_real_ui_prevresp_proof.get("runtime_cache")
-        if isinstance(n2_jangtq2_real_ui_prevresp_proof.get("runtime_cache"), dict)
-        else {}
-    )
-    n2_jangtq2_ui_cache_after = (
-        n2_jangtq2_runtime_cache.get("cache_after")
-        if isinstance(n2_jangtq2_runtime_cache.get("cache_after"), dict)
-        else {}
-    )
-    n2_jangtq2_ui_ok = (
-        n2_jangtq2_real_ui_prevresp_proof.get("status") == "pass"
-        and n2_jangtq2_ui.get("visible_assistant_turns_complete") is True
-        and (n2_jangtq2_ui.get("event_counts") or {}).get("tool", 0) > 0
-        and (n2_jangtq2_ui_cache_after.get("cache_hit_tokens") or 0) > 0
-        and (n2_jangtq2_ui_cache_after.get("l2_block_tokens_on_disk") or 0) > 0
-        and (n2_jangtq2_ui_cache_after.get("l2_ssm_tokens_on_disk") or 0) > 0
-    )
-    n2_jangtq2_strict_live = (
-        n2_jangtq2_strict_loopback_proof.get("live_result")
-        if isinstance(n2_jangtq2_strict_loopback_proof.get("live_result"), dict)
-        else {}
-    )
-    n2_jangtq2_strict_files = (
-        n2_jangtq2_strict_live.get("tool_probe_files")
-        if isinstance(n2_jangtq2_strict_live.get("tool_probe_files"), dict)
-        else {}
-    )
-    n2_jangtq2_strict_native = (
-        n2_jangtq2_strict_live.get("native_cache")
-        if isinstance(n2_jangtq2_strict_live.get("native_cache"), dict)
-        else {}
-    )
-    n2_jangtq2_strict_ok = (
-        n2_jangtq2_strict_loopback_proof.get("status") == "pass"
-        and n2_jangtq2_strict_files.get("real_ui_tool_probe_1.txt")
-        == "REAL_UI_LIVE_TOOL_ONE"
-        and n2_jangtq2_strict_files.get("real_ui_tool_probe_2.txt")
-        == "REAL_UI_LIVE_TOOL_TWO"
-        and (n2_jangtq2_strict_live.get("event_counts") or {}).get("tool", 0) > 0
-        and n2_jangtq2_strict_native.get("generic_turboquant_kv_enabled") is True
-        and n2_jangtq2_strict_native.get("attention_kv_storage_quantization_bits")
-        == 4
-    )
-    n2_jangtq2_stream_checks = (
-        n2_jangtq2_stream_boundary_proof.get("checks")
-        if isinstance(n2_jangtq2_stream_boundary_proof.get("checks"), dict)
-        else {}
-    )
-    n2_jangtq2_stream_ok = (
-        n2_jangtq2_stream_boundary_proof.get("status") == "pass"
-        and n2_jangtq2_stream_checks.get("direct_first_output_index_clean") is True
-        and n2_jangtq2_stream_checks.get("first_tool_call_present") is True
-        and n2_jangtq2_stream_checks.get("direct_followup_content_delta_streaming")
-        is True
-        and n2_jangtq2_stream_checks.get("gateway_followup_content_delta_streaming")
-        is True
-    )
-    n2_jangtq2_ok = (
-        n2_jangtq2_live_ok
-        and n2_jangtq2_l2_ok
-        and n2_jangtq2_ui_ok
-        and n2_jangtq2_strict_ok
-        and n2_jangtq2_stream_ok
-        and all(value == "pass" or value is True for value in n2_jangtq2_noheavy.values())
-    )
-    _add(
-        requirements,
-        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
-        _status(n2_jangtq2_ok),
-        [
-            N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
-            N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
-            N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
-            N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
-            N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
-            N2_API_CACHE_CONTRACT_REL,
-            N2_CACHE_ARCHITECTURE_CONTRACT_REL,
-            MODEL_FAMILY_CONTRACT_REL,
-        ],
-        caveat=(
-            None
-            if n2_jangtq2_ok
-            else (
-                "N2 JANGTQ2 remains open until live chat/cache, fresh-process "
-                "L2, real UI previous_response_id tool/cache, strict loopback "
-                "tool_choice=auto, direct/gateway Responses streaming, and "
-                "no-heavy parser/cache policy contracts all pass."
-            )
-        ),
-        details={
-            "live_chat_cache_responses": {
-                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
-                "status": n2_jangtq2_live_proof.get("status"),
-                "stable_text": n2_jangtq2_live_proof.get("stable_text"),
-                "tool_probe_pass": n2_jangtq2_live_proof.get("tool_probe_pass"),
-                "responses_probe_pass": n2_jangtq2_live_proof.get(
-                    "responses_probe_pass"
-                ),
-                "responses_stream_probe_pass": n2_jangtq2_live_proof.get(
-                    "responses_stream_probe_pass"
-                ),
-                "cache_hit_cache_detail": n2_jangtq2_live_proof.get(
-                    "cache_hit_cache_detail"
-                ),
-                "cache_hit_cached_tokens": n2_jangtq2_live_proof.get(
-                    "cache_hit_cached_tokens"
-                ),
-            },
-            "fresh_process_l2": {
-                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
-                "status": n2_jangtq2_l2_proof.get("status"),
-                "l2_restart_probe_pass": n2_jangtq2_l2_proof.get(
-                    "l2_restart_probe_pass"
-                ),
-            },
-            "real_ui_prevresp": {
-                "artifact": N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
-                "status": n2_jangtq2_real_ui_prevresp_proof.get("status"),
-                "tool_loop": n2_jangtq2_ui,
-                "runtime_cache": n2_jangtq2_runtime_cache,
-            },
-            "strict_loopback_toolchoice_auto": {
-                "artifact": N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
-                "status": n2_jangtq2_strict_loopback_proof.get("status"),
-                "live_result": n2_jangtq2_strict_live,
-            },
-            "responses_stream_boundary": {
-                "artifact": N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
-                "status": n2_jangtq2_stream_boundary_proof.get("status"),
-                "checks": n2_jangtq2_stream_checks,
-            },
-            "noheavy_contracts": n2_jangtq2_noheavy,
-            "boundary": (
-                "This clears the N2 JANGTQ2 checkpoint profile only. It does "
-                "not clear N2 JANG_1L, public tunnel parity, media/audio/video, "
-                "packaging, signing, notarization, or full release readiness."
-            ),
-        },
-    )
     _add(
         requirements,
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
@@ -7550,14 +7091,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             str(DEFAULT_OUT),
             N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
-            N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL,
-            N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL,
-            N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL,
-            N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
-            N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
-            N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
-            N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
-            N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
             MODEL_FAMILY_CONTRACT_REL,
@@ -7565,13 +7098,11 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             "N2 Pro 397B JANG1L/JANGTQ is now tracked as an explicit release "
             "blocker. The current no-heavy parser/cache/family policy contracts "
-            "are present, the local JANG_1L model/index preflight is registered, "
-            "and current-source plus real Electron dev-app probes have loaded "
-            "JANG_1L on the 128 GB host. Treat JANG_1L as careful-RAM live-proof "
-            "work, not permanent model infeasibility; do not sign, notarize, tag, "
-            "or publish a release claiming N2 support until both quant profiles "
-            "pass the same live runtime/cache/API/UI gates as the other "
-            "release-critical families."
+            "are present, and the local JANG_1L model/index preflight is "
+            "registered, but the preflight says not to launch on this host. Do "
+            "not sign, notarize, tag, or publish a release claiming N2 support "
+            "until both quant profiles pass the same live runtime/cache/API/UI "
+            "gates as the other release-critical families."
         ),
         details={
             "local_artifact_probe": {
@@ -7581,21 +7112,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "indexed_payload_gb_decimal": n2_local_memory_preflight.get(
                     "indexed_payload_gb_decimal"
                 ),
-                "indexed_payload_gib": n2_local_memory_preflight.get(
-                    "indexed_payload_gib"
-                ),
-                "required_available_gib": n2_local_memory_preflight.get(
-                    "required_available_gib"
-                ),
-                "available_gib": n2_local_memory_preflight.get("available_gib"),
-                "memory_gap_gib": n2_local_memory_preflight.get("memory_gap_gib"),
                 "memory_preflight_decision": n2_local_memory_preflight.get("decision"),
                 "launch_safe": n2_local_memory_preflight.get("launch_safe"),
-                "classification": n2_local_memory_preflight.get("classification"),
-                "no_load": n2_local_memory_preflight.get("no_load"),
-                "artifact_profile": n2_local_memory_preflight.get("artifact_profile"),
-                "model_type": n2_local_memory_preflight.get("model_type"),
-                "weights": n2_local_memory_preflight.get("weights"),
                 "vm_free_plus_speculative_gib": n2_local_memory_preflight.get(
                     "vm_free_plus_speculative_gib"
                 ),
@@ -7604,125 +7122,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 ),
                 "boundary": (
                     "The local N2 JANG_1L artifact/index is registered, but the "
-                    "current memory preflight is only a launch-safety warning. "
-                    "JANG_1L should be treated as careful-RAM live-proof work, "
-                    "not permanent infeasibility; this is not live runtime proof."
+                    "memory preflight says not to launch it on this host. This "
+                    "is not live runtime proof."
                 ),
-            },
-            "jang1l_live_gate": {
-                "artifact": N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL,
-                "status": n2_jang1l_chat_cache_proof.get("status"),
-                "reason": n2_jang1l_chat_cache_proof.get("reason"),
-                "model": n2_jang1l_chat_cache_proof.get("model"),
-                "available_gib": n2_jang1l_chat_cache_proof.get("available_gib"),
-                "required_available_gib": n2_jang1l_chat_cache_proof.get(
-                    "required_available_gib"
-                ),
-                "memory_gap_gib": n2_jang1l_chat_cache_proof.get("memory_gap_gib"),
-                "indexed_payload_gib": n2_jang1l_chat_cache_proof.get(
-                    "indexed_payload_gib"
-                ),
-                "required_extra_headroom_gib": n2_jang1l_chat_cache_proof.get(
-                    "required_extra_headroom_gib"
-                ),
-                "requested_probes": n2_jang1l_chat_cache_proof.get(
-                    "requested_probes"
-                ),
-                "release_boundary": n2_jang1l_chat_cache_proof.get(
-                    "release_boundary"
-                ),
-                "first_chat_status_code": (
-                    (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get(
-                        "status_code"
-                    )
-                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
-                    and n2_jang1l_chat_cache_proof.get("rows")
-                    else None
-                ),
-                "first_chat_visible_text": (
-                    (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get("text")
-                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
-                    and n2_jang1l_chat_cache_proof.get("rows")
-                    else None
-                ),
-                "cache_warm_status_code": (
-                    (n2_jang1l_chat_cache_proof.get("rows") or [{}, {}])[1].get(
-                        "status_code"
-                    )
-                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
-                    and len(n2_jang1l_chat_cache_proof.get("rows") or []) > 1
-                    else None
-                ),
-                "cache_hit_status_code": (
-                    (n2_jang1l_chat_cache_proof.get("rows") or [{}, {}, {}])[2].get(
-                        "status_code"
-                    )
-                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
-                    and len(n2_jang1l_chat_cache_proof.get("rows") or []) > 2
-                    else None
-                ),
-                "visible_quality_pass": bool(
-                    (
-                        (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get(
-                            "text"
-                        )
-                        if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
-                        and n2_jang1l_chat_cache_proof.get("rows")
-                        else ""
-                    )
-                ),
-                "cache_reuse_pass": (
-                    n2_jang1l_chat_cache_proof.get("cache_hit_cached_tokens") or 0
-                )
-                > 0,
-            },
-            "jang1l_real_ui_one_turn": {
-                "artifact": N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL,
-                "status": n2_jang1l_real_ui_one_turn_proof.get("status"),
-                "classification": n2_jang1l_real_ui_one_turn_proof.get(
-                    "classification"
-                ),
-                "model_path": n2_jang1l_real_ui_one_turn_proof.get("model_path"),
-                "served_model": n2_jang1l_real_ui_one_turn_proof.get(
-                    "served_model"
-                ),
-                "harness_contract": n2_jang1l_real_ui_one_turn_proof.get(
-                    "harness_contract"
-                ),
-                "positive_evidence": n2_jang1l_real_ui_one_turn_proof.get(
-                    "positive_evidence"
-                ),
-                "red_evidence": n2_jang1l_real_ui_one_turn_proof.get(
-                    "red_evidence"
-                ),
-                "runtime_detection": n2_jang1l_real_ui_one_turn_proof.get(
-                    "runtime_detection"
-                ),
-                "quantization": n2_jang1l_real_ui_one_turn_proof.get(
-                    "quantization"
-                ),
-                "runtime_cache": n2_jang1l_real_ui_one_turn_proof.get(
-                    "runtime_cache"
-                ),
-                "cache_after": n2_jang1l_real_ui_one_turn_proof.get("cache_after"),
-                "memory": n2_jang1l_real_ui_one_turn_proof.get("memory"),
-                "speed": n2_jang1l_real_ui_one_turn_proof.get("speed"),
-                "release_boundary": n2_jang1l_real_ui_one_turn_proof.get(
-                    "release_boundary"
-                ),
-            },
-            "jang1l_real_ui_bounded": {
-                "artifact": N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL,
-                "status": n2_jang1l_real_ui_bounded_proof.get("status"),
-                "model_path": n2_jang1l_real_ui_bounded_proof.get("model_path"),
-                "served_model": n2_jang1l_real_ui_bounded_proof.get(
-                    "served_model"
-                ),
-                "proven": n2_jang1l_real_ui_bounded_proof.get("proven"),
-                "red": n2_jang1l_real_ui_bounded_proof.get("red"),
-                "runtime": n2_jang1l_real_ui_bounded_proof.get("runtime"),
-                "cache": n2_jang1l_real_ui_bounded_proof.get("cache"),
-                "boundary": n2_jang1l_real_ui_bounded_proof.get("boundary"),
             },
             "noheavy_contracts": {
                 "api_cache": n2_api_cache_contract.get("status"),
@@ -7732,29 +7134,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     (model_family_contract.get("checks") or {}).get(
                         "n2_pro_qwen35_moe_hybrid_vl_policy"
                     )
-                    is True
-                ),
-                "n2_jangtq2_live_runtime_api_cache": (
-                    n2_jangtq2_live_proof.get("status") == "pass"
-                    and n2_jangtq2_live_proof.get("stable_text") is True
-                    and n2_jangtq2_live_proof.get("tool_probe_pass") is True
-                    and n2_jangtq2_live_proof.get("responses_probe_pass") is True
-                    and n2_jangtq2_live_proof.get("responses_stream_probe_pass") is True
-                    and n2_jangtq2_live_proof.get("l2_restart_probe_pass") is True
-                ),
-                "n2_jangtq2_direct_gateway_stream_boundary": (
-                    n2_jangtq2_stream_boundary_proof.get("status") == "pass"
-                    and (
-                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
-                    ).get("direct_first_output_index_clean")
-                    is True
-                    and (
-                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
-                    ).get("direct_followup_content_delta_streaming")
-                    is True
-                    and (
-                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
-                    ).get("gateway_followup_content_delta_streaming")
                     is True
                 ),
                 "turboquant_runtime_contract": (
@@ -7776,230 +7155,11 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     is True
                 ),
             },
-            "jangtq2_live_proof": {
-                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
-                "status": n2_jangtq2_live_proof.get("status"),
-                "model": n2_jangtq2_live_proof.get("model"),
-                "served_model_name": n2_jangtq2_live_proof.get("served_model_name"),
-                "stable_text": n2_jangtq2_live_proof.get("stable_text"),
-                "tool_probe_pass": n2_jangtq2_live_proof.get("tool_probe_pass"),
-                "responses_probe_pass": n2_jangtq2_live_proof.get(
-                    "responses_probe_pass"
-                ),
-                "responses_stream_probe_pass": n2_jangtq2_live_proof.get(
-                    "responses_stream_probe_pass"
-                ),
-                "cache_hit_cached_tokens": n2_jangtq2_live_proof.get(
-                    "cache_hit_cached_tokens"
-                ),
-                "cache_hit_cache_detail": n2_jangtq2_live_proof.get(
-                    "cache_hit_cache_detail"
-                ),
-                "block_disk_writes": (
-                    (
-                        (
-                            n2_jangtq2_live_proof.get("final_health")
-                            if isinstance(n2_jangtq2_live_proof.get("final_health"), dict)
-                            else {}
-                        ).get("cache")
-                        or {}
-                    ).get("block_disk_cache")
-                    or {}
-                ).get("disk_writes"),
-                "block_disk_hits": (
-                    (
-                        (
-                            n2_jangtq2_live_proof.get("final_health")
-                            if isinstance(n2_jangtq2_live_proof.get("final_health"), dict)
-                            else {}
-                        ).get("cache")
-                        or {}
-                    ).get("block_disk_cache")
-                    or {}
-                ).get("disk_hits"),
-                "ssm_disk_stores": (
-                    (
-                        (
-                            (
-                                n2_jangtq2_live_proof.get("final_health")
-                                if isinstance(
-                                    n2_jangtq2_live_proof.get("final_health"), dict
-                                )
-                                else {}
-                            ).get("cache")
-                            or {}
-                        ).get("ssm_companion")
-                        or {}
-                    ).get("disk")
-                    or {}
-                ).get("stores"),
-                "boundary": (
-                    "Current-source N2 JANGTQ2 chat/cache/Responses proof only. "
-                    "This does not clear N2 JANG_1L, installed-app/UI parity, "
-                    "media rows, or full release support."
-                ),
-            },
-            "jangtq2_l2_restart_proof": {
-                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
-                "status": n2_jangtq2_l2_proof.get("status"),
-                "l2_restart_probe_pass": n2_jangtq2_l2_proof.get(
-                    "l2_restart_probe_pass"
-                ),
-                "restart_cached_tokens": (
-                    (
-                        (
-                            (
-                                n2_jangtq2_l2_proof.get("l2_restart_probe")
-                                if isinstance(
-                                    n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
-                                )
-                                else {}
-                            ).get("row")
-                            or {}
-                        ).get("usage")
-                        or {}
-                    ).get("prompt_tokens_details")
-                    or {}
-                ).get("cached_tokens"),
-                "restart_cache_detail": (
-                    (
-                        (
-                            (
-                                n2_jangtq2_l2_proof.get("l2_restart_probe")
-                                if isinstance(
-                                    n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
-                                )
-                                else {}
-                            ).get("row")
-                            or {}
-                        ).get("usage")
-                        or {}
-                    ).get("prompt_tokens_details")
-                    or {}
-                ).get("cache_detail"),
-                "block_disk_hits": (
-                    (
-                        (
-                            n2_jangtq2_l2_proof.get("l2_restart_probe")
-                            if isinstance(
-                                n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
-                            )
-                            else {}
-                        ).get("after_health_cache")
-                        or {}
-                    ).get("block_disk_cache")
-                    or {}
-                ).get("disk_hits"),
-                "ssm_disk_hits": (
-                    (
-                        (
-                            n2_jangtq2_l2_proof.get("l2_restart_probe")
-                            if isinstance(
-                                n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
-                            )
-                            else {}
-                        ).get("after_health_cache")
-                        or {}
-                    ).get("ssm_companion_disk")
-                    or {}
-                ).get("hits"),
-                "boundary": (
-                    "Current-source N2 JANGTQ2 fresh-process L2 restart proof only. "
-                    "This does not clear N2 JANG_1L, installed-app/UI parity, "
-                    "media rows, same-model tunnel parity, or full release support."
-                ),
-            },
-            "jangtq2_real_ui_prevresp_proof": {
-                "artifact": N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
-                "status": n2_jangtq2_real_ui_prevresp_proof.get("status"),
-                "model": n2_jangtq2_real_ui_prevresp_proof.get("model"),
-                "ui": n2_jangtq2_real_ui_prevresp_proof.get("ui"),
-                "tool_loop": n2_jangtq2_real_ui_prevresp_proof.get("tool_loop"),
-                "runtime_detection": n2_jangtq2_real_ui_prevresp_proof.get(
-                    "runtime_detection"
-                ),
-                "runtime_cache": n2_jangtq2_real_ui_prevresp_proof.get(
-                    "runtime_cache"
-                ),
-                "red_followup": n2_jangtq2_real_ui_prevresp_proof.get(
-                    "red_followup"
-                ),
-                "boundary": (
-                    "Current Electron dev-app N2 JANGTQ2 default Responses "
-                    "tool/cache proof with previous_response_id continuation. "
-                    "This supports the checkpoint candidate profile. Stricter "
-                    "long-delta loopback tool pressure is tracked by the "
-                    "separate tool_choice=auto proof below; this default proof "
-                    "does not clear audio, public tunnel parity, N2 JANG_1L, or "
-                    "full release support."
-                ),
-            },
-            "jangtq2_strict_loopback_toolchoice_auto": {
-                "artifact": N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
-                "status": n2_jangtq2_strict_loopback_proof.get("status"),
-                "source_fix": n2_jangtq2_strict_loopback_proof.get("source_fix"),
-                "verification": n2_jangtq2_strict_loopback_proof.get(
-                    "verification"
-                ),
-                "live_result": n2_jangtq2_strict_loopback_proof.get("live_result"),
-                "no_claims": n2_jangtq2_strict_loopback_proof.get("no_claims"),
-                "boundary": (
-                    "Current Electron dev-app N2 JANGTQ2 strict long-delta "
-                    "Responses loopback proof. The specific required "
-                    "tool_choice is suppressed for local non-Gemma loopback "
-                    "sessions and replaced with tool_choice=auto, preserving "
-                    "tool pressure without triggering the required-tool error "
-                    "path. This clears the strict N2 JANGTQ2 loopback tool-loop "
-                    "red follow-up only; it does not clear public tunnel parity, "
-                    "media/audio, N2 JANG_1L, packaging, signing, notarization, "
-                    "or full release readiness."
-                ),
-            },
-            "jangtq2_responses_stream_boundary": {
-                "artifact": N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
-                "status": n2_jangtq2_stream_boundary_proof.get("status"),
-                "model": n2_jangtq2_stream_boundary_proof.get("model"),
-                "served_model_name": n2_jangtq2_stream_boundary_proof.get(
-                    "served_model_name"
-                ),
-                "checks": n2_jangtq2_stream_boundary_proof.get("checks"),
-                "direct_first_arguments": (
-                    (
-                        (
-                            n2_jangtq2_stream_boundary_proof.get("captures")
-                            if isinstance(
-                                n2_jangtq2_stream_boundary_proof.get("captures"), dict
-                            )
-                            else {}
-                        ).get("direct_first")
-                        or {}
-                    ).get("function_call_arguments")
-                    or []
-                ),
-                "gateway_first_arguments": (
-                    (
-                        (
-                            n2_jangtq2_stream_boundary_proof.get("captures")
-                            if isinstance(
-                                n2_jangtq2_stream_boundary_proof.get("captures"), dict
-                            )
-                            else {}
-                        ).get("gateway_first")
-                        or {}
-                    ).get("function_call_arguments")
-                    or []
-                ),
-                "boundary": (
-                    "Direct server and panel gateway raw SSE proof for N2 "
-                    "JANGTQ2 Responses required tool plus tool-result "
-                    "continuation. This does not clear public tunnel parity, "
-                    "audio, N2 JANG_1L, or full release support."
-                ),
-            },
             "required_next_evidence": [
                 "memory_safe_live_launch_or_smaller_runtime_strategy",
-                "JANG_1L runtime/cache/API/UI live proof",
+                "runtime_cache_api_ui_live_proof",
                 "JANG1L local artifact metadata and structural verification",
+                "JANGTQ local artifact metadata and structural verification",
                 "loader/model-family/generation-default/parser detection",
                 "visible text multi-turn output",
                 "required tool, auto tool, no-tool, and tool-result continuation",
@@ -8168,14 +7328,12 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
             ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
             ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
             ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL,
-            ALL_LOCAL_MODEL_SMOKE_STEP37_BUNDLED_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
             ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
             ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL,

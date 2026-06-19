@@ -98,7 +98,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             const cfg = s.config ? JSON.parse(s.config) : {}
             if (!s.modelPath.startsWith('remote://')) {
               const detected = await window.api.models.detectConfig(s.modelPath)
-              if (!detected?.reasoningParser) {
+              if (detected?.supportsThinking === false || !detected?.reasoningParser) {
                 setEffectiveReasoningParser(undefined)
               } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
                 setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))

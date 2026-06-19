@@ -47,17 +47,12 @@ class LlamaToolParser(ToolParser):
 
         matches = self.FUNCTION_PATTERN.findall(model_output)
         for name, args_str in matches:
-            tool_name = name.strip()
             try:
                 arguments = json.loads(args_str)
-                if not self._arguments_satisfy_required_schema(
-                    tool_name, arguments, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": tool_name,
+                        "name": name.strip(),
                         "arguments": (
                             json.dumps(arguments, ensure_ascii=False)
                             if isinstance(arguments, dict)
@@ -67,14 +62,10 @@ class LlamaToolParser(ToolParser):
                 )
             except json.JSONDecodeError:
                 # Keep the raw arguments string
-                if not self._arguments_satisfy_required_schema(
-                    tool_name, args_str, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": tool_name,
+                        "name": name.strip(),
                         "arguments": args_str,
                     }
                 )
@@ -112,7 +103,7 @@ class LlamaToolParser(ToolParser):
 
         # If we detect end of function, parse
         if "</function>" in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

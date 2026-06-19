@@ -75,28 +75,6 @@ class TestXMLFunctionToolParser:
         args = json.loads(out.tool_calls[0]["arguments"])
         assert args == {"value": "blue-cat"}
 
-    def test_pretty_wrapper_newlines_trim_scalar_not_inner_spacing(self, parser):
-        text = """
-<tool_call>
-<function=record_fact>
-<parameter=value>
-blue-cat
-</parameter>
-<parameter=cmd>  printf '&lt;日本語&gt;' &amp;&amp; pwd  </parameter>
-<parameter=content>line one
-line two</parameter>
-</function>
-</tool_call>
-"""
-
-        out = parser.extract_tool_calls(text)
-
-        assert out.tools_called is True
-        args = json.loads(out.tool_calls[0]["arguments"])
-        assert args["value"] == "blue-cat"
-        assert args["cmd"] == "  printf '<日本語>' && pwd  "
-        assert args["content"] == "line one\nline two"
-
     def test_visible_text_around_tool_call_has_no_xml_function_leak(self, parser):
         text = """
 I will write the file now.
@@ -289,64 +267,3 @@ Done.
         assert out.tools_called is False
         assert out.tool_calls == []
         assert out.content == "<tool_call>"
-
-    def test_empty_function_with_required_schema_fails_closed(self, parser):
-        text = """Quick preamble.
-<tool_call>
-<function=exec_command>
-</function>
-</tool_call>"""
-
-        out = parser.extract_tool_calls(
-            text,
-            request={
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "exec_command",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"cmd": {"type": "string"}},
-                                "required": ["cmd"],
-                            },
-                        },
-                    }
-                ]
-            },
-        )
-
-        assert out.tools_called is False
-        assert out.tool_calls == []
-        assert out.content == text
-
-    def test_nested_invoke_missing_required_schema_fails_closed(self, parser):
-        text = """<tool_call>
-<invoke>
-<tool_name>exec_command</tool_name>
-<arguments></arguments>
-</invoke>
-</tool_call>"""
-
-        out = parser.extract_tool_calls(
-            text,
-            request={
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "exec_command",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"cmd": {"type": "string"}},
-                                "required": ["cmd"],
-                            },
-                        },
-                    }
-                ]
-            },
-        )
-
-        assert out.tools_called is False
-        assert out.tool_calls == []
-        assert out.content == text

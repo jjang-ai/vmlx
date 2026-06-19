@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
@@ -540,7 +540,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('hy3')
     expect(detected.cacheType).toBe('kv')
-    expect(detected.usePagedCache).toBe(true)
+    // Phase-1 (2026-06-13): plain-KV text models default paged-OFF (SSD prefix).
+    expect(detected.usePagedCache).toBe(false)
     expect(detected.toolParser).toBe('hunyuan')
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.enableAutoToolChoice).toBe(true)
@@ -826,84 +827,9 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('gemma4')
     expect(detected.cacheType).toBe('rotating_kv')
-    expect(detected.usePagedCache).toBe(true)
-  })
-
-  it('detects Gemma 4 unified wrappers with mixed-SWA cache and Gemma parsers', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'gemma4_unified',
-        text_config: {
-          model_type: 'gemma4_unified_text',
-          layer_types: [
-            'sliding_attention',
-            'full_attention',
-          ],
-        },
-        vision_config: { model_type: 'gemma4_unified_vision' },
-        audio_config: { model_type: 'gemma4_unified_audio' },
-      },
-      {},
-    )
-
-    const detected = detectModelConfigFromDir(dir)
-
-    expect(detected.family).toBe('gemma4')
-    expect(detected.cacheType).toBe('rotating_kv')
-    expect(detected.usePagedCache).toBe(true)
-    expect(detected.reasoningParser).toBe('gemma4')
-    expect(detected.toolParser).toBe('gemma4')
-    expect(detected.enableAutoToolChoice).toBe(true)
-    expect(detected.isMultimodal).toBe(true)
-  })
-
-  it('marks Gemma 4 audio unavailable when config declares audio but indexed audio tower weights are absent', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'gemma4_unified',
-        text_config: { model_type: 'gemma4_unified_text' },
-        vision_config: { model_type: 'gemma4_unified_vision' },
-        audio_config: { model_type: 'gemma4_unified_audio' },
-        audio_token_id: 258881,
-      },
-      { weight_format: 'jang_4m', profile: 'jang_4m' },
-    )
-    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
-      weight_map: {
-        'embed_audio.embedding_projection.weight': 'model.safetensors',
-        'language_model.model.embed_tokens.weight': 'model.safetensors',
-      },
-    }))
-
-    const detected = detectModelConfigFromDir(dir)
-
-    expect(detected.family).toBe('gemma4')
-    expect(detected.isMultimodal).toBe(true)
-    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(false)
-  })
-
-  it('marks Gemma 4 audio available only when indexed audio tower weights exist', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'gemma4_unified',
-        text_config: { model_type: 'gemma4_unified_text' },
-        vision_config: { model_type: 'gemma4_unified_vision' },
-        audio_config: { model_type: 'gemma4_unified_audio' },
-      },
-      { weight_format: 'jang_4m', profile: 'jang_4m' },
-    )
-    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
-      weight_map: {
-        'audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight': 'model.safetensors',
-        'embed_audio.embedding_projection.weight': 'model.safetensors',
-      },
-    }))
-
-    const detected = detectModelConfigFromDir(dir)
-
-    expect(detected.family).toBe('gemma4')
-    expect(detected.isMultimodal).toBe(true)
-    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(true)
+    // Phase-1 (2026-06-13): Gemma mixed-SWA proven correct paged-OFF (memory-aware
+    // prefix + disk_cache L2 SSD + TurboQuantKVCache, cache HIT no drift).
+    expect(detected.usePagedCache).toBe(false)
   })
 
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
@@ -995,136 +921,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     const detected = detectModelConfigFromDir(dir)
     expect(detected.family).toBe('mimo_v2')
     expect(detected.toolParser).toBe('xml_function')
-    expect(detected.reasoningParser).toBe('think_xml')
-    expect(detected.supportsThinking).toBe(false)
     expect(detected.isMultimodal).toBe(false)
     expect(detected.forceTextOnly).toBe(true)
-  })
-
-  it('keeps MiMo V2 text-only when config.json capabilities stamp preserved media as unwired', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'mimo_v2',
-        vision_config: { model_type: 'mimo_v2_vision' },
-        audio_config: { model_type: 'mimo_v2_audio' },
-        image_token_id: 151655,
-        video_token_id: 151656,
-        processor_config: {
-          image_token_id: 151655,
-          video_token_id: 151656,
-          audio_token_id: 151669,
-        },
-        capabilities: {
-          family: 'mimo_v2',
-          modalities: ['text'],
-          preserved_modalities: ['vision', 'audio'],
-          unwired_modalities: ['vision', 'audio'],
-          multimodal_status: 'weights_preserved_text_runtime',
-          tools: {
-            supported: true,
-            parser: 'xml_function',
-          },
-        },
-        runtime: {
-          multimodal_mode: 'weights_preserved_text_runtime',
-        },
-      },
-      {
-        format: 'jangtq',
-        family: 'mimo_v2',
-        profile: 'JANGTQ_2',
-      },
-    )
-
-    const detected = detectModelConfigFromDir(dir)
-    expect(detected.family).toBe('mimo_v2')
-    expect(detected.toolParser).toBe('xml_function')
-    expect(detected.isMultimodal).toBe(false)
-    expect(detected.forceTextOnly).toBe(true)
-  })
-
-  it('keeps stale MiMo V2 JANG media configs text-only without explicit media runtime proof', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'mimo_v2',
-        vision_config: { model_type: 'mimo_v2_vision' },
-        audio_config: { model_type: 'mimo_v2_audio' },
-        image_token_id: 151655,
-        video_token_id: 151656,
-      },
-      {
-        format: 'jang',
-      },
-    )
-
-    const detected = detectModelConfigFromDir(dir)
-    expect(detected.family).toBe('mimo_v2')
-    expect(detected.toolParser).toBe('xml_function')
-    expect(detected.reasoningParser).toBe('think_xml')
-    expect(detected.isMultimodal).toBe(false)
-    expect(detected.forceTextOnly).toBe(true)
-  })
-
-  it('allows explicit MiMo V2 media overlay when preserved local weights are complete', () => {
-    const previous = process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY
-    process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY = '1'
-    try {
-      const dir = makeModelDir(
-        {
-          model_type: 'mimo_v2',
-          vision_config: { model_type: 'mimo_v2_vision' },
-          audio_config: { model_type: 'mimo_v2_audio' },
-          image_token_id: 151655,
-          video_token_id: 151656,
-          processor_config: {
-            image_token_id: 151655,
-            video_token_id: 151656,
-            audio_token_id: 151669,
-          },
-          capabilities: {
-            family: 'mimo_v2',
-            modalities: ['text'],
-            preserved_modalities: ['vision', 'audio'],
-            unwired_modalities: ['vision', 'audio'],
-            multimodal_status: 'weights_preserved_text_runtime',
-          },
-          runtime: {
-            multimodal_mode: 'weights_preserved_text_runtime',
-          },
-        },
-        {
-          format: 'jangtq',
-          family: 'mimo_v2',
-          profile: 'JANGTQ_2',
-        },
-      )
-      writeFileSync(join(dir, 'preprocessor_config.json'), JSON.stringify({ image_processor_type: 'MiMoV2ImageProcessor' }))
-      mkdirSync(join(dir, 'audio_tokenizer'))
-      writeFileSync(join(dir, 'audio_tokenizer', 'model.safetensors'), '')
-      writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
-        weight_map: {
-          'visual.patch_embed.proj.weight': 'model-00001-of-00002.safetensors',
-          'audio_encoder.layers.0.self_attn.q_proj.weight': 'model-00002-of-00002.safetensors',
-          'speech_embeddings.weight': 'model-00002-of-00002.safetensors',
-        },
-      }))
-
-      const detected = detectModelConfigFromDir(dir)
-      expect(detected.family).toBe('mimo_v2')
-      expect(detected.isMultimodal).toBe(true)
-      expect(detected.forceTextOnly).toBeUndefined()
-      expect(detected.architectureHints).toMatchObject({
-        runtimeScope: 'mimo_v2_text_runtime_media_overlay',
-        vlRuntimeAvailable: true,
-        audioRuntimeAvailable: true,
-      })
-    } finally {
-      if (previous === undefined) {
-        delete process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY
-      } else {
-        process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY = previous
-      }
-    }
   })
 
   it.each([
@@ -1300,42 +1098,6 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.family).toBe('qwen3.5-moe')
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.isMultimodal).toBe(true)
-  })
-
-  it('marks Qwen/N2 JANGTQ vision-video bundles audio-unavailable without weight-backed audio', () => {
-    const dir = makeModelDir(
-      {
-        model_type: 'qwen3_5_moe',
-        text_config: {
-          model_type: 'qwen3_5_moe_text',
-          layer_types: ['linear_attention', 'full_attention'],
-        },
-        vision_config: { hidden_size: 1024 },
-        image_token_id: 248056,
-        video_token_id: 248057,
-      },
-      {
-        format: 'jangtq',
-        weight_format: 'mxtq',
-        capabilities: {
-          family: 'qwen3_5_moe',
-          modality: 'vision',
-          cache_type: 'hybrid',
-        },
-      },
-    )
-    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
-      weight_map: {
-        'language_model.model.embed_tokens.weight': 'model.safetensors',
-        'vision_tower.blocks.0.attn.qkv.weight': 'model.safetensors',
-      },
-    }))
-
-    const detected = detectModelConfigFromDir(dir)
-
-    expect(detected.family).toBe('qwen3.5-moe')
-    expect(detected.isMultimodal).toBe(true)
-    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(false)
   })
 
   it('documents Qwen 3.6 release rows intentionally use qwen3.5 family aliases', () => {
@@ -1559,7 +1321,7 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     { modelType: 'ministral3', family: 'ministral3', cacheType: 'kv', toolParser: 'mistral' },
     { modelType: 'mistral3', family: 'mistral3', cacheType: 'kv', toolParser: 'mistral', isMultimodal: true },
     { modelType: 'mistral4', family: 'mistral4', cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral' },
-    { modelType: 'mimo_v2', family: 'mimo_v2', cacheType: 'kv', cacheSubtype: 'mimo_v2_asymmetric_swa', toolParser: 'xml_function', isMultimodal: true },
+    { modelType: 'mimo_v2', family: 'mimo_v2', cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', isMultimodal: true },
     { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', cacheSubtype: 'nemotron_h_ssm_attention' },
     { modelType: 'rwkv7', family: 'rwkv', cacheType: 'mamba' },
     { modelType: 'step3p7', family: 'step-3.7-flash', cacheType: 'kv', cacheSubtype: 'step3p7_full_sliding_kv', toolParser: 'step3p5', reasoningParser: 'qwen3', isMultimodal: true },
@@ -1615,10 +1377,8 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     const detected = detectModelConfigFromDir(dir)
     expect(detected.family).toBe('mimo_v2')
     expect(detected.cacheType).toBe('kv')
-    expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
-    expect(detected.usePagedCache).toBe(true)
     expect(detected.reasoningParser).toBe('think_xml')
-    expect(detected.supportsThinking).toBe(false)
+    expect(detected.supportsThinking).toBe(true)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.toolParser).toBe('xml_function')
     expect(detected.enableAutoToolChoice).toBe(true)
@@ -1648,28 +1408,12 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
 
     expect(detected.family).toBe('mimo_v2')
     expect(detected.reasoningParser).toBe('think_xml')
-    expect(detected.supportsThinking).toBe(false)
     expect(detected.toolParser).toBe('xml_function')
     expect(detected.enableAutoToolChoice).toBe(true)
   })
 })
 
 describe('detectModelConfigFromDir local high-risk artifact parity', () => {
-  it('keeps current local MiMo V2 JANG_2L text-runtime bundle out of forced MLLM launch', () => {
-    const modelPath = '/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L'
-    if (!existsSync(modelPath)) return
-
-    const detected = detectModelConfigFromDir(modelPath)
-    expect(detected.family).toBe('mimo_v2')
-    expect(detected.cacheType).toBe('kv')
-    expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
-    expect(detected.toolParser).toBe('xml_function')
-    expect(detected.reasoningParser).toBe('think_xml')
-    expect(detected.forceTextOnly).toBe(true)
-    expect(detected.isMultimodal).toBe(false)
-    expect(detected.supportsThinking).toBe(false)
-  })
-
   it('matches current local high-risk model paths to panel parser cache and modality policy', () => {
     const rows: Array<{
       name: string

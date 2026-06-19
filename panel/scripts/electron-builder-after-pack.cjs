@@ -7,11 +7,19 @@ function walk(dir, out = []) {
     const path = join(dir, ent.name)
     if (ent.isDirectory()) {
       walk(path, out)
-    } else if (ent.isFile() && (path.endsWith('.so') || path.endsWith('.dylib'))) {
+    } else if (ent.isFile()) {
       out.push(path)
     }
   }
   return out
+}
+
+function isMachO(path) {
+  const proc = spawnSync('file', ['-b', path], {
+    stdio: 'pipe',
+    encoding: 'utf8',
+  })
+  return proc.status === 0 && (proc.stdout || '').includes('Mach-O')
 }
 
 function removeSignature(path) {
@@ -24,6 +32,17 @@ function removeSignature(path) {
   const output = `${proc.stdout || ''}${proc.stderr || ''}`
   if (proc.status !== 0 && !output.includes('code object is not signed at all')) {
     throw new Error(`codesign --remove-signature failed for ${path}\n${output}`)
+  }
+}
+
+function signAdhoc(path) {
+  const proc = spawnSync('codesign', ['--force', '--sign', '-', '--timestamp=none', path], {
+    stdio: 'pipe',
+    encoding: 'utf8',
+  })
+  const output = `${proc.stdout || ''}${proc.stderr || ''}`
+  if (proc.status !== 0) {
+    throw new Error(`codesign --sign - failed for ${path}\n${output}`)
   }
 }
 
@@ -49,11 +68,12 @@ async function afterPack(context) {
     return
   }
 
-  const nativeFiles = walk(bundledPython)
+  const nativeFiles = walk(bundledPython).filter(isMachO)
   for (const file of nativeFiles) {
     removeSignature(file)
+    signAdhoc(file)
   }
-  console.log(`[afterPack] normalized signatures for ${nativeFiles.length} bundled Python native files`)
+  console.log(`[afterPack] normalized ad-hoc signatures for ${nativeFiles.length} bundled Python native files`)
 }
 
 module.exports = afterPack

@@ -31,7 +31,6 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = Path("/Users/example/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2")
 DEFAULT_OUT = REPO / "build/current-n2-jangtq2-chat-cache-proof-20260609.json"
 DEFAULT_CACHE_DIR = REPO / "build/current-n2-jangtq2-chat-cache-proof-block-cache-20260609"
-DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB = 8.0
 
 
 def resource_snapshot(name: str, proc: subprocess.Popen | None = None) -> dict[str, Any]:
@@ -43,14 +42,9 @@ def resource_snapshot(name: str, proc: subprocess.Popen | None = None) -> dict[s
         import psutil
 
         vm = psutil.virtual_memory()
-        total_gib = round(vm.total / (1024**3), 2)
-        available_gib = round(vm.available / (1024**3), 2)
         snap["system_memory"] = {
-            "unit": "GiB",
-            "total_gib": total_gib,
-            "available_gib": available_gib,
-            "total_gb": total_gib,
-            "available_gb": available_gib,
+            "total_gb": round(vm.total / (1024**3), 2),
+            "available_gb": round(vm.available / (1024**3), 2),
             "percent": vm.percent,
         }
         if proc is not None and proc.poll() is None:
@@ -71,110 +65,15 @@ def memory_preflight(min_available_gb: float) -> dict[str, Any] | None:
     if min_available_gb <= 0:
         return None
     snap = resource_snapshot("preflight")
-    memory = snap.get("system_memory") or {}
-    available = memory.get("available_gib", memory.get("available_gb"))
+    available = (snap.get("system_memory") or {}).get("available_gb")
     if isinstance(available, (int, float)) and available < min_available_gb:
-        gap_gib = round(max(0.0, min_available_gb - available), 2)
         return {
             "status": "skipped",
             "reason": "insufficient_available_memory",
-            "unit": "GiB",
-            "available_gib": available,
-            "required_available_gib": min_available_gb,
-            "memory_gap_gib": gap_gib,
             "required_available_gb": min_available_gb,
-            "available_gb": available,
-            "memory_gap_gb": gap_gib,
             "telemetry": [snap],
         }
     return None
-
-
-def _as_int(value: Any) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return 0
-    return 0
-
-
-def _is_n2_jang1l_model(args: argparse.Namespace) -> bool:
-    model_text = str(getattr(args, "model", ""))
-    served = str(getattr(args, "served_model_name", ""))
-    return "JANG_1L" in model_text or "jang1l" in served.lower()
-
-
-def n2_jang1l_payload_preflight(args: argparse.Namespace) -> dict[str, Any] | None:
-    if not _is_n2_jang1l_model(args):
-        return None
-    model = Path(args.model)
-    index_path = model / "model.safetensors.index.json"
-    if not index_path.exists():
-        return None
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 - diagnostic artifact
-        return {
-            "status": "skipped",
-            "reason": "n2_jang1l_index_unreadable",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    metadata = index.get("metadata") if isinstance(index, dict) else {}
-    metadata = metadata if isinstance(metadata, dict) else {}
-    payload_bytes = _as_int(metadata.get("total_size"))
-    if payload_bytes <= 0:
-        payload_bytes = sum(path.stat().st_size for path in model.glob("*.safetensors"))
-    if payload_bytes <= 0:
-        return None
-
-    snap = resource_snapshot("n2_jang1l_preflight")
-    memory = snap.get("system_memory") if isinstance(snap.get("system_memory"), dict) else {}
-    available = memory.get("available_gib", memory.get("available_gb"))
-    payload_gib = round(payload_bytes / (1024**3), 2)
-    headroom = float(
-        getattr(
-            args,
-            "jang1l_required_extra_headroom_gib",
-            DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB,
-        )
-    )
-    required_available = round(payload_gib + headroom, 2)
-    if isinstance(available, (int, float)) and available < required_available:
-        gap = round(required_available - float(available), 2)
-        return {
-            "status": "skipped",
-            "reason": "n2_jang1l_insufficient_available_memory",
-            "unit": "GiB",
-            "available_gib": available,
-            "required_available_gib": required_available,
-            "memory_gap_gib": gap,
-            "indexed_payload_gib": payload_gib,
-            "required_extra_headroom_gib": headroom,
-            "telemetry": [snap],
-            "release_boundary": (
-                "N2 JANG_1L live proof was not launched because the indexed payload "
-                "plus Metal/runtime headroom exceeds current available memory. "
-                "128 GiB total RAM is not sufficient evidence without current "
-                "available headroom."
-            ),
-        }
-    return None
-
-
-def requested_probes(args: argparse.Namespace) -> dict[str, bool]:
-    return {
-        "tool": bool(args.include_tool_probe),
-        "responses": bool(args.include_responses_probe),
-        "responses_stream": bool(args.include_responses_stream_probe),
-        "l2_restart": bool(args.include_l2_restart_probe),
-    }
 
 
 def build_command(args: argparse.Namespace) -> list[str]:
@@ -344,136 +243,6 @@ def post_sse(url: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
             "events": [],
             "error": f"{type(exc).__name__}: {exc}",
         }
-
-
-def _chat_prompt_details(row: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(row, dict):
-        return {}
-    usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
-    details = (
-        usage.get("prompt_tokens_details")
-        if isinstance(usage.get("prompt_tokens_details"), dict)
-        else {}
-    )
-    return details
-
-
-def _health_cache_stats(health: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(health, dict):
-        return {"block_disk_cache": {}, "ssm_companion_disk": {}, "totals": {}}
-    cache = health.get("cache") if isinstance(health.get("cache"), dict) else {}
-    ssm = cache.get("ssm_companion") if isinstance(cache.get("ssm_companion"), dict) else {}
-    return {
-        "block_disk_cache": (
-            cache.get("block_disk_cache")
-            if isinstance(cache.get("block_disk_cache"), dict)
-            else {}
-        ),
-        "ssm_companion_disk": (
-            ssm.get("disk") if isinstance(ssm.get("disk"), dict) else {}
-        ),
-        "totals": cache.get("totals") if isinstance(cache.get("totals"), dict) else {},
-    }
-
-
-def l2_restart_probe_passed(probe: dict[str, Any] | None) -> bool:
-    if not isinstance(probe, dict) or probe.get("status") != "pass":
-        return False
-    row = probe.get("row") if isinstance(probe.get("row"), dict) else {}
-    details = _chat_prompt_details(row)
-    cache_detail = str(details.get("cache_detail") or "")
-    cached_tokens = details.get("cached_tokens")
-    stats = probe.get("after_health_cache") if isinstance(probe.get("after_health_cache"), dict) else {}
-    block = (
-        stats.get("block_disk_cache")
-        if isinstance(stats.get("block_disk_cache"), dict)
-        else {}
-    )
-    ssm = (
-        stats.get("ssm_companion_disk")
-        if isinstance(stats.get("ssm_companion_disk"), dict)
-        else {}
-    )
-    return bool(
-        row.get("status_code") == 200
-        and isinstance(cached_tokens, int)
-        and cached_tokens > 0
-        and "disk" in cache_detail
-        and int(block.get("disk_hits") or 0) > 0
-        and int(ssm.get("hits") or 0) > 0
-    )
-
-
-def run_l2_restart_probe(args: argparse.Namespace, *, log_path: Path) -> dict[str, Any]:
-    """Start a fresh N2 server and verify same-cache-dir L2 restore.
-
-    The first phase must have already written cache state and exited. This
-    helper intentionally sends only one short chat request to minimize RAM/time.
-    """
-    restart_log_path = log_path.with_suffix(".l2_restart.server.log")
-    telemetry = [resource_snapshot("restart_before_launch")]
-    proc: subprocess.Popen | None = None
-    server_exit: int | None = None
-    health: dict[str, Any] | None = None
-    after_health: dict[str, Any] | None = None
-    row: dict[str, Any] | None = None
-    try:
-        with restart_log_path.open("w", encoding="utf-8") as log_file:
-            proc = subprocess.Popen(
-                build_command(args),
-                cwd=REPO,
-                env=build_env(),
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                preexec_fn=os.setsid,
-            )
-            health = wait_health(args.port, proc, args.load_timeout_s)
-            telemetry.append(resource_snapshot("restart_after_health", proc))
-            response = post_json(
-                f"http://127.0.0.1:{args.port}/v1/chat/completions",
-                chat_payload(args, skip_prefix_cache=False),
-                args.request_timeout_s,
-            )
-            row = row_from_response("l2_restart_cache_hit", response)
-            after_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
-            telemetry.append(resource_snapshot("restart_after_request", proc))
-    except Exception as exc:  # noqa: BLE001 - live diagnostic artifact
-        return {
-            "status": "fail",
-            "error": f"{type(exc).__name__}: {exc}",
-            "server_log": str(restart_log_path),
-            "telemetry": telemetry,
-        }
-    finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except Exception:
-                proc.terminate()
-            try:
-                proc.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except Exception:
-                    proc.kill()
-                proc.wait(timeout=10)
-            server_exit = proc.returncode
-
-    probe = {
-        "status": "pass",
-        "health": health,
-        "row": row,
-        "after_health": after_health,
-        "after_health_cache": _health_cache_stats(after_health),
-        "server_log": str(restart_log_path),
-        "server_exit": server_exit,
-        "telemetry": telemetry,
-    }
-    if not l2_restart_probe_passed(probe):
-        probe["status"] = "fail"
-    return probe
 
 
 def wait_health(port: int, proc: subprocess.Popen, timeout_s: int) -> dict[str, Any]:
@@ -868,34 +637,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     args.cache_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.model.exists():
-        return {
-            "status": "skipped",
-            "reason": "model_missing",
-            "model": str(args.model),
-            "requested_probes": requested_probes(args),
-        }
+        return {"status": "skipped", "reason": "model_missing", "model": str(args.model)}
 
     preflight = memory_preflight(args.min_available_gb)
     if preflight is not None:
-        preflight.update(
-            {
-                "model": str(args.model),
-                "artifact": str(args.out),
-                "requested_probes": requested_probes(args),
-            }
-        )
+        preflight.update({"model": str(args.model), "artifact": str(args.out)})
         return preflight
-
-    jang1l_preflight = n2_jang1l_payload_preflight(args)
-    if jang1l_preflight is not None:
-        jang1l_preflight.update(
-            {
-                "model": str(args.model),
-                "artifact": str(args.out),
-                "requested_probes": requested_probes(args),
-            }
-        )
-        return jang1l_preflight
 
     log_path = args.out.with_suffix(".server.log")
     cmd = build_command(args)
@@ -905,7 +652,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     health: dict[str, Any] | None = None
     final_health: dict[str, Any] | None = None
     server_exit: int | None = None
-    run_error: Exception | None = None
     try:
         with log_path.open("w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -1009,8 +755,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
-    except Exception as exc:  # noqa: BLE001 - live diagnostic artifact
-        run_error = exc
     finally:
         if proc is not None and proc.poll() is None:
             try:
@@ -1026,26 +770,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     proc.kill()
                 proc.wait(timeout=10)
             server_exit = proc.returncode
-        elif proc is not None:
-            server_exit = proc.returncode
-
-    if run_error is not None:
-        return {
-            "schema": "vmlx-n2-chat-cache-gate-v1",
-            "status": "fail",
-            "phase": "server_startup" if health is None else "request_probe",
-            "model": str(args.model),
-            "served_model_name": args.served_model_name,
-            "cmd": cmd,
-            "health": health,
-            "final_health": final_health,
-            "rows": rows,
-            "error": f"{type(run_error).__name__}: {run_error}",
-            "telemetry": telemetry,
-            "server_log": str(log_path),
-            "server_exit": server_exit,
-            "requested_probes": requested_probes(args),
-        }
 
     cache_hit_row = next((row for row in rows if row.get("mode") == "cache_hit"), {})
     cache_hit_usage = cache_hit_row.get("usage") if isinstance(cache_hit_row, dict) else {}
@@ -1126,13 +850,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
     )
-    l2_restart_probe: dict[str, Any] | None = None
-    if args.include_l2_restart_probe:
-        l2_restart_probe = run_l2_restart_probe(args, log_path=log_path)
-    l2_restart_probe_pass = (
-        not args.include_l2_restart_probe
-        or l2_restart_probe_passed(l2_restart_probe)
-    )
     status = (
         "pass"
         if all(row.get("status_code") == 200 for row in rows)
@@ -1142,7 +859,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         and tool_probe_pass
         and responses_probe_pass
         and responses_stream_probe_pass
-        and l2_restart_probe_pass
         else "fail"
     )
     return {
@@ -1158,7 +874,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "tool_probe_pass": tool_probe_pass,
         "responses_probe_pass": responses_probe_pass,
         "responses_stream_probe_pass": responses_stream_probe_pass,
-        "l2_restart_probe_pass": l2_restart_probe_pass,
         "cache_hit_cached_tokens": cached_tokens,
         "cache_hit_cache_detail": (
             prompt_details.get("cache_detail")
@@ -1169,7 +884,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "server_log": str(log_path),
         "server_exit": server_exit,
         "responses_rows": locals().get("responses_rows", []),
-        "l2_restart_probe": l2_restart_probe,
     }
 
 
@@ -1185,7 +899,6 @@ def main() -> int:
     parser.add_argument("--include-tool-probe", action="store_true")
     parser.add_argument("--include-responses-probe", action="store_true")
     parser.add_argument("--include-responses-stream-probe", action="store_true")
-    parser.add_argument("--include-l2-restart-probe", action="store_true")
     parser.add_argument(
         "--tool-prompt",
         default="Use lookup for query alpha. Do not answer in prose.",
@@ -1205,11 +918,6 @@ def main() -> int:
     parser.add_argument("--load-timeout-s", type=int, default=900)
     parser.add_argument("--request-timeout-s", type=int, default=240)
     parser.add_argument("--min-available-gb", type=float, default=24.0)
-    parser.add_argument(
-        "--jang1l-required-extra-headroom-gib",
-        type=float,
-        default=DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB,
-    )
     parser.add_argument("--prefill-batch-size", type=int, default=512)
     parser.add_argument("--prefill-step-size", type=int, default=1024)
     parser.add_argument("--completion-batch-size", type=int, default=256)

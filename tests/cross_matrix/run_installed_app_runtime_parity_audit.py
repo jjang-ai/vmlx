@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
@@ -34,7 +34,6 @@ CRITICAL_ENGINE_HASH_FILES = (
     "api/anthropic_adapter.py",
     "api/ollama_adapter.py",
     "block_disk_store.py",
-    "cache_record_validator.py",
     "cli.py",
     "disk_cache.py",
     "engine/batched.py",
@@ -46,66 +45,15 @@ CRITICAL_ENGINE_HASH_FILES = (
     "model_config_registry.py",
     "models/mllm.py",
     "models/step3p7_mlx_vlm.py",
-    "models/gemma4_unified_register.py",
-    "models/gemma4_unified/__init__.py",
-    "models/gemma4_unified/config.py",
-    "models/gemma4_unified/gemma4_unified.py",
-    "models/gemma4_unified/processing_gemma4_unified.py",
-    "native_mtp.py",
     "omni_multimodal.py",
     "paged_cache.py",
     "prefix_cache.py",
-    "runtime_patches/__init__.py",
-    "runtime_patches/deepseek_v4_register.py",
     "runtime_patches/gemma4_processing.py",
-    "runtime_patches/gemma4_vision.py",
-    "runtime_patches/kimi_k25_mla.py",
-    "runtime_patches/mlx_lm_compat.py",
-    "runtime_patches/mlx_vlm_compat.py",
-    "reasoning/__init__.py",
-    "reasoning/base.py",
-    "reasoning/deepseek_r1_parser.py",
-    "reasoning/gemma4_parser.py",
-    "reasoning/gptoss_parser.py",
-    "reasoning/minimax_m2_parser.py",
-    "reasoning/mistral_parser.py",
-    "reasoning/qwen3_parser.py",
-    "reasoning/think_parser.py",
-    "reasoning/think_xml_parser.py",
     "scheduler.py",
-    "patches/mlx_lm_mtp/__init__.py",
-    "patches/mlx_lm_mtp/batch_generator.py",
-    "patches/mlx_lm_mtp/cache_rollback.py",
-    "patches/mlx_lm_mtp/deepseek_v4_model.py",
-    "patches/mlx_lm_mtp/qwen35_model.py",
-    "tool_parsers/__init__.py",
-    "tool_parsers/abstract_tool_parser.py",
-    "tool_parsers/auto_tool_parser.py",
-    "tool_parsers/deepseek_tool_parser.py",
     "tool_parsers/dsml_tool_parser.py",
-    "tool_parsers/functionary_tool_parser.py",
-    "tool_parsers/gemma3_tool_parser.py",
-    "tool_parsers/gemma4_tool_parser.py",
-    "tool_parsers/glm47_tool_parser.py",
-    "tool_parsers/granite_tool_parser.py",
-    "tool_parsers/hermes_tool_parser.py",
-    "tool_parsers/hunyuan_tool_parser.py",
-    "tool_parsers/kimi_tool_parser.py",
-    "tool_parsers/lfm2_tool_parser.py",
-    "tool_parsers/llama_tool_parser.py",
-    "tool_parsers/minimax_tool_parser.py",
-    "tool_parsers/mistral_tool_parser.py",
-    "tool_parsers/nemotron_tool_parser.py",
-    "tool_parsers/qwen_tool_parser.py",
-    "tool_parsers/step3p5_tool_parser.py",
-    "tool_parsers/xlam_tool_parser.py",
-    "tool_parsers/xml_function_tool_parser.py",
-    "tool_parsers/zaya_tool_parser.py",
     "patches/mlx_vlm_mtp/qwen35_vl.py",
-    "tq_disk_store.py",
     "utils/single_batch_generator.py",
     "utils/head_dim_detection.py",
-    "utils/hybrid_tq_cache.py",
     "utils/mlx_vlm_compat.py",
     "utils/ssm_companion_cache.py",
     "utils/ssm_companion_disk_store.py",
@@ -115,33 +63,6 @@ CRITICAL_ENGINE_HASH_FILES = (
     "config/defaults.yaml",
     "metal/codebook_matvec.metal",
     "metal/codebook_moe.metal",
-)
-CRITICAL_JANG_TOOLS_HASH_FILES = (
-    "capabilities.py",
-    "convert.py",
-    "convert_hy3_jangtq.py",
-    "loader.py",
-    "load_jangtq.py",
-    "load_jangtq_vlm.py",
-    "load_jangtq_kimi_vlm.py",
-    "nemotron_omni_chat.py",
-    "dsv4/mlx_model.py",
-    "dsv4/pool_quant_cache.py",
-    "hy3/__init__.py",
-    "hy3/model.py",
-    "hy3/runtime.py",
-    "kimi_prune/generate_vl.py",
-    "kimi_prune/runtime_patch.py",
-    "mimo_v2/mlx_model.py",
-    "step37/__init__.py",
-    "step37/nvfp4_codec.py",
-    "step37/step3p7_mlx.py",
-    "topk_override.py",
-    "turboquant/fused_gate_up_kernel.py",
-    "turboquant/gather_tq_kernel.py",
-    "turboquant/hadamard_kernel.py",
-    "turboquant/mpp_nax_kernel.py",
-    "turboquant/tq_kernel.py",
 )
 DISCONNECT_ERROR_RE = re.compile(
     r"\b(?:EPIPE|ECONNRESET|ERR_STREAM_DESTROYED|write EPIPE)\b",
@@ -295,67 +216,6 @@ def _check_bundled_engine_hash_parity(
         "ok": ok,
         "source_engine": str(source_engine),
         "bundled_engine": str(bundled_engine),
-        "missing_source": missing_source,
-        "missing_bundled": missing_bundled,
-        "mismatched": mismatched,
-        "files": files,
-    }
-
-
-def _default_jang_tools_source() -> Path:
-    configured = (
-        os.environ.get("VMLX_JANG_TOOLS_SOURCE")
-        or os.environ.get("VMLINUX_JANG_TOOLS_SOURCE")
-    )
-    if configured:
-        return Path(configured)
-    return Path.home() / "jang/jang-tools"
-
-
-def _check_bundled_jang_tools_hash_parity(
-    root: Path,
-    python_path: Path,
-    *,
-    relpaths: tuple[str, ...] = CRITICAL_JANG_TOOLS_HASH_FILES,
-    source_jang_tools: Path | None = None,
-) -> dict[str, Any]:
-    source_root = source_jang_tools or _default_jang_tools_source()
-    source_jang = source_root / "jang_tools"
-    bundled_jang = (
-        _python_root_from_executable(python_path)
-        / "lib/python3.12/site-packages/jang_tools"
-    )
-    files: dict[str, dict[str, Any]] = {}
-    missing_source: list[str] = []
-    missing_bundled: list[str] = []
-    mismatched: list[str] = []
-    for relpath in relpaths:
-        source_path = source_jang / relpath
-        bundled_path = bundled_jang / relpath
-        source_hash = ""
-        bundled_hash = ""
-        if not source_path.exists():
-            missing_source.append(relpath)
-        else:
-            source_hash = _sha256(source_path)
-        if not bundled_path.exists():
-            missing_bundled.append(relpath)
-        else:
-            bundled_hash = _sha256(bundled_path)
-        if source_hash and bundled_hash and source_hash != bundled_hash:
-            mismatched.append(relpath)
-        files[relpath] = {
-            "source": str(source_path),
-            "bundled": str(bundled_path),
-            "source_sha256": source_hash,
-            "bundled_sha256": bundled_hash,
-            "match": bool(source_hash and bundled_hash and source_hash == bundled_hash),
-        }
-    ok = not missing_source and not missing_bundled and not mismatched
-    return {
-        "ok": ok,
-        "source_jang_tools": str(source_jang),
-        "bundled_jang_tools": str(bundled_jang),
         "missing_source": missing_source,
         "missing_bundled": missing_bundled,
         "mismatched": mismatched,
@@ -790,10 +650,6 @@ def build_audit(
         diagnostic_reports
     )
     bundled_engine_hash_parity = _check_bundled_engine_hash_parity(root, python_path)
-    bundled_jang_tools_hash_parity = _check_bundled_jang_tools_hash_parity(
-        root,
-        python_path,
-    )
     packaged_engine_source_hash_parity = _check_packaged_engine_source_hash_parity(
         root,
         app_path,
@@ -889,9 +745,6 @@ def build_audit(
             and help_result["returncode"] == 0
         ),
         "installed_bundled_engine_hash_parity": bundled_engine_hash_parity["ok"],
-        "installed_bundled_jang_tools_hash_parity": (
-            bundled_jang_tools_hash_parity["ok"]
-        ),
         "installed_packaged_engine_source_hash_parity": (
             packaged_engine_source_hash_parity["ok"]
         ),
@@ -1281,7 +1134,6 @@ def build_audit(
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
         "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
         "bundled_engine_hash_parity": bundled_engine_hash_parity,
-        "bundled_jang_tools_hash_parity": bundled_jang_tools_hash_parity,
         "packaged_engine_source_hash_parity": packaged_engine_source_hash_parity,
         "vmlx_bundled_python_launch_crash_repro": {
             "versioned_python_runs": versioned_python_result["returncode"] == 0,

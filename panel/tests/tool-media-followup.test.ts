@@ -23,7 +23,7 @@ describe('tool media follow-up routing', () => {
     expect(chat).toContain('pendingVideoDataUrls')
     expect(chat).toContain('result.imageDataUrl')
     expect(chat).toContain('result.videoDataUrl')
-    expect(chat).toContain('chatIsMultimodal || (isRemote && !modelForceTextOnly)')
+    expect(chat).toContain('chatIsMultimodal || isRemote')
     expect(chat).toContain('Skipping tool media bytes for text-only local session')
     expect(chat).toContain('buildToolMediaFollowupContent')
     expect(helper).toContain("type: 'image_url'")
@@ -68,14 +68,5 @@ describe('tool media follow-up routing', () => {
     expect(executor).toContain('video/mp4')
     expect(executor).toContain('data:${mime};base64')
     expect(executor).toContain('The video has been attached for visual analysis.')
-  })
-
-  it('filters model-chat audio attachments from any local model with audioRuntimeAvailable=false', () => {
-    const chat = readFileSync(`${repoRoot}/src/main/ipc/chat.ts`, 'utf8')
-
-    expect(chat).toContain('modelAudioRuntimeAvailable === false')
-    expect(chat).not.toContain('chatDetectedFamily === "gemma4" || chatDetectedFamily === "gemma4-text"')
-    expect(chat).toContain('Omitting audio attachment(s)')
-    expect(chat).toContain('bundle lacks weight-backed audio runtime')
   })
 })

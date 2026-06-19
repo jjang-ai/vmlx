@@ -95,6 +95,47 @@ def test_release_surface_contract_rejects_updater_ahead_of_source(tmp_path):
     assert artifact["checks"]["local_updater_not_ahead_of_source"] is False
 
 
+def test_release_surface_contract_requires_all_source_version_stamps_to_match(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    (tmp_path / "pyproject.toml").write_text('version = "1.5.66"\n', encoding="utf-8")
+    panel = tmp_path / "panel"
+    panel.mkdir()
+    (panel / "package.json").write_text(
+        json.dumps({"version": "1.5.66"}), encoding="utf-8"
+    )
+    (panel / "package-lock.json").write_text(
+        json.dumps({"version": "1.5.65", "packages": {"": {"version": "1.5.65"}}}),
+        encoding="utf-8",
+    )
+    engine = tmp_path / "vmlx_engine"
+    engine.mkdir()
+    (engine / "__init__.py").write_text('__version__ = "1.5.65"\n', encoding="utf-8")
+    (tmp_path / "latest.json").write_text(
+        json.dumps(
+            {
+                "version": "1.5.65",
+                "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.65/vMLX-1.5.65-sequoia-arm64.dmg",
+                "sha256": "a" * 64,
+                "notes": "vMLX 1.5.65",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    artifact = gate.build_artifact(tmp_path)
+
+    assert artifact["status"] == "fail"
+    assert artifact["source_versions"] == {
+        "pyproject": "1.5.66",
+        "panel_package": "1.5.66",
+        "panel_package_lock": "1.5.65",
+        "engine_init": "1.5.65",
+    }
+    assert artifact["checks"]["source_version_consistent"] is False
+    assert artifact["failed_checks"] == ["source_version_consistent"]
+
+
 def test_release_surface_contract_requires_complete_local_updater_when_bumped(tmp_path):
     from tests.cross_matrix import run_release_surface_contract as gate
 
@@ -313,6 +354,12 @@ def test_release_surface_live_public_checks_require_pypi_files(tmp_path):
     assert artifact["checks"]["public_pypi_has_release_files"] is False
     assert artifact["checks"]["staged_source_version_not_public"] is False
     assert artifact["status_failed_checks"] == ["public_pypi_has_release_files"]
+    assert artifact["failed_checks"] == ["public_pypi_has_release_files"]
+    assert artifact["failed_steps"] == ["public_pypi_has_release_files"]
+    assert artifact["next_actions"] == [
+        "Publish the matching vmlx wheel/sdist to PyPI or explicitly scope "
+        "PyPI out of this release surface."
+    ]
     assert "staged_source_version_not_public" in artifact["informational_false_checks"]
 
 

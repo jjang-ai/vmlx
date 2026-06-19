@@ -1545,7 +1545,7 @@ class TestToolCallBufferingStructure:
 
         # Uses trailing window to catch split-chunk markers without false positives
         assert "_reasoning_tail" in source
-        assert "_has_tool_marker_or_partial_suffix(\n                            _reasoning_tail" in source
+        assert "_text_ends_with_tool_marker(\n                            _reasoning_tail" in source
 
     def test_deepseek_unicode_marker_in_markers_list(self):
         """DeepSeek Unicode tool call marker must be in _TOOL_CALL_MARKERS."""

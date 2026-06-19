@@ -73,27 +73,6 @@ class TestStep3p5ToolParser:
             assert "<tool_call>" not in out.content
             assert "<function=" not in out.content
 
-    def test_json_string_argument_trims_only_wrapper_newlines_with_schema(self, parser):
-        text = '<tool_call><function=record_fact>{"value": "\\nblue-cat\\n"}</function></tool_call>'
-        request = {
-            "tools": [{
-                "function": {
-                    "name": "record_fact",
-                    "parameters": {
-                        "properties": {
-                            "value": {"type": "string"},
-                        },
-                    },
-                },
-            }],
-        }
-
-        out = parser.extract_tool_calls(text, request=request)
-
-        assert out.tools_called is True
-        args = json.loads(out.tool_calls[0]["arguments"])
-        assert args == {"value": "blue-cat"}
-
     def test_typed_args_with_schema_coercion(self, parser):
         """Schema in request triggers numeric coercion for string parameters."""
         text = (
@@ -125,89 +104,6 @@ class TestStep3p5ToolParser:
         assert args.get("celsius") == 22.5
         assert args.get("auto_adjust") is True
         assert args.get("label") == "kitchen"
-
-    def test_string_parameter_trims_only_xml_wrapper_newlines(self, parser):
-        text = (
-            "<tool_call>\n"
-            "<function=record_fact>\n"
-            "<parameter=value>\nblue-cat\n</parameter>\n"
-            "</function>\n"
-            "</tool_call>"
-        )
-        request = {
-            "tools": [{
-                "function": {
-                    "name": "record_fact",
-                    "parameters": {
-                        "properties": {
-                            "value": {"type": "string"},
-                        },
-                    },
-                },
-            }],
-        }
-
-        out = parser.extract_tool_calls(text, request=request)
-
-        assert out.tools_called is True
-        args = json.loads(out.tool_calls[0]["arguments"])
-        assert args == {"value": "blue-cat"}
-
-    def test_string_parameter_trims_wrapper_newlines_with_flat_tool_schema(self, parser):
-        text = (
-            "<tool_call>\n"
-            "<function=record_fact>\n"
-            "<parameter=value>\nblue-cat\n</parameter>\n"
-            "</function>\n"
-            "</tool_call>"
-        )
-        request = {
-            "tools": [{
-                "type": "function",
-                "name": "record_fact",
-                "parameters": {
-                    "properties": {
-                        "value": {"type": "string"},
-                    },
-                },
-            }],
-        }
-
-        out = parser.extract_tool_calls(text, request=request)
-
-        assert out.tools_called is True
-        args = json.loads(out.tool_calls[0]["arguments"])
-        assert args == {"value": "blue-cat"}
-
-    def test_string_parameter_preserves_same_line_spaces_and_multiline_payload(self, parser):
-        request = {
-            "tools": [{
-                "function": {
-                    "name": "write_note",
-                    "parameters": {
-                        "properties": {
-                            "value": {"type": "string"},
-                        },
-                    },
-                },
-            }],
-        }
-
-        same_line = parser.extract_tool_calls(
-            "<tool_call><function=write_note><parameter=value>  blue-cat  </parameter></function></tool_call>",
-            request=request,
-        )
-        multiline = parser.extract_tool_calls(
-            "<tool_call><function=write_note><parameter=value>line1\nline2</parameter></function></tool_call>",
-            request=request,
-        )
-
-        assert json.loads(same_line.tool_calls[0]["arguments"]) == {
-            "value": "  blue-cat  "
-        }
-        assert json.loads(multiline.tool_calls[0]["arguments"]) == {
-            "value": "line1\nline2"
-        }
 
     def test_visible_text_around_tool_call_no_xml_leak(self, parser):
         text = (
@@ -263,29 +159,6 @@ class TestStep3p5ToolParser:
         assert len(out.tool_calls) == 2
         assert out.tool_calls[0]["name"] == "fn_a"
         assert out.tool_calls[1]["name"] == "fn_b"
-
-    def test_empty_function_with_required_schema_fails_closed(self, parser):
-        text = "<tool_call><function=exec_command></function></tool_call>"
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        out = parser.extract_tool_calls(text, request=request)
-
-        assert out.tools_called is False
-        assert out.tool_calls == []
 
     def test_registry_aliases_resolve(self):
         """Step3p5ToolParser must register under both `step3p5` and `stepfun`."""

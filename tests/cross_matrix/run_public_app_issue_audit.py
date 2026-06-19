@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json"
+    "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -29,16 +29,16 @@ INSTALLED_APP_PYTHON = Path(
 STAGED_SEQUOIA_APP = Path("panel/release/sequoia-app/mac-arm64/vMLX.app")
 STAGED_TAHOE_APP = Path("panel/release/tahoe-app/mac-arm64/vMLX.app")
 TOOL_CALL_CONTRACT = Path(
-    "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json"
+    "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json"
+    "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(
@@ -57,17 +57,15 @@ GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
 GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
 )
-GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT = Path(
-    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-cachehit-256-bundled-triple-20260611.json"
-)
+GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT = GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT
 QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
 ISSUE179_ROOT_CAUSE_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 ISSUE179_RESPONSES_CANCEL_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"
 )
 ISSUE179_RESPONSES_CANCEL_PREFLIGHT = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
@@ -998,19 +996,6 @@ def build_audit(root: Path) -> dict[str, Any]:
                     "gemma26_memory_stress_mixed_swa_cache_hits",
                 },
             }[number]
-            required_source_checks = {
-                key: value for key, value in checks.items() if key not in open_keys
-            }
-            issue["focused_source_slice"] = (
-                "open"
-                if all(required_source_checks.values())
-                and any(checks.get(key) is not True for key in open_keys)
-                else "pass"
-                if all(checks.values())
-                else "fail"
-            )
-        elif number == "116":
-            open_keys = {"reasoning_template_contract_passes"}
             required_source_checks = {
                 key: value for key, value in checks.items() if key not in open_keys
             }

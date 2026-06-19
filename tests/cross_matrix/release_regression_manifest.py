@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
+    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -215,18 +215,14 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "structured_live_smoke_response_format_adoption",
     "response_format_docs_repair_validation_boundary",
     "responses_previous_response_history",
-    "responses_no_tool_invalid_markup_cleanup",
     "responses_streaming_tool_call_arguments_and_indexes",
-    "qwen_xml_function_required_args_fail_closed",
     "cache_reuse_endpoints",
     "cache_stats_reuse_skip_telemetry",
     "gateway_stale_port_startup",
     "gateway_standby_wake_routing",
     "gateway_responses_function_call_arguments_streaming",
-    "gateway_responses_reasoning_empty_final_arguments_streaming",
     "gateway_stale_responses_port_rejection",
     "panel_tool_status_responses_argument_recovery",
-    "panel_qwen_gemma_reasoning_request_controls",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",
@@ -384,13 +380,13 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json",
+    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
-    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
+    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
@@ -400,21 +396,21 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json"
+    "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"
@@ -423,7 +419,7 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
-    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
@@ -432,7 +428,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json"
+    "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
@@ -444,10 +440,10 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
+    "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-step37-vlm-runtime-audit-after-bundled-vlm-proof-20260611.json"
+    "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
 )
 DEFERRED_RELEASE_FAMILIES = {
     "dsv4": "deferred_per_20260602_emergency_release_scope",
@@ -863,7 +859,7 @@ CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS = {
     "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
     "nemotron_omni_tq2_system_nomedia": "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
     "dsv4_jang_local": "build/current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json",
 }
 CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
@@ -873,49 +869,34 @@ CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
     "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
     "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
 }
 CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT = (
-    "build/current-mimo-v25-jang2l-live-cb-cache-text-20260610.json"
+    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT = (
-    "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
+    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-long-prompt-first-request-oom-20260606.json"
+    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
-    "build/current-mimo-v25-jang2l-chat-tool-boundary-20260610.json"
+    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
-    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
+    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
+    "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
-)
-CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT = (
-    "build/current-mimo-v25-jang2l-restart-l2-restore-20260610-rerun/summary.json"
-)
-CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT = (
-    "build/current-real-ui-live-model-mimo-v25-jang2l-responses-tools-rerun-20260610.json"
-)
-CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT = (
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
-)
-CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT = (
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jang2l-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
-)
-CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT = (
-    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-image-overlay-after-rebuild-pass-20260611-proof.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
@@ -984,7 +965,7 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "cache_family": "hybrid_ssm",
     },
     "zaya_vl_jangtq4": {
-        "name": "ZAYA1-VL-8B-JANGTQ4",
+        "name": "ZAYA1-VL-8B-MXFP4",
         "model_type": "zaya1_vl",
         "is_mllm": True,
         "supports_video": False,
@@ -1235,10 +1216,10 @@ _ROWS: list[dict[str, Any]] = [
             "Structured JSON schema repair decodes valid nested object strings without semantic value rewriting",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
         ],
         "artifacts": [
-            "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json",
+            "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
             "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json",
         ],
     },
@@ -1276,7 +1257,7 @@ _ROWS: list[dict[str, Any]] = [
             "server startup maxTokens explicitness survives wake/reload and CLI implicit startup paths",
             "API gateway output-budget and context-budget paths are source-hashed",
             "DSV4 request-budget helper is source-hashed with the max-output boundary gate",
-            "Casual preset maxTokens is documented as an explicit server output cap and does not change model-owned defaults or context",
+            "Casual preset leaves maxTokens model-owned instead of forcing a hidden output cap",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
@@ -1423,10 +1404,10 @@ _ROWS: list[dict[str, Any]] = [
             "maxToolIterations caps tool loops",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
+            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
         ],
         "artifacts": [
-            "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
+            "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
             "build/current-tool-call-contract-20260523-post-budget-edge.json",
             "build/current-tool-call-contract-20260521.json",
             "build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",
@@ -1725,13 +1706,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json",
-            "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
+            "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
+            "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
@@ -1899,12 +1880,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json",
+            "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
@@ -2026,7 +2007,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
+            "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-explicit-nomedia-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-system-nomedia-bundled-20260524/summary.json",
@@ -2120,13 +2101,13 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-auto-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_PROMPT_1='Hi' VMLINUX_REAL_UI_PROMPT_2='Hi' node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-thinking-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_PROMPT_1='Hi' VMLINUX_REAL_UI_PROMPT_2='Hi' node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
-            ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --model /Users/example/models/dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK --python panel/bundled-python/python/bin/python3.12 --served-model models/MiniMax-M2.7-JANGTQ_K --out build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json --skip-memory-preflight --load-timeout 420 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
+            ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/tahoe-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json",
+            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2172,14 +2153,14 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-thinking-20260527-chat.png",
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-proof.json",
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-chat.png",
-            "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json",
+            "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json",
             "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
-            "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
-            "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
+            "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
+            "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json",
+            "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",
@@ -2220,7 +2201,6 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8790 --out build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json --timeout 420",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python .venv/bin/python --port 8810 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-source-20260606.json",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --port 8812 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
-            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --port 8812 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8799 --timeout 420 --out build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json --serve-extra-arg=--disable-prefix-cache",
             "VMLINUX_MLLM_PREFILL_TRACE=1 .venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --port 8798 --timeout 420 --out build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json --serve-extra-arg=--disable-prefix-cache",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python .venv/bin/python --port 8796 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json --serve-extra-arg=--disable-prefix-cache",
@@ -2234,8 +2214,6 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json",
             "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json",
             "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
-            "build/current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json",
-            "build/current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json",
             "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json",
@@ -3586,12 +3564,11 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
     if payload.get("launch_allowed") is not False:
         failures.append("launch_allowed_not_false")
     allowed_model_suffixes = (
-        "DeepSeek-V4-Flash-JANG",
         "DeepSeek-V4-Flash-JANGTQ-K",
         "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
     )
     if not any(model_path.endswith(suffix) for suffix in allowed_model_suffixes):
-        failures.append("model_path_not_dsv4")
+        failures.append("model_path_not_dsv4_jangtq_k")
     if model_size_gb is None or model_size_gb < 70:
         failures.append("model_size_gb_not_recorded")
     if required_gb is None or required_gb < 120:
@@ -4291,7 +4268,7 @@ def _real_ui_mixed_swa_storage_quantization_seen(
         and storage.get("mode") == "storage_boundary"
         and storage.get("bits") == 4
         and storage.get("group_size") == 64
-        and storage.get("applies_to") == "full_attention_kv_only"
+        and storage.get("applies_to") == "full_and_sliding_attention_kv"
         and storage.get("metadata_policy") == "preserve_rotating_window_metadata"
     ):
         return True
@@ -4405,8 +4382,7 @@ REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 REAL_UI_EXACT_REPLY_RE = re.compile(
-    r"(?:reply exactly|send visible final text exactly|output visible final text exactly):\s*"
-    r"[\"'“”`]?([^\r\n\"'“”`]+?)[\"'“”`]?\s*(?=\r?\n|$)",
+    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
     re.IGNORECASE,
 )
 
@@ -5208,8 +5184,6 @@ def _validate_current_issue175_179_release_boundary_audit(root: Path) -> dict[st
             "serve_cli_lora_scales",
             "image_load_lora_signature_guard",
             "focused_regression_test_present",
-            "empty_lora_lists_noop_regression_test_present",
-            "lora_scale_without_path_still_rejected",
             "text_lora_flags_rejected",
             "installed_app_lora_surface_proven",
         },
@@ -5469,12 +5443,6 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             and issue_clearance
             == "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
         )
-        issue116_known_open = (
-            number == "116"
-            and status == "open"
-            and issue_slice == "open"
-            and issue_clearance == "mapped_to_thinking_off_ui_api_request_guard"
-        )
         issue117_known_pass = (
             number == "117"
             and status == "pass"
@@ -5486,7 +5454,6 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             issue_slice != "pass"
             and not issue117_known_open
             and not issue115_known_open
-            and not issue116_known_open
             and not issue119_known_open
         ):
             result["failures"].append(f"unexpected_issue_slice:{number}")
@@ -5540,14 +5507,6 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             }
             if not all(value is True for value in required_open_checks.values()):
                 result["failures"].append(f"failed_issue_checks:{number}")
-        elif issue116_known_open:
-            required_open_checks = {
-                key: value
-                for key, value in checks.items()
-                if key != "reasoning_template_contract_passes"
-            }
-            if not all(value is True for value in required_open_checks.values()):
-                result["failures"].append(f"failed_issue_checks:{number}")
         elif issue119_known_open:
             required_open_checks = {
                 key: value
@@ -5574,8 +5533,6 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
                 "gemma26_memory_stress_native_cache_health",
                 "gemma26_memory_stress_mixed_swa_cache_hits",
             }:
-                continue
-            if issue116_known_open and check == "reasoning_template_contract_passes":
                 continue
             if checks.get(check) is not True:
                 result["failures"].append(f"missing_issue_check:{number}:{check}")
@@ -5814,19 +5771,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     no_source_classifier_artifact = (
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
     )
-    restart_l2_artifact = CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
-    responses_tools_artifact = (
-        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
-    )
-    installed_jangtq2_tools_artifact = (
-        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
-    )
-    installed_jang2l_tools_artifact = (
-        CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
-    )
-    installed_jangtq2_media_l2_artifact = (
-        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
-    )
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5839,11 +5783,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "metadata_truth": metadata_truth_artifact,
             "source_vs_quant_first_divergence": source_vs_quant_artifact,
             "no_source_exactness_classifier": no_source_classifier_artifact,
-            "jang2l_restart_l2": restart_l2_artifact,
-            "jang2l_responses_tools_rerun": responses_tools_artifact,
-            "jangtq2_installed_responses_tools_cache": installed_jangtq2_tools_artifact,
-            "jang2l_installed_responses_tools_cache": installed_jang2l_tools_artifact,
-            "jangtq2_installed_media_l2": installed_jangtq2_media_l2_artifact,
         },
         "missing": [],
         "failures": [],
@@ -5881,16 +5820,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "cb_working_set_pressure_blocked": False,
         "media_unwired": False,
         "mimo_jangtq2_live_media_l2_passed": False,
-        "mimo_jangtq2_installed_responses_tools_cache_passed": False,
-        "mimo_jang2l_installed_responses_tools_cache_passed": False,
-        "mimo_jangtq2_installed_media_l2_passed": False,
-        "mimo_jangtq2_installed_media_semantics_blocked": False,
-        "mimo_jang2l_media_l2_not_applicable": False,
         "mimo_jang2l_live_media_l2_blocked": False,
         "mimo_jang2l_l2_restart_cache_hit_passed": False,
         "mimo_jang2l_l2_restart_visible_output_blocked": False,
-        "mimo_jang2l_responses_transport_passed": False,
-        "mimo_jang2l_responses_tool_semantics_blocked": False,
         "manifest_integrity_passed": False,
         "stale_local_state_absent": False,
         "current_audit_status": None,
@@ -5913,11 +5845,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     metadata_truth_path = root / metadata_truth_artifact
     source_vs_quant_path = root / source_vs_quant_artifact
     no_source_classifier_path = root / no_source_classifier_artifact
-    restart_l2_path = root / restart_l2_artifact
-    responses_tools_path = root / responses_tools_artifact
-    installed_jangtq2_tools_path = root / installed_jangtq2_tools_artifact
-    installed_jang2l_tools_path = root / installed_jang2l_tools_artifact
-    installed_jangtq2_media_l2_path = root / installed_jangtq2_media_l2_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5928,11 +5855,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (metadata_truth_path, metadata_truth_artifact),
         (source_vs_quant_path, source_vs_quant_artifact),
         (no_source_classifier_path, no_source_classifier_artifact),
-        (restart_l2_path, restart_l2_artifact),
-        (responses_tools_path, responses_tools_artifact),
-        (installed_jangtq2_tools_path, installed_jangtq2_tools_artifact),
-        (installed_jang2l_tools_path, installed_jang2l_tools_artifact),
-        (installed_jangtq2_media_l2_path, installed_jangtq2_media_l2_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5951,72 +5873,18 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         no_source_classifier_payload = json.loads(
             no_source_classifier_path.read_text(encoding="utf-8")
         )
-        restart_l2_payload = json.loads(restart_l2_path.read_text(encoding="utf-8"))
-        responses_tools_payload = json.loads(
-            responses_tools_path.read_text(encoding="utf-8")
-        )
-        installed_jangtq2_tools_payload = json.loads(
-            installed_jangtq2_tools_path.read_text(encoding="utf-8")
-        )
-        installed_jang2l_tools_payload = json.loads(
-            installed_jang2l_tools_path.read_text(encoding="utf-8")
-        )
-        installed_jangtq2_media_l2_payload = json.loads(
-            installed_jangtq2_media_l2_path.read_text(encoding="utf-8")
-        )
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
         return result
 
-    metadata_jang2l = {}
-    metadata_bundles = metadata_truth_payload.get("bundles")
-    if isinstance(metadata_bundles, dict) and isinstance(
-        metadata_bundles.get("jang2l"), dict
-    ):
-        metadata_jang2l = metadata_bundles["jang2l"]
-    metadata_jang2l_caps = metadata_jang2l.get("capabilities")
-    if not isinstance(metadata_jang2l_caps, dict):
-        metadata_jang2l_caps = {}
-    jang2l_text_runtime_preserved_media = (
-        metadata_jang2l.get("status") == "pass"
-        and metadata_jang2l_caps.get("modalities") == ["text"]
-        and metadata_jang2l_caps.get("multimodal_status")
-        == "weights_preserved_text_runtime"
-        and set(metadata_jang2l_caps.get("preserved_modalities") or [])
-        >= {"vision", "audio"}
-        and set(metadata_jang2l_caps.get("unwired_modalities") or [])
-        >= {"vision", "audio"}
-    )
-    result["mimo_jang2l_media_l2_not_applicable"] = (
-        jang2l_text_runtime_preserved_media
-    )
     result["metadata_truth_passed"] = (
         metadata_truth_payload.get("status") == "pass"
-        and (
-            (
-                metadata_truth_payload.get("runtime_modalities") == ["text"]
-                and metadata_truth_payload.get("preserved_modalities")
-                == ["vision", "audio"]
-                and metadata_truth_payload.get("unwired_modalities")
-                == ["vision", "audio"]
-                and metadata_truth_payload.get("multimodal_status")
-                == "weights_preserved_text_runtime"
-            )
-            or (
-                metadata_truth_payload.get("expected_runtime_modalities") == ["text"]
-                and metadata_truth_payload.get("expected_preserved_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l.get("status") == "pass"
-                and metadata_jang2l_caps.get("modalities") == ["text"]
-                and metadata_jang2l_caps.get("preserved_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l_caps.get("unwired_modalities")
-                == ["vision", "audio"]
-                and metadata_jang2l_caps.get("multimodal_status")
-                == "weights_preserved_text_runtime"
-            )
-        )
+        and metadata_truth_payload.get("runtime_modalities") == ["text"]
+        and metadata_truth_payload.get("preserved_modalities") == ["vision", "audio"]
+        and metadata_truth_payload.get("unwired_modalities") == ["vision", "audio"]
+        and metadata_truth_payload.get("multimodal_status")
+        == "weights_preserved_text_runtime"
     )
     if not result["metadata_truth_passed"]:
         result["failures"].append("mimo_metadata_truth_not_pass")
@@ -6115,19 +5983,13 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     text_cache_requests = text_cache_payload.get("requests")
     if not isinstance(text_cache_requests, list):
         text_cache_requests = []
-    text_cache_rows = text_cache_payload.get("rows")
-    if not isinstance(text_cache_rows, list):
-        text_cache_rows = []
-    text_cache_summary = text_cache_payload.get("summary")
-    if not isinstance(text_cache_summary, dict):
-        text_cache_summary = {}
     text_cache_contents = [
         str(item.get("content") or "")
         for item in text_cache_requests
         if isinstance(item, dict)
     ]
     cached_token_counts = []
-    for item in [*text_cache_requests, *text_cache_rows]:
+    for item in text_cache_requests:
         if not isinstance(item, dict):
             continue
         usage = item.get("usage")
@@ -6135,26 +5997,10 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         cached_tokens = details.get("cached_tokens") if isinstance(details, dict) else None
         if isinstance(cached_tokens, int):
             cached_token_counts.append(cached_tokens)
-    summary_texts = text_cache_summary.get("texts")
-    if not isinstance(summary_texts, dict):
-        summary_texts = {}
-    summary_repeat_pass = (
-        text_cache_payload.get("status") == "pass"
-        and text_cache_summary.get("all_requests_http_ok") is True
-        and text_cache_summary.get("exact_repeat_1") is True
-        and text_cache_summary.get("exact_repeat_2") is True
-        and text_cache_summary.get("cache_hit_tokens", 0) > 0
-        and text_cache_summary.get("l2_tokens_on_disk", 0) > 0
-        and summary_texts.get("exact_repeat_1") == "ACK-CB-742"
-        and summary_texts.get("exact_repeat_2") == "ACK-CB-742"
-    )
     result["text_cache_narrow_pass"] = (
-        (
-            len(text_cache_contents) >= 2
-            and all(content == "cache ok" for content in text_cache_contents[:2])
-            and any(count > 0 for count in cached_token_counts)
-        )
-        or summary_repeat_pass
+        len(text_cache_contents) >= 2
+        and all(content == "cache ok" for content in text_cache_contents[:2])
+        and any(count > 0 for count in cached_token_counts)
     )
     if not result["text_cache_narrow_pass"]:
         result["failures"].append("mimo_text_cache_narrow_pass_missing")
@@ -6188,15 +6034,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     result["prompt_length_coherence_blocked"] = (
         length_sweep_payload.get("status") == "fail" and bool(corrupt_cases)
     )
-    if (
-        length_sweep_payload.get("status") == "open"
-        and length_sweep_payload.get("classification")
-        == "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
-    ):
-        result["prompt_length_coherence_blocked"] = True
-        result["prompt_length_runtime_blocker"] = length_sweep_payload.get(
-            "classification"
-        )
     result["prompt_length_corrupt_cases"] = corrupt_cases
 
     tool_observations = tool_dialect_payload.get("runtime_observations")
@@ -6219,15 +6056,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         and no_structured_tool_calls
         and required_rejected
     )
-    tool_checks = tool_dialect_payload.get("checks")
-    if not isinstance(tool_checks, dict):
-        tool_checks = {}
-    if (
-        tool_checks.get("required_mode_tool_call_present") is True
-        and tool_checks.get("auto_mode_tool_call_present") is True
-        and tool_checks.get("cache_positive") is True
-    ):
-        result["tool_protocol_blocked"] = False
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
@@ -6270,10 +6098,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             latest_decode_speed.get("switchglu_fastpath_active") is True
             and latest_decode_speed.get("speed_blocked") is True
         )
-    if (
-        current_audit_component_ok.get("long_prompt_coherence") is True
-        and not result.get("prompt_length_runtime_blocker")
-    ):
+    if current_audit_component_ok.get("long_prompt_coherence") is True:
         result["prompt_length_coherence_blocked"] = False
     elif audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
@@ -6363,189 +6188,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     result["mimo_jangtq2_live_media_l2_passed"] = bool(
         audit_jangtq2_live_media_l2_passed
     )
-    if audit_jang2l_live_media_l2_open and not result[
-        "mimo_jang2l_media_l2_not_applicable"
-    ]:
+    if audit_jang2l_live_media_l2_open:
         result["mimo_jang2l_live_media_l2_blocked"] = True
         result["failures"].append("mimo_jang2l_live_media_l2_missing")
-    if result["mimo_jang2l_media_l2_not_applicable"]:
-        result["current_audit_blockers"] = [
-            blocker
-            for blocker in result["current_audit_blockers"]
-            if blocker != "mimo_jang2l_live_media_l2_missing"
-        ]
     result["mimo_jang2l_l2_restart_cache_hit_passed"] = bool(
         audit_jang2l_l2_cache_hit_passed
     )
-    restart_l2_results = restart_l2_payload.get("results")
-    restart_l2_first = (
-        restart_l2_results[0]
-        if isinstance(restart_l2_results, list)
-        and restart_l2_results
-        and isinstance(restart_l2_results[0], dict)
-        else {}
-    )
-    restart_l2_classification = restart_l2_first.get("classification")
-    if not isinstance(restart_l2_classification, dict):
-        restart_l2_classification = {}
-    restart_l2_checks = restart_l2_classification.get("checks")
-    if not isinstance(restart_l2_checks, dict):
-        restart_l2_checks = {}
-    current_restart_l2_cache_hit_passed = (
-        restart_l2_classification.get("status") == "pass"
-        and restart_l2_classification.get("cache_status") == "pass"
-        and restart_l2_checks.get("restart_l2_restore_observed") is True
-        and restart_l2_checks.get("second_cached_tokens_positive") is True
-        and restart_l2_checks.get("block_disk_hit_positive") is True
-    )
-    if current_restart_l2_cache_hit_passed:
-        result["mimo_jang2l_l2_restart_cache_hit_passed"] = True
-        audit_jang2l_l2_visible_output_open = False
-    if (
-        result["mimo_jang2l_l2_restart_cache_hit_passed"]
-        and audit_jang2l_l2_visible_output_open
-    ):
+    if audit_jang2l_l2_cache_hit_passed and audit_jang2l_l2_visible_output_open:
         result["mimo_jang2l_l2_restart_visible_output_blocked"] = True
         result["failures"].append("mimo_jang2l_l2_restart_visible_output_blocked")
-    responses_proven = responses_tools_payload.get("proven")
-    if not isinstance(responses_proven, dict):
-        responses_proven = {}
-    responses_cache = responses_proven.get("cache")
-    if not isinstance(responses_cache, dict):
-        responses_cache = {}
-    responses_red = responses_tools_payload.get("red")
-    if not isinstance(responses_red, dict):
-        responses_red = {}
-    result["mimo_jang2l_responses_transport_passed"] = (
-        responses_proven.get("responses_endpoint_used") is True
-        and responses_proven.get("responses_delta_streaming") is True
-        and responses_proven.get("responses_previous_response_id_tool_followup")
-        is True
-        and int(responses_cache.get("cache_hit_tokens") or 0) > 0
-        and int(responses_cache.get("l2_block_tokens_on_disk") or 0) > 0
-    )
-    result["mimo_jang2l_responses_tool_semantics_blocked"] = (
-        result["mimo_jang2l_responses_transport_passed"] is True
-        and responses_tools_payload.get("status") == "fail"
-        and responses_red.get("long_tool_loop") is False
-    )
-    if result["mimo_jang2l_responses_tool_semantics_blocked"]:
-        result["failures"].append("mimo_jang2l_responses_tool_semantics_blocked")
-
-    def _positive_metric(value: Any) -> bool:
-        return isinstance(value, (int, float)) and value > 0
-
-    def _installed_mimo_tools_cache_passed(
-        proof: dict[str, Any],
-        *,
-        expected_model: str,
-        expected_final_text: str,
-    ) -> bool:
-        request_contract = proof.get("requestContract")
-        request_contract = request_contract if isinstance(request_contract, dict) else {}
-        chat = proof.get("chat")
-        chat = chat if isinstance(chat, dict) else {}
-        server = proof.get("server")
-        server = server if isinstance(server, dict) else {}
-        health = server.get("health")
-        health = health if isinstance(health, dict) else {}
-        cache = health.get("cache")
-        cache = cache if isinstance(cache, dict) else {}
-        block_disk = cache.get("block_disk_cache")
-        block_disk = block_disk if isinstance(block_disk, dict) else {}
-        scheduler_cache = cache.get("scheduler_cache")
-        scheduler_cache = scheduler_cache if isinstance(scheduler_cache, dict) else {}
-        totals = cache.get("totals")
-        totals = totals if isinstance(totals, dict) else {}
-        native = health.get("native_cache")
-        native = native if isinstance(native, dict) else {}
-        generic_tq = native.get("generic_turboquant_kv")
-        generic_tq = generic_tq if isinstance(generic_tq, dict) else {}
-        return (
-            proof.get("status") == "pass"
-            and proof.get("uiLaunchMode") == "installed-app"
-            and proof.get("rendererWireApi") == "responses"
-            and proof.get("modelName") == expected_model
-            and request_contract.get("builtinToolsEnabled") is True
-            and request_contract.get("wireApi") == "responses"
-            and chat.get("finalVisibleText") == expected_final_text
-            and _positive_metric(block_disk.get("disk_writes"))
-            and _positive_metric(block_disk.get("disk_hits"))
-            and _positive_metric(totals.get("l2_tokens_on_disk"))
-            and _positive_metric(scheduler_cache.get("cache_hits"))
-            and _positive_metric(scheduler_cache.get("tokens_saved"))
-            and native.get("schema") == "mixed_swa_kv_v1"
-            and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
-            and generic_tq.get("enabled") is False
-        )
-
-    result["mimo_jangtq2_installed_responses_tools_cache_passed"] = (
-        _installed_mimo_tools_cache_passed(
-            installed_jangtq2_tools_payload,
-            expected_model="MiMo-V2.5-JANGTQ_2",
-            expected_final_text="MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
-        )
-    )
-    result["mimo_jang2l_installed_responses_tools_cache_passed"] = (
-        _installed_mimo_tools_cache_passed(
-            installed_jang2l_tools_payload,
-            expected_model="MiMo-V2.5-JANG_2L",
-            expected_final_text="MIMO_DETERMINISTIC_TWO second UI turn.",
-        )
-    )
-
-    media_contract = installed_jangtq2_media_l2_payload.get("requestContract")
-    media_contract = media_contract if isinstance(media_contract, dict) else {}
-    media_chat = installed_jangtq2_media_l2_payload.get("chat")
-    media_chat = media_chat if isinstance(media_chat, dict) else {}
-    media_turns = media_chat.get("turns")
-    media_turns = media_turns if isinstance(media_turns, list) else []
-    media_server = installed_jangtq2_media_l2_payload.get("server")
-    media_server = media_server if isinstance(media_server, dict) else {}
-    media_health = media_server.get("health")
-    media_health = media_health if isinstance(media_health, dict) else {}
-    media_cache = media_health.get("cache")
-    media_cache = media_cache if isinstance(media_cache, dict) else {}
-    media_block_disk = media_cache.get("block_disk_cache")
-    media_block_disk = media_block_disk if isinstance(media_block_disk, dict) else {}
-    media_totals = media_cache.get("totals")
-    media_totals = media_totals if isinstance(media_totals, dict) else {}
-    media_native = media_health.get("native_cache")
-    media_native = media_native if isinstance(media_native, dict) else {}
-    result["mimo_jangtq2_installed_media_l2_passed"] = (
-        installed_jangtq2_media_l2_payload.get("uiLaunchMode") == "installed-app"
-        and installed_jangtq2_media_l2_payload.get("modelName")
-        == "MiMo-V2.5-JANGTQ_2"
-        and installed_jangtq2_media_l2_payload.get("rendererWireApi") == "responses"
-        and installed_jangtq2_media_l2_payload.get("requestedMedia") is True
-        and media_contract.get("checkMedia") is True
-        and media_health.get("model_type") == "mllm"
-        and any(
-            isinstance(turn, dict)
-            and turn.get("role") == "user"
-            and "image_url" in str(turn.get("content") or "")
-            for turn in media_turns
-        )
-        and _positive_metric(media_block_disk.get("disk_writes"))
-        and _positive_metric(media_totals.get("l2_tokens_on_disk"))
-        and media_native.get("schema") == "mixed_swa_kv_v1"
-        and media_native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
-    )
-    result["mimo_jangtq2_installed_media_semantics_blocked"] = (
-        result["mimo_jangtq2_installed_media_l2_passed"] is True
-        and installed_jangtq2_media_l2_payload.get("status") == "fail"
-        and installed_jangtq2_media_l2_payload.get("failureStage")
-        == "release_assertions"
-    )
-    if result["mimo_jangtq2_installed_media_l2_passed"]:
-        result["mimo_jangtq2_live_media_l2_passed"] = True
-        result["current_audit_blockers"] = [
-            blocker
-            for blocker in result["current_audit_blockers"]
-            if blocker != "mimo_jangtq2_live_media_l2_missing"
-        ]
-    if result["mimo_jangtq2_installed_media_semantics_blocked"]:
-        result["failures"].append("mimo_jangtq2_installed_media_semantics_blocked")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if (
@@ -6571,7 +6222,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         or result["decode_speed_target_blocked"]
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
-        or result["mimo_jangtq2_installed_media_semantics_blocked"]
         or result["mimo_jang2l_live_media_l2_blocked"]
         or result["mimo_jang2l_l2_restart_visible_output_blocked"]
         or not result["source_vs_quant_requirement_satisfied"]
@@ -6610,16 +6260,10 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("working-set pressure")
         if result["media_unwired"]:
             active_boundary_reasons.append("media wiring")
-        if result["mimo_jangtq2_installed_media_semantics_blocked"]:
-            active_boundary_reasons.append("JANGTQ2 installed-app media semantics")
         if result["mimo_jang2l_live_media_l2_blocked"]:
             active_boundary_reasons.append("JANG_2L live media/L2 proof")
-        if result["mimo_jang2l_media_l2_not_applicable"]:
-            active_boundary_reasons.append("JANG_2L text-runtime media boundary")
         if result["mimo_jang2l_l2_restart_visible_output_blocked"]:
             active_boundary_reasons.append("JANG_2L L2 restart visible output")
-        if result["mimo_jang2l_responses_tool_semantics_blocked"]:
-            active_boundary_reasons.append("JANG_2L Responses/tool semantic drift")
         if not result["source_vs_quant_requirement_satisfied"]:
             active_boundary_reasons.append(
                 "source-vs-quant/no-source classification boundary"

@@ -8,7 +8,6 @@ Covers gaps identified in the comprehensive test audit:
 - max_tokens fallback chain
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -1046,76 +1045,6 @@ class TestFallbackToolPromptFormat:
         assert "Do not answer in prose before the tool call" in rendered
         assert "<function=grep_repo>" in rendered
         assert "<parameter=pattern>" in rendered
-        assert "tools" not in tokenizer.last_kwargs
-
-    def test_gemma4_required_tool_choice_fallback_injects_native_tool_call(self):
-        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
-
-        class FakeTokenizer:
-            last_kwargs = None
-
-            def apply_chat_template(self, messages, **kwargs):
-                self.last_kwargs = kwargs
-                return "\n".join(m.get("content", "") for m in messages)
-
-        prompt = (
-            "<|turn>system\n"
-            "You have tools.\n"
-            "<|tool>run_command<tool|>\n"
-            "<|turn>user\n"
-            "Use the run_command tool exactly once to create a file named "
-            "real_ui_tool_probe_1.txt in the configured working directory. "
-            "Write the text REAL_UI_LIVE_TOOL_ONE into that file.\n"
-            "<|turn>model\n"
-        )
-        messages = [
-            {
-                "role": "user",
-                "content": (
-                    "Use the run_command tool exactly once to create a file named "
-                    "real_ui_tool_probe_1.txt in the configured working directory. "
-                    "Write the text REAL_UI_LIVE_TOOL_ONE into that file."
-                ),
-            }
-        ]
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "run_command",
-                    "description": "Run a shell command",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"command": {"type": "string"}},
-                        "required": ["command"],
-                    },
-                },
-            }
-        ]
-
-        tokenizer = FakeTokenizer()
-        rendered = check_and_inject_fallback_tools(
-            prompt,
-            messages,
-            tools,
-            tokenizer,
-            {
-                "tokenize": False,
-                "add_generation_prompt": True,
-                "tools": tools,
-                "tool_choice": "required",
-                "enable_thinking": True,
-            },
-            tool_parser_id="gemma4",
-        )
-
-        assert "tool_choice=required" in rendered
-        assert "If the template has opened a thought channel, close it with <channel|>" in rendered
-        assert "Current turn API contract: tool_choice=required" in rendered
-        assert "first assistant output for this turn must be one native Gemma4 tool call" in rendered
-        assert "<|tool_call>call:run_command{" in rendered
-        assert "command:<|\"|>printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt<|\"|>" in rendered
-        assert "<function=run_command>" not in rendered
         assert "tools" not in tokenizer.last_kwargs
 
     def test_step3p5_fallback_not_triggered_when_native_examples_present(self):
@@ -3033,42 +2962,6 @@ class TestFallbackToolPromptFormat:
         assert '"path": "."' in result.tool_calls[0]["arguments"]
         assert result.content is None
 
-    def test_dsml_parser_htmlish_repair_preserves_string_spacing(self):
-        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
-
-        text = (
-            '<invoke_write_file><br />\n'
-            '<param name="path">tmp/spaced file.txt</param>\n'
-            "<param name=\"content\">  printf '&lt;x&gt;&amp;y'\nnext  </param>\n"
-            '</inv'
-        )
-        req = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "path": {"type": "string"},
-                                "content": {"type": "string"},
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
-
-        assert result.tools_called
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args["path"] == "tmp/spaced file.txt"
-        assert args["content"] == "  printf '&lt;x&gt;&amp;y'\nnext  "
-        assert result.content is None
-
     def test_generic_parser_handles_laguna_arg_key_value_tool_call(self):
         from vmlx_engine.api.tool_calling import parse_tool_calls
 
@@ -3085,29 +2978,6 @@ class TestFallbackToolPromptFormat:
         assert calls
         assert calls[0].function.name == "list_directory"
         assert '"path": "."' in calls[0].function.arguments
-
-    def test_generic_parser_trims_pretty_wrapper_newlines_only(self):
-        from vmlx_engine.api.tool_calling import parse_tool_calls
-
-        text = (
-            "<tool_call>\n"
-            "<function=record_fact>\n"
-            "<parameter=value>\nblue-cat\n</parameter>\n"
-            "<parameter=cmd>  printf '&lt;日本語&gt;' &amp;&amp; pwd  </parameter>\n"
-            "<parameter=content>line one\nline two</parameter>\n"
-            "</function>\n"
-            "</tool_call>"
-        )
-
-        cleaned, calls = parse_tool_calls(text)
-
-        assert cleaned == ""
-        assert calls
-        assert calls[0].function.name == "record_fact"
-        args = json.loads(calls[0].function.arguments)
-        assert args["value"] == "blue-cat"
-        assert args["cmd"] == "  printf '<日本語>' && pwd  "
-        assert args["content"] == "line one\nline two"
 
     def test_generic_parser_handles_dsv4_use_json_tool_call(self):
         """Live DSV4 JANGTQ2 can emit a compact <use_tool JSON> call.

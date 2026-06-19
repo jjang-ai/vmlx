@@ -304,15 +304,12 @@ def test_production_family_audit_summary_surfaces_missing_and_review_rows():
     }
 
 
-def test_ling_rows_expect_tools_but_not_reasoning():
+def test_ling_rows_do_not_expect_reasoning():
     rows = {row.id: row for row in ROWS}
 
     assert rows["ling_flash_tq"].expect_reasoning is False
     assert rows["ling_flash_tq2_crack"].expect_reasoning is False
     assert rows["ling_flash_mxfp4_crack"].expect_reasoning is False
-    assert rows["ling_flash_tq"].expect_tool_parser == "deepseek"
-    assert rows["ling_flash_tq2_crack"].expect_tool_parser == "deepseek"
-    assert rows["ling_flash_mxfp4_crack"].expect_tool_parser == "deepseek"
 
 
 def test_static_audit_accepts_registry_family_aliases_for_ling_and_nemotron():

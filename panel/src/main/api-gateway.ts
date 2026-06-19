@@ -28,6 +28,7 @@ const JIT_TIMEOUT_MS = 120_000;
 const HEALTH_POLL_MS = 2_000;
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300;
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900;
+const MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900;
 const PROXY_TIMEOUT_MS = GENERIC_DEFAULT_TIMEOUT_SECONDS * 1000; // generic 5 min max for a single proxied request
 const SINGLE_MODEL_MODE_KEY = "gateway_single_model_mode";
 
@@ -124,7 +125,11 @@ export class ApiGateway extends EventEmitter {
       detectedFamily = undefined;
     }
 
-    if (sessionTimeout == null && detectedFamily !== "deepseek-v4") {
+    if (
+      sessionTimeout == null &&
+      detectedFamily !== "deepseek-v4" &&
+      detectedFamily !== "minimax_m3"
+    ) {
       return PROXY_TIMEOUT_MS;
     }
 
@@ -133,10 +138,76 @@ export class ApiGateway extends EventEmitter {
       (sessionTimeout == null ||
         sessionTimeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
         ? DSV4_DEFAULT_TIMEOUT_SECONDS
+        : detectedFamily === "minimax_m3" &&
+            (sessionTimeout == null ||
+              sessionTimeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
+          ? MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
         : sessionTimeout != null
           ? sessionTimeout
           : GENERIC_DEFAULT_TIMEOUT_SECONDS;
     return timeoutSecondsToMs(effectiveSeconds);
+  }
+
+  private sessionApiKey(session: Pick<ResolvedSession, "config">): string | undefined {
+    try {
+      const cfg = session.config ? JSON.parse(session.config) : {};
+      return typeof cfg.apiKey === "string" && cfg.apiKey
+        ? cfg.apiKey
+        : undefined;
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  private gatewayApiKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const s of db.getSessions()) {
+      if (s.type === "remote") continue;
+      const key = this.sessionApiKey({ config: s.config });
+      if (key) keys.add(key);
+    }
+    return keys;
+  }
+
+  private bearerCredential(req: IncomingMessage): string | undefined {
+    const value = req.headers.authorization;
+    if (!value) return undefined;
+    const match = value.match(/^Bearer\s+(.+)$/i);
+    return match?.[1]?.trim() || undefined;
+  }
+
+  private sendUnauthorized(res: ServerResponse): void {
+    this.sendJson(res, 401, {
+      error: {
+        message: "Invalid or missing API key",
+        type: "authentication_error",
+        code: "invalid_api_key",
+      },
+    });
+  }
+
+  private requireAnyGatewayAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): boolean {
+    const keys = this.gatewayApiKeys();
+    if (keys.size === 0) return true;
+    const token = this.bearerCredential(req);
+    if (token && keys.has(token)) return true;
+    this.sendUnauthorized(res);
+    return false;
+  }
+
+  private requireSessionAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+    session: ResolvedSession,
+  ): boolean {
+    const key = this.sessionApiKey(session);
+    if (!key) return true;
+    if (this.bearerCredential(req) === key) return true;
+    this.sendUnauthorized(res);
+    return false;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -441,8 +512,10 @@ export class ApiGateway extends EventEmitter {
 
     // ── Gateway meta endpoints (no proxy needed) ──
     if (url === "/health" && method === "GET") return this.handleHealth(res);
-    if (url === "/v1/models" && method === "GET")
+    if (url === "/v1/models" && method === "GET") {
+      if (!this.requireAnyGatewayAuth(req, res)) return;
       return this.handleListModels(res);
+    }
 
     // ── Ollama endpoints ──
     if (url.startsWith("/api/"))
@@ -490,6 +563,7 @@ export class ApiGateway extends EventEmitter {
     // Only the backend holding that request ID will actually cancel.
     const isCancel = method === "POST" && /\/cancel\/?$/.test(url);
     if (isCancel && !modelName) {
+      if (!this.requireAnyGatewayAuth(req, res)) return;
       const sessions = db
         .getSessions()
         .filter((s: any) => s.status === "running");
@@ -506,7 +580,7 @@ export class ApiGateway extends EventEmitter {
                 port: s.port,
                 path: url,
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: this.jsonProxyHeadersWithAuth(req),
                 timeout: 5000,
               },
               (r) => {
@@ -550,6 +624,8 @@ export class ApiGateway extends EventEmitter {
         },
       });
     }
+
+    if (!this.requireSessionAuth(req, res, session)) return;
 
     const prepared = await this.prepareSessionForRouting(session);
     if (prepared.status === "unload_failed") {
@@ -843,6 +919,13 @@ export class ApiGateway extends EventEmitter {
   // Reverse Proxy
   // ═══════════════════════════════════════════════════════════════
 
+  private jsonProxyHeadersWithAuth(clientReq: IncomingMessage): OutgoingHttpHeaders {
+    const headers: OutgoingHttpHeaders = { "Content-Type": "application/json" };
+    const authorization = clientReq.headers.authorization;
+    if (authorization) headers.Authorization = authorization;
+    return headers;
+  }
+
   private proxyRequest(
     clientReq: IncomingMessage,
     clientRes: ServerResponse,
@@ -1042,8 +1125,14 @@ export class ApiGateway extends EventEmitter {
         this.endResponse(res, "Ollama is running\n");
         return;
       }
-      if (url === "/api/tags") return this.handleOllamaTags(res);
-      if (url === "/api/ps") return this.handleOllamaPs(res);
+      if (url === "/api/tags") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
+        return this.handleOllamaTags(res);
+      }
+      if (url === "/api/ps") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
+        return this.handleOllamaPs(res);
+      }
       if (url === "/api/version")
         // mlxstudio#72: Copilot in VS Code gates on version >= 0.6.4. Real
         // Ollama is on 0.12.x; report a plausible recent real version so
@@ -1061,14 +1150,22 @@ export class ApiGateway extends EventEmitter {
       if (url === "/api/embeddings" || url === "/api/embed")
         return this.handleOllamaEmbed(req, res);
       // Unsupported but don't error — return empty success for compat
-      if (url === "/api/pull")
+      if (url === "/api/pull") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
         return this.sendJson(res, 200, { status: "success" });
-      if (url === "/api/delete")
+      }
+      if (url === "/api/delete") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
         return this.sendJson(res, 200, { status: "success" });
-      if (url === "/api/copy")
+      }
+      if (url === "/api/copy") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
         return this.sendJson(res, 200, { status: "success" });
-      if (url === "/api/create")
+      }
+      if (url === "/api/create") {
+        if (!this.requireAnyGatewayAuth(req, res)) return;
         return this.sendJson(res, 200, { status: "success" });
+      }
       return this.sendJson(res, 404, { error: "Unknown endpoint" });
     }
 
@@ -1295,6 +1392,7 @@ export class ApiGateway extends EventEmitter {
         error: `model '${parsed.model || "unknown"}' not found`,
       });
     }
+    if (!this.requireSessionAuth(req, res, session)) return;
 
     const prepared = await this.prepareSessionForRouting(session);
     if (prepared.status === "unload_failed") {
@@ -1352,7 +1450,7 @@ export class ApiGateway extends EventEmitter {
       port: routedSession.port,
       path: "/v1/chat/completions",
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.jsonProxyHeadersWithAuth(req),
       timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 
@@ -1633,6 +1731,7 @@ export class ApiGateway extends EventEmitter {
       return this.sendJson(res, 404, {
         error: `model '${parsed.model || "unknown"}' not found`,
       });
+    if (!this.requireSessionAuth(req, res, session)) return;
 
     const prepared = await this.prepareSessionForRouting(session);
     if (prepared.status === "unload_failed") {
@@ -1703,7 +1802,7 @@ export class ApiGateway extends EventEmitter {
       port: routedSession.port,
       path: backendPath,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.jsonProxyHeadersWithAuth(req),
       timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 
@@ -1901,6 +2000,7 @@ export class ApiGateway extends EventEmitter {
 
     const session = this.resolveSession(parsed.name || parsed.model);
     if (!session) return this.sendJson(res, 404, { error: "model not found" });
+    if (!this.requireSessionAuth(req, res, session)) return;
 
     // mlxstudio#72 — Copilot (Ollama spec v0.20.x) gates on `capabilities`.
     // Compute from the saved session config; fall back to permissive defaults.
@@ -1966,6 +2066,7 @@ export class ApiGateway extends EventEmitter {
 
     const session = this.resolveSession(parsed.model);
     if (!session) return this.sendJson(res, 404, { error: "model not found" });
+    if (!this.requireSessionAuth(req, res, session)) return;
 
     const prepared = await this.prepareSessionForRouting(session);
     if (prepared.status === "unload_failed") {
@@ -1992,7 +2093,7 @@ export class ApiGateway extends EventEmitter {
       port: routedSession.port,
       path: "/v1/embeddings",
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.jsonProxyHeadersWithAuth(req),
       timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 

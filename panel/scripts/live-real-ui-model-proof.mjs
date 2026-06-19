@@ -79,37 +79,22 @@ const defaultPromptTwo = builtinToolsEnabled
   : 'Repeat the phrase REAL_UI_LIVE once and mention that this is the second UI turn.'
 const promptOne = promptOneOverride || defaultPromptOne
 const promptTwo = promptTwoOverride || defaultPromptTwo
-const secondTurnEnabled = envBool('VMLINUX_REAL_UI_SECOND_TURN', true)
-const expectedAssistantOne = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_1
-  || process.env.VMLX_REAL_UI_EXPECT_ASSISTANT_1
-  || ''
-const expectedAssistantTwo = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_2
-  || process.env.VMLX_REAL_UI_EXPECT_ASSISTANT_2
-  || ''
-const reasoningProbePrompt = process.env.VMLINUX_REAL_UI_REASONING_PROBE_PROMPT
-  || process.env.VMLX_REAL_UI_REASONING_PROBE_PROMPT
-  || 'Do not use tools. Think briefly, then answer exactly: FOUR'
 const checkServerCacheControls = envBool('VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS', false)
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
-const checkAudio = envBool('VMLINUX_REAL_UI_CHECK_AUDIO', false)
 const expectPagedCacheLocked = envBool('VMLINUX_REAL_UI_EXPECT_PAGED_CACHE_LOCKED', false)
+const expectPagedCache = envBool('VMLINUX_REAL_UI_EXPECT_PAGED_CACHE', false)
 const enableThinkingOverride = (
   process.env.VMLINUX_REAL_UI_ENABLE_THINKING != null
   || process.env.VMLX_REAL_UI_ENABLE_THINKING != null
 )
   ? envBool('VMLINUX_REAL_UI_ENABLE_THINKING', false)
   : undefined
-const reasoningProbeEnabled = enableThinkingOverride === true
-  && envBool('VMLINUX_REAL_UI_REASONING_PROBE', true)
 const maxToolIterations = Number(process.env.VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS || process.env.VMLX_REAL_UI_MAX_TOOL_ITERATIONS || '4')
 const toolResultMaxChars = Number(process.env.VMLINUX_REAL_UI_TOOL_RESULT_MAX_CHARS || process.env.VMLX_REAL_UI_TOOL_RESULT_MAX_CHARS || '12345')
 const imageDataUrl = process.env.VMLINUX_REAL_UI_IMAGE_DATA_URL
   || process.env.VMLX_REAL_UI_IMAGE_DATA_URL
   || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
-const imagePrompt = process.env.VMLINUX_REAL_UI_IMAGE_PROMPT
-  || process.env.VMLX_REAL_UI_IMAGE_PROMPT
-  || 'What is the dominant color of the attached image? Reply with one color word in English.'
 const imageExpectRegex = process.env.VMLINUX_REAL_UI_IMAGE_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_IMAGE_EXPECT_REGEX
   || '\\bred\\b'
@@ -119,20 +104,8 @@ const videoDataUrl = process.env.VMLINUX_REAL_UI_VIDEO_DATA_URL
 const videoExpectRegex = process.env.VMLINUX_REAL_UI_VIDEO_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_VIDEO_EXPECT_REGEX
   || ''
-const audioDataUrl = process.env.VMLINUX_REAL_UI_AUDIO_DATA_URL
-  || process.env.VMLX_REAL_UI_AUDIO_DATA_URL
-  || ''
-const audioExpectRegex = process.env.VMLINUX_REAL_UI_AUDIO_EXPECT_REGEX
-  || process.env.VMLX_REAL_UI_AUDIO_EXPECT_REGEX
-  || ''
 const cacheExpectRegex = process.env.VMLINUX_REAL_UI_CACHE_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_CACHE_EXPECT_REGEX
-  || ''
-const explicitToolParser = process.env.VMLINUX_REAL_UI_TOOL_PARSER
-  || process.env.VMLX_REAL_UI_TOOL_PARSER
-  || ''
-const explicitReasoningParser = process.env.VMLINUX_REAL_UI_REASONING_PARSER
-  || process.env.VMLX_REAL_UI_REASONING_PARSER
   || ''
 
 if (!modelPath) {
@@ -443,62 +416,7 @@ async function capturePng(cdp, filePath) {
   return filePath
 }
 
-async function dismissBlockingUpdateModal(cdp) {
-  return await evaluate(cdp, `
-    (async () => {
-      const modalButtons = [...document.querySelectorAll('button')];
-      const dismiss = modalButtons.find((button) => {
-        const text = (button.innerText || '').replace(/\\s+/g, ' ').trim();
-        const label = (button.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
-        return text.includes("Got it")
-          || text.includes("don't show until next update")
-          || label === 'Close'
-          || label === 'Dismiss';
-      });
-      if (!dismiss) return false;
-      dismiss.scrollIntoView({ block: 'center' });
-      dismiss.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      dismiss.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-      dismiss.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      return true;
-    })()
-  `, 10_000).catch(() => false)
-}
-
-async function activateChatForScreenshot(cdp, chatId, sessionId, expectedText) {
-  if (!chatId) return false
-  await evaluate(cdp, `
-    (async () => {
-      await window.api?.settings?.set?.('appMode', 'chat').catch(() => null);
-      await window.api?.settings?.set?.('lastActiveChatId', ${JSON.stringify(chatId)}).catch(() => null);
-      if (${JSON.stringify(sessionId || '')}) {
-        await window.api?.settings?.set?.('lastActiveSessionId', ${JSON.stringify(sessionId || '')}).catch(() => null);
-      }
-      window.location.reload();
-      return true;
-    })()
-  `, 10_000).catch(() => false)
-  await sleep(1200)
-  return await evaluate(cdp, `
-    new Promise((resolve) => {
-      const expectedText = ${JSON.stringify(expectedText || '')};
-      const started = Date.now();
-      const check = () => {
-        const text = document.body?.innerText || '';
-        if (!expectedText || text.includes(expectedText)) return resolve(true);
-        if (Date.now() - started > 15000) return resolve(false);
-        setTimeout(check, 200);
-      };
-      check();
-    })
-  `, 20_000).catch(() => false)
-}
-
 function startRealServer(port, outDir) {
-  const detectedParsers = detectExternalServerParsers(modelPath)
-  const toolParser = explicitToolParser || detectedParsers.toolParser || 'auto'
-  const reasoningParser = explicitReasoningParser || detectedParsers.reasoningParser || ''
   const conservativeRuntime = envBool('VMLINUX_REAL_UI_CONSERVATIVE_RUNTIME', false)
   const runtimeArgs = conservativeRuntime
     ? [
@@ -551,15 +469,14 @@ function startRealServer(port, outDir) {
     process.env.VMLINUX_REAL_UI_MAX_TOKENS || '96',
     '--log-level',
     'INFO',
+    '--default-enable-thinking',
+    'false',
   ]
   if (Number.isFinite(requestMaxPromptTokens) && requestMaxPromptTokens > 0) {
     args.push('--max-prompt-tokens', String(Math.floor(requestMaxPromptTokens)))
   }
   if (builtinToolsEnabled) {
-    args.push('--enable-auto-tool-choice', '--tool-call-parser', toolParser)
-  }
-  if (reasoningParser) {
-    args.push('--reasoning-parser', reasoningParser)
+    args.push('--enable-auto-tool-choice', '--tool-call-parser', 'auto')
   }
   if (process.env.VMLINUX_REAL_UI_IS_MLLM === '1' || process.env.VMLX_REAL_UI_IS_MLLM === '1') {
     args.push('--is-mllm')
@@ -580,35 +497,6 @@ function startRealServer(port, outDir) {
   attachChildProcessStreamErrorGuard(proc.stdout, logs)
   attachChildProcessStreamErrorGuard(proc.stderr, logs)
   return { proc, logs, command: [python, ...args] }
-}
-
-function detectExternalServerParsers(modelDir) {
-  const empty = { toolParser: '', reasoningParser: '' }
-  try {
-    const raw = readFileSync(path.join(modelDir, 'config.json'), 'utf8')
-    const cfg = JSON.parse(raw)
-    const modelType = String(cfg?.model_type || '').toLowerCase()
-    const textType = String(cfg?.text_config?.model_type || '').toLowerCase()
-    const familyText = `${modelType} ${textType} ${path.basename(modelDir).toLowerCase()}`
-    if (modelType === 'gemma4' || modelType === 'gemma4_unified' || textType === 'gemma4_text' || textType === 'gemma4_unified_text') {
-      return { toolParser: 'gemma4', reasoningParser: 'gemma4' }
-    }
-    if (modelType === 'mimo_v2' || familyText.includes('mimo-v2')) {
-      return { toolParser: 'xml_function', reasoningParser: 'think_xml' }
-    }
-    if (modelType.includes('qwen3') || familyText.includes('qwen3.6') || familyText.includes('qwen3-coder')) {
-      return { toolParser: 'qwen', reasoningParser: 'qwen3' }
-    }
-    if (modelType.includes('minimax') || familyText.includes('minimax')) {
-      return { toolParser: 'minimax', reasoningParser: 'minimax_m2' }
-    }
-    if (modelType.includes('deepseek') || familyText.includes('deepseek')) {
-      return { toolParser: 'dsml', reasoningParser: 'deepseek_r1' }
-    }
-    return empty
-  } catch {
-    return empty
-  }
 }
 
 function startUiApp(userDataDir, debugPort) {
@@ -750,18 +638,11 @@ function assertResult(result) {
     Array.isArray(result.serverCommand)
     && !result.serverCommand.includes('--disable-prefix-cache')
     && !result.serverCommand.includes('--no-continuous-batching')
-    && result.secondTurnEnabled !== false
   )
   if (!result.server?.models?.data?.length) failures.push('real server /v1/models returned no models')
   if (result.remoteSessionStarted !== true) failures.push('remote session did not start through Electron UI API')
   if (!chat.turns?.some((m) => m.role === 'assistant' && m.content)) failures.push('assistant content is empty')
   if (!chat.finalVisibleText) failures.push('final visible assistant content is empty')
-  if (result.expectedAssistantOne && (result.firstAssistantContent || '').trim() !== result.expectedAssistantOne) {
-    failures.push(`first assistant content mismatch: expected ${JSON.stringify(result.expectedAssistantOne)}, got ${JSON.stringify((result.firstAssistantContent || '').trim())}`)
-  }
-  if (result.expectedAssistantTwo && (result.secondAssistantContent || '').trim() !== result.expectedAssistantTwo) {
-    failures.push(`second assistant content mismatch: expected ${JSON.stringify(result.expectedAssistantTwo)}, got ${JSON.stringify((result.secondAssistantContent || '').trim())}`)
-  }
   const visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(chat.turns)
   if (!visibleAssistantTurnsComplete) {
     failures.push('UI turn ended with empty visible assistant content')
@@ -774,11 +655,9 @@ function assertResult(result) {
   if ((chat.reasoningNumericRunCount || 0) > 0) {
     failures.push('numeric/list-like garbage leaked into reasoning segments')
   }
-  const expectedCompleteTurns = result.secondTurnEnabled === false ? 1 : 2
-  const expectedPersistedMessages = result.secondTurnEnabled === false ? 2 : 4
-  if ((result.eventCounts?.complete || 0) < expectedCompleteTurns) failures.push(`expected ${expectedCompleteTurns} completed UI chat turns`)
+  if ((result.eventCounts?.complete || 0) < 2) failures.push('expected two completed UI chat turns')
   if ((result.eventCounts?.stream || 0) < 1) failures.push('expected streaming events from real model')
-  if ((chat.turns?.length || 0) < expectedPersistedMessages) failures.push(`expected at least ${expectedPersistedMessages} persisted chat messages, got ${chat.turns?.length || 0}`)
+  if ((chat.turns?.length || 0) < 4) failures.push(`expected at least four persisted chat messages, got ${chat.turns?.length || 0}`)
   if (result.sendErrors?.length) failures.push(`renderer send errors: ${result.sendErrors.join('; ')}`)
   if (cacheTelemetryExpected && (result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
   if (cacheTelemetryExpected && !result.provenSurfaces?.includes('cache_hit_telemetry')) {
@@ -819,18 +698,11 @@ function assertResult(result) {
   if (result.requestedServerCacheControls === true && !result.provenSurfaces?.includes('server_cache_controls')) {
     failures.push('requested real server cache controls but proof did not record server_cache_controls surface')
   }
-  if (
-    result.requestedMedia === true
-    && !result.provenSurfaces?.includes('vl_image')
-    && !result.provenSurfaces?.includes('media_force_text_only_gated')
-  ) {
+  if (result.requestedMedia === true && !result.provenSurfaces?.includes('vl_image')) {
     failures.push('requested real image media but proof did not record vl_image surface')
   }
   if (result.requestedVideo === true && !result.provenSurfaces?.includes('video_where_supported')) {
     failures.push('requested real video media but proof did not record video_where_supported surface')
-  }
-  if (result.requestedAudio === true && !result.provenSurfaces?.includes('audio_where_supported')) {
-    failures.push('requested real audio media but proof did not record audio_where_supported surface')
   }
   if (failures.length) {
     const error = new Error(`Real UI live-model proof failed:\n- ${failures.join('\n- ')}`)
@@ -907,40 +779,13 @@ function deriveProvenSurfaces(result) {
   ) {
     surfaces.add('tool_l2_cache_integrated')
   }
-  const mediaGated = mediaForceTextOnlyGated(result)
-  if (mediaGated) {
-    surfaces.add('media_force_text_only_gated')
-  }
-  if (result.media?.imageVerified === true && !mediaGated) {
+  if (result.media?.imageVerified === true) {
     surfaces.add('vl_image')
   }
   if (result.media?.videoVerified === true) {
     surfaces.add('video_where_supported')
   }
-  if (result.media?.audioVerified === true) {
-    surfaces.add('audio_where_supported')
-  }
   return [...surfaces].sort()
-}
-
-function mediaForceTextOnlyGated(result) {
-  const lines = [
-    ...(result.sessionLogTail || []),
-    ...(result.appLogTail || []),
-  ].map((line) => String(line))
-  const attachmentRoute = lines.find((line) =>
-    line.includes('[CHAT_DIAG] attachment_route=') &&
-    line.includes('"modelForceTextOnly":true') &&
-    line.includes('"chatIsMultimodal":false')
-  )
-  if (!attachmentRoute) return false
-  const mediaRequest = lines.find((line) =>
-    line.includes('[CHAT_DIAG] request_shape=') &&
-    line.includes('"chatIsMultimodal":false') &&
-    line.includes('"route":"/v1/chat/completions"') &&
-    line.includes('"chars":95')
-  )
-  return !!mediaRequest && !mediaRequest.includes('image_url') && !mediaRequest.includes('video_url') && !mediaRequest.includes('input_audio')
 }
 
 function extractLiveSpeedSamples(result) {
@@ -1041,7 +886,6 @@ function l2DiskStorageSeen(cache) {
 function responsesDeltaStreamingSeen(result) {
   if (result?.rendererWireApi !== 'responses') return false
   if ((result.eventCounts?.stream || 0) < 2) return false
-  if (responsesFunctionCallArgumentStreamingSeen(result)) return true
   const traces = Array.isArray(result.streamTrace)
     ? result.streamTrace
     : (Array.isArray(result.streamTraceByMessage) ? result.streamTraceByMessage : [])
@@ -1066,31 +910,6 @@ function responsesDeltaStreamingSeen(result) {
     }
   }
   return qualifyingTraceIds.size + qualifyingTraceCount >= 2
-}
-
-function responsesFunctionCallArgumentStreamingSeen(result) {
-  const strings = []
-  const collect = (value) => {
-    if (typeof value === 'string') {
-      strings.push(value)
-      return
-    }
-    if (!value || typeof value !== 'object') return
-    if (Array.isArray(value)) {
-      for (const child of value) collect(child)
-      return
-    }
-    for (const child of Object.values(value)) collect(child)
-  }
-  collect(result?.streamTrace)
-  collect(result?.appLogTail)
-  collect(result?.sessionLogs)
-  const joined = strings.join('\n')
-  const deltaSeen = joined.includes('response.function_call_arguments.delta')
-    || joined.includes('Responses function_call_arguments.delta')
-  const doneSeen = joined.includes('response.function_call_arguments.done')
-    || joined.includes('Responses function_call_arguments.done')
-  return deltaSeen && doneSeen
 }
 
 function responsesCacheDetailUsageSeen(result) {
@@ -1258,7 +1077,7 @@ function namedToolProbeSemanticsOk(result) {
   })()
   const strictExactReplyOk = (() => {
     const turns = Array.isArray(result.chat?.turns) ? result.chat.turns : []
-    const exactReplyRe = /(?:reply exactly|send visible final text exactly|output visible final text exactly|reply with exactly this (?:text|json) and nothing else):\s*["'“”`]?([^\r\n"'“”`]+?)["'“”`]?\s*(?=\r?\n|$)/i
+    const exactReplyRe = /reply exactly:\s*["'“”`]?([A-Za-z0-9_=-]+)["'“”`]?/i
     for (let i = 0; i < turns.length; i += 1) {
       const turn = turns[i]
       if (!turn || turn.role !== 'user') continue
@@ -1358,14 +1177,10 @@ async function main() {
         const enableThinking = ${enableThinkingOverride === undefined ? 'undefined' : JSON.stringify(enableThinkingOverride)};
         const checkMedia = ${JSON.stringify(checkMedia)};
         const checkVideo = ${JSON.stringify(checkVideo)};
-        const checkAudio = ${JSON.stringify(checkAudio)};
         const imageDataUrl = ${JSON.stringify(imageDataUrl)};
-        const imagePrompt = ${JSON.stringify(imagePrompt)};
         const imageExpectRegex = ${JSON.stringify(imageExpectRegex)};
         const videoDataUrl = ${JSON.stringify(videoDataUrl)};
         const videoExpectRegex = ${JSON.stringify(videoExpectRegex)};
-        const audioDataUrl = ${JSON.stringify(audioDataUrl)};
-        const audioExpectRegex = ${JSON.stringify(audioExpectRegex)};
         const workingDirectory = ${JSON.stringify(workingDirectory)};
         const samplingOverrides = ${JSON.stringify(samplingOverrides)};
         const endpoint = { host: '127.0.0.1', port: ${JSON.stringify(serverPort)} };
@@ -1392,19 +1207,6 @@ async function main() {
           };
           check();
         });
-        const updateDismiss = [...document.querySelectorAll('button')]
-          .find((b) => {
-            const text = (b.innerText || '').replace(/\\s+/g, ' ').trim();
-            const label = (b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
-            return text.includes("Got it")
-              || text.includes("don't show until next update")
-              || label === 'Close'
-              || label === 'Dismiss';
-          });
-        if (updateDismiss) {
-          updateDismiss.click();
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
         await window.api.engine.checkInstallation().catch(() => null);
         await window.api.chat.clearAllLocks().catch(() => null);
         const events = { stream: [], tool: [], reasoningDone: [], complete: [] };
@@ -1418,7 +1220,6 @@ async function main() {
           const remote = await window.api.sessions.createRemote({
             remoteUrl: baseUrl,
             remoteModel: servedModel,
-            capabilityModelPath: ${JSON.stringify(modelPath)},
           });
           if (!remote.success) throw new Error(remote.error || 'remote session create failed');
           await window.api.sessions.start(remote.session.id);
@@ -1463,37 +1264,11 @@ async function main() {
             }
           };
           const firstSent = await sendMessageWithCapture(1, 'first_send_message', ${JSON.stringify(promptOne)});
-          const secondTurnEnabled = ${JSON.stringify(secondTurnEnabled)};
-          if (firstSent && secondTurnEnabled) {
+          if (firstSent) {
             await sendMessageWithCapture(2, 'second_send_message', ${JSON.stringify(promptTwo)});
           }
-          const reasoningProbeEnabled = ${JSON.stringify(reasoningProbeEnabled)};
-          let reasoningProbeSent = false;
-          if (reasoningProbeEnabled && !rendererFailureStage) {
-            const reasoningProbeOverrides = {
-              ...overrides,
-              builtinToolsEnabled: false,
-              shellEnabled: false,
-              fileToolsEnabled: false,
-              searchToolsEnabled: false,
-              gitEnabled: false,
-              utilityToolsEnabled: false,
-              webSearchEnabled: false,
-              braveSearchEnabled: false,
-              fetchUrlEnabled: false,
-            };
-            await window.api.chat.setOverrides(chat.id, reasoningProbeOverrides);
-            reasoningProbeSent = await sendMessageWithCapture(
-              3,
-              'reasoning_probe_send_message',
-              ${JSON.stringify(reasoningProbePrompt)}
-            );
-            if (${JSON.stringify(checkMedia || checkVideo || checkAudio)}) {
-              await window.api.chat.setOverrides(chat.id, overrides);
-            }
-          }
           if (checkMedia && !rendererFailureStage) {
-            await sendMessageWithCapture(3, 'image_send_message', imagePrompt, [
+            await sendMessageWithCapture(3, 'image_send_message', 'What is the dominant color of the attached image? Reply with one color word in English.', [
               {
                 name: 'real-ui-proof-image.png',
                 type: 'image/png',
@@ -1521,34 +1296,15 @@ async function main() {
               ]);
             }
           }
-          if (checkAudio && !rendererFailureStage) {
-            if (!audioDataUrl) {
-              rendererFailureStage = 'audio_data_url_missing';
-              sendErrors.push({
-                turn: 5,
-                stage: 'audio_data_url_missing',
-                message: 'VMLINUX_REAL_UI_CHECK_AUDIO requires VMLINUX_REAL_UI_AUDIO_DATA_URL',
-              });
-            } else {
-              await sendMessageWithCapture(5, 'audio_send_message', 'Transcribe the attached audio. Reply with only the spoken words.', [
-                {
-                  name: 'real-ui-proof-audio.wav',
-                  type: 'audio/wav',
-                  kind: 'audio',
-                  dataUrl: audioDataUrl,
-                },
-              ]);
-            }
-          }
           const preloadHealthAfter = await window.api.performance.health(endpoint)
             .catch((error) => ({ error: String(error?.message || error) }));
           const cacheAfter = await window.api.cache.stats(endpoint, remote.session.id)
             .catch((error) => ({ error: String(error?.message || error) }));
           const cacheAfterSettled = await waitForCacheEndpointStorage(cacheAfter, remote.session.id);
-          const sessionLogs = await window.api.sessions.getLogs(remote.session.id)
-            .catch((error) => ['[proof] failed to read session logs: ' + String(error?.message || error)]);
           const messages = await window.api.chat.getMessages(chat.id);
           const assistants = messages.filter((m) => m.role === 'assistant');
+          const first = assistants[0]?.content || '';
+          const second = assistants[assistants.length - 1]?.content || '';
           const parsePersistedArray = (value) => {
             if (!value) return [];
             try {
@@ -1567,9 +1323,7 @@ async function main() {
           const persistedReasoningSegments = persistedReasoningByMessage.flat();
           const persistedTools = persistedToolsByMessage.flat();
           const allAssistantText = assistants.map((m) => m.content || '').join('\\n');
-          const first = assistants[0]?.content || '';
-          const second = secondTurnEnabled ? (assistants[1]?.content || '') : '';
-          const visible = allAssistantText;
+          const visible = first + '\\n' + second;
           const streamTraceByMessage = Object.values(events.stream.reduce((acc, event) => {
             const key = event?.messageId || 'unknown';
             const row = acc[key] || {
@@ -1616,35 +1370,24 @@ async function main() {
           const hasVideoAttachment = contentPartsByMessage.some((parts) =>
             parts.some((part) => part?.type === 'video_url' && part?.video_url?.url)
           );
-          const hasAudioAttachment = contentPartsByMessage.some((parts) =>
-            parts.some((part) => part?.type === 'input_audio' && part?.input_audio?.data)
-          );
           const imageSemanticVerified = checkMedia && new RegExp(imageExpectRegex, 'i').test(allAssistantText);
           const videoSemanticVerified = checkVideo && !!videoExpectRegex && new RegExp(videoExpectRegex, 'i').test(allAssistantText);
-          const audioSemanticVerified = checkAudio && !!audioExpectRegex && new RegExp(audioExpectRegex, 'i').test(allAssistantText);
           const mediaEvidence = {
             requestedImage: checkMedia,
             requestedVideo: checkVideo,
-            requestedAudio: checkAudio,
-            secondTurnEnabled,
             imageExpectedRegex: imageExpectRegex,
             videoExpectedRegex: videoExpectRegex,
-            audioExpectedRegex: audioExpectRegex,
             imageSemanticVerified,
             videoSemanticVerified,
-            audioSemanticVerified,
             imageVerified: checkMedia && hasImageAttachment && imageSemanticVerified && !sendErrors.some((item) => item.turn === 3),
             videoVerified: checkVideo && hasVideoAttachment && videoSemanticVerified && !sendErrors.some((item) => item.turn === 4),
-            audioVerified: checkAudio && hasAudioAttachment && audioSemanticVerified && !sendErrors.some((item) => item.turn === 5),
             persistedImageAttachment: hasImageAttachment,
             persistedVideoAttachment: hasVideoAttachment,
-            persistedAudioAttachment: hasAudioAttachment,
           };
           return {
             rendererWireApi: wireApi,
             rendererBuiltinToolsEnabled: builtinToolsEnabled,
             rendererEnableThinking: enableThinking,
-            secondTurnEnabled,
             workingDirectory,
             remoteSessionId: remote.session.id,
             remoteSessionStarted: true,
@@ -1652,11 +1395,6 @@ async function main() {
             chatOverrides,
             sendErrors,
             rendererFailureStage,
-            expectedAssistantOne: ${JSON.stringify(expectedAssistantOne)},
-            expectedAssistantTwo: ${JSON.stringify(expectedAssistantTwo)},
-            reasoningProbeEnabled,
-            reasoningProbeSent,
-            reasoningProbePrompt: ${JSON.stringify(reasoningProbePrompt)},
             media: mediaEvidence,
             messageCount: messages.length,
             assistantCount: assistants.length,
@@ -1676,7 +1414,6 @@ async function main() {
             reasoningNumericRunCount: countRegex(reasoningText, numericRunRegex),
             preloadHealthBefore,
             preloadHealthAfter,
-            sessionLogs,
             cacheBefore,
             cacheAfter: cacheAfterSettled,
             eventCounts: {
@@ -1696,7 +1433,6 @@ async function main() {
         .catch((healthError) => ({ error: healthError.message }))
       let chatScreenshot = null
       try {
-        await dismissBlockingUpdateModal(cdp)
         chatScreenshot = await capturePng(
           cdp,
           path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1719,13 +1455,9 @@ async function main() {
         requestedServerCacheControls: checkServerCacheControls,
         requestedMedia: checkMedia,
         requestedVideo: checkVideo,
-        requestedAudio: checkAudio,
         requestContract: {
           promptOne,
           promptTwo,
-          secondTurnEnabled,
-          expectedAssistantOne,
-          expectedAssistantTwo,
           requestMaxTokens,
           requestMaxPromptTokens,
           maxToolIterations,
@@ -1736,11 +1468,9 @@ async function main() {
           checkServerCacheControls,
           checkMedia,
           checkVideo,
-          checkAudio,
           expectPagedCacheLocked,
           imageExpectRegex,
           videoExpectRegex,
-          audioExpectRegex,
           cacheExpectRegex,
         },
         baseUrl,
@@ -1794,14 +1524,6 @@ async function main() {
       }
       throw error
     }
-    const visibleTextForScreenshot = rendererResult.secondAssistantContent || rendererResult.firstAssistantContent || ''
-    const chatActivatedForScreenshot = await activateChatForScreenshot(
-      cdp,
-      rendererResult.chatId,
-      rendererResult.remoteSessionId,
-      visibleTextForScreenshot,
-    )
-    await dismissBlockingUpdateModal(cdp)
     const chatScreenshot = await capturePng(
       cdp,
       path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1828,6 +1550,7 @@ async function main() {
           const modelPath = ${JSON.stringify(modelPath)};
           const cacheExpectRegex = ${JSON.stringify(cacheExpectRegex)};
           const expectPagedCacheLocked = ${JSON.stringify(expectPagedCacheLocked)};
+          const expectPagedCache = ${JSON.stringify(expectPagedCache)};
           const updateDismiss = [...document.querySelectorAll('button')]
             .find((b) => b.innerText.includes("Got it"));
           if (updateDismiss) {
@@ -1907,7 +1630,7 @@ async function main() {
           const cacheExpectationMatches = !cacheExpectRegex || new RegExp(cacheExpectRegex, 'i').test(bodyText);
           const verified = labels.length === 5
             && initialCacheControls.enablePrefixCache === true
-            && initialCacheControls.usePagedCache === true
+            && initialCacheControls.usePagedCache === expectPagedCache
             && (!expectPagedCacheLocked || initialCacheControls.usePagedCacheDisabled === true)
             && initialCacheControls.enableDiskCacheDisabled === true
             && initialCacheControls.blockDiskCachePresent === true
@@ -1960,15 +1683,9 @@ async function main() {
       requestedServerCacheControls: checkServerCacheControls,
       requestedMedia: checkMedia,
       requestedVideo: checkVideo,
-      requestedAudio: checkAudio,
       requestContract: {
         promptOne,
         promptTwo,
-        reasoningProbePrompt,
-        reasoningProbeEnabled,
-        secondTurnEnabled,
-        expectedAssistantOne,
-        expectedAssistantTwo,
         requestMaxTokens,
         requestMaxPromptTokens,
         maxToolIterations,
@@ -1982,11 +1699,9 @@ async function main() {
         checkServerCacheControls,
         checkMedia,
         checkVideo,
-        checkAudio,
         expectPagedCacheLocked,
         imageExpectRegex,
         videoExpectRegex,
-        audioExpectRegex,
         cacheExpectRegex,
       },
       baseUrl,
@@ -2024,14 +1739,10 @@ async function main() {
         chat: path.resolve(chatScreenshot),
       },
       ...rendererResult,
-      chatActivatedForScreenshot,
       serverCacheControls,
       toolProbeFiles,
       streamTrace: rendererResult.streamTraceByMessage || [],
       appLogTail: appLogs.slice(-80),
-      sessionLogTail: Array.isArray(rendererResult.sessionLogs)
-        ? rendererResult.sessionLogs.slice(-120)
-        : [],
       serverLogTail: server.logs.slice(-120),
     }
     result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])

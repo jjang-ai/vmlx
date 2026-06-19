@@ -11,7 +11,6 @@ Supports Nemotron-3-Nano-30B-A3B and similar models.
 import json
 import re
 from collections.abc import Sequence
-from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -44,23 +43,9 @@ class NemotronToolParser(ToolParser):
 
     # Pattern to extract parameters
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>(.*?)</parameter>",
+        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
         re.DOTALL,
     )
-
-    @staticmethod
-    def _coerce_parameter_value(value: str) -> Any:
-        stripped = value.strip()
-        try:
-            return json.loads(stripped)
-        except (json.JSONDecodeError, ValueError):
-            # Pretty-printed template XML often wraps scalar values as
-            # ``<parameter=x>\n.\n</parameter>``. Keep exact same-line string
-            # payloads intact, but do not treat those wrapper newlines as part
-            # of a one-line scalar argument.
-            if ("\n" in value or "\r" in value) and "\n" not in stripped and "\r" not in stripped:
-                return unescape(stripped)
-            return unescape(value)
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -84,16 +69,12 @@ class NemotronToolParser(ToolParser):
             content = content.strip()
             if content.startswith("{"):
                 try:
-                    arguments = json.loads(content)
-                    if not self._arguments_satisfy_required_schema(
-                        func_name, arguments, request
-                    ):
-                        continue
+                    json.loads(content)
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
                             "name": func_name,
-                            "arguments": json.dumps(arguments, ensure_ascii=False),
+                            "arguments": content,
                         }
                     )
                     continue
@@ -105,14 +86,12 @@ class NemotronToolParser(ToolParser):
             if params:
                 arguments = {}
                 for param_name, param_value in params:
-                    arguments[param_name.strip()] = self._coerce_parameter_value(
-                        param_value
-                    )
+                    # Try to parse value as JSON (for nested objects)
+                    try:
+                        arguments[param_name.strip()] = json.loads(param_value.strip())
+                    except json.JSONDecodeError:
+                        arguments[param_name.strip()] = param_value.strip()
 
-                if not self._arguments_satisfy_required_schema(
-                    func_name, arguments, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -122,10 +101,6 @@ class NemotronToolParser(ToolParser):
                 )
             else:
                 # Raw content without parameter tags, or empty content
-                if not self._arguments_satisfy_required_schema(
-                    func_name, content, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -166,7 +141,7 @@ class NemotronToolParser(ToolParser):
             return {"content": delta_text}
 
         if "</tool_call>" in delta_text or "</function>" in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

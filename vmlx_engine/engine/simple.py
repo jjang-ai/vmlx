@@ -261,22 +261,47 @@ class SimpleEngine(BaseEngine):
         *,
         enable_thinking: bool | None,
     ) -> list[Any]:
-        """Return MiMo thinking-off decode processors.
+        """Suppress MiMo native thinking tags when API thinking is disabled.
 
         MiMo's stable text prompt for thinking-off serving is the plain
         assistant prefix; its native ``enable_thinking=False`` template closes
-        ``<think></think>`` before generation and can first-token-stop. Current
-        first-token probes show the primary EOS marker as the top token for
-        failing system+long rows, so EOS is suppressed only for the first
-        generated token. Do not suppress literal XML thinking delimiters:
-        MiMo can otherwise emit untagged reasoning prose as visible text, while
-        the active think_xml parser can cleanly separate tagged reasoning.
+        ``<think></think>`` before generation and can first-token-stop. Because
+        the stable render does not itself prevent tag emission, the decode loop
+        must make the native thinking delimiters unavailable for the requested
+        API rail. Current first-token probes also show the primary EOS marker
+        as the top token for failing system+long rows, so EOS is suppressed
+        only for the first generated token. This is a logits-boundary policy,
+        not output injection.
         """
 
         if enable_thinking is not False:
             return []
 
+        token_ids: set[int] = set()
+        for token in ("<think>", "</think>"):
+            try:
+                encoded = tokenizer.encode(token, add_special_tokens=False)
+            except TypeError:
+                encoded = tokenizer.encode(token)
+            except Exception:
+                encoded = []
+            if len(encoded) == 1:
+                try:
+                    token_ids.add(int(encoded[0]))
+                except Exception:
+                    continue
+
         processors = []
+        if token_ids:
+
+            def _suppress_mimo_thinking_tags(_, logits):
+                import mlx.core as mx
+
+                indices = mx.array(sorted(token_ids))
+                return logits.at[:, indices].add(-float("inf"))
+
+            processors.append(_suppress_mimo_thinking_tags)
+
         eos_token_ids: set[int] = set()
         for token in ("<|im_end|>",):
             try:
@@ -698,7 +723,6 @@ class SimpleEngine(BaseEngine):
         # Pop vmlx-engine-specific kwargs early to prevent leaking to mlx-lm calls
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         reasoning_effort = kwargs.pop("reasoning_effort", None)
-        tool_parser_id = kwargs.pop("_tool_parser_id", None)
         kwargs.pop("request_id", None)
         thinking_enabled = kwargs.pop("enable_thinking", True)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
@@ -830,7 +854,7 @@ class SimpleEngine(BaseEngine):
                         template_tools,
                         tokenizer,
                         tpl_kwargs,
-                        tool_parser_id=tool_parser_id or self._model_tool_parser_name(),
+                        tool_parser_id=self._model_tool_parser_name(),
                     )
 
                     if thinking_enabled is False:
@@ -934,7 +958,6 @@ class SimpleEngine(BaseEngine):
 
         # Pop vmlx-engine-specific kwargs early to prevent leaking to mlx-lm calls
         reasoning_effort = kwargs.pop("reasoning_effort", None)
-        tool_parser_id = kwargs.pop("_tool_parser_id", None)
         thinking_enabled = kwargs.pop("enable_thinking", True)
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
@@ -1135,7 +1158,7 @@ class SimpleEngine(BaseEngine):
                 template_tools,
                 tokenizer,
                 template_kwargs,
-                tool_parser_id=tool_parser_id or self._model_tool_parser_name(),
+                tool_parser_id=self._model_tool_parser_name(),
             )
 
             if thinking_enabled is False:

@@ -189,6 +189,9 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         or model_type == "mimo_v2"
         or model_type == "zaya1_vl"
     )
+    non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
+    if "ling" in non_reasoning_family_blob or model_type == "zaya":
+        supports_thinking = False
     reasoning_capabilities = (
         capabilities.get("reasoning")
         if isinstance(capabilities.get("reasoning"), dict)
@@ -198,18 +201,14 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_thinking = bool(capabilities["supports_thinking"])
     elif isinstance(reasoning_capabilities.get("supported"), bool):
         supports_thinking = bool(reasoning_capabilities["supported"])
-    non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
-    if "ling" in non_reasoning_family_blob or model_type == "zaya":
-        supports_thinking = False
     if model_type == "zaya1_vl" and not _bundle_template_has_thinking_control(model_dir):
         supports_thinking = False
     if model_type == "mimo_v2":
         # MiMo-V2.5 artifacts may carry stale thinking metadata, but current
         # live proof shows the model can emit hidden-only output with no
         # visible final answer when thinking is enabled. Keep the smoke gate
-        # aligned with runtime capability truth: XML tools and XML cleanup
-        # parsing are supported, but reasoning/thinking is not release-exposed
-        # for MiMo yet.
+        # aligned with runtime capability truth: XML tools are supported, but
+        # reasoning/thinking is not release-exposed for MiMo yet.
         supports_thinking = False
 
     supports_tools = True
@@ -227,7 +226,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
     if model_type == "mimo_v2":
         capabilities = dict(capabilities)
         reasoning = dict(capabilities.get("reasoning") or {})
-        reasoning.update({"default": False, "parser": "think_xml", "supported": False})
+        reasoning.update({"default": False, "parser": None, "supported": False})
         tools = dict(capabilities.get("tools") or {})
         tools.update({"parser": "xml_function", "supported": True})
         capabilities["reasoning"] = reasoning
@@ -644,9 +643,8 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
                 "role": "user",
                 "content": (
                     "The tool has completed. Do not call another tool. "
-                    "Reply exactly with the characters on the next line, then stop. "
-                    "The final character must be a period.\n"
-                    "blue-cat."
+                    'Reply with exactly: STORED blue-cat. Include the hyphen '
+                    "and the letters cat."
                 ),
             },
         ],
@@ -730,9 +728,8 @@ def _exact_code_payload(model: str, max_tokens: int) -> dict[str, Any]:
             {
                 "role": "user",
                 "content": (
-                    "Return exactly the following code and nothing else. The third "
-                    "line must start at column 1 with no leading space. Do not use "
-                    "markdown.\n\n"
+                    "Output exactly these three Python lines, preserving spaces, "
+                    "newlines, punctuation, and capitalization. Do not use markdown.\n"
                     "def add(a, b):\n"
                     "    return a + b\n"
                     "print(add(2, 3))"
@@ -847,9 +844,9 @@ def _tool_prompt_style(row: dict[str, Any]) -> str:
 def _cache_probe_prompt(row: dict[str, Any]) -> str:
     if _is_zaya_row(row):
         return (
-            "ZAYA typed CCA cache probe. Stable sequence: "
-            "blue green blue amber violet. Reply with exactly the single "
-            "lowercase word blue. Do not add any other words."
+            "ZAYA typed CCA cache probe. Read the stable sequence: "
+            "blue green blue amber violet. Which color word repeats? "
+            "Answer exactly one lowercase word."
         )
     base = (
         "Cache probe fixed prefix. Read these stable words: alpha beta gamma delta "
@@ -887,8 +884,8 @@ def _no_media_payload(
         return _text_payload(
             model,
             (
-                f"No {media_kind} is attached. What should you output? NONE. "
-                "Output only NONE."
+                f"If a {media_kind} file is attached to this current message, "
+                "answer ATTACHED. Otherwise answer NONE."
             ),
             max_tokens,
             thinking=False,
@@ -1413,12 +1410,12 @@ def validate_probe_response(
                     "tool_calls": tool_calls,
                 }
             )
-        if stripped != "blue-cat.":
+        if stripped != "STORED blue-cat.":
             failures.append(
                 {
                     "label": label,
                     "reason": "expected_tool_result_summary_missing",
-                    "expected": "blue-cat.",
+                    "expected": "STORED blue-cat.",
                 }
             )
         raw_markup_needles = (
@@ -1554,10 +1551,15 @@ def validate_probe_response(
             "no" in words
             or "none" in words
             or "zero" in words
+            or "text_only" in compact_lower
+            or "textonly" in compact_lower
+            or "text-only" in lower
             or "not included" in lower
             or "not provided" in lower
             or "not attached" in lower
             or "without" in words
+            or "do not" in lower
+            or "don't" in lower
         )
         says_affirmative_media = (
             lower in {media_kind, f"{media_kind}."}

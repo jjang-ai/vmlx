@@ -28,11 +28,6 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
     assert "test_jang_quant_mode_supports_mxfp8_metadata" in required
     assert "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp" in required
     assert "test_native_mtp_detection_uses_weights_not_path_name" in required
-    assert "test_gemma4_qat_mxfp4_ple_dequant_uses_mxfp_mode" in required
-    assert "test_gemma4_qat_mxfp4_quantized_ple_stays_packed" in required
-    assert "test_native_mxfp_uint8_scales_select_mxfp_kernel" in required
-    assert "test_gemma4_moe_mxfp_experts_split_to_switch_glu_float_weights" in required
-    assert "test_gemma4_moe_mxfp_expert_cross_shard_sidecars_are_hydrated" in required
 
     assert "vmlx_engine/loaders/load_jangtq.py" in sources
     assert "vmlx_engine/loaders/load_jangtq_vlm.py" in sources

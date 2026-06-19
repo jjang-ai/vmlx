@@ -128,31 +128,8 @@ registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoTool
 registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
 // MiMo-V2.5 JANG_2L keeps multimodal assets. Its template emits generic XML
-// function calls, not Qwen tool JSON. Use generic XML reasoning parsing for
-// cleanup/separation, but keep thinking disabled until live proof shows
-// requested thinking returns a visible final answer.
-registerFamily('mimo_v2', {
-  cacheType: 'kv',
-  cacheSubtype: 'mimo_v2_asymmetric_swa',
-  architectureHints: {
-    runtimeMtpMode: 'absent',
-    fullAttentionKvHeads: 4,
-    swaAttentionKvHeads: 8,
-    attentionValueScale: 0.707,
-    swaWindow: 128,
-    swaAttentionSinkBias: true,
-  },
-  toolParser: 'xml_function',
-  reasoningParser: 'think_xml',
-  supportsThinking: false,
-  thinkInTemplate: false,
-  defaultEnableThinking: false,
-  enableAutoToolChoice: true,
-  isMultimodal: true,
-  usePagedCache: true,
-  description: 'MiMo V2.5 multimodal MoE',
-  priority: 4,
-})
+// function calls and <think> reasoning, not Qwen tool JSON.
+registerFamily('mimo_v2', { cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', supportsThinking: true, thinkInTemplate: false, enableAutoToolChoice: true, isMultimodal: true, description: 'MiMo V2.5 multimodal MoE', priority: 4 })
 
 // Llama
 registerFamily('llama4', { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 4', priority: 5 })
@@ -385,8 +362,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma3n': 'gemma3n',
   'gemma3n_text': 'gemma3n-text',
   'gemma4': 'gemma4',
-  'gemma4_unified': 'gemma4',
   'gemma4_text': 'gemma4-text',
+  'gemma4_unified': 'gemma4',
   'gemma4_unified_text': 'gemma4-text',
   // ── Phi family ──
   'phi3': 'phi3',
@@ -509,94 +486,6 @@ function configDeclaresMedia(config: any): boolean {
     if (key in config && config[key] != null) return true
   }
   return false
-}
-
-function modelHasIndexedWeight(modelPath: string, predicate: (key: string) => boolean): boolean {
-  try {
-    const raw = readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf-8')
-    const index = JSON.parse(raw)
-    const weightMap = index?.weight_map
-    if (!weightMap || typeof weightMap !== 'object') return false
-    return Object.keys(weightMap).some(predicate)
-  } catch {
-    return false
-  }
-}
-
-function gemmaAudioRuntimeAvailable(modelPath: string): boolean {
-  return modelHasIndexedWeight(modelPath, key => key.startsWith('audio_tower.'))
-}
-
-function configDeclaresAudio(config: any): boolean {
-  if (!config || typeof config !== 'object') return false
-  const containers = [
-    config,
-    config.text_config,
-    config.processor_config,
-    config.audio_config,
-  ].filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-  if (containers.some(container => container.audio_config != null)) return true
-  return containers.some(container =>
-    [
-      'audio_token_id',
-      'audio_token_index',
-      'audio_start_token_id',
-      'audio_end_token_id',
-    ].some(key => container[key] != null),
-  )
-}
-
-function modelHasLikelyAudioWeights(modelPath: string): boolean {
-  return modelHasIndexedWeight(modelPath, key =>
-    /(^|\.)(audio_tower|audio_encoder|speech_embeddings|audio_model|whisper|audio_projector|embed_audio)(\.|$)/.test(key),
-  )
-}
-
-function mimoV2MediaRuntimeOverlayRequested(): boolean {
-  return ['1', 'true', 'yes', 'on'].includes(
-    String(process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY ?? '').toLowerCase(),
-  )
-}
-
-function configHasAnyToken(config: any, keys: string[]): boolean {
-  if (!config || typeof config !== 'object') return false
-  const containers = [
-    config,
-    config.processor_config,
-    config.vision_config,
-    config.audio_config,
-  ].filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-  return containers.some(container => keys.some(key => container[key] != null))
-}
-
-function mimoV2MediaRuntimeOverlayAvailable(parsedConfig: any, modelPath: string): {
-  vision: boolean
-  audio: boolean
-} {
-  if (String(parsedConfig?.model_type || '').toLowerCase() !== 'mimo_v2') {
-    return { vision: false, audio: false }
-  }
-  const vision =
-    !!parsedConfig?.vision_config &&
-    existsSync(join(modelPath, 'preprocessor_config.json')) &&
-    modelHasIndexedWeight(modelPath, key => key.startsWith('visual.')) &&
-    configHasAnyToken(parsedConfig, [
-      'image_token_id',
-      'image_token_index',
-      'video_token_id',
-      'video_token_index',
-    ])
-  const audio =
-    !!parsedConfig?.audio_config &&
-    existsSync(join(modelPath, 'audio_tokenizer', 'model.safetensors')) &&
-    modelHasIndexedWeight(modelPath, key => key.startsWith('audio_encoder.')) &&
-    modelHasIndexedWeight(modelPath, key => key.startsWith('speech_embeddings.')) &&
-    configHasAnyToken(parsedConfig, [
-      'audio_token_id',
-      'audio_token_index',
-      'audio_start_token_id',
-    ])
-  return { vision, audio }
 }
 
 function isMxtqJangConfig(jangCfg: any): boolean {
@@ -923,39 +812,6 @@ function applyConfigMetadataOverrides(
   return next
 }
 
-function applyIndexedWeightCapabilityHints(
-  detected: DetectedConfig,
-  parsedConfig: any,
-  modelPath: string,
-): DetectedConfig {
-  if (!parsedConfig || typeof parsedConfig !== 'object') return detected
-  if (detected.family !== 'gemma4' && detected.family !== 'gemma4-text') {
-    if (detected.isMultimodal && !configDeclaresAudio(parsedConfig) && !modelHasLikelyAudioWeights(modelPath)) {
-      return {
-        ...detected,
-        architectureHints: {
-          ...(detected.architectureHints ?? {}),
-          audioRuntimeAvailable: false,
-        },
-      }
-    }
-    return detected
-  }
-  const declaresAudio =
-    parsedConfig.audio_config != null ||
-    parsedConfig.audio_token_id != null ||
-    parsedConfig.audio_token_index != null
-  if (!declaresAudio) return detected
-
-  return {
-    ...detected,
-    architectureHints: {
-      ...(detected.architectureHints ?? {}),
-      audioRuntimeAvailable: gemmaAudioRuntimeAvailable(modelPath),
-    },
-  }
-}
-
 function isStep37TextBridge(parsedConfig: any): boolean {
   const modelType = String(parsedConfig?.model_type ?? '').toLowerCase()
   const modelFile = String(parsedConfig?.model_file ?? '').split('/').pop()?.toLowerCase()
@@ -1007,13 +863,6 @@ function applyJangCapabilities(
     item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
   )
 
-  if (next.family === 'minimax_m3') {
-    // MiniMax-M3 (config model_type=minimax_m3_vl) registers multimodal, but the VL vision
-    // forward (mlx_vlm.models.minimax_m3_vl) is unpublished; force text-only so the panel
-    // emits --text-only and M3 loads via register_minimax_m3_runtime.
-    next.isMultimodal = false
-    next.forceTextOnly = true
-  }
   if (next.family === 'mimo_v2') {
     next.toolParser = 'xml_function'
     next.enableAutoToolChoice = caps.supports_tools !== false
@@ -1058,9 +907,8 @@ function applyJangCapabilities(
     next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'mimo_v2') {
     next.reasoningParser = 'think_xml'
-    next.supportsThinking = false
+    next.supportsThinking = true
     next.thinkInTemplate = false
-    next.defaultEnableThinking = false
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
     next.supportsThinking = false
@@ -1103,86 +951,6 @@ function applyJangCapabilities(
     next.usePagedCache = true
   }
   return next
-}
-
-function applyConfigCapabilitiesMediaPolicy(
-  detected: DetectedConfig,
-  parsedConfig: any,
-  jangCfg: any | undefined,
-  modelPath: string,
-): DetectedConfig {
-  if (detected.family !== 'mimo_v2') {
-    return detected
-  }
-  const overlay = mimoV2MediaRuntimeOverlayRequested()
-    ? mimoV2MediaRuntimeOverlayAvailable(parsedConfig, modelPath)
-    : { vision: false, audio: false }
-  if (overlay.vision || overlay.audio) {
-    return {
-      ...detected,
-      isMultimodal: true,
-      forceTextOnly: undefined,
-      architectureHints: {
-        ...(detected.architectureHints ?? {}),
-        vlRuntimeAvailable: overlay.vision,
-        audioRuntimeAvailable: overlay.audio,
-        runtimeScope: 'mimo_v2_text_runtime_media_overlay',
-      },
-    }
-  }
-  const configCaps = parsedConfig?.capabilities && typeof parsedConfig.capabilities === 'object'
-    ? parsedConfig.capabilities
-    : undefined
-  const jangCaps = jangCfg?.capabilities && typeof jangCfg.capabilities === 'object'
-    ? jangCfg.capabilities
-    : undefined
-  const caps = configCaps ?? jangCaps ?? {}
-  const runtimeModalities = Array.isArray(caps.modalities)
-    ? caps.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
-    : []
-  const unwiredModalities = Array.isArray(caps.unwired_modalities)
-    ? caps.unwired_modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
-    : []
-  const capsRuntimeHasMedia = runtimeModalities.some((item: string) =>
-    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
-  )
-  const capsRuntimeTextOnly = runtimeModalities.length > 0 && !capsRuntimeHasMedia
-  const capsHasUnwiredMedia = unwiredModalities.some((item: string) =>
-    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
-  )
-  const multimodalStatus = String(caps.multimodal_status || '').toLowerCase()
-  const runtimeMode = String(
-    parsedConfig?.runtime?.multimodal_mode ??
-    jangCfg?.runtime?.multimodal_mode ??
-    '',
-  ).toLowerCase()
-  const explicitMediaRuntime = new Set([
-    'mimo_v2_multimodal_runtime',
-    'multimodal_runtime',
-    'media_enabled',
-    'vl_audio_video_runtime',
-  ])
-  if (explicitMediaRuntime.has(multimodalStatus) || explicitMediaRuntime.has(runtimeMode)) {
-    return {
-      ...detected,
-      isMultimodal: true,
-      forceTextOnly: undefined,
-    }
-  }
-  if (
-    capsRuntimeTextOnly ||
-    capsHasUnwiredMedia ||
-    multimodalStatus === 'weights_preserved_text_runtime' ||
-    runtimeMode === 'weights_preserved_text_runtime' ||
-    (jangCfg && !jangCaps && configDeclaresMedia(parsedConfig))
-  ) {
-    return {
-      ...detected,
-      isMultimodal: false,
-      forceTextOnly: true,
-    }
-  }
-  return detected
 }
 
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
@@ -1307,11 +1075,9 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             }
             // JANG model detection: read jang_config.json for VLM
             const jangConfigPath = join(modelPath, 'jang_config.json')
-            let jangCfgForMediaPolicy: any | undefined
             if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
-              jangCfgForMediaPolicy = jangCfg
               detected = applyJangCapabilities(detected, jangCfg)
               const nativeMtp = detectNativeMtpCapability(parsed, jangCfg, modelPath)
               if (nativeMtp) {
@@ -1342,9 +1108,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           } else if (configDeclaresMedia(parsed)) {
             detected.isMultimodal = true
           }
-          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed, jangCfgForMediaPolicy, modelPath)
           detected = applyConfigMetadataOverrides(detected, parsed)
-          detected = applyIndexedWeightCapabilityHints(detected, parsed, modelPath)
           return detected
         }
       }
@@ -1356,8 +1120,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
       if (configDeclaresMedia(parsed)) {
         fallback.isMultimodal = true
       }
-      const withHints = applyIndexedWeightCapabilityHints(fallback, parsed, modelPath)
-      return withHints
+      return fallback
     }
   } catch (_) {
     console.log(`[MODEL-CONFIG] Error reading or parsing config.json at ${modelPath}`)

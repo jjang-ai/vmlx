@@ -101,11 +101,8 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["111"]["release_clearance"] == (
         "mapped_to_mistral_small4_vlm_wrapper_detection_guard"
     )
-    assert audit["issues"]["116"]["focused_source_slice"] in {"open", "pass"}
-    assert isinstance(
-        audit["issues"]["116"]["checks"]["reasoning_template_contract_passes"],
-        bool,
-    )
+    assert audit["issues"]["116"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["116"]["checks"]["reasoning_template_contract_passes"] is True
     assert audit["issues"]["116"]["checks"]["explicit_thinking_off_request_wired"] is True
     assert audit["issues"]["116"]["checks"]["panel_thinking_off_control_present"] is True
     assert audit["issues"]["116"]["checks"]["packaged_renderer_thinking_controls_present"] is True
@@ -172,7 +169,7 @@ def test_public_app_issue_audit_uses_current_manifest_artifact():
         manifest.CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
     )
     assert str(gate.ISSUE179_RESPONSES_CANCEL_PROOF) == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
+        "build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"
     )
     assert str(gate.ISSUE179_RESPONSES_CANCEL_PREFLIGHT) == (
         manifest.CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT

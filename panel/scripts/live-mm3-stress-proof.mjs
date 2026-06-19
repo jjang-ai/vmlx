@@ -21,6 +21,7 @@ const stamp = startedAt.toISOString().replace(/[:.]/g, '-')
 const proofDir = path.resolve(process.env.VMLX_MM3_PROOF_DIR || path.join(repoDir, 'build', `live-mm3-stress-${stamp}`))
 const outJson = path.join(proofDir, 'mm3-stress-proof.json')
 const shotPath = path.join(proofDir, 'mm3-stress-final.png')
+const apiKey = process.env.VMLX_MM3_API_KEY || `vmlx-mm3-live-${stamp}`
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -152,6 +153,19 @@ function responseTextFromResponsesObject(obj) {
 function cacheTokensFromUsage(obj) {
   const details = obj?.usage?.prompt_tokens_details || obj?.usage?.input_tokens_details || {}
   return Number(details.cached_tokens || details.cache_read_input_tokens || 0)
+}
+
+function extractLaunchCommand(logLines) {
+  const lines = Array.isArray(logLines) ? logLines : []
+  return [...lines].reverse().find((line) => /\b(?:vmlx_engine\.cli|vmlx-engine)\b/.test(line) && /\bserve\b/.test(line)) || ''
+}
+
+function commandHasFlag(command, flag) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
+}
+
+function commandHasFlagValue(command, flag, value) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+${String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
 }
 
 function readJsonMaybe(file) {
@@ -387,13 +401,57 @@ function ollamaText(obj) {
   return String(obj?.message?.content || obj?.response || '')
 }
 
-async function postJson(url, body, timeoutMs = 240_000) {
+function authHeaders(mode = 'valid') {
+  if (!apiKey || mode === 'none') return {}
+  if (mode === 'wrong') return { Authorization: `Bearer wrong-${apiKey}` }
+  return { Authorization: `Bearer ${apiKey}` }
+}
+
+async function fetchJsonStatus(url, mode = 'valid', timeoutMs = 20_000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, {
+      headers: authHeaders(mode),
+      signal: controller.signal,
+    })
+    const text = await res.text()
+    let json
+    try { json = text ? JSON.parse(text) : null } catch { json = { raw: text } }
+    return { ok: res.ok, status: res.status, json, raw: text.slice(0, 2000) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function runApiAuthMatrix(baseUrl, servedModel) {
+  const missing = await fetchJsonStatus(`${baseUrl}/v1/models`, 'none')
+  const wrong = await fetchJsonStatus(`${baseUrl}/v1/models`, 'wrong')
+  const correct = await fetchJsonStatus(`${baseUrl}/v1/models`, 'valid')
+  const chatCorrect = await postJson(`${baseUrl}/v1/chat/completions`, {
+    model: servedModel,
+    messages: [{ role: 'user', content: 'Auth matrix check: reply exactly AUTH_OK.' }],
+    max_tokens: 40,
+    temperature: 0,
+    enable_thinking: false,
+  })
+  return {
+    apiKeyConfigured: Boolean(apiKey),
+    missing,
+    wrong,
+    correct,
+    chatCorrect,
+    source: 'direct-session-port',
+  }
+}
+
+async function postJson(url, body, timeoutMs = 240_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(mode) },
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -410,18 +468,18 @@ async function postJson(url, body, timeoutMs = 240_000) {
   }
 }
 
-async function getJson(url, timeoutMs = 10_000) {
+async function getJson(url, timeoutMs = 10_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { signal: controller.signal })
+    const res = await fetch(url, { headers: authHeaders(mode), signal: controller.signal })
     return await res.json()
   } finally {
     clearTimeout(timer)
   }
 }
 
-async function streamSse(url, body, kind, timeoutMs = 300_000) {
+async function streamSse(url, body, kind, timeoutMs = 300_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const events = []
@@ -434,7 +492,7 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(mode) },
       body: JSON.stringify({ ...body, stream: true }),
       signal: controller.signal,
     })
@@ -740,6 +798,7 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir) {
 function deriveVerdict(result) {
   const failures = []
   const logs = (result.sessionLogsEnd || []).join('\n')
+  const launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsStart || result.sessionLogsEnd || [])
   for (const [label, regex] of [
     ['M3 autodetect log missing', /MiniMax-M3 AUTODETECTED/i],
     ['paged cache off log missing', /paged_cache=OFF/i],
@@ -751,6 +810,19 @@ function deriveVerdict(result) {
   ]) {
     if (!regex.test(logs)) failures.push(label)
   }
+  if (!launchCommand) failures.push('MM3 stress launch command missing from UI logs')
+  if (launchCommand && !commandHasFlag(launchCommand, '--enable-disk-cache')) failures.push('MM3 stress launch argv missing --enable-disk-cache')
+  if (launchCommand && commandHasFlag(launchCommand, '--disable-prefix-cache')) failures.push('MM3 stress launch argv incorrectly disabled prefix cache')
+  if (launchCommand && commandHasFlag(launchCommand, '--use-paged-cache')) failures.push('MM3 stress launch argv incorrectly enabled generic paged KV cache')
+  if (launchCommand && commandHasFlag(launchCommand, '--enable-block-disk-cache')) failures.push('MM3 stress launch argv incorrectly enabled generic block disk cache')
+  if (launchCommand && commandHasFlag(launchCommand, '--kv-cache-quantization')) failures.push('MM3 stress launch argv incorrectly passed generic --kv-cache-quantization')
+  if (launchCommand && commandHasFlag(launchCommand, '--enable-jit')) failures.push('MM3 stress launch argv incorrectly passed --enable-jit')
+  if (launchCommand && commandHasFlag(launchCommand, '--is-mllm')) failures.push('MM3 stress launch argv incorrectly passed generic --is-mllm')
+  if (launchCommand && !commandHasFlagValue(launchCommand, '--tool-call-parser', 'minimax_m3')) failures.push('MM3 stress launch argv missing --tool-call-parser minimax_m3')
+  if (launchCommand && !commandHasFlagValue(launchCommand, '--reasoning-parser', 'minimax_m3')) failures.push('MM3 stress launch argv missing --reasoning-parser minimax_m3')
+  if (launchCommand && !commandHasFlag(launchCommand, '--enable-auto-tool-choice')) failures.push('MM3 stress launch argv missing --enable-auto-tool-choice')
+  if (launchCommand && !commandHasFlagValue(launchCommand, '--timeout', '900')) failures.push('MM3 stress launch argv missing --timeout 900 long-generation default')
+  if (launchCommand && commandHasFlag(launchCommand, '--max-tokens')) failures.push('MM3 stress launch argv incorrectly forced --max-tokens; default must remain model-owned')
   const turns = result.ui?.multiturn10?.turns || []
   if (turns.length !== 10) failures.push(`10-turn UI count mismatch: ${turns.length}`)
   if (turns.some((t) => t.sendError)) failures.push('UI send error')
@@ -871,6 +943,19 @@ function deriveVerdict(result) {
   if (result.api?.ollamaGenerate?.ok && !hasExactMarker(result.api.ollamaGenerate.text || '', 'OLLAMA_GENERATE_OK')) failures.push('Ollama generate missing exact marker OLLAMA_GENERATE_OK')
   const apiToolArgs = JSON.stringify(result.api?.chatTool?.message?.tool_calls || [])
   if (result.api?.chatTool?.hasToolCalls && !hasExactMarker(apiToolArgs, 'API_TOOL_OK')) failures.push('API Chat tool arguments missing API_TOOL_OK')
+  const auth = result.apiAuth || {}
+  if (!auth.apiKeyConfigured) failures.push('auth API key was not configured in stress session')
+  if (auth.missing?.status !== 401) failures.push(`auth missing request did not return 401: ${auth.missing?.status}`)
+  if (auth.wrong?.status !== 401) failures.push(`auth wrong request did not return 401: ${auth.wrong?.status}`)
+  if (auth.correct?.status !== 200) failures.push(`auth correct request did not return 200: ${auth.correct?.status}`)
+  if (auth.chatCorrect?.status !== 200 || !hasExactMarker(auth.chatCorrect?.json?.choices?.[0]?.message?.content || '', 'AUTH_OK')) failures.push('auth correct chat request failed exact AUTH_OK')
+  const gatewayAuth = result.gatewayAuth || {}
+  if (gatewayAuth.error) failures.push(`gateway auth matrix errored: ${gatewayAuth.error}`)
+  if (gatewayAuth.status?.running && !gatewayAuth.skipped) {
+    if (gatewayAuth.missing?.status !== 401) failures.push(`gateway auth missing request did not return 401: ${gatewayAuth.missing?.status}`)
+    if (gatewayAuth.wrong?.status !== 401) failures.push(`gateway auth wrong request did not return 401: ${gatewayAuth.wrong?.status}`)
+    if (gatewayAuth.correct?.status !== 200) failures.push(`gateway auth correct request did not return 200: ${gatewayAuth.correct?.status}`)
+  }
   for (const [name, row] of Object.entries(result.streaming || {})) {
     if (!row?.ok) failures.push(`stream ${name} HTTP failed`)
     if (row?.textScore?.empty && !row?.hasToolCallSignal) failures.push(`stream ${name} reconstructed empty content/tool signal`)
@@ -946,11 +1031,12 @@ async function main() {
     await page.waitForLoadState('domcontentloaded').catch(() => {})
     await waitForWindowApi(page)
 
-    const sessionResult = await page.evaluate(async ({ modelPath, port }) => {
+    const sessionResult = await page.evaluate(async ({ modelPath, port, apiKey }) => {
       await window.api.chat.clearAllLocks().catch(() => null)
       const config = {
         host: '127.0.0.1',
         port,
+        apiKey: apiKey,
         continuousBatching: true,
         maxNumSeqs: 1,
         prefillBatchSize: 512,
@@ -958,7 +1044,10 @@ async function main() {
         completionBatchSize: 512,
         cacheMemoryPercent: 15,
         timeout: 300,
-        maxTokens: 512,
+        // Keep the server startup default model-owned. Individual stress turns
+        // set maxTokens as chat/API overrides so this harness does not prove a
+        // product default that users would inherit.
+        maxTokens: 0,
       }
       const created = await window.api.sessions.create(modelPath, config)
       if (!created?.success || !created?.session?.id) {
@@ -970,7 +1059,7 @@ async function main() {
       }
       const session = await window.api.sessions.get(created.session.id)
       return { created, started, session }
-    }, { modelPath, port: sessionPort })
+    }, { modelPath, port: sessionPort, apiKey })
     result.sessionCreateResult = sessionResult.created
     result.sessionStartResult = sessionResult.started
     const session = sessionResult.session
@@ -986,6 +1075,7 @@ async function main() {
     result.sessionConfigAfterStart.id = session.id
     result.generationDefaults = await captureGenerationDefaults(page, modelPath, result.sessionConfigAfterStart)
     result.sessionLogsStart = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: session.id })
+    result.launchCommand = extractLaunchCommand(result.sessionLogsStart)
     result.cacheStart = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint, id: session.id }).catch((error) => ({ error: String(error?.message || error) }))
     writeResult(result)
 
@@ -1136,6 +1226,28 @@ async function main() {
     const models = await getJson(`http://127.0.0.1:${sessionPort}/v1/models`).catch((error) => ({ error: String(error?.message || error) }))
     const servedModel = models?.data?.[0]?.id || result.sessionAfterStart?.modelName || path.basename(modelPath)
     result.api = { models, servedModel }
+    result.apiAuth = await runApiAuthMatrix(`http://127.0.0.1:${sessionPort}`, servedModel)
+    result.gatewayAuth = await page.evaluate(async ({ servedModel, apiKey }) => {
+      const status = await window.api.gateway?.getStatus?.().catch((error) => ({ error: String(error?.message || error) }))
+      if (!status?.running || !status?.port) return { status, skipped: 'gateway not running for this stress harness' }
+      const base = `http://${status.host || '127.0.0.1'}:${status.port}`
+      const call = async (mode) => {
+        const headers = mode === 'none'
+          ? {}
+          : { Authorization: `Bearer ${mode === 'wrong' ? `wrong-${apiKey}` : apiKey}` }
+        const res = await fetch(`${base}/v1/models`, { headers })
+        const text = await res.text()
+        return { ok: res.ok, status: res.status, raw: text.slice(0, 1000) }
+      }
+      return {
+        status,
+        servedModel,
+        missing: await call('none'),
+        wrong: await call('wrong'),
+        correct: await call('valid'),
+      }
+    }, { servedModel, apiKey }).catch((error) => ({ error: String(error?.message || error) }))
+    writeResult(result)
 
     const chatResp = await postJson(`http://127.0.0.1:${sessionPort}/v1/chat/completions`, {
       model: servedModel,
@@ -1307,6 +1419,7 @@ async function main() {
     result.api.ollamaGenerate = { ...ollamaGenerateResp, text: ollamaGenerateVisible, textScore: scoreText(ollamaGenerateVisible), cachedTokens: cacheTokensFromUsage(ollamaGenerateResp.json) }
     result.cacheEnd = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint, id: session.id }).catch((error) => ({ error: String(error?.message || error) }))
     result.sessionLogsEnd = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: session.id })
+    result.launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsEnd)
     result.appLogTail = appLog.slice(-160)
     writeResult(result)
 

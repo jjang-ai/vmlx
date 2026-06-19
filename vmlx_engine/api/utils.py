@@ -133,15 +133,6 @@ def resolve_to_local_path(model_name: str) -> str:
     except Exception:
         pass
 
-    # Local developer/model cache used by vMLX proof and release lanes:
-    # ~/models/<org>/<name>/.
-    try:
-        local_models_path = Path.home() / "models" / model_name
-        if local_models_path.is_dir() and (local_models_path / "config.json").is_file():
-            return str(local_models_path)
-    except Exception:
-        pass
-
     # HuggingFace cache (no network, no download)
     try:
         from huggingface_hub import scan_cache_dir
@@ -477,30 +468,40 @@ def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bo
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
-    # MiniMax-M3 VL (additive, gated): when VMLX_M3_VL is set, route M3 through
-    # the text path (is_mllm=False) so it runs on the SingleBatchGenerator VL
-    # path (model handles pixel_values internally) instead of the mlx_vlm MLLM
-    # generator, which is the WRONG runtime for M3. When VMLX_M3_VL is unset this
-    # branch is skipped and detection is unchanged.
+    # MiniMax-M3 VL: always route through the text engine. The generic mlx_vlm
+    # loader has no minimax_m3_vl runtime; vMLX's source-owned M3 model handles
+    # MSA cache and (when VMLX_M3_VL is set by CLI/panel) image preprocessing in
+    # SingleBatchGenerator. Never let force_mllm push this family into mlx_vlm.
     try:
         import os as _os_m3vl
-        if _os_m3vl.environ.get("VMLX_M3_VL", "").strip().lower() in {
-            "1", "true", "on", "yes",
-        }:
-            import json as _json_m3vl
-            from pathlib import Path as _Path_m3vl
-            _cfg_p = _Path_m3vl(local_path) / "config.json"
-            if _cfg_p.exists():
-                _cfg = _json_m3vl.loads(_cfg_p.read_text())
-                _top = str(_cfg.get("model_type") or "")
-                _txt = str((_cfg.get("text_config") or {}).get("model_type") or "")
-                if "minimax_m3" in _top or "minimax_m3" in _txt:
-                    _logger.info(
-                        "is_mllm_model(%s): tier=m3_vl_text_route result=False "
-                        "(VMLX_M3_VL: image handled by SingleBatchGenerator path)",
+        import json as _json_m3vl
+        from pathlib import Path as _Path_m3vl
+        _cfg_p = _Path_m3vl(local_path) / "config.json"
+        if _cfg_p.exists():
+            _cfg = _json_m3vl.loads(_cfg_p.read_text())
+            _top = str(_cfg.get("model_type") or "")
+            _txt = str((_cfg.get("text_config") or {}).get("model_type") or "")
+            if "minimax_m3" in _top or "minimax_m3" in _txt:
+                _m3_vl_env = _os_m3vl.environ.get("VMLX_M3_VL", "").strip().lower() in {
+                    "1", "true", "on", "yes",
+                }
+                if force_mllm:
+                    _logger.warning(
+                        "is_mllm_model(%s): MiniMax-M3 overrides force_mllm — "
+                        "mlx_vlm has no minimax_m3_vl runtime; routing through "
+                        "the source-owned text MSA runtime",
                         model_name,
                     )
-                    return False
+                else:
+                    _logger.info(
+                        "is_mllm_model(%s): tier=m3_vl_text_route result=False "
+                        "(%s)",
+                        model_name,
+                        "VMLX_M3_VL: image handled by SingleBatchGenerator path"
+                        if _m3_vl_env
+                        else "text route avoids unsupported mlx_vlm minimax_m3_vl",
+                    )
+                return False
     except Exception:
         pass
 

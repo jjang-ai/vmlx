@@ -583,7 +583,6 @@ declare global {
           remoteApiKey?: string;
           remoteModel: string;
           remoteOrganization?: string;
-          capabilityModelPath?: string;
         }) => Promise<any>;
         start: (
           sessionId: string,

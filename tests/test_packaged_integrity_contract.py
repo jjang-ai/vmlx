@@ -14,7 +14,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json"
+        "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
     )
 
 
@@ -481,34 +481,8 @@ def test_packaged_integrity_checks_packaged_python_has_no_pycache(monkeypatch, t
 
 def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
     assert "models/step3p7_mlx_vlm.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "models/gemma4_unified_register.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/__init__.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/config.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "models/gemma4_unified/gemma4_unified.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert (
-        "models/gemma4_unified/processing_gemma4_unified.py"
-        in runner.STAGED_APP_ENGINE_HASH_FILES
-    )
     assert "patches/mlx_vlm_mtp/qwen35_vl.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "cache_record_validator.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "native_mtp.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/__init__.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/batch_generator.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/cache_rollback.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/deepseek_v4_model.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "patches/mlx_lm_mtp/qwen35_model.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "tq_disk_store.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "utils/hybrid_tq_cache.py" in runner.STAGED_APP_ENGINE_HASH_FILES
     assert "utils/mlx_vlm_compat.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "runtime_patches/deepseek_v4_register.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "runtime_patches/gemma4_vision.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert "runtime_patches/kimi_k25_mla.py" in runner.STAGED_APP_ENGINE_HASH_FILES
-    assert _expected_tool_parser_hash_files().issubset(
-        set(runner.STAGED_APP_ENGINE_HASH_FILES)
-    )
-    assert _expected_reasoning_parser_hash_files().issubset(
-        set(runner.STAGED_APP_ENGINE_HASH_FILES)
-    )
 
     source = tmp_path / "vmlx_engine/server.py"
     staged = (
@@ -526,20 +500,6 @@ def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
     staged.write_text("current\n", encoding="utf-8")
 
     assert runner._check_staged_app_engine_hash_parity(tmp_path) is True
-
-
-def _expected_tool_parser_hash_files() -> set[str]:
-    return {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/tool_parsers").glob("*.py")
-    }
-
-
-def _expected_reasoning_parser_hash_files() -> set[str]:
-    return {
-        str(path.relative_to("vmlx_engine"))
-        for path in Path("vmlx_engine/reasoning").glob("*.py")
-    }
 
 
 def test_staged_app_engine_hash_parity_rejects_stale_packaged_source_mirror(

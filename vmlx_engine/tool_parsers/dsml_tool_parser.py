@@ -174,25 +174,18 @@ class DSMLToolParser(ToolParser):
     def _coerce_plain_param_value(
         self, raw: str, prop_schema: dict[str, Any] | None
     ) -> Any:
-        value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE)
+        value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE).strip()
         if not isinstance(prop_schema, dict):
-            return value.strip()
+            return value
         schema_type = prop_schema.get("type")
         if isinstance(schema_type, list):
             schema_type = next((t for t in schema_type if t != "null"), None)
         if schema_type in {"integer", "number", "boolean", "array", "object"}:
-            value = value.strip()
             try:
                 return json.loads(value)
             except Exception:
                 return value
         return value
-
-    @staticmethod
-    def _plain_param_value_present(value: Any) -> bool:
-        if isinstance(value, str):
-            return value.strip() != ""
-        return value is not None
 
     def _parse_plain_params(
         self, body: str, schema: dict[str, Any] | None
@@ -206,28 +199,28 @@ class DSMLToolParser(ToolParser):
             if name not in props:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
-            if self._plain_param_value_present(value):
+            if value != "":
                 args[name] = value
         for m in self._SHORT_DSML_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name not in props or name in args:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
-            if self._plain_param_value_present(value):
+            if value != "":
                 args[name] = value
         for m in self._SCHEMA_KEYED_DSML_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name in {"name", "string", "value"} or name not in props or name in args:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
-            if self._plain_param_value_present(value):
+            if value != "":
                 args[name] = value
         for m in self._SELF_CLOSING_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name not in props or name in args or raw in {"true", "false"}:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
-            if self._plain_param_value_present(value):
+            if value != "":
                 args[name] = value
         return args
 
@@ -428,8 +421,8 @@ class DSMLToolParser(ToolParser):
         for pm in self._HTMLISH_PARAM_RE.finditer(body):
             p_name, raw = pm.group(1), pm.group(2)
             if p_name in props:
-                value = self._coerce_plain_param_value(raw, props.get(p_name))
-                if self._plain_param_value_present(value):
+                value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE).strip()
+                if value:
                     args[p_name] = value
         if not args and len(props) == 1 and ">.<" in text:
             args[next(iter(props))] = "."
@@ -673,8 +666,6 @@ class DSMLToolParser(ToolParser):
                 plain_args = self._parse_plain_params(body, schema)
                 if plain_args and self._required_satisfied(plain_args, schema):
                     args.update(plain_args)
-            if schema and not self._required_satisfied(args, schema):
-                continue
             tool_calls.append(
                 self._make_tool_call(
                     name=name,

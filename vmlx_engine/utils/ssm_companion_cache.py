@@ -536,23 +536,14 @@ class SSMCompanionCache:
             reverse=True,
         )
         if not candidate_lengths:
-            if self._disk is not None and hasattr(self._disk, "candidate_lengths"):
-                try:
-                    candidate_lengths = list(
-                        self._disk.candidate_lengths(int(max_len))
-                    )
-                except Exception:
-                    candidate_lengths = []
-            if not candidate_lengths:
-                self.last_prefix_lookup = {
-                    "max_len": int(max_len),
-                    "candidate_lengths": [],
-                    "matched": False,
-                    "reason": "no_candidate_lengths",
-                    "store_size": len(self._store),
-                    "disk_enabled": self._disk is not None,
-                }
-                return None
+            self.last_prefix_lookup = {
+                "max_len": int(max_len),
+                "candidate_lengths": [],
+                "matched": False,
+                "reason": "no_candidate_lengths",
+                "store_size": len(self._store),
+            }
+            return None
         # Compute the prefix_hash for each candidate length against the
         # query's own tokens and compare. First match wins.
         for n in candidate_lengths:
@@ -561,13 +552,7 @@ class SSMCompanionCache:
             )
             stored_key = self._length_index.get(n, {}).get(query_ph)
             if stored_key is None:
-                if self._disk is None:
-                    continue
-                stored_key = self._key(
-                    token_ids,
-                    n,
-                    cache_extra_keys=cache_extra_keys,
-                )
+                continue
             # Delegate to fetch() so deep-copy discipline is uniform.
             result = self.fetch(token_ids, n, cache_extra_keys=cache_extra_keys)
             if result is None:

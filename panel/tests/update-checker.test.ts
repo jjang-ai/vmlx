@@ -10,6 +10,7 @@ import {
   compareVersions as compareVersionsFromSource,
   isValidUpdateUrl as isValidUpdateUrlFromSource,
   selectDownloadForMacOS,
+  selectHighestRelease,
 } from '../src/main/update-manifest'
 
 // Mirror of compareVersions from src/main/update-checker.ts
@@ -204,5 +205,23 @@ describe('native macOS update asset selection', () => {
   it('uses the source version comparison and URL validation helpers', () => {
     expect(compareVersionsFromSource('1.5.48', '1.5.49')).toBe(true)
     expect(isValidUpdateUrlFromSource(manifest.downloads.tahoe.url)).toBe(true)
+  })
+})
+
+describe('multi-source update manifests', () => {
+  it('selects raw GitHub when mlx.studio is stale so users are not pinned to the old website origin', () => {
+    const staleSite = {
+      version: '1.5.58',
+      url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.58/vMLX-1.5.58-sequoia-arm64.dmg',
+      sha256: '5'.repeat(64),
+    }
+    const rawGitHub = {
+      version: '1.5.65',
+      url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.65/vMLX-1.5.65-sequoia-arm64.dmg',
+      sha256: '6'.repeat(64),
+    }
+
+    expect(selectHighestRelease([staleSite, rawGitHub])).toEqual(rawGitHub)
+    expect(selectHighestRelease([rawGitHub, staleSite])).toEqual(rawGitHub)
   })
 })

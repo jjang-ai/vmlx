@@ -769,38 +769,6 @@ def test_disk_store_round_trips_across_cache_instances(tmp_path):
     assert cache3.fetch(tokens, 4) is None
 
 
-def test_disk_store_restores_longest_prefix_after_cache_recreation(tmp_path):
-    """Restarted hybrid schedulers must discover SSM prefix checkpoints on disk."""
-    from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
-
-    tokens = list(range(1, 129))
-    disk1 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
-    cache1 = SSMCompanionCache(
-        max_entries=2,
-        model_key="qwen36-vl|mxfp4|cache-schema-a",
-        disk_store=disk1,
-    )
-    cache1.store(tokens, 64, [_FakeSSMLayer(6.0)], is_complete=True)
-
-    disk2 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
-    cache2 = SSMCompanionCache(
-        max_entries=2,
-        model_key="qwen36-vl|mxfp4|cache-schema-a",
-        disk_store=disk2,
-    )
-
-    hit = cache2.fetch_longest_prefix(tokens, 96)
-
-    assert hit is not None
-    checkpoint_len, states, is_complete = hit
-    assert checkpoint_len == 64
-    assert is_complete is True
-    assert states[0].cache[0].tolist() == [6.0, 6.0, 6.0, 6.0]
-    assert cache2.last_prefix_lookup["matched"] is True
-    assert 64 in cache2.last_prefix_lookup["candidate_lengths"]
-    assert disk2.stats()["hits"] == 1
-
-
 def test_disk_store_stats_include_tokens_and_io_counters(tmp_path):
     """Hybrid SSM L2 telemetry must expose persistent token and hit counts."""
     from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore

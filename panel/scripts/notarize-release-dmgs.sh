@@ -14,16 +14,10 @@ VERSION="$(node -p "require('./package.json').version")"
 DIST_DIR="${VMLINUX_RELEASE_OUTPUT_DIR:-release}"
 NOTARY_PROFILE="${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-${VMLX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}}"
 NOTARY_KEYCHAIN="${VMLINUX_NOTARY_KEYCHAIN:-${VMLX_NOTARY_KEYCHAIN:-}}"
-NOTARY_SUBMIT_TIMEOUT="${VMLINUX_NOTARY_SUBMIT_TIMEOUT:-${VMLX_NOTARY_SUBMIT_TIMEOUT:-2h}}"
-NOTARY_S3_ACCELERATION="${VMLINUX_NOTARY_S3_ACCELERATION:-${VMLX_NOTARY_S3_ACCELERATION:-1}}"
 
 notarytool_args=(--keychain-profile "$NOTARY_PROFILE")
 if [[ -n "$NOTARY_KEYCHAIN" ]]; then
   notarytool_args=(--keychain "$NOTARY_KEYCHAIN" "${notarytool_args[@]}")
-fi
-notary_submit_args=("${notarytool_args[@]}" --wait --timeout "$NOTARY_SUBMIT_TIMEOUT")
-if [[ "$NOTARY_S3_ACCELERATION" = "0" || "$NOTARY_S3_ACCELERATION" = "false" ]]; then
-  notary_submit_args+=(--no-s3-acceleration)
 fi
 
 require_developer_id_signature() {
@@ -94,7 +88,8 @@ notarize_one() {
   codesign --verify --verbose=2 "$dmg"
   require_developer_id_signature "$dmg"
   xcrun notarytool submit "$dmg" \
-    "${notary_submit_args[@]}" \
+    "${notarytool_args[@]}" \
+    --wait \
     --output-format json
   xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"

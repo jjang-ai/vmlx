@@ -14,16 +14,27 @@ _DISABLE_ENV_NAMES = ('VMLINUX_M3_AFFINE2_SWITCH', 'VMLX_M3_AFFINE2_SWITCH')
 
 
 def _disabled() -> bool:
-    # The affine-2 decode fast path currently produces INCORRECT math for the
-    # MiniMax-M3 2-bit/group128 routed experts (degenerate repetition like
-    # 'dudas dudas...'), while the standard SwitchGLU path is correct. Until the
-    # kernel is fixed, the fast path is DISABLED BY DEFAULT (correctness over the
-    # ~22-25 tok/s speedup). Set VMLX_M3_AFFINE2_SWITCH=1 (or true/on/yes) to
-    # opt back in for kernel-correctness testing.
+    # DEFAULT DISABLED (2026-06-15) — NOT shippable default-on yet. The kernel is
+    # numerically EXACT (group128/bits2 max_abs 1.6e-7; deterministic per call) and
+    # ~2x faster (9.9->20.8 tok/s), and the async cache-sync fix in
+    # mllm_batch_generator.py (_mllm_decode_sync_eval_enabled/_submit_decode_token_eval)
+    # made SHORT generations coherent (dev-app tool+recall 4/4 PASS).
+    # BUT longer/thinking generations still DEGENERATE to null-byte garbage with the
+    # fast path ON (proven live: thinking=auto affine2-ON degenerates on a NON-
+    # adversarial prompt, while affine2-OFF produces coherent long reasoning + correct
+    # answer). So the decode-token sync is insufficient for long gen — there is a
+    # residual async/materialization hazard not yet covered. Keep OFF until that is
+    # fixed (or use EAGLE3 spec-decode, which never touches the MoE numerics).
+    # Opt in for investigation with VMLX_M3_AFFINE2_SWITCH=1.
     for name in _DISABLE_ENV_NAMES:
         value = os.environ.get(name)
         if value is not None:
             return value.lower() not in {'1', 'true', 'on', 'yes'}
+    # DEFAULT-OFF: corrupts production long/thinking gen via a deep paged-cache/
+    # prefix-reconstruction interaction (NOT the decode lookahead — forced sync
+    # did not fix it; affine2-OFF is coherent). Kernel is exact+deterministic and
+    # coherent in the simple runtime path, but unshippable through the engine's
+    # paged-cache path. Use EAGLE3 spec-decode for 2x instead (orthogonal to MoE).
     return True
 
 
@@ -359,6 +370,11 @@ def affine2_switchglu_decode(switch: Any, x: mx.array, indices: mx.array, opt: i
         up = up_kernel(x_rows, switch.up_proj, idx)
     act = switch.activation(up, gate)
     down = down_kernel(act, switch.down_proj, idx)
+    # NOTE: bf16-casting this output does NOT fix long-context incoherence — the
+    # kernel differs from mlx gather_qmm by ~bf16-rounding (~0.003) regardless of
+    # output dtype, and M3's sparse Lightning Indexer (>2048 tok) flips its
+    # top-16 block selection on that. Proven 2026-06-15 (ab_longctx_affine2.py).
+    # Fix the long-context regime via a context-length gate or EAGLE3, not here.
     return down.reshape(*x.shape[:-1], top_k, switch.down_proj.output_dims)
 
 

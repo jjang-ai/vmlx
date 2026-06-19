@@ -23,8 +23,6 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - API docs boundary for repair/validation vs hard constrained decoding.
 - Responses SSE function-call argument, output-index, and required-arg fail-closed
   contracts.
-- Qwen/Qwen-coder XML-function parser required-argument fail-closed contracts.
-- Panel Qwen/Gemma reasoning request-body controls for Responses and Chat.
 """
 
 from __future__ import annotations
@@ -40,15 +38,12 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path(
-    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
-)
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/api/models.py",
     "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
-    "vmlx_engine/tool_parsers/qwen_tool_parser.py",
     "vmlx_engine/api/anthropic_adapter.py",
     "vmlx_engine/api/ollama_adapter.py",
     "docs/guides/server.md",
@@ -65,14 +60,12 @@ SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_dsml_tool_parser.py",
-    "tests/test_tool_parser_required_args_fail_closed.py",
     "tests/test_responses_history.py",
     "tests/test_tool_format.py",
     "panel/src/main/api-gateway.ts",
     "panel/src/main/ipc/chat.ts",
     "panel/src/renderer/src/components/chat/ToolCallStatus.tsx",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
-    "panel/tests/request-builder.test.ts",
     "panel/tests/tool-status-responsiveness.test.ts",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
 )
@@ -120,10 +113,6 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_streaming_responses_reasoning_tool_call_keeps_arguments",
     "test_streaming_responses_tool_call_uses_next_output_index_without_text",
     "test_streaming_responses_required_empty_xml_tool_call_is_rejected",
-    "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments",
-    "test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths",
-    "test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments",
-    "test_required_arguments_missing_fail_closed_but_valid_calls_survive",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -132,7 +121,6 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens",
     "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens",
     "test_responses_streaming_stores_history_for_previous_response_id",
-    "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup",
     "test_responses_streaming_reasoning_only_stores_placeholder_and_marker",
     "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor",
     "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
@@ -160,13 +148,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "allows gateway startup on ports used only by stopped or remote saved sessions",
     "auto-switches to a standby model by waking it before direct OpenAI streaming",
     "passes Responses function-call argument SSE through unchanged",
-    "passes Responses argument SSE with reasoning and empty final item arguments",
     "returns backend-unavailable for stale Responses session ports",
     "recovers Responses function-call arguments from argument delta and done events",
-    "forwards Qwen-family reasoning controls from detected family when parser state is stale",
-    "forwards Gemma-family reasoning controls from detected family when parser state is stale",
-    "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale",
-    "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -285,7 +268,6 @@ COMMANDS: dict[str, list[str]] = {
         "-k",
         (
             "responses_streaming_stores_history_for_previous_response_id "
-            "or responses_streaming_tool_choice_none_strips_invalid_tool_markup "
             "or responses_streaming_reasoning_only_stores_placeholder_and_marker "
             "or chained_response_helper_emits_warning_for_reasoning_only_predecessor"
         ),
@@ -340,21 +322,8 @@ COMMANDS: dict[str, list[str]] = {
             "streaming_responses_tool_call_arguments_survive_buffering "
             "or streaming_responses_reasoning_tool_call_keeps_arguments "
             "or streaming_responses_tool_call_uses_next_output_index_without_text "
-            "or streaming_responses_required_empty_xml_tool_call_is_rejected "
-            "or streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments "
-            "or tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths "
-            "or streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments"
+            "or streaming_responses_required_empty_xml_tool_call_is_rejected"
         ),
-    ],
-    "qwen_xml_required_args_parser_contracts": [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        "-vv",
-        "tests/test_tool_parser_required_args_fail_closed.py",
-        "-k",
-        "QwenToolParser or required_arguments_missing",
     ],
     "structured_guided_decoding_contracts": [
         sys.executable,
@@ -402,7 +371,6 @@ COMMANDS: dict[str, list[str]] = {
             "allows gateway startup on ports used only by stopped or remote saved sessions|"
             "auto-switches to a standby model by waking it before direct OpenAI streaming|"
             "passes Responses function-call argument SSE through unchanged|"
-            "passes Responses argument SSE with reasoning and empty final item arguments|"
             "returns backend-unavailable for stale Responses session ports"
         ),
     ],
@@ -419,25 +387,6 @@ COMMANDS: dict[str, list[str]] = {
         "verbose",
         "--testNamePattern",
         "recovers Responses function-call arguments from argument delta and done events",
-    ],
-    "panel_request_builder_contracts": [
-        "npm",
-        "--prefix",
-        "panel",
-        "exec",
-        "vitest",
-        "run",
-        "tests/request-builder.test.ts",
-        "--",
-        "--reporter",
-        "verbose",
-        "--testNamePattern",
-        (
-            "forwards Qwen-family reasoning controls from detected family when parser state is stale|"
-            "forwards Gemma-family reasoning controls from detected family when parser state is stale|"
-            "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale|"
-            "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
-        ),
     ],
 }
 
@@ -503,12 +452,10 @@ def build_artifact(root: Path) -> dict[str, Any]:
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
     responses_stream_tools_ok = commands["responses_streaming_tool_contracts"]["returncode"] == 0
-    qwen_required_args_ok = commands["qwen_xml_required_args_parser_contracts"]["returncode"] == 0
     structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
     structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     panel_tool_status_ok = commands["panel_tool_status_contracts"]["returncode"] == 0
-    panel_request_builder_ok = commands["panel_request_builder_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
@@ -635,11 +582,6 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor"
             not in missing_markers
         ),
-        "responses_no_tool_invalid_markup_cleanup": (
-            responses_history_ok
-            and "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup"
-            not in missing_markers
-        ),
         "responses_streaming_tool_call_arguments_and_indexes": (
             responses_stream_tools_ok
             and "test_streaming_responses_tool_call_arguments_survive_buffering"
@@ -649,13 +591,6 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_streaming_responses_tool_call_uses_next_output_index_without_text"
             not in missing_markers
             and "test_streaming_responses_required_empty_xml_tool_call_is_rejected"
-            not in missing_markers
-            and "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments"
-            not in missing_markers
-        ),
-        "qwen_xml_function_required_args_fail_closed": (
-            qwen_required_args_ok
-            and "test_required_arguments_missing_fail_closed_but_valid_calls_survive"
             not in missing_markers
         ),
         "cache_stats_reuse_skip_telemetry": (
@@ -685,11 +620,6 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "passes Responses function-call argument SSE through unchanged"
             not in missing_markers
         ),
-        "gateway_responses_reasoning_empty_final_arguments_streaming": (
-            panel_gateway_ok
-            and "passes Responses argument SSE with reasoning and empty final item arguments"
-            not in missing_markers
-        ),
         "gateway_stale_responses_port_rejection": (
             panel_gateway_ok
             and "returns backend-unavailable for stale Responses session ports"
@@ -698,17 +628,6 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_tool_status_responses_argument_recovery": (
             panel_tool_status_ok
             and "recovers Responses function-call arguments from argument delta and done events"
-            not in missing_markers
-        ),
-        "panel_qwen_gemma_reasoning_request_controls": (
-            panel_request_builder_ok
-            and "forwards Qwen-family reasoning controls from detected family when parser state is stale"
-            not in missing_markers
-            and "forwards Gemma-family reasoning controls from detected family when parser state is stale"
-            not in missing_markers
-            and "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale"
-            not in missing_markers
-            and "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
             not in missing_markers
         ),
         "dsv4_native_cache_status": (

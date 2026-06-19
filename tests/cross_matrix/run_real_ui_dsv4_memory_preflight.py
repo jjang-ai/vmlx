@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MODEL_PATH = Path("/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG")
+DEFAULT_MODEL_PATH = Path("/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K")
 DEFAULT_OUT = Path(
-    "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
+    "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
-DEFAULT_REQUIRED_AVAILABLE_GB: float | None = None
+DEFAULT_REQUIRED_AVAILABLE_GB = 120.0
 DEFAULT_REQUIRED_MODEL_MARGIN_GB = 40.0
 TOP_MEMORY_PROCESS_COUNT = 10
 HEAVY_PROCESS_PATTERNS = (
@@ -86,13 +86,6 @@ def model_size_gb(model_path: Path) -> float | None:
         if path.is_file():
             total += path.stat().st_size
     return round(total / (1024**3), 2)
-
-
-def default_required_available_gb(model_path: Path) -> float:
-    size_gb = model_size_gb(model_path)
-    if size_gb is None:
-        return 120.0
-    return round(size_gb + DEFAULT_REQUIRED_MODEL_MARGIN_GB, 2)
 
 
 def parse_top_memory_processes(text: str, limit: int = TOP_MEMORY_PROCESS_COUNT) -> list[dict[str, Any]]:
@@ -308,15 +301,10 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--required-available-gb", type=float, default=DEFAULT_REQUIRED_AVAILABLE_GB)
     args = parser.parse_args()
-    required_available_gb = (
-        args.required_available_gb
-        if args.required_available_gb is not None
-        else default_required_available_gb(args.model_path)
-    )
     payload = write_preflight(
         model_path=args.model_path,
         out_path=args.out,
-        required_available_gb=required_available_gb,
+        required_available_gb=args.required_available_gb,
     )
     print(
         json.dumps(

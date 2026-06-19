@@ -31,13 +31,8 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
-    CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT,
-    CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -641,7 +636,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                     "mode": "storage_boundary",
                     "bits": 4,
                     "group_size": 64,
-                    "applies_to": "full_attention_kv_only",
+                    "applies_to": "full_and_sliding_attention_kv",
                     "metadata_policy": "preserve_rotating_window_metadata",
                 },
                 "prefix": True,
@@ -1531,8 +1526,6 @@ def _write_expected_issue175_179_release_boundary_audit(root: Path) -> None:
                             "serve_cli_lora_scales": True,
                             "image_load_lora_signature_guard": True,
                             "focused_regression_test_present": True,
-                            "empty_lora_lists_noop_regression_test_present": True,
-                            "lora_scale_without_path_still_rejected": True,
                             "text_lora_flags_rejected": True,
                             "installed_app_lora_surface_proven": True,
                         },
@@ -2104,7 +2097,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                 },
                 "not_proven": [],
                 "local_reporter_prompt_reproduction": {
-                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json",
+                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json",
                     "exists": True,
                     "status": "pass",
                     "request_matches_reporter": True,
@@ -2123,7 +2116,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                     "clean": True,
                 },
                 "local_responses_cancel_probe": {
-                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json",
+                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json",
                     "exists": True,
                     "status": "pass",
                     "response_id_seen": True,
@@ -3564,17 +3557,6 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                 "preserved_modalities": ["vision", "audio"],
                 "unwired_modalities": ["vision", "audio"],
                 "multimodal_status": "weights_preserved_text_runtime",
-                "bundles": {
-                    "jang2l": {
-                        "status": "pass",
-                        "capabilities": {
-                            "modalities": ["text"],
-                            "multimodal_status": "weights_preserved_text_runtime",
-                            "preserved_modalities": ["vision", "audio"],
-                            "unwired_modalities": ["vision", "audio"],
-                        },
-                    }
-                },
             }
         )
         + "\n",
@@ -3595,151 +3577,6 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "api_sampler_non_top1_selection": True,
                 },
                 "unresolved_surfaces": {},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    restart_l2_path = root / CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
-    restart_l2_path.parent.mkdir(parents=True, exist_ok=True)
-    restart_l2_path.write_text(
-        json.dumps(
-            {
-                "results": [
-                    {
-                        "classification": {
-                            "status": "pass",
-                            "cache_status": "pass",
-                            "output_status": "pass",
-                            "checks": {
-                                "restart_l2_restore_observed": True,
-                                "second_cached_tokens_positive": True,
-                                "block_disk_hit_positive": True,
-                            },
-                        }
-                    }
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    responses_tools_path = root / CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
-    responses_tools_path.parent.mkdir(parents=True, exist_ok=True)
-    responses_tools_path.write_text(
-        json.dumps(
-            {
-                "status": "pass",
-                "proven": {
-                    "responses_endpoint_used": True,
-                    "responses_delta_streaming": True,
-                    "responses_previous_response_id_tool_followup": True,
-                    "cache": {
-                        "cache_hit_tokens": 4552,
-                        "l2_block_tokens_on_disk": 4960,
-                    },
-                },
-                "red": {"long_tool_loop": True},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    def _installed_mimo_cache_proof(model_name: str, final_text: str) -> dict:
-        return {
-            "status": "pass",
-            "uiLaunchMode": "installed-app",
-            "rendererWireApi": "responses",
-            "modelName": model_name,
-            "requestContract": {
-                "builtinToolsEnabled": True,
-                "wireApi": "responses",
-            },
-            "chat": {"finalVisibleText": final_text},
-            "server": {
-                "health": {
-                    "native_cache": {
-                        "schema": "mixed_swa_kv_v1",
-                        "cache_subtype": "mimo_v2_asymmetric_swa",
-                        "generic_turboquant_kv": {"enabled": False},
-                    },
-                    "cache": {
-                        "block_disk_cache": {
-                            "disk_writes": 60,
-                            "disk_hits": 321,
-                        },
-                        "scheduler_cache": {
-                            "cache_hits": 324,
-                            "tokens_saved": 10463,
-                        },
-                        "totals": {"l2_tokens_on_disk": 3732},
-                    },
-                }
-            },
-        }
-
-    jangtq2_tools_path = (
-        root / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
-    )
-    jangtq2_tools_path.parent.mkdir(parents=True, exist_ok=True)
-    jangtq2_tools_path.write_text(
-        json.dumps(
-            _installed_mimo_cache_proof(
-                "MiMo-V2.5-JANGTQ_2",
-                "MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
-            )
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    jang2l_tools_path = (
-        root / CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
-    )
-    jang2l_tools_path.parent.mkdir(parents=True, exist_ok=True)
-    jang2l_tools_path.write_text(
-        json.dumps(
-            _installed_mimo_cache_proof(
-                "MiMo-V2.5-JANG_2L",
-                "MIMO_DETERMINISTIC_TWO second UI turn.",
-            )
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    media_l2_path = root / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
-    media_l2_path.parent.mkdir(parents=True, exist_ok=True)
-    media_l2_path.write_text(
-        json.dumps(
-            {
-                "status": "pass",
-                "uiLaunchMode": "installed-app",
-                "rendererWireApi": "responses",
-                "modelName": "MiMo-V2.5-JANGTQ_2",
-                "requestedMedia": True,
-                "requestContract": {"checkMedia": True},
-                "chat": {
-                    "turns": [
-                        {
-                            "role": "user",
-                            "content": '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]',
-                        },
-                        {"role": "assistant", "content": "Blue."},
-                    ]
-                },
-                "server": {
-                    "health": {
-                        "model_type": "mllm",
-                        "native_cache": {
-                            "schema": "mixed_swa_kv_v1",
-                            "cache_subtype": "mimo_v2_asymmetric_swa",
-                        },
-                        "cache": {
-                            "block_disk_cache": {"disk_writes": 2},
-                            "totals": {"l2_tokens_on_disk": 61},
-                        },
-                    }
-                },
             }
         )
         + "\n",
@@ -4100,11 +3937,11 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 tool probe remains diagnostic" in joined
@@ -4195,7 +4032,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 bundled tool probe remains a diagnostic failure" in joined
@@ -4262,12 +4099,9 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json" in joined
-    assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" not in joined
+    assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "current-regression-suite-after-structured-schema-decode-20260609.json" not in joined
-    assert "current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json" in joined
-    assert "current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json" not in joined
-    assert "current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json" not in joined
+    assert "current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json" in joined
     assert "current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json" not in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
@@ -4294,9 +4128,9 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json" in joined
-    assert "current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json" in row_text
-    assert "run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json" in joined
+    assert "current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json" in row_text
+    assert "run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json" in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
@@ -4309,7 +4143,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json" in joined
+    assert "current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" in joined
     assert "current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" not in joined
@@ -4358,8 +4192,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json" in joined
-    assert "current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json" not in joined
+    assert "current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json" in joined
     assert "current-real-ui-dsv4-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-local-recheck.json" not in joined
@@ -4418,7 +4251,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json" in joined
+    assert "current-packaged-integrity-contract-after-bundled-python-sync-20260608.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
@@ -4535,8 +4368,6 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "REAL_UI_LIVE_TOOL_TWO" in source
     assert "VMLINUX_REAL_UI_WORKING_DIRECTORY" in source
     assert "VMLINUX_REAL_UI_ENABLE_THINKING" in source
-    assert "VMLINUX_REAL_UI_TOOL_PARSER" in source
-    assert "VMLINUX_REAL_UI_REASONING_PARSER" in source
     assert "VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS" in source
     assert "VMLINUX_REAL_UI_CHECK_MEDIA" in source
     assert "VMLINUX_REAL_UI_IMAGE_DATA_URL" in source
@@ -4574,10 +4405,6 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "numeric/list-like garbage leaked into reasoning segments" in source
     assert "--enable-auto-tool-choice" in source
     assert "--tool-call-parser" in source
-    assert "--reasoning-parser" in source
-    assert "detectExternalServerParsers(modelPath)" in source
-    assert "return { toolParser: 'gemma4', reasoningParser: 'gemma4' }" in source
-    assert "'--default-enable-thinking'," not in source
     assert "window.api.sessions.create" in source
     assert "window.api.sessions.start" in source
     assert "window.api.chat.sendMessage" in source
@@ -4907,8 +4734,7 @@ def test_release_regression_manifest_real_ui_script_rejects_visible_tool_probe_c
     assert "REAL_UI_LIVE_TOOL_ONE" in semantics_block
     assert "RE:AL_UI_LIVE_TOOL_TWO" in semantics_block
     assert "strictExactReplyOk" in semantics_block
-    assert "exactReplyRe" in semantics_block
-    assert "reply exactly" in semantics_block
+    assert "reply exactly:" in semantics_block
     assert "&& visibleToolSemanticsOk" in semantics_block
     assert "&& strictExactReplyOk" in semantics_block
 
@@ -5918,7 +5744,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             "mode": "storage_boundary",
             "bits": 4,
             "group_size": 64,
-            "applies_to": "full_attention_kv_only",
+            "applies_to": "full_and_sliding_attention_kv",
             "metadata_policy": "preserve_rotating_window_metadata",
         },
         "prefix": True,
@@ -6586,7 +6412,7 @@ def _step37_integrated_vl_tool_l2_matrix_proof() -> dict[str, object]:
                         "mode": "storage_boundary",
                         "bits": 4,
                         "group_size": 64,
-                        "applies_to": "full_attention_kv_only",
+                        "applies_to": "full_and_sliding_attention_kv",
                         "metadata_policy": "preserve_rotating_window_metadata",
                     },
                     "prefix": True,
@@ -6808,7 +6634,7 @@ def test_release_regression_manifest_real_ui_matrix_accepts_step37_family_alias_
                         "mode": "storage_boundary",
                         "bits": 4,
                         "group_size": 64,
-                        "applies_to": "full_attention_kv_only",
+                        "applies_to": "full_and_sliding_attention_kv",
                         "metadata_policy": "preserve_rotating_window_metadata",
                     },
                     "prefix": True,
@@ -7132,53 +6958,6 @@ def test_release_regression_manifest_real_ui_named_tool_probe_accepts_exact_repl
                     ),
                 },
                 {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_TWO"},
-            ]
-        },
-        "persistedToolsByMessage": [
-            [
-                {
-                    "phase": "result",
-                    "toolName": "run_command",
-                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt",
-                }
-            ],
-            [
-                {
-                    "phase": "result",
-                    "toolName": "run_command",
-                    "detail": (
-                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
-                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
-                        "REAL_UI_LIVE_TOOL_TWO"
-                    ),
-                }
-            ],
-        ],
-        "toolProbeFiles": {
-            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
-            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
-        },
-    }
-
-    assert _real_ui_named_tool_probe_semantics_ok(proof)
-
-
-def test_release_regression_manifest_real_ui_named_tool_probe_accepts_visible_final_text_contract():
-    proof = {
-        "chat": {
-            "turns": [
-                {
-                    "role": "user",
-                    "content": (
-                        "Use the run_command tool exactly once. "
-                        "After the tool result, send visible final text exactly: "
-                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
-                    ),
-                },
-                {
-                    "role": "assistant",
-                    "content": "REAL_UI_LIVE_TOOL_TWO second UI turn.",
-                },
             ]
         },
         "persistedToolsByMessage": [
@@ -11928,10 +11707,6 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     assert result["tool_protocol_blocked"] is False
     assert result["remote_evidence_only"] is False
     assert result["remote_artifacts"] == []
-    assert result["mimo_jangtq2_installed_responses_tools_cache_passed"] is True
-    assert result["mimo_jang2l_installed_responses_tools_cache_passed"] is True
-    assert result["mimo_jangtq2_installed_media_l2_passed"] is True
-    assert result["mimo_jangtq2_installed_media_semantics_blocked"] is False
     assert result["local_release_clearance"] is True
 
 
@@ -11976,11 +11751,6 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
         ),
     }
     current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
-    media_l2_path = tmp_path / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
-    media_l2 = json.loads(media_l2_path.read_text(encoding="utf-8"))
-    media_l2["status"] = "fail"
-    media_l2["failureStage"] = "release_assertions"
-    media_l2_path.write_text(json.dumps(media_l2) + "\n", encoding="utf-8")
 
     result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
 
@@ -11988,14 +11758,9 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["decode_speed_target_blocked"] is True
     assert result["media_unwired"] is True
     assert result["mimo_jangtq2_live_media_l2_passed"] is True
-    assert result["mimo_jangtq2_installed_responses_tools_cache_passed"] is True
-    assert result["mimo_jang2l_installed_responses_tools_cache_passed"] is True
-    assert result["mimo_jangtq2_installed_media_l2_passed"] is True
-    assert result["mimo_jangtq2_installed_media_semantics_blocked"] is True
-    assert result["mimo_jang2l_media_l2_not_applicable"] is True
-    assert result["mimo_jang2l_live_media_l2_blocked"] is False
+    assert result["mimo_jang2l_live_media_l2_blocked"] is True
     assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
-    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
+    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is True
     assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
     assert result["switchglu_fastpath_active_but_slow"] is True
     assert result["async_decode_wait_dominates"] is True
@@ -12005,170 +11770,8 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     )
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
-    assert "mimo_jangtq2_installed_media_semantics_blocked" in result["failures"]
-    assert "mimo_jang2l_live_media_l2_missing" not in result["failures"]
-    assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
-
-
-def test_mimo_v2_root_cause_requires_jang2l_media_l2_when_runtime_media_capable(
-    tmp_path,
-):
-    from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
-        _validate_current_mimo_v2_jang2l_root_cause,
-    )
-
-    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
-    metadata_path = tmp_path / CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    metadata["bundles"] = {
-        "jang2l": {
-            "status": "pass",
-            "capabilities": {
-                "modalities": ["text", "image", "video", "audio"],
-                "multimodal_status": "mimo_v2_multimodal_runtime",
-                "preserved_modalities": [],
-                "unwired_modalities": [],
-            },
-        }
-    }
-    metadata["expected_runtime_modalities"] = None
-    metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
-    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
-    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
-    current_audit["status"] = "open"
-    current_audit["local_release_clearance"] = False
-    current_audit["component_ok"]["mimo_jang2l_live_media_l2"] = False
-    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
-
-    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
-
-    assert result["status"] == "open"
-    assert result["mimo_jang2l_media_l2_not_applicable"] is False
-    assert result["mimo_jang2l_live_media_l2_blocked"] is True
     assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
-
-
-def test_mimo_v2_root_cause_consumes_current_jang2l_l2_and_responses_tool_proofs(
-    tmp_path,
-):
-    from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
-        _validate_current_mimo_v2_jang2l_root_cause,
-    )
-
-    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
-    restart_path = tmp_path / CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
-    restart_path.parent.mkdir(parents=True, exist_ok=True)
-    restart_path.write_text(
-        json.dumps(
-            {
-                "results": [
-                    {
-                        "classification": {
-                            "status": "pass",
-                            "cache_status": "pass",
-                            "output_status": "review",
-                            "checks": {
-                                "restart_l2_restore_observed": True,
-                                "second_cached_tokens_positive": True,
-                                "block_disk_hit_positive": True,
-                            },
-                        }
-                    }
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    responses_path = tmp_path / CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
-    responses_path.parent.mkdir(parents=True, exist_ok=True)
-    responses_path.write_text(
-        json.dumps(
-            {
-                "status": "fail",
-                "proven": {
-                    "responses_endpoint_used": True,
-                    "responses_delta_streaming": True,
-                    "responses_previous_response_id_tool_followup": True,
-                    "cache": {
-                        "cache_hit_tokens": 4552,
-                        "l2_block_tokens_on_disk": 4960,
-                    },
-                },
-                "red": {
-                    "long_tool_loop": False,
-                    "semantic_drift": [
-                        "REAL_UI_LIVE_TOOL_ONE drifted to REAL_UI_LAND_TOOL_ONE"
-                    ],
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
-    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
-    current_audit["status"] = "open"
-    current_audit["local_release_clearance"] = False
-    current_audit["component_ok"]["mimo_media_wired"] = False
-    current_audit["component_ok"]["mimo_jang2l_live_media_l2"] = False
-    current_audit["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] = False
-    current_audit["component_ok"]["mimo_jang2l_l2_restart_visible_output"] = False
-    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
-
-    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
-
-    assert result["status"] == "open"
-    assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
-    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
-    assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
-    assert result["mimo_jang2l_responses_transport_passed"] is True
-    assert result["mimo_jang2l_responses_tool_semantics_blocked"] is True
-    assert "mimo_jang2l_responses_tool_semantics_blocked" in result["failures"]
-    assert "JANG_2L Responses/tool semantic drift" in result["release_boundary"]
-
-
-def test_mimo_v2_root_cause_preserves_current_long_prompt_oom_blocker(tmp_path):
-    from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
-        _validate_current_mimo_v2_jang2l_root_cause,
-    )
-
-    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
-    length_path = tmp_path / CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
-    length_path.parent.mkdir(parents=True, exist_ok=True)
-    length_path.write_text(
-        json.dumps(
-            {
-                "status": "open",
-                "classification": (
-                    "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
-                ),
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
-    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
-    current_audit["status"] = "open"
-    current_audit["local_release_clearance"] = False
-    current_audit["component_ok"]["long_prompt_coherence"] = True
-    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
-
-    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
-
-    assert result["status"] == "open"
-    assert result["prompt_length_coherence_blocked"] is True
-    assert (
-        result["prompt_length_runtime_blocker"]
-        == "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
-    )
-    assert "long-prompt coherence" in result["release_boundary"]
+    assert "mimo_jang2l_l2_restart_visible_output_blocked" in result["failures"]
 
 
 def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clearing_quality(
@@ -12467,39 +12070,6 @@ def test_mimo_v2_current_audit_accepts_packaged_jangtq2_decode_speed(tmp_path):
     )
 
 
-def test_mimo_v2_current_audit_carries_speed_boundary_root_cause():
-    from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
-        _latest_decode_speed_evidence,
-    )
-
-    evidence = _latest_decode_speed_evidence(
-        {
-            "status": "open",
-            "speed_boundary": {
-                "current_source_server_tps": 39.2,
-                "current_source_wall_tps": 39.13,
-                "current_source_long_decode_artifact": "build/current-mimo-speed/result.json",
-                "status": "open_because_current_text_runtime_decode_is_below_40",
-            },
-        },
-        {
-            "artifact": "current-mimo-jang2l-speed-cache-root-cause-20260611",
-            "classification": "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck",
-            "classic_jang2l_user_model_ms_token1": 3.1,
-            "classic_jang2l_user_logits_ms_token1": 2532.17,
-        },
-    )
-
-    assert evidence["speed_blocked"] is True
-    assert evidence["bundle_decode_tps"] == 39.2
-    assert evidence["wall_decode_tps"] == 39.13
-    assert evidence["decode_bottleneck_classification"] == (
-        "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
-    )
-    assert evidence["speed_root_cause_evidence"]["classic_jang2l_user_model_ms_token1"] == 3.1
-    assert evidence["speed_root_cause_evidence"]["classic_jang2l_user_logits_ms_token1"] == 2532.17
-
-
 def test_current_proof_sweep_includes_mimo_root_cause_artifacts():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,
@@ -12533,26 +12103,10 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
     assert not any("/remote-" in artifact for artifact in artifacts)
-
-
-def test_current_mimo_v2_proof_artifact_constants_use_latest_pointer_set():
-    from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
-    )
-
-    assert CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT == (
-        "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
-    )
-    assert CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
-    )
 
 
 def test_current_proof_sweep_tracks_mimo_root_cause_component():
@@ -12586,11 +12140,6 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
-        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
-        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT,
     ]
 
 
@@ -12773,7 +12322,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
+        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
     )
 
 
@@ -12980,11 +12529,11 @@ def test_release_regression_manifest_requires_dirty_contract_unit_source_hashes(
         "vmlx_engine/model_configs.py",
         "vmlx_engine/mlx_memory.py",
         "vmlx_engine/reasoning/__init__.py",
+        "vmlx_engine/reasoning/think_xml_parser.py",
         "vmlx_engine/tool_parsers/__init__.py",
         "vmlx_engine/tool_parsers/xml_function_tool_parser.py",
         "vmlx_engine/tool_parsers/zaya_tool_parser.py",
     }
-    required |= {str(path) for path in Path("vmlx_engine/reasoning").glob("*.py")}
 
     assert required.issubset(set(manifest.CURRENT_SUITE_SOURCE_HASH_FILES))
     assert all(Path(path).exists() for path in required)
@@ -15499,7 +15048,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json" in joined
+    assert "current-tool-call-contract-after-cross-model-loop-metrics-20260609.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
@@ -15577,8 +15126,6 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-source-20260606.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json" in joined
-    assert "current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json" in joined
-    assert "current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json" in joined
@@ -15603,13 +15150,13 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json" in joined
+    assert "current-packaged-integrity-contract-after-bundled-python-sync-20260608.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert (
-        "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json"
+        "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
         in " ".join(row["commands"])
     )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
@@ -15620,10 +15167,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert (
-        "current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
-        in joined
-    )
+    assert "current-objective-proof-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -15635,7 +15179,7 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
-    assert "current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json" in joined
+    assert "current-packaged-integrity-contract-after-bundled-python-sync-20260608.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260524-text-additional-args-sanitizer.json" in joined
     assert "clean JANG source path" in joined
@@ -15691,10 +15235,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert (
-        "current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
-        in ling_joined
-    )
+    assert "current-objective-proof-after-pr-intake-matrix-refresh-20260609.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

@@ -90,11 +90,7 @@ class KimiToolParser(ToolParser):
 
             try:
                 # Validate JSON
-                arguments = json.loads(func_args)
-                if not self._arguments_satisfy_required_schema(
-                    func_name.strip(), arguments, request
-                ):
-                    continue
+                json.loads(func_args)
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -103,10 +99,6 @@ class KimiToolParser(ToolParser):
                     }
                 )
             except json.JSONDecodeError:
-                if not self._arguments_satisfy_required_schema(
-                    func_name.strip(), func_args.strip(), request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -143,7 +135,7 @@ class KimiToolParser(ToolParser):
             return {"content": delta_text}
 
         if self.TOOL_CALL_END in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

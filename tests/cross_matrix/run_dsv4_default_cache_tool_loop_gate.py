@@ -27,15 +27,9 @@ from typing import Any
 
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_PY_CANDIDATES = (
+DEFAULT_PY = (
     REPO
-    / "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3",
-    REPO
-    / "panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3",
-    REPO / "panel/bundled-python/python/bin/python3",
-    REPO / ".venv/bin/python",
-    REPO
-    / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3",
+    / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
 DEFAULT_MODEL_CANDIDATES = (
     "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
@@ -102,18 +96,6 @@ def resolve_default_model() -> str:
         if Path(candidate).is_dir():
             return candidate
     return DEFAULT_MODEL_CANDIDATES[0]
-
-
-def resolve_default_python(
-    candidates: tuple[Path, ...] = DEFAULT_PY_CANDIDATES,
-) -> Path:
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
-
-
-DEFAULT_PY = resolve_default_python()
 
 
 def resource_snapshot(name: str, proc: subprocess.Popen | None = None) -> dict[str, Any]:

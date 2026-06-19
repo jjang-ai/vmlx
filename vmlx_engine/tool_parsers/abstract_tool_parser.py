@@ -13,7 +13,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from html import unescape
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -197,37 +196,6 @@ class ToolParser(ABC):
         return None
 
     @classmethod
-    def _arguments_satisfy_required_schema(
-        cls,
-        tool_name: str,
-        arguments: Any,
-        request: dict[str, Any] | None = None,
-    ) -> bool:
-        schema = cls._function_schema_for_tool(request, tool_name)
-        required = schema.get("required") if isinstance(schema, dict) else None
-        if not isinstance(required, list) or not required:
-            return True
-        if isinstance(arguments, dict):
-            args = arguments
-        elif isinstance(arguments, str) and arguments.strip():
-            try:
-                parsed = json.loads(arguments)
-            except json.JSONDecodeError:
-                return False
-            if not isinstance(parsed, dict):
-                return False
-            args = parsed
-        else:
-            return False
-        for name in required:
-            if not isinstance(name, str) or not name:
-                continue
-            value = args.get(name)
-            if value is None or (isinstance(value, str) and value.strip() == ""):
-                return False
-        return True
-
-    @classmethod
     def _serialize_tool_arguments(
         cls,
         tool_name: str,
@@ -251,7 +219,7 @@ class ToolParser(ABC):
         param_name, param_value = match.groups()
         if param_name not in properties:
             return arguments
-        return json.dumps({param_name: unescape(param_value)}, ensure_ascii=False)
+        return json.dumps({param_name: param_value.strip()}, ensure_ascii=False)
 
 
 class ToolParserManager:

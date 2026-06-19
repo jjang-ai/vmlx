@@ -96,11 +96,12 @@ def _bundle_declares_mxtq_jangtq(model_path: str | None) -> bool:
 
     if not model_path:
         return False
-    from pathlib import Path
-
-    model_text = Path(str(model_path).rstrip("/")).name.lower()
+    model_text = str(model_path).lower()
+    if "mxtq" in model_text or "jangtq" in model_text:
+        return True
     try:
         import json
+        from pathlib import Path
 
         root = Path(model_path).expanduser()
         configs = []
@@ -113,42 +114,18 @@ def _bundle_declares_mxtq_jangtq(model_path: str | None) -> bool:
     except Exception:
         configs = []
 
-    def _walk_dicts(value):
+    def _declares_mxtq(value) -> bool:
         if isinstance(value, dict):
-            yield value
-            for item in value.values():
-                yield from _walk_dicts(item)
-        elif isinstance(value, list):
-            for item in value:
-                yield from _walk_dicts(item)
+            for key, item in value.items():
+                if key == "mxtq_bits":
+                    return True
+                if _declares_mxtq(item):
+                    return True
+            return False
+        text = str(value or "").lower()
+        return "mxtq" in text or "jangtq" in text
 
-    explicit_tq = False
-    explicit_affine_jang = False
-    bare_mxtq_bits = False
-    for config in configs:
-        for item in _walk_dicts(config):
-            for key, raw_value in item.items():
-                key_text = str(key or "").lower()
-                value_text = str(raw_value or "").lower()
-                if key_text == "mxtq_bits":
-                    bare_mxtq_bits = True
-                    continue
-                if key_text in {"format", "weight_format", "method"}:
-                    if "mxtq" in value_text or "jangtq" in value_text:
-                        explicit_tq = True
-                    elif value_text == "jang":
-                        explicit_affine_jang = True
-                elif key_text == "profile":
-                    if "mxtq" in value_text or "jangtq" in value_text:
-                        explicit_tq = True
-
-    if explicit_tq:
-        return True
-    if explicit_affine_jang:
-        return False
-    if bare_mxtq_bits:
-        return True
-    return "mxtq" in model_text or "jangtq" in model_text
+    return any(_declares_mxtq(config) for config in configs)
 
 
 def _speculative_incompatibility_reason(args) -> str | None:
@@ -476,21 +453,6 @@ def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
         return default
 
 
-def _effective_ssm_state_cache_size(args) -> int:
-    """Scale hybrid SSM entry count when callers reserve a larger MB budget."""
-
-    requested_entries = max(1, int(getattr(args, "ssm_state_cache_size", 8) or 8))
-    requested_mb = getattr(args, "ssm_state_cache_mb", None)
-    try:
-        budget_mb = int(requested_mb) if requested_mb is not None else 512
-    except (TypeError, ValueError):
-        budget_mb = 512
-    if budget_mb <= 512:
-        return requested_entries
-    budget_scaled_entries = max(8, min(64, budget_mb // 128))
-    return max(requested_entries, budget_scaled_entries)
-
-
 def _suppress_image_resource_tracker_warning() -> None:
     """Hide benign mflux multiprocessing semaphore cleanup noise on shutdown."""
     import warnings
@@ -556,6 +518,16 @@ def serve_command(args):
             _m3_mt = str(_m3_c.get("model_type", "")).lower()
             _m3_arch = " ".join(str(a) for a in (_m3_c.get("architectures") or [])).lower()
             if _m3_mt in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in _m3_arch:
+                _m3_has_vl = _m3_mt == "minimax_m3_vl" or bool(_m3_c.get("vision_config"))
+                if _m3_has_vl:
+                    _m3_os.environ["VMLX_M3_VL"] = "1"
+                    if getattr(args, "is_mllm", False):
+                        args.is_mllm = False
+                        logger.warning(
+                            "MiniMax-M3 VL uses vMLX's text-routed MSA/VL runtime; "
+                            "ignoring --is-mllm to avoid the unsupported mlx_vlm "
+                            "minimax_m3_vl loader."
+                        )
                 # M3's MSA dual-cache is dynamic/path-dependent (idx_keys grow and
                 # the Lightning-Indexer block selection changes every step).
                 # mx.compile (JIT) traces a STATIC graph and cannot follow that —
@@ -736,12 +708,6 @@ def serve_command(args):
     # Configure tool calling
     _user_disabled_tool_parser = getattr(args, "tool_call_parser", None) == "none"
     server._tool_call_parser_disabled_explicitly = _user_disabled_tool_parser
-    server._tool_call_parser_explicit_name = (
-        args.tool_call_parser
-        if args.enable_auto_tool_choice
-        and args.tool_call_parser not in (None, "auto", "none")
-        else None
-    )
     if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser != "none":
         server._enable_auto_tool_choice = True
         # "auto" → resolved below by model_config_registry auto-apply (lines 86-108)
@@ -846,6 +812,7 @@ def serve_command(args):
             from .reasoning import get_parser
             parser_cls = get_parser(parser_name)
             server._reasoning_parser = parser_cls()
+            server._reasoning_parser_explicit_name = parser_name
             logger.info(f"Reasoning parser enabled: {parser_name}")
         except KeyError as e:
             print(f"Error: {e}")
@@ -889,34 +856,18 @@ def serve_command(args):
             or getattr(_mc, "cache_subtype", None) == "zaya_cca"
         ):
             _apply_zaya_cca_cache_policy(args, logger)
-        elif _mc.family_name == "minimax_m3":
-            # MiniMax-M3 MSA dual-cache (keys/values/idx_keys, append-only positional)
-            # is STRUCTURALLY paged: the Phase-2 SSD-serialization of that 3-tuple is not
-            # wired yet, so M3 must run with paged cache or its decode KV state has no home
-            # and output degrades. The Phase-1 paged-off default + the v3 saved-session
-            # migration can leave use_paged_cache False for a saved/migrated M3 session;
-            # force it on (mirroring the ZAYA/CCA rescue) so M3 never silently loses cache.
-            if not getattr(args, "use_paged_cache", False):
-                args.use_paged_cache = True
-                logger.info(
-                    "MiniMax-M3 MSA cache requires paged - forcing use_paged_cache=True "
-                    "(Phase-1 paged-off / saved-session rescue)"
-                )
         elif (
             _mc.family_name == "mimo_v2"
             or getattr(_mc, "cache_subtype", None) == "mimo_v2_asymmetric_swa"
-        ) and os.environ.get(
-            "VMLINUX_MIMO_ALLOW_GENERIC_KV_CACHE_QUANTIZATION", ""
-        ).lower() not in {"1", "true", "yes", "on"}:
+        ) and not getattr(args, "kv_cache_quantization_explicit", False):
             _old_kvq = args.kv_cache_quantization
             args.kv_cache_quantization = "none"
             logger.info(
                 "MiMo-V2 asymmetric mixed-SWA cache detected — disabling auto "
-                "or explicit generic stored-prefix q4/q8 quantization "
-                "(was: %s). Prefix/paged/L2 "
+                "stored-prefix q4/q8 quantization (was: %s). Prefix/paged/L2 "
                 "cache stays enabled with native KV/RotatingKVCache state; "
-                "set VMLINUX_MIMO_ALLOW_GENERIC_KV_CACHE_QUANTIZATION=1 only "
-                "for diagnostics; it is not release-cleared for MiMo exactness.",
+                "explicit --kv-cache-quantization q4/q8 remains available for "
+                "diagnostics but is not release-cleared for MiMo exactness.",
                 _old_kvq,
             )
         elif (
@@ -1397,7 +1348,7 @@ def serve_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
-            ssm_state_cache_size=_effective_ssm_state_cache_size(args),
+            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
             ssm_state_cache_max_mb=(
                 max(1, int(args.ssm_state_cache_mb))
                 if getattr(args, 'ssm_state_cache_mb', None) is not None
@@ -1777,7 +1728,7 @@ def bench_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
-            ssm_state_cache_size=_effective_ssm_state_cache_size(args),
+            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
             ssm_state_cache_max_mb=(
                 max(1, int(args.ssm_state_cache_mb))
                 if getattr(args, 'ssm_state_cache_mb', None) is not None

@@ -748,11 +748,12 @@ def _family_fallback_for(model_name: str = "") -> tuple[float | None, float | No
         return (None, None, None)
     return _FAMILY_FALLBACK_DEFAULTS.get(family, (None, None, None))
 _THINK_STRIP_RE = re.compile(
-    r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*", re.DOTALL
+    r"(?:<think>.*?</think>|<mm:think>.*?</mm:think>|\[THINK\].*?\[/THINK\])\s*",
+    re.DOTALL,
 )
 _JANGTQ_PROFILE_BITS_RE = re.compile(r"^JANGTQ([124])(?:$|[_-])", re.IGNORECASE)
 _THINK_MARKER_RE = re.compile(
-    r"[ \t]*(?:\n[ \t]*)?(?:</?think>|\[/?THINK\])[ \t]*(?:\n[ \t]*)?",
+    r"[ \t]*(?:\n[ \t]*)?(?:</?think>|</?mm:think>|\[/?THINK\])[ \t]*(?:\n[ \t]*)?",
     re.IGNORECASE,
 )
 
@@ -772,7 +773,8 @@ def _strip_think_markers_keep_spacing(text: str) -> str:
 def _strip_think_for_tool_parse(text: str) -> str:
     """Strip residual think tags before tool call parsing.
 
-    Handles both <think>...</think> and [THINK]...[/THINK] forms, plus
+    Handles <think>...</think>, <mm:think>...</mm:think>, and
+    [THINK]...[/THINK] forms, plus
     the truncated case where the opening tag was consumed by streaming
     but the closing tag remains (partition on </think> or [/THINK]).
 
@@ -782,8 +784,10 @@ def _strip_think_for_tool_parse(text: str) -> str:
     if not text:
         return ""
     stripped = _THINK_STRIP_RE.sub("", text)
-    if stripped == text and ("</think>" in text or "[/THINK]" in text):
-        for end_tag in ("</think>", "[/THINK]"):
+    if stripped == text and (
+        "</think>" in text or "</mm:think>" in text or "[/THINK]" in text
+    ):
+        for end_tag in ("</think>", "</mm:think>", "[/THINK]"):
             if end_tag in text:
                 _, _, stripped = text.partition(end_tag)
                 break
@@ -818,6 +822,13 @@ def _strip_residual_think_markup_for_display(text: str) -> str:
     if not text:
         return ""
     stripped = _THINK_STRIP_RE.sub("", text)
+    if stripped == text and (
+        "</think>" in text or "</mm:think>" in text or "[/THINK]" in text
+    ):
+        for end_tag in ("</think>", "</mm:think>", "[/THINK]"):
+            if end_tag in text:
+                _, _, stripped = text.partition(end_tag)
+                break
     stripped = _strip_think_markers_keep_spacing(stripped)
     return stripped.strip()
 
@@ -14866,6 +14877,7 @@ async def stream_chat_completion(
     streamed_content = (
         ""  # Track content actually yielded to client (for post-stream dedup)
     )
+    deferred_m3_visible_content = ""
     content_was_emitted = False  # Whether any content chunk was actually sent
     reasoning_was_streamed = False  # Whether any reasoning_content chunk was sent
 
@@ -15165,6 +15177,17 @@ async def stream_chat_completion(
                         accumulated_content,
                         streamed_content,
                     )
+
+                # MiniMax-M3 forced/adaptive reasoning can spend the whole
+                # first-pass token budget in the prompt-opened <mm:think>
+                # rail, then emit only a partial visible answer before
+                # finish_reason="length". Defer no-tool visible content from
+                # that first pass until we know whether it ended cleanly; if
+                # it truncates, the post-stream thinking-off answer pass below
+                # emits the usable visible answer instead of leaking a prefix.
+                if m3_reasoning_only_answer_enabled and emit_content:
+                    deferred_m3_visible_content += emit_content
+                    emit_content = None
 
                 # Skip chunks that have nothing to emit after conversion
                 if not emit_content and not emit_reasoning and not output.finished:
@@ -15538,7 +15561,38 @@ async def stream_chat_completion(
                         )
                     ],
                 )
-                yield f"data: {_dump_sse_json(flush_chunk)}\n\n"
+            yield f"data: {_dump_sse_json(flush_chunk)}\n\n"
+
+    if (
+        not content_was_emitted
+        and m3_reasoning_only_answer_enabled
+        and deferred_m3_visible_content.strip()
+        and (not last_output or getattr(last_output, "finish_reason", None) != "length")
+    ):
+        buffered_text = _finalize_visible_text_for_request(
+            clean_output_text(deferred_m3_visible_content),
+            request,
+        )
+        if buffered_text:
+            content_was_emitted = True
+            streamed_content += buffered_text
+            buffered_chunk = ChatCompletionChunk(
+                id=response_id,
+                created=_created_ts,
+                model=request.model,
+                choices=[
+                    ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(content=buffered_text),
+                        finish_reason=(
+                            getattr(last_output, "finish_reason", None)
+                            if last_output
+                            else "stop"
+                        )
+                        or "stop",
+                    )
+                ],
+            )
+            yield f"data: {_dump_sse_json(buffered_chunk)}\n\n"
 
     # Fallback: if reasoning parser produced only reasoning with no content,
     # emit the reasoning text as content so clients always get a usable response.
@@ -16911,6 +16965,11 @@ async def stream_responses_api(
             answer_kwargs.pop("tools", None)
             answer_kwargs.pop("_vmlx_tools_present", None)
             answer_kwargs.pop("_vmlx_template_tools", None)
+            answer_endpoint = (
+                "Responses API MiniMax-M3 visible answer pass"
+                if m3_reasoning_only_answer_enabled
+                else f"Responses API {_answer_family} visible answer pass"
+            )
             try:
                 answer_output = await _await_chat_with_disconnect_abort(
                     engine,
@@ -16919,7 +16978,7 @@ async def stream_responses_api(
                     timeout=_stream_timeout,
                     fastapi_request=fastapi_request,
                     request_id=f"{response_id}:visible-answer",
-                    endpoint=f"Responses API {_answer_family} visible answer pass",
+                    endpoint=answer_endpoint,
                 )
                 answer_text = _responses_fast_path_visible_text(answer_output, request)
                 answer_text = _finalize_visible_text_for_request(answer_text, request)

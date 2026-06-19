@@ -371,7 +371,6 @@ ROWS: list[ModelRow] = [
         path="/Users/example/models/JANGQ/Ling-2.6-flash-JANGTQ",
         family="bailing_hybrid",
         expect_reasoning=False,
-        expect_tool_parser="deepseek",
         cache_profile="hybrid_ssm",
         slow=True,
         notes=[
@@ -385,7 +384,6 @@ ROWS: list[ModelRow] = [
         path="/Users/example/models/dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK",
         family="bailing_hybrid",
         expect_reasoning=False,
-        expect_tool_parser="deepseek",
         cache_profile="hybrid_ssm",
         slow=True,
     ),
@@ -395,7 +393,6 @@ ROWS: list[ModelRow] = [
         path="/Users/example/models/dealign.ai/Ling-2.6-flash-MXFP4-CRACK",
         family="bailing_hybrid",
         expect_reasoning=False,
-        expect_tool_parser="deepseek",
         cache_profile="hybrid_ssm",
         slow=True,
         notes=[
@@ -925,6 +922,11 @@ def _mtp_status(
     if config_layers in (None, 0) and jang_drop_mtp is not True and index_has_mtp:
         issues.append(
             "bundle indexes mtp.* tensors but config disables MTP runtime"
+        )
+    if jang_drop_mtp is True and config_layers not in (None, 0):
+        issues.append(
+            "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
+            f"{config_layers}"
         )
     if jang_drop_mtp is True and index_has_mtp:
         issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")

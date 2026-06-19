@@ -9,7 +9,6 @@ Based on vLLM's glm47_moe_tool_parser.py
 import json
 import re
 from collections.abc import Sequence
-from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -53,11 +52,12 @@ class Glm47ToolParser(ToolParser):
 
         Uses json.loads for type coercion, falls back to raw string.
         """
-        stripped = value.strip()
+        value = value.strip()
+
         try:
-            return json.loads(stripped)
+            return json.loads(value)
         except json.JSONDecodeError:
-            return unescape(value)
+            return value
 
     def _get_tool_names(self, request: dict[str, Any] | None) -> set[str]:
         """Extract valid tool names from the request."""
@@ -117,10 +117,6 @@ class Glm47ToolParser(ToolParser):
                     if key:
                         arguments[key] = value
 
-            if not self._arguments_satisfy_required_schema(
-                func_name, arguments, request
-            ):
-                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -142,10 +138,6 @@ class Glm47ToolParser(ToolParser):
                         if valid_names and name not in valid_names:
                             continue
                         args = data.get("arguments", data.get("parameters", {}))
-                        if not self._arguments_satisfy_required_schema(
-                            name, args, request
-                        ):
-                            continue
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),

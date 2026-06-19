@@ -43,11 +43,7 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv' || cacheSubtype === 'mimo_v2_asymmetric_swa'
-}
-
-function cacheSubtypeOwnsStoredKvQuantization(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'mimo_v2_asymmetric_swa'
+  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -447,7 +443,6 @@ function buildCommandPreview(
   // when tools are configured. Tool sessions benefit from cache but do not
   // silently own the cache toggle.
   const zayaTypedCacheRequiresPaged = zayaCcaActive
-  const nativeStoredKvQuantization = cacheSubtypeOwnsStoredKvQuantization(detected?.cacheSubtype)
   const architectureRequiresPagedCache =
     zayaTypedCacheRequiresPaged ||
     dsv4PrefixCacheOptIn ||
@@ -504,9 +499,9 @@ function buildCommandPreview(
     if (maxCacheBlocks != null) parts.push('--max-cache-blocks', maxCacheBlocks.toString())
   }
 
-  // KV cache quantization — requires prefix cache ON. Some native mixed-cache
-  // families own stored prefix state and must not receive the generic codec.
-  if (!prefixCacheOff && !dsv4Active && !m3Active && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+  // KV cache quantization — requires prefix cache ON (works for both LLM and VLM)
+  // Hybrid/Mamba models allowed — Python scheduler only quantizes KVCache layers
+  if (!prefixCacheOff && !dsv4Active && !m3Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
     if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
@@ -892,7 +887,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedCacheSubtype={detectedConfig?.cacheSubtype} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedCacheSubtype={detectedConfig?.cacheSubtype} detectedFamily={detectedConfig?.family} detectedToolParser={detectedConfig?.toolParser} detectedReasoningParser={detectedConfig?.reasoningParser} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
 
         {/* Command Preview */}
         <div className="mt-4">

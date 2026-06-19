@@ -68,27 +68,15 @@ class FunctionaryToolParser(ToolParser):
             if func_name.lower() in ["all", "user"]:
                 continue  # Skip non-function recipients
             try:
-                arguments = json.loads(args_str)
-                if not self._arguments_satisfy_required_schema(
-                    func_name, arguments, request
-                ):
-                    continue
+                json.loads(args_str)
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": (
-                            json.dumps(arguments, ensure_ascii=False)
-                            if isinstance(arguments, dict)
-                            else str(arguments)
-                        ),
+                        "arguments": args_str,
                     }
                 )
             except json.JSONDecodeError:
-                if not self._arguments_satisfy_required_schema(
-                    func_name, args_str, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -104,33 +92,20 @@ class FunctionaryToolParser(ToolParser):
         # Try function pattern
         function_matches = self.FUNCTION_PATTERN.findall(cleaned_text)
         for func_name, args_str in function_matches:
-            name = func_name.strip()
             try:
-                arguments = json.loads(args_str)
-                if not self._arguments_satisfy_required_schema(
-                    name, arguments, request
-                ):
-                    continue
+                json.loads(args_str)
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name,
-                        "arguments": (
-                            json.dumps(arguments, ensure_ascii=False)
-                            if isinstance(arguments, dict)
-                            else str(arguments)
-                        ),
+                        "name": func_name.strip(),
+                        "arguments": args_str,
                     }
                 )
             except json.JSONDecodeError:
-                if not self._arguments_satisfy_required_schema(
-                    name, args_str, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name,
+                        "name": func_name.strip(),
                         "arguments": args_str,
                     }
                 )
@@ -145,16 +120,11 @@ class FunctionaryToolParser(ToolParser):
                 if isinstance(parsed, list):
                     for call in parsed:
                         if isinstance(call, dict) and "name" in call:
-                            name = call["name"]
                             args = call.get("arguments", {})
-                            if not self._arguments_satisfy_required_schema(
-                                name, args, request
-                            ):
-                                continue
                             tool_calls.append(
                                 {
                                     "id": generate_tool_id(),
-                                    "name": name,
+                                    "name": call["name"],
                                     "arguments": (
                                         json.dumps(args, ensure_ascii=False)
                                         if isinstance(args, dict)
@@ -198,7 +168,7 @@ class FunctionaryToolParser(ToolParser):
 
         end_markers = ["<|content|>", "</function>", "]"]
         if any(m in delta_text for m in end_markers):
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

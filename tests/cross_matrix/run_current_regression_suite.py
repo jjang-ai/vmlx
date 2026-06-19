@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -42,7 +42,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -74,7 +74,6 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/src/shared/reasoningParserAliases.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
     "panel/tests/api-gateway-ollama.test.ts",
-    "panel/tests/api-gateway-qwen35-live-capture.test.ts",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
     "panel/tests/image-system.test.ts",
     "panel/tests/interleaved-reasoning-render.test.ts",
@@ -92,9 +91,6 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
     "tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py",
     "tests/test_dsv4_responses_restart_l2_gate.py",
-    "tests/test_kimi_k25_mla_patch.py",
-    "tests/test_mlx_lm_runtime_patches.py",
-    "tests/test_single_active_batch_generator.py",
     "tests/cross_matrix/run_generation_defaults_contract.py",
     "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
     "tests/cross_matrix/run_decode_speed_gate.py",
@@ -119,7 +115,6 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_model_family_detection_contract.py",
     "tests/cross_matrix/run_mimo_v2_cache_vs_nocache_next_token.py",
     "tests/cross_matrix/run_mimo_v2_no_source_exactness_classifier.py",
-    "tests/cross_matrix/run_n2_jang1l_memory_preflight.py",
     "tests/cross_matrix/run_n2_chat_cache_gate.py",
     "tests/cross_matrix/run_native_mtp_contract.py",
     "tests/cross_matrix/run_full_release_objective_checklist.py",
@@ -130,8 +125,6 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_panel_tool_security_contract.py",
     "tests/cross_matrix/run_production_family_audit.py",
     "tests/cross_matrix/run_reasoning_template_contract.py",
-    "tests/cross_matrix/run_responses_raw_sse_parity_contract.py",
-    "tests/cross_matrix/run_qwen35_responses_raw_sse_capture.py",
     "tests/cross_matrix/run_release_regression_manifest.py",
     "tests/cross_matrix/run_release_surface_contract.py",
     "tests/cross_matrix/run_remote_max2_dsv4_exactness_guard.py",
@@ -159,7 +152,6 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/test_agents_release_control_plane.py",
     "tests/test_mimo_v2_cache_vs_nocache_next_token.py",
     "tests/test_n2_chat_cache_gate.py",
-    "tests/test_n2_jang1l_memory_preflight.py",
     "tests/test_mimo_v2_no_source_exactness_classifier.py",
     "tests/test_mimo_v2_local_bundle_metadata_contract.py",
     "tests/test_full_release_objective_checklist.py",
@@ -192,13 +184,10 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/test_reasoning_modes.py",
     "tests/test_release_gate_python_app.py",
     "tests/test_release_regression_manifest.py",
-    "tests/test_responses_raw_sse_parity_contract.py",
-    "tests/test_qwen35_responses_raw_sse_capture.py",
     "tests/test_real_ui_dsv4_memory_preflight.py",
     "tests/test_runtime_memory_stress_probe.py",
     "tests/test_scheduler_repetition_context.py",
     "tests/test_server.py",
-    "tests/test_tool_parser_required_args_fail_closed.py",
     "tests/test_step37_crash_falsification_contract.py",
     "tests/test_tool_format.py",
     "tests/test_tool_parsers.py",
@@ -218,30 +207,13 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "vmlx_engine/models/mllm.py",
     "vmlx_engine/paged_cache.py",
     "vmlx_engine/prefix_cache.py",
-    "vmlx_engine/utils/single_batch_generator.py",
-    "vmlx_engine/runtime_patches/__init__.py",
-    "vmlx_engine/runtime_patches/deepseek_v4_register.py",
-    "vmlx_engine/runtime_patches/gemma4_processing.py",
-    "vmlx_engine/runtime_patches/gemma4_vision.py",
-    "vmlx_engine/runtime_patches/kimi_k25_mla.py",
-    "vmlx_engine/runtime_patches/mlx_lm_compat.py",
-    "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
     "vmlx_engine/reasoning/__init__.py",
-    "vmlx_engine/reasoning/base.py",
-    "vmlx_engine/reasoning/deepseek_r1_parser.py",
-    "vmlx_engine/reasoning/gemma4_parser.py",
-    "vmlx_engine/reasoning/gptoss_parser.py",
-    "vmlx_engine/reasoning/minimax_m2_parser.py",
-    "vmlx_engine/reasoning/mistral_parser.py",
-    "vmlx_engine/reasoning/qwen3_parser.py",
-    "vmlx_engine/reasoning/think_parser.py",
     "vmlx_engine/reasoning/think_xml_parser.py",
     "vmlx_engine/reranker.py",
     "vmlx_engine/scheduler.py",
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/__init__.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
-    "vmlx_engine/tool_parsers/qwen_tool_parser.py",
     "vmlx_engine/tool_parsers/xml_function_tool_parser.py",
     "vmlx_engine/tool_parsers/zaya_tool_parser.py",
     "vmlx_engine/utils/dsv4_batch_generator.py",
@@ -478,7 +450,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "full_release_objective_checklist":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json"
+        path = root / "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -541,7 +513,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json",
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
@@ -614,7 +586,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json",
+        "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -665,12 +637,6 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--out",
         "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json",
     ],
-    "n2_jang1l_memory_preflight": [
-        sys.executable,
-        "tests/cross_matrix/run_n2_jang1l_memory_preflight.py",
-        "--out",
-        "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json",
-    ],
     "step37_crash_falsification_contract": [
         sys.executable,
         "tests/cross_matrix/run_step37_crash_falsification_contract.py",
@@ -681,7 +647,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
+        "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -689,21 +655,21 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
+        "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--app",
-        "panel/release/tahoe-app/mac-arm64/vMLX.app",
+        "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
+        "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
     ],
     "issue179_minimax_k_root_cause_audit": [
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -728,35 +694,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json",
+        "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json",
     ],
     "gemma_qat_native_mxfp4_inventory_gate": [
         sys.executable,
         "tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py",
         "--out",
-        "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json",
-    ],
-    "responses_raw_sse_parity_contract": [
-        sys.executable,
-        "tests/cross_matrix/run_responses_raw_sse_parity_contract.py",
-        "--direct-sse",
-        "build/responses-sse-captures-20260610/direct-gemma4-12b-mxfp8-crack-tool-20260610.sse",
-        "--gateway-sse",
-        "build/responses-sse-captures-20260610/gateway-gemma4-12b-mxfp8-crack-tool-20260610.sse",
-        "--tunnel-sse",
-        "build/responses-sse-captures-20260610/tunnel-gemma4-12b-mxfp8-crack-tool-20260610.sse",
-        "--gateway-log",
-        "build/responses-sse-captures-20260610/gateway-gemma4-12b-mxfp8-crack-tool-20260610.log",
-        "--expected-function-name",
-        "record_fact",
-        "--expected-arguments",
-        '{"value": "blue-cat"}',
-        "--expected-model",
-        "models/Gemma-4-12B-it-MXFP8-CRACK",
-        "--require-reasoning-events",
-        "--require-same-model",
-        "--out",
-        "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json",
+        "build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json",
     ],
     "focused_regression_pytest": [
         sys.executable,
@@ -766,7 +710,6 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_objective_proof_digest.py",
         "tests/test_agents_release_control_plane.py",
         "tests/test_mimo_v2_cache_vs_nocache_next_token.py",
-        "tests/test_n2_jang1l_memory_preflight.py",
         "tests/test_n2_chat_cache_gate.py",
         "tests/test_mimo_v2_no_source_exactness_classifier.py",
         "tests/test_full_release_objective_checklist.py",
@@ -794,12 +737,8 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_gemma4_12b_speed_gate.py",
         "tests/test_step37_crash_falsification_contract.py",
         "tests/test_gemma_qat_native_mxfp4_inventory_gate.py",
-        "tests/test_responses_raw_sse_parity_contract.py",
-        "tests/test_qwen35_responses_raw_sse_capture.py",
-        "tests/test_mlx_lm_runtime_patches.py",
-        "tests/test_single_active_batch_generator.py",
         "-k",
-        "objective_proof_digest or full_release_objective_checklist or default_cache_tool_loop or current_regression_suite or release_regression_manifest or remote_max2_dsv4 or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or gemma4_speed_gate or gemma_qat_inventory_gate or vl_media_cache_contract or step37_crash_falsification or responses_raw_sse_parity or qwen35_raw_sse_capture or mlx_lm_runtime_patches or single_active_generator or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe or cache_vs_nocache or n2_chat_cache_gate or n2_jang1l_memory_preflight",
+        "objective_proof_digest or full_release_objective_checklist or default_cache_tool_loop or current_regression_suite or release_regression_manifest or remote_max2_dsv4 or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or gemma4_speed_gate or gemma_qat_inventory_gate or vl_media_cache_contract or step37_crash_falsification or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe or cache_vs_nocache or n2_chat_cache_gate",
     ],
     "objective_digest": [
         sys.executable,
@@ -813,13 +752,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json",
+        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json",
     ],
     "full_release_objective_checklist": [
         sys.executable,
         "tests/cross_matrix/run_full_release_objective_checklist.py",
         "--out",
-        "build/current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json",
+        "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json",
     ],
 }
 

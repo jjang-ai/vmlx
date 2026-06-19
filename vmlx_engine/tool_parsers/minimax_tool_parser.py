@@ -16,7 +16,6 @@ Supports MiniMax-M2.5 and MiniMax-M2 models.
 import json
 import re
 from collections.abc import Sequence
-from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -46,15 +45,15 @@ def _convert_param_value(value: str) -> Any:
     Tries JSON parsing first (handles arrays, objects, numbers, booleans, null),
     falls back to raw string.
     """
-    stripped = value.strip()
-    if not stripped:
+    value = value.strip()
+    if not value:
         return value
 
     # Try JSON parsing (handles null, true, false, numbers, objects, arrays)
     try:
-        return json.loads(stripped)
+        return json.loads(value)
     except (json.JSONDecodeError, ValueError):
-        return unescape(value)
+        return value
 
 
 @ToolParserManager.register_module(["minimax", "minimax_m2"])
@@ -90,18 +89,9 @@ class MiniMaxToolParser(ToolParser):
         re.DOTALL,
     )
 
-    # MiniMax live generations can emit a complete native invoke block without
-    # the outer <minimax:tool_call> wrapper. Treat only complete, explicitly
-    # closed invoke blocks as bare native calls; truncated calls remain scoped
-    # to the wrapped lenient path below.
-    BARE_INVOKE_PATTERN = re.compile(
-        r"<invoke name=([^>]+)>(.*?)</invoke>",
-        re.DOTALL,
-    )
-
     # Pattern to match <parameter name="key">value</parameter> within an invoke
     PARAM_PATTERN = re.compile(
-        r"<parameter name=([^>]+)>(.*?)</parameter>",
+        r"<(?:parameter|field) name=([^>]+)>(.*?)</(?:parameter|field)>",  # MiniMax-M2.7-Small uses <field>
         re.DOTALL,
     )
 
@@ -114,7 +104,7 @@ class MiniMaxToolParser(ToolParser):
         re.DOTALL,
     )
     LENIENT_PARAM_PATTERN = re.compile(
-        r"<parameter name=([^>]+)>(.*?)(?=(?:</parameter>|<parameter name=|</invoke>|$))",
+        r"<(?:parameter|field) name=([^>]+)>(.*?)(?=(?:</parameter>|</field>|<parameter name=|<field name=|</invoke>|$))",
         re.DOTALL,
     )
 
@@ -146,25 +136,6 @@ class MiniMaxToolParser(ToolParser):
         cleaned_text = self.strip_think_tags(model_output)
 
         if "<minimax:tool_call>" not in cleaned_text:
-            tool_calls: list[dict[str, Any]] = []
-            for invoke_match in self.BARE_INVOKE_PATTERN.finditer(cleaned_text):
-                tool_call = self._tool_call_from_invoke(
-                    invoke_match.group(1),
-                    invoke_match.group(2),
-                    lenient=False,
-                    request=request,
-                )
-                if tool_call:
-                    tool_calls.append(tool_call)
-
-            if tool_calls:
-                content_text = self.BARE_INVOKE_PATTERN.sub("", cleaned_text).strip()
-                return ExtractedToolCallInformation(
-                    tools_called=True,
-                    tool_calls=tool_calls,
-                    content=content_text if content_text else None,
-                )
-
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=cleaned_text
             )
@@ -183,7 +154,6 @@ class MiniMaxToolParser(ToolParser):
                     invoke_match.group(1),
                     invoke_match.group(2),
                     lenient=False,
-                    request=request,
                 )
                 if tool_call:
                     tool_calls.append(tool_call)
@@ -200,14 +170,13 @@ class MiniMaxToolParser(ToolParser):
                         invoke_match.group(1),
                         invoke_match.group(2),
                         lenient=True,
-                        request=request,
                     )
                     if tool_call:
                         tool_calls.append(tool_call)
 
             # Strategy 2: No <invoke> found — try fallback formats
             if not invoke_found and block_content:
-                tc = self._parse_block_fallback(block_content, request=request)
+                tc = self._parse_block_fallback(block_content)
                 if tc:
                     tool_calls.append(tc)
 
@@ -218,7 +187,6 @@ class MiniMaxToolParser(ToolParser):
                         invoke_match.group(1),
                         invoke_match.group(2),
                         lenient=True,
-                        request=request,
                     )
                     if tool_call:
                         tool_calls.append(tool_call)
@@ -250,7 +218,6 @@ class MiniMaxToolParser(ToolParser):
         invoke_content: str,
         *,
         lenient: bool,
-        request: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         func_name = _extract_name(raw_func_name)
         params = (
@@ -262,60 +229,41 @@ class MiniMaxToolParser(ToolParser):
             arguments: dict[str, Any] = {}
             for param_name, param_value in params:
                 clean_name = _extract_name(param_name)
-                clean_value = param_value
-                if clean_value.endswith("</parameter>"):
-                    clean_value = clean_value[: -len("</parameter>")]
+                clean_value = param_value.strip()
+                for _close in ("</parameter>", "</field>"):
+                    if clean_value.endswith(_close):
+                        clean_value = clean_value[: -len(_close)].strip()
                 arguments[clean_name] = _convert_param_value(clean_value)
-            if not self._arguments_satisfy_required_schema(
-                func_name, arguments, request
-            ):
-                return None
             return {
                 "id": generate_tool_id(),
                 "name": func_name,
                 "arguments": json.dumps(arguments, ensure_ascii=False),
             }
 
-        raw_content = invoke_content
-        stripped_content = invoke_content.strip()
-        if stripped_content:
-            if lenient and "<parameter" in stripped_content:
+        raw_content = invoke_content.strip()
+        if raw_content:
+            if lenient and ("<parameter" in raw_content or "<field" in raw_content):
                 return None
             try:
-                parsed = json.loads(stripped_content)
-                if not self._arguments_satisfy_required_schema(
-                    func_name, parsed, request
-                ):
-                    return None
+                json.loads(raw_content)
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": (
-                        json.dumps(parsed, ensure_ascii=False)
-                        if isinstance(parsed, dict)
-                        else str(parsed)
-                    ),
+                    "arguments": raw_content,
                 }
             except json.JSONDecodeError:
-                raw_args = json.dumps(
-                    {"raw": raw_content},
-                    ensure_ascii=False,
-                )
-                if not self._arguments_satisfy_required_schema(
-                    func_name, raw_args, request
-                ):
-                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": raw_args,
+                    "arguments": json.dumps(
+                        {"raw": raw_content},
+                        ensure_ascii=False,
+                    ),
                 }
 
         if lenient:
             return None
 
-        if not self._arguments_satisfy_required_schema(func_name, {}, request):
-            return None
         return {
             "id": generate_tool_id(),
             "name": func_name,
@@ -341,7 +289,7 @@ class MiniMaxToolParser(ToolParser):
         return blocks
 
     def _parse_block_fallback(
-        self, block_content: str, request: dict[str, Any] | None = None
+        self, block_content: str
     ) -> dict[str, Any] | None:
         """
         Parse tool call from non-standard formats inside a <minimax:tool_call> block.
@@ -356,34 +304,22 @@ class MiniMaxToolParser(ToolParser):
         xml_match = self.XML_FUNC_PATTERN.search(block_content)
         if xml_match:
             func_name = xml_match.group(1)
-            raw_content = xml_match.group(2)
-            content = raw_content.strip()
+            content = xml_match.group(2).strip()
             if content:
                 try:
-                    parsed = json.loads(content)
-                    if not self._arguments_satisfy_required_schema(
-                        func_name, parsed, request
-                    ):
-                        return None
+                    json.loads(content)
                     return {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": (
-                            json.dumps(parsed, ensure_ascii=False)
-                            if isinstance(parsed, dict)
-                            else str(parsed)
-                        ),
+                        "arguments": content,
                     }
                 except json.JSONDecodeError:
-                    raw_args = json.dumps({"raw": raw_content}, ensure_ascii=False)
-                    if not self._arguments_satisfy_required_schema(
-                        func_name, raw_args, request
-                    ):
-                        return None
                     return {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": raw_args,
+                        "arguments": json.dumps(
+                            {"raw": content}, ensure_ascii=False
+                        ),
                     }
 
         # 2. func_name\n{...}
@@ -392,19 +328,11 @@ class MiniMaxToolParser(ToolParser):
             func_name = func_json_match.group(1)
             args_json = func_json_match.group(2).strip()
             try:
-                parsed = json.loads(args_json)
-                if not self._arguments_satisfy_required_schema(
-                    func_name, parsed, request
-                ):
-                    return None
+                json.loads(args_json)
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": (
-                        json.dumps(parsed, ensure_ascii=False)
-                        if isinstance(parsed, dict)
-                        else str(parsed)
-                    ),
+                    "arguments": args_json,
                 }
             except json.JSONDecodeError:
                 pass
@@ -420,10 +348,6 @@ class MiniMaxToolParser(ToolParser):
                 value = kv.group(2) if kv.group(2) is not None else kv.group(3)
                 arguments[key] = _convert_param_value(value)
             if arguments:
-                if not self._arguments_satisfy_required_schema(
-                    func_name, arguments, request
-                ):
-                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
@@ -435,15 +359,10 @@ class MiniMaxToolParser(ToolParser):
             obj = json.loads(block_content)
             if isinstance(obj, dict):
                 if "name" in obj:
-                    name = obj["name"]
                     args = obj.get("arguments", obj.get("parameters", {}))
-                    if not self._arguments_satisfy_required_schema(
-                        name, args, request
-                    ):
-                        return None
                     return {
                         "id": generate_tool_id(),
-                        "name": name,
+                        "name": obj["name"],
                         "arguments": json.dumps(args, ensure_ascii=False)
                         if isinstance(args, dict)
                         else str(args),
@@ -473,7 +392,7 @@ class MiniMaxToolParser(ToolParser):
 
         # Tool call block just completed — parse the full accumulated text
         if "</minimax:tool_call>" in delta_text:
-            result = self.extract_tool_calls(current_text, request=request)
+            result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {
                     "tool_calls": [

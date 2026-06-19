@@ -1320,7 +1320,7 @@ class TestModelConfigs:
         assert config.reasoning_parser == "qwen3"
 
     def test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp(
-        self, registry, tmp_path
+        self, registry
     ):
         """Plain MLX 4-bit Qwen artifacts still use config metadata.
 
@@ -1342,9 +1342,11 @@ class TestModelConfigs:
             "vision_config": {"model_type": "qwen3_5_vit"},
         }
 
-        (tmp_path / "config.json").write_text(json.dumps(config_json))
+        def _load_config(path):
+            return dict(config_json)
 
-        config = registry.lookup(str(tmp_path))
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            config = registry.lookup("Qwen3.6-35B-A3B-4bit")
 
         assert config.family_name == "qwen3_5"
         assert config.cache_type == "hybrid"
@@ -1766,7 +1768,7 @@ class TestModelConfigs:
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
         assert config.cache_subtype == "mimo_v2_asymmetric_swa"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
         assert config.supports_thinking is False
         assert config.supports_native_tools is True
@@ -2121,7 +2123,7 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.supports_thinking is False
         assert config.think_in_template is False
         assert config.tool_parser == "xml_function"
@@ -2169,7 +2171,7 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
         assert config.supports_thinking is False
@@ -2213,7 +2215,7 @@ class TestModelConfigComprehensiveChecks:
         config = registry.lookup(str(tmp_path))
 
         assert config.family_name == "mimo_v2"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
         assert config.supports_thinking is False
@@ -2414,3 +2416,49 @@ class TestModelConfigComprehensiveChecks:
         assert q3.think_in_template is True
         assert q2.reasoning_parser is None
         assert q2.think_in_template is False
+
+
+class TestFamilyOverride:
+    """Manual --model-family override: forces family + its parser/cache contract,
+    bypassing autodetect. Pins the parser-contract transfer and the self-populate
+    hardening (override reached before lazy register_all)."""
+
+    def test_override_transfers_parser_contract(self):
+        reg = get_model_config_registry()  # populated via accessor
+        reg.set_family_override("qwen3")
+        try:
+            cfg = reg.lookup("/nonexistent/dummy-model")
+            assert cfg.family_name == "qwen3"
+            assert cfg.tool_parser == "qwen"
+            assert cfg.reasoning_parser == "qwen3"
+        finally:
+            reg.set_family_override(None)
+
+    def test_override_auto_restores_autodetect(self):
+        reg = get_model_config_registry()
+        reg.set_family_override("qwen3")
+        assert reg.lookup("/nonexistent/dummy-model").family_name == "qwen3"
+        reg.set_family_override("auto")
+        assert reg.get_family_override() is None
+
+    def test_override_self_populates_on_empty_registry(self):
+        # Hardening: a fresh (unpopulated) singleton must STILL transfer the forced
+        # family's parser contract — _build_override_config self-triggers register_all.
+        ModelConfigRegistry._instance = None
+        reg = ModelConfigRegistry()
+        assert len(reg._configs) == 0
+        reg.set_family_override("qwen3")
+        cfg = reg.lookup("/nonexistent/dummy-model")
+        assert cfg.family_name == "qwen3"
+        assert cfg.tool_parser == "qwen"
+        assert cfg.reasoning_parser == "qwen3"
+
+    def test_unknown_family_honored_no_crash(self):
+        reg = get_model_config_registry()
+        reg.set_family_override("totally_made_up_family")
+        try:
+            cfg = reg.lookup("/nonexistent/dummy-model")
+            assert cfg.family_name == "totally_made_up_family"
+            assert cfg.cache_type == "kv"
+        finally:
+            reg.set_family_override(None)

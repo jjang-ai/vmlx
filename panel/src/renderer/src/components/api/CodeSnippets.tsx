@@ -285,9 +285,17 @@ print(message.content[0].text)`
 
 // ── Ollama snippets ──
 
-function buildOllamaCli(baseUrl: string, _apiKey: string | null, model: string): string {
+function buildOllamaAuthHeader(apiKey: string | null): string {
+  return apiKey ? `Authorization: Bearer ${apiKey}` : ''
+}
+
+function buildOllamaCli(baseUrl: string, apiKey: string | null, model: string): string {
+  const authNote = apiKey
+    ? `\n# This gateway uses API-key auth. The Ollama CLI does not send custom HTTP headers;\n# use the curl or Python snippets below for authenticated gateway calls.\n`
+    : ''
   return `# Set the Ollama host to your vMLX gateway
 export OLLAMA_HOST=${baseUrl}
+${authNote}
 
 # Chat with a model
 ollama run ${model}
@@ -296,9 +304,13 @@ ollama run ${model}
 ollama list`
 }
 
-function buildOllamaCurl(baseUrl: string, _apiKey: string | null, model: string): string {
+function buildOllamaCurl(baseUrl: string, apiKey: string | null, model: string): string {
+  const authHeader = buildOllamaAuthHeader(apiKey)
+  const authLine = authHeader ? `  -H "${authHeader}" \\\n` : ''
   return `# Streaming chat (NDJSON)
-curl ${baseUrl}/api/chat -d '{
+curl ${baseUrl}/api/chat \\
+  -H "Content-Type: application/json" \\
+${authLine}  -d '{
   "model": "${model}",
   "messages": [
     {"role": "user", "content": "Hello!"}
@@ -306,7 +318,9 @@ curl ${baseUrl}/api/chat -d '{
 }'
 
 # Text generation
-curl ${baseUrl}/api/generate -d '{
+curl ${baseUrl}/api/generate \\
+  -H "Content-Type: application/json" \\
+${authLine}  -d '{
   "model": "${model}",
   "prompt": "Hello!"
 }'
@@ -315,12 +329,18 @@ curl ${baseUrl}/api/generate -d '{
 curl ${baseUrl}/api/tags`
 }
 
-function buildOllamaPython(baseUrl: string, _apiKey: string | null, model: string): string {
+function buildOllamaPython(baseUrl: string, apiKey: string | null, model: string): string {
+  const headers = apiKey
+    ? `headers={"Authorization": "Bearer ${apiKey}"}`
+    : 'headers={}'
   return `import requests, json
+
+${headers}
 
 # Streaming chat via Ollama API
 response = requests.post(
     "${baseUrl}/api/chat",
+    headers=headers,
     json={
         "model": "${model}",
         "messages": [

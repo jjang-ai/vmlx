@@ -149,7 +149,6 @@ class SchedulingPolicy(Enum):
 # a paged cache hit. The companion cache LRU and queue cap bound memory.
 SSM_REDERIVE_MIN_TOKENS = 1
 SSM_REDERIVE_QUEUE_CAP = 8
-MIXED_SWA_STORE_QUEUE_CAP = 8
 
 
 @dataclass
@@ -501,7 +500,6 @@ class Scheduler:
                 )
         except Exception as e:
             logger.debug(f"Mixed-attention detection failed: {e}")
-        self._mixed_swa_store_queue = deque()
 
         # Per-model SequenceStateMachine for token-level reasoning/stop detection.
         # Lazy-built on first request because we need the reasoning parser instance
@@ -1052,42 +1050,6 @@ class Scheduler:
         # periodically (every 60s) even during continuous load.
         self._last_metal_gc_time = time.monotonic()
         self._metal_gc_interval = 60.0  # seconds
-        self._maybe_warm_mimo_v2_single_decode_graph()
-
-    def _maybe_warm_mimo_v2_single_decode_graph(self) -> None:
-        """Warm MiMo's single-active decode graph before first user traffic."""
-
-        if self._model_type_for_runtime != "mimo_v2":
-            return
-        if int(getattr(self.config, "max_num_seqs", 1) or 1) > 1:
-            return
-        if os.environ.get("VMLINUX_MIMO_V2_DISABLE_DECODE_WARMUP", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            logger.info("MiMo-V2 single-active decode warmup disabled by env")
-            return
-        try:
-            import mlx.core as mx
-
-            warm_generator = SingleBatchGenerator(
-                model=self.model,
-                max_tokens=1,
-                stop_tokens=self.stop_tokens,
-                sampler=lambda logits: mx.argmax(logits, axis=-1),
-                logits_processors=None,
-                prefill_batch_size=1,
-                completion_batch_size=1,
-                prefill_step_size=self.config.prefill_step_size,
-            )
-            if warm_generator.warm_decode_graph():
-                logger.info(
-                    "MiMo-V2 single-active decode graph warmed during scheduler startup"
-                )
-        except Exception:
-            logger.exception("MiMo-V2 single-active decode graph warmup failed")
 
     @staticmethod
     def _model_has_mixed_attention(model: Any) -> bool:
@@ -2133,125 +2095,6 @@ class Scheduler:
             logger.debug(traceback.format_exc())
             return None
 
-    def _queue_mixed_swa_prompt_cache_store(
-        self,
-        *,
-        request_id: str,
-        cache_key_tokens: List[int],
-        prompt_token_count: int,
-        cache_type: str,
-    ) -> bool:
-        if not cache_key_tokens or self.block_aware_cache is None:
-            return False
-        if os.environ.get("VMLINUX_MIXED_SWA_SYNC_CACHE_STORE", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            return False
-        cap = max(
-            1,
-            int(
-                os.environ.get(
-                    "VMLINUX_MIXED_SWA_STORE_QUEUE_CAP",
-                    MIXED_SWA_STORE_QUEUE_CAP,
-                )
-            ),
-        )
-        while len(self._mixed_swa_store_queue) >= cap:
-            dropped = self._mixed_swa_store_queue.popleft()
-            logger.info(
-                "Mixed-SWA deferred cache store queue full; dropped oldest "
-                "request %s (%d cache-key tokens).",
-                dropped.get("request_id"),
-                len(dropped.get("cache_key_tokens") or []),
-            )
-        self._mixed_swa_store_queue.append(
-            {
-                "request_id": request_id,
-                "cache_key_tokens": list(cache_key_tokens),
-                "prompt_token_count": int(prompt_token_count),
-                "cache_type": cache_type,
-            }
-        )
-        logger.info(
-            "Mixed-SWA prefix cache store queued for idle clean prompt-boundary "
-            "re-prefill (%d cache-key tokens from %d prompt tokens, queue=%d).",
-            len(cache_key_tokens),
-            prompt_token_count,
-            len(self._mixed_swa_store_queue),
-        )
-        return True
-
-    def _run_deferred_mixed_swa_cache_store(self) -> bool:
-        if not self._mixed_swa_store_queue or self.block_aware_cache is None:
-            return False
-        task = self._mixed_swa_store_queue.popleft()
-        request_id = str(task.get("request_id") or "unknown")
-        cache_key_tokens = list(task.get("cache_key_tokens") or [])
-        if not cache_key_tokens:
-            return False
-        t0 = time.perf_counter()
-        try:
-            logger.info(
-                "Mixed-SWA deferred cache store: running idle clean "
-                "prompt-boundary re-prefill for %s (%d cache-key tokens, "
-                "%d remaining in queue).",
-                request_id,
-                len(cache_key_tokens),
-                len(self._mixed_swa_store_queue),
-            )
-            cache_for_extract = self._prefill_for_prompt_only_cache(cache_key_tokens)
-            if cache_for_extract is None:
-                logger.warning(
-                    "Mixed-SWA deferred cache store skipped for %s: "
-                    "prompt-only prefill produced no cache.",
-                    request_id,
-                )
-                return False
-            if getattr(self, "_kv_cache_bits", 0):
-                cache_for_extract = self._quantize_cache_for_storage(cache_for_extract)
-            extracted_cache = self._extract_cache_states(cache_for_extract)
-            if not extracted_cache:
-                logger.warning(
-                    "Mixed-SWA deferred cache store skipped for %s: "
-                    "cache extraction returned empty.",
-                    request_id,
-                )
-                return False
-            self.block_aware_cache.store_cache(
-                request_id,
-                cache_key_tokens,
-                extracted_cache,
-                cache_type=str(
-                    task.get("cache_type") or self.config.prefix_cache_default_type
-                ),
-            )
-            logger.info(
-                "Mixed-SWA deferred cache store complete for %s "
-                "(%d cache-key tokens from %d prompt tokens, %d layers, %.2fs).",
-                request_id,
-                len(cache_key_tokens),
-                int(task.get("prompt_token_count") or 0),
-                len(extracted_cache),
-                time.perf_counter() - t0,
-            )
-            return True
-        except Exception as exc:
-            logger.warning(
-                "Mixed-SWA deferred cache store failed for %s: %s",
-                request_id,
-                exc,
-            )
-            logger.debug(traceback.format_exc())
-            return False
-        finally:
-            try:
-                clear_mlx_memory_cache(log=logger)
-            except Exception:
-                pass
-
     def _dsv4_trace_timing(
         self,
         event: str,
@@ -2867,111 +2710,6 @@ class Scheduler:
 
         return _wrapped
 
-    def _minimax_m3_think_close_tokens(self):
-        """Return (OPEN, CLOSE) reasoning token ids for the active M3 parser, else None.
-
-        Gated on the MiniMax-M3 reasoning parser so the thinking-budget backstop only
-        applies to M3. Uses the parser's own reasoning_tag_token_seqs (no hard-coded ids).
-        """
-        try:
-            from . import server as _server  # lazy: dodge circular import
-            parser = getattr(_server, "_reasoning_parser", None)
-            if parser is None or type(parser).__name__ != "MiniMaxM3ReasoningParser":
-                return None
-            tags = parser.reasoning_tag_token_seqs(self._actual_tokenizer or self.tokenizer)
-            end = tags.get("end") or ()
-            start = tags.get("start") or ()
-
-            def _last_id(seqs):
-                # reasoning_tag_token_seqs returns nested lists, e.g. [[200060]].
-                if not seqs:
-                    return None
-                last = seqs[-1]
-                if isinstance(last, (list, tuple)):
-                    return int(last[-1]) if last else None
-                return int(last)
-
-            close_id = _last_id(end)
-            if close_id is None:
-                return None
-            open_id = _last_id(start)
-            logger.debug(
-                "MiniMax-M3 thinking-budget backstop armed: OPEN=%s CLOSE=%s budget=%s",
-                open_id, close_id, os.environ.get("VMLX_M3_THINK_BUDGET", "1024"),
-            )
-            return (open_id, close_id)
-        except Exception:
-            return None
-
-    def _m3_thinking_budget_processor(self, prompt_tokens, max_out_tokens=None):
-        """Force-close a runaway <mm:think> trace after a token budget.
-
-        M3's reasoning parser is post-hoc text-splitting with NO termination control;
-        only EOS (200020) stops generation, and </mm:think> (200060) is not a stop. On
-        uncertain queries the model ruminates without ever emitting </mm:think>, looping
-        to max_tokens (verified independent of cache path, indexer, and sampling). This
-        forces the close token once the in-thinking trace exceeds VMLX_M3_THINK_BUDGET
-        tokens, pushing the model into its answer. Hard termination guarantee.
-        """
-        toks = self._minimax_m3_think_close_tokens()
-        if toks is None:
-            return None
-        OPEN, CLOSE = toks
-        try:
-            budget = int(os.environ.get("VMLX_M3_THINK_BUDGET", "1024"))
-        except Exception:
-            budget = 1024
-        # Scale the reasoning budget to the OUTPUT limit so the backstop always fires
-        # BEFORE max_tokens, leaving room for the answer. Without this, a short
-        # max_tokens (< budget) means the loop runs to max_tokens unprotected. Cap
-        # reasoning at ~half the output budget (floor 96) so the answer always has space.
-        if max_out_tokens and max_out_tokens > 0:
-            budget = min(budget, max(96, int(max_out_tokens) // 2))
-        if budget <= 0:
-            return None
-        tail = [int(t) for t in (prompt_tokens[-6:] if prompt_tokens else [])]
-        has_open = OPEN is not None and OPEN in tail
-        has_close = CLOSE in tail
-        if has_close and not has_open:
-            return None  # disabled mode: thinking pre-closed in the prompt -> no backstop
-        import mlx.core as mx
-        st = {"opened": bool(has_open), "closed": False, "scanned": 0}
-
-        def _proc(tokens, logits):
-            if st["closed"]:
-                return logits
-            try:
-                n = len(tokens)
-                if n > st["scanned"]:
-                    new_t = tokens[st["scanned"]:]
-                    arr = new_t.tolist() if hasattr(new_t, "tolist") else list(new_t)
-                    for t in arr:
-                        ti = int(t)
-                        if OPEN is not None and ti == OPEN:
-                            st["opened"] = True
-                        elif ti == CLOSE:
-                            st["closed"] = True
-                    st["scanned"] = n
-            except Exception:
-                return logits
-            if st["closed"] or not st["opened"]:
-                return logits
-            if n >= budget:
-                if not st.get("logged_fire"):
-                    logger.info("MiniMax-M3 thinking-budget backstop FIRED at %d tokens — forcing </mm:think>", n)
-                    st["logged_fire"] = True
-                vocab = logits.shape[-1]
-                onehot = (mx.arange(vocab) == CLOSE)
-                forced = mx.where(
-                    onehot,
-                    mx.array(0.0, dtype=logits.dtype),
-                    mx.array(-1e9, dtype=logits.dtype),
-                )
-                return mx.broadcast_to(forced, logits.shape)
-            return logits
-
-        return _proc
-
     def _request_logits_processors(
         self,
         request: Request,
@@ -2979,33 +2717,22 @@ class Scheduler:
     ) -> Optional[List[Callable[[Any, Any], Any]]]:
         """Build BatchGenerator processors with generate_step-compatible context."""
 
-        skip_prefix_tokens = max(len(tokens_to_process) - 1, 0)
-        processors: List[Callable[[Any, Any], Any]] = []
-
         rep = request.sampling_params.repetition_penalty
-        if rep and rep != 1.0:
-            from mlx_lm.sample_utils import make_logits_processors
+        if not rep or rep == 1.0:
+            return None
 
-            rep_context_size = 512 if self._long_repetition_context else 20
-            rep_procs = make_logits_processors(
-                repetition_penalty=rep,
-                repetition_context_size=rep_context_size,
-            )
-            processors.extend(
-                self._wrap_generated_only_logits_processor(p, skip_prefix_tokens)
-                for p in rep_procs
-            )
+        from mlx_lm.sample_utils import make_logits_processors
 
-        # M3 thinking-budget backstop (hard guarantee against runaway <mm:think> loops).
-        _maxtok = (getattr(request, "max_tokens", None)
-                   or getattr(getattr(request, "sampling_params", None), "max_tokens", None))
-        tb = self._m3_thinking_budget_processor(tokens_to_process, _maxtok)
-        if tb is not None:
-            processors.append(
-                self._wrap_generated_only_logits_processor(tb, skip_prefix_tokens)
-            )
-
-        return processors or None
+        rep_context_size = 512 if self._long_repetition_context else 20
+        processors = make_logits_processors(
+            repetition_penalty=rep,
+            repetition_context_size=rep_context_size,
+        )
+        skip_prefix_tokens = max(len(tokens_to_process) - 1, 0)
+        return [
+            self._wrap_generated_only_logits_processor(p, skip_prefix_tokens)
+            for p in processors
+        ]
 
     def _ensure_batch_generator(self, sampling_params: SamplingParams) -> bool:
         """Ensure BatchGenerator exists with compatible settings."""
@@ -4811,56 +4538,6 @@ class Scheduler:
             # Re-append gpl suffix to remaining so model sees template trailer.
             if _gpl_suffix_tokens:
                 remaining = list(remaining or []) + list(_gpl_suffix_tokens)
-            if (
-                block_table
-                and block_table.num_tokens > 0
-                and getattr(self, "_mixed_attention_cache_model", False)
-                and not self._uses_dsv4_cache
-                and not self._uses_zaya_cache
-            ):
-                try:
-                    min_mixed_hit_tokens = int(
-                        os.environ.get(
-                            "VMLINUX_MIXED_SWA_MIN_PAGED_HIT_TOKENS",
-                            "256",
-                        )
-                        or "256"
-                    )
-                except ValueError:
-                    min_mixed_hit_tokens = 256
-                if (
-                    min_mixed_hit_tokens > 0
-                    and int(getattr(block_table, "num_tokens", 0) or 0)
-                    < min_mixed_hit_tokens
-                ):
-                    cached_for_log = int(getattr(block_table, "num_tokens", 0) or 0)
-                    logger.info(
-                        "Request %s: ignoring short mixed-SWA paged cache hit "
-                        "(cached_tokens=%d < %d); full prefill is cheaper and "
-                        "avoids tiny-prefix RotatingKVCache reconstruct stalls.",
-                        request.request_id,
-                        cached_for_log,
-                        min_mixed_hit_tokens,
-                    )
-                    try:
-                        self.block_aware_cache.paged_cache.release_request_refs(
-                            block_table
-                        )
-                        self.block_aware_cache.paged_cache.detach_request(
-                            request.request_id
-                        )
-                    except Exception:
-                        pass
-                    request._cache_selection = {
-                        "selected": "miss",
-                        "rejected": "paged",
-                        "reason": "short_mixed_swa_paged_hit",
-                        "paged_cached_tokens": cached_for_log,
-                        "min_cached_tokens": min_mixed_hit_tokens,
-                    }
-                    self._last_cache_selection = request._cache_selection
-                    block_table = None
-                    remaining = request.prompt_token_ids
             if block_table and block_table.num_tokens > 0:
                 paged_cold_tokens = self._paged_cold_block_tokens(block_table)
                 warm_cache = None
@@ -5392,16 +5069,6 @@ class Scheduler:
                 logger.info("Shutting down block disk cache...")
                 disk_store.shutdown()
                 logger.info("Block disk cache shutdown complete")
-
-        step_executor = getattr(self, "_step_executor", None)
-        if step_executor is not None:
-            self._step_executor = None
-            try:
-                logger.info("Shutting down scheduler step executor...")
-                step_executor.shutdown(wait=False, cancel_futures=True)
-                logger.info("Scheduler step executor shutdown complete")
-            except Exception as exc:
-                logger.warning("Scheduler step executor shutdown failed: %s", exc)
 
     def _finalize_hybrid_paged_cache_on_worker(
         self,
@@ -6638,36 +6305,24 @@ class Scheduler:
                                             else []
                                         )
                                         if mixed_key_tokens:
-                                            queued = self._queue_mixed_swa_prompt_cache_store(
-                                                request_id=request.request_id,
-                                                cache_key_tokens=list(mixed_key_tokens),
-                                                prompt_token_count=len(mixed_prompt_tokens),
-                                                cache_type=self._pick_cache_type_for_request(
-                                                    request
-                                                ),
+                                            logger.info(
+                                                "Mixed-SWA prefix cache store using "
+                                                "clean prompt-boundary re-prefill "
+                                                "(%d cache-key tokens from %d "
+                                                "prompt tokens).",
+                                                len(mixed_key_tokens),
+                                                len(mixed_prompt_tokens),
                                             )
-                                            if queued:
-                                                cache_for_extract = None
-                                                request._mixed_swa_cache_store_deferred = True
-                                            else:
-                                                logger.info(
-                                                    "Mixed-SWA prefix cache store using "
-                                                    "clean prompt-boundary re-prefill "
-                                                    "(%d cache-key tokens from %d "
-                                                    "prompt tokens).",
-                                                    len(mixed_key_tokens),
-                                                    len(mixed_prompt_tokens),
+                                            cache_for_extract = (
+                                                self._prefill_for_prompt_only_cache(
+                                                    mixed_key_tokens
                                                 )
-                                                cache_for_extract = (
-                                                    self._prefill_for_prompt_only_cache(
-                                                        mixed_key_tokens
-                                                    )
+                                            )
+                                            if cache_for_extract is not None:
+                                                request._extracted_cache_key_tokens = (
+                                                    list(mixed_key_tokens)
                                                 )
-                                                if cache_for_extract is not None:
-                                                    request._extracted_cache_key_tokens = (
-                                                        list(mixed_key_tokens)
-                                                    )
-                                                    request._extracted_cache_from_prompt_snapshot = True
+                                                request._extracted_cache_from_prompt_snapshot = True
                                         else:
                                             cache_for_extract = None
                                     else:
@@ -6772,12 +6427,6 @@ class Scheduler:
                                     elif getattr(
                                         request,
                                         "_dsv4_cache_hit_store_skipped",
-                                        False,
-                                    ):
-                                        pass
-                                    elif getattr(
-                                        request,
-                                        "_mixed_swa_cache_store_deferred",
                                         False,
                                     ):
                                         pass
@@ -8482,17 +8131,6 @@ class Scheduler:
         # SSM state for future prefix cache hits.
         _has_unprocessed = bool(getattr(self, "unprocessed_requests", []))
         _has_waiting = bool(getattr(self, "waiting", []))
-        if (
-            self.config.enable_prefix_cache
-            and self._mixed_attention_cache_model
-            and not self.running
-            and not _has_waiting
-            and not _has_unprocessed
-            and self._mixed_swa_store_queue
-        ):
-            if self._run_deferred_mixed_swa_cache_store():
-                output.has_work = True
-
         if (
             self._is_hybrid
             and not self._uses_zaya_cache

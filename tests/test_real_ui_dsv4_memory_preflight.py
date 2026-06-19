@@ -10,24 +10,8 @@ from tests.cross_matrix import run_real_ui_dsv4_memory_preflight as gate
 
 def test_dsv4_memory_preflight_default_out_tracks_current_release_artifact():
     assert gate.DEFAULT_OUT == Path(
-        "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
+        "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
     )
-
-
-def test_dsv4_memory_preflight_default_model_tracks_local_release_artifact():
-    assert gate.DEFAULT_MODEL_PATH == Path(
-        "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG"
-    )
-
-
-def test_dsv4_memory_preflight_default_floor_derives_from_model_size(tmp_path):
-    model = tmp_path / "DeepSeek-V4-Flash-JANG"
-    model.mkdir()
-    (model / "weights.bin").write_bytes(b"x" * 1024 * 1024 * 2)
-
-    floor = gate.default_required_available_gb(model)
-
-    assert floor == round(gate.model_size_gb(model) + gate.DEFAULT_REQUIRED_MODEL_MARGIN_GB, 2)
 
 
 def test_dsv4_memory_preflight_psutil_snapshot_labels_binary_units(monkeypatch):

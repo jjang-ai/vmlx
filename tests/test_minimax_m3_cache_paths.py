@@ -852,3 +852,30 @@ def test_minimax_m3_reasoning_parser_prompt_opened_complete_is_reasoning():
 
     assert reasoning == "The user asks for arithmetic."
     assert content is None
+
+
+def test_minimax_m3_reasoning_parser_splits_captured_prompt_opened_raw_output():
+    from vmlx_engine.reasoning.minimax_m3_parser import MiniMaxM3ReasoningParser
+
+    parser = MiniMaxM3ReasoningParser()
+    parser.reset_state(think_in_prompt=True)
+
+    reasoning, content = parser.extract_reasoning(
+        "The user asks for arithmetic.</mm:think>17 + 25 = 31\n\n\\boxed{31}"
+    )
+
+    assert reasoning == "The user asks for arithmetic."
+    assert content == "17 + 25 = 31\n\n\\boxed{31}"
+    assert "</mm:think>" not in content
+
+
+def test_minimax_m3_residual_think_markup_is_stripped_for_display_and_tools():
+    import vmlx_engine.server as server
+
+    raw = "private <mm:think>hidden</mm:think> visible"
+    implicit = "hidden reasoning</mm:think>visible answer"
+
+    assert server._strip_residual_think_markup_for_display(raw) == "private visible"
+    assert server._strip_think_for_tool_parse(raw) == "private visible"
+    assert server._strip_residual_think_markup_for_display(implicit) == "visible answer"
+    assert server._strip_think_for_tool_parse(implicit) == "visible answer"

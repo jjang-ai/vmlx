@@ -242,72 +242,6 @@ class TestQwenToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"command": 'echo "Tools are working correctly!"'}
 
-    def test_streaming_xml_empty_required_args_fail_closed(self, parser):
-        """Streaming parse must keep request schema validation."""
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-        text = (
-            "Checking what's in /tmp.\n"
-            '<tool_call>{"name": "exec_command", "arguments": {}}</tool_call>'
-        )
-
-        result = parser.extract_tool_calls_streaming(
-            "",
-            text,
-            "</tool_call>",
-            request=request,
-        )
-
-        assert result is None
-
-    def test_streaming_xml_required_args_preserved(self, parser):
-        """Valid required arguments should still stream as a tool call."""
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-        text = (
-            "Checking what's in /tmp.\n"
-            '<tool_call>{"name": "exec_command", '
-            '"arguments": {"cmd": "ls /tmp"}}</tool_call>'
-        )
-
-        result = parser.extract_tool_calls_streaming(
-            "",
-            text,
-            "</tool_call>",
-            request=request,
-        )
-
-        assert result is not None
-        assert result["tool_calls"][0]["function"]["name"] == "exec_command"
-        args = json.loads(result["tool_calls"][0]["function"]["arguments"])
-        assert args == {"cmd": "ls /tmp"}
-
     def test_plain_tool_name_then_argument_uses_single_tool_schema(self, parser):
         """Qwen3.6 can emit a bare tool name followed by the command text."""
         request = {
@@ -335,36 +269,6 @@ class TestQwenToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"command": 'echo "Tool test successful!"'}
 
-    def test_plain_tool_name_then_argument_preserves_spacing_and_newlines(
-        self, parser
-    ):
-        """Schema-gated Qwen plain-line fallback must not rewrite strings."""
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "bash",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"command": {"type": "string"}},
-                            "required": ["command"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = parser.extract_tool_calls(
-            "  bash  \n  printf '<日本語>' && pwd  \nnext  ",
-            request=request,
-        )
-
-        assert result.tools_called
-        assert result.content is None
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args == {"command": "  printf '<日本語>' && pwd  \nnext  "}
-
     def test_bracket_format(self, parser):
         """Test parsing Qwen bracket format (Qwen3 style)."""
         text = '[Calling tool: add({"a": 5, "b": 3})]'
@@ -381,29 +285,6 @@ class TestQwenToolParser:
 
         assert result.tools_called
         assert len(result.tool_calls) == 2
-
-    def test_xml_empty_arguments_with_required_schema_fails_closed(self, parser):
-        text = '<tool_call>{"name": "exec_command", "arguments": {}}</tool_call>'
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert not result.tools_called
-        assert result.tool_calls == []
 
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""
@@ -525,65 +406,6 @@ class TestDeepSeekToolParser:
 
         assert result.tools_called
         assert result.content == "Let me help you with that."
-
-    def test_special_string_arguments_preserved_after_json_normalization(self, parser):
-        """Valid JSON may be normalized, but string payload bytes must survive."""
-        text = """<｜tool▁calls▁begin｜>
-<｜tool▁call▁begin｜>function<｜tool▁sep｜>exec_command
-```json
-{"cmd":"  printf '<日本語>' && pwd\\n  "}
-```<｜tool▁call▁end｜>
-<｜tool▁calls▁end｜>"""
-        result = parser.extract_tool_calls(text)
-
-        assert result.tools_called
-        assert json.loads(result.tool_calls[0]["arguments"]) == {
-            "cmd": "  printf '<日本語>' && pwd\n  "
-        }
-
-    def test_missing_required_arguments_fail_closed(self, parser):
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-        text = """<｜tool▁calls▁begin｜>
-<｜tool▁call▁begin｜>function<｜tool▁sep｜>exec_command
-```json
-{}
-```<｜tool▁call▁end｜>
-<｜tool▁calls▁end｜>"""
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert result.tools_called is False
-        assert result.tool_calls == []
-
-    def test_raw_invalid_arguments_preserve_outer_whitespace_without_schema(self, parser):
-        raw = "  raw value with <angle> & spaces  "
-        text = (
-            "<｜tool▁calls▁begin｜>\n"
-            "<｜tool▁call▁begin｜>function<｜tool▁sep｜>legacy_raw\n"
-            "```json\n"
-            f"{raw}\n"
-            "```<｜tool▁call▁end｜>\n"
-            "<｜tool▁calls▁end｜>"
-        )
-
-        result = parser.extract_tool_calls(text)
-
-        assert result.tools_called
-        assert result.tool_calls[0]["arguments"] == raw
 
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""
@@ -778,29 +600,6 @@ class TestNemotronToolParser:
         assert result.tools_called
         assert len(result.tool_calls) == 2
 
-    def test_empty_function_with_required_schema_fails_closed(self, parser):
-        text = "<tool_call><function=exec_command></function></tool_call>"
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "exec_command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"cmd": {"type": "string"}},
-                            "required": ["cmd"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert not result.tools_called
-        assert result.tool_calls == []
-
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""
         text = "Here is the information you requested."
@@ -834,57 +633,6 @@ class TestZayaToolParser:
         assert args == {
             "path": "real_ui_tool_probe_1.txt",
             "content": "REAL_UI_LIVE_TOOL_ONE",
-        }
-
-    def test_string_parameter_trims_only_wrapper_newlines_with_schema(self, parser):
-        text = (
-            "<zyphra_tool_call>\n"
-            "<function=record_fact>\n"
-            "<parameter=value>\nblue-cat\n</parameter>\n"
-            "</function>\n"
-            "</zyphra_tool_call>"
-        )
-        request = {
-            "tools": [{
-                "function": {
-                    "name": "record_fact",
-                    "parameters": {"properties": {"value": {"type": "string"}}},
-                },
-            }],
-        }
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert result.tools_called
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args == {"value": "blue-cat"}
-
-    def test_string_parameter_preserves_same_line_spaces_and_multiline_payload(
-        self, parser
-    ):
-        request = {
-            "tools": [{
-                "function": {
-                    "name": "write_note",
-                    "parameters": {"properties": {"value": {"type": "string"}}},
-                },
-            }],
-        }
-
-        same_line = parser.extract_tool_calls(
-            "<zyphra_tool_call><function=write_note><parameter=value>  blue-cat  </parameter></function></zyphra_tool_call>",
-            request=request,
-        )
-        multiline = parser.extract_tool_calls(
-            "<zyphra_tool_call><function=write_note><parameter=value>line1\nline2</parameter></function></zyphra_tool_call>",
-            request=request,
-        )
-
-        assert json.loads(same_line.tool_calls[0]["arguments"]) == {
-            "value": "  blue-cat  "
-        }
-        assert json.loads(multiline.tool_calls[0]["arguments"]) == {
-            "value": "line1\nline2"
         }
 
 
@@ -1219,69 +967,6 @@ class TestMiniMaxToolParser:
 
         assert not result.tools_called
         assert "<minimax:tool_call>" in result.content
-
-    def test_bare_invoke_parameter_block(self, parser):
-        """Live MiniMax can emit a complete invoke without the outer wrapper."""
-        text = '''<invoke name="record_fact">
-<parameter name="value">blue-cat</parameter>
-</invoke>'''
-        result = parser.extract_tool_calls(text)
-
-        assert result.tools_called
-        assert result.content is None
-        assert result.tool_calls[0]["name"] == "record_fact"
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args == {"value": "blue-cat"}
-
-    def test_bare_invoke_raw_fallback_preserves_spacing(self, parser):
-        """Schema-gated raw fallback must not trim string payloads."""
-        text = "<invoke name=\"legacy_raw\">  alpha\nbeta  </invoke>"
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "legacy_raw",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"raw": {"type": "string"}},
-                            "required": ["raw"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert result.tools_called
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args == {"raw": "  alpha\nbeta  "}
-
-    def test_xml_function_raw_fallback_preserves_spacing(self, parser):
-        """Legacy XML fallback must not trim schema-declared raw payloads."""
-        text = "<minimax:tool_call><legacy_raw>  alpha\nbeta  </legacy_raw></minimax:tool_call>"
-        request = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "legacy_raw",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"raw": {"type": "string"}},
-                            "required": ["raw"],
-                        },
-                    },
-                }
-            ]
-        }
-
-        result = parser.extract_tool_calls(text, request=request)
-
-        assert result.tools_called
-        args = json.loads(result.tool_calls[0]["arguments"])
-        assert args == {"raw": "  alpha\nbeta  "}
 
     def test_empty_invoke(self, parser):
         """Test invoke with no parameters."""

@@ -69,9 +69,8 @@ restore_python_runtime_files() {
 echo "==> Downloading Python ${PYTHON_VERSION}..."
 curl -L "$URL" -o "$STANDALONE_TARBALL"
 tar xzf "$STANDALONE_TARBALL" -C "$BUNDLE_DIR"
-restore_python_runtime_files
 
-PYTHON="$BUNDLE_DIR/python/bin/python3.12"
+PYTHON="$BUNDLE_DIR/python/bin/python3"
 
 # Verify Python works
 "$PYTHON" --version
@@ -133,8 +132,6 @@ echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
   --implementation py --python-version 312 --abi none \
   "mlx-metal==$MLX_VERSION"
 "$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
-restore_python_runtime_files
-PYTHON="$BUNDLE_DIR/python/bin/python3"
 
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install \
@@ -210,7 +207,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
 else
   if [ "${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
-    "$PYTHON" -m pip install --no-deps "jang>=2.5.30"
+    "$PYTHON" -m pip install --no-deps "jang>=2.5.29"
   else
     echo "ERROR: RELEASE BLOCKED — local jang-tools source missing: $JANG_LOCAL" >&2
     echo "       vMLX release builds must bundle the checked-out JANG runtime," >&2

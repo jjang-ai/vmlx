@@ -572,27 +572,18 @@ class MLLMScheduler:
                         if self._is_hybrid and not self._uses_zaya_cache:
                             try:
                                 try:
-                                    default_ssm_budget_gb = max(
-                                        float(self.config.block_disk_cache_max_gb),
-                                        (
-                                            float(self.config.ssm_state_cache_size)
-                                            * float(
-                                                self.config.ssm_state_cache_max_mb
-                                                or 512
-                                            )
-                                        )
-                                        / 1024.0,
-                                    )
                                     ssm_budget_gb = float(
                                         os.environ.get(
                                             "VMLX_SSM_DISK_CACHE_MAX_GB",
-                                            str(default_ssm_budget_gb),
+                                            str(self.config.block_disk_cache_max_gb),
                                         )
                                     )
                                     if ssm_budget_gb <= 0:
-                                        ssm_budget_gb = default_ssm_budget_gb
+                                        ssm_budget_gb = (
+                                            self.config.block_disk_cache_max_gb
+                                        )
                                 except ValueError:
-                                    ssm_budget_gb = default_ssm_budget_gb
+                                    ssm_budget_gb = self.config.block_disk_cache_max_gb
                                 self._ssm_companion_disk_store = (
                                     SSMCompanionDiskStore(
                                         directory=os.path.join(
@@ -765,7 +756,6 @@ class MLLMScheduler:
             self._mixed_attention_cache_model
             and getattr(self.config, "kv_cache_quantization_explicit", False) is False
             and self.config.kv_cache_quantization != "none"
-            and not self._auto_storage_quant_allowed_for_mixed_attention()
         ):
             logger.info(
                 "Mixed-SWA VLM cache detected — disabling auto q4/q8 stored-cache "
@@ -1196,32 +1186,6 @@ class MLLMScheduler:
                 nxt = _safe_attr(obj, attr)
                 if nxt is not None and nxt is not obj and id(nxt) not in seen:
                     stack.append(nxt)
-
-    def _auto_storage_quant_allowed_for_mixed_attention(self) -> bool:
-        """Return True when auto q4/q8 storage compression is release-cleared.
-
-        Gemma4 mixed-SWA stores full-attention KVCache layers with q4/q8
-        compression at the prefix/paged/L2 boundary while RotatingKVCache
-        sliding-window layers stay native. MiMo and Step3.7 mixed-SWA variants
-        remain explicit opt-in until their own semantic parity rows are green.
-        """
-        model_path = str(getattr(self.config, "model_path", "") or "")
-        try:
-            from .model_config_registry import get_model_config_registry
-
-            cfg = get_model_config_registry().lookup(model_path)
-            family = str(getattr(cfg, "family_name", "") or "").lower()
-            subtype = str(getattr(cfg, "cache_subtype", "") or "").lower()
-            if family == "gemma4" and subtype not in {
-                "mimo_v2_asymmetric_swa",
-                "step3p7_full_sliding_kv",
-            }:
-                return True
-        except Exception:
-            pass
-
-        lowered = model_path.lower()
-        return "gemma-4" in lowered or "gemma4" in lowered
 
     def _enforce_turboquant_single_sequence(self) -> None:
         """Keep MLLM live batching honest for TurboQuantKVCache."""

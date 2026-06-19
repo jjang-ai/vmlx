@@ -373,6 +373,51 @@ class MemoryAwarePrefixCache:
             f"ttl={ttl_str}"
         )
 
+    def _clone_cache_for_fetch(self, cache: list, length: int) -> list:
+        """Return an isolated clone of a cache hit, or the stored reference.
+
+        Issue #198 (1C): only clone when every layer is a plainly-sliceable
+        positional cache (KVCache / QuantizedKVCache, incl. CacheList of
+        those). _truncate_cache rebuilds those as fresh objects with sliced
+        arrays -> independent offset and (on next update) independent buffer,
+        so generation cannot contaminate the stored entry. For RotatingKVCache
+        (would be lossily converted), MambaCache / cumulative state (cannot be
+        truncated), or unknown types, fall back to the stored reference
+        (unchanged behavior).
+        """
+        try:
+            from mlx_lm.models.cache import KVCache, QuantizedKVCache
+        except Exception:
+            return cache
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except Exception:
+            _CacheList = ()
+
+        def _safe(layer) -> bool:
+            # MiniMax-M3 MSA cache (KVCache subclass + idx_keys lane): _truncate_cache
+            # now rebuilds it AS a fresh isolated MiniMaxM3SparseCache with
+            # keys/values/idx_keys all sliced, so cloning fully isolates the stored
+            # entry. WITHOUT this, the hit returned the stored object by reference and
+            # decode appended into the cached prefix -> polluted reuse -> repetition
+            # loop on the next hit (the real multi-turn / repeated-prompt bug).
+            if type(layer).__name__ == "MiniMaxM3SparseCache":
+                return True
+            if isinstance(layer, (KVCache, QuantizedKVCache)):
+                return type(layer).__name__ in ("KVCache", "QuantizedKVCache")
+            if _CacheList and isinstance(layer, _CacheList):
+                subs = getattr(layer, "caches", None) or []
+                return bool(subs) and all(
+                    type(sc).__name__ in ("KVCache", "QuantizedKVCache")
+                    for sc in subs
+                )
+            return False
+
+        if not cache or not all(_safe(layer) for layer in cache):
+            return cache
+        cloned = self._truncate_cache(cache, length)
+        return cloned if cloned is not None else cache
+
     @staticmethod
     def _truncate_cache(
         cache: list[Any], target_len: int
@@ -627,8 +672,11 @@ class MemoryAwarePrefixCache:
                 entry.touch()
                 self._stats.hits += 1
                 self._stats.tokens_saved += len(tokens)
-                # Return reference directly - MLX arrays are immutable
-                return entry.cache, []
+                # issue #198 (1C): return an isolated clone so generation
+                # advancing offset/appending KV in place cannot contaminate
+                # the stored entry for future hits on the same prefix.
+                cloned = self._clone_cache_for_fetch(entry.cache, len(tokens))
+                return cloned, []
 
             # Prefix scan: O(n) over all entries (Issue #62).
             #
@@ -677,7 +725,11 @@ class MemoryAwarePrefixCache:
                 self._stats.hits += 1
                 self._stats.tokens_saved += best_forward_length
                 remaining = tokens[best_forward_length:]
-                return best_forward_match.cache, remaining
+                # issue #198 (1C): isolated clone (see exact-match path).
+                cloned = self._clone_cache_for_fetch(
+                    best_forward_match.cache, best_forward_length
+                )
+                return cloned, remaining
 
             # Fall back to reverse match with cache truncation
             if best_reverse_match is not None:

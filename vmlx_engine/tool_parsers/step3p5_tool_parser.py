@@ -13,7 +13,6 @@ on the tool schema provided in the request.
 import json
 import re
 from collections.abc import Sequence
-from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -56,7 +55,7 @@ class Step3p5ToolParser(ToolParser):
 
     # Pattern to extract <parameter=name>value</parameter>
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>(.*?)</parameter>",
+        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
         re.DOTALL,
     )
 
@@ -70,24 +69,9 @@ class Step3p5ToolParser(ToolParser):
         if not tools:
             return None
         for tool in tools:
-            if isinstance(tool, dict):
-                nested = tool.get("function")
-                func = nested if isinstance(nested, dict) else tool
-            else:
-                nested = getattr(tool, "function", None)
-                func = nested if nested is not None else tool
-            if isinstance(func, dict):
-                name = func.get("name")
-                parameters = func.get("parameters", {})
-            else:
-                name = getattr(func, "name", None)
-                parameters = getattr(func, "parameters", {})
-            if name == func_name:
-                props = (
-                    parameters.get("properties", {})
-                    if isinstance(parameters, dict)
-                    else {}
-                )
+            func = tool.get("function", {})
+            if func.get("name") == func_name:
+                props = func.get("parameters", {}).get("properties", {})
                 return props.get(param_name)
         return None
 
@@ -100,65 +84,35 @@ class Step3p5ToolParser(ToolParser):
         Matches vLLM step3p5 parser behavior: converts string values to
         int, float, or bool when the schema specifies those types.
         """
-        stripped = value.strip()
         if not schema:
-            return unescape(value)
+            return value
 
         param_type = schema.get("type", "string")
 
         if param_type == "integer":
             try:
-                return int(stripped)
+                return int(value)
             except (ValueError, TypeError):
-                return unescape(value)
+                return value
         elif param_type == "number":
             try:
-                return float(stripped)
+                return float(value)
             except (ValueError, TypeError):
-                return unescape(value)
+                return value
         elif param_type == "boolean":
-            lower = stripped.lower()
+            lower = value.lower().strip()
             if lower in ("true", "1", "yes"):
                 return True
             elif lower in ("false", "0", "no"):
                 return False
-            return unescape(value)
+            return value
         elif param_type == "array" or param_type == "object":
             try:
-                return json.loads(stripped)
+                return json.loads(value)
             except json.JSONDecodeError:
-                return unescape(value)
-        elif param_type == "string":
-            if (
-                ("\n" in value or "\r" in value)
-                and "\n" not in stripped
-                and "\r" not in stripped
-            ):
-                return unescape(stripped)
+                return value
 
-        return unescape(value)
-
-    def _coerce_json_arguments(
-        self,
-        func_name: str,
-        arguments: dict[str, Any],
-        request: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        coerced = dict(arguments)
-        for param_name, value in list(coerced.items()):
-            if not isinstance(value, str):
-                continue
-            schema = self._get_param_schema(func_name, str(param_name), request)
-            if not isinstance(schema, dict) or schema.get("type", "string") != "string":
-                continue
-            stripped = value.strip()
-            if (
-                ("\n" in value or "\r" in value)
-                and "\n" not in stripped
-                and "\r" not in stripped
-            ):
-                coerced[param_name] = unescape(stripped)
-        return coerced
+        return value
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -185,22 +139,12 @@ class Step3p5ToolParser(ToolParser):
             content = content.strip()
             if content.startswith("{"):
                 try:
-                    arguments = json.loads(content)
-                    if isinstance(arguments, dict):
-                        arguments = self._coerce_json_arguments(
-                            func_name,
-                            arguments,
-                            request,
-                        )
-                    if not self._arguments_satisfy_required_schema(
-                        func_name, arguments, request
-                    ):
-                        continue
+                    json.loads(content)
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
                             "name": func_name,
-                            "arguments": json.dumps(arguments, ensure_ascii=False),
+                            "arguments": content,
                         }
                     )
                     continue
@@ -213,15 +157,12 @@ class Step3p5ToolParser(ToolParser):
                 arguments = {}
                 for param_name, param_value in params:
                     param_name = param_name.strip()
+                    param_value = param_value.strip()
 
                     # Type coercion based on schema
                     schema = self._get_param_schema(func_name, param_name, request)
                     arguments[param_name] = self._coerce_value(param_value, schema)
 
-                if not self._arguments_satisfy_required_schema(
-                    func_name, arguments, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -231,10 +172,6 @@ class Step3p5ToolParser(ToolParser):
                 )
             else:
                 # Raw content without parameter tags, or empty content
-                if not self._arguments_satisfy_required_schema(
-                    func_name, content, request
-                ):
-                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),

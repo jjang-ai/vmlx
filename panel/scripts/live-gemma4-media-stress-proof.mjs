@@ -26,6 +26,7 @@ const stamp = startedAt.toISOString().replace(/[:.]/g, '-')
 const proofDir = path.resolve(process.env.VMLX_GEMMA_PROOF_DIR || path.join(repoDir, 'build', `live-gemma4-media-${rowName}-${stamp}`))
 const outJson = path.join(proofDir, 'gemma4-media-proof.json')
 const shotPath = path.join(proofDir, 'gemma4-media-final.png')
+const apiKey = process.env.VMLX_GEMMA_API_KEY || `vmlx-gemma-live-${stamp}`
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -150,6 +151,19 @@ function cacheTokensFromUsage(obj) {
   return Number(details.cached_tokens || details.cache_read_input_tokens || 0)
 }
 
+function extractLaunchCommand(logLines) {
+  const lines = Array.isArray(logLines) ? logLines : []
+  return [...lines].reverse().find((line) => /\b(?:vmlx_engine\.cli|vmlx-engine)\b/.test(line) && /\bserve\b/.test(line)) || ''
+}
+
+function commandHasFlag(command, flag) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
+}
+
+function commandHasFlagValue(command, flag, value) {
+  return new RegExp(`(?:^|\\s)${flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+${String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(command)
+}
+
 function readJsonMaybe(file) {
   try {
     return JSON.parse(readFileSync(file, 'utf8'))
@@ -257,6 +271,50 @@ async function captureGenerationDefaults(page, modelPath, sessionConfig) {
       bodyPreview: bodyText.slice(0, 1200),
     },
   }
+}
+
+async function captureSettingsControlValues(page) {
+  return page.evaluate(() => {
+    const labels = ['Timeout (seconds)', 'Max Output Tokens', 'Max Context Tokens', 'Stream Interval']
+    const byLabel = {}
+
+    function findByDataLabel(label) {
+      return Array.from(document.querySelectorAll('[data-setting-label]'))
+        .find((el) => (el.getAttribute('data-setting-label') || '').trim() === label)
+    }
+
+    function findByVisibleLabel(label) {
+      const candidates = Array.from(document.querySelectorAll('span, label, div'))
+        .filter((el) => (el.textContent || '').trim() === label)
+      for (const candidate of candidates) {
+        let node = candidate
+        for (let depth = 0; node && depth < 6; depth += 1, node = node.parentElement) {
+          if (node.querySelector?.('input[type="number"]')) return node
+        }
+      }
+      return null
+    }
+
+    for (const label of labels) {
+      const root = findByDataLabel(label) || findByVisibleLabel(label)
+      const numberInput = root?.querySelector?.('input[type="number"]') || null
+      const rangeInput = root?.querySelector?.('input[type="range"]') || null
+      const unlimitedButton = Array.from(root?.querySelectorAll?.('button') || [])
+        .find((button) => /No limit|Model-owned|Auto \(|Disabled/i.test(button.textContent || '')) || null
+      byLabel[label] = {
+        found: !!root,
+        dataValue: root?.getAttribute?.('data-setting-value') || null,
+        dataUnlimitedActive: root?.getAttribute?.('data-unlimited-active') || null,
+        inputValue: numberInput?.value ?? null,
+        inputPlaceholder: numberInput?.getAttribute?.('placeholder') || '',
+        rangeValue: rangeInput?.value ?? null,
+        unlimitedButtonText: (unlimitedButton?.textContent || '').trim(),
+        unlimitedPressed: unlimitedButton?.getAttribute?.('aria-pressed') || null,
+        rootText: (root?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+      }
+    }
+    return byLabel
+  })
 }
 
 function crc32(buf) {
@@ -428,13 +486,57 @@ function makeSpeechAudio() {
   }
 }
 
-async function postJson(url, body, timeoutMs = 300_000) {
+function authHeaders(mode = 'valid') {
+  if (!apiKey || mode === 'none') return {}
+  if (mode === 'wrong') return { Authorization: `Bearer wrong-${apiKey}` }
+  return { Authorization: `Bearer ${apiKey}` }
+}
+
+async function fetchJsonStatus(url, mode = 'valid', timeoutMs = 20_000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, {
+      headers: authHeaders(mode),
+      signal: controller.signal,
+    })
+    const text = await res.text()
+    let json
+    try { json = text ? JSON.parse(text) : null } catch { json = { raw: text } }
+    return { ok: res.ok, status: res.status, json, raw: text.slice(0, 3000) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function runApiAuthMatrix(baseUrl, servedModel) {
+  const missing = await fetchJsonStatus(`${baseUrl}/v1/models`, 'none')
+  const wrong = await fetchJsonStatus(`${baseUrl}/v1/models`, 'wrong')
+  const correct = await fetchJsonStatus(`${baseUrl}/v1/models`, 'valid')
+  const chatCorrect = await postJson(`${baseUrl}/v1/chat/completions`, {
+    model: servedModel,
+    messages: [{ role: 'user', content: 'Auth matrix check: reply exactly GEMMA_AUTH_OK.' }],
+    max_tokens: 50,
+    temperature: 0,
+    enable_thinking: false,
+  })
+  return {
+    apiKeyConfigured: Boolean(apiKey),
+    missing,
+    wrong,
+    correct,
+    chatCorrect,
+    source: 'direct-session-port',
+  }
+}
+
+async function postJson(url, body, timeoutMs = 300_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(mode) },
       body: JSON.stringify(body),
       signal: controller.signal,
     })
@@ -451,11 +553,11 @@ async function postJson(url, body, timeoutMs = 300_000) {
   }
 }
 
-async function getJson(url, timeoutMs = 20_000) {
+async function getJson(url, timeoutMs = 20_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { signal: controller.signal })
+    const res = await fetch(url, { headers: authHeaders(mode), signal: controller.signal })
     const text = await res.text()
     try {
       return JSON.parse(text)
@@ -467,7 +569,7 @@ async function getJson(url, timeoutMs = 20_000) {
   }
 }
 
-async function streamSse(url, body, kind, timeoutMs = 300_000) {
+async function streamSse(url, body, kind, timeoutMs = 300_000, mode = 'valid') {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const events = []
@@ -480,7 +582,7 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(mode) },
       body: JSON.stringify({ ...body, stream: true }),
       signal: controller.signal,
     })
@@ -843,8 +945,18 @@ function rejectsRedImageLabel(text) {
 function deriveVerdict(result) {
   const failures = []
   const logs = (result.sessionLogsEnd || []).join('\n')
+  const launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsStart || result.sessionLogsEnd || [])
   if (!/family=gemma4|Model family: gemma4|gemma4/i.test(logs)) failures.push('Gemma4 autodetect/log evidence missing')
   const cfg = result.sessionConfigAfterStart || {}
+  if (!launchCommand) failures.push('Gemma4 stress launch command missing from UI logs')
+  if (launchCommand && !commandHasFlag(launchCommand, '--enable-disk-cache')) failures.push('Gemma4 stress launch argv missing --enable-disk-cache')
+  if (launchCommand && commandHasFlag(launchCommand, '--disable-prefix-cache')) failures.push('Gemma4 stress launch argv incorrectly disabled prefix cache')
+  if (launchCommand && cfg.usePagedCache === false && commandHasFlag(launchCommand, '--use-paged-cache')) failures.push('Gemma4 stress launch argv enabled generic paged KV despite usePagedCache=false')
+  if (launchCommand && commandHasFlag(launchCommand, '--enable-block-disk-cache')) failures.push('Gemma4 stress launch argv unexpectedly enabled block disk cache for default row')
+  if (launchCommand && cfg.kvCacheQuantization === 'auto' && commandHasFlag(launchCommand, '--kv-cache-quantization')) failures.push('Gemma4 stress launch argv passed explicit --kv-cache-quantization despite auto defaults')
+  if (launchCommand && !commandHasFlagValue(launchCommand, '--tool-call-parser', 'gemma4')) failures.push('Gemma4 stress launch argv missing --tool-call-parser gemma4')
+  if (launchCommand && !commandHasFlagValue(launchCommand, '--reasoning-parser', 'gemma4')) failures.push('Gemma4 stress launch argv missing --reasoning-parser gemma4')
+  if (launchCommand && !commandHasFlag(launchCommand, '--enable-auto-tool-choice')) failures.push('Gemma4 stress launch argv missing --enable-auto-tool-choice')
   if (cfg.toolCallParser !== 'gemma4') failures.push(`session toolCallParser=${cfg.toolCallParser}`)
   if (cfg.reasoningParser !== 'gemma4') failures.push(`session reasoningParser=${cfg.reasoningParser}`)
   if (cfg.isMultimodal !== true) failures.push(`session isMultimodal=${cfg.isMultimodal}`)
@@ -861,6 +973,19 @@ function deriveVerdict(result) {
     if (!defaults.uiVisibleProbe?.settingsTextVisible || !defaults.uiVisibleProbe?.temperatureValueVisible || !defaults.uiVisibleProbe?.topPValueVisible || !defaults.uiVisibleProbe?.topKValueVisible) {
       failures.push('UI did not visibly expose concrete generation defaults temperature/top-p/top-k')
     }
+  }
+  const controls = result.settingsControlValues || {}
+  const timeoutControl = controls['Timeout (seconds)']
+  if (!timeoutControl?.found) failures.push('settings UI timeout control not found')
+  else if (String(timeoutControl.inputValue) !== String(cfg.timeout ?? '')) {
+    failures.push(`settings UI timeout value ${timeoutControl.inputValue} did not match session timeout ${cfg.timeout}`)
+  }
+  const maxOutputControl = controls['Max Output Tokens']
+  if (!maxOutputControl?.found) failures.push('settings UI max output control not found')
+  else if (Number(cfg.maxTokens || 0) > 0 && String(maxOutputControl.inputValue) !== String(cfg.maxTokens)) {
+    failures.push(`settings UI max output value ${maxOutputControl.inputValue} did not match session maxTokens ${cfg.maxTokens}`)
+  } else if (Number(cfg.maxTokens || 0) > 0 && maxOutputControl.unlimitedPressed === 'true') {
+    failures.push('settings UI max output control showed Model-owned active despite explicit maxTokens')
   }
 
   const modalities = new Set((result.capabilities?.modalities || []).map((m) => String(m).toLowerCase()))
@@ -975,6 +1100,19 @@ function deriveVerdict(result) {
   if (!result.api?.chatTool?.hasToolCalls) failures.push('API Chat required tool did not return tool_calls')
   const apiToolArgs = JSON.stringify(result.api?.chatTool?.message?.tool_calls || [])
   if (result.api?.chatTool?.hasToolCalls && !hasExactMarker(apiToolArgs, 'GEMMA_TOOL_OK')) failures.push('API Chat tool arguments missing GEMMA_TOOL_OK')
+  const auth = result.apiAuth || {}
+  if (!auth.apiKeyConfigured) failures.push('auth API key was not configured in stress session')
+  if (auth.missing?.status !== 401) failures.push(`auth missing request did not return 401: ${auth.missing?.status}`)
+  if (auth.wrong?.status !== 401) failures.push(`auth wrong request did not return 401: ${auth.wrong?.status}`)
+  if (auth.correct?.status !== 200) failures.push(`auth correct request did not return 200: ${auth.correct?.status}`)
+  if (auth.chatCorrect?.status !== 200 || !hasExactMarker(auth.chatCorrect?.json?.choices?.[0]?.message?.content || '', 'GEMMA_AUTH_OK')) failures.push('auth correct chat request failed exact GEMMA_AUTH_OK')
+  const gatewayAuth = result.gatewayAuth || {}
+  if (gatewayAuth.error) failures.push(`gateway auth matrix errored: ${gatewayAuth.error}`)
+  if (gatewayAuth.status?.running && !gatewayAuth.skipped) {
+    if (gatewayAuth.missing?.status !== 401) failures.push(`gateway auth missing request did not return 401: ${gatewayAuth.missing?.status}`)
+    if (gatewayAuth.wrong?.status !== 401) failures.push(`gateway auth wrong request did not return 401: ${gatewayAuth.wrong?.status}`)
+    if (gatewayAuth.correct?.status !== 200) failures.push(`gateway auth correct request did not return 200: ${gatewayAuth.correct?.status}`)
+  }
   for (const [name, row] of Object.entries(result.streaming || {})) {
     if (!row?.ok) failures.push(`stream ${name} HTTP failed`)
     if (row?.textScore?.empty && !row?.hasToolCallSignal) failures.push(`stream ${name} reconstructed empty content/tool signal`)
@@ -1069,11 +1207,12 @@ async function main() {
     await page.waitForLoadState('domcontentloaded').catch(() => {})
     await waitForWindowApi(page)
 
-    const sessionResult = await page.evaluate(async ({ modelPath, port }) => {
+    const sessionResult = await page.evaluate(async ({ modelPath, port, apiKey }) => {
       await window.api.chat.clearAllLocks().catch(() => null)
       const config = {
         host: '127.0.0.1',
         port,
+        apiKey: apiKey,
         continuousBatching: true,
         maxNumSeqs: 1,
         prefillBatchSize: 512,
@@ -1081,7 +1220,10 @@ async function main() {
         completionBatchSize: 512,
         cacheMemoryPercent: 15,
         timeout: 300,
-        maxTokens: 512,
+        // Keep the server startup default model-owned. Individual stress turns
+        // set maxTokens as chat/API overrides so the proof does not introduce a
+        // hidden app-wide output cap.
+        maxTokens: 0,
       }
       const created = await window.api.sessions.create(modelPath, config)
       if (!created?.success || !created?.session?.id) {
@@ -1093,7 +1235,7 @@ async function main() {
       }
       const session = await window.api.sessions.get(created.session.id)
       return { created, started, session }
-    }, { modelPath, port: sessionPort })
+    }, { modelPath, port: sessionPort, apiKey })
     result.sessionCreateResult = sessionResult.created
     result.sessionStartResult = sessionResult.started
     const session = sessionResult.session
@@ -1108,7 +1250,9 @@ async function main() {
     result.sessionConfigAfterStart = JSON.parse(result.sessionAfterStart.config || '{}')
     result.sessionConfigAfterStart.id = session.id
     result.generationDefaults = await captureGenerationDefaults(page, modelPath, result.sessionConfigAfterStart)
+    result.settingsControlValues = await captureSettingsControlValues(page)
     result.sessionLogsStart = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: session.id })
+    result.launchCommand = extractLaunchCommand(result.sessionLogsStart)
     result.cacheStart = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint, id: session.id }).catch((error) => ({ error: String(error?.message || error) }))
     result.models = await getJson(`http://127.0.0.1:${sessionPort}/v1/models`).catch((error) => ({ error: String(error?.message || error) }))
     const servedModel = result.models?.data?.[0]?.id || result.sessionAfterStart?.modelName || path.basename(modelPath)
@@ -1196,6 +1340,29 @@ async function main() {
     writeResult(result)
 
     result.api = {}
+    result.apiAuth = await runApiAuthMatrix(`http://127.0.0.1:${sessionPort}`, servedModel)
+    result.gatewayAuth = await page.evaluate(async ({ servedModel, apiKey }) => {
+      const status = await window.api.gateway?.getStatus?.().catch((error) => ({ error: String(error?.message || error) }))
+      if (!status?.running || !status?.port) return { status, skipped: 'gateway not running for this stress harness' }
+      const base = `http://${status.host || '127.0.0.1'}:${status.port}`
+      const call = async (mode) => {
+        const headers = mode === 'none'
+          ? {}
+          : { Authorization: `Bearer ${mode === 'wrong' ? `wrong-${apiKey}` : apiKey}` }
+        const res = await fetch(`${base}/v1/models`, { headers })
+        const text = await res.text()
+        return { ok: res.ok, status: res.status, raw: text.slice(0, 1000) }
+      }
+      return {
+        status,
+        servedModel,
+        missing: await call('none'),
+        wrong: await call('wrong'),
+        correct: await call('valid'),
+      }
+    }, { servedModel, apiKey }).catch((error) => ({ error: String(error?.message || error) }))
+    writeResult(result)
+
     const chatResp = await postJson(`http://127.0.0.1:${sessionPort}/v1/chat/completions`, {
       model: servedModel,
       messages: [{ role: 'user', content: 'API Chat text check: start the visible answer with the exact marker GEMMA_API_CHAT_OK, then add one short fact about Oracle EBS.' }],
@@ -1407,6 +1574,7 @@ async function main() {
     result.healthEnd = await getJson(`http://127.0.0.1:${sessionPort}/health`).catch((error) => ({ error: String(error?.message || error) }))
     result.capabilitiesEnd = await getJson(`http://127.0.0.1:${sessionPort}/v1/models/${encodeURIComponent(servedModel)}/capabilities`).catch((error) => ({ error: String(error?.message || error) }))
     result.sessionLogsEnd = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: session.id })
+    result.launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsEnd)
     result.appLogTail = appLog.slice(-200)
     writeResult(result)
 
