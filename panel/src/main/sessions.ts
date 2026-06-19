@@ -15,6 +15,7 @@ import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../shared/toolParserAliases'
 import { canonicalizeReasoningParserForCli } from '../shared/reasoningParserAliases'
 import { GENERATION_STARTUP_DEFAULTS_VERSION, LEGACY_GENERIC_MAX_OUTPUT_TOKENS } from '../shared/sessionConfigMigrations'
+import { appendMetalWiredLimitGuidance } from '../shared/metalWiredLimit'
 import {
   BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE,
   normalizeBackendStderrChunk,
@@ -94,6 +95,7 @@ function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+const MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900
 
 function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: string): number {
   const configured = config.timeout
@@ -101,6 +103,9 @@ function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: 
   const normalizedFamily = normalizeDetectedFamilyName(family)
   if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
     return DSV4_DEFAULT_TIMEOUT_SECONDS
+  }
+  if (normalizedFamily === 'minimax_m3' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+    return MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
   }
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
@@ -171,6 +176,17 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         changed = true
       }
     } else if (detectedFamily === 'minimax_m3') {
+      if (config.timeout == null || config.timeout === GENERIC_DEFAULT_TIMEOUT_SECONDS) {
+        config.timeout = MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
+        changed = true
+      }
+      // Keep MiniMax-M3 output length model-owned by default. Do not silently
+      // force a larger --max-tokens cap; explicit user values are preserved and
+      // legacy generic caps are scrubbed back to model-owned below.
+      if (config.maxTokens != null && LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))) {
+        config.maxTokens = 0
+        changed = true
+      }
       if (config.enablePrefixCache !== true) {
         config.enablePrefixCache = true
         changed = true
@@ -1737,6 +1753,7 @@ export class SessionManager extends EventEmitter {
         } else {
           reason = `Process exited with code ${code}`
         }
+        reason = appendMetalWiredLimitGuidance(reason)
         this.pushLog(sessionId, `[ERROR] ${reason}`)
         this.emit('session:error', { sessionId, error: reason })
       } else {
@@ -2040,7 +2057,9 @@ export class SessionManager extends EventEmitter {
           port: proc.port,
           timeout: detectedFamily === 'deepseek-v4'
             ? DSV4_DEFAULT_TIMEOUT_SECONDS
-            : GENERIC_DEFAULT_TIMEOUT_SECONDS,
+            : detectedFamily === 'minimax_m3'
+              ? MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
+              : GENERIC_DEFAULT_TIMEOUT_SECONDS,
           maxNumSeqs: 1,
           prefillBatchSize: 512,
           prefillStepSize: 2048,
@@ -3461,6 +3480,7 @@ export class SessionManager extends EventEmitter {
           } else {
             reason = managed.lastStderr || `exit code ${managed.exitCode ?? 'unknown'}`
           }
+          reason = appendMetalWiredLimitGuidance(reason)
           throw new Error(`Process exited before becoming ready: ${reason}`)
         }
         if (!managed) {

@@ -518,6 +518,16 @@ def serve_command(args):
             _m3_mt = str(_m3_c.get("model_type", "")).lower()
             _m3_arch = " ".join(str(a) for a in (_m3_c.get("architectures") or [])).lower()
             if _m3_mt in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in _m3_arch:
+                _m3_has_vl = _m3_mt == "minimax_m3_vl" or bool(_m3_c.get("vision_config"))
+                if _m3_has_vl:
+                    _m3_os.environ["VMLX_M3_VL"] = "1"
+                    if getattr(args, "is_mllm", False):
+                        args.is_mllm = False
+                        logger.warning(
+                            "MiniMax-M3 VL uses vMLX's text-routed MSA/VL runtime; "
+                            "ignoring --is-mllm to avoid the unsupported mlx_vlm "
+                            "minimax_m3_vl loader."
+                        )
                 # M3's MSA dual-cache is dynamic/path-dependent (idx_keys grow and
                 # the Lightning-Indexer block selection changes every step).
                 # mx.compile (JIT) traces a STATIC graph and cannot follow that —

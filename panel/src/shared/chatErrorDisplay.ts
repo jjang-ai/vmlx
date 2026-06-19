@@ -1,3 +1,5 @@
+import { appendMetalWiredLimitGuidance } from './metalWiredLimit'
+
 const PROJECTED_METAL_HEADROOM_RE =
   /Requested max output tokens exceed projected safe Metal headroom/i
 
@@ -12,5 +14,5 @@ export function projectedMetalHeadroomChatErrorContent(
     .replace(/^API error:\s*413\s*-\s*/i, "")
     .trim()
 
-  return `Generation blocked: ${detail}`
+  return appendMetalWiredLimitGuidance(`Generation blocked: ${detail}`)
 }

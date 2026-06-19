@@ -35,6 +35,7 @@ import {
 const DEFAULT_PORT = 8000;
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300;
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900;
+const MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900;
 const configuredToolStreamStallTimeoutMs = Number(
   process.env.VMLX_TOOL_STREAM_STALL_TIMEOUT_MS,
 );
@@ -44,13 +45,17 @@ const TOOL_STREAM_STALL_TIMEOUT_MS = Number.isFinite(
   ? Math.max(5_000, configuredToolStreamStallTimeoutMs)
   : 30_000;
 
-function effectiveDsv4RequestTimeoutSeconds(
+function effectiveFamilyRequestTimeoutSeconds(
   timeoutSeconds: number,
   detectedFamily?: string,
 ): number {
-  return detectedFamily === "deepseek-v4" && timeoutSeconds === GENERIC_DEFAULT_TIMEOUT_SECONDS
-    ? DSV4_DEFAULT_TIMEOUT_SECONDS
-    : timeoutSeconds;
+  if (detectedFamily === "deepseek-v4" && timeoutSeconds === GENERIC_DEFAULT_TIMEOUT_SECONDS) {
+    return DSV4_DEFAULT_TIMEOUT_SECONDS;
+  }
+  if (detectedFamily === "minimax_m3" && timeoutSeconds === GENERIC_DEFAULT_TIMEOUT_SECONDS) {
+    return MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS;
+  }
+  return timeoutSeconds;
 }
 
 function shouldForwardReasoningEffort(
@@ -1013,7 +1018,7 @@ export function registerChatHandlers(
               thinkingBudgetSupported = undefined;
             }
             chatDetectedFamily = detected.family;
-            timeoutSeconds = effectiveDsv4RequestTimeoutSeconds(
+            timeoutSeconds = effectiveFamilyRequestTimeoutSeconds(
               timeoutSeconds,
               chatDetectedFamily,
             );
@@ -1395,6 +1400,7 @@ export function registerChatHandlers(
           // Without stripping, the model sees prior thinking in context and mimics it.
           if (overrides?.enableThinking === false) {
             msgContent = msgContent.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+            msgContent = msgContent.replace(/<mm:think>[\s\S]*?<\/mm:think>\s*/g, "");
             msgContent = msgContent.replace(
               /\[THINK\][\s\S]*?\[\/THINK\]\s*/g,
               "",
@@ -2767,8 +2773,14 @@ export function registerChatHandlers(
                     emitDelta(text, isR, chunkCounted);
                     chunkCounted = true; // subsequent calls skip counting
                   };
-                  // Normalize [THINK]/[/THINK] (Mistral 4) to <think>/</think> for unified parsing
+                  // Normalize [THINK]/[/THINK] (Mistral 4) and
+                  // <mm:think>...</mm:think> (MiniMax-M3) to
+                  // <think>...</think> for unified fallback parsing when an
+                  // older/misconfigured server streams reasoning tags in
+                  // content instead of reasoning_content.
                   content = content
+                    .replace(/<mm:think>/g, "<think>")
+                    .replace(/<\/mm:think>/g, "</think>")
                     .replace(/\[THINK\]/g, "<think>")
                     .replace(/\[\/THINK\]/g, "</think>");
 

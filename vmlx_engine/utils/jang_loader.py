@@ -13,6 +13,7 @@ import gc
 import importlib
 import json
 import logging
+import os
 import shutil
 import struct
 import sys
@@ -1173,8 +1174,8 @@ def _set_wired_limit_for_model(weight_files):
     set. Models larger than this default get pages swapped during eval,
     causing Metal command buffer timeouts.
 
-    Sets wired limit to model_size + 8 GB headroom, capped at the OS's
-    max working set (which the user can raise via:
+    Sets wired limit to model_size + runtime headroom, capped at both the OS's
+    max working set and a physical-RAM reserve (which the user can raise via:
         sudo sysctl iogpu.wired_limit_mb=250000
     persisted in /etc/sysctl.conf).
 
@@ -1195,6 +1196,39 @@ def _set_wired_limit_for_model(weight_files):
             _, max_ws = get_effective_metal_working_set_bytes(mx)
             if max_ws and target > max_ws:
                 target = max_ws
+        except Exception:
+            pass
+        # The OS wired limit is only an upper bound; setting MLX all the way to
+        # that bound on 128GB-class Macs can still SIGKILL or Metal-OOM during
+        # first command-buffer materialization because WindowServer, Python,
+        # mmap metadata, filesystem cache, and transient Metal scratch need
+        # real headroom. Keep a physical-RAM reserve by default, while allowing
+        # developers to tune it for diagnostics.
+        try:
+            total_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+            reserve_fraction = float(
+                os.environ.get(
+                    "VMLX_METAL_WIRED_RESERVE_FRACTION",
+                    os.environ.get(
+                        "VMLINUX_METAL_WIRED_RESERVE_FRACTION",
+                        os.environ.get("VMLINUX_METAL_WIRED_RESERVE_PCT", "0.16"),
+                    ),
+                )
+            )
+            if reserve_fraction > 1:
+                reserve_fraction = reserve_fraction / 100.0
+            reserve_fraction = min(max(reserve_fraction, 0.05), 0.50)
+            reserve_gb = float(os.environ.get("VMLX_METAL_WIRED_RESERVE_GB", os.environ.get("VMLINUX_METAL_WIRED_RESERVE_GB", "16")))
+            reserve = max(int(total_ram * reserve_fraction), int(reserve_gb * 1024 * 1024 * 1024))
+            ram_capped_target = max(0, total_ram - reserve)
+            if ram_capped_target and target > ram_capped_target:
+                logger.info(
+                    "  Wired limit target %.0f GB capped to %.0f GB to leave %.0f GB system/Metal headroom",
+                    target / 1e9,
+                    ram_capped_target / 1e9,
+                    reserve / 1e9,
+                )
+                target = ram_capped_target
         except Exception:
             pass
         if hasattr(mx, "set_wired_limit"):

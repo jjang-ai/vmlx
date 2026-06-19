@@ -29,6 +29,10 @@ interface BackendHandle {
   paths: string[];
 }
 
+interface AuthCaptureBackendHandle extends BackendHandle {
+  authHeaders: Array<string | undefined>;
+}
+
 function listen(server: Server, port = 0): Promise<number> {
   return new Promise((resolve) => {
     server.listen(port, "127.0.0.1", () => {
@@ -132,6 +136,49 @@ async function startEmbeddingBackend(): Promise<BackendHandle> {
   return { server, port: await listen(server), bodies, paths };
 }
 
+async function startAuthCaptureBackend(): Promise<AuthCaptureBackendHandle> {
+  const bodies: any[] = [];
+  const paths: string[] = [];
+  const authHeaders: Array<string | undefined> = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on("end", () => {
+      paths.push(req.url || "");
+      authHeaders.push(req.headers.authorization);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      bodies.push(raw ? JSON.parse(raw) : {});
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/v1/embeddings") {
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2] }],
+            model: "hy3-model",
+            usage: { prompt_tokens: 1, total_tokens: 1 },
+          }),
+        );
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          id: "chatcmpl-auth-capture",
+          object: "chat.completion",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "ok" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    });
+  });
+  return { server, port: await listen(server), bodies, paths, authHeaders };
+}
+
 async function startSlowStreamingChatBackend(): Promise<
   BackendHandle & { responseClosed: Promise<void> }
 > {
@@ -197,10 +244,14 @@ async function startGateway(sessionPort: number): Promise<{ gateway: any; port: 
   return { gateway, port };
 }
 
-async function postJson(url: string, body: any): Promise<any> {
+async function postJson(
+  url: string,
+  body: any,
+  headers: Record<string, string> = { "Content-Type": "application/json" },
+): Promise<any> {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(200);
@@ -364,6 +415,124 @@ describe("Ollama gateway request translation behavior", () => {
     expect(backend.bodies[0]).not.toHaveProperty("reasoning_effort");
     expect(backend.bodies[1].enable_thinking).toBe(false);
     expect(backend.bodies[1]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("forwards bearer auth through translated Ollama chat, generate, and embeddings routes", async () => {
+    const authBackend = await startAuthCaptureBackend();
+    backend = authBackend;
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: "Bearer gateway-session-key",
+    };
+
+    await postJson(`http://127.0.0.1:${started.port}/api/chat`, {
+      model: "hy3-model",
+      stream: false,
+      messages: [{ role: "user", content: "hi" }],
+    }, headers);
+    await postJson(`http://127.0.0.1:${started.port}/api/generate`, {
+      model: "hy3-model",
+      stream: false,
+      prompt: "hi",
+    }, headers);
+    await postJson(`http://127.0.0.1:${started.port}/api/embeddings`, {
+      model: "hy3-model",
+      input: "hi",
+    }, headers);
+
+    expect(authBackend.paths).toEqual([
+      "/v1/chat/completions",
+      "/v1/chat/completions",
+      "/v1/embeddings",
+    ]);
+    expect(authBackend.authHeaders).toEqual([
+      "Bearer gateway-session-key",
+      "Bearer gateway-session-key",
+      "Bearer gateway-session-key",
+    ]);
+  });
+
+  it("requires configured session bearer before gateway-owned model lists and Ollama routing", async () => {
+    const authBackend = await startAuthCaptureBackend();
+    backend = authBackend;
+    const sessions = [
+      {
+        id: "secure",
+        modelPath: "/models/Secure-JANG",
+        modelName: "secure-model",
+        host: "127.0.0.1",
+        port: backend.port,
+        status: "running",
+        type: "local",
+        config: JSON.stringify({
+          servedModelName: "secure-model",
+          apiKey: "gateway-session-key",
+        }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ];
+    dbMock.getSetting.mockImplementation((key: string) =>
+      key === "gateway_single_model_mode" ? "false" : undefined,
+    );
+    dbMock.getSessions.mockReturnValue(sessions);
+    dbMock.getSession.mockImplementation((id: string) =>
+      sessions.find((session) => session.id === id),
+    );
+
+    const { ApiGateway } = await import("../src/main/api-gateway");
+    gateway = new ApiGateway();
+    const port = await freePort();
+    await gateway.start(port, "127.0.0.1");
+
+    const getStatus = async (path: string, authorization?: string) => {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+        headers: authorization ? { Authorization: authorization } : {},
+      });
+      return response.status;
+    };
+
+    expect(await getStatus("/v1/models")).toBe(401);
+    expect(await getStatus("/v1/models", "Bearer wrong-key")).toBe(401);
+    expect(await getStatus("/v1/models", "Bearer gateway-session-key")).toBe(200);
+    expect(await getStatus("/api/tags")).toBe(401);
+    expect(await getStatus("/api/tags", "Bearer wrong-key")).toBe(401);
+    expect(await getStatus("/api/tags", "Bearer gateway-session-key")).toBe(200);
+    expect(await getStatus("/api/ps", "Bearer wrong-key")).toBe(401);
+    expect(await getStatus("/api/ps", "Bearer gateway-session-key")).toBe(200);
+
+    const wrongChat = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer wrong-key",
+      },
+      body: JSON.stringify({
+        model: "secure-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(wrongChat.status).toBe(401);
+    expect(authBackend.paths).toEqual([]);
+
+    const okChat = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer gateway-session-key",
+      },
+      body: JSON.stringify({
+        model: "secure-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(okChat.status).toBe(200);
+    expect(authBackend.paths).toEqual(["/v1/chat/completions"]);
+    expect(authBackend.authHeaders).toEqual(["Bearer gateway-session-key"]);
   });
 
   it("auto-switches by model id in single-model mode before preserving streaming deltas", async () => {

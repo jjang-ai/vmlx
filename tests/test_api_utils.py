@@ -164,6 +164,22 @@ class TestIsMllmModel:
         (tmp_path / "config.json").write_text(json.dumps(config))
         assert is_mllm_model(str(tmp_path)) is True
 
+    def test_minimax_m3_vl_routes_text_runtime_even_when_force_mllm(self, tmp_path):
+        """MiniMax-M3 VL must never route to generic mlx_vlm minimax_m3_vl."""
+        import json
+
+        _IS_MLLM_CACHE.clear()
+        config = {
+            "model_type": "minimax_m3_vl",
+            "architectures": ["MiniMaxM3SparseForConditionalGeneration"],
+            "vision_config": {"hidden_size": 1024},
+            "text_config": {"model_type": "minimax_m3"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert is_mllm_model(str(tmp_path)) is False
+        assert is_mllm_model(str(tmp_path), force_mllm=True) is False
+
     def test_remote_model_name_returns_false(self):
         """Remote HF names without local config.json default to non-VLM.
         Users must force VLM mode via session settings."""

@@ -12,6 +12,7 @@
  * 9. VL model compatibility
  * 10. Wire format compatibility: completions vs responses
  */
+import { readFileSync } from 'fs'
 import { describe, it, expect } from 'vitest'
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -42,6 +43,11 @@ function processContentWithThinkFallback(
     }
 
     if (!serverReasoningProvided && sessionHasReasoningParser) {
+        content = content
+            .replace(/<mm:think>/g, '<think>')
+            .replace(/<\/mm:think>/g, '</think>')
+            .replace(/\[THINK\]/g, '<think>')
+            .replace(/\[\/THINK\]/g, '</think>')
         if (state.clientSideThinkParsing) {
             // Inside a <think> block — check for closing tag
             const endIdx = content.indexOf('</think>')
@@ -110,6 +116,32 @@ describe('Client-side <think> tag extraction — basic cases', () => {
         expect(result).toEqual([
             ['Let me reason about this', true],
             ['The answer is 42.', false]
+        ])
+        expect(state.clientSideThinkParsing).toBe(false)
+    })
+
+    it('extracts complete MiniMax-M3 <mm:think> block in single delta', () => {
+        const state = { clientSideThinkParsing: false }
+        const result = processContentWithThinkFallback(
+            '<mm:think>Let me reason about this</mm:think>The answer is 42.',
+            false, true, state
+        )
+        expect(result).toEqual([
+            ['Let me reason about this', true],
+            ['The answer is 42.', false]
+        ])
+        expect(state.clientSideThinkParsing).toBe(false)
+    })
+
+    it('extracts implicit MiniMax-M3 close tag while fallback parser is active', () => {
+        const state = { clientSideThinkParsing: true }
+        const result = processContentWithThinkFallback(
+            'hidden reasoning</mm:think>Visible answer.',
+            false, true, state
+        )
+        expect(result).toEqual([
+            ['hidden reasoning', true],
+            ['Visible answer.', false]
         ])
         expect(state.clientSideThinkParsing).toBe(false)
     })
@@ -1566,5 +1598,19 @@ describe('GPT-OSS / Harmony — client-side behavior', () => {
         expect(emitState.reasoningContent).toBe('Harmony analysis content')
         expect(emitState.fullContent).toBe('Harmony final content')
         expect(emitState.reasoningDoneEmitted).toBe(true)
+    })
+})
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 15. Production source contract
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('Production chat source — MiniMax-M3 reasoning fallback wiring', () => {
+    it('normalizes MiniMax-M3 tags in fallback parsing and thinking-off history cleanup', () => {
+        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+        expect(source).toContain('.replace(/<mm:think>/g, "<think>")')
+        expect(source).toContain('.replace(/<\\/mm:think>/g, "</think>")')
+        expect(source).toContain('msgContent.replace(/<mm:think>[\\s\\S]*?<\\/mm:think>\\s*/g, "")')
     })
 })

@@ -17,6 +17,7 @@ import {
   pagedCacheControlsState,
   pagedCacheMemoryIgnoredText,
 } from '../../../../shared/cacheCapacityDisplay'
+import { metalWiredLimitHelpText } from '../../../../shared/metalWiredLimit'
 import { normalizeMcpPolicyList } from '../../../../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../../../../shared/toolParserAliases'
 export interface SessionConfig {
@@ -245,7 +246,7 @@ export const CASUAL_CONFIG: SessionConfig = {
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
   kvCacheQuantization: 'auto', // Do not pass explicit q4; that disables calibrated live TQ-KV.
-  maxTokens: 8192,            // Explicit server output cap; limits runaway long replies without changing context.
+  maxTokens: 0,               // Model-owned output cap. Users can set an explicit cap per server/chat/API request.
   enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
 }
 
@@ -377,6 +378,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   }
   const cachePolicy = resolveCacheControlPolicy(cacheControlState)
   const effectiveUsePagedCache = cachePolicy.effectiveUsePagedCache
+  const genericPagedCacheToggleDisabled = m3Active || (!dsv4Active && cachePolicy.pagedCacheDisabled)
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
@@ -388,7 +390,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     defaultMaxBlocks: DEFAULT_CONFIG.maxCacheBlocks,
   })
   const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')
-  const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
+  const nativeTypedCacheOwnsStoredCodec = dsv4Active || m3Active
+  const effectiveStoredCacheQuantization = nativeTypedCacheOwnsStoredCodec ? 'auto' : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
@@ -595,7 +598,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <SliderField
           label={t('sessions.config.timeout')}
-          tooltip="Maximum time in seconds to wait for a single inference request to complete before timing out. Increase this for very long generations or slow models. Default 300s (5 minutes) should be sufficient for most use cases."
+          tooltip="Maximum time in seconds to wait for a single inference request to complete before timing out. Increase this for very long generations or slow models. Default is 300s for most models; MiniMax-M3 and DSV4 auto-use 900s unless you choose a custom value."
           value={config.timeout}
           onChange={v => onChange('timeout', v)}
           min={10}
@@ -773,6 +776,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectiveContinuousBatching && (
           <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
         )}
+        <InfoNote text={metalWiredLimitHelpText} />
       </Section>
 
       {/* Prefix Cache */}
@@ -947,7 +951,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for diagnostic decode-cache testing." />}
-        {!dsv4Active && <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={!dsv4Active && cachePolicy.pagedCacheDisabled} />}
+        {m3Active && <InfoNote text="MiniMax-M3 uses native MSA SSD prefix cache with keys, values, idx_keys, and absolute offsets. Generic paged KV cache is locked OFF because it cannot preserve that cache format." />}
+        {!dsv4Active && m3Active ? (
+          <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'not-allowed', opacity: 0.75 }}>
+            <span>Use Paged KV Cache</span>
+            <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(148,163,184,0.18)', color: 'var(--muted-foreground)' }}>LOCKED OFF</span>
+          </div>
+        ) : !dsv4Active && (
+          <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={genericPagedCacheToggleDisabled} />
+        )}
         {effectiveUsePagedCache && (
           <>
             <InfoNote text={effectivePagedCapacityText} />
@@ -1030,6 +1042,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
         {!effectivelyNoBatching && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Its prefix reuse uses native SWA+CSA/HCA snapshots through the DSV4 Native Composite Prefix Cache switch, not the generic stored-KV codec." />}
+        {!effectivelyNoBatching && m3Active && <PerformanceHint text="MiniMax-M3 keeps generic KV q4/q8 disabled. Prefix reuse uses native MSA snapshots with keys, values, idx_keys, and absolute offsets; generic stored-KV codecs cannot preserve that cache format." />}
         {dsv4Active && (
           <CheckField
             label="DSV4 CSA/HCA Pool Codec"
@@ -1057,7 +1070,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             Stored Cache Quantization
             <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec and also disable calibrated live TurboQuant so the explicit choice is honored." />
           </span>
-          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active}>
+          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || nativeTypedCacheOwnsStoredCodec}>
             <option value="auto">Auto (engine-selected: native/TurboQuant + stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
@@ -1227,7 +1240,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <SliderField
           label="Max Output Tokens"
-          tooltip="Default generated-token cap for this local server. This maps to --max-tokens and only limits response length; it does not change prompt/context length. Leave model-owned to let API request max_tokens or the engine's bundle/default policy decide."
+          tooltip="Default generated-token cap for this local server. This maps to --max-tokens and only limits response length; it does not change prompt/context length. Leave on Model-owned unless you intentionally want a server-level cap."
           value={config.maxTokens}
           onChange={v => onChange('maxTokens', v)}
           min={1}
@@ -2122,7 +2135,12 @@ export function SliderField({
   const displayValue = localInput !== null ? localInput : (isUnlimited ? '' : value)
 
   return (
-    <div className={`block ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
+    <div
+      className={`block ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+      data-setting-label={label}
+      data-setting-value={String(value)}
+      data-unlimited-active={String(isUnlimited)}
+    >
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground">
           {label}
@@ -2133,6 +2151,8 @@ export function SliderField({
             type="button"
             onClick={toggleUnlimited}
             disabled={disabled}
+            aria-pressed={isUnlimited}
+            aria-label={`${label}: ${unlimitedLabel} ${isUnlimited ? 'active' : 'inactive'}`}
             className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${isUnlimited
               ? 'bg-primary/15 border-primary/40 text-primary'
               : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'

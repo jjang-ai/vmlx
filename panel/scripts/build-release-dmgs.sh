@@ -34,7 +34,10 @@ case "$RELEASE_SCOPE" in
   mm3_gemma_vl)
     (
       cd "$ROOT_DIR"
-      if [[ "$VERSION" == "1.5.65" ]]; then
+      if [[ "$VERSION" == "1.5.66" ]]; then
+        "$PYTHON_BIN" "panel/scripts/scoped-release-preflight-66.py" \
+          --out "$PREPACKAGE_READY_MANIFEST_OUT"
+      elif [[ "$VERSION" == "1.5.65" ]]; then
         "$PYTHON_BIN" "panel/scripts/scoped-release-preflight-65.py" \
           --out "$PREPACKAGE_READY_MANIFEST_OUT"
       else

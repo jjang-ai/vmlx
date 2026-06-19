@@ -1257,7 +1257,7 @@ _ROWS: list[dict[str, Any]] = [
             "server startup maxTokens explicitness survives wake/reload and CLI implicit startup paths",
             "API gateway output-budget and context-budget paths are source-hashed",
             "DSV4 request-budget helper is source-hashed with the max-output boundary gate",
-            "Casual preset maxTokens is documented as an explicit server output cap and does not change model-owned defaults or context",
+            "Casual preset leaves maxTokens model-owned instead of forcing a hidden output cap",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",

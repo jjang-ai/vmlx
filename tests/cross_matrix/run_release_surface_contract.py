@@ -98,10 +98,21 @@ def _current_git_head(root: Path) -> str | None:
 def _source_versions(root: Path) -> dict[str, str | None]:
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     panel_pkg = _load_json(root / "panel/package.json")
-    return {
+    versions = {
         "pyproject": pyproject.get("project", {}).get("version") or pyproject.get("version"),
         "panel_package": panel_pkg.get("version"),
     }
+    panel_lock = root / "panel/package-lock.json"
+    if panel_lock.exists():
+        versions["panel_package_lock"] = _load_json(panel_lock).get("version")
+    engine_init = root / "vmlx_engine/__init__.py"
+    if engine_init.exists():
+        match = re.search(
+            r"__version__\s*=\s*['\"]([^'\"]+)['\"]",
+            engine_init.read_text(encoding="utf-8"),
+        )
+        versions["engine_init"] = match.group(1) if match else None
+    return versions
 
 
 def _local_updater_checks(source_version: str, latest: dict[str, Any]) -> dict[str, bool]:
@@ -365,10 +376,19 @@ def build_artifact(
     versions = _source_versions(root)
     source_version = versions["pyproject"]
     panel_version = versions["panel_package"]
+    source_version_values = [
+        str(value)
+        for value in versions.values()
+        if isinstance(value, str) and value
+    ]
     latest = _load_json(root / "latest.json")
 
     checks = {
-        "source_version_consistent": bool(source_version and source_version == panel_version),
+        "source_version_consistent": bool(
+            source_version
+            and panel_version
+            and len(set(source_version_values)) == 1
+        ),
         **_local_updater_checks(str(source_version or ""), latest),
     }
     public_surfaces: dict[str, Any] = {}
@@ -409,12 +429,33 @@ def build_artifact(
         if not passed and name not in status_check_names
     )
     status = "pass" if not status_failed_checks else "fail"
+    next_actions = {
+        "public_site_updater_matches_local": (
+            "Update the live mlx.studio origin manifest/download page and purge "
+            "Cloudflare only after origin content is correct."
+        ),
+        "public_pypi_has_release_files": (
+            "Publish the matching vmlx wheel/sdist to PyPI or explicitly scope "
+            "PyPI out of this release surface."
+        ),
+        "public_github_source_release_tag_matches_source_head": (
+            "Move or recreate the source release tag only after confirming the "
+            "current source head is the intended public release source."
+        ),
+    }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": status,
         "checks": checks,
+        "failed_checks": status_failed_checks,
+        "failed_steps": status_failed_checks,
         "status_failed_checks": status_failed_checks,
         "informational_false_checks": informational_false_checks,
+        "next_actions": [
+            next_actions[name]
+            for name in status_failed_checks
+            if name in next_actions
+        ],
         "source_versions": versions,
         "local_latest": {
             "version": latest.get("version"),
@@ -450,6 +491,7 @@ def main() -> int:
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(args.out)
     print(f"status={artifact['status']}")
+    print("failed_checks=" + json.dumps(artifact["failed_checks"], sort_keys=True))
     print("checks=" + json.dumps(artifact["checks"], sort_keys=True))
     return 0 if artifact["status"] == "pass" else 1
 
