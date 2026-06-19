@@ -205,11 +205,11 @@ function isZayaCcaFamily(family?: string): boolean {
 }
 
 function cacheTypeRequiresPaged(cacheType?: string): boolean {
-    return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
+    return cacheType === 'hybrid' || cacheType === 'mamba'
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-    return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
+    return cacheSubtype === 'step3p7_full_sliding_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -2248,7 +2248,7 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(kvOut, '--use-paged-cache')).toBe(false)
     })
 
-    it('detected Gemma4 mixed-SWA rotating KV forces paged cache over stale saved false', () => {
+    it('detected Gemma4 mixed-SWA rotating KV stays on paged-off SSD prefix by default', () => {
         const out = preview(
             {
                 enablePrefixCache: true,
@@ -2260,7 +2260,7 @@ describe('No Hardcoded Values', () => {
             {
                 family: 'gemma4',
                 cacheType: 'rotating_kv',
-                usePagedCache: true,
+                usePagedCache: false,
                 isMultimodal: true,
                 toolParser: 'gemma4',
                 reasoningParser: 'gemma4',
@@ -2268,10 +2268,10 @@ describe('No Hardcoded Values', () => {
         )
 
         expect(hasFlag(out, '--is-mllm')).toBe(true)
-        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
-        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
-        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
-        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.15')
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {
@@ -2753,15 +2753,17 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('zayaCcaActive ||')
     })
 
-    it('settings form treats Gemma4 mixed-SWA rotating KV as architecture-paged cache', () => {
+    it('settings form treats rotating KV as native topology, not a paged-cache mandate', () => {
         const fs = require('fs')
         const form = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(form).toContain("detectedCacheType === 'rotating_kv'")
+        expect(form).toContain("const rotatingCacheDetected = detectedCacheType === 'rotating_kv'")
         expect(form).toContain('nativeCacheRequiresPaged')
+        expect(form).toContain('generic paged KV is optional unless a family-specific detector explicitly requires it')
+        expect(form).toContain('Generic flat TurboQuant KV is not implied unless a typed rotating-cache codec is proven')
     })
 
     it('settings form surfaces the macOS Metal wired-limit sudo command near memory/cache controls', () => {

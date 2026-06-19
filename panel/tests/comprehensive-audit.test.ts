@@ -31,7 +31,7 @@ interface DetectedConfig {
 const DEFAULT_CONFIG: DetectedConfig = {
   family: "unknown",
   cacheType: "kv",
-  usePagedCache: true,
+  usePagedCache: false,
   enableAutoToolChoice: false,
   isMultimodal: false,
   description: "Unknown model",
@@ -341,8 +341,8 @@ describe("Phase 1: Model Config Detection", () => {
       expect(DEFAULT_CONFIG.cacheType).toBe("kv");
     });
 
-    it("defaults to paged cache enabled", () => {
-      expect(DEFAULT_CONFIG.usePagedCache).toBe(true);
+    it("defaults to paged RAM cache disabled", () => {
+      expect(DEFAULT_CONFIG.usePagedCache).toBe(false);
     });
 
     it("defaults to no tool choice", () => {

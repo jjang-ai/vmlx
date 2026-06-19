@@ -120,10 +120,10 @@ export const DEFAULT_CONFIG: SessionConfig = {
   rateLimit: 0,
   timeout: 300,
   maxNumSeqs: 1,
-  // Default to the production cache stack: continuous batching is the backend
-  // path that enables prefix, paged KV, block-L2, and stored-cache codecs.
-  // Keep max sequences at one for normal local chat so users get the cache
-  // features without reserving a large multi-user batch shape.
+  // Default to the production single-user cache stack: continuous batching
+  // enables prefix reuse, while paged RAM KV and block-disk are opt-in or
+  // family-detected. Generic fresh sessions use memory-aware prefix cache plus
+  // SSD disk_cache L2 so the UI default matches sessions.ts startup defaults.
   prefillBatchSize: 512,
   prefillStepSize: 2048,
   completionBatchSize: 512,
@@ -135,7 +135,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   cacheMemoryPercent: 15,
   cacheTtlMinutes: 0,
   noMemoryAwareCache: false,
-  usePagedCache: true,
+  usePagedCache: false,
   pagedCacheBlockSize: 64,
   maxCacheBlocks: 1000,
   kvCacheQuantization: 'auto',
@@ -144,7 +144,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enableDiskCache: true,
   diskCacheMaxGb: 10,
   diskCacheDir: '',
-  enableBlockDiskCache: true,
+  enableBlockDiskCache: false,
   blockDiskCacheMaxGb: 10,
   blockDiskCacheDir: '',
   streamInterval: 1,
@@ -359,11 +359,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const prefixOff = !effectivePrefixCacheEnabled
   const isMambaCache =
     detectedCacheType === 'mamba' ||
-    detectedCacheType === 'hybrid' ||
-    detectedCacheType === 'rotating_kv'
+    detectedCacheType === 'hybrid'
+  const rotatingCacheDetected = detectedCacheType === 'rotating_kv'
   const subtypeRequiresPagedCache =
-    detectedCacheSubtype === 'step3p7_full_sliding_kv' ||
-    detectedCacheSubtype === 'mixed_swa_kv'
+    detectedCacheSubtype === 'step3p7_full_sliding_kv'
   const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache || subtypeRequiresPagedCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
@@ -950,6 +949,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && cachePolicy.architectureRequiresPagedCache && <IncompatWarning text="This model uses native/paged cache when Prefix Cache is enabled. Enable Prefix Cache above to activate the architecture-specific cache stack." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
+        {rotatingCacheDetected && !nativeCacheRequiresPaged && !dsv4CompositeRequiresPaged && !m3Active && <InfoNote text="Mixed full/sliding attention detected. This rotating-cache topology uses the model's native cache contract; generic paged KV is optional unless a family-specific detector explicitly requires it." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for diagnostic decode-cache testing." />}
         {m3Active && <InfoNote text="MiniMax-M3 uses native MSA SSD prefix cache with keys, values, idx_keys, and absolute offsets. Generic paged KV cache is locked OFF because it cannot preserve that cache format." />}
         {!dsv4Active && m3Active ? (
@@ -1041,6 +1041,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
+        {!effectivelyNoBatching && !prefixOff && rotatingCacheDetected && !m3Active && <PerformanceHint text="Mixed full/sliding attention cache detected — Auto keeps the native rotating-cache contract. Generic flat TurboQuant KV is not implied unless a typed rotating-cache codec is proven for this family." />}
         {!effectivelyNoBatching && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Its prefix reuse uses native SWA+CSA/HCA snapshots through the DSV4 Native Composite Prefix Cache switch, not the generic stored-KV codec." />}
         {!effectivelyNoBatching && m3Active && <PerformanceHint text="MiniMax-M3 keeps generic KV q4/q8 disabled. Prefix reuse uses native MSA snapshots with keys, values, idx_keys, and absolute offsets; generic stored-KV codecs cannot preserve that cache format." />}
         {dsv4Active && (

@@ -804,9 +804,11 @@ function applyConfigMetadataOverrides(
     configDeclaresMixedSwaAttention(parsedConfig)
   ) {
     next.cacheType = 'rotating_kv'
-    // Phase-1 cache policy (2026-06-13): Gemma SWA (mixed full+sliding) is proven correct
-    // paged-OFF with memory-aware prefix + disk_cache L2 (SSD) + TurboQuantKVCache (cache HIT,
-    // no drift). Default to paged-off/SSD-prefix; rotating_kv cacheType still drives the UI label.
+    // Phase-1 cache policy (2026-06-13): Gemma SWA (mixed full+sliding) defaults
+    // to paged-off memory-aware prefix + disk_cache L2 (SSD). `rotating_kv` is a
+    // cache-topology label for the UI; it is not by itself a paged-cache mandate.
+    // Generic flat TQ-KV/stored q4 is only allowed when the engine proves that
+    // codec for the family-specific rotating-cache contract.
     next.usePagedCache = false
   }
   return next

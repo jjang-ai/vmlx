@@ -85,11 +85,11 @@ function isZayaCcaFamily(family?: string): boolean {
 }
 
 function cacheTypeRequiresPaged(cacheType?: string): boolean {
-  return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
+  return cacheType === 'hybrid' || cacheType === 'mamba'
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
+  return cacheSubtype === 'step3p7_full_sliding_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
