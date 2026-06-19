@@ -250,6 +250,23 @@ class TestEnableThinkingTriState:
             assert "_effective_thinking is True" in source
             assert "think_in_template = True" in source
 
+    def test_minimax_m3_nonstream_adaptive_mode_seeds_prompt_reasoning(self):
+        """M3 Auto/adaptive can also start inside prompt-opened reasoning.
+
+        Streaming Chat/Responses already seed MiniMax-M3 for both enabled and
+        adaptive. Non-streaming extraction must match that contract; otherwise
+        adaptive turns that decide to think can publish hidden reasoning as
+        visible content or return an empty visible answer.
+        """
+        import vmlx_engine.server as server_mod
+
+        for source in (
+            inspect.getsource(server_mod.create_chat_completion),
+            inspect.getsource(server_mod.create_response),
+        ):
+            assert "thinking_mode" in source
+            assert 'in ("enabled", "adaptive")' in source
+
     def test_minimax_m3_responses_forced_on_has_visible_answer_pass(self):
         """M3 forced-On can otherwise spend all max_tokens inside <mm:think>."""
         import vmlx_engine.server as server_mod

@@ -12085,13 +12085,14 @@ async def create_chat_completion(
                 engine=engine,
             ):
                 _think_in_prompt_ns = True
-            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
-            # generation prompt, so assistant output starts INSIDE reasoning with
-            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
-            # mode so the reasoning isn't misclassified as visible content.
+            # MiniMax-M3 thinking_mode="enabled"/"adaptive" may prompt-open
+            # <mm:think> in the generation prompt, so assistant output can
+            # start INSIDE reasoning with no opening tag in the OUTPUT. Seed
+            # the parser's implicit-reasoning mode so auto/adaptive reasoning
+            # is not misclassified as visible content.
             if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
                 "thinking_mode"
-            ) == "enabled":
+            ) in ("enabled", "adaptive"):
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
@@ -14132,13 +14133,14 @@ async def create_response(
                 engine=engine,
             ):
                 _think_in_prompt_ns = True
-            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
-            # generation prompt, so assistant output starts INSIDE reasoning with
-            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
-            # mode so the reasoning isn't misclassified as visible content.
+            # MiniMax-M3 thinking_mode="enabled"/"adaptive" may prompt-open
+            # <mm:think> in the generation prompt, so assistant output can
+            # start INSIDE reasoning with no opening tag in the OUTPUT. Seed
+            # the parser's implicit-reasoning mode so auto/adaptive reasoning
+            # is not misclassified as visible content.
             if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
                 "thinking_mode"
-            ) == "enabled":
+            ) in ("enabled", "adaptive"):
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
