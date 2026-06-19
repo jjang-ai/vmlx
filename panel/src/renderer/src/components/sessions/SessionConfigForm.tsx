@@ -378,6 +378,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const cachePolicy = resolveCacheControlPolicy(cacheControlState)
   const effectiveUsePagedCache = cachePolicy.effectiveUsePagedCache
   const genericPagedCacheToggleDisabled = m3Active || (!dsv4Active && cachePolicy.pagedCacheDisabled)
+  const genericBlockDiskCacheToggleDisabled = m3Active || !cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
@@ -953,7 +954,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for diagnostic decode-cache testing." />}
         {m3Active && <InfoNote text="MiniMax-M3 uses native MSA SSD prefix cache with keys, values, idx_keys, and absolute offsets. Generic paged KV cache is locked OFF because it cannot preserve that cache format." />}
         {!dsv4Active && m3Active ? (
-          <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'not-allowed', opacity: 0.75 }}>
+          <div
+            className="cfg-input flex items-center justify-between"
+            style={{ background: 'var(--card)', cursor: 'not-allowed', opacity: 0.75 }}
+            role="switch"
+            aria-checked="false"
+            aria-disabled="true"
+            data-setting-label="Use Paged KV Cache"
+            data-setting-value="locked-off"
+          >
             <span>Use Paged KV Cache</span>
             <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(148,163,184,0.18)', color: 'var(--muted-foreground)' }}>LOCKED OFF</span>
           </div>
@@ -989,7 +998,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             />
           </>
         )}
-        {!batchingOff && !effectiveUsePagedCache && <InfoNote text="Block Disk Cache is SSD L2 for paged/native cache blocks. Turning it on will enable Prefix Cache and Paged KV Cache." />}
+        {!batchingOff && !effectiveUsePagedCache && !m3Active && <InfoNote text="Block Disk Cache is SSD L2 for paged/native cache blocks. Turning it on will enable Prefix Cache and Paged KV Cache." />}
+        {!batchingOff && m3Active && <InfoNote text="MiniMax-M3 uses native MSA SSD prefix-cache snapshots through Disk Cache. Generic Block Disk Cache (L2) is locked OFF because it would imply generic paged KV blocks instead of MSA keys/values/idx_keys records." />}
         {(!dsv4Active || dsv4CompositeRequiresPaged) && <CheckField
           label={dsv4Active ? "DSV4 Block Disk Cache (L2)" : "Block Disk Cache (L2)"}
           tooltip={dsv4Active
@@ -997,7 +1007,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             : "Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant."}
           checked={cachePolicy.blockDiskCacheChecked}
           onChange={v => applyCacheControlUpdates(dsv4Active ? cacheControlUpdatesForDsv4BlockDiskToggle(v) : cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
-          disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled}
+          disabled={genericBlockDiskCacheToggleDisabled}
         />}
         {cachePolicy.blockDiskCacheChecked && (
           <>

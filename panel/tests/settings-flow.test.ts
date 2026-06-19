@@ -2862,9 +2862,11 @@ describe('JIT Toggle', () => {
         expect(countOccurrences(form, 'label="DSV4 Native Composite Prefix Cache"')).toBe(1)
         expect(countOccurrences(form, 'label="DSV4 CSA/HCA Pool Codec"')).toBe(1)
         expect(countOccurrences(form, 'label={dsv4Active ? "DSV4 Block Disk Cache (L2)" : "Block Disk Cache (L2)"}')).toBe(1)
-        expect(countOccurrences(form, 'label="Use Paged KV Cache"')).toBe(1)
+        expect(countOccurrences(form, '<CheckField label="Use Paged KV Cache"')).toBe(1)
         expect(form).toContain('!dsv4Active && m3Active ? (')
         expect(form).toContain('LOCKED OFF')
+        expect(form).toContain('data-setting-label="Use Paged KV Cache"')
+        expect(form).toContain('data-setting-value="locked-off"')
         expect(form).toContain(') : !dsv4Active && (')
         expect(form).toContain('<CheckField label="Use Paged KV Cache"')
         expect(form).toContain('disabled={dsv4CompositeRequiresPaged}')
@@ -2899,6 +2901,19 @@ describe('JIT Toggle', () => {
         expect(form).toContain('LOCKED OFF')
         expect(form).toContain('m3Active ? (')
         expect(form).toContain('disabled={genericPagedCacheToggleDisabled}')
+    })
+
+    it('settings form disables generic block-disk cache for MiniMax-M3 native MSA cache', () => {
+        const form = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain('const genericBlockDiskCacheToggleDisabled = m3Active || !cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled')
+        expect(form).toContain('MiniMax-M3 uses native MSA SSD prefix-cache snapshots through Disk Cache')
+        expect(form).toContain('Generic Block Disk Cache (L2) is locked OFF')
+        expect(form).toContain('disabled={genericBlockDiskCacheToggleDisabled}')
+        expect(form).not.toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled}')
     })
 
     it('settings form hides generic paged-cache warnings for the DSV4 native cache path', () => {

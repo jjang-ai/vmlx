@@ -57,7 +57,7 @@ def _tiny_m3_model():
     return _Model()
 
 
-def test_minimax_m3_switch_expert_rebuild_honors_forward_remapped_quantization():
+def test_minimax_m3_switch_expert_rebuild_honors_forward_remapped_quantization(monkeypatch):
     from mlx_lm.models.switch_layers import QuantizedSwitchLinear
 
     from vmlx_engine.models.minimax_m3.m3_affine2_switch import (
@@ -94,4 +94,9 @@ def test_minimax_m3_switch_expert_rebuild_honors_forward_remapped_quantization()
 
     x = mx.zeros((1, 1, 256), dtype=mx.bfloat16)
     indices = mx.array([[[0, 1, 2, 3]]], dtype=mx.uint32)
+    monkeypatch.delenv("VMLINUX_M3_AFFINE2_SWITCH", raising=False)
+    monkeypatch.delenv("VMLX_M3_AFFINE2_SWITCH", raising=False)
+    assert not can_use_affine2_switchglu(switch, x, indices)
+
+    monkeypatch.setenv("VMLINUX_M3_AFFINE2_SWITCH", "1")
     assert can_use_affine2_switchglu(switch, x, indices)
