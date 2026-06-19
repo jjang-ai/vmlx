@@ -15,7 +15,7 @@ import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../shared/toolParserAliases'
 import { canonicalizeReasoningParserForCli } from '../shared/reasoningParserAliases'
 import { GENERATION_STARTUP_DEFAULTS_VERSION, LEGACY_GENERIC_MAX_OUTPUT_TOKENS } from '../shared/sessionConfigMigrations'
-import { appendMetalWiredLimitGuidance } from '../shared/metalWiredLimit'
+import { appendMetalWiredLimitGuidance, classifyLargeModelMemoryPreflight } from '../shared/metalWiredLimit'
 import {
   BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE,
   normalizeBackendStderrChunk,
@@ -1510,12 +1510,24 @@ export class SessionManager extends EventEmitter {
       const totalGB = (totalBytes / 1e9).toFixed(0)
       console.log(`[SESSION] Model estimate: ~${modelGB} GB | RAM: ${availGB} GB free / ${totalGB} GB total (${usagePercent.toFixed(0)}% used)`)
       this.emit('session:log', { sessionId, data: `Model estimate: ~${modelGB} GB | RAM: ${availGB} GB free / ${totalGB} GB total\n` })
-      if (modelSizeBytes > availableBytes * 0.9) {
-        console.warn(`[SESSION] WARNING: Model (~${modelGB} GB) may exceed available memory (${availGB} GB free). Risk of system instability.`)
-        this.emit('session:log', { sessionId, data: `⚠️  Memory warning: Model requires ~${modelGB} GB but only ${availGB} GB free. Loading may cause system instability or swap.\n` })
-      } else if (modelSizeBytes > availableBytes * 0.7) {
-        console.log(`[SESSION] Model will use most of available RAM (${modelGB} GB / ${availGB} GB free)`)
-        this.emit('session:log', { sessionId, data: `Note: Model (~${modelGB} GB) will use most available memory. KV cache may be limited.\n` })
+      const memoryPreflight = classifyLargeModelMemoryPreflight({ modelSizeBytes, availableBytes, totalBytes })
+      if (memoryPreflight.action === 'block') {
+        console.warn(`[SESSION] ${memoryPreflight.message}`)
+        this.emit('session:log', { sessionId, data: `⛔ ${memoryPreflight.message}\n` })
+        db.updateSession(sessionId, {
+          status: 'error',
+          lastStoppedAt: Date.now()
+        })
+        this.emit('session:error', { sessionId, error: memoryPreflight.message })
+        throw new Error(memoryPreflight.message)
+      } else if (memoryPreflight.action === 'warn') {
+        if (modelSizeBytes > availableBytes * 0.9) {
+          console.warn(`[SESSION] WARNING: Model (~${modelGB} GB) may exceed available memory (${availGB} GB free). Risk of system instability.`)
+          this.emit('session:log', { sessionId, data: `⚠️  ${memoryPreflight.message}\n` })
+        } else {
+          console.log(`[SESSION] Model will use most of available RAM (${modelGB} GB / ${availGB} GB free)`)
+          this.emit('session:log', { sessionId, data: `${memoryPreflight.message}\n` })
+        }
       }
     }
 

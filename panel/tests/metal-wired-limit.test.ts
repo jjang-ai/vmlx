@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   appendMetalWiredLimitGuidance,
+  classifyLargeModelMemoryPreflight,
   metalWiredLimitCommand,
   metalWiredLimitHelpText,
 } from '../src/shared/metalWiredLimit'
@@ -40,5 +41,29 @@ describe('Metal wired-memory limit guidance', () => {
 
     expect(annotated).toContain('Metal wired-memory limit help')
     expect(annotated).toContain('115000-120000 MB')
+  })
+
+  it('hard-blocks huge model startup when the machine has essentially no free RAM', () => {
+    const result = classifyLargeModelMemoryPreflight({
+      modelSizeBytes: 132.3e9,
+      availableBytes: 0.1e9,
+      totalBytes: 137e9,
+    })
+
+    expect(result.action).toBe('block')
+    expect(result.message).toContain('Refusing to start')
+    expect(result.message).toContain('0.1 GB free')
+    expect(result.message).toContain(metalWiredLimitCommand)
+  })
+
+  it('keeps ordinary large-model overcommit as a warning, not a hard block', () => {
+    const result = classifyLargeModelMemoryPreflight({
+      modelSizeBytes: 132.3e9,
+      availableBytes: 104.3e9,
+      totalBytes: 137e9,
+    })
+
+    expect(result.action).toBe('warn')
+    expect(result.message).toContain('Memory warning')
   })
 })

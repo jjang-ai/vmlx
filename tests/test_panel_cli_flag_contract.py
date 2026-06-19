@@ -369,6 +369,31 @@ def test_metal_oom_startup_errors_surface_wired_limit_guidance() -> None:
     assert "metalWiredLimitHelpText" in form
 
 
+def test_large_model_low_memory_preflight_blocks_before_engine_spawn() -> None:
+    shared = (ROOT / "panel" / "src" / "shared" / "metalWiredLimit.ts").read_text(
+        encoding="utf-8"
+    )
+    sessions = (ROOT / "panel" / "src" / "main" / "sessions.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "classifyLargeModelMemoryPreflight" in shared
+    assert "action: 'block'" in shared
+    assert "effectivelyNoFreeRam" in shared
+    assert "ordinary large-model overcommit" not in shared
+    assert "classifyLargeModelMemoryPreflight" in sessions
+    assert "memoryPreflight.action === 'block'" in sessions
+    assert "this.emit('session:error', { sessionId, error: memoryPreflight.message })" in sessions
+    assert "throw new Error(memoryPreflight.message)" in sessions
+
+    preflight_index = sessions.index("const memoryPreflight = classifyLargeModelMemoryPreflight")
+    kill_port_index = sessions.index("await this.killByPort(session.port)")
+    bundled_spawn_index = sessions.index("proc = spawn(engineResult.pythonPath")
+    system_spawn_index = sessions.index("proc = spawn(engineResult.binaryPath")
+    assert preflight_index < kill_port_index < bundled_spawn_index
+    assert preflight_index < kill_port_index < system_spawn_index
+
+
 def test_jang_loader_wired_limit_keeps_physical_ram_headroom() -> None:
     source = (ROOT / "vmlx_engine" / "utils" / "jang_loader.py").read_text(
         encoding="utf-8"

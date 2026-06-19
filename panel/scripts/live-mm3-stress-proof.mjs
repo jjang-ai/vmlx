@@ -22,6 +22,7 @@ const proofDir = path.resolve(process.env.VMLX_MM3_PROOF_DIR || path.join(repoDi
 const outJson = path.join(proofDir, 'mm3-stress-proof.json')
 const shotPath = path.join(proofDir, 'mm3-stress-final.png')
 const apiKey = process.env.VMLX_MM3_API_KEY || `vmlx-mm3-live-${stamp}`
+const stressScope = process.env.VMLX_MM3_STRESS_SCOPE || 'full'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -87,6 +88,7 @@ function scoreText(text) {
     wordCount: words(value).length,
     empty: value.trim().length === 0,
     leakedThinkTags: /<mm:think|<think>|<\/think>|\[THINK\]|\[\/THINK\]/i.test(value),
+    visibleReasoningCue: /(^|\n)\s*(reasoning|analysis|thought)\s*:/i.test(value),
     maxLineRun,
     adjacentPhraseRepeat: phrase,
     loopSuspect: maxLineRun >= 4 || phrase.count >= 6,
@@ -147,6 +149,40 @@ function responseTextFromResponsesObject(obj) {
       if (typeof part?.text === 'string') chunks.push(part.text)
     }
   }
+  return chunks.join('\n')
+}
+
+function reasoningTextFromChatMessage(message) {
+  return String(message?.reasoning_content || message?.reasoning || '')
+}
+
+function reasoningTextFromResponsesObject(obj) {
+  const chunks = []
+  const seen = new Set()
+  function add(value) {
+    if (typeof value !== 'string' || !value.trim()) return
+    if (seen.has(value)) return
+    seen.add(value)
+    chunks.push(value)
+  }
+  function walk(value, parentKey = '') {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, parentKey)
+      return
+    }
+    const type = String(value.type || '')
+    for (const [key, child] of Object.entries(value)) {
+      if (typeof child === 'string') {
+        if (/reasoning/i.test(key) || /reasoning/i.test(type) || (parentKey === 'summary' && key === 'text')) {
+          add(child)
+        }
+      } else {
+        walk(child, key)
+      }
+    }
+  }
+  walk(obj)
   return chunks.join('\n')
 }
 
@@ -685,6 +721,11 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir) {
     row.label = label
     row.overridesAfterSet = overridesAfterSet
     turns.push(row)
+    writeFileSync(path.join(proofDir, 'mixed-session-partial.json'), JSON.stringify({
+      chatId: chat.id,
+      toolDir,
+      turns,
+    }, null, 2))
     return row
   }
 
@@ -796,6 +837,50 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir) {
 }
 
 function deriveVerdict(result) {
+  if (result.stressScope === 'mixed') {
+    const failures = []
+    const logs = (result.sessionLogsEnd || result.sessionLogsStart || []).join('\n')
+    for (const [label, re] of [
+      ['MiniMax-M3 autodetect log missing', /MiniMax-M3 AUTODETECTED/i],
+      ['TurboQuant KV skip log missing', /tq_kv=SKIP\(native MSA\)/i],
+      ['JIT forced-off log missing', /jit=OFF\(forced\)|ignoring --enable-jit/i],
+    ]) {
+      if (!re.test(logs)) failures.push(label)
+    }
+    const mixed = result.ui?.mixedSession
+    if (!mixed) failures.push('mixed UI session missing')
+    else {
+      const labels = mixed.turns || []
+      if (labels.length !== 6) failures.push(`mixed UI turn count mismatch: ${labels.length}`)
+      if (labels.some((t) => t.sendError)) failures.push('mixed UI send error')
+      if (labels.some((t) => t.score.empty || t.hiddenOnly)) failures.push('mixed UI empty or hidden-only assistant turn')
+      if (labels.some((t) => t.score.leakedThinkTags)) failures.push('mixed UI raw think tag leak')
+      if (labels.some((t) => t.score.visibleReasoningCue)) failures.push('mixed UI visible reasoning cue leak')
+      if (labels.some((t) => t.score.loopSuspect)) failures.push('mixed UI loop suspect')
+      if (labels.some((t) => t.autonomousAssistantTurn)) failures.push('mixed UI autonomous assistant turn after completion')
+      if (mixed.toolFiles?.on !== 'M3_MIX_TOOL_ON') failures.push('mixed UI reasoning-on tool file proof missing')
+      if (mixed.toolFiles?.auto !== 'M3_MIX_TOOL_AUTO') failures.push('mixed UI reasoning-auto tool file proof missing')
+      const byLabel = Object.fromEntries(labels.map((t) => [t.label, t]))
+      if ((byLabel.text_reasoning_off?.reasoningChars || 0) > 0) failures.push('mixed reasoning-off turn emitted reasoning')
+      if ((byLabel.image_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on image turn emitted no reasoning')
+      if ((byLabel.tool_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on tool turn emitted no reasoning')
+      if (!equalsText(byLabel.tool_reasoning_on?.content || '', 'M3_MIX_TOOL_ON_DONE')) failures.push(`mixed reasoning-on tool exact final mismatch: ${byLabel.tool_reasoning_on?.content || ''}`)
+      if (!equalsText(byLabel.tool_reasoning_auto?.content || '', 'M3_MIX_TOOL_AUTO_DONE')) failures.push(`mixed reasoning-auto tool exact final mismatch: ${byLabel.tool_reasoning_auto?.content || ''}`)
+      if (toolCallingCount(byLabel.tool_reasoning_on, 'run_command') !== 1) failures.push('mixed reasoning-on expected exactly 1 run_command call')
+      if (toolCallingCount(byLabel.tool_reasoning_auto, 'run_command') !== 1) failures.push('mixed reasoning-auto expected exactly 1 run_command call')
+      const mixedImageContent = byLabel.image_reasoning_on?.content || ''
+      if (!equalsText(mixedImageContent, 'MM3_MIX_IMAGE_RED') || rejectsRedImageLabel(mixedImageContent)) failures.push(`mixed image exact mismatch: ${mixedImageContent}`)
+      const postMediaCacheHit = ['tool_reasoning_on', 'tool_reasoning_auto', 'final_recall_cache']
+        .some((label) => Number(byLabel[label]?.metrics?.cachedTokens || 0) > 0)
+      if (!postMediaCacheHit) failures.push('mixed post-media/tool cachedTokens never exceeded 0')
+      const finalMixed = byLabel.final_recall_cache?.content || ''
+      for (const label of ['M3_MIX_TEXT_OFF', 'MM3_MIX_IMAGE_RED', 'M3_MIX_AUTO_TEXT', 'M3_MIX_TOOL_ON', 'M3_MIX_TOOL_AUTO']) {
+        if (!new RegExp(label, 'i').test(finalMixed)) failures.push(`mixed final recall missing ${label}`)
+      }
+    }
+    return { status: failures.length ? 'fail' : 'pass', failures }
+  }
+
   const failures = []
   const logs = (result.sessionLogsEnd || []).join('\n')
   const launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsStart || result.sessionLogsEnd || [])
@@ -861,6 +946,7 @@ function deriveVerdict(result) {
   for (const row of result.ui?.reasoningModes || []) {
     if (row.score.empty || row.hiddenOnly) failures.push(`reasoning ${row.mode} empty or hidden-only`)
     if (row.score.leakedThinkTags) failures.push(`reasoning ${row.mode} raw tag leak`)
+    if (row.score.visibleReasoningCue) failures.push(`reasoning ${row.mode} visible reasoning cue leak`)
   }
   const off = result.ui?.reasoningModes?.find((row) => row.mode === 'off')
   const on = result.ui?.reasoningModes?.find((row) => row.mode === 'on')
@@ -943,6 +1029,23 @@ function deriveVerdict(result) {
   if (result.api?.ollamaGenerate?.ok && !hasExactMarker(result.api.ollamaGenerate.text || '', 'OLLAMA_GENERATE_OK')) failures.push('Ollama generate missing exact marker OLLAMA_GENERATE_OK')
   const apiToolArgs = JSON.stringify(result.api?.chatTool?.message?.tool_calls || [])
   if (result.api?.chatTool?.hasToolCalls && !hasExactMarker(apiToolArgs, 'API_TOOL_OK')) failures.push('API Chat tool arguments missing API_TOOL_OK')
+  const apiReasoning = result.apiReasoning || {}
+  for (const [name, row] of Object.entries(apiReasoning)) {
+    if (!row?.ok) failures.push(`API reasoning ${name} HTTP failed`)
+    if (row?.textScore?.empty) failures.push(`API reasoning ${name} visible text empty`)
+    if (row?.textScore?.leakedThinkTags) failures.push(`API reasoning ${name} visible raw think tag leak`)
+    if (row?.textScore?.visibleReasoningCue) failures.push(`API reasoning ${name} visible reasoning cue leak`)
+  }
+  if (apiReasoning.chatOff?.reasoningChars > 0) failures.push(`API Chat reasoning off emitted reasoningChars=${apiReasoning.chatOff.reasoningChars}`)
+  if (apiReasoning.responsesOff?.reasoningChars > 0) failures.push(`API Responses reasoning off emitted reasoningChars=${apiReasoning.responsesOff.reasoningChars}`)
+  if (apiReasoning.chatOn?.ok && apiReasoning.chatOn.reasoningChars <= 0) failures.push('API Chat reasoning on emitted no reasoning_content')
+  if (apiReasoning.responsesOn?.ok && apiReasoning.responsesOn.reasoningChars <= 0) failures.push('API Responses reasoning on emitted no reasoning content')
+  if (apiReasoning.chatOff?.ok && !equalsText(apiReasoning.chatOff.text || '', 'API_REASONING_OFF_OK')) failures.push(`API Chat reasoning off exact mismatch: ${apiReasoning.chatOff.text || ''}`)
+  if (apiReasoning.chatOn?.ok && !hasExactMarker(apiReasoning.chatOn.text || '', 'API_REASONING_ON_OK')) failures.push('API Chat reasoning on missing API_REASONING_ON_OK')
+  if (apiReasoning.chatAuto?.ok && !hasExactMarker(apiReasoning.chatAuto.text || '', 'API_REASONING_AUTO_OK')) failures.push('API Chat reasoning auto missing API_REASONING_AUTO_OK')
+  if (apiReasoning.responsesOff?.ok && !equalsText(apiReasoning.responsesOff.text || '', 'API_RESP_REASONING_OFF_OK')) failures.push(`API Responses reasoning off exact mismatch: ${apiReasoning.responsesOff.text || ''}`)
+  if (apiReasoning.responsesOn?.ok && !hasExactMarker(apiReasoning.responsesOn.text || '', 'API_RESP_REASONING_ON_OK')) failures.push('API Responses reasoning on missing API_RESP_REASONING_ON_OK')
+  if (apiReasoning.responsesAuto?.ok && !hasExactMarker(apiReasoning.responsesAuto.text || '', 'API_RESP_REASONING_AUTO_OK')) failures.push('API Responses reasoning auto missing API_RESP_REASONING_AUTO_OK')
   const auth = result.apiAuth || {}
   if (!auth.apiKeyConfigured) failures.push('auth API key was not configured in stress session')
   if (auth.missing?.status !== 401) failures.push(`auth missing request did not return 401: ${auth.missing?.status}`)
@@ -996,6 +1099,7 @@ async function main() {
     panelDir,
     appPath,
     modelPath,
+    stressScope,
     debugPort,
     sessionPort,
     loadPolls: [],
@@ -1016,6 +1120,19 @@ async function main() {
   })
   app.stdout.on('data', (d) => appLog.push(...d.toString().split(/\r?\n/).filter(Boolean)))
   app.stderr.on('data', (d) => appLog.push(...d.toString().split(/\r?\n/).filter(Boolean)))
+  app.on('error', (error) => {
+    result.appProcessError = String(error?.stack || error?.message || error)
+    writeResult(result)
+  })
+  app.on('exit', (code, signal) => {
+    result.appExit = {
+      code,
+      signal,
+      at: new Date().toISOString(),
+      appLogTail: appLog.slice(-80),
+    }
+    writeResult(result)
+  })
   result.appPid = app.pid
   result.appCommand = [appExe, `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${debugPort}`]
   writeResult(result)
@@ -1078,6 +1195,30 @@ async function main() {
     result.launchCommand = extractLaunchCommand(result.sessionLogsStart)
     result.cacheStart = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint, id: session.id }).catch((error) => ({ error: String(error?.message || error) }))
     writeResult(result)
+
+    if (stressScope === 'mixed') {
+      result.ui = { multiturn10: { turns: [] }, reasoningModes: [], toolUse: null, longContextPrefix: null, mixedSession: null }
+      result.ui.mixedSession = await runMixedUiSession(page, modelPath, endpoint, proofDir)
+      result.cacheEnd = await page.evaluate(async ({ endpoint, id }) => window.api.cache.stats(endpoint, id), { endpoint, id: session.id }).catch((error) => ({ error: String(error?.message || error) }))
+      result.sessionLogsEnd = await page.evaluate(async ({ id }) => window.api.sessions.getLogs(id), { id: session.id })
+      result.launchCommand = result.launchCommand || extractLaunchCommand(result.sessionLogsEnd)
+      result.appLogTail = appLog.slice(-160)
+      result.finishedAt = new Date().toISOString()
+      Object.assign(result, deriveVerdict(result))
+      writeResult(result)
+      await page.evaluate(async ({ id }) => window.api.sessions.stop(id).catch(() => null), { id: session.id }).catch(() => null)
+      console.log(JSON.stringify({
+        status: result.status,
+        failures: result.failures,
+        proofDir,
+        outJson,
+        shotPath,
+        sessionPort,
+        stressScope,
+        mixed: result.ui.mixedSession?.turns?.map((t) => ({ label: t.label, cachedTokens: t.metrics?.cachedTokens, content: t.score.preview, reasoningChars: t.reasoningChars })),
+      }, null, 2))
+      return
+    }
 
     const chat = await page.evaluate(async ({ modelPath }) => {
       return window.api.chat.create('MM3 1.5.65 10-turn stress', modelPath.split('/').pop(), undefined, modelPath)
@@ -1317,6 +1458,113 @@ async function main() {
     result.api.responses2 = { ...resp2, text: resp2Text, textScore: scoreText(resp2Text), cachedTokens: cacheTokensFromUsage(resp2.json) }
     writeResult(result)
 
+    result.apiReasoning = {}
+    const chatReasoningCases = [
+      {
+        name: 'chatOff',
+        body: {
+          model: servedModel,
+          messages: [{ role: 'user', content: 'API non-stream reasoning OFF: reply exactly API_REASONING_OFF_OK and nothing else.' }],
+          max_tokens: 80,
+          temperature: 0.1,
+          top_p: 0.9,
+          enable_thinking: false,
+        },
+      },
+      {
+        name: 'chatOn',
+        body: {
+          model: servedModel,
+          messages: [{ role: 'user', content: 'API non-stream reasoning ON: think briefly, then visible answer must include API_REASONING_ON_OK.' }],
+          max_tokens: 420,
+          temperature: 0.2,
+          top_p: 0.9,
+          enable_thinking: true,
+          max_thinking_tokens: 160,
+        },
+      },
+      {
+        name: 'chatAuto',
+        body: {
+          model: servedModel,
+          messages: [{ role: 'user', content: 'API non-stream reasoning AUTO/adaptive: if useful think briefly, then visible answer must include API_REASONING_AUTO_OK.' }],
+          max_tokens: 420,
+          temperature: 0.2,
+          top_p: 0.9,
+          max_thinking_tokens: 160,
+          chat_template_kwargs: { thinking_mode: 'adaptive' },
+        },
+      },
+    ]
+    for (const item of chatReasoningCases) {
+      const row = await postJson(`http://127.0.0.1:${sessionPort}/v1/chat/completions`, item.body)
+      const message = row.json?.choices?.[0]?.message || {}
+      const text = String(message.content || '')
+      const reasoning = reasoningTextFromChatMessage(message)
+      result.apiReasoning[item.name] = {
+        ...row,
+        message,
+        text,
+        reasoning,
+        reasoningChars: reasoning.length,
+        textScore: scoreText(text),
+        cachedTokens: cacheTokensFromUsage(row.json),
+      }
+      writeResult(result)
+    }
+
+    const responsesReasoningCases = [
+      {
+        name: 'responsesOff',
+        body: {
+          model: servedModel,
+          input: 'Responses non-stream reasoning OFF: reply exactly API_RESP_REASONING_OFF_OK and nothing else.',
+          max_output_tokens: 80,
+          temperature: 0.1,
+          top_p: 0.9,
+          enable_thinking: false,
+        },
+      },
+      {
+        name: 'responsesOn',
+        body: {
+          model: servedModel,
+          input: 'Responses non-stream reasoning ON: think briefly, then visible answer must include API_RESP_REASONING_ON_OK.',
+          max_output_tokens: 420,
+          temperature: 0.2,
+          top_p: 0.9,
+          enable_thinking: true,
+          max_thinking_tokens: 160,
+        },
+      },
+      {
+        name: 'responsesAuto',
+        body: {
+          model: servedModel,
+          input: 'Responses non-stream reasoning AUTO/adaptive: if useful think briefly, then visible answer must include API_RESP_REASONING_AUTO_OK.',
+          max_output_tokens: 420,
+          temperature: 0.2,
+          top_p: 0.9,
+          max_thinking_tokens: 160,
+          chat_template_kwargs: { thinking_mode: 'adaptive' },
+        },
+      },
+    ]
+    for (const item of responsesReasoningCases) {
+      const row = await postJson(`http://127.0.0.1:${sessionPort}/v1/responses`, item.body)
+      const text = responseTextFromResponsesObject(row.json)
+      const reasoning = reasoningTextFromResponsesObject(row.json)
+      result.apiReasoning[item.name] = {
+        ...row,
+        text,
+        reasoning,
+        reasoningChars: reasoning.length,
+        textScore: scoreText(text),
+        cachedTokens: cacheTokensFromUsage(row.json),
+      }
+      writeResult(result)
+    }
+
     result.streaming = {}
     result.streaming.chatText = await streamSse(`http://127.0.0.1:${sessionPort}/v1/chat/completions`, {
       model: servedModel,
@@ -1461,6 +1709,10 @@ async function main() {
         ollamaChat: result.api.ollamaChat.textScore.preview,
         ollamaGenerate: result.api.ollamaGenerate.textScore.preview,
       },
+      apiReasoning: Object.fromEntries(Object.entries(result.apiReasoning || {}).map(([name, row]) => [
+        name,
+        { preview: row.textScore?.preview, reasoningChars: row.reasoningChars },
+      ])),
       streaming: {
         chatText: result.streaming.chatText?.textScore?.preview,
         responsesImage: result.streaming.responsesImage?.textScore?.preview,

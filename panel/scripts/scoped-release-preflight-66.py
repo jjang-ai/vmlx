@@ -55,6 +55,30 @@ REQUIRED_LIFECYCLE_ROWS = {
     "gemma4-31b-mxfp4-lifecycle-current-64",
 }
 
+REQUIRED_GEMMA_MODEL_DIRS = {
+    "gemma4-e2b-jang4m-vl-current-64": "/Users/example/models/OsaurusAI--gemma-4-E2B-it-qat-JANG_4M",
+    "gemma4-e4b-jang4m-vl-current-64": "/Users/example/models/OsaurusAI--gemma-4-E4B-it-qat-JANG_4M",
+    "gemma4-12b-jang4m-vl-current-64": "/Users/example/models/OsaurusAI--gemma-4-12B-it-qat-JANG_4M",
+    "gemma4-26b-jang4m-vl-current-64": "/Users/example/models/OsaurusAI--gemma-4-26B-A4B-it-qat-JANG_4M",
+    "gemma4-31b-jang4m-vl-current-64": "/Users/example/models/OsaurusAI--gemma-4-31B-it-qat-JANG_4M",
+    "gemma4-e2b-mxfp4-real-profile-gateway-vl-visible-off": "/Users/example/models/OsaurusAI--gemma-4-E2B-it-qat-MXFP4",
+    "gemma4-26b-mxfp4-visual-current-64": "/Users/example/models/OsaurusAI--gemma-4-26B-A4B-it-qat-MXFP4",
+    "gemma4-26b-mxfp4-clean-start-current-64": "/Users/example/models/OsaurusAI--gemma-4-26B-A4B-it-qat-MXFP4",
+    "gemma4-31b-mxfp4-visual-current-64": "/Users/example/models/OsaurusAI--gemma-4-31B-it-qat-MXFP4",
+    "gemma4-31b-mxfp4-clean-start-current-64": "/Users/example/models/OsaurusAI--gemma-4-31B-it-qat-MXFP4",
+    "gemma4-12b-jang4m-clean-start-current-64": "/Users/example/models/OsaurusAI--gemma-4-12B-it-qat-JANG_4M",
+    "gemma4-26b-jang4m-clean-start-current-64": "/Users/example/models/OsaurusAI--gemma-4-26B-A4B-it-qat-JANG_4M",
+    "gemma4-31b-jang4m-clean-start-current-64": "/Users/example/models/OsaurusAI--gemma-4-31B-it-qat-JANG_4M",
+}
+
+EXPECTED_GEMMA_GENERATION_CONFIG = {
+    "do_sample": True,
+    "temperature": 1.0,
+    "top_k": 64,
+    "top_p": 0.95,
+    "eos_token_id": [1, 106, 50],
+}
+
 
 def load_json(path: Path, failures: list[str]) -> dict[str, Any]:
     if not path.exists():
@@ -82,6 +106,42 @@ def load_pass(path: Path, failures: list[str]) -> dict[str, Any]:
     require(data.get("status") == "pass", failures, f"{path} status={data.get('status')!r}")
     require(not data.get("failures"), failures, f"{path} failures={data.get('failures')!r}")
     return data
+
+
+def validate_gemma_generation_config(row: str, model_dir: Path, failures: list[str]) -> dict[str, Any]:
+    """Validate Gemma serving defaults from the actual model bundle metadata.
+
+    Gemma 4 serving parity depends on sampling defaults from generation_config
+    and on the multi-token EOS list. Greedy-only probes and single-EOS harnesses
+    are not equivalent to the real app/API serving path.
+    """
+
+    path = model_dir / "generation_config.json"
+    data = load_json(path, failures)
+    for key, expected in EXPECTED_GEMMA_GENERATION_CONFIG.items():
+        require(
+            data.get(key) == expected,
+            failures,
+            f"{row}: generation_config {key}={data.get(key)!r}, expected {expected!r} at {path}",
+        )
+    return data
+
+
+def validate_required_gemma_model_metadata(failures: list[str]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    required_rows = REQUIRED_GEMMA_MEDIA_ROWS | {
+        row for row in REQUIRED_CLEAN_START_ROWS if row.startswith("gemma4")
+    }
+    missing_rows = sorted(required_rows - set(REQUIRED_GEMMA_MODEL_DIRS))
+    if missing_rows:
+        failures.append(f"missing Gemma model metadata mappings: {', '.join(missing_rows)}")
+    for row in sorted(required_rows & set(REQUIRED_GEMMA_MODEL_DIRS)):
+        model_dir = Path(REQUIRED_GEMMA_MODEL_DIRS[row])
+        metadata[row] = {
+            "model_dir": str(model_dir),
+            "generation_config": validate_gemma_generation_config(row, model_dir, failures),
+        }
+    return metadata
 
 
 def proof_paths(glob_pattern: str) -> list[Path]:
@@ -251,7 +311,7 @@ def validate_lifecycle(row: str, data: dict[str, Any], failures: list[str]) -> N
     require((stop.get("quiet") or {}).get("changed") is False, failures, f"{row}: changed after stop quiet wait")
 
 
-def validate_versions(failures: list[str]) -> dict[str, str | None]:
+def validate_versions(failures: list[str], expected_version: str) -> dict[str, str | None]:
     package = load_json(ROOT / "panel/package.json", failures)
     lock = load_json(ROOT / "panel/package-lock.json", failures)
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -259,32 +319,36 @@ def validate_versions(failures: list[str]) -> dict[str, str | None]:
     panel_version = package.get("version")
     lock_version = lock.get("version")
     lock_root_version = ((lock.get("packages") or {}).get("") or {}).get("version")
-    require(panel_version == "1.5.66", failures, f"panel/package.json version={panel_version!r}")
-    require(lock_version == "1.5.66", failures, f"panel/package-lock.json version={lock_version!r}")
-    require(lock_root_version == "1.5.66", failures, f"panel/package-lock root version={lock_root_version!r}")
-    require('version = "1.5.66"' in pyproject, failures, "pyproject.toml is not 1.5.66")
-    require('__version__ = "1.5.66"' in init_py, failures, "vmlx_engine/__init__.py is not 1.5.66")
+    require(panel_version == expected_version, failures, f"panel/package.json version={panel_version!r}, expected {expected_version!r}")
+    require(lock_version == expected_version, failures, f"panel/package-lock.json version={lock_version!r}, expected {expected_version!r}")
+    require(lock_root_version == expected_version, failures, f"panel/package-lock root version={lock_root_version!r}, expected {expected_version!r}")
+    require(f'version = "{expected_version}"' in pyproject, failures, f"pyproject.toml is not {expected_version}")
+    require(f'__version__ = "{expected_version}"' in init_py, failures, f"vmlx_engine/__init__.py is not {expected_version}")
     return {
         "panel": panel_version,
         "panel_lock": lock_version,
         "panel_lock_root": lock_root_version,
-        "pyproject": "1.5.66" if 'version = "1.5.66"' in pyproject else None,
-        "engine": "1.5.66" if '__version__ = "1.5.66"' in init_py else None,
+        "pyproject": expected_version if f'version = "{expected_version}"' in pyproject else None,
+        "engine": expected_version if f'__version__ = "{expected_version}"' in init_py else None,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=ROOT / "build/current-scoped-release-preflight-66.json")
+    parser.add_argument("--expected-version", default="1.5.66")
     args = parser.parse_args()
 
     failures: list[str] = []
     manifest: dict[str, Any] = {
-        "scope": "1.5.66-mm3-gemma4",
+        "scope": f"{args.expected_version}-mm3-gemma4",
         "status": "fail",
         "failures": failures,
-        "versions": validate_versions(failures),
+        "versions": validate_versions(failures, args.expected_version),
         "proofs": {},
+        "source_model_metadata": {
+            "gemma": validate_required_gemma_model_metadata(failures),
+        },
         "boundary": {
             "gemma_audio": "out_of_current_scope_per_user; VL only",
             "gemma_mixed_swa_tq": "generic flat TQ-KV is required to stay off unless a native mixed-SWA TQ bridge is implemented and live-proven",

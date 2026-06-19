@@ -695,6 +695,26 @@ describe('buildRequestBody — Responses API', () => {
     })
 })
 
+describe('buildRequestBody source parity', () => {
+    it('actual chat IPC Responses branch forwards local reasoning controls exactly once', () => {
+        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        const branchStart = source.indexOf('if (useResponsesApi) {')
+        expect(branchStart).toBeGreaterThanOrEqual(0)
+        const branchReturn = source.indexOf('return obj;', branchStart)
+        expect(branchReturn).toBeGreaterThan(branchStart)
+        const responsesBranch = source.slice(branchStart, branchReturn)
+
+        expect(responsesBranch).toContain('effectiveEnableThinkingOverride !== undefined')
+        expect(responsesBranch).toContain('obj.enable_thinking = effectiveEnableThinkingOverride')
+        expect(responsesBranch).toContain('enable_thinking: obj.enable_thinking')
+        expect(responsesBranch).toContain('applyLocalThinkingBudget(obj);')
+        expect(responsesBranch).toContain('shouldForwardReasoningEffort(')
+        expect(responsesBranch).toContain('obj.reasoning_effort = overrides.reasoningEffort')
+        expect(responsesBranch.match(/applyLocalThinkingBudget\(obj\);/g)?.length).toBe(1)
+        expect(responsesBranch.match(/obj\.enable_thinking = effectiveEnableThinkingOverride/g)?.length).toBe(1)
+    })
+})
+
 describe('buildRequestBody — Tool format', () => {
     const messages = [{ role: 'user', content: 'Hello' }]
     const sampleTools = [

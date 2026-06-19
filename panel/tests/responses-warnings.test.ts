@@ -99,6 +99,12 @@ describe('categorizeResponsesWarning', () => {
     )
   })
 
+  it('categorizes no-visible-response warnings separately from generic warnings', () => {
+    expect(categorizeResponsesWarning('The model produced no visible response.')).toBe(
+      'empty_visible_response',
+    )
+  })
+
   it('falls back to "other" for unrecognized warnings', () => {
     expect(categorizeResponsesWarning('something completely unrelated')).toBe('other')
   })

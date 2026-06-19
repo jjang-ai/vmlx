@@ -173,4 +173,50 @@ describe('i18n locale consistency', () => {
       expect(localeNotice.section4BodyA).toContain('latest.json')
     }
   })
+
+  it('technical model/cache/parser proper nouns stay literal across localized release copy', () => {
+    const requiredTerms = [
+      'MCP',
+      'MTP',
+      'JANG',
+      'JANGTQ',
+      'Gemma',
+      'MiniMax',
+      'TurboQuant KV',
+      'Prefix cache',
+      'paged cache',
+      'L2 disk cache',
+      'tool parser',
+      'reasoning parser',
+    ]
+
+    for (const l of LOCALES) {
+      const combined = Object.values(locales[l].update.notice).join('\n')
+      for (const term of requiredTerms) {
+        expect(
+          combined,
+          `Locale '${l}' must keep technical term '${term}' literal in release-critical copy`,
+        ).toContain(term)
+      }
+    }
+  })
+
+  it('MM3/Gemma cache-control explanations remain exact technical English in settings source', () => {
+    const settingsForm = readFileSync(
+      resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionConfigForm.tsx'),
+      'utf-8',
+    )
+
+    for (const exact of [
+      'MiniMax-M3 uses native MSA SSD prefix cache with keys, values, idx_keys, and absolute offsets',
+      'Generic Block Disk Cache (L2) is locked OFF',
+      'MiniMax-M3 keeps generic KV q4/q8 disabled',
+      'Mixed full/sliding attention cache detected',
+      'Generic flat TurboQuant KV is not implied unless a typed rotating-cache codec is proven',
+      'tool parser',
+      'reasoning parser',
+    ]) {
+      expect(settingsForm).toContain(exact)
+    }
+  })
 })

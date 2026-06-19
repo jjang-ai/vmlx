@@ -59,6 +59,9 @@ export function categorizeResponsesWarning(warning: string): string {
   if (lower.includes('reasoning only') || lower.includes('previous_response_id')) {
     return 'chain_reasoning_only'
   }
+  if (lower.includes('no visible response') || lower.includes('empty_model_response')) {
+    return 'empty_visible_response'
+  }
   if (lower.includes('cache') || lower.includes('prefix')) {
     return 'cache_alignment'
   }
