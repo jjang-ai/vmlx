@@ -76,13 +76,26 @@ def preprocess_image(pil_img, patch_size=14, temporal_patch_size=2, merge_size=2
     """PIL image -> (pixel_values[num_patches, 1176], grid_thw[1,3]). Mirrors the
     bundled MiniMaxM3VLImageProcessor (Qwen2-VL layout)."""
     import numpy as np
-    from PIL import Image
+    import torch
+    import torch.nn.functional as F
+
     img = pil_img.convert("RGB")
     w0, h0 = img.size
     factor = patch_size * merge_size
     rh, rw = smart_resize(h0, w0, factor=factor, max_pixels=max_pixels)
-    img = img.resize((rw, rh), Image.BICUBIC)
-    arr = np.asarray(img).astype(np.float32) / 255.0          # [H,W,3]
+    arr = np.asarray(img).astype(np.float32)                 # [H,W,3]
+    # Match MiniMaxM3VLImageProcessor.resize exactly: torch bicubic,
+    # align_corners=False, antialias=True. PIL bicubic is close but not
+    # numerically equivalent after resizing.
+    tensor = torch.from_numpy(arr).contiguous().permute(2, 0, 1).unsqueeze(0)
+    tensor = F.interpolate(
+        tensor,
+        size=(rh, rw),
+        mode="bicubic",
+        align_corners=False,
+        antialias=True,
+    ).squeeze(0)
+    arr = tensor.permute(1, 2, 0).detach().cpu().numpy().astype(np.float32) / 255.0
     arr = np.transpose(arr, (2, 0, 1))                        # [3,H,W]
     x = mx.array(arr)
     x = (x - IMAGE_MEAN) / IMAGE_STD                          # normalize

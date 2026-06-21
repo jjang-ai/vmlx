@@ -80,7 +80,7 @@ def _preprocess_images_native(pil_images: List[Any]):
     """Run vMLX's native MiniMax-M3 image preprocessor.
 
     Returns MLX ``pixel_values`` and ``image_grid_thw`` matching MiniMax's HF
-    processor layout, but without importing torch/torchvision.
+    processor layout, but without importing the HF AutoProcessor/torchvision.
     """
     import mlx.core as mx
 
