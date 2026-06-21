@@ -934,6 +934,40 @@ class TestNativeMtpAutodetect:
         assert "multi_modal_projector.linear_1" in candidates
         assert "model.multi_modal_projector.linear_1" in candidates
 
+    def test_minimax_m3_vlm_quant_candidates_select_vision_linears(self):
+        import mlx.nn as nn
+
+        from vmlx_engine.utils.jang_loader import _vlm_quant_module_path_candidates
+
+        class Projector(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear_1 = nn.Linear(32, 4)
+
+        class Vision(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.multi_modal_projector = Projector()
+
+        class TinyMiniMaxM3VL(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.vision = Vision()
+
+        model = TinyMiniMaxM3VL()
+        quantized_suffixes = {"multi_modal_projector.linear_1"}
+
+        def class_predicate(path, module):
+            return bool(
+                hasattr(module, "to_quantized")
+                and _vlm_quant_module_path_candidates(path, "minimax_m3_vl")
+                & quantized_suffixes
+            )
+
+        nn.quantize(model, group_size=32, bits=4, class_predicate=class_predicate)
+
+        assert isinstance(model.vision.multi_modal_projector.linear_1, nn.QuantizedLinear)
+
     def test_pre_load_activation_patches_mlx_vlm_qwen36_language_runtime(
         self, tmp_path
     ):
