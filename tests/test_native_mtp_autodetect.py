@@ -923,6 +923,17 @@ class TestNativeMtpAutodetect:
         assert "mtp.fc" in candidates
         assert "model.language_model.mtp.fc" in candidates
 
+    def test_vlm_quant_candidates_map_minimax_m3_vision_wrapper(self):
+        from vmlx_engine.utils.jang_loader import _vlm_quant_module_path_candidates
+
+        candidates = _vlm_quant_module_path_candidates(
+            "vision.multi_modal_projector.linear_1",
+            "minimax_m3_vl",
+        )
+
+        assert "multi_modal_projector.linear_1" in candidates
+        assert "model.multi_modal_projector.linear_1" in candidates
+
     def test_pre_load_activation_patches_mlx_vlm_qwen36_language_runtime(
         self, tmp_path
     ):

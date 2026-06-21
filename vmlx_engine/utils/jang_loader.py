@@ -579,6 +579,18 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
     if module_path.endswith("lm_head") or "language_model.lm_head" in module_path:
         candidates.add("lm_head")
 
+    if str(model_type or "").lower() in {"minimax_m3", "minimax_m3_vl"}:
+        # The vendored MiniMax-M3 runtime hangs the VL stack under
+        # ``model.vision`` while JANG bundles store those weights at top-level
+        # paths such as ``vision_tower.*``, ``multi_modal_projector.*`` and
+        # ``patch_merge_mlp.*``.  Let nn.quantize() see through that runtime
+        # wrapper; otherwise quantized vision linears stay plain nn.Linear and
+        # their uint32 sidecars are skipped by strict=False load.
+        if module_path.startswith("vision."):
+            raw = module_path[len("vision.") :]
+            candidates.add(raw)
+            candidates.add(f"model.{raw}")
+
     if str(model_type or "").lower() == "zaya1_vl":
         if module_path.startswith("language_model.model."):
             raw = module_path.replace("language_model.model.", "model.", 1)
@@ -3538,16 +3550,17 @@ def _load_jang_v2_vlm(
         return None
 
     def get_class_predicate(p, m):
-        if skip_multimodal_module(p):
+        candidates = _vlm_quant_module_path_candidates(
+            p,
+            str(config.get("model_type", "")),
+        )
+        if skip_multimodal_module(p) and not (candidates & quantized_suffixes):
             return False
         if not hasattr(m, "to_quantized"):
             return False
         # Path matches: same logic as before for "should this module be quantized?"
         _matched = False
-        if _vlm_quant_module_path_candidates(
-            p,
-            str(config.get("model_type", "")),
-        ) & quantized_suffixes:
+        if candidates & quantized_suffixes:
             _matched = True
         if not _matched:
             return False

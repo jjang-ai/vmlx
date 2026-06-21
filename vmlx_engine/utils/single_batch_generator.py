@@ -617,7 +617,15 @@ class SingleBatchGenerator:
         image-token positions must co-occur for the vision splice.
         """
         tokens = list(req.prompt_tokens)
-        step = max(1, int(self.prefill_step_size or len(tokens) or 1))
+        if req.pixel_values is not None:
+            # VL splice correctness requires image-token positions and
+            # pixel_values to be present in the same forward.  _model_call()
+            # intentionally clears pixel_values after the first forward so
+            # decode stays text-only; therefore image prompts cannot be split
+            # by prefill_step_size.
+            step = max(1, len(tokens))
+        else:
+            step = max(1, int(self.prefill_step_size or len(tokens) or 1))
         pos = 0
         _prefill_keep_alloc = os.environ.get(
             "VMLINUX_PREFILL_KEEP_ALLOC",

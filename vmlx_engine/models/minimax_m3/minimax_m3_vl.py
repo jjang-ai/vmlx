@@ -10,7 +10,7 @@ tower as the structural template.
 
 Confirmed architecture (see docs BUILD-STATUS):
   pixel_values[N, 1176] --3D-conv patch_embed--> [N, 1280]
-    + 3D-RoPE (h,w; head_dim 80, rope on 40 dims)
+    + 3D-RoPE (t,h,w; head_dim 80, rope on 78 dims, tail pass-through)
     --> pre_layrnorm --> 32 CLIP-style encoder layers
         (LayerNorm; separate q/k/v/out_proj with bias; mlp fc1 1280->5120 gelu fc2;
          FULL attention per image, no window)
@@ -105,45 +105,52 @@ def preprocess_image(pil_img, patch_size=14, temporal_patch_size=2, merge_size=2
     return pixel_values, grid_thw
 
 
-# ── 3D-RoPE (h,w spatial; t=1 for images) ──
+# ── 3D-RoPE (t,h,w; matches transformers.models.minimax_m3_vl) ──
 def rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2:]
     return mx.concatenate([-x2, x1], axis=-1)
 
 
-def apply_rope_vision(t, freqs):
-    cos = mx.expand_dims(mx.tile(mx.expand_dims(mx.cos(freqs), 1), (1, 1, 2)), 0)
-    sin = mx.expand_dims(mx.tile(mx.expand_dims(mx.sin(freqs), 1), (1, 1, 2)), 0)
-    return (t * cos) + (rotate_half(t) * sin)
+def apply_rope_vision(q, k, cos, sin):
+    rot_dim = cos.shape[-1]
+    cos = mx.expand_dims(mx.expand_dims(cos, 0), 2)  # [1, L, 1, rot_dim]
+    sin = mx.expand_dims(mx.expand_dims(sin, 0), 2)
+    q_rot, q_pass = q[..., :rot_dim], q[..., rot_dim:]
+    k_rot, k_pass = k[..., :rot_dim], k[..., rot_dim:]
+    q_rot = (q_rot * cos) + (rotate_half(q_rot) * sin)
+    k_rot = (k_rot * cos) + (rotate_half(k_rot) * sin)
+    return mx.concatenate([q_rot, q_pass], axis=-1), mx.concatenate([k_rot, k_pass], axis=-1)
 
 
-class VisionRoPE(nn.Module):
-    def __init__(self, dim, theta=10000.0):
+class VisionRoPE3D(nn.Module):
+    def __init__(self, head_dim, theta=10000.0, spatial_merge_size=1):
         super().__init__()
-        self.dim, self.theta = dim, theta
+        rope_dims = 2 * (head_dim // 2)
+        self.axis_dim = 2 * ((rope_dims // 3) // 2)
+        self.theta = theta
+        self.spatial_merge_size = spatial_merge_size
 
-    def __call__(self, seqlen):
-        inv = 1.0 / (self.theta ** (mx.arange(0, self.dim, 2, dtype=mx.float32) / self.dim))
-        seq = mx.arange(int(seqlen), dtype=inv.dtype)
-        return mx.outer(seq, inv)
+    def __call__(self, grid_thw, dtype=mx.float32):
+        m = self.spatial_merge_size
+        coords = []
+        for t, h, w in grid_thw.tolist():
+            hi = mx.repeat(mx.expand_dims(mx.arange(h), 1), w, axis=1)
+            hi = hi.reshape(h // m, m, w // m, m)
+            hi = mx.transpose(hi, (0, 2, 1, 3)).flatten()
+            wi = mx.repeat(mx.expand_dims(mx.arange(w), 0), h, axis=0)
+            wi = wi.reshape(h // m, m, w // m, m)
+            wi = mx.transpose(wi, (0, 2, 1, 3)).flatten()
+            ti = mx.repeat(mx.arange(t), h * w)
+            coords.append(mx.stack([ti, mx.tile(hi, t), mx.tile(wi, t)], axis=-1))
+        coords = mx.concatenate(coords, axis=0).astype(mx.float32)
 
-
-def rot_pos_emb(grid_thw, merge_size, rope):
-    pos_ids = []
-    for t, h, w in grid_thw.tolist():
-        hp = mx.repeat(mx.expand_dims(mx.arange(h), 1), w, axis=1)
-        hp = hp.reshape(h // merge_size, merge_size, w // merge_size, merge_size)
-        hp = mx.transpose(hp, (0, 2, 1, 3)).flatten()
-        wp = mx.repeat(mx.expand_dims(mx.arange(w), 0), h, axis=0)
-        wp = wp.reshape(h // merge_size, merge_size, w // merge_size, merge_size)
-        wp = mx.transpose(wp, (0, 2, 1, 3)).flatten()
-        pos_ids.append(mx.tile(mx.stack([hp, wp], axis=-1), (t, 1)))
-    pos_ids = mx.concatenate(pos_ids, axis=0)
-    max_grid = int(mx.max(grid_thw[:, 1:]))
-    full = rope(max_grid)
-    emb = full[pos_ids]
-    return emb.reshape(pos_ids.shape[0], -1)
+        inv = 1.0 / (
+            self.theta ** (mx.arange(0, self.axis_dim, 2, dtype=mx.float32) / self.axis_dim)
+        )
+        freqs = mx.concatenate([coords[:, i:i + 1] * inv for i in range(3)], axis=-1)
+        emb = mx.concatenate([freqs, freqs], axis=-1)
+        return mx.cos(emb).astype(dtype), mx.sin(emb).astype(dtype)
 
 
 # ── CLIP-style encoder layer (LayerNorm, separate q/k/v/out, gelu mlp) ──
@@ -158,26 +165,19 @@ class M3VisionAttention(nn.Module):
         self.v_proj = nn.Linear(dim, dim, bias=True)
         self.out_proj = nn.Linear(dim, dim, bias=True)
 
-    def __call__(self, x, cu_seqlens, rope_emb):
+    def __call__(self, x, cu_seqlens, position_embeddings):
         L = x.shape[0]
         q = self.q_proj(x).reshape(L, self.num_heads, self.head_dim)
         k = self.k_proj(x).reshape(L, self.num_heads, self.head_dim)
         v = self.v_proj(x).reshape(L, self.num_heads, self.head_dim)
-        q = apply_rope_vision(mx.expand_dims(q, 0), rope_emb)[0]
-        k = apply_rope_vision(mx.expand_dims(k, 0), rope_emb)[0]
+        cos, sin = position_embeddings
+        q, k = apply_rope_vision(mx.expand_dims(q, 0), mx.expand_dims(k, 0), cos, sin)
+        q, k = q[0], k[0]
         q = mx.expand_dims(q.transpose(1, 0, 2), 0)  # [1,H,L,d]
         k = mx.expand_dims(k.transpose(1, 0, 2), 0)
         v = mx.expand_dims(v.transpose(1, 0, 2), 0)
-        cs = cu_seqlens.tolist()
-        outs = []
-        for i in range(len(cs) - 1):
-            a, b = cs[i], cs[i + 1]
-            if b <= a:
-                continue
-            o = mx.fast.scaled_dot_product_attention(
-                q[:, :, a:b], k[:, :, a:b], v[:, :, a:b], scale=self.scale, mask=None)
-            outs.append(o)
-        out = mx.concatenate(outs, axis=2)[0].transpose(1, 0, 2).reshape(L, -1)
+        out = mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=self.scale, mask=None)[0].transpose(1, 0, 2).reshape(L, -1)
         return self.out_proj(out)
 
 
@@ -229,18 +229,18 @@ class MiniMaxM3VisionModel(nn.Module):
         self.pre_layrnorm = nn.LayerNorm(dim, eps=vc.get("layer_norm_eps", 1e-5))
         self.encoder = _Encoder(vc)
         head_dim = dim // self.num_heads
-        self.rope = VisionRoPE(head_dim // 2, theta=vc.get("rope_theta", 10000.0))
+        self.rope = VisionRoPE3D(
+            head_dim, theta=vc.get("rope_theta", 10000.0), spatial_merge_size=self.merge_size)
 
     def __call__(self, pixel_values, grid_thw):
         x = self.embeddings(pixel_values)                  # [N, dim]
         x = self.pre_layrnorm(x)
-        rope_emb = rot_pos_emb(grid_thw, self.merge_size, self.rope)
-        # full attention per image: cu_seqlens at image boundaries
+        position_embeddings = self.rope(grid_thw, dtype=x.dtype)
         cu = [0]
         for t, h, w in grid_thw.tolist():
             cu.append(cu[-1] + t * h * w)
         cu_seqlens = mx.array(cu, dtype=mx.int32)
-        x = self.encoder(x, cu_seqlens, rope_emb)
+        x = self.encoder(x, cu_seqlens, position_embeddings)
         return x
 
 

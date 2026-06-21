@@ -615,6 +615,47 @@ def test_single_batch_m3_chunks_long_prompt_before_final_sample():
     assert model.calls == [[1, 2, 3], [4, 5, 6], [7, 8]]
 
 
+def test_single_batch_m3_vl_prefills_image_prompt_in_one_forward():
+    from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+    class _FakeVLModel:
+        def __init__(self):
+            self.calls = []
+
+        def make_cache(self):
+            return []
+
+        def __call__(self, tokens, cache=None, pixel_values=None, image_grid_thw=None):
+            self.calls.append(
+                (
+                    tokens.tolist()[0],
+                    pixel_values is not None,
+                    image_grid_thw is not None,
+                )
+            )
+            return mx.zeros((1, tokens.shape[1], 8), dtype=mx.float32)
+
+    model = _FakeVLModel()
+    gen = SingleBatchGenerator(
+        model,
+        max_tokens=1,
+        sampler=lambda _logits: mx.array([3], dtype=mx.int32),
+        prefill_step_size=3,
+        stream=None,
+    )
+
+    gen.insert(
+        [[1, 2, 3, 4, 5, 6, 7, 8]],
+        pixel_values=[mx.zeros((1, 1), dtype=mx.bfloat16)],
+        image_grid_thw=[mx.array([[1, 1, 1]], dtype=mx.int32)],
+    )
+    prompt_responses, generation_responses = gen.next()
+
+    assert len(prompt_responses) == 1
+    assert generation_responses == []
+    assert model.calls == [([1, 2, 3, 4, 5, 6, 7, 8], True, True)]
+
+
 def test_scheduler_uses_minimax_m3_logits_sampler_for_msa_cache(monkeypatch):
     from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache
     from vmlx_engine.request import SamplingParams
@@ -731,29 +772,32 @@ def test_minimax_m3_reasoning_on_off_auto_map_to_template_modes(monkeypatch):
 
 
 def test_minimax_m3_vl_preprocess_maps_reasoning_to_thinking_mode(monkeypatch):
-    import numpy as np
+    import mlx.core as mx
 
     from vmlx_engine.models.minimax_m3 import m3_vl_preprocess
 
     seen_kwargs = []
+    seen_texts = []
 
     class _Tokenizer:
         def apply_chat_template(self, messages, **kwargs):
             seen_kwargs.append(dict(kwargs))
-            return "<image> describe"
+            return "]<]image[>[ describe"
 
-    class _Processor:
-        tokenizer = _Tokenizer()
+        def __call__(self, text, return_tensors=None):
+            seen_texts.extend(text)
+            return {"input_ids": [[1, 200025, 2]]}
 
-        def __call__(self, *, text, images, return_tensors):
-            return {
-                "input_ids": np.array([[1, 200025, 2]], dtype=np.int64),
-                "pixel_values": np.zeros((1, 1, 1), dtype=np.float32),
-                "image_grid_thw": np.array([[1, 1, 1]], dtype=np.int32),
-            }
-
-    monkeypatch.setattr(m3_vl_preprocess, "_get_processor", lambda _path: _Processor())
+    monkeypatch.setattr(m3_vl_preprocess, "_get_tokenizer", lambda _path: _Tokenizer())
     monkeypatch.setattr(m3_vl_preprocess, "_load_pil_images", lambda _images: [object()])
+    monkeypatch.setattr(
+        m3_vl_preprocess,
+        "_preprocess_images_native",
+        lambda _images: (
+            mx.zeros((1, 1), dtype=mx.bfloat16),
+            mx.array([[1, 2, 2]], dtype=mx.int32),
+        ),
+    )
 
     messages = [
         {
@@ -778,6 +822,7 @@ def test_minimax_m3_vl_preprocess_maps_reasoning_to_thinking_mode(monkeypatch):
         )
         assert seen_kwargs[-1]["thinking_mode"] == expected
         assert "enable_thinking" not in seen_kwargs[-1]
+        assert seen_texts[-1].count("]<]image[>[") == 1
 
 
 def test_minimax_m3_reasoning_parser_accepts_fallback_think_tags():

@@ -9,10 +9,10 @@ The standalone diagnostics (``diag_m3_vl_integrated.py``) proved that
 
     model(input_ids, cache=cache, pixel_values=pv, image_grid_thw=grid)
 
-produces a coherent image description. The job of this module is to reproduce the
-*exact* preprocessing those diagnostics used (MiniMax ``AutoProcessor``,
-trust_remote_code), so the engine feeds the model identical
-``input_ids`` / ``pixel_values`` / ``image_grid_thw`` tensors.
+produces a coherent image description. This module keeps the same token contract
+without importing MiniMax's HuggingFace ``AutoProcessor`` at request time. That
+processor depends on torch/torchvision/video validation, which is unnecessary for
+the text-routed vMLX image path and can block server requests on Apple Silicon.
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 _TRUE = {"1", "true", "on", "yes"}
 
-# Process-wide processor cache, keyed by model path. AutoProcessor.from_pretrained
-# is expensive; the processor is stateless across requests so caching is safe.
-_PROCESSOR_CACHE: dict[str, Any] = {}
+# Process-wide tokenizer cache, keyed by model path. Tokenizers are stateless
+# across requests and much cheaper/safer than loading the full AutoProcessor.
+_TOKENIZER_CACHE: dict[str, Any] = {}
 
 
 def m3_vl_enabled() -> bool:
@@ -52,15 +52,15 @@ def is_m3_vl_model(model: Any) -> bool:
         return False
 
 
-def _get_processor(model_path: str):
-    proc = _PROCESSOR_CACHE.get(model_path)
-    if proc is not None:
-        return proc
-    from transformers import AutoProcessor
+def _get_tokenizer(model_path: str):
+    tok = _TOKENIZER_CACHE.get(model_path)
+    if tok is not None:
+        return tok
+    from transformers import AutoTokenizer
 
-    proc = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
-    _PROCESSOR_CACHE[model_path] = proc
-    return proc
+    tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    _TOKENIZER_CACHE[model_path] = tok
+    return tok
 
 
 def _load_pil_images(images: List[Any]):
@@ -74,6 +74,65 @@ def _load_pil_images(images: List[Any]):
         path = process_image_input(img)
         out.append(Image.open(path).convert("RGB"))
     return out
+
+
+def _preprocess_images_native(pil_images: List[Any]):
+    """Run vMLX's native MiniMax-M3 image preprocessor.
+
+    Returns MLX ``pixel_values`` and ``image_grid_thw`` matching MiniMax's HF
+    processor layout, but without importing torch/torchvision.
+    """
+    import mlx.core as mx
+
+    from .minimax_m3_vl import preprocess_image
+
+    pixel_chunks = []
+    grid_chunks = []
+    for image in pil_images:
+        pv, grid = preprocess_image(image)
+        pixel_chunks.append(pv)
+        grid_chunks.append(grid)
+    if not pixel_chunks:
+        raise ValueError("M3 VL: all image inputs failed to preprocess")
+    pixel_values = mx.concatenate(pixel_chunks, axis=0).astype(mx.bfloat16)
+    grid = mx.concatenate(grid_chunks, axis=0).astype(mx.int32)
+    mx.eval(pixel_values, grid)
+    return pixel_values, grid
+
+
+def _expand_image_tokens(text: str, image_grid_thw: Any, merge_size: int = 2) -> str:
+    """Expand each MiniMax image marker to one token per merged image patch."""
+    image_token = "]<]image[>["
+    vision_start = "]<]start of image[>["
+    vision_end = "]<]end of image[>["
+    placeholder = "]<]placeholder[>["
+    merge_length = merge_size**2
+    grids = image_grid_thw.tolist()
+    index = 0
+    while image_token in text:
+        if index >= len(grids):
+            raise ValueError(
+                "M3 VL: prompt contains more image placeholders than images"
+            )
+        gt, gh, gw = (int(v) for v in grids[index])
+        num_tokens = (gt * gh * gw) // merge_length
+        text = text.replace(
+            image_token,
+            vision_start + placeholder * num_tokens + vision_end,
+            1,
+        )
+        index += 1
+    if index != len(grids):
+        raise ValueError(
+            "M3 VL: image count does not match chat-template placeholders"
+        )
+    return text.replace(placeholder, image_token)
+
+
+def _tokenize_text(tok: Any, text: str) -> List[int]:
+    encoded = tok([text], return_tensors=None)
+    ids = encoded["input_ids"][0]
+    return [int(x) for x in ids]
 
 
 def _normalize_messages_for_template(messages: List[dict]) -> Tuple[List[dict], List[Any]]:
@@ -128,18 +187,14 @@ def preprocess_m3_vl_messages(
     add_generation_prompt: bool = True,
     enable_thinking: Optional[bool] = None,
 ) -> Optional[Tuple[List[int], Any, Any]]:
-    """Template `messages` + run the MiniMax processor -> (input_ids, pv, grid).
+    """Template `messages` + native image preprocess -> (input_ids, pv, grid).
 
-    Mirrors the proven diag preprocessing exactly: normalize image items to
-    ``{"type": "image"}``, ``apply_chat_template`` via the processor's tokenizer,
-    then call the processor with the raw PIL images. Returns ``None`` when there
-    are no images.
+    Mirrors MiniMax processor semantics without importing HF AutoProcessor:
+    normalize image items to ``{"type": "image"}``, render the chat template,
+    preprocess images with the vMLX native MiniMax image path, expand image
+    markers to patch-token placeholders, then tokenize.
     """
-    import mlx.core as mx
-    import numpy as np
-
-    proc = _get_processor(model_path)
-    tok = getattr(proc, "tokenizer", proc)
+    tok = _get_tokenizer(model_path)
 
     norm_msgs, raw_images = _normalize_messages_for_template(messages)
     if not raw_images and extra_images:
@@ -198,18 +253,11 @@ def preprocess_m3_vl_messages(
     if not pil_images:
         raise ValueError("M3 VL: all image inputs failed to load")
 
-    out = proc(text=[txt], images=pil_images, return_tensors="np")
-    ids = np.asarray(out["input_ids"][0]).astype(np.int64)
-    input_ids = [int(x) for x in ids.tolist()]
-    pixel_values = mx.array(out["pixel_values"]).astype(mx.bfloat16)
-    grid = mx.array(np.asarray(out["image_grid_thw"]).astype(np.int32))
-    # Materialize NOW so no lazy graph crosses threads. Preprocessing runs on the
-    # server event loop thread; the forward runs on the scheduler worker thread.
-    # A lazy astype bound to this thread's default stream would otherwise fail to
-    # resolve there (P0 VL stream bug: "no Stream(gpu,0) in current thread").
-    mx.eval(pixel_values, grid)
+    pixel_values, grid = _preprocess_images_native(pil_images)
+    txt = _expand_image_tokens(txt, grid)
+    input_ids = _tokenize_text(tok, txt)
 
-    n_img = int((ids == 200025).sum())
+    n_img = sum(1 for token in input_ids if token == 200025)
     logger.info(
         "M3 VL preprocess: %d tokens, %d image tokens, pixel_values=%s grid=%s",
         len(input_ids),
@@ -246,29 +294,19 @@ def preprocess_m3_vl(
     template renders an ``<image>`` placeholder per image item; the processor
     expands each into the configured number of image tokens.
     """
-    import mlx.core as mx
-    import numpy as np
-
     if not images:
         return None
 
-    proc = _get_processor(model_path)
+    tok = _get_tokenizer(model_path)
     pil_images = _load_pil_images(images)
     if not pil_images:
         raise ValueError("M3 VL: all image inputs failed to load")
 
-    out = proc(text=[prompt], images=pil_images, return_tensors="np")
-    ids = np.asarray(out["input_ids"][0]).astype(np.int64)
-    input_ids = [int(x) for x in ids.tolist()]
-    pixel_values = mx.array(out["pixel_values"]).astype(mx.bfloat16)
-    grid = mx.array(np.asarray(out["image_grid_thw"]).astype(np.int32))
-    # Materialize NOW so no lazy graph crosses threads. Preprocessing runs on the
-    # server event loop thread; the forward runs on the scheduler worker thread.
-    # A lazy astype bound to this thread's default stream would otherwise fail to
-    # resolve there (P0 VL stream bug: "no Stream(gpu,0) in current thread").
-    mx.eval(pixel_values, grid)
+    pixel_values, grid = _preprocess_images_native(pil_images)
+    prompt = _expand_image_tokens(prompt, grid)
+    input_ids = _tokenize_text(tok, prompt)
 
-    n_img = int((ids == 200025).sum())
+    n_img = sum(1 for token in input_ids if token == 200025)
     logger.info(
         "M3 VL preprocess: %d tokens, %d image tokens, pixel_values=%s grid=%s",
         len(input_ids),
