@@ -2525,9 +2525,16 @@ class BlockAwarePrefixCache:
                                 first_k = keys[0]
                                 seq_len = first_k.shape[-2]
                                 actual_end = min(end_idx, seq_len)
-                                if start_idx >= actual_end:
-                                    sub_slices.append(("skip",))
-                                    continue
+                                # MLA: store an EMPTY slice instead of ("skip",)
+                                # when this block's range is out-of-cache (e.g.
+                                # an MLA layer whose secondary head group
+                                # accumulated 0 tokens — live kshape
+                                # [.,.,0,feat]). The empty array is non-None so
+                                # the live-cache validator accepts it, and
+                                # reconstruct's "kv" path builds a real empty
+                                # KVCache matching the live state. Emitting
+                                # ("skip",) here left the rebuild all-skip and
+                                # forced a full re-prefill on every warm turn.
                                 keys_slice = tuple(t[..., start_idx:actual_end, :] for t in keys)
                                 values_slice = tuple(t[..., start_idx:actual_end, :] for t in values)
                                 meta = sub.get("meta_state", ())
@@ -2540,9 +2547,10 @@ class BlockAwarePrefixCache:
                                     continue
                                 seq_len = keys.shape[seq_dim]
                                 actual_end = min(end_idx, seq_len)
-                                if start_idx >= actual_end:
-                                    sub_slices.append(("skip",))
-                                    continue
+                                # MLA (see quant branch): store an empty slice
+                                # instead of ("skip",) when out-of-cache, so
+                                # reconstruct builds a non-None empty KVCache
+                                # that passes the live-cache validator.
                                 if ndim == 4:
                                     ks = keys[:, :, start_idx:actual_end, :]
                                     vs = values[:, :, start_idx:actual_end, :]
@@ -3771,10 +3779,18 @@ class BlockAwarePrefixCache:
                                 padded_len = ((offset + step - 1) // step) * step
                                 pad = padded_len - offset
                                 if pad > 0:
-                                    pad_shape = list(ck.shape)
-                                    pad_shape[seq_axis] = pad
-                                    k_pad = mx.zeros(tuple(pad_shape), ck.dtype)
-                                    v_pad = mx.zeros(tuple(pad_shape), cv.dtype)
+                                    # MLA: keys and values can have DIFFERENT
+                                    # feature dims (compressed-latent attention
+                                    # has asymmetric k/v last-dim, e.g. k ends in
+                                    # 64 and v in 512). Build pad shapes per
+                                    # tensor — reusing ck's shape for v_pad
+                                    # crashes mx.concatenate.
+                                    k_pad_shape = list(ck.shape)
+                                    k_pad_shape[seq_axis] = pad
+                                    v_pad_shape = list(cv.shape)
+                                    v_pad_shape[seq_axis] = pad
+                                    k_pad = mx.zeros(tuple(k_pad_shape), ck.dtype)
+                                    v_pad = mx.zeros(tuple(v_pad_shape), cv.dtype)
                                     ck = mx.concatenate([ck, k_pad], axis=seq_axis)
                                     cv = mx.concatenate([cv, v_pad], axis=seq_axis)
                                     mx.eval(ck, cv)
