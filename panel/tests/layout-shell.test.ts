@@ -14,6 +14,7 @@
  *   - No hardcoded values verification
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 // ─── AppState Types (from types/app-state.ts) ────────────────────────────────
 
@@ -433,6 +434,16 @@ describe('AppState Reducer', () => {
       const result = appReducer(initialState, { type: 'NONEXISTENT' } as any)
       expect(result).toEqual(initialState)
     })
+  })
+})
+
+describe('SessionView chat list overlay', () => {
+  const sessionViewSource = readFileSync('src/renderer/src/components/sessions/SessionView.tsx', 'utf8')
+
+  it('positions the chat list overlay inside the session view, below the app titlebar', () => {
+    expect(sessionViewSource).toContain('className="relative flex flex-col h-full min-h-0"')
+    expect(sessionViewSource).toContain('className="absolute inset-0 bg-background/50 z-10"')
+    expect(sessionViewSource).not.toContain('className="fixed inset-0 bg-background/50 z-10"')
   })
 })
 

@@ -244,7 +244,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const isImageEdit = isImage && sessionConfig.imageMode === 'edit'
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="relative flex flex-col h-full min-h-0">
       {/* Session Header */}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0 overflow-x-auto [scrollbar-width:thin]">
         <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1 flex-shrink-0">
@@ -449,7 +449,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
 
       {/* Chat List Overlay */}
       {showChatList && (
-        <div className="fixed inset-0 bg-background/50 z-10" onClick={() => setShowChatList(false)}>
+        <div className="absolute inset-0 bg-background/50 z-10" onClick={() => setShowChatList(false)}>
           <div className="w-80 h-full bg-card border-r border-border" onClick={e => e.stopPropagation()}>
             <ChatList
               currentChatId={currentChatId}
