@@ -777,6 +777,11 @@ def smelt_load(
     import struct as _struct
     from jang_tools.loader import load_jang_model as _jt_load
     from jang_tools.loader import _fix_quantized_bits
+    try:
+        from ..utils.jang_loader import apply_jang_norm_shift as _apply_jang_norm_shift
+    except Exception as exc:
+        _apply_jang_norm_shift = None
+        logger.debug("Could not import JANG norm shift helper: %s", exc)
 
     # Gemma 4 (model_type=gemma4, text_config.model_type=gemma4_text):
     # jang_tools text-only loader does NOT sanitize Gemma 4's SwitchGLU +
@@ -1064,6 +1069,8 @@ def smelt_load(
     # After filling experts, fix quantization bits again (expert modules
     # may have different bits than the backbone defaults)
     _fix_quantized_bits(model, {})
+    if _apply_jang_norm_shift is not None:
+        _apply_jang_norm_shift(model)
 
     logger.info("  Wrapped %d MoE layers", patched)
 
