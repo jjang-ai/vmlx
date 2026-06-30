@@ -30,13 +30,13 @@ export function TitleBar() {
     >
       {/* macOS traffic light spacer + sidebar toggle */}
       <div
-        className="flex items-center gap-1 pl-[72px] pr-2"
+        className="flex w-[102px] shrink-0 items-center gap-1 pl-[72px] pr-2"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         {state.mode === "chat" && (
           <button
             onClick={() => dispatch({ type: "TOGGLE_SIDEBAR" })}
-            className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors"
+            className="p-1 translate-y-[3px] text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors focus:outline-none focus-visible:outline-none"
             title={
               state.sidebarCollapsed
                 ? t("app.sidebar.show")

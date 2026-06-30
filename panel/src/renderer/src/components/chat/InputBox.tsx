@@ -79,6 +79,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
+    el.style.overflowY = el.scrollHeight > 200 ? 'auto' : 'hidden'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [message])
 
