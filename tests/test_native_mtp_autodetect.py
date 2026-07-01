@@ -1970,6 +1970,226 @@ class TestNativeMtpAutodetect:
         assert language_model.mtp_calls == [3, 5]
         assert req.output_tokens == [2, 3, 4, 5]
 
+    def test_mllm_native_mtp_backbone_calls_use_absolute_position_ids(
+        self, monkeypatch
+    ):
+        import mlx.core as mx
+
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatch,
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+            MLLMBatchStats,
+        )
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "1")
+        vocab_size = 8
+
+        def logits_for(targets):
+            rows = []
+            for target in targets:
+                row = [-100.0] * vocab_size
+                row[int(target)] = 100.0
+                rows.append(row)
+            return mx.array([rows], dtype=mx.float32)
+
+        class _Cache:
+            def __init__(self, offset):
+                self.offset = offset
+
+            def is_trimmable(self):
+                return True
+
+            def trim(self, count):
+                if count:
+                    self.offset -= count
+
+        class _PositionAwareLanguageModel:
+            def __init__(self):
+                self.mtp = object()
+                self.calls = []
+
+            def make_mtp_cache(self):
+                return [_Cache(0)]
+
+            def __call__(
+                self,
+                input_ids,
+                cache=None,
+                return_hidden=False,
+                position_ids=None,
+                **_kwargs,
+            ):
+                if cache is not None and position_ids is None:
+                    raise AssertionError("native MTP backbone call needs position_ids")
+                tokens = [int(t) for t in input_ids.reshape(-1).tolist()]
+                positions = (
+                    position_ids[0, 0].tolist() if position_ids is not None else []
+                )
+                self.calls.append((tokens, positions))
+                if cache:
+                    cache[0].offset += len(tokens)
+                if tokens == [2]:
+                    targets = [3]
+                elif tokens == [3, 4]:
+                    targets = [4, 5]
+                else:
+                    targets = [(tokens[-1] + 1) % vocab_size]
+                logits = logits_for(targets)
+                if return_hidden:
+                    hidden = mx.ones((1, len(targets), 4), dtype=mx.float32)
+                    return logits, hidden
+                return logits
+
+            def mtp_forward(self, hidden_states, next_token_ids, mtp_cache):
+                next_id = int(next_token_ids.reshape(-1).tolist()[0])
+                return logits_for([(next_id + 1) % vocab_size])
+
+        req = MLLMBatchRequest(
+            uid=0,
+            request_id="vl-mtp-positions",
+            prompt="",
+            max_tokens=4,
+            temperature=0.0,
+        )
+        req.input_ids = mx.array([101, 102])
+        req._original_token_ids = [101, 102]
+
+        language_model = _PositionAwareLanguageModel()
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator.language_model = language_model
+        generator.model = type("_VLM", (), {"language_model": language_model})()
+        generator.unprocessed_requests = []
+        generator.completion_batch_size = 1
+        generator.stop_tokens = set()
+        generator._prefill_errors = []
+        generator._stats = MLLMBatchStats()
+        generator._make_request_sampler = lambda _req: (
+            lambda logits: mx.argmax(logits, axis=-1).astype(mx.uint32)
+        )
+
+        first_token = mx.array([2], dtype=mx.uint32)
+        first_logprobs = [logits_for([2]).squeeze(0).squeeze(0)]
+        generator.active_batch = MLLMBatch(
+            uids=[0],
+            request_ids=["vl-mtp-positions"],
+            y=first_token,
+            logprobs=first_logprobs,
+            max_tokens=[4],
+            num_tokens=[0],
+            cache=[_Cache(16)],
+            requests=[req],
+        )
+
+        generator._seed_native_mtp_from_prefill(
+            req,
+            generator.active_batch.cache,
+            first_token,
+            first_logprobs,
+        )
+
+        tokens = [generator._next()[0].token for _ in range(4)]
+
+        assert tokens == [2, 3, 4, 5]
+        assert language_model.calls == [
+            ([2], [16]),
+            ([3, 4], [17, 18]),
+        ]
+
+    def test_mllm_native_mtp_replay_uses_absolute_position_ids(self):
+        import mlx.core as mx
+
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        class _Cache:
+            def __init__(self, offset):
+                self.offset = offset
+
+        class _PositionAwareLanguageModel:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(
+                self,
+                input_ids,
+                cache=None,
+                return_hidden=False,
+                position_ids=None,
+                **_kwargs,
+            ):
+                if cache is not None and position_ids is None:
+                    raise AssertionError("native MTP replay needs position_ids")
+                tokens = [int(t) for t in input_ids.reshape(-1).tolist()]
+                positions = position_ids[0, 0].tolist()
+                self.calls.append((tokens, positions))
+                hidden = mx.ones((1, len(tokens), 4), dtype=mx.float32)
+                logits = mx.zeros((1, len(tokens), 8), dtype=mx.float32)
+                return logits, hidden
+
+        req = MLLMBatchRequest(
+            uid=0,
+            request_id="vl-mtp-replay-positions",
+            prompt="",
+            max_tokens=4,
+            temperature=0.0,
+        )
+        language_model = _PositionAwareLanguageModel()
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator.language_model = language_model
+
+        hidden = generator._replay_native_mtp_confirmed_tokens(
+            req,
+            [_Cache(21)],
+            [mx.array([5], dtype=mx.uint32), mx.array([6], dtype=mx.uint32)],
+        )
+
+        assert hidden.shape == (1, 1, 4)
+        assert language_model.calls == [([5, 6], [21, 22])]
+
+    def test_mllm_native_mtp_prompt_cache_keeps_native_kv_for_hybrid_ssm(
+        self, monkeypatch
+    ):
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        class _NativeMtpLanguageModel:
+            mtp = object()
+
+            def mtp_forward(self):
+                pass
+
+            def make_mtp_cache(self):
+                return []
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP", "1")
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator.language_model = _NativeMtpLanguageModel()
+
+        request = MLLMBatchRequest(
+            uid=0,
+            request_id="warm-hybrid-mtp",
+            prompt="",
+            max_tokens=8,
+            temperature=0.0,
+        )
+        request.prompt_cache = [object()]
+        request._cache_detail = "paged+ssm"
+
+        assert generator._native_mtp_keep_native_kv_for_prompt_cache(request)
+
+        request._cache_detail = "paged"
+        assert not generator._native_mtp_keep_native_kv_for_prompt_cache(request)
+
+        request._cache_detail = "paged+ssm"
+        request.temperature = 1.0
+        assert not generator._native_mtp_keep_native_kv_for_prompt_cache(request)
+
     def test_mllm_generator_runs_depth3_native_mtp_verify_cycle(self, monkeypatch):
         import mlx.core as mx
 

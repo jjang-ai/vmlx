@@ -2854,6 +2854,11 @@ class MLLMScheduler:
                                     "clean prompt-boundary store",
                                     request_id,
                                 )
+                            _uses_generic_hybrid_ssm_cache = bool(
+                                getattr(self, "_is_hybrid", False)
+                                and not _uses_zaya_cache
+                                and not _uses_mixed_attention_cache
+                            )
                             if truncated_tokens and cached_tokens >= len(truncated_tokens):
                                 logger.debug(
                                     "Skipping VLM paged cache store for %s: "
@@ -2868,11 +2873,16 @@ class MLLMScheduler:
                                 raw = request._extracted_cache
                                 if raw is None:
                                     cache_blocks = None
-                                elif _uses_zaya_cache or _uses_mixed_attention_cache:
-                                    # ZAYA CCA and Gemma-style mixed-SWA caches are
-                                    # path-dependent. ZAYA conv_state/prev_hs and
-                                    # RotatingKVCache windows cannot be recovered
-                                    # safely from post-generation state. Re-prefill
+                                elif (
+                                    _uses_zaya_cache
+                                    or _uses_mixed_attention_cache
+                                    or _uses_generic_hybrid_ssm_cache
+                                ):
+                                    # ZAYA CCA, Gemma-style mixed-SWA, and generic
+                                    # hybrid SSM caches are path-dependent. Their
+                                    # non-KV state and prompt-boundary KV must be
+                                    # aligned, so never derive the storable prefix
+                                    # from a post-generation live cache. Re-prefill
                                     # exactly the N-1 cache key and store that clean
                                     # typed state. If the clean prefill is
                                     # unavailable, skip the store instead of writing
@@ -2982,6 +2992,13 @@ class MLLMScheduler:
                                                 "prefill unavailable",
                                                 request_id,
                                             )
+                                        elif _uses_generic_hybrid_ssm_cache:
+                                            logger.info(
+                                                "Skipping hybrid-SSM VLM paged cache "
+                                                "store for %s: clean hybrid_ssm prompt "
+                                                "prefill unavailable",
+                                                request_id,
+                                            )
                                         else:
                                             logger.info(
                                                 "Skipping mixed-SWA VLM paged cache store "
@@ -2995,16 +3012,21 @@ class MLLMScheduler:
                                 logger.info(
                                     "Skipping VLM paged cache store for %s: "
                                     "resolved extracted cache is empty "
-                                    "(mixed_swa=%s, zaya_cca=%s, prompt_tokens=%d, "
-                                    "cache_callable=%s)",
+                                    "(mixed_swa=%s, zaya_cca=%s, hybrid_ssm=%s, "
+                                    "prompt_tokens=%d, cache_callable=%s)",
                                     request_id,
                                     _uses_mixed_attention_cache,
                                     _uses_zaya_cache,
+                                    _uses_generic_hybrid_ssm_cache,
                                     prompt_len,
                                     callable(getattr(request, "_extracted_cache", None)),
                                 )
                             else:
-                                if _uses_zaya_cache or _uses_mixed_attention_cache:
+                                if (
+                                    _uses_zaya_cache
+                                    or _uses_mixed_attention_cache
+                                    or _uses_generic_hybrid_ssm_cache
+                                ):
                                     cache_blocks = list(cache_blocks)
                                 else:
                                     cache_blocks = self._truncate_hybrid_cache(

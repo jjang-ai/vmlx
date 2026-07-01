@@ -1534,6 +1534,63 @@ class TestCleanupFinishedCacheStore:
         assert len(args[0]) == 666
         scheduler.block_aware_cache.store_cache.assert_called_once()
 
+    def test_generic_hybrid_ssm_paged_store_uses_clean_prefill_not_live_cache(self):
+        """Qwen hybrid SSM must not store KV from post-generation live cache."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=12,
+            _bypass_prefix_cache=False,
+            _cached_tokens=0,
+            _extracted_cache=lambda: ["dirty-live-cache"],
+            _extracted_tokens=[10, 11, 12, 13],
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-qwen-ssm": request}
+        scheduler.block_aware_cache = MagicMock()
+        scheduler.block_aware_cache._request_tables = {}
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+        scheduler._is_hybrid = True
+        scheduler._kv_cache_bits = 0
+        scheduler._uses_zaya_cache = False
+        scheduler._mixed_attention_cache_model = False
+        scheduler._mllm_request_has_media_cache_context = MagicMock(return_value=False)
+        scheduler._mllm_media_prefix_cache_allowed = MagicMock(return_value=False)
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["dirty-truncated-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        clean_states = [{"class_name": "KVCache", "state": "clean"}]
+        scheduler._extract_cache_states = MagicMock(return_value=clean_states)
+        scheduler.batch_generator = SimpleNamespace(
+            _tight_memory_prefill_drain=False,
+            _prefill_for_clean_path_dependent_cache=MagicMock(
+                return_value=["clean-hybrid-cache"]
+            ),
+        )
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = MagicMock()
+        scheduler.requests = {"req-qwen-ssm": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-qwen-ssm"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_called_once_with(
+            [10, 11, 12]
+        )
+        scheduler._truncate_hybrid_cache.assert_not_called()
+        scheduler._extract_cache_states.assert_called_once_with(["clean-hybrid-cache"])
+        scheduler.block_aware_cache.store_cache.assert_called_once_with(
+            "req-qwen-ssm",
+            [10, 11, 12],
+            clean_states,
+            cache_extra_keys=None,
+        )
+
     def test_media_request_skips_memory_aware_token_only_store(self):
         """Image/video VLM requests must not be stored under text-only keys."""
 

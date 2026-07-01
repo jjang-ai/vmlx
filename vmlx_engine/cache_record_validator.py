@@ -729,6 +729,15 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
         if not hasattr(layer_cache, attr):
             return True, ""
         value = getattr(layer_cache, attr)
+        if (
+            attr == "_idx"
+            and value is None
+            and type(layer_cache).__name__ == "TurboQuantKVCache"
+        ):
+            # TurboQuantKVCache uses _idx only after batch prepare/filter. A
+            # clean single-sequence prompt prefill keeps offset as an int and
+            # leaves _idx unset; that is valid prefix-cache state.
+            return True, ""
         if type(value).__module__.startswith("unittest.mock"):
             # Unit-test mocks claim every attribute exists. Ignore synthetic
             # mock scalars so cache-validation contract tests can use duck

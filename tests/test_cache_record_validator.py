@@ -435,6 +435,29 @@ def test_live_cache_rejects_tq_encoded_huge_shape_when_keys_cleared():
     assert "shape" in reason.lower() or "dim" in reason.lower()
 
 
+def test_live_cache_accepts_single_sequence_turboquant_with_unset_idx():
+    """TurboQuantKVCache leaves _idx=None until it enters batched mode."""
+    from vmlx_engine.cache_record_validator import validate_live_cache
+
+    TurboQuantKVCache = type("TurboQuantKVCache", (), {})
+    layer = TurboQuantKVCache()
+    layer.keys = _stub_tensor((1, 8, 16, 128))
+    layer.values = _stub_tensor((1, 8, 16, 128))
+    layer.offset = 16
+    layer._idx = None
+    layer.key_dim = 128
+    layer.value_dim = 128
+    layer.key_bits = 3
+    layer.value_bits = 3
+    layer.sink_tokens = 0
+    layer._compressed_tokens = 0
+
+    ok, reason, nbytes = validate_live_cache([layer], source="test:live-tq-single")
+
+    assert ok, reason
+    assert nbytes > 0
+
+
 def test_live_cache_accepts_clean_kv_layer():
     from vmlx_engine.cache_record_validator import validate_live_cache
 

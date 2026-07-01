@@ -6223,12 +6223,24 @@ class MLLMBatchGenerator:
                         num_model_layers=self._hybrid_num_layers,
                     )
                     # Paged/memory/disk cache reconstruction returns plain
-                    # KVCache objects. For JANG/JANGTQ VLMs whose loader
-                    # patched make_cache() to TurboQuantKVCache, re-wrap the
-                    # fetched KV layers before the prefill tail so the live
-                    # decode path keeps the same TQ memory profile as cold
-                    # prefill. If the model is not TQ-backed this is a no-op.
-                    req_cache = _recompress_to_tq(req_cache, self.language_model)
+                    # KVCache objects. For JANG/JANGTQ VLMs we normally
+                    # re-wrap the fetched KV layers before the prefill tail so
+                    # warm decode keeps the same TQ memory profile as cold
+                    # prefill. Native-MTP hybrid SSM warm hits are the
+                    # exception: verify/replay/rollback needs mutable KVCache
+                    # semantics, so the guard below intentionally keeps the
+                    # reconstructed attention KV native for that request.
+                    if self._native_mtp_keep_native_kv_for_prompt_cache(req):
+                        logger.info(
+                            "MLLM native MTP prompt-cache hit for %s: keeping "
+                            "reconstructed attention KVCache layers native "
+                            "(cache_detail=%s) to preserve verify/replay "
+                            "rollback semantics",
+                            req.request_id,
+                            getattr(req, "_cache_detail", None),
+                        )
+                    else:
+                        req_cache = _recompress_to_tq(req_cache, self.language_model)
                 else:
                     try:
                         if hasattr(self.language_model, 'make_cache'):
@@ -7244,6 +7256,19 @@ class MLLMBatchGenerator:
                 )
         return False
 
+    def _native_mtp_keep_native_kv_for_prompt_cache(
+        self, request: MLLMBatchRequest
+    ) -> bool:
+        """Keep hybrid SSM prompt-cache KV mutable for native-MTP rollback."""
+        if not self._is_hybrid:
+            return False
+        if getattr(request, "prompt_cache", None) is None:
+            return False
+        cache_detail = str(getattr(request, "_cache_detail", "") or "")
+        if "ssm" not in cache_detail:
+            return False
+        return self._native_mtp_enabled_for_request(request)
+
     def _step_native_mtp_head(
         self,
         request: MLLMBatchRequest,
@@ -7313,6 +7338,21 @@ class MLLMBatchGenerator:
             _native_mtp_trace_stop(stats, "draft_ms", trace_t0)
         return drafts, draft_lps, []
 
+    def _native_mtp_lm_kwargs(
+        self, input_tokens: mx.array, cache: List[Any]
+    ) -> Dict[str, Any]:
+        """Build native-MTP LM kwargs, including absolute position_ids when supported."""
+        kwargs: Dict[str, Any] = {"cache": cache, "return_hidden": True}
+        if _lm_supports_position_ids(self.language_model):
+            position_ids = _absolute_text_position_ids(
+                input_tokens,
+                cache,
+                self.language_model,
+            )
+            if position_ids is not None:
+                kwargs["position_ids"] = position_ids
+        return kwargs
+
     def _seed_native_mtp_from_prefill(
         self,
         request: MLLMBatchRequest,
@@ -7335,10 +7375,10 @@ class MLLMBatchGenerator:
 
         sampler = self._make_request_sampler(request)
         seed_main_forwards = 1
+        seed_input = first_tok[:, None]
         output = self.language_model(
-            first_tok[:, None],
-            cache=cache,
-            return_hidden=True,
+            seed_input,
+            **self._native_mtp_lm_kwargs(seed_input, cache),
         )
         if isinstance(output, tuple):
             logits, hidden = output
@@ -7396,8 +7436,7 @@ class MLLMBatchGenerator:
         replay_input = mx.concatenate(replay_tokens).reshape(1, len(replay_tokens))
         output = self.language_model(
             replay_input,
-            cache=cache,
-            return_hidden=True,
+            **self._native_mtp_lm_kwargs(replay_input, cache),
         )
         if isinstance(output, tuple):
             _logits, hidden = output
@@ -7428,8 +7467,7 @@ class MLLMBatchGenerator:
         state.stats.verify_main_forwards += 1
         output = self.language_model(
             inputs[None, :],
-            cache=cache,
-            return_hidden=True,
+            **self._native_mtp_lm_kwargs(inputs[None, :], cache),
         )
         if isinstance(output, tuple):
             logits, hidden = output
