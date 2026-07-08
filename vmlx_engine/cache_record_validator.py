@@ -658,6 +658,13 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
     if layer_cache is None:
         return False, f"layer {layer_idx}: None cache layer", 0
 
+    def _is_turboquant_kv_cache(value: Any) -> bool:
+        cls = type(value)
+        return (
+            cls.__name__ == "TurboQuantKVCache"
+            and cls.__module__.startswith("jang_tools.turboquant")
+        )
+
     def _m3_seq_len(value: Any) -> Optional[int]:
         shape = getattr(value, "shape", None)
         if not isinstance(shape, (list, tuple)) or len(shape) < 3:
@@ -729,6 +736,10 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
         if not hasattr(layer_cache, attr):
             return True, ""
         value = getattr(layer_cache, attr)
+        if attr == "_idx" and value is None and _is_turboquant_kv_cache(layer_cache):
+            # TurboQuantKVCache leaves _idx unset for clean single-sequence
+            # cache state until the cache is prepared for batched use.
+            return True, ""
         if type(value).__module__.startswith("unittest.mock"):
             # Unit-test mocks claim every attribute exists. Ignore synthetic
             # mock scalars so cache-validation contract tests can use duck
