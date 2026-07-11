@@ -142,7 +142,13 @@ class DistributedEngine(BaseEngine):
         videos: list[str] | None = None,
         **kwargs,
     ) -> GenerationOutput:
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         prompt = self._apply_chat_template(messages, tools)
+        if callable(prompt_capture):
+            try:
+                prompt_capture(prompt)
+            except Exception:
+                logger.debug("Tool-call prompt diagnostic capture failed", exc_info=True)
         return await self.generate(prompt, max_tokens, temperature, top_p, **kwargs)
 
     async def stream_chat(
@@ -157,7 +163,13 @@ class DistributedEngine(BaseEngine):
         request_id: str | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         prompt = self._apply_chat_template(messages, tools)
+        if callable(prompt_capture):
+            try:
+                prompt_capture(prompt)
+            except Exception:
+                logger.debug("Tool-call prompt diagnostic capture failed", exc_info=True)
         self._current_request_id = request_id
         async for chunk in self.stream_generate(
             prompt, max_tokens, temperature, top_p, **kwargs

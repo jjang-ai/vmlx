@@ -726,6 +726,7 @@ class SimpleEngine(BaseEngine):
         kwargs.pop("request_id", None)
         thinking_enabled = kwargs.pop("enable_thinking", True)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
@@ -744,6 +745,14 @@ class SimpleEngine(BaseEngine):
                     )
                     if prompt_suffix:
                         prompt += prompt_suffix
+                    if callable(prompt_capture):
+                        try:
+                            prompt_capture(prompt)
+                        except Exception:
+                            logger.debug(
+                                "Tool-call prompt diagnostic capture failed",
+                                exc_info=True,
+                            )
                     self._raise_if_prompt_over_limit(
                         prompt,
                         max_prompt_tokens,
@@ -777,6 +786,9 @@ class SimpleEngine(BaseEngine):
                     })
                 if template_tools:
                     mllm_kwargs["tools"] = template_tools
+                    mllm_kwargs["tool_parser_id"] = self._model_tool_parser_name()
+                if callable(prompt_capture):
+                    mllm_kwargs["_vmlx_tool_call_prompt_capture"] = prompt_capture
                 output = await self._run_model_call(
                     self._model.chat,
                     messages=messages,
@@ -871,6 +883,14 @@ class SimpleEngine(BaseEngine):
                 # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
                 if prompt_suffix:
                     prompt += prompt_suffix
+                if callable(prompt_capture):
+                    try:
+                        prompt_capture(prompt)
+                    except Exception:
+                        logger.debug(
+                            "Tool-call prompt diagnostic capture failed",
+                            exc_info=True,
+                        )
 
                 self._raise_if_prompt_over_limit(
                     prompt,
@@ -961,6 +981,7 @@ class SimpleEngine(BaseEngine):
         thinking_enabled = kwargs.pop("enable_thinking", True)
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
@@ -990,6 +1011,9 @@ class SimpleEngine(BaseEngine):
                 })
             if template_tools:
                 mllm_kwargs["tools"] = template_tools
+                mllm_kwargs["tool_parser_id"] = self._model_tool_parser_name()
+            if callable(prompt_capture):
+                mllm_kwargs["_vmlx_tool_call_prompt_capture"] = prompt_capture
 
             async with self._generation_lock:
                 try:
@@ -1175,6 +1199,14 @@ class SimpleEngine(BaseEngine):
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
+        if callable(prompt_capture):
+            try:
+                prompt_capture(prompt)
+            except Exception:
+                logger.debug(
+                    "Tool-call prompt diagnostic capture failed",
+                    exc_info=True,
+                )
 
         self._raise_if_prompt_over_limit(
             prompt,

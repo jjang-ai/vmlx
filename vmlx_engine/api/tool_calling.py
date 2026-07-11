@@ -103,6 +103,123 @@ def check_and_inject_fallback_tools(
 
     instruction_prompt = _tool_instruction_scope(prompt)
 
+    def _qwen_has_legacy_xml_parameter_examples(text: str) -> bool:
+        scope = _tool_instruction_scope(text)
+        return (
+            "<parameter=" in scope
+            or "<function=example_function_name>" in scope
+            or bool(
+                re.search(
+                    r"<tool_call>\s*<function=[^>]+>[\s\S]*?</function>\s*</tool_call>",
+                    scope,
+                )
+            )
+        )
+
+    def _strip_qwen_legacy_xml_tool_scaffold(rendered: str) -> str:
+        scope = _tool_instruction_scope(rendered)
+        if not scope or not _qwen_has_legacy_xml_parameter_examples(scope):
+            return rendered
+        cleaned_scope = re.sub(r"(?im)^# Tools\s*\n?", "", scope)
+        cleaned_scope = re.sub(r"(?is)<tools>.*?</tools>\s*", "", cleaned_scope)
+        cleaned_scope = re.sub(
+            r"(?is)(?:For each function call[^\n]*\n)?\s*"
+            r"<tool_call>\s*<function=example_function_name>.*?</function>\s*</tool_call>\s*",
+            "",
+            cleaned_scope,
+        )
+        cleaned_scope = re.sub(
+            r"(?im)^[^\n]*(?:return xml|XML format|<parameter=)[^\n]*\n?",
+            "",
+            cleaned_scope,
+        )
+        return cleaned_scope + rendered[len(scope):]
+
+    def _rewrite_qwen_legacy_xml_tool_calls(rendered: str) -> str:
+        def _replace(match: re.Match) -> str:
+            name = (match.group(1) or "").strip()
+            body = match.group(2) or ""
+            if not name:
+                return match.group(0)
+            arguments: dict[str, str] = {}
+            for param_name, param_value in re.findall(
+                r"<parameter=([^>]+)>\s*([\s\S]*?)\s*</parameter>",
+                body,
+            ):
+                param_name = param_name.strip()
+                if param_name:
+                    arguments[param_name] = param_value.strip()
+            return (
+                "<tool_call>\n"
+                + json.dumps(
+                    {"name": name, "arguments": arguments},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n</tool_call>"
+            )
+
+        return re.sub(
+            r"<tool_call>\s*<function=([^>]+)>([\s\S]*?)</function>\s*</tool_call>",
+            _replace,
+            rendered,
+        )
+
+    def _normalize_qwen_rendered_prompt(rendered: str) -> str:
+        return _rewrite_qwen_legacy_xml_tool_calls(
+            _strip_qwen_legacy_xml_tool_scaffold(rendered)
+        )
+
+    def _qwen_tool_call_content(tool_call: Any) -> str | None:
+        if not isinstance(tool_call, dict):
+            return None
+        func = tool_call.get("function")
+        if not isinstance(func, dict):
+            return None
+        name = func.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        arguments = func.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+        if not isinstance(arguments, dict):
+            arguments = {}
+        return (
+            "<tool_call>\n"
+            + json.dumps(
+                {"name": name.strip(), "arguments": arguments},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n</tool_call>"
+        )
+
+    def _qwen_messages_with_json_tool_history(msgs: list[dict]) -> list[dict]:
+        normalized: list[dict] = []
+        for msg in msgs:
+            copied = dict(msg)
+            tool_calls = copied.get("tool_calls")
+            if copied.get("role") == "assistant" and isinstance(tool_calls, list):
+                rendered_calls = [
+                    rendered
+                    for call in tool_calls
+                    if (rendered := _qwen_tool_call_content(call))
+                ]
+                if rendered_calls:
+                    existing = copied.get("content")
+                    existing_text = existing.strip() if isinstance(existing, str) else ""
+                    copied["content"] = (
+                        (existing_text + "\n" if existing_text else "")
+                        + "\n".join(rendered_calls)
+                    )
+                    copied.pop("tool_calls", None)
+                    copied.pop("reasoning_content", None)
+            normalized.append(copied)
+        return normalized
+
     def _message_request_text() -> str:
         chunks: list[str] = []
         for msg in messages:
@@ -157,10 +274,13 @@ def check_and_inject_fallback_tools(
     parser_id = (tool_parser_id or "").strip().lower()
     is_dsv4_prompt = "<｜User｜>" in prompt or "<｜Assistant｜>" in prompt
     is_qwen_native_tool_prompt = (
-        parser_id not in {"xml_function", "mimo_xml_function"}
-        and "<|im_start|>" in prompt
-        and "<tools>" in prompt
-        and "<function=example_function_name>" in prompt
+        parser_id in {"qwen", "qwen3"}
+        or (
+            parser_id not in {"xml_function", "mimo_xml_function"}
+            and "<|im_start|>" in prompt
+            and "<tools>" in prompt
+            and "<function=example_function_name>" in prompt
+        )
     )
     is_zaya_native_tool_prompt = (
         parser_id in {"zaya_xml", "zaya", "zyphra"}
@@ -209,7 +329,19 @@ def check_and_inject_fallback_tools(
     )
     _qwen_has_concrete_tool_examples = (
         is_qwen_native_tool_prompt
-        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
+        and not _qwen_has_legacy_xml_parameter_examples(instruction_prompt)
+        and "<tool_call>" in instruction_prompt
+        and '"arguments"' in instruction_prompt
+        and all(
+            re.search(
+                r"<tool_call>\s*\{[^<]*\"name\"\s*:\s*\""
+                + re.escape(name)
+                + r"\"[^<]*\"arguments\"\s*:",
+                instruction_prompt,
+                flags=re.DOTALL,
+            )
+            for name in tool_names
+        )
     )
     _zaya_has_concrete_tool_examples = (
         is_zaya_native_tool_prompt
@@ -231,7 +363,33 @@ def check_and_inject_fallback_tools(
         and "<tool_call>" in instruction_prompt
         and "<function=example_function_name>" in instruction_prompt
         and "<tools>" in instruction_prompt
-        and all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)
+        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
+        and all(
+            not (
+                isinstance(_tool_func(tool).get("parameters", {}), dict)
+                and isinstance(
+                    _tool_func(tool).get("parameters", {}).get("required", []),
+                    list,
+                )
+                and _tool_func(tool).get("parameters", {}).get("required", [])
+            )
+            or (
+                (
+                    f"{_tool_func(tool).get('name', '')} required:"
+                    in instruction_prompt
+                    or '"required"' in instruction_prompt
+                    or "<required>" in instruction_prompt
+                )
+                and all(
+                    field in instruction_prompt
+                    for field in _tool_func(tool).get("parameters", {}).get(
+                        "required", []
+                    )
+                    if isinstance(field, str)
+                )
+            )
+            for tool in template_tools
+        )
     )
     _step3p5_has_concrete_tool_examples = (
         is_step3p5_native_tool_prompt
@@ -246,6 +404,8 @@ def check_and_inject_fallback_tools(
         and (not is_xml_function_native_tool_prompt or _xml_function_has_native_tool_schema)
         and (not is_step3p5_native_tool_prompt or _step3p5_has_concrete_tool_examples)
     ):
+        if is_qwen_native_tool_prompt:
+            return _normalize_qwen_rendered_prompt(prompt)
         return prompt
 
     logger.warning("Chat template needs fallback tool schema injection.")
@@ -346,119 +506,177 @@ def check_and_inject_fallback_tools(
             )
         return "\n\n".join(blocks)
 
+    def _latest_tool_result_absolute_path() -> str:
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or msg.get("role") != "tool":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, str):
+                continue
+            lowered = content.lower()
+            if "not found" in lowered or "no files found" in lowered:
+                continue
+            for line in content.splitlines():
+                candidate = line.strip().strip("`'\"").rstrip(".,;:")
+                if candidate.startswith("/") and not re.search(r"\s", candidate):
+                    return candidate
+        return ""
+
+    def _derive_run_command_value() -> str:
+        if not request_text:
+            return ""
+        direct_patterns = (
+            r'(?<![A-Za-z0-9_])command\s+["“]([^"”\n]{1,240})["”]',
+            r"(?<![A-Za-z0-9_])command\s+`([^`\n]{1,240})`",
+            r"(?<![A-Za-z0-9_])command\s+([A-Za-z0-9_./:;|&%><=+,'\" -]{1,240})(?:[.\n]|$)",
+        )
+        for pattern in direct_patterns:
+            match = re.search(pattern, request_text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip().rstrip(".,;:")
+
+        read_then_create = re.search(
+            r"\bread\s+([A-Za-z0-9_.:/-]{1,120})\s+and\s+create\s+"
+            r"([A-Za-z0-9_.:/-]{1,120}).*?\bWrite(?:\s+the\s+text)?\s+"
+            r"([A-Za-z0-9_.:-]{1,120})\s+into\s+the\s+second\s+file",
+            request_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if read_then_create:
+            src, dst, text = (part.strip() for part in read_then_create.groups())
+            return (
+                f"cat {shlex.quote(src)} >/dev/null && "
+                f"printf %s {shlex.quote(text)} > {shlex.quote(dst)}"
+            )
+
+        create_file = re.search(
+            r"\bcreate\s+a\s+file\s+named\s+([A-Za-z0-9_.:/-]{1,120}).*?"
+            r"\bWrite(?:\s+the\s+text)?\s+([A-Za-z0-9_.:-]{1,120})\s+"
+            r"into\s+that\s+file",
+            request_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if create_file:
+            path, text = (part.strip() for part in create_file.groups())
+            return f"printf %s {shlex.quote(text)} > {shlex.quote(path)}"
+        return ""
+
+    def _request_param_value(tool_name: str, param: str) -> str:
+        normalized_tool = tool_name.strip().lower()
+        normalized_param = param.strip().lower()
+        normalized_param_key = re.sub(r"[^a-z0-9]", "", normalized_param)
+        path_like_param = (
+            normalized_param in {"path", "file", "filename"}
+            or normalized_param.endswith("_path")
+            or normalized_param_key in {"path", "file", "filename", "filepath"}
+            or normalized_param_key.endswith("path")
+        )
+        if normalized_tool == "run_command" and normalized_param == "command":
+            command = _derive_run_command_value()
+            if command:
+                return command
+        if not request_text:
+            return ""
+        if normalized_tool == "glob" and normalized_param == "pattern":
+            explicit_pattern = re.search(
+                r"\bpattern\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9_*?./:-]{1,160})",
+                request_text,
+                flags=re.IGNORECASE,
+            )
+            if explicit_pattern:
+                return explicit_pattern.group(1).rstrip(".,;:!?`'\"")
+            filename = re.search(
+                r"(?<![A-Za-z0-9_/-])([A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z0-9_]{1,16})(?=$|[^A-Za-z0-9_/-])",
+                request_text,
+            )
+            if filename:
+                value = filename.group(1).rstrip(".,;:!?`'\"")
+                if "*" in value or "?" in value or "/" in value:
+                    return value
+                return f"**/{value}"
+        if path_like_param:
+            if normalized_tool in {"read", "read_file"}:
+                latest_tool_path = _latest_tool_result_absolute_path()
+                if latest_tool_path:
+                    return latest_tool_path
+                read_file = re.search(
+                    r"\b(?:read|read_file)\b[^\n.]{0,120}?\bfor\s+([A-Za-z0-9_.:/-]{1,120})",
+                    request_text,
+                    flags=re.IGNORECASE,
+                )
+                if read_file:
+                    return read_file.group(1).rstrip(".,;:!?`'\"")
+            if normalized_tool == "write_file":
+                write_file = re.search(
+                    r"\bwrite_file\b[^\n.]{0,120}?\bpath\s+([A-Za-z0-9_.:/-]{1,120})",
+                    request_text,
+                    flags=re.IGNORECASE,
+                )
+                if write_file:
+                    return write_file.group(1).rstrip(".,;:!?`'\"")
+        for obj_match in re.finditer(r"\{[^{}]{1,400}\}", request_text):
+            try:
+                obj = json.loads(obj_match.group(0))
+            except json.JSONDecodeError:
+                continue
+            value = obj.get(param) if isinstance(obj, dict) else None
+            if isinstance(value, str) and 0 < len(value) <= 80:
+                return value
+        name = re.escape(param)
+        patterns = (
+            rf"\b{name}\s+parameter(?:\s+content)?\s+must\s+be\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+            rf"\b{name}\s+argument\s+must\s+be\s+(?:the\s+)?literal\s+string\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+            rf"\b{name}\s+argument\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+            rf"\b{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,119}})",
+            rf"\b{name}\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+            rf"\bwith\s+{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, request_text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).rstrip(".,;:!?`'\"")
+        return ""
+
+    def _example_value(tool_name: str, param: str) -> str:
+        normalized = param.strip().lower()
+        normalized_key = re.sub(r"[^a-z0-9]", "", normalized)
+        if (
+            normalized in {"path", "dir", "directory", "file", "filename"}
+            or normalized.endswith("_path")
+            or normalized_key in {"path", "dir", "directory", "file", "filename", "filepath"}
+            or normalized_key.endswith("path")
+        ):
+            requested = _request_param_value(tool_name, param)
+            if requested:
+                return requested
+            if tool_name.strip().lower() in {"list_directory", "read_directory"}:
+                return "."
+            return ""
+        return _request_param_value(tool_name, param)
+
     def _render_xml_examples(
         tools: list[dict],
         wrapper_open: str,
         wrapper_close: str,
+        *,
+        include_required_placeholders: bool = False,
     ) -> str:
-        def _derive_run_command_value() -> str:
-            if not request_text:
-                return ""
-            direct_patterns = (
-                r'(?<![A-Za-z0-9_])command\s+["“]([^"”\n]{1,240})["”]',
-                r"(?<![A-Za-z0-9_])command\s+`([^`\n]{1,240})`",
-                r"(?<![A-Za-z0-9_])command\s+([A-Za-z0-9_./:;|&%><=+,'\" -]{1,240})(?:[.\n]|$)",
-            )
-            for pattern in direct_patterns:
-                match = re.search(pattern, request_text, flags=re.IGNORECASE)
-                if match:
-                    return match.group(1).strip().rstrip(".,;:")
-
-            read_then_create = re.search(
-                r"\bread\s+([A-Za-z0-9_.:/-]{1,120})\s+and\s+create\s+"
-                r"([A-Za-z0-9_.:/-]{1,120}).*?\bWrite(?:\s+the\s+text)?\s+"
-                r"([A-Za-z0-9_.:-]{1,120})\s+into\s+the\s+second\s+file",
-                request_text,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
-            if read_then_create:
-                src, dst, text = (part.strip() for part in read_then_create.groups())
-                return (
-                    f"cat {shlex.quote(src)} >/dev/null && "
-                    f"printf %s {shlex.quote(text)} > {shlex.quote(dst)}"
-                )
-
-            create_file = re.search(
-                r"\bcreate\s+a\s+file\s+named\s+([A-Za-z0-9_.:/-]{1,120}).*?"
-                r"\bWrite(?:\s+the\s+text)?\s+([A-Za-z0-9_.:-]{1,120})\s+"
-                r"into\s+that\s+file",
-                request_text,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
-            if create_file:
-                path, text = (part.strip() for part in create_file.groups())
-                return f"printf %s {shlex.quote(text)} > {shlex.quote(path)}"
-            return ""
-
-        def _request_param_value(tool_name: str, param: str) -> str:
-            normalized_tool = tool_name.strip().lower()
-            normalized_param = param.strip().lower()
-            if (
-                normalized_tool == "run_command"
-                and normalized_param == "command"
-            ):
-                command = _derive_run_command_value()
-                if command:
-                    return command
-            if not request_text:
-                return ""
-            if normalized_param in {"path", "file", "filename"}:
-                if normalized_tool == "read_file":
-                    read_file = re.search(
-                        r"\bread_file\b[^\n.]{0,120}?\bfor\s+([A-Za-z0-9_.:/-]{1,120})",
-                        request_text,
-                        flags=re.IGNORECASE,
-                    )
-                    if read_file:
-                        return read_file.group(1).rstrip(".,;:!?`'\"")
-                if normalized_tool == "write_file":
-                    write_file = re.search(
-                        r"\bwrite_file\b[^\n.]{0,120}?\bpath\s+([A-Za-z0-9_.:/-]{1,120})",
-                        request_text,
-                        flags=re.IGNORECASE,
-                    )
-                    if write_file:
-                        return write_file.group(1).rstrip(".,;:!?`'\"")
-            for obj_match in re.finditer(r"\{[^{}]{1,400}\}", request_text):
-                try:
-                    obj = json.loads(obj_match.group(0))
-                except json.JSONDecodeError:
-                    continue
-                value = obj.get(param) if isinstance(obj, dict) else None
-                if isinstance(value, str) and 0 < len(value) <= 80:
-                    return value
-            name = re.escape(param)
-            patterns = (
-                rf"\b{name}\s+parameter(?:\s+content)?\s+must\s+be\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
-                rf"\b{name}\s+argument\s+must\s+be\s+(?:the\s+)?literal\s+string\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
-                rf"\b{name}\s+argument\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
-                rf"\b{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,119}})",
-                rf"\b{name}\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
-                rf"\bwith\s+{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
-            )
-            for pattern in patterns:
-                match = re.search(pattern, request_text, flags=re.IGNORECASE)
-                if match:
-                    return match.group(1).rstrip(".,;:!?`'\"")
-            return ""
-
-        def _example_value(tool_name: str, param: str) -> str:
-            normalized = param.strip().lower()
-            if normalized in {"path", "dir", "directory"} or normalized.endswith("_path"):
-                requested = _request_param_value(tool_name, param)
-                if requested:
-                    return requested
-                if tool_name.strip().lower() in {"list_directory", "read_directory"}:
-                    return "."
-                return ""
-            return _request_param_value(tool_name, param)
-
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
+            func = _tool_func(tool)
+            params = func.get("parameters", {}) or {}
+            required = params.get("required", []) if isinstance(params, dict) else []
+            required_set = {p for p in required if isinstance(p, str)}
             lines = [wrapper_open, f"<function={name}>"]
             for param in props:
                 value = _example_value(name, param)
+                if (
+                    not value
+                    and include_required_placeholders
+                    and param in required_set
+                ):
+                    value = f"REQUIRED_{param}_VALUE"
                 if value:
                     lines.extend([f"<parameter={param}>", value, "</parameter>"])
             lines.extend(["</function>", wrapper_close])
@@ -562,6 +780,29 @@ def check_and_inject_fallback_tools(
                 )
             lines.extend(["</invoke>", "</minimax:tool_call>"])
             blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+
+    def _render_qwen_json_examples(tools: list[dict]) -> str:
+        blocks: list[str] = []
+        for tool in tools:
+            name, props = _tool_props(tool)
+            func = _tool_func(tool)
+            params = func.get("parameters", {}) or {}
+            required = params.get("required", []) if isinstance(params, dict) else []
+            required_set = {p for p in required if isinstance(p, str)}
+            arguments: dict[str, str] = {}
+            for param in props:
+                value = _example_value(name, param)
+                if not value and param in required_set:
+                    value = f"REQUIRED_{param}_VALUE"
+                if value:
+                    arguments[param] = value
+            payload = {"name": name, "arguments": arguments}
+            blocks.append(
+                "<tool_call>\n"
+                + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                + "\n</tool_call>"
+            )
         return "\n\n".join(blocks)
 
     def _render_lfm2_examples(tools: list[dict]) -> str:
@@ -731,6 +972,10 @@ def check_and_inject_fallback_tools(
             )
         )
     elif is_qwen_native_tool_prompt:
+        has_qwen_read_path_tool = False
+        has_qwen_glob_tool = False
+        latest_qwen_tool_path = ""
+        qwen_read_tool_name = "read"
         qwen_lines = [
             "You have access to these tools. When a user asks you to use one, "
             "you must call it instead of fabricating a result.",
@@ -759,14 +1004,35 @@ def check_and_inject_fallback_tools(
         for idx, tool in enumerate(template_tools):
             func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
+            normalized_name = name.strip().lower()
             qwen_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
             if desc:
                 qwen_lines.append(f"  description: {desc}")
             params = func.get("parameters", {}) or {}
             props = params.get("properties", {}) if isinstance(params, dict) else {}
-            required = set(params.get("required", []) if isinstance(params, dict) else [])
+            required_names = [
+                p
+                for p in (params.get("required", []) if isinstance(params, dict) else [])
+                if isinstance(p, str)
+            ]
+            required = set(required_names)
+            if normalized_name in {"glob", "find_files"}:
+                has_qwen_glob_tool = True
             if props:
+                if normalized_name in {"read", "read_file"}:
+                    qwen_read_tool_name = name
+                    for prop in props:
+                        normalized_prop = prop.strip().lower()
+                        normalized_key = re.sub(r"[^a-z0-9]", "", normalized_prop)
+                        if (
+                            normalized_prop in {"path", "file", "filename"}
+                            or normalized_prop.endswith("_path")
+                            or normalized_key in {"path", "file", "filename", "filepath"}
+                            or normalized_key.endswith("path")
+                        ):
+                            has_qwen_read_path_tool = True
+                    latest_qwen_tool_path = latest_qwen_tool_path or _latest_tool_result_absolute_path()
                 qwen_lines.append("  parameters:")
                 for p_name, p_schema in props.items():
                     p_type = (
@@ -782,18 +1048,18 @@ def check_and_inject_fallback_tools(
                     )
                     suffix = f": {p_desc}" if p_desc else ""
                     qwen_lines.append(f"    - {p_name} ({p_type}, {req}){suffix}")
+                if required_names:
+                    qwen_lines.append(
+                        "  required: "
+                        + json.dumps(
+                            required_names,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    )
                 if name.strip().lower() == "run_command" and "command" in props:
-                    command_block = _render_xml_examples(
-                        [tool],
-                        "<tool_call>",
-                        "</tool_call>",
-                    )
-                    match = re.search(
-                        r"<parameter=command>\s*([\s\S]*?)\s*</parameter>",
-                        command_block,
-                    )
-                    if match:
-                        exact_command = match.group(1).strip()
+                    exact_command = _request_param_value(name, "command")
+                    if exact_command:
                         qwen_lines.append(
                             f"For this request, run_command.command must be exactly: {exact_command}"
                         )
@@ -805,17 +1071,54 @@ def check_and_inject_fallback_tools(
             qwen_lines.append("")
         tool_prompt = (
             "\n".join(qwen_lines).rstrip()
-            + "\n\nWhen a tool call is needed, emit ONLY this native XML shape. "
-            "Do not emit JSON result data, markdown, prose, or a fake directory listing.\n"
+            + "\n\nWhen a tool call is needed, the assistant output must start with <tool_call> and end with </tool_call>. "
+            "Inside that envelope, put exactly one valid JSON object with keys \"name\" and \"arguments\". "
+            "All tool inputs must be JSON fields inside \"arguments\". "
+            "The tool name key is exactly \"name\"; never write \"function\", \"function=...\", or XML-style function tags. "
+            "Never emit standalone parameter tags; parameters belong only inside the JSON arguments object. "
+            "Every required parameter listed above must be present and non-empty in the arguments object. "
+            "Do not write a fake directory listing or fake tool result. "
+            "Use this Qwen JSON tool-call shape:\n"
+            "<tool_call>\n"
+            "{\"name\":\"TOOL_NAME\",\"arguments\":{\"FIELD\":\"VALUE\"}}\n"
+            "</tool_call>\n"
             + (
-                "Because tool_choice=required, the first assistant output for this turn must be one of the native tool calls below and nothing else.\n"
+                "Because tool_choice=required, the first assistant output for this turn must be one of the Qwen JSON tool calls below and nothing else.\n"
                 if tool_choice_required
                 else ""
             )
-            + _render_xml_examples(template_tools, "<tool_call>", "</tool_call>")
+            + _render_qwen_json_examples(template_tools)
             + (
                 "\n\nFor a request to list the current directory, set path to \".\" exactly."
                 if _has_directory_path_tool(template_tools)
+                else ""
+            )
+            + (
+                "\n\nFor read/read_file path parameters, filePath/path must be an absolute path starting with \"/\" and must be present. "
+                "Relative paths are invalid even when they are relative to the current working directory or workspace root. "
+                "Never shorten, trim, or remove the leading directory prefix from a path returned by a tool. "
+                + (
+                    "If the user provides only a filename or relative path, call glob first with a pattern like **/filename, then call read/read_file with the absolute path returned by glob."
+                    if has_qwen_glob_tool
+                    else "If the absolute path is unknown, do not call read/read_file without the required filePath/path argument."
+                )
+                if has_qwen_read_path_tool
+                else ""
+            )
+            + (
+                "\n\nThe latest tool result contains an absolute path. For the next assistant output, copy this exact Qwen JSON tool call:\n"
+                "Copy the entire filePath byte-for-byte; do not convert it to a relative path:\n"
+                "<tool_call>\n"
+                + json.dumps(
+                    {
+                        "name": qwen_read_tool_name,
+                        "arguments": {"filePath": latest_qwen_tool_path},
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n</tool_call>"
+                if has_qwen_read_path_tool and latest_qwen_tool_path
                 else ""
             )
         )
@@ -824,24 +1127,70 @@ def check_and_inject_fallback_tools(
         xml_function_lines = [
             "MiMo XML function tools:",
         ]
+        empty_required_examples: list[str] = []
         for tool in xml_function_prompt_tools:
             func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             params = func.get("parameters", {}) or {}
             props = params.get("properties", {}) if isinstance(params, dict) else {}
+            required = params.get("required", []) if isinstance(params, dict) else []
+            required_names = [p for p in required if isinstance(p, str)]
+            required_set = set(required_names)
             if props:
-                xml_function_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+                fields = [
+                    f"{p} (required)" if p in required_set else str(p)
+                    for p in props
+                ]
+                xml_function_lines.append(f"{name} fields: {', '.join(fields)}")
+                compact_props: dict[str, dict[str, Any]] = {}
+                for p_name, p_schema in props.items():
+                    if not isinstance(p_name, str) or not p_name:
+                        continue
+                    compact_schema: dict[str, Any] = {}
+                    if isinstance(p_schema, dict):
+                        for key in (
+                            "type",
+                            "description",
+                            "minimum",
+                            "maximum",
+                            "enum",
+                        ):
+                            if key in p_schema:
+                                compact_schema[key] = p_schema[key]
+                    compact_schema["required"] = p_name in required_set
+                    compact_props[p_name] = compact_schema
+                xml_function_lines.append(
+                    f"{name} parameters: "
+                    f"{json.dumps(compact_props, ensure_ascii=False, separators=(',', ':'))}"
+                )
             else:
                 xml_function_lines.append(f"{name} fields: none")
+                xml_function_lines.append(f"{name} parameters: {{}}")
+            xml_function_lines.append(
+                f"{name} required: "
+                f"{json.dumps(required_names, ensure_ascii=False, separators=(',', ':'))}"
+            )
+            if required_names:
+                empty_required_examples.append(f"<function={name}></function>")
         tool_prompt = (
             "\n".join(xml_function_lines).rstrip()
             + "\nUse native XML function shape only when a tool is requested/required. "
             "No prose, JSON, markdown, fake results, or other XML. "
-            "Copy user field values exactly.\n"
+            "Copy user field values exactly. "
+            "Every name in a tool's required array must be emitted as a non-empty "
+            "<parameter=NAME>VALUE</parameter> tag inside that tool call. "
+            + (
+                "Never emit empty required tool calls such as "
+                f"{', '.join(empty_required_examples)}. "
+                if empty_required_examples
+                else ""
+            )
+            + "\n"
             + _render_xml_examples(
                 xml_function_prompt_tools,
                 "<tool_call>",
                 "</tool_call>",
+                include_required_placeholders=True,
             )
             + (
                 "\n\nFor a request to list the current directory, set path to \".\" exactly."
@@ -994,15 +1343,27 @@ def check_and_inject_fallback_tools(
         if is_dsv4_prompt:
             return "<｜DSML｜invoke" in rendered
         if is_qwen_native_tool_prompt:
-            return "<tool_call>" in rendered
+            return (
+                not _qwen_has_legacy_xml_parameter_examples(rendered)
+                and
+                "<tool_call>" in rendered
+                and '"arguments"' in rendered
+                and all(
+                    re.search(
+                        r"<tool_call>\s*\{[^<]*\"name\"\s*:\s*\""
+                        + re.escape(name)
+                        + r"\"[^<]*\"arguments\"\s*:",
+                        rendered,
+                        flags=re.DOTALL,
+                    )
+                    for name in tool_names
+                )
+            )
         if is_xml_function_native_tool_prompt:
             return (
                 "<tool_call>" in rendered
                 and all(name in rendered for name in tool_names)
-                and (
-                    all(f"<name>{name}</name>" in rendered for name in tool_names)
-                    or all(f"<function={name}>" in rendered for name in tool_names)
-                )
+                and all(f"<function={name}>" in rendered for name in tool_names)
             )
         if is_step3p5_native_tool_prompt:
             return all(f"<function={name}>" in rendered for name in tool_names)
@@ -1068,6 +1429,8 @@ def check_and_inject_fallback_tools(
 
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
+    if is_qwen_native_tool_prompt:
+        messages_copy = _qwen_messages_with_json_tool_history(messages_copy)
     injected = False
     for msg in messages_copy:
         if injected:
@@ -1083,7 +1446,7 @@ def check_and_inject_fallback_tools(
     if is_qwen_native_tool_prompt and tool_choice_required:
         qwen_required_reminder = (
             "Current turn API contract: tool_choice=required. "
-            "Your next assistant output must be exactly one native <tool_call> "
+            "Your next assistant output must be exactly one Qwen JSON <tool_call> "
             f"for one of: {', '.join(tool_names)}. "
             "Historical tool results do not satisfy this current-turn requirement. "
             "Do not answer in prose before the tool call."
@@ -1107,6 +1470,8 @@ def check_and_inject_fallback_tools(
 
     try:
         new_prompt = tokenizer.apply_chat_template(messages_copy, **safe_kwargs)
+        if is_qwen_native_tool_prompt:
+            new_prompt = _normalize_qwen_rendered_prompt(new_prompt)
         if _rendered_prompt_kept_tool_instructions(new_prompt):
             if (
                 is_zaya_native_tool_prompt
@@ -1120,6 +1485,8 @@ def check_and_inject_fallback_tools(
                     messages_copy,
                     **zaya_plain_kwargs,
                 )
+                if is_qwen_native_tool_prompt:
+                    plain_prompt = _normalize_qwen_rendered_prompt(plain_prompt)
                 if _rendered_prompt_kept_tool_instructions(plain_prompt):
                     return plain_prompt
             return new_prompt
@@ -1132,6 +1499,8 @@ def check_and_inject_fallback_tools(
             "retrying with first-user injection."
         )
         user_messages = [dict(m) for m in messages]
+        if is_qwen_native_tool_prompt:
+            user_messages = _qwen_messages_with_json_tool_history(user_messages)
         user_injected = False
         for msg in user_messages:
             if msg.get("role") == "user":
@@ -1146,6 +1515,8 @@ def check_and_inject_fallback_tools(
             )
             user_messages.insert(0, {"role": "user", "content": content})
         new_prompt = tokenizer.apply_chat_template(user_messages, **safe_kwargs)
+        if is_qwen_native_tool_prompt:
+            new_prompt = _normalize_qwen_rendered_prompt(new_prompt)
         if _rendered_prompt_kept_tool_instructions(new_prompt):
             return new_prompt
         if is_zaya_native_tool_prompt:
@@ -1154,6 +1525,8 @@ def check_and_inject_fallback_tools(
                 "first-user injection; retrying with list text content."
             )
             user_messages = [dict(m) for m in messages]
+            if is_qwen_native_tool_prompt:
+                user_messages = _qwen_messages_with_json_tool_history(user_messages)
             user_injected = False
             for msg in user_messages:
                 if msg.get("role") == "user":
@@ -1170,6 +1543,8 @@ def check_and_inject_fallback_tools(
                     {"role": "user", "content": [{"type": "text", "text": tool_prompt}]},
                 )
             new_prompt = tokenizer.apply_chat_template(user_messages, **safe_kwargs)
+            if is_qwen_native_tool_prompt:
+                new_prompt = _normalize_qwen_rendered_prompt(new_prompt)
             if _rendered_prompt_kept_tool_instructions(new_prompt):
                 return new_prompt
         logger.warning(
@@ -1178,6 +1553,11 @@ def check_and_inject_fallback_tools(
         )
         if is_xml_function_native_tool_prompt:
             return _splice_tool_prompt_into_rendered_chatml(prompt, tool_prompt)
+        if is_qwen_native_tool_prompt:
+            return _splice_tool_prompt_into_rendered_chatml(
+                _normalize_qwen_rendered_prompt(prompt),
+                tool_prompt,
+            )
         return tool_prompt + "\n\n" + prompt
     except Exception as e:
         logger.error(f"Failed to apply template with injected tools: {e}")

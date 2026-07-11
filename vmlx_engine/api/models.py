@@ -465,6 +465,7 @@ class ChatCompletionResponse(BaseModel):
     choices: list[ChatCompletionChoice]
     usage: Usage = Field(default_factory=Usage)
     warnings: list[str] | None = None
+    tool_call_diagnostic_file: str | None = None
 
 
 # =============================================================================
@@ -1000,6 +1001,7 @@ class ResponsesObject(BaseModel):
     # `previous_response_id` chained a prior response that produced reasoning
     # only (no visible message, no tool calls).
     warnings: list[str] | None = None
+    tool_call_diagnostic_file: str | None = None
 
     @computed_field
     @property
@@ -1068,4 +1070,5 @@ class ChatCompletionChunk(BaseModel):
     choices: list[ChatCompletionChunkChoice]
     usage: Usage | None = None  # Included when stream_options.include_usage=true
     warnings: list[str] | None = None
+    tool_call_diagnostic_file: str | None = None
     tool_call_generating: bool | None = None  # vMLX UI hint while native XML is buffered

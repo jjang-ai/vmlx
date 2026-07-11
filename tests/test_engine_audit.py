@@ -8452,15 +8452,15 @@ class TestStartupCompatibilityGuards:
         assert "if pct < threshold_pct:\n                    return" in block
 
     def test_xml_function_tool_fallback_accepts_native_mimo_schema(self):
-        """MiMo/xml_function prompts should not duplicate a native tool schema."""
+        """MiMo/xml_function prompts require concrete native tool examples."""
         source = Path("./vmlx_engine/api/tool_calling.py").read_text()
         server_source = Path("./vmlx_engine/server.py").read_text()
         start = source.index("_xml_function_has_native_tool_schema = (")
         end = source.index("_step3p5_has_concrete_tool_examples", start)
         block = source[start:end]
 
-        assert 'all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)' in block
-        assert 'all(f"<function={name}>" in instruction_prompt for name in tool_names)' not in block
+        assert 'all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)' not in block
+        assert 'all(f"<function={name}>" in instruction_prompt for name in tool_names)' in block
         assert '"<function=example_function_name>" not in source'
         assert "def _splice_tool_prompt_into_rendered_chatml(" in source
         assert (

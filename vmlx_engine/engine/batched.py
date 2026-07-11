@@ -288,6 +288,7 @@ class BatchedEngine(BaseEngine):
         call_kwargs["top_p"] = top_p
         if tools:
             call_kwargs["tools"] = convert_tools_for_template(tools)
+            call_kwargs["tool_parser_id"] = self._model_tool_parser_name()
         executor = getattr(self._mllm_scheduler, "_step_executor", None)
         loop = asyncio.get_running_loop()
 
@@ -1969,6 +1970,7 @@ class BatchedEngine(BaseEngine):
         reasoning_effort = kwargs.pop("reasoning_effort", None)
         extra_tpl = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
         if reasoning_effort:
             extra_tpl = extra_tpl or {}
@@ -2016,6 +2018,11 @@ class BatchedEngine(BaseEngine):
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
+        if callable(prompt_capture):
+            try:
+                prompt_capture(prompt)
+            except Exception:
+                logger.debug("Tool-call prompt diagnostic capture failed", exc_info=True)
 
         # Pass message count for cache skip heuristic (Phase 2 optimization).
         # Single-turn API requests (1-2 messages: system+user) with short output
@@ -2136,6 +2143,7 @@ class BatchedEngine(BaseEngine):
         reasoning_effort = kwargs.pop("reasoning_effort", None)
         extra_tpl = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
         if reasoning_effort:
             extra_tpl = extra_tpl or {}
@@ -2180,6 +2188,11 @@ class BatchedEngine(BaseEngine):
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
+        if callable(prompt_capture):
+            try:
+                prompt_capture(prompt)
+            except Exception:
+                logger.debug("Tool-call prompt diagnostic capture failed", exc_info=True)
 
         # Pass message count for cache skip heuristic (Phase 2 optimization).
         kwargs["num_messages"] = len(messages)

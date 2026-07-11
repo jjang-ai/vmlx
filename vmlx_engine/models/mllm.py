@@ -5238,6 +5238,8 @@ class MLXMultimodalLM:
         chat_messages: list[dict],
         enable_thinking: bool | None = None,
         tools: list[dict] | None = None,
+        tool_parser_id: str | None = None,
+        prompt_capture: Any | None = None,
     ) -> str:
         """
         Apply chat template to structured messages with enable_thinking support.
@@ -5368,6 +5370,33 @@ class MLXMultimodalLM:
                         last_user_msg = content
                     break
             formatted_prompt = last_user_msg
+
+        if tools:
+            try:
+                from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+                fallback_kwargs = {
+                    "tools": tools,
+                    "tokenize": False,
+                    "add_generation_prompt": True,
+                }
+                if enable_thinking is not None:
+                    fallback_kwargs["enable_thinking"] = enable_thinking
+                formatted_prompt = check_and_inject_fallback_tools(
+                    formatted_prompt,
+                    chat_messages,
+                    tools,
+                    self.processor,
+                    fallback_kwargs,
+                    tool_parser_id=tool_parser_id,
+                )
+            except Exception:
+                logger.debug("MLLM tool fallback prompt injection skipped", exc_info=True)
+        if callable(prompt_capture):
+            try:
+                prompt_capture(formatted_prompt)
+            except Exception:
+                logger.debug("MLLM tool prompt diagnostic capture failed", exc_info=True)
 
         return formatted_prompt
 
@@ -5883,6 +5912,8 @@ class MLXMultimodalLM:
 
         # Apply chat template
         template_tools = kwargs.pop("tools", None)
+        tool_parser_id = kwargs.pop("tool_parser_id", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         logger.info(
             f"Applying chat template with {len(chat_messages)} messages, "
             f"{len(all_images)} images, {len(all_audio)} audio"
@@ -5897,6 +5928,8 @@ class MLXMultimodalLM:
             chat_messages,
             enable_thinking,
             tools=template_tools,
+            tool_parser_id=tool_parser_id,
+            prompt_capture=prompt_capture,
         )
 
         # Post-template image count guard: VLM chat templates may not expand
@@ -6223,11 +6256,15 @@ class MLXMultimodalLM:
 
         # Apply chat template
         template_tools = kwargs.pop("tools", None)
+        tool_parser_id = kwargs.pop("tool_parser_id", None)
+        prompt_capture = kwargs.pop("_vmlx_tool_call_prompt_capture", None)
         enable_thinking = kwargs.pop("enable_thinking", None)
         formatted_prompt = self._apply_chat_template(
             chat_messages,
             enable_thinking,
             tools=template_tools,
+            tool_parser_id=tool_parser_id,
+            prompt_capture=prompt_capture,
         )
 
         # Post-template image count guard: VLM chat templates may not expand

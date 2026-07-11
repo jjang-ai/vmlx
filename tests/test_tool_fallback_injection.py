@@ -243,7 +243,7 @@ def test_fallback_with_empty_name_tools(mock_messages):
 
 
 def test_mimo_xml_function_native_template_does_not_trigger_step_fallback(mock_messages):
-    """MiMo XML-function templates should not be rewritten as Step/JSON fallback."""
+    """MiMo XML-function templates with concrete examples should be left alone."""
     mock_tokenizer = MagicMock()
     tools = [
         {
@@ -273,6 +273,12 @@ For each function call, return xml:
 <parameter=example_parameter_1>value_1</parameter>
 </function>
 </tool_call>
+Concrete example:
+<tool_call>
+<function=record_fact>
+<parameter=value>blue-cat</parameter>
+</function>
+</tool_call>
 <|im_end|>
 <|im_start|>user
 Record blue-cat.
@@ -290,6 +296,597 @@ Record blue-cat.
 
     assert result == original_prompt
     mock_tokenizer.apply_chat_template.assert_not_called()
+
+
+def test_mimo_xml_function_schema_only_read_tool_gets_required_filepath_shape():
+    """Schema-only XML prompts need the required read(filePath) shape."""
+    mock_tokenizer = MagicMock()
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "File CardDisplayField.swift. "
+                "Write only its review and do not modify contents."
+            ),
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "The absolute path to the file or directory to read",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "description": "The line number to start reading from",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991,
+                            "description": "The maximum number of lines to read",
+                        },
+                    },
+                    "required": ["filePath"],
+                },
+            },
+        },
+    ]
+    original_prompt = """
+<|im_start|>system
+You may call one or more functions to assist with the user query.
+<tools>
+<function>
+<name>read</name>
+<description>Read a file.</description>
+<parameter>
+<name>filePath</name>
+<type>string</type>
+</parameter>
+</function>
+</tools>
+For each function call, return xml:
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>value_1</parameter>
+</function>
+</tool_call>
+<|im_end|>
+<|im_start|>user
+File CardDisplayField.swift. Write only its review and do not modify contents.
+<|im_end|>
+"""
+
+    def mock_apply(modified_messages, **_kwargs):
+        system_text = modified_messages[0]["content"]
+        user_text = modified_messages[1]["content"]
+        return (
+            "<|im_start|>system\n"
+            f"{system_text}\n"
+            "<tools>\n"
+            "<function><name>read</name></function>\n"
+            "</tools>\n"
+            "<tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>value_1</parameter>\n"
+            "</function>\n"
+            "</tool_call>\n"
+            "<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{user_text}<|im_end|>\n"
+        )
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt=original_prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="xml_function",
+    )
+
+    assert result != original_prompt
+    assert "native XML function shape" in result
+    assert "<function=read>" in result
+    assert "<parameter=filePath>" in result
+    assert "filePath (required)" in result
+    assert "read parameters:" in result
+    assert '"filePath":{"type":"string","description":"The absolute path' in result
+    assert '"offset":{"type":"integer","description":"The line number' in result
+    assert '"limit":{"type":"integer","description":"The maximum number' in result
+    assert "read required: [\"filePath\"]" in result
+    assert "Every name in a tool's required array must be emitted" in result
+    assert "Never emit empty required tool calls such as <function=read></function>" in result
+    assert "REQUIRED_filePath_VALUE" in result
+    assert '"name": "FUNCTION_NAME"' not in result
+
+
+def test_qwen_fallback_teaches_json_required_read_filepath_and_glob_first():
+    """Qwen fallback must match its JSON parser and teach required read args."""
+    mock_tokenizer = MagicMock()
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Review CardDisplayField.swift. "
+                "Write only the review and do not modify files."
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_read",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": "{\"filePath\":\"/missing/CardDisplayField.swift\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read",
+            "content": "File not found: /missing/CardDisplayField.swift",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_bad_glob",
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "arguments": "{\"pattern\":\":\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_bad_glob",
+            "content": "No files found",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_good_glob",
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "arguments": "{\"pattern\":\"**/CardDisplayField.swift\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_good_glob",
+            "content": (
+                "/repo/Dependencies/"
+                "Packages/iOS_Inspection/Sources/InspectionSwift/AuxEntities/"
+                "CustomField/CardDisplayField.swift"
+            ),
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "The absolute path to the file or directory to read",
+                        },
+                        "offset": {"type": "integer"},
+                    },
+                    "required": ["filePath"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "description": "Find files by pattern.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"pattern": {"type": "string"}},
+                    "required": ["pattern"],
+                },
+            },
+        },
+    ]
+    original_prompt = """
+<|im_start|>system
+# Tools
+<tools>
+<function><name>read</name></function>
+<function><name>glob</name></function>
+</tools>
+For each function call, return xml:
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>value_1</parameter>
+</function>
+</tool_call>
+<|im_end|>
+<|im_start|>user
+Review CardDisplayField.swift.
+<|im_end|>
+"""
+
+    def mock_apply(modified_messages, **_kwargs):
+        return modified_messages[0]["content"]
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt=original_prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="qwen",
+    )
+
+    assert result != original_prompt
+    assert "Qwen JSON tool-call shape" in result
+    assert (
+        '"name":"read","arguments":{"filePath":'
+        '"/repo/Dependencies/Packages/iOS_Inspection/Sources/InspectionSwift/AuxEntities/CustomField/CardDisplayField.swift"}'
+    ) in result
+    assert '"name":"glob","arguments":{"pattern":"**/CardDisplayField.swift"}' in result
+    assert "REQUIRED_filePath_VALUE" not in result
+    assert 'required: ["filePath"]' in result
+    assert "Every required parameter listed above must be present" in result
+    assert "parameters belong only inside the JSON arguments object" in result
+    assert 'filePath/path must be an absolute path starting with "/" and must be present' in result
+    assert "Relative paths are invalid even when they are relative to the current working directory" in result
+    assert "Never shorten, trim, or remove the leading directory prefix" in result
+    assert "call glob first with a pattern like **/filename" in result
+    assert "the assistant output must start with <tool_call>" in result
+    assert '"name":"TOOL_NAME","arguments":{"FIELD":"VALUE"}' in result
+    assert "The latest tool result contains an absolute path" in result
+    assert "copy this exact Qwen JSON tool call" in result
+    assert "Copy the entire filePath byte-for-byte" in result
+    assert '{"function=' not in result
+    assert "<function=example_function_name>" not in result
+    assert "<parameter=example_parameter_1>" not in result
+    assert "<function=read>" not in result
+    assert "<parameter=filePath>" not in result
+
+
+def test_qwen_rendered_fallback_strips_legacy_xml_parameter_scaffold():
+    from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+    class LegacyTokenizer:
+        def __init__(self, rendered):
+            self.rendered = rendered
+
+        def apply_chat_template(self, _messages, **_kwargs):
+            return self.rendered
+
+    legacy_prompt = """
+<|im_start|>system
+# Tools
+<tools>
+<function><name>read</name></function>
+</tools>
+For each function call, return xml:
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>value_1</parameter>
+</function>
+</tool_call>
+<|im_end|>
+<|im_start|>user
+Read CardDisplayField.swift.
+<|im_end|>
+<|im_start|>assistant
+"""
+    messages = [{"role": "user", "content": "Read CardDisplayField.swift."}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "The absolute path to the file",
+                        }
+                    },
+                    "required": ["filePath"],
+                },
+            },
+        }
+    ]
+
+    result = check_and_inject_fallback_tools(
+        prompt=legacy_prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=LegacyTokenizer(legacy_prompt),
+        template_kwargs={"tools": tools},
+        tool_parser_id="qwen",
+    )
+
+    assert "Qwen JSON tool-call shape" in result
+    assert '"name":"read","arguments":{"filePath":"REQUIRED_filePath_VALUE"}' in result
+    assert "<function=example_function_name>" not in result
+    assert "<parameter=example_parameter_1>" not in result
+    assert "return xml" not in result.lower()
+
+
+def test_qwen_fallback_rewrites_legacy_xml_tool_call_history():
+    from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+    class HistoryXmlTokenizer:
+        def apply_chat_template(self, modified_messages, **_kwargs):
+            return (
+                modified_messages[0]["content"]
+                + "\n<|im_start|>user\nReview CardDisplayField.swift.<|im_end|>\n"
+                + "<|im_start|>assistant\n"
+                + "<tool_call>\n"
+                + "<function=glob>\n"
+                + "<parameter=pattern>\n**/CardDisplayField.swift\n</parameter>\n"
+                + "</function>\n"
+                + "</tool_call><|im_end|>\n"
+                + "<|im_start|>user\n"
+                + "<tool_response>\n/repo/CardDisplayField.swift\n</tool_response>"
+                + "<|im_end|>\n<|im_start|>assistant\n"
+            )
+
+    messages = [
+        {"role": "user", "content": "Review CardDisplayField.swift."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_glob",
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "arguments": "{\"pattern\":\"**/CardDisplayField.swift\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_glob",
+            "content": "/repo/CardDisplayField.swift",
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "description": "Find files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"pattern": {"type": "string"}},
+                    "required": ["pattern"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"filePath": {"type": "string"}},
+                    "required": ["filePath"],
+                },
+            },
+        },
+    ]
+    prompt = (
+        "<|im_start|>system\n"
+        "Tools are available, but no parser-native examples are present."
+        "<|im_end|>\n"
+        "<|im_start|>user\nReview CardDisplayField.swift.<|im_end|>\n"
+    )
+
+    result = check_and_inject_fallback_tools(
+        prompt=prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=HistoryXmlTokenizer(),
+        template_kwargs={"tools": tools},
+        tool_parser_id="qwen",
+    )
+
+    assert "Qwen JSON tool-call shape" in result
+    assert '"name":"glob","arguments":{"pattern":"**/CardDisplayField.swift"}' in result
+    assert (
+        '"name":"read","arguments":{"filePath":'
+        '"/repo/CardDisplayField.swift"}'
+    ) in result
+    assert "<function=glob>" not in result
+    assert "<parameter=pattern>" not in result
+
+
+def test_qwen_fallback_prerenders_tool_call_history_as_json():
+    from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+    class InspectingTokenizer:
+        def __init__(self):
+            self.messages = None
+
+        def apply_chat_template(self, modified_messages, **_kwargs):
+            self.messages = modified_messages
+            return "\n".join(
+                str(message.get("content") or "")
+                for message in modified_messages
+            )
+
+    messages = [
+        {"role": "user", "content": "Review CardDisplayField.swift."},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "\n\n",
+            "tool_calls": [
+                {
+                    "id": "call_glob",
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "arguments": "{\"pattern\":\"**/CardDisplayField.swift\"}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_glob",
+            "content": "/repo/CardDisplayField.swift",
+        },
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"pattern": {"type": "string"}},
+                    "required": ["pattern"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"filePath": {"type": "string"}},
+                    "required": ["filePath"],
+                },
+            },
+        },
+    ]
+    tokenizer = InspectingTokenizer()
+
+    result = check_and_inject_fallback_tools(
+        prompt="<|im_start|>system\nTools are available.<|im_end|>",
+        messages=messages,
+        template_tools=tools,
+        tokenizer=tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="qwen",
+    )
+
+    history_message = next(
+        message
+        for message in tokenizer.messages
+        if message.get("role") == "assistant"
+    )
+    assert "tool_calls" not in history_message
+    assert "reasoning_content" not in history_message
+    assert (
+        history_message["content"]
+        == '<tool_call>\n{"name":"glob","arguments":{"pattern":"**/CardDisplayField.swift"}}\n</tool_call>'
+    )
+    assert (
+        '<tool_call>\n{"name":"glob","arguments":{"pattern":"**/CardDisplayField.swift"}}\n</tool_call>'
+        in result
+    )
+    assert "<function=glob>" not in result
+    assert "<parameter=pattern>" not in result
+
+
+def test_qwen_parser_id_forces_json_contract_even_when_tool_names_are_present():
+    from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+    mock_tokenizer = MagicMock()
+    messages = [{"role": "user", "content": "Read CardDisplayField.swift."}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "The absolute path to the file",
+                        }
+                    },
+                    "required": ["filePath"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "description": "Find files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"pattern": {"type": "string"}},
+                    "required": ["pattern"],
+                },
+            },
+        },
+    ]
+    prompt = (
+        "System instructions mention available tools by name: read and glob. "
+        "No parser-native examples are present."
+    )
+
+    def mock_apply(modified_messages, **_kwargs):
+        return modified_messages[0]["content"]
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt=prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="qwen",
+    )
+
+    assert result != prompt
+    assert "Qwen JSON tool-call shape" in result
+    assert '"name":"read","arguments":{"filePath":"REQUIRED_filePath_VALUE"}' in result
+    assert '"name":"glob","arguments":{"pattern":"**/CardDisplayField.swift"}' in result
+    assert "<parameter=" not in result
+    assert '{"function=' not in result
 
 
 def test_mimo_xml_function_fallback_matches_parser_dialect(mock_messages):

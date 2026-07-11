@@ -981,8 +981,10 @@ class TestFallbackToolPromptFormat:
             {"tokenize": False, "add_generation_prompt": True, "tools": tools},
         )
 
-        assert "<function=list_directory>" in rendered
-        assert "<parameter=path>" in rendered
+        assert "Qwen JSON tool-call shape" in rendered
+        assert '<tool_call>\n{"name":"list_directory","arguments":{"path":"."}}\n</tool_call>' in rendered
+        assert "<function=list_directory>" not in rendered
+        assert "<parameter=path>" not in rendered
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
@@ -1039,12 +1041,13 @@ class TestFallbackToolPromptFormat:
 
         assert "tool_choice=required" in rendered
         assert "emit exactly one native tool call before any prose" in rendered
-        assert "first assistant output for this turn must be one of the native tool calls" in rendered
+        assert "first assistant output for this turn must be one of the Qwen JSON tool calls" in rendered
         assert "Current turn API contract: tool_choice=required" in rendered
         assert "Historical tool results do not satisfy this current-turn requirement" in rendered
         assert "Do not answer in prose before the tool call" in rendered
-        assert "<function=grep_repo>" in rendered
-        assert "<parameter=pattern>" in rendered
+        assert '<tool_call>\n{"name":"grep_repo","arguments":{"pattern":"cache"}}\n</tool_call>' in rendered
+        assert "<function=grep_repo>" not in rendered
+        assert "<parameter=pattern>" not in rendered
         assert "tools" not in tokenizer.last_kwargs
 
     def test_step3p5_fallback_not_triggered_when_native_examples_present(self):
@@ -3025,6 +3028,376 @@ class TestFallbackToolPromptFormat:
         assert calls is None
         assert "README.md" in cleaned
 
+    @pytest.mark.parametrize("parser_name", [None, "auto", "xml_function"])
+    def test_server_xml_function_does_not_generic_repair_missing_required_args(
+        self, monkeypatch, caplog, parser_name
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        caplog.set_level("WARNING")
+        monkeypatch.setattr(server, "_tool_call_parser", parser_name)
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[
+                Message(role="user", content="File CardDisplayField.swift."),
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"filePath": {"type": "string"}},
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            "<tool_call><function=read></function></tool_call>",
+            req,
+        )
+
+        assert calls is None
+        assert "<function=read>" in cleaned
+        assert "Dropping parsed tool call" not in caplog.text
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert len(warnings) == 1
+        assert "Suspicious XML tool-like model output" in warnings[0]
+        assert "raw_model_output=" in warnings[0]
+        assert "<tool_call><function=read></function></tool_call>" in warnings[0]
+
+    def test_server_missing_required_tool_warning_includes_raw_model_output(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read CardDisplayField.swift.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"filePath": {"type": "string"}},
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+        raw_output = '<tool_call>{"name":"read","arguments":{}}</tool_call>'
+
+        cleaned, calls = server._parse_tool_calls_with_parser(raw_output, req)
+
+        assert calls is None
+        assert raw_output in cleaned
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert len(warnings) == 1
+        assert "required argument(s): filePath" in warnings[0]
+        assert "raw_model_output=" in warnings[0]
+        assert raw_output in warnings[0]
+
+    def test_server_drops_required_read_file_path_when_not_absolute(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read CardDisplayField.swift.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "filePath": {
+                                    "type": "string",
+                                    "description": "The absolute path to read",
+                                }
+                            },
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+        raw_output = '<tool_call>{"name":"read","arguments":{"filePath":":"}}</tool_call>'
+
+        cleaned, calls = server._parse_tool_calls_with_parser(raw_output, req)
+
+        assert calls is None
+        assert raw_output in cleaned
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert len(warnings) == 1
+        assert "absolute paths starting with '/'" in warnings[0]
+        assert "filePath=':'" in warnings[0]
+        assert "raw_model_output=" in warnings[0]
+        assert raw_output in warnings[0]
+
+    def test_server_does_not_repair_qwen_xml_parameter_hybrid(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read CardDisplayField.swift.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "filePath": {
+                                    "type": "string",
+                                    "description": "The absolute path to read",
+                                }
+                            },
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+        raw_output = (
+            "<tool_call>\n"
+            '{"function=read"}\n'
+            "<parameter=filePath>/repo/file.txt\n</parameter>"
+            "\n</tool_call>"
+        )
+
+        assert server._has_tool_marker_or_partial_suffix(raw_output)
+        assert server._buffer_has_complete_tool_call_candidate(raw_output)
+        cleaned, calls = server._parse_tool_calls_with_parser(raw_output, req)
+
+        assert calls is None
+        assert raw_output in cleaned
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert len(warnings) == 1
+        assert "Malformed tool_call block" in warnings[0]
+        assert "Expected Qwen JSON shape" in warnings[0]
+        assert "raw_model_output=" in warnings[0]
+        assert raw_output in warnings[0]
+
+    def test_qwen_parser_parses_function_parameter_xml_without_fallback(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", "qwen")
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read CardDisplayField.swift.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "filePath": {
+                                    "type": "string",
+                                    "description": "The absolute path to read",
+                                }
+                            },
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+        raw_output = (
+            "<tool_call><function=read>"
+            "<parameter=filePath>/repo/file.txt</parameter>"
+            "</function></tool_call>"
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(raw_output, req)
+
+        assert cleaned == ""
+        assert calls is not None
+        assert len(calls) == 1
+        assert calls[0].function.name == "read"
+        assert json.loads(calls[0].function.arguments) == {
+            "filePath": "/repo/file.txt"
+        }
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert warnings == []
+
+    def test_server_ignores_standalone_parameter_marker_without_tool_call(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        server._begin_tool_call_drop_capture()
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read CardDisplayField.swift.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "filePath": {
+                                    "type": "string",
+                                    "description": "The absolute path to read",
+                                }
+                            },
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+        raw_output = (
+            '{"function=read"}\n'
+            "<parameter=filePath>/repo/file.txt</parameter>"
+        )
+
+        assert not server._has_tool_marker_or_partial_suffix(raw_output)
+        assert not server._buffer_has_complete_tool_call_candidate(raw_output)
+        cleaned, calls = server._parse_tool_calls_with_parser(raw_output, req)
+
+        assert calls is None
+        assert raw_output in cleaned
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert warnings == []
+
+    def test_tool_call_drop_writes_rendered_prompt_file_without_response_leak(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import vmlx_engine.server as server
+
+        rendered_prompt = (
+            "MiMo XML function tools:\n"
+            "read required: [\"filePath\"]\n"
+            "<tool_call>\n<function=read>\n"
+            "<parameter=filePath>REQUIRED_filePath_VALUE</parameter>\n"
+            "</function>\n</tool_call>"
+        )
+        monkeypatch.setenv("VMLINUX_TOOL_CALL_DIAGNOSTIC_DIR", str(tmp_path))
+
+        server._begin_tool_call_drop_capture()
+        server._capture_tool_call_diagnostic_prompt(rendered_prompt)
+        server._record_tool_call_drop("tool drop warning")
+
+        warnings = server._take_tool_call_drop_diagnostics()
+        path = server._take_tool_call_diagnostic_file()
+        assert warnings == ["tool drop warning"]
+        assert rendered_prompt not in warnings[0]
+        assert path is not None
+        assert str(tmp_path) in path
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert payload["object"] == "vmlx.tool_call_drop_diagnostic"
+        assert payload["diagnostic"] == "tool drop warning"
+        assert payload["prompt_capture_status"] == "captured"
+        assert payload["rendered_prompt"] == rendered_prompt
+
+    def test_tool_call_drop_prompt_capture_survives_worker_thread(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import threading
+        import vmlx_engine.server as server
+
+        rendered_prompt = (
+            "Qwen JSON tool-call shape:\n"
+            '<tool_call>\n{"name":"read","arguments":{"filePath":"/repo/a.swift"}}\n'
+            "</tool_call>"
+        )
+        monkeypatch.setenv("VMLINUX_TOOL_CALL_DIAGNOSTIC_DIR", str(tmp_path))
+
+        server._begin_tool_call_drop_capture()
+        capture = server._make_tool_call_diagnostic_prompt_capture()
+        worker = threading.Thread(target=capture, args=(rendered_prompt,))
+        worker.start()
+        worker.join()
+        server._record_tool_call_drop("tool drop warning")
+
+        path = server._take_tool_call_diagnostic_file()
+        assert path is not None
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert payload["prompt_capture_status"] == "captured"
+        assert payload["rendered_prompt"] == rendered_prompt
+
+    def test_tool_call_drop_writes_context_file_when_prompt_capture_missing(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setenv("VMLINUX_TOOL_CALL_DIAGNOSTIC_DIR", str(tmp_path))
+        req = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="Read a file.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"filePath": {"type": "string"}},
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        server._begin_tool_call_drop_capture()
+        server._capture_tool_call_diagnostic_context(
+            endpoint="chat.completions.stream",
+            response_id="chatcmpl-test",
+            request=req,
+            messages=[{"role": "user", "content": "Read a file."}],
+            chat_kwargs={"tools": [{"type": "function", "function": {"name": "read"}}]},
+        )
+        server._record_tool_call_drop("tool drop warning")
+
+        assert server._take_tool_call_drop_diagnostics() == ["tool drop warning"]
+        path = server._take_tool_call_diagnostic_file()
+        assert path is not None
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        assert payload["prompt_capture_status"] == "missing"
+        assert payload["rendered_prompt"] is None
+        assert payload["context"]["endpoint"] == "chat.completions.stream"
+        assert payload["context"]["response_id"] == "chatcmpl-test"
+        assert payload["context"]["effective_tools"][0]["function"]["name"] == "read"
+
     def test_server_cleans_suppressed_zaya_tool_markup_without_calling_tool(
         self, monkeypatch
     ):
@@ -3414,3 +3787,62 @@ class TestXMLFunctionToolParser:
         assert delta is not None
         assert delta["tool_calls"][0]["type"] == "function"
         assert delta["tool_calls"][0]["function"]["name"] == "fetch"
+
+    def test_rejects_xml_function_call_missing_required_file_path(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("xml_function")()
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"filePath": {"type": "string"}},
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(
+            "<tool_call><function=read></function></tool_call>",
+            request=request,
+        )
+
+        assert result.tools_called is False
+        assert result.tool_calls == []
+
+    def test_accepts_xml_function_call_with_required_file_path(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("xml_function")()
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"filePath": {"type": "string"}},
+                            "required": ["filePath"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(
+            "<tool_call><function=read>"
+            "<parameter=filePath>CardDisplayField.swift</parameter>"
+            "</function></tool_call>",
+            request=request,
+        )
+
+        assert result.tools_called is True
+        assert result.tool_calls[0]["name"] == "read"
+        assert result.tool_calls[0]["arguments"] == '{"filePath": "CardDisplayField.swift"}'

@@ -3170,6 +3170,22 @@ def _content_forms_raw_json_tool_call(text: str) -> bool:
     return compact.startswith(anchor) or anchor.startswith(compact)
 
 
+def _buffer_has_complete_tool_call_candidate(text: str) -> bool:
+    """Return True once a buffered native-tool fragment is parseable enough."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if (
+        "</tool_call>" in stripped
+        or "</function>" in stripped
+        or "</minimax:tool_call>" in stripped
+        or "<|tool_call_end|>" in stripped
+        or "<|tool_call|>" in stripped
+    ):
+        return True
+    return _content_forms_raw_json_tool_call(stripped)
+
+
 def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
     """Return whether a rendered assistant prefix leaves ``<think>`` open."""
     after_user = str(rendered).rsplit(marker, 1)[-1]
@@ -4324,6 +4340,18 @@ def get_engine() -> BaseEngine:
 _TOOL_CALL_DROP_DIAGNOSTICS: contextvars.ContextVar[list[str] | None] = (
     contextvars.ContextVar("vmlx_tool_call_drop_diagnostics", default=None)
 )
+_TOOL_CALL_DIAGNOSTIC_PROMPT: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("vmlx_tool_call_diagnostic_prompt", default=None)
+)
+_TOOL_CALL_DIAGNOSTIC_PROMPT_BOX: contextvars.ContextVar[
+    dict[str, str | None] | None
+] = contextvars.ContextVar("vmlx_tool_call_diagnostic_prompt_box", default=None)
+_TOOL_CALL_DIAGNOSTIC_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = (
+    contextvars.ContextVar("vmlx_tool_call_diagnostic_context", default=None)
+)
+_TOOL_CALL_DIAGNOSTIC_FILE: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("vmlx_tool_call_diagnostic_file", default=None)
+)
 
 
 def _begin_tool_call_drop_capture() -> None:
@@ -4336,10 +4364,136 @@ def _begin_tool_call_drop_capture() -> None:
     instead of receiving an empty response with no signal.
     """
     _TOOL_CALL_DROP_DIAGNOSTICS.set([])
+    _TOOL_CALL_DIAGNOSTIC_PROMPT.set(None)
+    _TOOL_CALL_DIAGNOSTIC_PROMPT_BOX.set(None)
+    _TOOL_CALL_DIAGNOSTIC_CONTEXT.set(None)
+    _TOOL_CALL_DIAGNOSTIC_FILE.set(None)
+
+
+def _capture_tool_call_diagnostic_prompt(prompt: str) -> None:
+    """Store the exact rendered prompt for a diagnostic artifact if parsing drops it."""
+    if isinstance(prompt, str) and prompt:
+        _TOOL_CALL_DIAGNOSTIC_PROMPT.set(prompt)
+        box = _TOOL_CALL_DIAGNOSTIC_PROMPT_BOX.get()
+        if isinstance(box, dict):
+            box["prompt"] = prompt
+
+
+def _make_tool_call_diagnostic_prompt_capture():
+    prompt_box: dict[str, str | None] = {"prompt": None}
+    _TOOL_CALL_DIAGNOSTIC_PROMPT_BOX.set(prompt_box)
+
+    def _capture(prompt: str) -> None:
+        if isinstance(prompt, str) and prompt:
+            prompt_box["prompt"] = prompt
+            _TOOL_CALL_DIAGNOSTIC_PROMPT.set(prompt)
+
+    return _capture
+
+
+def _json_safe_tool_call_diagnostic_value(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_safe_tool_call_diagnostic_value(
+                value.model_dump(exclude_none=True)
+            )
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_tool_call_diagnostic_value(val)
+            for key, val in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_tool_call_diagnostic_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return repr(value)
+
+
+def _capture_tool_call_diagnostic_context(
+    *,
+    endpoint: str,
+    response_id: str,
+    request: ChatCompletionRequest | ResponsesRequest | None,
+    messages: list,
+    chat_kwargs: dict[str, Any],
+) -> None:
+    safe_kwargs = {
+        key: value
+        for key, value in (chat_kwargs or {}).items()
+        if key
+        not in {
+            "_vmlx_tool_call_prompt_capture",
+            "images",
+            "videos",
+            "audio",
+        }
+    }
+    _TOOL_CALL_DIAGNOSTIC_CONTEXT.set(
+        _json_safe_tool_call_diagnostic_value(
+            {
+                "endpoint": endpoint,
+                "response_id": response_id,
+                "model": getattr(request, "model", None),
+                "tool_choice": getattr(request, "tool_choice", None),
+                "enable_thinking": getattr(request, "enable_thinking", None),
+                "tool_call_parser": _tool_call_parser,
+                "reasoning_parser": (
+                    type(_reasoning_parser).__name__ if _reasoning_parser else None
+                ),
+                "messages": messages,
+                "request_tools": getattr(request, "tools", None),
+                "effective_tools": _effective_tools_for_tool_parsing(request),
+                "chat_kwargs": safe_kwargs,
+            }
+        )
+    )
+
+
+def _write_tool_call_diagnostic_file(diagnostic: str) -> str | None:
+    prompt = _TOOL_CALL_DIAGNOSTIC_PROMPT.get()
+    if not prompt:
+        box = _TOOL_CALL_DIAGNOSTIC_PROMPT_BOX.get()
+        if isinstance(box, dict):
+            prompt = box.get("prompt")
+    context = _TOOL_CALL_DIAGNOSTIC_CONTEXT.get()
+    if (not prompt and not context) or _TOOL_CALL_DIAGNOSTIC_FILE.get():
+        return _TOOL_CALL_DIAGNOSTIC_FILE.get()
+    try:
+        root = Path(
+            os.environ.get(
+                "VMLINUX_TOOL_CALL_DIAGNOSTIC_DIR",
+                os.path.join(tempfile.gettempdir(), "vmlx-tool-call-diagnostics"),
+            )
+        )
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / (
+            f"tool-call-drop-{time.strftime('%Y%m%d-%H%M%S')}-"
+            f"{uuid.uuid4().hex[:8]}.json"
+        )
+        payload = {
+            "object": "vmlx.tool_call_drop_diagnostic",
+            "created": int(time.time()),
+            "diagnostic": diagnostic,
+            "prompt_capture_status": "captured" if prompt else "missing",
+            "rendered_prompt": prompt,
+            "context": context,
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to write tool-call diagnostic file: %s", exc)
+        return None
+    _TOOL_CALL_DIAGNOSTIC_FILE.set(str(path))
+    return str(path)
 
 
 def _record_tool_call_drop(diagnostic: str) -> None:
     """Append a human-readable diagnostic for a dropped tool call."""
+    _write_tool_call_diagnostic_file(diagnostic)
     bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
     if bucket is None:
         # Capture not started for this request (non-streaming JSON paths don't
@@ -4349,6 +4503,14 @@ def _record_tool_call_drop(diagnostic: str) -> None:
     bucket.append(diagnostic)
 
 
+def _tool_call_raw_preview(text: str, *, limit: int = 700) -> str:
+    """Compact raw model output for warning diagnostics."""
+    preview = (text or "").replace("\r", "\\r").replace("\n", "\\n")
+    if len(preview) > limit:
+        return preview[:limit] + "...[truncated]"
+    return preview
+
+
 def _take_tool_call_drop_diagnostics() -> list[str]:
     """Return accumulated diagnostics and reset the capture bucket."""
     bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
@@ -4356,6 +4518,16 @@ def _take_tool_call_drop_diagnostics() -> list[str]:
         return []
     _TOOL_CALL_DROP_DIAGNOSTICS.set([])
     return bucket
+
+
+def _take_tool_call_diagnostic_file() -> str | None:
+    """Return the rendered-prompt diagnostic artifact path and reset it."""
+    path = _TOOL_CALL_DIAGNOSTIC_FILE.get()
+    _TOOL_CALL_DIAGNOSTIC_PROMPT.set(None)
+    _TOOL_CALL_DIAGNOSTIC_PROMPT_BOX.set(None)
+    _TOOL_CALL_DIAGNOSTIC_CONTEXT.set(None)
+    _TOOL_CALL_DIAGNOSTIC_FILE.set(None)
+    return path
 
 
 def _parse_tool_calls_with_parser(
@@ -4389,7 +4561,9 @@ def _parse_tool_calls_with_parser(
             pass
         return names
 
-    def _filter_to_request_tools(tool_calls: list | None) -> list | None:
+    def _filter_to_request_tools(
+        tool_calls: list | None, *, raw_model_output: str | None = None
+    ) -> list | None:
         if not tool_calls:
             return tool_calls
         allowed = _allowed_tool_names()
@@ -4406,6 +4580,11 @@ def _parse_tool_calls_with_parser(
                     schemas_by_name[name] = fn
         except Exception:
             schemas_by_name = {}
+
+        def _raw_model_output_suffix() -> str:
+            if raw_model_output is None:
+                return ""
+            return f" raw_model_output={_tool_call_raw_preview(raw_model_output)!r}"
 
         def _function_payload(tc: Any) -> tuple[str | None, str, str]:
             try:
@@ -4447,6 +4626,50 @@ def _parse_tool_calls_with_parser(
                 if value is None or (isinstance(value, str) and value.strip() == ""):
                     missing.append(key)
             return missing
+
+        def _invalid_required_path_args(
+            name: str | None, raw_args: Any
+        ) -> list[tuple[str, str]]:
+            if not name:
+                return []
+            schema = schemas_by_name.get(name) or {}
+            params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
+            required = params.get("required", []) if isinstance(params, dict) else []
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if not isinstance(required, list) or not isinstance(props, dict):
+                return []
+            args = _coerce_json_args(raw_args)
+            invalid: list[tuple[str, str]] = []
+            for key in required:
+                if not isinstance(key, str) or not key:
+                    continue
+                prop = props.get(key)
+                prop_desc = (
+                    prop.get("description", "")
+                    if isinstance(prop, dict)
+                    else ""
+                )
+                normalized_key = re.sub(r"[^a-z0-9]", "", key.lower())
+                normalized_name = name.strip().lower()
+                looks_like_path = (
+                    normalized_key in {"path", "filepath"}
+                    or normalized_key.endswith("path")
+                )
+                requires_absolute_path = (
+                    "absolute path" in str(prop_desc).lower()
+                    or (
+                        normalized_name in {"read", "read_file"}
+                        and normalized_key in {"path", "filepath"}
+                    )
+                )
+                if not looks_like_path or not requires_absolute_path:
+                    continue
+                value = args.get(key)
+                if value is None or (isinstance(value, str) and value.strip() == ""):
+                    continue
+                if not isinstance(value, str) or not value.startswith("/"):
+                    invalid.append((key, str(value)))
+            return invalid
 
         def _rewrite_tool_alias(tc: Any) -> Any | None:
             name, raw_args, call_id = _function_payload(tc)
@@ -4498,6 +4721,29 @@ def _parse_tool_calls_with_parser(
                         f"model did not provide required argument(s): "
                         f"{', '.join(missing)}. Try a clearer prompt, raise "
                         f"max_tokens, or disable thinking for this turn."
+                        f"{_raw_model_output_suffix()}"
+                    )
+                    continue
+                invalid_paths = _invalid_required_path_args(name, raw_args)
+                if invalid_paths:
+                    details = ", ".join(
+                        f"{arg_name}={arg_value!r}"
+                        for arg_name, arg_value in invalid_paths
+                    )
+                    logger.warning(
+                        "Dropping parsed tool call %s for %r because required "
+                        "path argument(s) are not absolute: %s",
+                        call_id or "<no-id>",
+                        name,
+                        details,
+                    )
+                    _record_tool_call_drop(
+                        f"A tool call to '{name}' was dropped because required "
+                        f"path argument(s) must be absolute paths starting "
+                        f"with '/': {details}. Do not substitute paths on the "
+                        f"server; call a search/glob tool first if the "
+                        f"absolute path is unknown."
+                        f"{_raw_model_output_suffix()}"
                     )
                     continue
                 filtered.append(tc)
@@ -4515,7 +4761,7 @@ def _parse_tool_calls_with_parser(
                 _record_tool_call_drop(
                     f"A tool call to '{name}' was dropped because it is not "
                     f"in the request's tools list. Available tools: "
-                    f"{sorted(allowed)}."
+                    f"{sorted(allowed)}.{_raw_model_output_suffix()}"
                 )
         return filtered or None
 
@@ -4693,10 +4939,63 @@ def _parse_tool_calls_with_parser(
             )
         ]
 
+    def _xml_function_parse_filtered(text: str) -> tuple[str, list | None] | None:
+        if "<function=" not in text:
+            return None
+        effective_tools = _effective_tools_for_tool_parsing(request)
+        if not request or not effective_tools:
+            return None
+        try:
+            parser_cls = ToolParserManager.get_tool_parser("xml_function")
+            parser_instance = parser_cls(None)
+            parser_request = {
+                "tools": convert_tools_for_template(effective_tools),
+                "model_path": (
+                    _model_path or _model_name or getattr(request, "model", None)
+                ),
+            }
+            result = parser_instance.extract_tool_calls(text, request=parser_request)
+        except Exception:
+            return None
+        if result.tools_called:
+            tool_calls = [
+                ToolCall(
+                    id=tc.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                    type="function",
+                    function=FunctionCall(
+                        name=tc["name"],
+                        arguments=tc["arguments"],
+                    ),
+                )
+                for tc in result.tool_calls
+            ]
+            filtered_tool_calls = _filter_to_request_tools(
+                tool_calls, raw_model_output=text
+            )
+            if filtered_tool_calls:
+                return result.content or "", filtered_tool_calls
+            _record_tool_call_drop(
+                "Suspicious XML tool-like model output was parsed but not "
+                "emitted as a valid requested tool call. "
+                f"raw_model_output={_tool_call_raw_preview(text)!r}"
+            )
+            return text, None
+        if "<tool_call>" in text or "</tool_call>" in text:
+            _record_tool_call_drop(
+                "Suspicious XML tool-like model output could not be parsed as "
+                "a valid requested tool call. "
+                f"raw_model_output={_tool_call_raw_preview(text)!r}"
+            )
+            return result.content or text, None
+        return None
+
     def _generic_parse_filtered(text: str) -> tuple[str, list | None]:
+        xml_function_result = _xml_function_parse_filtered(text)
+        if xml_function_result is not None:
+            return xml_function_result
         cleaned, calls = parse_tool_calls(text)
         if calls:
-            calls = _filter_to_request_tools(calls)
+            calls = _filter_to_request_tools(calls, raw_model_output=text)
             if calls:
                 return cleaned, calls
             return text, None
@@ -4706,6 +5005,13 @@ def _parse_tool_calls_with_parser(
         bare_cleaned, bare_calls = _repair_required_single_tool_bare_json_args(text)
         if bare_calls:
             return bare_cleaned, bare_calls
+        if "<tool_call" in text or "</tool_call>" in text:
+            _record_tool_call_drop(
+                "Malformed tool_call block could not be parsed as a valid "
+                "requested tool call. Expected Qwen JSON shape "
+                "<tool_call>{\"name\":\"tool\",\"arguments\":{...}}</tool_call>. "
+                f"raw_model_output={_tool_call_raw_preview(text)!r}"
+            )
         return text, None
 
     # Determine which parser to use.
@@ -4728,6 +5034,10 @@ def _parse_tool_calls_with_parser(
 
     if not active_parser:
         return _generic_parse_filtered(output_text)
+    if active_parser in {"auto", "generic"}:
+        xml_function_result = _xml_function_parse_filtered(output_text)
+        if xml_function_result is not None:
+            return xml_function_result
 
     # Create a fresh parser instance per call for thread-safety.
     # Non-streaming requests can be concurrent — sharing a global instance
@@ -4767,7 +5077,9 @@ def _parse_tool_calls_with_parser(
                 )
                 for tc in result.tool_calls
             ]
-            filtered_tool_calls = _filter_to_request_tools(tool_calls)
+            filtered_tool_calls = _filter_to_request_tools(
+                tool_calls, raw_model_output=output_text
+            )
             if filtered_tool_calls:
                 return result.content or "", filtered_tool_calls
             # Parser consumed only unavailable tool names. Treat as plain text
@@ -4776,6 +5088,24 @@ def _parse_tool_calls_with_parser(
             # list_directory().
             return output_text, None
         else:
+            if active_parser in {"qwen", "qwen3"}:
+                if "<tool_call" in output_text or "</tool_call>" in output_text:
+                    _record_tool_call_drop(
+                        "Malformed Qwen tool_call block could not be parsed as "
+                        "a valid requested tool call. Expected Qwen JSON shape "
+                        "<tool_call>{\"name\":\"tool\",\"arguments\":{...}}</tool_call>. "
+                        f"raw_model_output={_tool_call_raw_preview(output_text)!r}"
+                    )
+                return result.content or output_text, None
+            if active_parser in {"xml_function", "mimo_xml_function"} and (
+                "<tool_call>" in output_text or "<function=" in output_text
+            ):
+                _record_tool_call_drop(
+                    "Suspicious XML tool-like model output could not be parsed as "
+                    "a valid requested tool call. "
+                    f"raw_model_output={_tool_call_raw_preview(output_text)!r}"
+                )
+                return result.content or output_text, None
             # Specific parser found nothing — try generic parser as fallback
             # (handles Nemotron, Llama, raw JSON, etc.)
             return _generic_parse_filtered(output_text)
@@ -12174,6 +12504,9 @@ async def create_chat_completion(
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
         chat_kwargs["_vmlx_tools_present"] = True
+        chat_kwargs["_vmlx_tool_call_prompt_capture"] = (
+            _make_tool_call_diagnostic_prompt_capture()
+        )
 
     # Inject Harmony analysis prefix for GPT-OSS models when thinking is enabled.
     # The suffix replaces the template's generation prompt (<|start|>assistant<|message|>)
@@ -14233,6 +14566,9 @@ async def create_response(
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
         chat_kwargs["_vmlx_tools_present"] = True
+        chat_kwargs["_vmlx_tool_call_prompt_capture"] = (
+            _make_tool_call_diagnostic_prompt_capture()
+        )
     elif not _suppress_tools and _is_dsv4_resp_msgs and any(
         isinstance(m, dict) and m.get("role") == "tool" for m in messages
     ):
@@ -14240,6 +14576,9 @@ async def create_response(
         if historical_tools:
             chat_kwargs["tools"] = historical_tools
             chat_kwargs["_vmlx_tools_present"] = True
+            chat_kwargs["_vmlx_tool_call_prompt_capture"] = (
+                _make_tool_call_diagnostic_prompt_capture()
+            )
             logger.info(
                 "DSV4 (Responses): synthesized %d historical tool schema(s) "
                 "for tool-result continuation prompt context",
@@ -15325,12 +15664,23 @@ async def stream_chat_completion(
     # the stream's terminal warnings array carries an explanation back to the
     # client instead of returning an empty response with no signal (Bug 5).
     _begin_tool_call_drop_capture()
+    if callable(kwargs.get("_vmlx_tool_call_prompt_capture")):
+        kwargs = dict(kwargs)
+        kwargs["_vmlx_tool_call_prompt_capture"] = (
+            _make_tool_call_diagnostic_prompt_capture()
+        )
+    _capture_tool_call_diagnostic_context(
+        endpoint="chat.completions.stream",
+        response_id=response_id,
+        request=request,
+        messages=messages,
+        chat_kwargs=kwargs,
+    )
 
     # Tool call buffering: when we detect a tool call marker in the stream,
     # we stop emitting content and buffer the rest. At end of stream, we parse
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
-    tool_call_buffering_notified = False  # Have we sent the buffering signal?
     tool_calls_emitted = False  # Were actual tool calls parsed and emitted?
     # #219 follow-up: the START tool_calls delta emitted at first buffer tick
     # generates its own random id. Cache it here so the final tool_calls data
@@ -15444,6 +15794,137 @@ async def stream_chat_completion(
     _stream_timeout = (
         request.timeout if request.timeout is not None else _default_timeout
     )
+
+    def _buffered_tool_parse_text() -> str:
+        if request_parser and accumulated_content.strip():
+            return accumulated_content.strip()
+        if request_parser and accumulated_reasoning.strip():
+            return accumulated_reasoning.strip()
+        return _strip_think_for_tool_parse(accumulated_text)
+
+    def _chat_usage_chunk() -> ChatCompletionChunk:
+        _usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        if cached_tokens > 0 or cache_detail:
+            _usage.prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=cached_tokens,
+                cache_detail=cache_detail,
+            )
+        return ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[],
+            usage=_usage,
+        )
+
+    def _early_tool_call_chunks(tool_calls: list, cleaned_text: str = "") -> list[str]:
+        chunks: list[str] = []
+        visible = (cleaned_text or "").strip()
+        if visible and not content_was_emitted:
+            content_chunk = ChatCompletionChunk(
+                id=response_id,
+                created=_created_ts,
+                model=request.model,
+                choices=[
+                    ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(content=visible),
+                        finish_reason=None,
+                    )
+                ],
+            )
+            chunks.append(f"data: {_dump_sse_json(content_chunk)}\n\n")
+        tc_deltas = [
+            {
+                "index": i,
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for i, tc in enumerate(tool_calls)
+        ]
+        chunks.append(
+            "data: "
+            + json.dumps(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": _created_ts,
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": tc_deltas,
+                            },
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                ensure_ascii=True,
+            )
+            + "\n\n"
+        )
+        chunks.append(
+            "data: "
+            + json.dumps(
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": _created_ts,
+                    "model": request.model,
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ],
+                },
+                ensure_ascii=True,
+            )
+            + "\n\n"
+        )
+        if include_usage:
+            chunks.append(f"data: {_dump_sse_json(_chat_usage_chunk())}\n\n")
+        chunks.append("data: [DONE]\n\n")
+        return chunks
+
+    def _early_tool_drop_warning_chunks() -> list[str]:
+        diagnostics = _take_tool_call_drop_diagnostics()
+        diagnostic_file = _take_tool_call_diagnostic_file()
+        if not diagnostics:
+            return []
+        warning_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[],
+            warnings=diagnostics,
+            tool_call_diagnostic_file=diagnostic_file,
+        )
+        finish_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[
+                ChatCompletionChunkChoice(
+                    delta=ChatCompletionChunkDelta(),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        chunks = [
+            f"data: {_dump_sse_json(warning_chunk)}\n\n",
+            f"data: {_dump_sse_json(finish_chunk)}\n\n",
+        ]
+        if include_usage:
+            chunks.append(f"data: {_dump_sse_json(_chat_usage_chunk())}\n\n")
+        chunks.append("data: [DONE]\n\n")
+        return chunks
 
     try:
         # Stream content (with SSE keep-alive during long prefills)
@@ -15638,41 +16119,34 @@ async def stream_chat_completion(
                             tool_call_buffering = True
 
                 if tool_call_buffering:
-                    # #219: On the FIRST buffering tick emit a proper OpenAI
-                    # streaming tool_calls START delta so strict clients
-                    # (OpenCode, AI SDK) see tool-call activity immediately
-                    # instead of an opaque sequence of empty deltas. Then keep
-                    # the connection alive with spec-clean empty deltas (no
-                    # vMLX-only `tool_call_generating` field on the wire).
-                    if not tool_call_buffering_notified:
-                        tool_call_buffering_notified = True
-                        if _stream_tool_call_start_id is None:
-                            _stream_tool_call_start_id = generate_tool_id()
-                        start_chunk = {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": _created_ts,
-                            "model": request.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "tool_calls": [
-                                            {
-                                                "index": 0,
-                                                "id": _stream_tool_call_start_id,
-                                                "type": "function",
-                                                "function": {"name": "", "arguments": ""},
-                                            }
-                                        ],
-                                    },
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                        yield f"data: {json.dumps(start_chunk, ensure_ascii=True)}\n\n"
-                    # Subsequent ticks: spec-clean empty delta (carries usage
+                    buffered_parse_text = _buffered_tool_parse_text()
+                    if _buffer_has_complete_tool_call_candidate(buffered_parse_text):
+                        early_cleaned, early_calls = _parse_tool_calls_with_parser(
+                            buffered_parse_text,
+                            request,
+                        )
+                        if early_calls:
+                            if hasattr(engine, "abort_request"):
+                                await engine.abort_request(response_id)
+                            tool_calls_emitted = True
+                            for chunk in _early_tool_call_chunks(
+                                early_calls,
+                                early_cleaned,
+                            ):
+                                yield chunk
+                            return
+                        warning_chunks = _early_tool_drop_warning_chunks()
+                        if warning_chunks:
+                            if hasattr(engine, "abort_request"):
+                                await engine.abort_request(response_id)
+                            for chunk in warning_chunks:
+                                yield chunk
+                            return
+                    # Buffer native tool markup until a complete call can be
+                    # parsed. Do not emit an OpenAI `tool_calls` delta with
+                    # empty name/arguments; clients treat that as a real,
+                    # invalid tool invocation.
+                    # Buffered ticks: spec-clean empty delta (carries usage
                     # if include_usage). No `tool_call_generating` field.
                     buf_chunk = ChatCompletionChunk(
                         id=response_id,
@@ -15821,37 +16295,32 @@ async def stream_chat_completion(
                     )
 
                 if tool_call_buffering:
-                    # #219: same fix as the reasoning-parser branch — emit a
-                    # proper OpenAI streaming tool_calls START delta on the
-                    # first buffering tick + keep subsequent chunks spec-clean.
-                    if not tool_call_buffering_notified:
-                        tool_call_buffering_notified = True
-                        if _stream_tool_call_start_id is None:
-                            _stream_tool_call_start_id = generate_tool_id()
-                        start_chunk = {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": _created_ts,
-                            "model": request.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "tool_calls": [
-                                            {
-                                                "index": 0,
-                                                "id": _stream_tool_call_start_id,
-                                                "type": "function",
-                                                "function": {"name": "", "arguments": ""},
-                                            }
-                                        ],
-                                    },
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                        yield f"data: {json.dumps(start_chunk, ensure_ascii=True)}\n\n"
+                    buffered_parse_text = _buffered_tool_parse_text()
+                    if _buffer_has_complete_tool_call_candidate(buffered_parse_text):
+                        early_cleaned, early_calls = _parse_tool_calls_with_parser(
+                            buffered_parse_text,
+                            request,
+                        )
+                        if early_calls:
+                            if hasattr(engine, "abort_request"):
+                                await engine.abort_request(response_id)
+                            tool_calls_emitted = True
+                            for chunk in _early_tool_call_chunks(
+                                early_calls,
+                                early_cleaned,
+                            ):
+                                yield chunk
+                            return
+                        warning_chunks = _early_tool_drop_warning_chunks()
+                        if warning_chunks:
+                            if hasattr(engine, "abort_request"):
+                                await engine.abort_request(response_id)
+                            for chunk in warning_chunks:
+                                yield chunk
+                            return
+                    # Same as the reasoning-parser branch: buffer until the
+                    # final parsed tool call exists, rather than exposing an
+                    # invalid empty OpenAI tool call placeholder.
                     buf_chunk = ChatCompletionChunk(
                         id=response_id,
                         created=_created_ts,
@@ -16161,18 +16630,28 @@ async def stream_chat_completion(
             # the remainder needs flushing.
             # When reasoning parser is active, use accumulated_content (content-only)
             # instead of accumulated_text (which includes reasoning and would leak it).
-            already_sent = streamed_content.strip()
-            full = (
+            buffered_full = (
                 accumulated_content.strip()
                 if request_parser
                 else accumulated_text.strip()
             )
-            if already_sent and full.startswith(already_sent):
-                remainder = full[len(already_sent) :].strip()
+            if _TOOL_CALL_DROP_DIAGNOSTICS.get():
+                remainder = ""
             else:
-                remainder = full if not content_was_emitted else ""
-            if remainder:
-                remainder = _strip_tool_markup_residue_for_display(remainder)
+                already_sent = streamed_content.strip()
+                if already_sent and buffered_full.startswith(already_sent):
+                    remainder = buffered_full[len(already_sent) :].strip()
+                else:
+                    remainder = buffered_full if not content_was_emitted else ""
+                if remainder:
+                    remainder = _strip_tool_markup_residue_for_display(remainder)
+            if not remainder and not _TOOL_CALL_DROP_DIAGNOSTICS.get():
+                _record_tool_call_drop(
+                    "Tool-like model output was buffered but dropped because "
+                    "it did not parse as a valid requested tool call and "
+                    "contained no safe visible text after removing tool markup. "
+                    f"raw_model_output={_tool_call_raw_preview(buffered_full)!r}"
+                )
             if remainder:
                 # Use the engine's actual finish_reason (e.g., "length" if max_tokens
                 # was hit) instead of hardcoding "stop"
@@ -16472,6 +16951,7 @@ async def stream_chat_completion(
     # without a tool_calls delta; without this hook the client sees an empty
     # response with no signal as to why.
     _dropped_tc_diagnostics = _take_tool_call_drop_diagnostics()
+    _dropped_tc_diagnostic_file = _take_tool_call_diagnostic_file()
     if _dropped_tc_diagnostics and not tool_calls_emitted:
         if _stream_chat_warnings is None:
             _stream_chat_warnings = []
@@ -16483,6 +16963,7 @@ async def stream_chat_completion(
             model=request.model,
             choices=[],
             warnings=_stream_chat_warnings,
+            tool_call_diagnostic_file=_dropped_tc_diagnostic_file,
         )
         yield f"data: {_dump_sse_json(warning_chunk)}\n\n"
         # Strict OpenAI clients (langchain, harnesses) wait for a chunk with
@@ -16711,6 +17192,18 @@ async def stream_responses_api(
 
     # Bug 5 (Responses API): start dropped-tool-call diagnostic capture
     _begin_tool_call_drop_capture()
+    if callable(kwargs.get("_vmlx_tool_call_prompt_capture")):
+        kwargs = dict(kwargs)
+        kwargs["_vmlx_tool_call_prompt_capture"] = (
+            _make_tool_call_diagnostic_prompt_capture()
+        )
+    _capture_tool_call_diagnostic_context(
+        endpoint="responses.stream",
+        response_id=response_id,
+        request=request,
+        messages=messages,
+        chat_kwargs=kwargs,
+    )
 
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
     _request_has_tools = bool(getattr(request, "tools", None))
@@ -17515,6 +18008,7 @@ async def stream_responses_api(
     tool_calls = None
     cleaned_text = full_text
     _tool_parse_from_reasoning_only = False
+    parse_text_for_diagnostic = ""
     if not _suppress_tools:
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
@@ -17526,8 +18020,9 @@ async def stream_responses_api(
             _tool_parse_from_reasoning_only = True
         else:
             parse_text = _strip_think_for_tool_parse(full_text)
+        parse_text_for_diagnostic = parse_text or full_text
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
-            parse_text or full_text, request
+            parse_text_for_diagnostic, request
         )
         if _tool_parse_from_reasoning_only and not tool_calls:
             # Reasoning-only text is only a candidate tool-call source. If it is
@@ -17557,6 +18052,19 @@ async def stream_responses_api(
         if _tc_calls:
             cleaned_text = (_tc_cleaned or "").strip()
             tool_calls = _tc_calls
+    if (
+        not tool_calls
+        and parse_text_for_diagnostic
+        and not _TOOL_CALL_DROP_DIAGNOSTICS.get()
+        and _has_tool_marker_or_partial_suffix(parse_text_for_diagnostic)
+        and not _strip_tool_markup_residue_for_display(parse_text_for_diagnostic)
+    ):
+        _record_tool_call_drop(
+            "Tool-like model output was buffered but dropped because it did "
+            "not parse as a valid requested tool call and contained no safe "
+            "visible text after removing tool markup. "
+            f"raw_model_output={_tool_call_raw_preview(parse_text_for_diagnostic)!r}"
+        )
 
     display_text = ""
 
@@ -17694,10 +18202,12 @@ async def stream_responses_api(
             output_index += 1
     else:
         # No tool calls — use content accumulated during streaming (reasoning already separated)
-        display_text = cleaned_text or ""
+        display_text = "" if _TOOL_CALL_DROP_DIAGNOSTICS.get() else (cleaned_text or "")
         if request_parser:
             # Reasoning was already emitted during streaming — use content-only text
-            if accumulated_content:
+            if _TOOL_CALL_DROP_DIAGNOSTICS.get():
+                display_text = ""
+            elif accumulated_content:
                 display_text = accumulated_content
             elif (
                 accumulated_reasoning
@@ -17862,7 +18372,13 @@ async def stream_responses_api(
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty. Report it as a diagnostic warning, not as
             # assistant output that would pollute user-visible text/history.
-            if suppress_reasoning and accumulated_reasoning:
+            if _TOOL_CALL_DROP_DIAGNOSTICS.get():
+                display_text = ""
+                logger.info(
+                    f"Request {response_id}: malformed tool-like model output "
+                    "was dropped; leaving output_text empty"
+                )
+            elif suppress_reasoning and accumulated_reasoning:
                 display_text = ""
                 logger.info(
                     f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
@@ -18069,6 +18585,7 @@ async def stream_responses_api(
     # Bug 5: surface dropped-tool-call diagnostics on the Responses API too
     # (same root cause + same UX gap as the Chat Completions stream).
     _dropped_tc_diagnostics = _take_tool_call_drop_diagnostics()
+    _dropped_tc_diagnostic_file = _take_tool_call_diagnostic_file()
     _stream_warnings = _merge_responses_warnings(
         _stream_chain_warnings,
         _current_response_warnings_for_reasoning_only(_stream_reasoning_only),
@@ -18085,6 +18602,11 @@ async def stream_responses_api(
         "output": all_output_items,
         **_resp_extra,
         **({"warnings": _stream_warnings} if _stream_warnings else {}),
+        **(
+            {"tool_call_diagnostic_file": _dropped_tc_diagnostic_file}
+            if _dropped_tc_diagnostic_file
+            else {}
+        ),
         "usage": {
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens,

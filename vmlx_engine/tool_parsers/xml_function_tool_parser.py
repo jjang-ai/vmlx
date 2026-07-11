@@ -102,6 +102,30 @@ class XMLFunctionToolParser(ToolParser):
                 names.add(fn["name"])
         return names
 
+    @staticmethod
+    def _request_required_args(request: dict[str, Any] | None) -> dict[str, set[str]]:
+        if not isinstance(request, dict):
+            return {}
+        tools = request.get("tools")
+        if not isinstance(tools, list):
+            return {}
+        required_by_name: dict[str, set[str]] = {}
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if not isinstance(fn, dict):
+                continue
+            name = fn.get("name")
+            params = fn.get("parameters")
+            required = params.get("required", []) if isinstance(params, dict) else []
+            if not isinstance(name, str) or not isinstance(required, list):
+                continue
+            required_by_name[name] = {
+                key for key in required if isinstance(key, str) and key
+            }
+        return required_by_name
+
     # Relaxed function pattern: Ornith-1.0 may emit `<function=name>` without
     # the matching `</function>` close. Body extends to the next `</tool_call>`
     # or end-of-string. Only used as fallback when the strict pattern misses.
@@ -124,7 +148,11 @@ class XMLFunctionToolParser(ToolParser):
 
     @classmethod
     def _parse_functions(
-        cls, text: str, *, allowed_names: set[str] | None = None
+        cls,
+        text: str,
+        *,
+        allowed_names: set[str] | None = None,
+        required_by_name: dict[str, set[str]] | None = None,
     ) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         matches = list(cls.FUNCTION_PATTERN.findall(text))
@@ -136,6 +164,14 @@ class XMLFunctionToolParser(ToolParser):
             if allowed_names is not None and name not in allowed_names:
                 continue
             arguments = cls._extract_arguments_from_body(body)
+            required = (required_by_name or {}).get(name, set())
+            if any(
+                key not in arguments
+                or arguments[key] is None
+                or (isinstance(arguments[key], str) and arguments[key].strip() == "")
+                for key in required
+            ):
+                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -147,7 +183,11 @@ class XMLFunctionToolParser(ToolParser):
 
     @classmethod
     def _parse_nested_invoke_functions(
-        cls, text: str, *, allowed_names: set[str] | None = None
+        cls,
+        text: str,
+        *,
+        allowed_names: set[str] | None = None,
+        required_by_name: dict[str, set[str]] | None = None,
     ) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         for body in cls.INVOKE_PATTERN.findall(text):
@@ -163,6 +203,14 @@ class XMLFunctionToolParser(ToolParser):
                 args_body = args_match.group(1)
                 for arg_name, arg_value in cls.SIMPLE_XML_ARG_PATTERN.findall(args_body):
                     arguments[arg_name.strip()] = cls._coerce_value(arg_value)
+            required = (required_by_name or {}).get(name, set())
+            if any(
+                key not in arguments
+                or arguments[key] is None
+                or (isinstance(arguments[key], str) and arguments[key].strip() == "")
+                for key in required
+            ):
+                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -188,6 +236,7 @@ class XMLFunctionToolParser(ToolParser):
         model_output: str,
         request: dict[str, Any] | None = None,
     ) -> ExtractedToolCallInformation:
+        required_by_name = self._request_required_args(request)
         if "<tool_call>" not in model_output:
             allowed_names = self._request_tool_names(request)
             if (
@@ -196,7 +245,9 @@ class XMLFunctionToolParser(ToolParser):
                 and "<function=" in model_output
             ):
                 repaired_calls = self._parse_functions(
-                    model_output, allowed_names=allowed_names
+                    model_output,
+                    allowed_names=allowed_names,
+                    required_by_name=required_by_name,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)
@@ -213,9 +264,16 @@ class XMLFunctionToolParser(ToolParser):
 
         tool_calls: list[dict[str, Any]] = []
         for block in self.TOOL_CALL_PATTERN.findall(model_output):
-            tool_calls.extend(self._parse_functions(block))
+            tool_calls.extend(
+                self._parse_functions(block, required_by_name=required_by_name)
+            )
             if not tool_calls:
-                tool_calls.extend(self._parse_nested_invoke_functions(block))
+                tool_calls.extend(
+                    self._parse_nested_invoke_functions(
+                        block,
+                        required_by_name=required_by_name,
+                    )
+                )
 
         cleaned_text = self.TOOL_CALL_PATTERN.sub("", model_output).strip()
         if not tool_calls:
@@ -224,6 +282,7 @@ class XMLFunctionToolParser(ToolParser):
                 repaired_calls = self._parse_functions(
                     model_output,
                     allowed_names=allowed_names,
+                    required_by_name=required_by_name,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)
@@ -236,6 +295,7 @@ class XMLFunctionToolParser(ToolParser):
                 repaired_calls = self._parse_nested_invoke_functions(
                     model_output,
                     allowed_names=allowed_names,
+                    required_by_name=required_by_name,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)

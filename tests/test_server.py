@@ -2349,6 +2349,138 @@ class TestOpenAILogprobsFormatting:
         )
         assert visible == "2 < 3"
 
+    @pytest.mark.parametrize("with_reasoning_parser", [False, True])
+    @pytest.mark.asyncio
+    async def test_streaming_chat_tool_call_has_no_empty_placeholder(
+        self, monkeypatch, with_reasoning_parser
+    ):
+        """Buffered tool calls must not stream empty function name/arguments."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.base import DeltaMessage
+
+        class _ReasoningParser:
+            def reset_state(self, **_kwargs):
+                pass
+
+            def extract_reasoning_streaming(
+                self, previous_text, current_text, delta_text
+            ):
+                if delta_text == "\n\n":
+                    return DeltaMessage(reasoning=delta_text)
+                return DeltaMessage(content=delta_text)
+
+            def extract_reasoning(self, model_output):
+                return model_output, None
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=with_reasoning_parser)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = []
+                if with_reasoning_parser:
+                    chunks.append(("\n\n", False, None))
+                chunks.extend((
+                    (
+                        '<tool_call>{"name":"glob","arguments":{"path":"/tmp"',
+                        False,
+                        None,
+                    ),
+                    (',"pattern":"*"}}</tool_call>', True, "stop"),
+                ))
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(
+            server,
+            "_reasoning_parser",
+            _ReasoningParser() if with_reasoning_parser else None,
+        )
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ChatCompletionRequest(
+            model="unit-tool-model",
+            messages=[Message(role="user", content="List files in /tmp")],
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "glob",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "pattern": {"type": "string"},
+                            },
+                            "required": ["pattern"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="auto",
+            enable_thinking=True if with_reasoning_parser else None,
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        if with_reasoning_parser:
+            assert any(
+                choice.get("delta", {}).get("reasoning_content")
+                or choice.get("delta", {}).get("reasoning")
+                for chunk in chunks
+                for choice in chunk.get("choices", [])
+            )
+        tool_call_deltas = [
+            tc
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            for tc in choice.get("delta", {}).get("tool_calls") or []
+        ]
+        empty_placeholders = [
+            tc
+            for tc in tool_call_deltas
+            if tc.get("function", {}).get("name") == ""
+            and tc.get("function", {}).get("arguments") == ""
+        ]
+
+        assert empty_placeholders == []
+        assert [tc["function"]["name"] for tc in tool_call_deltas] == ["glob"]
+        assert json.loads(tool_call_deltas[0]["function"]["arguments"]) == {
+            "path": "/tmp",
+            "pattern": "*",
+        }
+        assert any(
+            choice.get("finish_reason") == "tool_calls"
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+        )
+
     @pytest.mark.asyncio
     async def test_streaming_chat_hides_zaya_visual_grounding_markup(self, monkeypatch):
         """ZAYA-VL point spans are control markup, not visible assistant text."""
