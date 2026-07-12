@@ -252,7 +252,10 @@ def convert_command(args: argparse.Namespace) -> None:
     if not args.skip_verify:
         print()
         print("Running verification smoke test...")
-        success, message = _smoke_test(str(output_dir))
+        success, message = _smoke_test(
+            str(output_dir),
+            trust_remote_code=args.trust_remote_code,
+        )
         if success:
             print(f"  PASS: {message}")
             print()
@@ -351,7 +354,11 @@ def _run_conversion(
     )
 
 
-def _smoke_test(model_path: str) -> tuple[bool, str]:
+def _smoke_test(
+    model_path: str,
+    *,
+    trust_remote_code: bool = False,
+) -> tuple[bool, str]:
     """
     Load the converted model and generate a few tokens to verify it works.
 
@@ -367,7 +374,13 @@ def _smoke_test(model_path: str) -> tuple[bool, str]:
         from mlx_lm import load
         from mlx_lm.sample_utils import make_sampler
 
-        model, tokenizer = load(model_path)
+        if trust_remote_code:
+            model, tokenizer = load(
+                model_path,
+                tokenizer_config={"trust_remote_code": True},
+            )
+        else:
+            model, tokenizer = load(model_path)
 
         # Generate a few tokens with a simple prompt
         import mlx.core as mx
@@ -404,11 +417,21 @@ def _smoke_test(model_path: str) -> tuple[bool, str]:
         return False, f"Smoke test failed: {e}"
 
 
-def _jang_smoke_test(model_path: str) -> tuple[bool, str]:
+def _jang_smoke_test(
+    model_path: str,
+    *,
+    trust_remote_code: bool = False,
+) -> tuple[bool, str]:
     """Load a JANG model and generate a few tokens to verify it works."""
     try:
         from ..utils.jang_loader import load_jang_model
-        model, tokenizer = load_jang_model(model_path)
+        if trust_remote_code:
+            model, tokenizer = load_jang_model(
+                model_path,
+                tokenizer_config_extra={"trust_remote_code": True},
+            )
+        else:
+            model, tokenizer = load_jang_model(model_path)
 
         import mlx.core as mx
         from mlx_lm.sample_utils import make_sampler
@@ -776,7 +799,10 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     if not args.skip_verify:
         print()
         print("Running JANG verification smoke test...")
-        success, message = _jang_smoke_test(str(output_dir))
+        success, message = _jang_smoke_test(
+            str(output_dir),
+            trust_remote_code=getattr(args, "trust_remote_code", False),
+        )
         if success:
             print(f"  PASS: {message}")
         else:

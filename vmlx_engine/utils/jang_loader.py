@@ -2218,6 +2218,7 @@ def _load_jang_v2(
     skip_eval: bool = False,
     filter_expert_keys: bool = False,
     layer_range: tuple = None,
+    tokenizer_config_extra: dict | None = None,
 ):
     """
     Load a JANG v2 model — instant via mx.load() mmap.
@@ -3195,7 +3196,17 @@ def _load_jang_v2(
         f"JANG v2 loaded in {elapsed:.1f}s: {source_model} ({actual_bits:.1f}-bit avg)"
     )
 
-    tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
+    if tokenizer_config_extra:
+        tokenizer = load_tokenizer(
+            path,
+            tokenizer_config_extra=tokenizer_config_extra,
+            eos_token_ids=config.get("eos_token_id", None),
+        )
+    else:
+        tokenizer = load_tokenizer(
+            path,
+            eos_token_ids=config.get("eos_token_id", None),
+        )
     return model, tokenizer
 
 
@@ -4472,6 +4483,7 @@ def load_jang_model(
     skip_eval: bool = False,
     filter_expert_keys: bool = False,
     layer_range: tuple = None,
+    tokenizer_config_extra: dict | None = None,
 ):
     """
     Load a JANG model for inference.
@@ -4556,6 +4568,7 @@ def load_jang_model(
         return _load_jang_v2(
             path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys,
             layer_range=layer_range,
+            tokenizer_config_extra=tokenizer_config_extra,
         )
 
     # v1: repack path (legacy)
