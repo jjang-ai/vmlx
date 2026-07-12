@@ -929,104 +929,109 @@ class MemoryAwarePrefixCache:
             - remaining_tokens: Tokens that still need processing
         """
         if not tokens:
-            self._stats.misses += 1
+            with self._lock:
+                self._stats.misses += 1
             return None, tokens
 
+        tokens_key = tuple(tokens)
+        matched_key: tuple[int, ...] | None = None
+        matched_entry: _CacheEntry | None = None
+        matched_cache: list[Any] | None = None
+        matched_length = 0
+        match_kind: str | None = None
+        remaining: list[int] = tokens
+
+        # Select the best immutable cache snapshot while holding the metadata
+        # lock, but do NOT clone it here. _clone_cache_for_fetch() may dispatch
+        # work to the single llm-worker executor. Holding this lock while waiting
+        # for that worker deadlocks when the in-flight request finishes and calls
+        # store(): API thread waits for llm-worker; llm-worker waits for this lock.
+        # A local reference keeps the cache list alive even if another thread
+        # evicts its entry while the isolate-clone is being built.
         with self._lock:
-            # Evict expired entries before lookup
             if self._ttl_seconds > 0:
                 self._evict_expired()
 
-            tokens_key = tuple(tokens)
+            exact_entry = self._entries.get(tokens_key)
+            if exact_entry is not None:
+                matched_key = tokens_key
+                matched_entry = exact_entry
+                matched_cache = exact_entry.cache
+                matched_length = len(tokens)
+                match_kind = "clone"
+                remaining = []
+            else:
+                # Prefix scan: O(n) over all entries (Issue #62). max_entries
+                # bounds n, and exact matches already took the O(1) path above.
+                best_forward_key: tuple[int, ...] | None = None
+                best_forward_match: _CacheEntry | None = None
+                best_forward_length = 0
+                best_reverse_key: tuple[int, ...] | None = None
+                best_reverse_match: _CacheEntry | None = None
 
-            # Check for exact match
-            if tokens_key in self._entries:
-                entry = self._entries[tokens_key]
-                # issue #198 (1C): return an isolated clone so generation
-                # advancing offset/appending KV in place cannot contaminate
-                # the stored entry for future hits on the same prefix. A clone we
-                # cannot build is a miss — only count the hit once it succeeds.
-                cloned = self._clone_cache_for_fetch(entry.cache, len(tokens))
-                if cloned is not None:
-                    self._entries.move_to_end(tokens_key)
-                    self._touch_type_lru(tokens_key, entry.cache_type)
-                    entry.touch()
-                    self._stats.hits += 1
-                    self._stats.tokens_saved += len(tokens)
-                    return cloned, []
+                for cached_key, entry in self._entries.items():
+                    cached_len = len(cached_key)
+                    if cached_len < len(tokens):
+                        if (
+                            cached_len > best_forward_length
+                            and tokens_key[:cached_len] == cached_key
+                        ):
+                            best_forward_key = cached_key
+                            best_forward_match = entry
+                            best_forward_length = cached_len
+                    elif cached_len > len(tokens):
+                        # Preserve the existing first reverse-match behavior.
+                        # All reverse candidates match the same requested length,
+                        # so there is no longer reverse prefix to prefer.
+                        if (
+                            best_reverse_match is None
+                            and cached_key[: len(tokens)] == tokens_key
+                        ):
+                            best_reverse_key = cached_key
+                            best_reverse_match = entry
+
+                # Prefer forward match (exact prefix reuse, no reduction).
+                if best_forward_match is not None:
+                    matched_key = best_forward_key
+                    matched_entry = best_forward_match
+                    matched_cache = best_forward_match.cache
+                    matched_length = best_forward_length
+                    match_kind = "clone"
+                    remaining = tokens[best_forward_length:]
+                elif best_reverse_match is not None:
+                    matched_key = best_reverse_key
+                    matched_entry = best_reverse_match
+                    matched_cache = best_reverse_match.cache
+                    matched_length = len(tokens)
+                    match_kind = "truncate"
+                    remaining = []
+
+        if matched_cache is None or matched_entry is None or matched_key is None:
+            with self._lock:
+                self._stats.misses += 1
+            return None, tokens
+
+        if match_kind == "clone":
+            resolved = self._clone_cache_for_fetch(matched_cache, matched_length)
+        else:
+            resolved = self._truncate_cache(matched_cache, matched_length)
+
+        with self._lock:
+            if resolved is None:
                 self._stats.misses += 1
                 return None, tokens
 
-            # Prefix scan: O(n) over all entries (Issue #62).
-            #
-            # This is an intentional design trade-off. A trie would give O(k)
-            # lookup (k = token length), but adds significant complexity for
-            # insertion, eviction, and memory tracking. The flat OrderedDict
-            # approach is simpler, easier to reason about for correctness, and
-            # performs well in practice because:
-            #   - max_entries defaults to 1000 (config.max_entries), bounding n
-            #   - Prefix comparison short-circuits on first mismatch (tuple ==)
-            #   - The exact-match dict lookup above handles the common case in O(1)
-            # If profiling shows this scan as a bottleneck with large entry counts,
-            # consider replacing OrderedDict with a trie + LRU linked list.
-            best_forward_match: _CacheEntry | None = None
-            best_forward_length = 0
-            best_reverse_match: _CacheEntry | None = None
-            best_reverse_length = 0
+            # The selected snapshot remains valid even if its entry was evicted
+            # while cloning. Only mutate LRU metadata when the same entry is still
+            # resident; never accidentally touch a replacement at the same key.
+            if self._entries.get(matched_key) is matched_entry:
+                self._entries.move_to_end(matched_key)
+                self._touch_type_lru(matched_key, matched_entry.cache_type)
+                matched_entry.touch()
+            self._stats.hits += 1
+            self._stats.tokens_saved += matched_length
 
-            for cached_key, entry in self._entries.items():
-                cached_len = len(cached_key)
-
-                if cached_len < len(tokens):
-                    # Forward: cached sequence is a prefix of requested tokens
-                    if (
-                        cached_len > best_forward_length
-                        and tokens_key[:cached_len] == cached_key
-                    ):
-                        best_forward_match = entry
-                        best_forward_length = cached_len
-
-                elif cached_len > len(tokens):
-                    # Reverse: requested tokens are a prefix of cached sequence
-                    # This handles repeated prompts where cache stores prompt+output
-                    if (
-                        len(tokens) > best_reverse_length
-                        and cached_key[: len(tokens)] == tokens_key
-                    ):
-                        best_reverse_match = entry
-                        best_reverse_length = len(tokens)
-
-            # Prefer forward match (exact prefix reuse, no truncation needed)
-            if best_forward_match is not None:
-                # issue #198 (1C): isolated clone (see exact-match path). This is the
-                # entry's FULL cached length (best_forward_length == cached_len), which
-                # is what lets cumulative SSM layers be copied rather than reduced.
-                cloned = self._clone_cache_for_fetch(
-                    best_forward_match.cache, best_forward_length
-                )
-                if cloned is not None:
-                    self._entries.move_to_end(best_forward_match.tokens)
-                    self._touch_type_lru(
-                        best_forward_match.tokens, best_forward_match.cache_type
-                    )
-                    best_forward_match.touch()
-                    self._stats.hits += 1
-                    self._stats.tokens_saved += best_forward_length
-                    return cloned, tokens[best_forward_length:]
-
-            # Fall back to reverse match with cache truncation
-            if best_reverse_match is not None:
-                truncated = self._truncate_cache(best_reverse_match.cache, len(tokens))
-                if truncated is not None:
-                    self._entries.move_to_end(best_reverse_match.tokens)
-                    self._touch_type_lru(best_reverse_match.tokens, best_reverse_match.cache_type)
-                    best_reverse_match.touch()
-                    self._stats.hits += 1
-                    self._stats.tokens_saved += len(tokens)
-                    return truncated, []
-
-            self._stats.misses += 1
-            return None, tokens
+        return resolved, remaining
 
     def store(
         self,

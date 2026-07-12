@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for memory-aware prefix cache."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -247,6 +249,126 @@ class TestMemoryAwarePrefixCache:
         assert result is not kv
         assert result[0] is not kv[0]
         assert remaining == []
+
+    def test_worker_clone_does_not_hold_cache_lock(self, small_cache):
+        """A concurrent fetch cannot deadlock an in-flight worker-side store.
+
+        The API thread builds hit clones on the single llm-worker. If fetch holds
+        the cache mutex while waiting for that clone, a request finishing on the
+        worker blocks in store() on the same mutex and neither side can proceed.
+        """
+        tokens = [1, 2, 3]
+        entry = _CacheEntry(tokens=tuple(tokens), cache=[object()], memory_bytes=1)
+        with small_cache._lock:
+            small_cache._entries[tuple(tokens)] = entry
+            small_cache._lru_by_type["assistant"][tuple(tokens)] = True
+
+        worker_started = threading.Event()
+        let_worker_store = threading.Event()
+        worker_acquired_cache_lock = threading.Event()
+
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="llm-worker"
+        ) as worker:
+            small_cache.set_clone_executor(worker)
+
+            def finish_in_flight_request():
+                worker_started.set()
+                assert let_worker_store.wait(timeout=2)
+                with small_cache._lock:
+                    worker_acquired_cache_lock.set()
+
+            worker_future = worker.submit(finish_in_flight_request)
+            assert worker_started.wait(timeout=2)
+
+            def clone_on_worker(cache, _length):
+                return worker.submit(lambda: list(cache)).result(timeout=2)
+
+            small_cache._clone_cache_for_fetch = clone_on_worker
+            with ThreadPoolExecutor(max_workers=1) as api:
+                fetch_future = api.submit(small_cache.fetch, tokens)
+                let_worker_store.set()
+                assert worker_acquired_cache_lock.wait(timeout=1), (
+                    "fetch held the cache lock while waiting for the llm-worker"
+                )
+                worker_future.result(timeout=2)
+                cloned, remaining = fetch_future.result(timeout=2)
+
+        assert cloned is not entry.cache
+        assert cloned == entry.cache
+        assert remaining == []
+
+    @pytest.mark.parametrize(
+        ("stored_tokens", "request_tokens", "resolver_name"),
+        [
+            ([1, 2, 3], [1, 2, 3], "_clone_cache_for_fetch"),
+            ([1, 2, 3, 4], [1, 2, 3], "_truncate_cache"),
+        ],
+    )
+    def test_fetch_snapshot_survives_same_key_replacement(
+        self, small_cache, stored_tokens, request_tokens, resolver_name
+    ):
+        """Out-of-lock clone/truncate must not mutate a same-key replacement."""
+        key = tuple(stored_tokens)
+        old_cache = [object()]
+        old_entry = _CacheEntry(tokens=key, cache=old_cache, memory_bytes=1)
+        with small_cache._lock:
+            small_cache._entries[key] = old_entry
+            small_cache._lru_by_type["assistant"][key] = True
+
+        selected_snapshot = threading.Event()
+        resume_resolver = threading.Event()
+
+        def resolve_snapshot(cache, _length):
+            assert cache is old_cache
+            selected_snapshot.set()
+            assert resume_resolver.wait(timeout=2)
+            return list(cache)
+
+        setattr(small_cache, resolver_name, resolve_snapshot)
+
+        with ThreadPoolExecutor(max_workers=1) as api:
+            fetch_future = api.submit(small_cache.fetch, request_tokens)
+            assert selected_snapshot.wait(timeout=2)
+
+            replacement_cache = [object()]
+            replacement = _CacheEntry(
+                tokens=key,
+                cache=replacement_cache,
+                memory_bytes=1,
+                last_accessed_at=123.0,
+            )
+            marker_key = (99,)
+            marker = _CacheEntry(
+                tokens=marker_key,
+                cache=[object()],
+                memory_bytes=1,
+                last_accessed_at=456.0,
+            )
+            with small_cache._lock:
+                assert small_cache._entries.pop(key) is old_entry
+                del small_cache._lru_by_type["assistant"][key]
+                small_cache._entries[key] = replacement
+                small_cache._lru_by_type["assistant"][key] = True
+                small_cache._entries[marker_key] = marker
+                small_cache._lru_by_type["assistant"][marker_key] = True
+                lru_before = list(small_cache._lru_by_type["assistant"])
+
+            resume_resolver.set()
+            resolved, remaining = fetch_future.result(timeout=2)
+
+        assert resolved is not old_cache
+        assert resolved == old_cache
+        assert remaining == []
+        with small_cache._lock:
+            assert small_cache._entries[key] is replacement
+            assert replacement.cache is replacement_cache
+            assert replacement.last_accessed_at == 123.0
+            assert list(small_cache._lru_by_type["assistant"]) == lru_before
+        stats = small_cache.get_stats()
+        assert stats["hits"] == 1
+        assert stats["misses"] == 0
+        assert stats["tokens_saved"] == len(request_tokens)
 
     def test_fetch_prefix_match(self, small_cache, mock_kv_cache):
         # Store shorter sequence
