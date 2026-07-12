@@ -112,6 +112,7 @@ def compute_model_cache_key(
 
     Components:
     - Architecture id: model class + num_hidden_layers + key arch fields
+    - Exact MiniCPM position semantics: effective rope_theta
     - Path + mtime: catches in-place edits to config.json / jang_config.json
     - Loader flags: smelt mode, smelt %, TQ enabled, KV quant bits
 
@@ -122,6 +123,7 @@ def compute_model_cache_key(
     is strictly additive over the previous behaviour.
     """
     parts: List[str] = []
+    cache_identity_config = None
 
     # 1. Architecture identity (cheap and safe even if path is unknown)
     try:
@@ -130,6 +132,7 @@ def compute_model_cache_key(
             cfg = getattr(model, attr, None)
             if cfg is None:
                 continue
+            cache_identity_config = cfg
             for f in (
                 "model_type",
                 "num_hidden_layers",
@@ -145,6 +148,22 @@ def compute_model_cache_key(
             break
     except Exception:
         pass
+
+    # MiniCPM's official absent-key theta is 10K, while older MLX-LM runtime
+    # state used 1M. Rotated K tensors from those semantics are incompatible.
+    # Keep this exact-family-only so unrelated model cache keys remain byte-for-
+    # byte unchanged by the MiniCPM compatibility correction.
+    if (
+        any(part == "model_type=minicpm" for part in parts)
+        and cache_identity_config is not None
+    ):
+        theta = getattr(cache_identity_config, "rope_theta", None)
+        if theta is not None and not callable(theta):
+            try:
+                theta_tag = format(float(theta), ".17g")
+            except (TypeError, ValueError):
+                theta_tag = repr(theta)
+            parts.append(f"minicpm_rope_theta={theta_tag}")
 
     # 2. Path + mtime — catches edited config.json / jang_config.json
     if model_path:

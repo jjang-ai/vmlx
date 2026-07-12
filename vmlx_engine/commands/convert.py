@@ -12,7 +12,10 @@ import json
 import logging
 import subprocess
 import sys
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger("vmlx_engine")
@@ -213,15 +216,18 @@ def convert_command(args: argparse.Namespace) -> None:
                 ],
             )
         else:
-            _run_conversion(
-                hf_path=model_path,
-                mlx_path=str(output_dir),
-                q_bits=args.bits,
-                q_group_size=args.group_size,
-                q_mode=args.mode if args.mode != "default" else None,
-                dtype=args.dtype,
-                trust_remote_code=args.trust_remote_code,
-            )
+            with _conversion_source_with_model_config_compat(
+                model_path
+            ) as conversion_source:
+                _run_conversion(
+                    hf_path=conversion_source,
+                    mlx_path=str(output_dir),
+                    q_bits=args.bits,
+                    q_group_size=args.group_size,
+                    q_mode=args.mode if args.mode != "default" else None,
+                    dtype=args.dtype,
+                    trust_remote_code=args.trust_remote_code,
+                )
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"\nError: Conversion failed after {elapsed:.1f}s: {e}")
@@ -349,6 +355,64 @@ def _run_conversion(
         dtype=dtype,
         trust_remote_code=trust_remote_code,
     )
+
+
+@contextmanager
+def _conversion_source_with_model_config_compat(
+    hf_path: str | Path,
+) -> Iterator[str]:
+    """Yield a source view with narrowly detected compatibility metadata.
+
+    ``mlx_lm.convert`` does not expose the ``model_config`` override accepted
+    by ``mlx_lm.load``. Legacy MiniCPM checkpoints therefore fail before
+    quantization because their raw config omits ``model_type``. For a matched
+    checkpoint, build a temporary symlink view and replace only config.json
+    with the merged in-memory metadata. The source checkpoint is never
+    modified, while the normal MLX-LM save path persists the corrected config
+    in the converted artifact.
+    """
+    source_dir = Path(hf_path)
+    config_path = source_dir / "config.json"
+    if not source_dir.is_dir() or not config_path.is_file():
+        yield str(hf_path)
+        return
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        yield str(hf_path)
+        return
+
+    from ..model_config_registry import _minicpm_model_config_compat_override
+
+    override = _minicpm_model_config_compat_override(config)
+    if override is None:
+        yield str(hf_path)
+        return
+
+    print(
+        "Exact MiniCPM metadata detected — supplying missing official "
+        "model defaults during conversion."
+    )
+    with tempfile.TemporaryDirectory(prefix="vmlx-minicpm-convert-") as temp_dir:
+        # Preserve the source directory name because converters may stamp it
+        # into artifact provenance metadata.
+        overlay_dir = Path(temp_dir) / source_dir.name
+        overlay_dir.mkdir()
+        for source_entry in source_dir.iterdir():
+            if source_entry.name == "config.json":
+                continue
+            (overlay_dir / source_entry.name).symlink_to(
+                source_entry,
+                target_is_directory=source_entry.is_dir(),
+            )
+
+        merged_config = {**config, **override}
+        (overlay_dir / "config.json").write_text(
+            json.dumps(merged_config, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        yield str(overlay_dir)
 
 
 def _smoke_test(model_path: str) -> tuple[bool, str]:
@@ -712,9 +776,8 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     _conv_error_log = output_dir / "convert_error.log"
 
     try:
-        from jang_tools.convert import convert_model
-        result = convert_model(
-            model_path=str(model_path),
+        result = _run_jang_conversion(
+            model_path=model_path,
             output_path=str(output_dir),
             target_bits=comp,  # COMPRESS tier bits (fixed profile) or K target average (K-quant profile)
             profile=profile,
@@ -791,3 +854,37 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     print()
     print(f"Load with:")
     print(f"  vmlx-engine serve {output_dir}")
+
+
+def _run_jang_conversion(
+    *,
+    model_path: str | Path,
+    output_path: str,
+    target_bits: int,
+    profile: str,
+    quantization_method: str,
+    calibration_method: str,
+    imatrix_path: str | None,
+    use_awq: bool,
+    awq_alpha: float,
+) -> dict:
+    """Run JANG conversion with the same model-config compatibility view.
+
+    JANG reads the raw source config independently from MLX-LM. Reusing the
+    temporary compatibility view keeps legacy MiniCPM identity consistent
+    across uniform and adaptive conversion without mutating the checkpoint.
+    """
+    from jang_tools.convert import convert_model
+
+    with _conversion_source_with_model_config_compat(model_path) as conversion_source:
+        return convert_model(
+            model_path=conversion_source,
+            output_path=output_path,
+            target_bits=target_bits,
+            profile=profile,
+            quantization_method=quantization_method,
+            calibration_method=calibration_method,
+            imatrix_path=imatrix_path,
+            use_awq=use_awq,
+            awq_alpha=awq_alpha,
+        )

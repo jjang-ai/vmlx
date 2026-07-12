@@ -1250,6 +1250,27 @@ def register_all(registry=None):
         )
     )
 
+    # ── MiniCPM text models ──
+
+    _register(
+        ModelConfig(
+            family_name="minicpm",
+            model_types=["minicpm"],
+            cache_type="kv",
+            architecture_hints={
+                # MiniCPM4 cache keys are unusually sensitive to affine
+                # group-64 storage quantization. Direct real-KV and live
+                # cold/warm probes showed q4 corruption and prompt-dependent
+                # q8 divergence. Keep automatic scheduler snapshots raw;
+                # JANG artifacts may still use their calibrated live TQ path.
+                "auto_kv_cache_storage_quantization": "none",
+                "blocked_kv_cache_storage_quantizations": ["q4"],
+                "warn_kv_cache_storage_quantizations": ["q8"],
+            },
+            priority=20,
+        )
+    )
+
     # ── VLM / MLLM models ──
 
     _register(

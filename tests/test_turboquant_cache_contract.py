@@ -134,6 +134,55 @@ def test_plain_qwen3_moe_auto_mode_keeps_loader_turboquant_enabled(tmp_path, mon
     assert os.environ.get("VMLX_DISABLE_TQ_KV") is None
 
 
+def test_minicpm_auto_mode_keeps_live_tq_and_stores_prefixes_raw(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "minicpm"})
+    )
+    monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+    monkeypatch.delenv("VMLX_FORCE_TQ_AUTO", raising=False)
+
+    args = _serve_args(str(tmp_path), kv_cache_quantization=None)
+
+    _run_serve_until_uvicorn(monkeypatch, args)
+
+    assert args.kv_cache_quantization == "none"
+    assert args.kv_cache_quantization_explicit is False
+    assert os.environ.get("VMLX_FORCE_TQ_AUTO") == "1"
+    assert os.environ.get("VMLX_DISABLE_TQ_KV") is None
+
+
+def test_minicpm_explicit_q4_cli_is_rejected_without_unsafe_override(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import cli, server
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "minicpm"})
+    )
+    monkeypatch.delenv(
+        "VMLX_ALLOW_UNSAFE_KV_CACHE_QUANTIZATION",
+        raising=False,
+    )
+    args = _serve_args(str(tmp_path), kv_cache_quantization="q4")
+
+    server.app.user_middleware.clear()
+    server.app.middleware_stack = None
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            cli.serve_command(args)
+    finally:
+        server.app.user_middleware.clear()
+        server.app.middleware_stack = None
+
+    assert exc_info.value.code == 2
+    assert args.kv_cache_quantization == "q4"
+    assert args.kv_cache_quantization_explicit is True
+
+
 def test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4(tmp_path, monkeypatch):
     """Qwen3.5/3.6 hybrid SSM uses selective attention TQ and stored q4 KV."""
 

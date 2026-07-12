@@ -61,6 +61,51 @@ def build_chat_template_kwargs(
     return kwargs
 
 
+def ensure_minicpm_chat_bos(
+    prompt: str,
+    *,
+    family_name: str | None,
+    tokenizer: Any,
+) -> str:
+    """Prepend the trained BOS only for MiniCPM text batched chat.
+
+    MiniCPM's official text template starts at ``<|im_start|>`` and relies on
+    tokenizer special-token insertion for the leading ``<s>``. BatchedEngine
+    intentionally disables generic special-token insertion after rendering,
+    because most supported templates already own their BOS. Correct that one
+    family after rendering instead of changing the generic encoding contract.
+
+    The resolved registry family is the gate: MiniCPM-V and unrelated or
+    unknown models are strict no-ops. Wrapper and processor tokenizer shapes
+    are supported, and prompts that already start with BOS remain byte-identical.
+    """
+
+    if family_name != "minicpm" or not isinstance(prompt, str):
+        return prompt
+
+    candidates = [tokenizer]
+    for attribute in ("_tokenizer", "tokenizer"):
+        try:
+            candidates.append(getattr(tokenizer, attribute, None))
+        except Exception:
+            continue
+    bos_token = None
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            value = getattr(candidate, "bos_token", None)
+        except Exception:
+            continue
+        if isinstance(value, str) and value:
+            bos_token = value
+            break
+
+    if bos_token is None or prompt.startswith(bos_token):
+        return prompt
+    return bos_token + prompt
+
+
 def ensure_thinking_off_sentinel(
     prompt: str,
     *,

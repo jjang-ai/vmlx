@@ -88,6 +88,59 @@ _DEFAULT_CONFIG = ModelConfig(
 )
 
 
+_LEGACY_MINICPM_ARCHITECTURES = frozenset({"MiniCPMForCausalLM"})
+_LEGACY_MINICPM_SIGNATURE_FIELDS = frozenset(
+    {"scale_emb", "scale_depth", "dim_model_base"}
+)
+
+
+def _minicpm_model_config_compat_override(config: dict) -> dict | None:
+    """Return missing official defaults for exact MiniCPM text configs.
+
+    Hugging Face can load these checkpoints because their remote
+    ``MiniCPMConfig`` supplies ``model_type = "minicpm"`` and defaults an
+    omitted ``rope_theta`` to 10,000. MLX-LM and the vMLX registry read raw
+    JSON directly, so every loader/converter needs the same narrow effective
+    config without rewriting the artifact.
+
+    The architecture plus all MiniCPM scaling fields must match. An explicit
+    non-MiniCPM model type always wins, and an explicitly present rope_theta
+    key is always preserved for ordinary validation, even when its value is
+    null, zero, a string, or otherwise invalid.
+    """
+    if not isinstance(config, dict):
+        return None
+
+    if _config_declares_media(config):
+        return None
+
+    architectures = config.get("architectures")
+    if not isinstance(architectures, list) or not any(
+        architecture in _LEGACY_MINICPM_ARCHITECTURES
+        for architecture in architectures
+    ):
+        return None
+
+    if not _LEGACY_MINICPM_SIGNATURE_FIELDS.issubset(config):
+        return None
+
+    model_type = config.get("model_type")
+    if model_type not in (None, "", "minicpm"):
+        return None
+
+    override: dict[str, Any] = {}
+    if model_type in (None, ""):
+        override["model_type"] = "minicpm"
+    if "rope_theta" not in config:
+        override["rope_theta"] = 10_000.0
+    return override or None
+
+
+def _legacy_minicpm_model_config_override(config: dict) -> dict | None:
+    """Backward-compatible alias for the expanded MiniCPM normalizer."""
+    return _minicpm_model_config_compat_override(config)
+
+
 def _config_declares_linear_attention(config: Any) -> bool:
     """Return True when config metadata declares hybrid linear-attention layers."""
     if not isinstance(config, dict):
@@ -880,6 +933,15 @@ class ModelConfigRegistry:
                     load_config = _load_config_fn
                 from pathlib import Path
                 model_config = load_config(Path(resolved_path))
+                _compat_override = _minicpm_model_config_compat_override(
+                    model_config
+                )
+                if _compat_override is not None:
+                    model_config = {**model_config, **_compat_override}
+                    logger.info(
+                        "Model config: exact MiniCPM compatibility metadata "
+                        "applied in memory for family lookup"
+                    )
                 model_type = model_config.get("model_type", "").lower()
                 has_media_config = any(
                     bool(model_config.get(k))

@@ -9,15 +9,56 @@ directly from tokenizer.json.
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
-import importlib
 from pathlib import Path
 
+from ..model_config_registry import _minicpm_model_config_compat_override
 from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+
+def _minicpm_jang_tokenizer_config(
+    model_path: str | Path,
+    tokenizer_config: dict | None,
+) -> dict | None:
+    """Return explicit local-code trust only for the exact MiniCPM source."""
+    try:
+        config_path = Path(model_path) / "config.json"
+        if not config_path.is_file():
+            return None
+        config = json.loads(config_path.read_text())
+        root = config_path.parent
+        if any(
+            key in config
+            for key in ("vision_config", "audio_config", "video_config")
+        ) or any(
+            (root / name).exists()
+            for name in (
+                "preprocessor_config.json",
+                "video_preprocessor_config.json",
+            )
+        ):
+            return None
+        explicit_exact_text = (
+            config.get("model_type") == "minicpm"
+            and config.get("architectures") == ["MiniCPMForCausalLM"]
+            and {"scale_emb", "scale_depth", "dim_model_base"}.issubset(config)
+        )
+        if (
+            _minicpm_model_config_compat_override(config) is None
+            and not explicit_exact_text
+        ):
+            return None
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+    extra = dict(tokenizer_config or {})
+    extra["trust_remote_code"] = True
+    return extra
 
 
 _NEMOTRON_QUANT_ROOT_KEYS = frozenset({"group_size", "bits", "mode"})
@@ -998,6 +1039,27 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     if local_model_path != model_name:
         logger.info(f"Resolved HF model to: {local_model_path}")
 
+    # Some official MiniCPM checkpoints rely on their Transformers remote
+    # config class to supply ``model_type = "minicpm"`` and omit the field
+    # from config.json. MLX-LM intentionally reads raw JSON without executing
+    # model remote code, so provide the same identity as an in-memory override.
+    # Do not rewrite the user's checkpoint and do not guess from its name.
+    _model_config_override = None
+    try:
+        _compat_cfg_path = Path(local_model_path) / "config.json"
+        if _compat_cfg_path.is_file():
+            _compat_cfg = json.loads(_compat_cfg_path.read_text())
+            _model_config_override = _minicpm_model_config_compat_override(
+                _compat_cfg
+            )
+            if _model_config_override is not None:
+                logger.info(
+                    "Exact MiniCPM config detected: supplying missing official "
+                    "model defaults in memory"
+                )
+    except (OSError, json.JSONDecodeError):
+        pass
+
     # ── Architecture-specific routing BEFORE the JANG gate ──
     #
     # `is_jang_model()` only fires for bundles whose `jang_config.weight_format`
@@ -1161,7 +1223,17 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
 
         from .jang_loader import load_jang_model
 
-        _m, _t = load_jang_model(local_model_path)
+        _minicpm_tokenizer_config = _minicpm_jang_tokenizer_config(
+            local_model_path,
+            tokenizer_config,
+        )
+        if _minicpm_tokenizer_config is None:
+            _m, _t = load_jang_model(local_model_path)
+        else:
+            _m, _t = load_jang_model(
+                local_model_path,
+                tokenizer_config_extra=_minicpm_tokenizer_config,
+            )
         _inject_chat_template_if_missing(_t, local_model_path)
         return _m, _t
 
@@ -1179,7 +1251,10 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
 
     try:
         model, tokenizer = load(
-            model_name, tokenizer_config=tokenizer_config, lazy=False
+            model_name,
+            tokenizer_config=tokenizer_config,
+            lazy=False,
+            model_config=_model_config_override,
         )
         if not skip_turboquant:
             _apply_turboquant_to_model(model, local_model_path)
@@ -1234,11 +1309,20 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
         cfg_path = Path(model_path) / "config.json"
         if cfg_path.is_file():
             _cfg = json.loads(cfg_path.read_text())
+            _minicpm_override = _minicpm_model_config_compat_override(_cfg)
+            if _minicpm_override is not None:
+                _model_config_override = _minicpm_override
+                logger.info(
+                    "Tokenizer fallback: supplying missing official MiniCPM "
+                    "model defaults in memory"
+                )
             if _cfg.get("model_type") == "nemotron_h":
                 _load_strict = False
-                _model_config_override, _removed_gate_quant = (
+                _nemotron_override, _removed_gate_quant = (
                     _sanitize_nemotron_quantization_config_for_load(_cfg)
                 )
+                if _nemotron_override is not None:
+                    _model_config_override = _nemotron_override
                 if _removed_gate_quant:
                     logger.info(
                         "Nemotron-H load: removed %d stale MoEGate quantization "

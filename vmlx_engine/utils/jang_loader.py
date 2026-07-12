@@ -24,6 +24,8 @@ from typing import Any, Optional
 
 import mlx.core as mx
 import numpy as np
+
+from ..model_config_registry import _minicpm_model_config_compat_override
 from .memory_limits import get_effective_metal_working_set_bytes
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,19 @@ JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 JANG_WEIGHT_FORMAT_VALUES = {"affine", "jang_affine", "mxtq", "mxfp4", "mxfp8"}
 _MLX_WEIGHT_QUANT_BITS = {2, 3, 4, 5, 6, 8}
 _MLX_WEIGHT_QUANT_GROUP_SIZES = {32, 64, 128}
+
+
+def _load_config_with_minicpm_compat(load_config_fn, path: Path) -> dict:
+    """Load config and apply only exact MiniCPM missing official defaults."""
+    config = load_config_fn(path)
+    override = _minicpm_model_config_compat_override(config)
+    if override is None:
+        return config
+    logger.info(
+        "  Exact MiniCPM config detected — supplying missing official "
+        "model defaults in memory before JANG skeleton creation"
+    )
+    return {**config, **override}
 
 
 def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
@@ -2243,7 +2258,7 @@ def _load_jang_v2(
     _ensure_zaya_runtime_supported(path, jang_cfg)
 
     start = time.perf_counter()
-    config = load_config(path)
+    config = _load_config_with_minicpm_compat(load_config, path)
     _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
     _normalize_step3p7_model_type(config)
@@ -4588,7 +4603,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
         f"({actual_bits:.1f}-bit avg, block_size={block_size})"
     )
 
-    config = load_config(path)
+    config = _load_config_with_minicpm_compat(load_config, path)
     _normalize_gemma4_config_scalar_types(config)
     default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)

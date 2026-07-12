@@ -31,6 +31,7 @@ from ..errors import (
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
+    ensure_minicpm_chat_bos,
     ensure_thinking_off_sentinel,
 )
 from ..utils.multi_eos import collect_multi_eos_ids
@@ -1590,6 +1591,12 @@ class BatchedEngine(BaseEngine):
                 tokenizer,
                 template_kwargs,
                 tool_parser_id=self._model_tool_parser_name(),
+            )
+
+            prompt = ensure_minicpm_chat_bos(
+                prompt,
+                family_name=self._model_family_name(),
+                tokenizer=tokenizer,
             )
 
             # When thinking is OFF, close any unclosed <think> when the family

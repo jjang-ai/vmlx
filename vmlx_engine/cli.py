@@ -20,10 +20,131 @@ import sys
 DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 DSV4_PREFIX_CACHE_ENV = "VMLX_DSV4_ENABLE_PREFIX_CACHE"
+ALLOW_UNSAFE_KV_CACHE_QUANTIZATION_ENV = (
+    "VMLX_ALLOW_UNSAFE_KV_CACHE_QUANTIZATION"
+)
+_KV_CACHE_STORAGE_QUANTIZATION_CHOICES = frozenset({"none", "q4", "q8"})
+
+
+class FamilyKVCacheStoragePolicyError(ValueError):
+    """Raised when an explicit stored-KV codec violates family policy."""
 
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
+def _normalized_kv_storage_policy_values(value, *, hint_name, family, logger):
+    """Return valid stored-KV codec names from one registry policy hint."""
+
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        raw_values = (value,)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_values = value
+    else:
+        logger.warning(
+            "Ignoring invalid %s registry hint for family=%s: expected a "
+            "codec name or sequence, got %r",
+            hint_name,
+            family,
+            value,
+        )
+        return frozenset()
+
+    normalized = {str(item).strip().lower() for item in raw_values}
+    invalid = normalized - _KV_CACHE_STORAGE_QUANTIZATION_CHOICES
+    if invalid:
+        logger.warning(
+            "Ignoring invalid codecs in %s registry hint for family=%s: %s",
+            hint_name,
+            family,
+            ", ".join(sorted(invalid)),
+        )
+    return frozenset(normalized & _KV_CACHE_STORAGE_QUANTIZATION_CHOICES)
+
+
+def _apply_family_kv_storage_policy(args, model_config, logger):
+    """Apply registry-owned policy to stored prefix-cache quantization.
+
+    This policy is intentionally separate from weight quantization and live
+    TurboQuant KV. In automatic mode it may change only the scheduler's stored
+    prefix codec while leaving ``VMLX_FORCE_TQ_AUTO`` untouched, so a JANG
+    bundle can retain its calibrated live cache path.
+    """
+
+    family = str(getattr(model_config, "family_name", "unknown") or "unknown")
+    hints = dict(getattr(model_config, "architecture_hints", None) or {})
+    selected = str(
+        getattr(args, "kv_cache_quantization", "none") or "none"
+    ).strip().lower()
+    explicit = bool(getattr(args, "kv_cache_quantization_explicit", False))
+
+    if not explicit:
+        auto_codec = hints.get("auto_kv_cache_storage_quantization")
+        if auto_codec is not None:
+            auto_codec = str(auto_codec).strip().lower()
+            if auto_codec not in _KV_CACHE_STORAGE_QUANTIZATION_CHOICES:
+                logger.warning(
+                    "Ignoring invalid auto_kv_cache_storage_quantization=%r "
+                    "for family=%s",
+                    auto_codec,
+                    family,
+                )
+            elif auto_codec != selected:
+                args.kv_cache_quantization = auto_codec
+                logger.info(
+                    "Family stored-KV policy applied: family=%s auto codec "
+                    "%s -> %s. Live TurboQuant auto eligibility is unchanged.",
+                    family,
+                    selected,
+                    auto_codec,
+                )
+                return "auto_override"
+        return "unchanged"
+
+    blocked = _normalized_kv_storage_policy_values(
+        hints.get("blocked_kv_cache_storage_quantizations"),
+        hint_name="blocked_kv_cache_storage_quantizations",
+        family=family,
+        logger=logger,
+    )
+    warned = _normalized_kv_storage_policy_values(
+        hints.get("warn_kv_cache_storage_quantizations"),
+        hint_name="warn_kv_cache_storage_quantizations",
+        family=family,
+        logger=logger,
+    )
+
+    if selected in blocked:
+        if _env_truthy(ALLOW_UNSAFE_KV_CACHE_QUANTIZATION_ENV):
+            logger.warning(
+                "UNSAFE stored-KV override enabled: family=%s codec=%s. "
+                "Cold/warm output coherence is not guaranteed.",
+                family,
+                selected,
+            )
+            return "unsafe_override"
+        raise FamilyKVCacheStoragePolicyError(
+            f"Family '{family}' blocks explicit --kv-cache-quantization "
+            f"{selected}: live validation found cold/warm output corruption. "
+            "Use automatic mode or --kv-cache-quantization none. For a "
+            "deliberate diagnostic only, set "
+            f"{ALLOW_UNSAFE_KV_CACHE_QUANTIZATION_ENV}=1."
+        )
+
+    if selected in warned:
+        logger.warning(
+            "Lossy stored-KV codec selected: family=%s codec=%s. Live "
+            "validation found prompt-dependent cold/warm divergence; cache "
+            "hits and successful dequantization do not guarantee coherence.",
+            family,
+            selected,
+        )
+        return "warned"
+
+    return "unchanged"
 
 
 def _dsv4_prefix_cache_opt_in(args=None) -> bool:
@@ -911,6 +1032,7 @@ def serve_command(args):
     try:
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
+        _apply_family_kv_storage_policy(args, _mc, logger)
         # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
         # runtime mode (tri-mode SWA+CSA/HCA). The native composite prefix
         # cache and materialized CSA/HCA pool codec are the default path;
@@ -1055,6 +1177,9 @@ def serve_command(args):
                                 )
                 except Exception as _jit_e:
                     logger.debug(f"JANG-affine JIT auto-default skipped: {_jit_e}")
+    except FamilyKVCacheStoragePolicyError as e:
+        logger.error("KV cache storage policy rejected startup: %s", e)
+        raise SystemExit(2) from e
     except Exception as e:
         logger.debug(f"Registry auto-apply skipped: {e}")
 
@@ -1798,9 +1923,13 @@ def bench_command(args):
         from .model_config_registry import get_model_config_registry
 
         _mc = get_model_config_registry().lookup(args.model)
+        _apply_family_kv_storage_policy(args, _mc, logger)
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
+    except FamilyKVCacheStoragePolicyError as exc:
+        print(f"ERROR: KV cache storage policy rejected benchmark: {exc}")
+        raise SystemExit(2) from exc
     except Exception as exc:
         logger.debug("Bench model runtime policy lookup failed: %s", exc)
 
@@ -2552,15 +2681,17 @@ Examples:
         type=str,
         default=None,
         choices=["none", "q4", "q8"],
-        help="Compress stored KV cache to reduce unified memory usage by 2-4x. "
-             "q8 = 8-bit (minimal quality loss, ~2x savings). "
-             "q4 = 4-bit (slight quality loss, ~4x savings). "
-             "Cache is stored compressed but decompressed for generation (no inference slowdown). "
+        help="Lossily compress stored KV cache to reduce unified memory usage. "
+             "q8 usually preserves more fidelity than q4 but can still change output; "
+             "q4 is more aggressive and may be blocked for sensitive families. "
+             "Decompression restores tensor shape, not the discarded precision. "
              "Requires --continuous-batching. Omitting this flag uses production auto "
-             "mode: TurboQuant KV for compatible models plus q4 stored-prefix fallback. "
+             "mode: TurboQuant KV for compatible models plus a family-selected stored "
+             "prefix codec (usually q4, but none for families that fail coherence). "
              "Passing the flag explicitly disables JANG-calibrated TurboQuant KV so your "
-             "choice is honored. Set VMLX_DEFAULT_KV_CACHE_QUANTIZATION=none to turn "
-             "the stored-prefix fallback off. (default: auto q4)",
+             "choice is honored, subject to family safety guards and warnings. Set "
+             "VMLX_DEFAULT_KV_CACHE_QUANTIZATION=none to request raw Auto storage globally; "
+             "family safety policy can also override the global fallback. (default: auto)",
     )
     serve_parser.add_argument(
         "--kv-cache-group-size",
