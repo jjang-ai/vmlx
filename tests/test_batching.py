@@ -236,6 +236,409 @@ class TestSchedulerLogprobs:
         assert "sample_sampler(logits[e : e + 1])" in source
         assert "mx.logsumexp(logits" in source
 
+
+    @pytest.fixture
+    def mock_tokenizer(self):
+        tokenizer = MagicMock()
+        tokenizer.eos_token_id = 0
+        tokenizer.eos_token_ids = {0}
+        return tokenizer
+
+    @pytest.fixture
+    def mock_model(self):
+        return MagicMock()
+
+    @staticmethod
+    def _request(request_id, policy):
+        temperature, top_p, min_p, top_k = policy
+        request = Request(
+            request_id=request_id,
+            prompt=request_id,
+            sampling_params=SamplingParams(
+                max_tokens=8,
+                temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                top_k=top_k,
+            ),
+        )
+        request.prompt_token_ids = [1, 2, 3]
+        request.num_prompt_tokens = 3
+        return request
+
+    @pytest.mark.parametrize(
+        ("first_policy", "second_policy"),
+        [
+            ((0.0, 1.0, 0.0, 1), (1.35, 0.55, 0.0, 7)),
+            ((1.35, 0.55, 0.0, 7), (0.0, 1.0, 0.0, 1)),
+        ],
+    )
+    def test_reciprocal_requests_keep_distinct_samplers_on_one_generator(
+        self,
+        mock_model,
+        mock_tokenizer,
+        monkeypatch,
+        first_policy,
+        second_policy,
+    ):
+        import vmlx_engine.scheduler as scheduler_module
+
+        class RecordingBatchGenerator:
+            stop_tokens = set()
+
+            def __init__(self):
+                self.inserts = []
+
+            def insert(self, tokens, max_tokens, caches=None, **kwargs):
+                self.inserts.append(
+                    {
+                        "tokens": tokens,
+                        "max_tokens": max_tokens,
+                        "caches": caches,
+                        "kwargs": kwargs,
+                    }
+                )
+                return [len(self.inserts)]
+
+        generator = RecordingBatchGenerator()
+        generator._vmlx_request_scoped_sampler_insert = True
+        created = []
+
+        def create_generator(_sampling_params):
+            created.append(generator)
+            return generator
+
+        def make_policy_sampler(*, temp, top_p, min_p, top_k):
+            return SimpleNamespace(policy=(temp, top_p, min_p, top_k))
+
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                max_num_seqs=2,
+                enable_prefix_cache=False,
+                use_memory_aware_cache=False,
+            ),
+        )
+        monkeypatch.setattr(scheduler, "_create_batch_generator", create_generator)
+        monkeypatch.setattr(scheduler_module, "make_sampler", make_policy_sampler)
+        monkeypatch.setattr(
+            scheduler_module,
+            "get_effective_metal_working_set_bytes",
+            lambda _mx: (0, 1),
+        )
+
+        requests = [
+            self._request("first", first_policy),
+            self._request("second", second_policy),
+        ]
+        for request in requests:
+            scheduler.requests[request.request_id] = request
+            scheduler.waiting.append(request)
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == requests
+        assert created == [generator]
+        assert scheduler.batch_generator is generator
+        assert [
+            call["kwargs"]["samplers"][0].policy for call in generator.inserts
+        ] == [first_policy, second_policy]
+        assert (
+            generator.inserts[0]["kwargs"]["samplers"][0]
+            is not generator.inserts[1]["kwargs"]["samplers"][0]
+        )
+
+    def test_cache_retry_reuses_exact_request_sampler(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        import vmlx_engine.scheduler as scheduler_module
+
+        class RetryBatchGenerator:
+            stop_tokens = set()
+
+            def __init__(self):
+                self.inserts = []
+
+            def insert(self, tokens, max_tokens, caches=None, **kwargs):
+                self.inserts.append(
+                    {
+                        "tokens": tokens,
+                        "max_tokens": max_tokens,
+                        "caches": caches,
+                        "kwargs": kwargs,
+                    }
+                )
+                if caches is not None:
+                    raise RuntimeError("synthetic cache insertion failure")
+                return [91]
+
+        sampler = SimpleNamespace(policy=(0.7, 0.8, 0.0, 5))
+        monkeypatch.setattr(scheduler_module, "make_sampler", lambda **_kwargs: sampler)
+
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                max_num_seqs=2,
+                enable_prefix_cache=False,
+                use_memory_aware_cache=False,
+            ),
+        )
+        generator = RetryBatchGenerator()
+        generator._vmlx_request_scoped_sampler_insert = True
+        scheduler.batch_generator = generator
+
+        request = self._request("cache-retry", (0.7, 0.8, 0.0, 5))
+        request.prompt_cache = [object()]
+        request.cached_tokens = 2
+        request.remaining_tokens = [3]
+        scheduler.requests[request.request_id] = request
+        scheduler.waiting.append(request)
+        scheduler._validate_cache = lambda _cache: True
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == [request]
+        assert len(generator.inserts) == 2
+        assert generator.inserts[0]["caches"] is not None
+        assert generator.inserts[1]["caches"] is None
+        assert generator.inserts[0]["kwargs"]["samplers"] == [sampler]
+        assert generator.inserts[1]["kwargs"]["samplers"] == [sampler]
+        assert (
+            generator.inserts[0]["kwargs"]["samplers"][0]
+            is generator.inserts[1]["kwargs"]["samplers"][0]
+        )
+
+    def test_explicit_seeded_sampler_precedes_ordinary_request_policy(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        class RecordingBatchGenerator:
+            stop_tokens = set()
+
+            def __init__(self):
+                self.kwargs = None
+
+            def insert(self, _tokens, max_tokens, caches=None, **kwargs):
+                self.kwargs = kwargs
+                return [73]
+
+        seeded_sampler = object()
+        generator = RecordingBatchGenerator()
+        generator._vmlx_request_scoped_sampler_insert = True
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                max_num_seqs=2,
+                enable_prefix_cache=False,
+                use_memory_aware_cache=False,
+            ),
+        )
+        scheduler.batch_generator = generator
+        monkeypatch.setattr(
+            scheduler,
+            "_request_seeded_sampler",
+            lambda _request: seeded_sampler,
+        )
+
+        def fail_unseeded_fallback(_sampling_params):
+            pytest.fail("ordinary sampler must not replace an explicit seeded sampler")
+
+        monkeypatch.setattr(
+            scheduler,
+            "_request_sampler_for_current_generator",
+            fail_unseeded_fallback,
+        )
+
+        request = self._request("seeded", (0.7, 0.8, 0.0, 5))
+        scheduler.requests[request.request_id] = request
+        scheduler.waiting.append(request)
+
+        assert scheduler._schedule_waiting() == [request]
+        assert generator.kwargs is not None
+        assert generator.kwargs["samplers"] == [seeded_sampler]
+
+    def test_route_marker_excludes_native_mtp_pld_and_single_batch(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        import vmlx_engine.native_mtp as native_mtp
+        import vmlx_engine.scheduler as scheduler_module
+
+        class RecordingBatchGenerator:
+            def __init__(self, **_kwargs):
+                pass
+
+        class RecordingSingleBatchGenerator:
+            def __init__(self, **_kwargs):
+                pass
+
+        monkeypatch.setattr(scheduler_module, "BatchGenerator", RecordingBatchGenerator)
+        monkeypatch.setattr(
+            scheduler_module,
+            "SingleBatchGenerator",
+            RecordingSingleBatchGenerator,
+        )
+        monkeypatch.setattr(native_mtp, "model_has_native_mtp_runtime", lambda _m: False)
+
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(max_num_seqs=2),
+        )
+        params = SamplingParams(max_tokens=8)
+
+        ordinary = scheduler._create_batch_generator(params)
+        assert ordinary._vmlx_request_scoped_sampler_insert is True
+
+        scheduler.config.pld_enabled = True
+        pld = scheduler._create_batch_generator(params)
+        assert not hasattr(pld, "_vmlx_request_scoped_sampler_insert")
+
+        scheduler.config.pld_enabled = False
+        monkeypatch.setattr(native_mtp, "model_has_native_mtp_runtime", lambda _m: True)
+        native = scheduler._create_batch_generator(params)
+        assert not hasattr(native, "_vmlx_request_scoped_sampler_insert")
+
+        monkeypatch.setattr(native_mtp, "model_has_native_mtp_runtime", lambda _m: False)
+        scheduler.config.max_num_seqs = 1
+        single = scheduler._create_batch_generator(params)
+        assert not hasattr(single, "_vmlx_request_scoped_sampler_insert")
+
+        scheduler.config.max_num_seqs = 2
+        scheduler._uses_m3_msa_cache = True
+        monkeypatch.setattr(
+            scheduler_module,
+            "make_minimax_m3_sampler",
+            lambda **_kwargs: SimpleNamespace(),
+        )
+        m3 = scheduler._create_batch_generator(params)
+        assert not hasattr(m3, "_vmlx_request_scoped_sampler_insert")
+
+        from vmlx_engine.utils import dsv4_batch_generator
+
+        class DSV4Model:
+            pass
+
+        DSV4Model.__module__ = "jang_tools.dsv4.mlx_model"
+        scheduler.model = DSV4Model()
+        scheduler._uses_m3_msa_cache = False
+        monkeypatch.setattr(
+            dsv4_batch_generator,
+            "DSV4BatchGenerator",
+            RecordingSingleBatchGenerator,
+        )
+        dsv4 = scheduler._create_batch_generator(params)
+        assert not hasattr(dsv4, "_vmlx_request_scoped_sampler_insert")
+
+    def test_unmarked_generator_keeps_legacy_fallback_behavior(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        import vmlx_engine.scheduler as scheduler_module
+
+        class SpecializedGenerator:
+            stop_tokens = set()
+
+            def __init__(self):
+                self.kwargs = None
+
+            def insert(self, _tokens, _max_tokens=None, **kwargs):
+                self.kwargs = kwargs
+                return [2]
+
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                max_num_seqs=2,
+                enable_prefix_cache=False,
+                use_memory_aware_cache=False,
+            ),
+        )
+        monkeypatch.setattr(
+            scheduler_module,
+            "get_effective_metal_working_set_bytes",
+            lambda _mx: (0, 1),
+        )
+        generator = SpecializedGenerator()
+        scheduler.batch_generator = generator
+        scheduler._current_sampler_params = (0.0, 1.0, 0.0, 1, 1.0)
+
+        active = self._request("active", (0.0, 1.0, 0.0, 1))
+        active.status = RequestStatus.RUNNING
+        scheduler.running[active.request_id] = active
+        scheduler.requests[active.request_id] = active
+
+        waiting = self._request("waiting", (1.35, 0.55, 0.0, 7))
+        scheduler.requests[waiting.request_id] = waiting
+        scheduler.waiting.append(waiting)
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == [waiting]
+        assert generator.kwargs is not None
+        assert "samplers" not in generator.kwargs
+
+    def test_abort_removes_only_the_cancelled_uid_sampler(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        import vmlx_engine.scheduler as scheduler_module
+
+        class RemovableBatchGenerator:
+            stop_tokens = set()
+
+            def __init__(self):
+                self.samplers_by_uid = {}
+                self.removed = []
+
+            def insert(self, _tokens, max_tokens, caches=None, **kwargs):
+                uid = len(self.samplers_by_uid) + 1
+                self.samplers_by_uid[uid] = kwargs["samplers"][0]
+                return [uid]
+
+            def remove(self, uids):
+                self.removed.append(list(uids))
+                for uid in uids:
+                    self.samplers_by_uid.pop(uid, None)
+
+        def make_policy_sampler(*, temp, top_p, min_p, top_k):
+            return SimpleNamespace(policy=(temp, top_p, min_p, top_k))
+
+        monkeypatch.setattr(scheduler_module, "make_sampler", make_policy_sampler)
+        monkeypatch.setattr(
+            scheduler_module,
+            "get_effective_metal_working_set_bytes",
+            lambda _mx: (0, 1),
+        )
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(
+                max_num_seqs=2,
+                enable_prefix_cache=False,
+                use_memory_aware_cache=False,
+            ),
+        )
+        generator = RemovableBatchGenerator()
+        generator._vmlx_request_scoped_sampler_insert = True
+        scheduler.batch_generator = generator
+
+        first = self._request("abort-first", (0.0, 1.0, 0.0, 1))
+        second = self._request("survive-second", (1.35, 0.55, 0.0, 7))
+        for request in (first, second):
+            scheduler.requests[request.request_id] = request
+            scheduler.waiting.append(request)
+
+        assert scheduler._schedule_waiting() == [first, second]
+        assert scheduler.abort_request(first.request_id) is True
+        scheduler._process_pending_aborts()
+
+        assert generator.removed == [[1]]
+        assert generator.samplers_by_uid[2].policy == (1.35, 0.55, 0.0, 7)
+        assert first.request_id not in scheduler.request_id_to_uid
+        assert scheduler.request_id_to_uid[second.request_id] == 2
+        assert scheduler.uid_to_request_id == {2: second.request_id}
+
     def test_generation_batch_cpu_tolist_detour_is_model_gated(self):
         import inspect
         from vmlx_engine.utils import mamba_cache

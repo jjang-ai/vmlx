@@ -2745,7 +2745,7 @@ class Scheduler:
                 prefill_step_size=self.config.prefill_step_size,
             )
 
-        return BatchGenerator(
+        generator = BatchGenerator(
             model=self.model,
             max_tokens=sampling_params.max_tokens,
             stop_tokens=stop_tokens,
@@ -2755,6 +2755,33 @@ class Scheduler:
             completion_batch_size=self.config.completion_batch_size,
             prefill_step_size=self.config.prefill_step_size,
         )
+        # Stamp only the ordinary route. Native MTP deliberately returns the
+        # same concrete BatchGenerator class, so class-name/isinstance checks
+        # would widen this change. PLD's separate reinsertion paths remain on
+        # generator-owned sampling until they receive their own evidence and
+        # explicit approval.
+        if not self._uses_m3_msa_cache and not self.config.pld_enabled:
+            generator._vmlx_request_scoped_sampler_insert = True
+        return generator
+
+    def _request_sampler_for_current_generator(
+        self, sampling_params: SamplingParams
+    ) -> Callable[[Any], Any] | None:
+        """Build a sampler only for the ordinary per-request-capable route."""
+        if not getattr(
+            self.batch_generator, "_vmlx_request_scoped_sampler_insert", False
+        ) or self.config.pld_enabled:
+            return None
+
+        sampler = make_sampler(
+            temp=sampling_params.temperature,
+            top_p=sampling_params.top_p,
+            min_p=sampling_params.min_p,
+            top_k=sampling_params.top_k,
+        )
+        if float(sampling_params.temperature or 0.0) == 0.0:
+            sampler._vmlx_accepts_logits = True
+        return sampler
 
     @staticmethod
     def _wrap_generated_only_logits_processor(
@@ -2853,6 +2880,15 @@ class Scheduler:
             sampling_params.repetition_penalty,
         )
         cleared_cache = False
+
+        # The ordinary mlx-lm BatchGenerator accepts a sampler per inserted
+        # sequence. Its fallback sampler is therefore not a compatibility key,
+        # and changing request policy must not recreate the generator or clear
+        # prefix caches. Specialized generators retain the historical behavior.
+        if getattr(
+            self.batch_generator, "_vmlx_request_scoped_sampler_insert", False
+        ) and not self.config.pld_enabled:
+            return False
 
         # Create new generator if needed or if sampling params changed
         if (
@@ -5716,11 +5752,17 @@ class Scheduler:
                 cache_to_use = None
 
             try:
+                # Explicit request seeds use the stable seeded sampler added by
+                # the current runtime. Otherwise, the ordinary PLD-off route
+                # receives the request-local sampling policy. Compute this once
+                # so a cache insertion retry reuses the exact sampler object.
+                request_sampler = self._request_seeded_sampler(request)
+                if request_sampler is None:
+                    request_sampler = self._request_sampler_for_current_generator(
+                        request.sampling_params
+                    )
                 try:
                     insert_kwargs = {}
-                    request_sampler = self._request_seeded_sampler(request)
-                    if request_sampler is not None:
-                        insert_kwargs["samplers"] = [request_sampler]
                     if _m3vl_active:
                         insert_kwargs["pixel_values"] = [_m3vl_pv]
                         insert_kwargs["image_grid_thw"] = [_m3vl_grid]
@@ -5785,6 +5827,8 @@ class Scheduler:
                             insert_kwargs["logits_processors"] = [
                                 request_processors
                             ]
+                    if request_sampler is not None:
+                        insert_kwargs["samplers"] = [request_sampler]
                     uids = self.batch_generator.insert(
                         [tokens_to_process],
                         # Remaining budget, not the full cap: a cache-error
@@ -5808,9 +5852,6 @@ class Scheduler:
                         request.remaining_tokens = request.prompt_token_ids
                         tokens_to_process = request.prompt_token_ids
                         insert_kwargs = {}
-                        request_sampler = self._request_seeded_sampler(request)
-                        if request_sampler is not None:
-                            insert_kwargs["samplers"] = [request_sampler]
                         if (
                             self.batch_generator.__class__.__name__
                             == "DSV4BatchGenerator"
@@ -5831,6 +5872,8 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        if request_sampler is not None:
+                            insert_kwargs["samplers"] = [request_sampler]
                         uids = self.batch_generator.insert(
                             [tokens_to_process],
                             # Remaining budget, not the full cap (see the
