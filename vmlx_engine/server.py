@@ -140,7 +140,6 @@ from .logprobs import (
 from .mlx_memory import clear_mlx_memory_cache
 from .reasoning.gptoss_parser import GptOssReasoningParser
 from .tool_parsers import ToolParserManager
-from .tool_parsers.abstract_tool_parser import generate_tool_id
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15782,14 +15781,7 @@ async def stream_chat_completion(
     # we stop emitting content and buffer the rest. At end of stream, we parse
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
-    tool_call_buffering_notified = False  # Have we sent the buffering signal?
     tool_calls_emitted = False  # Were actual tool calls parsed and emitted?
-    # #219 follow-up: the START tool_calls delta emitted at first buffer tick
-    # generates its own random id. Cache it here so the final tool_calls data
-    # delta reuses the same id — per OpenAI SDK spec, all streaming deltas for
-    # the same tool_call MUST share the same id, otherwise SDK clients treat
-    # them as two separate tool_calls and fail to reconcile the arguments.
-    _stream_tool_call_start_id: str | None = None
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
     # Auto-enable tool call detection when client sends tools in request (#46),
     # even if server wasn't started with --enable-auto-tool-choice
@@ -16090,42 +16082,18 @@ async def stream_chat_completion(
                             tool_call_buffering = True
 
                 if tool_call_buffering:
-                    # #219: On the FIRST buffering tick emit a proper OpenAI
-                    # streaming tool_calls START delta so strict clients
-                    # (OpenCode, AI SDK) see tool-call activity immediately
-                    # instead of an opaque sequence of empty deltas. Then keep
-                    # the connection alive with spec-clean empty deltas (no
-                    # vMLX-only `tool_call_generating` field on the wire).
-                    if not tool_call_buffering_notified:
-                        tool_call_buffering_notified = True
-                        if _stream_tool_call_start_id is None:
-                            _stream_tool_call_start_id = generate_tool_id()
-                        start_chunk = {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": _created_ts,
-                            "model": request.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "tool_calls": [
-                                            {
-                                                "index": 0,
-                                                "id": _stream_tool_call_start_id,
-                                                "type": "function",
-                                                "function": {"name": "", "arguments": ""},
-                                            }
-                                        ],
-                                    },
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                        yield f"data: {json.dumps(start_chunk, ensure_ascii=True)}\n\n"
-                    # Subsequent ticks: spec-clean empty delta (carries usage
-                    # if include_usage). No `tool_call_generating` field.
+                    # Buffer-then-parse: the tool name is unknown until the
+                    # whole call block is parsed at end-of-stream, so we do NOT
+                    # emit an early tool_calls START delta here. A START delta
+                    # carrying function.name="" is spec-illegal and breaks
+                    # clients on the Vercel AI SDK @ai-sdk/openai-compatible
+                    # provider (OpenCode, Cline): they initialize a tool call
+                    # from the FIRST delta seen for an index, capture the empty
+                    # name, ignore name on later deltas, and drop the call. The
+                    # resolved call is emitted as a single complete tool_calls
+                    # delta once parsed (see the #46 emit block below). Keep the
+                    # connection alive here with spec-clean empty deltas
+                    # (carries usage if include_usage).
                     buf_chunk = ChatCompletionChunk(
                         id=response_id,
                         created=_created_ts,
@@ -16275,37 +16243,11 @@ async def stream_chat_completion(
                     )
 
                 if tool_call_buffering:
-                    # #219: same fix as the reasoning-parser branch — emit a
-                    # proper OpenAI streaming tool_calls START delta on the
-                    # first buffering tick + keep subsequent chunks spec-clean.
-                    if not tool_call_buffering_notified:
-                        tool_call_buffering_notified = True
-                        if _stream_tool_call_start_id is None:
-                            _stream_tool_call_start_id = generate_tool_id()
-                        start_chunk = {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": _created_ts,
-                            "model": request.model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "tool_calls": [
-                                            {
-                                                "index": 0,
-                                                "id": _stream_tool_call_start_id,
-                                                "type": "function",
-                                                "function": {"name": "", "arguments": ""},
-                                            }
-                                        ],
-                                    },
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                        yield f"data: {json.dumps(start_chunk, ensure_ascii=True)}\n\n"
+                    # Same as the reasoning-parser branch: no empty-name START
+                    # delta (spec-illegal, breaks @ai-sdk/openai-compatible
+                    # clients). Keep the connection alive with spec-clean empty
+                    # deltas; the resolved call is emitted as a single complete
+                    # tool_calls delta once parsed (see the #46 emit block).
                     buf_chunk = ChatCompletionChunk(
                         id=response_id,
                         created=_created_ts,
@@ -16534,16 +16476,14 @@ async def stream_chat_completion(
             # Chunk 2: empty delta with finish_reason="tool_calls"
             # This split is required for CLI clients (Claude Code, OpenCode, etc.)
             #
-            # #219 follow-up: if a START tool_calls delta was already emitted
-            # (empty name/arguments) with a specific id, the FIRST tool_call
-            # here MUST reuse that same id — OpenAI SDKs match START + arg
-            # deltas by id, and a mismatch causes them to treat the arg delta
-            # as a NEW tool_call (which fails because there's no matching START).
-            # Subsequent tool_calls (multi-call turns) keep their parser ids.
+            # Each tool call is emitted as a single, complete delta carrying its
+            # resolved name + full arguments under its own index. No prior START
+            # delta exists to reconcile by id (see the buffering block above), so
+            # every call — including the first — uses its own parser id.
             tc_deltas = [
                 {
                     "index": i,
-                    "id": _stream_tool_call_start_id if (i == 0 and _stream_tool_call_start_id is not None) else tc.id,
+                    "id": tc.id,
                     "type": "function",
                     "function": {
                         "name": tc.function.name,

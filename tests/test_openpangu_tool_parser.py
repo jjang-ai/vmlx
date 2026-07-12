@@ -464,11 +464,16 @@ class TestOpenPanguStreamEarlyStop:
         assert tc["function"]["name"] == "get_weather"
         assert json.loads(tc["function"]["arguments"]) == {"location": "Paris"}
         assert data_chunk["choices"][0]["finish_reason"] is None
-        # #219: the final data delta reuses the START delta's id.
-        start_chunk = tc_chunks[0]
-        assert (
-            tc["id"] == start_chunk["choices"][0]["delta"]["tool_calls"][0]["id"]
-        )
+        # No tool_calls delta may carry an empty function.name. An early
+        # empty-name START delta breaks Vercel AI SDK clients (OpenCode, Cline),
+        # which initialize a tool call from the first delta for an index and
+        # ignore name on later deltas. The buffer-then-parse emitter therefore
+        # sends ONE complete tool_calls delta with the resolved name.
+        for _c in tc_chunks:
+            for _tc in _c["choices"][0]["delta"]["tool_calls"]:
+                assert _tc["function"].get("name"), (
+                    f"tool_calls delta with empty function.name: {_tc}"
+                )
 
         finish_reasons = [
             c["choices"][0].get("finish_reason")
