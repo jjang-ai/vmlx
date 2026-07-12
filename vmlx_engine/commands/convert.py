@@ -339,16 +339,18 @@ def _run_conversion(
     """Run mlx_lm.convert.convert() with the LatentMoE patch active."""
     from mlx_lm.convert import convert
 
-    convert(
-        hf_path=hf_path,
-        mlx_path=mlx_path,
-        quantize=True,
-        q_group_size=q_group_size,
-        q_bits=q_bits,
-        q_mode=q_mode,
-        dtype=dtype,
-        trust_remote_code=trust_remote_code,
-    )
+    convert_kwargs = {
+        "hf_path": hf_path,
+        "mlx_path": mlx_path,
+        "quantize": True,
+        "q_group_size": q_group_size,
+        "q_bits": q_bits,
+        "dtype": dtype,
+        "trust_remote_code": trust_remote_code,
+    }
+    if q_mode is not None:
+        convert_kwargs["q_mode"] = q_mode
+    convert(**convert_kwargs)
 
 
 def _smoke_test(model_path: str) -> tuple[bool, str]:
