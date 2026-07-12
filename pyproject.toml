@@ -108,6 +108,10 @@ dependencies = [
     # Parakeet audio feature extractor is initialized with the multimodal
     # wrapper even when the first request is image-only.
     "librosa>=0.10.0",
+    # librosa permits numba 0.51+, whose older releases cannot install on the
+    # Python 3.11+ versions supported by vMLX. Keep fresh wheel resolution on a
+    # Python-compatible numba without changing the audio-extra dependency set.
+    "numba>=0.57.0",
 ]
 
 [project.optional-dependencies]
