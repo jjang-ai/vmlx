@@ -212,7 +212,7 @@ export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
   'gemma', 'gemma3', 'gemma3_text', 'gemma4', 'gemma4_text', 'medgemma',
   'phi4', 'phi4_reasoning', 'phi4_multimodal', 'phi3',
   'nemotron', 'nemotron_h', 'cohere', 'granite', 'granitemoehybrid', 'lfm2',
-  'minimax', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
+  'minimax', 'minicpm', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
   'hy_v3', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
   'openpangu_v2',
 ]

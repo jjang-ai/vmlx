@@ -271,6 +271,12 @@ registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priorit
 registerFamily('stablelm', { cacheType: 'kv', description: 'StableLM', priority: 30 })
 registerFamily('baichuan', { cacheType: 'kv', description: 'Baichuan', priority: 30 })
 
+// Plain-text MiniCPM. Keep this separate from the MiniCPM-V multimodal family
+// below: the text artifact is ordinary KV with no parser, media, SSM, MTP, or
+// forced paged-cache contract. Backend registry policy remains authoritative
+// for its raw stored-prefix / calibrated live-TurboQuant behavior.
+registerFamily('minicpm', { cacheType: 'kv', usePagedCache: false, isMultimodal: false, description: 'MiniCPM text', priority: 20 })
+
 // VLM / MLLM models
 registerFamily('yi-vl', { cacheType: 'kv', isMultimodal: true, description: 'Yi Vision-Language', priority: 15 })
 registerFamily('llava', { cacheType: 'kv', isMultimodal: true, description: 'LLaVA vision-language', priority: 20 })
@@ -446,6 +452,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'florence2': 'florence',
   'got_ocr2': 'got-ocr',
   'molmo': 'molmo',
+  'minicpm': 'minicpm',
   'minicpmv': 'minicpm-v',
   'smolvlm': 'smolvlm',
   'internvl_chat': 'internvl',
@@ -1035,6 +1042,36 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
   return hasMediaConfig
 }
 
+const LEGACY_MINICPM_ARCHITECTURES = new Set(['MiniCPMForCausalLM'])
+const LEGACY_MINICPM_SIGNATURE_FIELDS = ['scale_emb', 'scale_depth', 'dim_model_base'] as const
+
+/** Mirror the backend's narrow identity for official source configs that omit model_type. */
+function isLegacyMiniCpmTextConfig(parsedConfig: any): boolean {
+  if (configDeclaresMedia(parsedConfig)) return false
+
+  const explicitModelType = parsedConfig?.model_type
+  if (
+    explicitModelType !== undefined &&
+    explicitModelType !== null &&
+    explicitModelType !== '' &&
+    explicitModelType !== 'minicpm'
+  ) return false
+
+  const architectures = parsedConfig?.architectures
+  if (
+    !Array.isArray(architectures) ||
+    !architectures.some((architecture: unknown) =>
+      LEGACY_MINICPM_ARCHITECTURES.has(String(architecture)),
+    )
+  ) {
+    return false
+  }
+
+  return LEGACY_MINICPM_SIGNATURE_FIELDS.every((field) =>
+    Object.prototype.hasOwnProperty.call(parsedConfig, field),
+  )
+}
+
 /**
  * Detect model configuration ONLY by reading the model's config.json.
  * This is the authoritative way. We no longer guess based on folder name/regex.
@@ -1084,6 +1121,9 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             }
           } catch {}
         }
+      }
+      if (!familyName && isLegacyMiniCpmTextConfig(parsed)) {
+        familyName = 'minicpm'
       }
       if (familyName) {
 
