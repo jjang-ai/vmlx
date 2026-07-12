@@ -1431,6 +1431,35 @@ def _should_use_safe_processor_path(
 # but does NOT inherit from KVCache. This constant enables KV-like detection without
 # importing TQ (which may not be installed for non-JANG users).
 _TQ_CLASS_NAME = "TurboQuantKVCache"
+_DENSE_QWEN_TQ_MTP_UNSAFE_MODEL_TYPES = frozenset(
+    {"qwen3_5", "qwen3_5_text", "qwen3_6", "qwen3_6_text"}
+)
+
+
+def _is_dense_qwen_tq_mtp_unsafe_model_type(model_type: Any) -> bool:
+    """Return whether a runtime type uses the dense-Qwen shared MLLM path."""
+    return str(model_type or "").lower() in _DENSE_QWEN_TQ_MTP_UNSAFE_MODEL_TYPES
+
+
+def _is_jang_turboquant_cache(layer: Any) -> bool:
+    """Recognize the optional JANG TurboQuant cache without importing it."""
+    layer_type = type(layer)
+    return (
+        layer_type.__name__ == _TQ_CLASS_NAME
+        and layer_type.__module__.startswith("jang_tools.turboquant.")
+    )
+
+
+def _cache_has_configured_or_active_turboquant(cache: list[Any]) -> bool:
+    """Return whether live TQ compression is active or can start later."""
+    return any(
+        _is_jang_turboquant_cache(layer)
+        and (
+            int(getattr(layer, "_compressed_tokens", 0) or 0) > 0
+            or int(getattr(layer, "compress_after", 0) or 0) > 0
+        )
+        for layer in cache or []
+    )
 
 
 def _is_kv_like(c) -> bool:
@@ -7297,7 +7326,11 @@ class MLLMBatchGenerator:
 
         return [_force_xml_tool_prefix]
 
-    def _native_mtp_disabled_reason_for_request(self, request: MLLMBatchRequest) -> Optional[str]:
+    def _native_mtp_disabled_reason_for_request(
+        self,
+        request: MLLMBatchRequest,
+        cache: list[Any] | None = None,
+    ) -> Optional[str]:
         """Return a per-request native-MTP gate reason, or None when enabled."""
         if os.environ.get("VMLINUX_NATIVE_MTP", "1") in (
             "0",
@@ -7317,11 +7350,27 @@ class MLLMBatchGenerator:
             return f"repetition_penalty={getattr(request, 'repetition_penalty', None)!r} is not 1.0"
         if request is None:
             return "request missing"
+        if (
+            cache is not None
+            and getattr(self, "_is_hybrid", False)
+            and _is_dense_qwen_tq_mtp_unsafe_model_type(
+                getattr(self, "_model_type", "")
+            )
+            and _cache_has_configured_or_active_turboquant(cache)
+        ):
+            return (
+                "dense-Qwen hybrid native MTP is disabled when live "
+                "TurboQuant KV compression is configured or active"
+            )
         return None
 
-    def _native_mtp_enabled_for_request(self, request: MLLMBatchRequest) -> bool:
+    def _native_mtp_enabled_for_request(
+        self,
+        request: MLLMBatchRequest,
+        cache: list[Any] | None = None,
+    ) -> bool:
         """Return true when vMLX can run native MTP on this MLLM request."""
-        reason = self._native_mtp_disabled_reason_for_request(request)
+        reason = self._native_mtp_disabled_reason_for_request(request, cache)
         if reason is None:
             return True
         if request is not None:
@@ -7412,7 +7461,7 @@ class MLLMBatchGenerator:
         first_logprobs: List[mx.array],
     ) -> bool:
         """Seed native MTP after prompt prefill produced the first token."""
-        if not self._native_mtp_enabled_for_request(request):
+        if not self._native_mtp_enabled_for_request(request, cache):
             return False
         if request.max_tokens <= 1:
             return False

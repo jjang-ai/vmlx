@@ -3424,3 +3424,241 @@ class TestNativeMtpAutodetect:
         assert [output.new_text for output in outputs] == ["A", "BC"]
         assert outputs[-1].output_token_ids == [0, 1, 2]
         assert scheduler.running["burst-prefix"]._gen_prefix_tokens == []
+
+
+class TestDenseQwenTurboQuantMtpSafetyGate:
+    @staticmethod
+    def _tq_cache(*, compressed_tokens=0, compress_after=0):
+        from jang_tools.turboquant.cache import TurboQuantKVCache
+
+        cache = TurboQuantKVCache(
+            key_dim=64,
+            value_dim=64,
+            compress_after=compress_after,
+        )
+        cache._compressed_tokens = compressed_tokens
+        return cache
+
+    @staticmethod
+    def _request():
+        from vmlx_engine.mllm_batch_generator import MLLMBatchRequest
+
+        return MLLMBatchRequest(
+            uid=0,
+            request_id="dense-qwen-tq-mtp-gate",
+            prompt="",
+            max_tokens=8,
+            temperature=0.0,
+        )
+
+    @staticmethod
+    def _generator():
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        class _LanguageModel:
+            mtp = object()
+
+            @staticmethod
+            def mtp_forward():
+                return None
+
+            @staticmethod
+            def make_mtp_cache():
+                return []
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator._model_type = "qwen3_5"
+        generator.language_model = _LanguageModel()
+        return generator
+
+    @pytest.mark.parametrize(
+        "model_type",
+        ["qwen3_5", "qwen3_5_text", "qwen3_6", "qwen3_6_text", "QWEN3_6"],
+    )
+    def test_dense_qwen_aliases_are_selected(self, model_type):
+        from vmlx_engine.mllm_batch_generator import (
+            _is_dense_qwen_tq_mtp_unsafe_model_type,
+        )
+
+        assert _is_dense_qwen_tq_mtp_unsafe_model_type(model_type)
+
+    @pytest.mark.parametrize(
+        "model_type",
+        [
+            None,
+            "",
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
+            "qwen3_6_moe",
+            "qwen3_6_moe_text",
+            "gemma4",
+            "hy_v3",
+        ],
+    )
+    def test_non_dense_qwen_aliases_are_excluded(self, model_type):
+        from vmlx_engine.mllm_batch_generator import (
+            _is_dense_qwen_tq_mtp_unsafe_model_type,
+        )
+
+        assert not _is_dense_qwen_tq_mtp_unsafe_model_type(model_type)
+
+    def test_active_and_future_tq_compression_are_selected(self):
+        from vmlx_engine.mllm_batch_generator import (
+            _cache_has_configured_or_active_turboquant,
+        )
+
+        assert _cache_has_configured_or_active_turboquant(
+            [self._tq_cache(compressed_tokens=5)]
+        )
+        assert _cache_has_configured_or_active_turboquant(
+            [self._tq_cache(compress_after=64)]
+        )
+        assert not _cache_has_configured_or_active_turboquant(
+            [self._tq_cache()]
+        )
+        assert not _cache_has_configured_or_active_turboquant([object()])
+
+    def test_real_turboquant_cache_contract_is_selected(self):
+        from vmlx_engine.mllm_batch_generator import (
+            _cache_has_configured_or_active_turboquant,
+        )
+
+        cache = self._tq_cache(compress_after=64)
+        assert _cache_has_configured_or_active_turboquant([cache])
+
+        cache.compress_after = 0
+        assert not _cache_has_configured_or_active_turboquant([cache])
+
+        cache._compressed_tokens = 5
+        assert _cache_has_configured_or_active_turboquant([cache])
+
+    def test_same_name_non_jang_cache_is_excluded(self):
+        from vmlx_engine.mllm_batch_generator import (
+            _cache_has_configured_or_active_turboquant,
+        )
+
+        class TurboQuantKVCache:
+            compress_after = 5
+            _compressed_tokens = 5
+
+        assert not _cache_has_configured_or_active_turboquant(
+            [TurboQuantKVCache()]
+        )
+
+    def test_runtime_resolver_selects_qwen36_shared_dense_alias(self):
+        from vmlx_engine.mllm_batch_generator import _runtime_model_type
+
+        language_model = SimpleNamespace(
+            config=SimpleNamespace(model_type="qwen3_5_text")
+        )
+        wrapper = SimpleNamespace(
+            config=SimpleNamespace(model_type=""),
+            language_model=language_model,
+        )
+
+        assert _runtime_model_type(wrapper) == "qwen3_5_text"
+
+    def test_request_gate_disables_only_the_proven_intersection(self, monkeypatch):
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP", "1")
+        generator = self._generator()
+        request = self._request()
+        tq_cache = [self._tq_cache(compress_after=5)]
+
+        reason = generator._native_mtp_disabled_reason_for_request(
+            request, tq_cache
+        )
+        assert reason == (
+            "dense-Qwen hybrid native MTP is disabled when live "
+            "TurboQuant KV compression is configured or active"
+        )
+        assert not generator._native_mtp_enabled_for_request(request, tq_cache)
+
+        for model_type in ("qwen3_5_moe", "qwen3_5_moe_text", "gemma4", "hy_v3"):
+            generator._model_type = model_type
+            assert generator._native_mtp_enabled_for_request(request, tq_cache)
+
+        generator._model_type = "qwen3_5"
+        generator._is_hybrid = False
+        assert generator._native_mtp_enabled_for_request(request, tq_cache)
+
+        generator._is_hybrid = True
+        assert generator._native_mtp_enabled_for_request(
+            request, [self._tq_cache()]
+        )
+        assert generator._native_mtp_enabled_for_request(request, [object()])
+
+    def test_gate_is_conservative_across_d1_and_tool_capped_d1(
+        self, monkeypatch
+    ):
+        from vmlx_engine.mllm_batch_generator import _native_mtp_depth_for_request
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP", "1")
+        generator = self._generator()
+        request = self._request()
+        tq_cache = [self._tq_cache(compress_after=5)]
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "1")
+        assert _native_mtp_depth_for_request(request) == 1
+        assert generator._native_mtp_disabled_reason_for_request(
+            request, tq_cache
+        )
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
+        request.extra_kwargs = {
+            "tools": [{"type": "function", "function": {"name": "lookup"}}]
+        }
+        assert _native_mtp_depth_for_request(request) == 1
+        assert generator._native_mtp_disabled_reason_for_request(
+            request, tq_cache
+        )
+
+    def test_existing_global_and_sampling_gates_keep_precedence(self, monkeypatch):
+        generator = self._generator()
+        request = self._request()
+        tq_cache = [self._tq_cache(compress_after=5)]
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP", "0")
+        assert generator._native_mtp_disabled_reason_for_request(
+            request, tq_cache
+        ) == "disabled by VMLINUX_NATIVE_MTP=0/--disable-native-mtp"
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP", "1")
+        request.temperature = 0.5
+        assert "not deterministic" in generator._native_mtp_disabled_reason_for_request(
+            request, tq_cache
+        )
+
+    def test_seed_checks_real_policy_before_main_or_mtp_forward(self):
+        import mlx.core as mx
+
+        generator = self._generator()
+        request = self._request()
+        cache = [self._tq_cache(compress_after=5)]
+
+        class _FailOnForwardLanguageModel:
+            mtp = object()
+
+            def __call__(self, *args, **kwargs):
+                raise AssertionError("main forward must not run after the gate")
+
+            @staticmethod
+            def mtp_forward(*args, **kwargs):
+                raise AssertionError("MTP forward must not run after the gate")
+
+            @staticmethod
+            def make_mtp_cache():
+                raise AssertionError("MTP cache must not be created after the gate")
+
+        generator.language_model = _FailOnForwardLanguageModel()
+
+        assert not generator._seed_native_mtp_from_prefill(
+            request,
+            cache,
+            first_tokens=mx.array([1], dtype=mx.uint32),
+            first_logprobs=[],
+        )
+        assert request._native_mtp_gate_logged == (
+            "dense-Qwen hybrid native MTP is disabled when live "
+            "TurboQuant KV compression is configured or active"
+        )
