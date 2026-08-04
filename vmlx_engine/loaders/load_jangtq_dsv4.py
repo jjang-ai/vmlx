@@ -32,9 +32,10 @@ Runtime contract implemented by the underlying loader:
   this loader verifies the installed JANG attention path has the symmetric
   mask-width fix and per-query compressed-pool mask. Older JANG builds now
   fail loudly instead of being patched in-process.
-- ``swiglu_limit=10`` SwiGLU activation, fp32 lm_head matmul (4096
-  contraction in bf16 drifts logits enough to flip arithmetic answers —
-  see research/DSV-EXHAUSTIVE-VARIABLES-GUIDE.md).
+- ``swiglu_limit=10`` SwiGLU activation, native affine quantized ``lm_head``
+  by default (with an opt-in exact FP32 dequantized fallback; the historical
+  BF16 contraction can drift logits enough to flip arithmetic answers — see
+  research/DSV-EXHAUSTIVE-VARIABLES-GUIDE.md).
 
 The function returns ``(model, tokenizer)`` just like the sibling loaders.
 """
@@ -1398,6 +1399,12 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     pool_quant = _configure_dsv4_pool_quant_default(model_path)
     _log.info("DSV4 runtime defaults: DSV4_LONG_CTX=1, DSV4_POOL_QUANT=%s", pool_quant)
     _install_dsv4_memory_defaults()
+    # JANG's layerwise prefill materialization is needed for genuinely long
+    # prompts, but evaluating all 43 layers for a 267-token request adds
+    # avoidable synchronization. Keep the operator's explicit override and
+    # defer the safety boundary to 512 tokens, which is live-verified on the
+    # target model and leaves long-context prefill protected.
+    os.environ.setdefault("DSV4_LAYERWISE_PREFILL_MIN_TOKENS", "512")
 
     # Eagerly register mlx_lm.models.deepseek_v4 so the underlying loader
     # can resolve the model_type. Safe to call multiple times (idempotent).
@@ -1457,6 +1464,46 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
                 "DSV4 affine MoE decode fast path unavailable (%s); using stock SwitchGLU",
                 _affine_fastpath_err,
             )
+
+    # The JANG DSV4 model class dequantizes its quantized vocabulary head on
+    # every forward call. Install the selected native quantized-head or exact
+    # FP32-cache fast path; this is independent of the experimental routed-
+    # expert kernels above.
+    try:
+        from ..models.dsv4_lm_head_cache import install_dsv4_lm_head_cache
+
+        if install_dsv4_lm_head_cache(model):
+            _log.info("DSV4 lm_head fast path installed")
+        else:
+            _log.info("DSV4 lm_head fast path not installed")
+    except Exception as _lm_head_cache_err:
+        _log.warning("DSV4 lm_head fast path unavailable: %s", _lm_head_cache_err)
+
+    try:
+        from ..models.dsv4_compiled_moe import install_dsv4_compiled_moe
+
+        compiled_moe = install_dsv4_compiled_moe(model)
+        if compiled_moe:
+            _log.info("DSV4 compiled native-gather MoE path installed for %d modules", compiled_moe)
+    except Exception as _compiled_moe_err:
+        _log.warning("DSV4 compiled MoE path unavailable: %s", _compiled_moe_err)
+
+    try:
+        from ..models.dsv4_rope_cache import install_dsv4_rope_cache
+
+        if install_dsv4_rope_cache(model):
+            _log.info("DSV4 exact RoPE table cache installed")
+    except Exception as _rope_cache_err:
+        _log.warning("DSV4 exact RoPE table cache unavailable: %s", _rope_cache_err)
+
+    try:
+        from ..models.dsv4_indexer_skip import install_dsv4_indexer_skip
+
+        indexer_skip = install_dsv4_indexer_skip(model)
+        if indexer_skip:
+            _log.info("DSV4 unused-indexer bypass candidate installed for %d modules", indexer_skip)
+    except Exception as _indexer_skip_err:
+        _log.warning("DSV4 unused-indexer bypass candidate unavailable: %s", _indexer_skip_err)
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template

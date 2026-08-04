@@ -335,6 +335,53 @@ class DSV4BatchGenerator:
             # decode token on the DSV4 hot path.
             return int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
 
+    @staticmethod
+    def _iter_cache_state_arrays(value):
+        if isinstance(value, mx.array):
+            yield value
+            return
+        if isinstance(value, dict):
+            for child in value.values():
+                yield from DSV4BatchGenerator._iter_cache_state_arrays(child)
+            return
+        if isinstance(value, (tuple, list)):
+            for child in value:
+                yield from DSV4BatchGenerator._iter_cache_state_arrays(child)
+
+    @staticmethod
+    def _realize_decode_cache_state(cache, *, step: int | None = None) -> None:
+        """Optionally detach DSV4 cache graphs after a decode forward.
+
+        DSV4 composite caches retain pooled arrays and rotating KV updates.
+        Realizing their state collapses the per-token lazy graph on MLX while
+        preserving the cache values. It is opt-in during evaluation because
+        the extra state barrier can trade throughput for long-run residency.
+        """
+        periodic = os.environ.get("VMLX_DSV4_REALIZE_CACHE_STATE_EVERY", "").strip()
+        if periodic:
+            try:
+                every = int(periodic)
+            except ValueError:
+                every = 0
+            if every <= 0 or step is None or int(step) % every != 0:
+                return
+        elif os.environ.get("VMLX_DSV4_REALIZE_CACHE_STATE", "0").strip().lower() not in {
+            "1", "true", "yes", "on"
+        }:
+            return
+        arrays = []
+        for layer_cache in cache or []:
+            for attr in ("storage_state", "state"):
+                try:
+                    state = getattr(layer_cache, attr)
+                except Exception:
+                    continue
+                arrays.extend(DSV4BatchGenerator._iter_cache_state_arrays(state))
+                if arrays:
+                    break
+        if arrays:
+            mx.eval(*arrays)
+
     # ---------- helpers ----------
     def _make_new_cache(self):
         if hasattr(self.model, "make_cache"):
@@ -1340,6 +1387,20 @@ class DSV4BatchGenerator:
                     # This preserves SWA+CSA/HCA state while bounding transient
                     # MLX allocations for long prompts.
                     r.cache = self._make_new_cache()
+                    # The ratio-4 indexer is only consulted after 512 pool
+                    # rows. For a fresh request whose prompt plus output cap
+                    # stays within 2048 tokens, its decode updates are provably
+                    # unused; mark only those per-request caches for the
+                    # bounded indexer bypass. Prompt prefill stays exact, and
+                    # prefix-cache-hit requests retain the full indexer state.
+                    if os.environ.get("VMLX_DSV4_SKIP_UNUSED_INDEXER", "1").strip().lower() in {
+                        "1", "true", "yes", "on"
+                    } and len(r.prompt_tokens) + int(r.max_tokens) <= 2048:
+                        for _layer_cache in r.cache:
+                            try:
+                                _layer_cache._vmlx_dsv4_indexer_skip_decode = True
+                            except Exception:
+                                pass
                     if not r.prompt_tokens:
                         r.finish_reason = "stop"
                         r.prompt_processed = True
@@ -1625,6 +1686,7 @@ class DSV4BatchGenerator:
                     _t_decode_model = time.perf_counter()
                     logits = self.model(ids, cache=r.cache)
                     last_logits = logits[:, -1, :]
+                    self._realize_decode_cache_state(r.cache, step=len(r.out_tokens))
                     self._trace_timing(
                         "decode_model",
                         _t_decode_model,
