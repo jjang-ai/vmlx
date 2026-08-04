@@ -101,7 +101,7 @@ def main():
     base_msgs = [
         {"role": "system", "content": "You are a helpful coding agent."},
         {"role": "user",
-         "content": "Read the file /Users/eric/r21-dsv4-work/r21_probe_one.txt "
+         "content": "Read the file /workspace/r21_probe_one.txt "
                     "and tell me exactly what it contains."},
     ]
 

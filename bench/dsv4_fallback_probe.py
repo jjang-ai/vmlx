@@ -8,11 +8,15 @@ documented cause of the unbounded literal `response` loop.
 """
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.environ.get("VMLX_SRC", "/Users/eric/mlx/vllm-mlx-r20-dsv4"))
+sys.path.insert(
+    0,
+    os.environ.get("VMLX_SRC", str(Path(__file__).resolve().parents[1])),
+)
 
 from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools  # noqa: E402
-from vmlx_engine.loaders import dsv4_chat_encoder as E  # noqa: E402
+from vmlx_engine.loaders import dsv4_chat_encoder as E  # noqa: E402, N812
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dsv4_prefix_probe import MODEL_PATH, TOOLS, TURNS  # noqa: E402

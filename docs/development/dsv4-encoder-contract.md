@@ -2,7 +2,8 @@
 
 Source of truth: the bundle's own `encoding/README.md` and `encoding/encoding_dsv4.py`
 (mirrored at <https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/blob/main/encoding/README.md>).
-Local copy on the box: `/Volumes/EricsLLMDrive/sources/DeepSeek-V4-Flash-0731-9e165c30e270/encoding/`.
+For local reproduction, point `DSV4_BUNDLE` at a verified bundle copy; no
+machine-local source path is part of this public contract.
 
 vMLX adapter: `vmlx_engine/loaders/dsv4_chat_encoder.py`.
 Tool parser: `vmlx_engine/tool_parsers/dsml_tool_parser.py` (parser key `dsml`,

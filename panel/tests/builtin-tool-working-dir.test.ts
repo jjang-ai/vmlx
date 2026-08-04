@@ -8,6 +8,8 @@
  * no visible answer. Observed live on DSV4 against a deleted release-gate run
  * directory.
  */
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('electron', () => ({ clipboard: { readText: () => '', writeText: () => {} } }))
@@ -16,7 +18,7 @@ vi.mock('../src/main/database', () => ({ db: {} }))
 describe('built-in tool working directory validation', () => {
   it('names a missing working directory instead of leaking ENOENT', async () => {
     const { executeBuiltinTool } = await import('../src/main/tools/executor')
-    const missing = '/Users/eric/.cache/vmlx-proof/does-not-exist-r21/r20'
+    const missing = join(tmpdir(), `vmlx-missing-working-directory-${process.pid}`, 'r20')
 
     const result = await executeBuiltinTool(
       'write_file',
