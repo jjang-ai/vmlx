@@ -231,8 +231,9 @@ def test_dsv4_hydration_mode_separates_affine_from_jangtq(tmp_path):
     assert _dsv4_uses_jangtq_hydration(tq) is True
 
 
-def test_dsv4_affine_loader_uses_generic_jang_hydration(monkeypatch, tmp_path):
+def test_dsv4_affine_loader_uses_generic_jang_hydration(monkeypatch, tmp_path, caplog):
     import vmlx_engine.loaders.load_jangtq_dsv4 as loader
+    import vmlx_engine.metal.affine_moe_decode as affine_fastpath
     import vmlx_engine.utils.jang_loader as jang_loader
 
     bundle = tmp_path / "DeepSeek-V4-Flash-JANG_2L-MTP"
@@ -245,6 +246,8 @@ def test_dsv4_affine_loader_uses_generic_jang_hydration(monkeypatch, tmp_path):
     )
     expected = (object(), SimpleNamespace(apply_chat_template=lambda *a, **k: []))
     calls = []
+    fastpath_calls = []
+    caplog.set_level("INFO", logger=loader.__name__)
 
     monkeypatch.setattr(loader, "_validate_dsv4_control_tensors", lambda path: None)
     monkeypatch.setattr(loader, "_verify_dsv4_attention_contract", lambda: None)
@@ -257,12 +260,20 @@ def test_dsv4_affine_loader_uses_generic_jang_hydration(monkeypatch, tmp_path):
         "load_jang_model",
         lambda path, **kwargs: calls.append((path, kwargs)) or expected,
     )
+    monkeypatch.setattr(
+        affine_fastpath,
+        "install_dsv4_affine_moe_fastpath",
+        lambda model, **kwargs: fastpath_calls.append((model, kwargs)) or 0,
+    )
 
     loaded = loader.load_jangtq_dsv4_model(str(bundle), skip_params_eval=True)
 
     assert loaded[0] is expected[0]
     assert loaded[1] is expected[1]
     assert calls == [(str(bundle), {"skip_eval": True})]
+    assert fastpath_calls == [(expected[0], {"model_type": "deepseek_v4"})]
+    assert "fast path not installed; using stock SwitchGLU" in caplog.text
+    assert "fast path installed for 0 modules" not in caplog.text
 
 
 def test_dsv4_artifact_bit_plan_audit_reads_actual_tq_bits_and_sidecar(tmp_path):

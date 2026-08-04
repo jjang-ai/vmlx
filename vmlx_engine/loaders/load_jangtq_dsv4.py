@@ -1432,6 +1432,31 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
                 model_path,
                 skip_eval=skip_params_eval,
             )
+        # PR #248 by Andrew Hornsby (@Hornsan1) supplies substantially faster
+        # affine routed-expert decode kernels. Keep installation inside this
+        # exact DSV4 affine branch; the installer validates every projection
+        # and leaves stock SwitchGLU untouched for unsupported modules.
+        try:
+            from ..metal.affine_moe_decode import install_dsv4_affine_moe_fastpath
+
+            installed = install_dsv4_affine_moe_fastpath(
+                model,
+                model_type="deepseek_v4",
+            )
+            if installed > 0:
+                _log.info(
+                    "DSV4 affine MoE decode fast path installed for %d modules",
+                    installed,
+                )
+            else:
+                _log.info(
+                    "DSV4 affine MoE decode fast path not installed; using stock SwitchGLU"
+                )
+        except Exception as _affine_fastpath_err:
+            _log.warning(
+                "DSV4 affine MoE decode fast path unavailable (%s); using stock SwitchGLU",
+                _affine_fastpath_err,
+            )
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template
