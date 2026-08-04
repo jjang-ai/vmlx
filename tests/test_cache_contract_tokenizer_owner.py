@@ -44,3 +44,28 @@ def test_cache_contract_identity_uses_live_scheduler_tokenizer(monkeypatch):
     assert identity["tokenizer_source"] == "llm_scheduler_tokenizer"
     assert scheduler_tokenizer.calls == [("rendered prompt", False)]
     assert fallback_tokenizer.calls == []
+
+
+def test_batched_chat_encoding_honors_family_special_token_policy(monkeypatch):
+    tokenizer = _RecordingTokenizer([1, 2])
+    engine = object.__new__(BatchedEngine)
+    engine._model_name = "/models/minicpm"
+    registry = SimpleNamespace(
+        get_architecture_hints=lambda _path: {
+            "chat_encode_add_special_tokens": True
+        }
+    )
+    monkeypatch.setattr(
+        batched_module,
+        "get_model_config_registry",
+        lambda: registry,
+    )
+
+    token_ids = engine._encode_rendered_prompt(
+        tokenizer.encode,
+        "rendered prompt",
+        engine._chat_encode_add_special_tokens(),
+    )
+
+    assert token_ids == [1, 2]
+    assert tokenizer.calls == [("rendered prompt", True)]

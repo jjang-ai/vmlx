@@ -301,6 +301,10 @@ registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priorit
 registerFamily('stablelm', { cacheType: 'kv', description: 'StableLM', priority: 30 })
 registerFamily('baichuan', { cacheType: 'kv', description: 'Baichuan', priority: 30 })
 
+// Plain-text MiniCPM. MLX-LM already ships the runtime model; this row only
+// declares the vMLX family/session policy and stays separate from MiniCPM-V.
+registerFamily('minicpm', { cacheType: 'kv', supportsThinking: false, isMultimodal: false, description: 'MiniCPM text', priority: 20 })
+
 // VLM / MLLM models
 registerFamily('yi-vl', { cacheType: 'kv', isMultimodal: true, description: 'Yi Vision-Language', priority: 15 })
 registerFamily('llava', { cacheType: 'kv', isMultimodal: true, description: 'LLaVA vision-language', priority: 20 })
@@ -477,6 +481,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'florence2': 'florence',
   'got_ocr2': 'got-ocr',
   'molmo': 'molmo',
+  'minicpm': 'minicpm',
   'minicpmv': 'minicpm-v',
   'smolvlm': 'smolvlm',
   'internvl_chat': 'internvl',

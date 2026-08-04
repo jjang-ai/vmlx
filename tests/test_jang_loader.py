@@ -79,6 +79,25 @@ class TestJangDetection:
         assert config["text_config"]["final_logit_softcapping"] == 30.0
         assert type(config["text_config"]["final_logit_softcapping"]) is float
 
+    def test_minicpm_defaults_follow_authoritative_jang_family(self):
+        from vmlx_engine.utils.jang_loader import _apply_minicpm_config_defaults
+
+        config = {"architectures": ["MiniCPMForCausalLM"]}
+        _apply_minicpm_config_defaults(
+            config,
+            {"capabilities": {"family": "minicpm"}},
+        )
+
+        assert config["model_type"] == "minicpm"
+        assert config["rope_theta"] == 10_000.0
+
+        unrelated = {"model_type": "llama"}
+        _apply_minicpm_config_defaults(
+            unrelated,
+            {"capabilities": {"family": "minicpm"}},
+        )
+        assert unrelated == {"model_type": "llama"}
+
     def test_gemma4_processor_path_uses_temporary_normalized_config(self, tmp_path):
         from vmlx_engine.utils.jang_loader import _prepare_gemma4_processor_model_path
 

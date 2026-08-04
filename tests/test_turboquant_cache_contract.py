@@ -214,6 +214,45 @@ def test_minimax_m3_native_msa_disables_tq_for_live_and_persisted_cache(
     assert os.environ.get("VMLX_FORCE_TQ_AUTO") is None
 
 
+def test_minicpm_requires_native_raw_kv(monkeypatch):
+    from types import SimpleNamespace
+
+    from vmlx_engine.cli import MiniCPMCachePolicyError, _apply_minicpm_cache_policy
+
+    config = SimpleNamespace(
+        family_name="minicpm",
+        architecture_hints={
+            "blocked_kv_cache_storage_quantizations": ["q4", "q8"]
+        },
+    )
+    auto = SimpleNamespace(
+        kv_cache_quantization="q4",
+        kv_cache_quantization_explicit=False,
+    )
+    monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+
+    assert _apply_minicpm_cache_policy(
+        auto,
+        config,
+        __import__("logging").getLogger("test"),
+    )
+    assert auto.kv_cache_quantization == "none"
+    assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
+    assert "VMLX_FORCE_TQ_AUTO" not in os.environ
+
+    for codec in ("q4", "q8"):
+        explicit = SimpleNamespace(
+            kv_cache_quantization=codec,
+            kv_cache_quantization_explicit=True,
+        )
+        with pytest.raises(MiniCPMCachePolicyError, match=codec):
+            _apply_minicpm_cache_policy(
+                explicit,
+                config,
+                __import__("logging").getLogger("test"),
+            )
+
+
 def test_mimo_v2_auto_mode_keeps_prefix_cache_lossless_by_default(tmp_path, monkeypatch):
     """MiMo mixed-SWA cache must not use lossy stored q4 in auto mode."""
 

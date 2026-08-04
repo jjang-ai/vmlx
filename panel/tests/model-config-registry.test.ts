@@ -1672,6 +1672,7 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     { modelType: 'ministral3', family: 'ministral3', cacheType: 'kv', toolParser: 'mistral' },
     { modelType: 'mistral3', family: 'mistral3', cacheType: 'kv', toolParser: 'mistral', isMultimodal: true },
     { modelType: 'mistral4', family: 'mistral4', cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral' },
+    { modelType: 'minicpm', family: 'minicpm', cacheType: 'kv', isMultimodal: false },
     { modelType: 'mimo_v2', family: 'mimo_v2', cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', isMultimodal: true },
     { modelType: 'nanbeige', family: 'nanbeige', cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'qwen3', isMultimodal: false },
     { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', cacheSubtype: 'nemotron_h_ssm_attention' },
