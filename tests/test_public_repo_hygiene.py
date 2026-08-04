@@ -107,3 +107,22 @@ def test_forbidden_artifact_on_public_tag_fails(tmp_path: Path):
     assert "public repository history contains forbidden" in result.stderr
     assert "notes/private.md" in result.stderr
     _assert_temporary_public_refs_removed(repo)
+
+
+def test_published_dsv4_encoder_contract_is_exactly_allowlisted(tmp_path: Path):
+    repo, _ = _public_repo(tmp_path)
+    docs = repo / "docs" / "development"
+    docs.mkdir(parents=True)
+    (docs / "dsv4-encoder-contract.md").write_text(
+        "# Public DSV4 encoder contract\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "docs/development/dsv4-encoder-contract.md")
+    _git(repo, "commit", "-m", "publish DSV4 encoder contract")
+    _git(repo, "push", "origin", "main")
+
+    result = _run_hygiene(repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Public repository hygiene check passed.\n"
+    _assert_temporary_public_refs_removed(repo)

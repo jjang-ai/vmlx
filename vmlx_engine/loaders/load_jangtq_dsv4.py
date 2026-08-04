@@ -1234,7 +1234,7 @@ def _install_dsv4_instant_load_patch() -> None:
     )
 
 
-def _install_dsv4_memory_defaults() -> None:
+def _install_dsv4_memory_defaults() -> int | None:
     """Set DSV4-specific MLX/JANG runtime defaults before hydration.
 
     Per Eric directive 2026-06-27: honor the user's `iogpu.wired_limit_mb`
@@ -1299,14 +1299,33 @@ def _install_dsv4_memory_defaults() -> None:
             os.environ.get("DSV4_MLX_CACHE_LIMIT_GB", "%g" % _default_cache_gb)
         )
         if cache_gb > 0:
-            mx.set_cache_limit(int(cache_gb * 1024**3))
+            cache_limit_bytes = int(cache_gb * 1024**3)
+            try:
+                from ..models.dsv4_lm_head_fastpath import (
+                    configure_dsv4_lm_head_cache_budget,
+                )
+
+                effective_cache_limit = configure_dsv4_lm_head_cache_budget(
+                    cache_limit_bytes
+                )
+            except Exception as cache_budget_error:
+                _log.warning(
+                    "DSV4 lm_head cache-budget integration unavailable (%s); "
+                    "using the configured allocator ceiling",
+                    cache_budget_error,
+                )
+                mx.set_cache_limit(cache_limit_bytes)
+                effective_cache_limit = cache_limit_bytes
             print(
-                f"  [dsv4] MLX cache limit set to {cache_gb:g} GB "
+                "  [dsv4] MLX cache limit set to "
+                f"{effective_cache_limit / 1024**3:.2f} GB "
                 "(env DSV4_MLX_CACHE_LIMIT_GB)",
                 flush=True,
             )
+            return cache_limit_bytes
     except Exception:
         pass
+    return None
 
 
 def _configure_dsv4_pool_quant_default(model_path: str | None = None) -> str:
@@ -1481,6 +1500,32 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
                 "DSV4 affine MoE decode fast path unavailable (%s); using stock SwitchGLU",
                 _affine_fastpath_err,
             )
+
+    # These optimizations retain the source model's arithmetic and are scoped
+    # to the exact instances validated by their installers. Neither fallback
+    # replays the transformer against a mutable request cache.
+    try:
+        from ..models.dsv4_lm_head_fastpath import install_dsv4_lm_head_fastpath
+
+        if install_dsv4_lm_head_fastpath(model):
+            _log.info("DSV4 exact dequantized lm_head cache installed")
+    except Exception as _lm_head_err:
+        _log.warning(
+            "DSV4 exact dequantized lm_head cache unavailable: %s",
+            _lm_head_err,
+        )
+
+    try:
+        from ..models.dsv4_rope_cache import install_dsv4_rope_cache
+
+        rope_instances = install_dsv4_rope_cache(model)
+        if rope_instances:
+            _log.info(
+                "DSV4 exact RoPE table sharing installed for %d instances",
+                rope_instances,
+            )
+    except Exception as _rope_cache_err:
+        _log.warning("DSV4 exact RoPE table sharing unavailable: %s", _rope_cache_err)
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template
