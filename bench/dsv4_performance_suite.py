@@ -178,6 +178,45 @@ def _model_identity(model_path: Path) -> dict[str, Any]:
     }
 
 
+def _swap_used_bytes() -> int | None:
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "vm.swapusage"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        used = result.stdout.split("used =")[1].split()[0]
+        scale = {"K": 1024, "M": 1024**2, "G": 1024**3}.get(used[-1], 1)
+        return int(float(used.rstrip("KMG")) * scale)
+    except (OSError, subprocess.CalledProcessError, IndexError, ValueError):
+        return None
+
+
+def _memory_snapshot(mx: Any) -> dict[str, Any]:
+    import resource
+
+    from vmlx_engine.utils.memory_limits import (
+        get_effective_metal_working_set_bytes,
+        metal_resource_limit,
+    )
+
+    try:
+        active_bytes, max_working_set = get_effective_metal_working_set_bytes(mx)
+    except Exception:
+        active_bytes, max_working_set = None, None
+    return {
+        "mlx_active_bytes": int(mx.get_active_memory()),
+        "mlx_peak_bytes": int(mx.get_peak_memory()),
+        "mlx_cache_bytes": int(mx.get_cache_memory()),
+        "effective_working_set_active_bytes": active_bytes,
+        "effective_working_set_max_bytes": max_working_set,
+        "metal_resource_limit": metal_resource_limit(),
+        "process_max_rss_bytes": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
+        "swap_used_bytes": _swap_used_bytes(),
+    }
+
+
 def _prompt(tokenizer: Any, target_tokens: int, mx: Any) -> Any:
     body = PROMPT
     while len(tokenizer.encode(body)) < target_tokens:
@@ -205,6 +244,9 @@ class _Runner:
         )
 
     def request(self, prompt: Any, generation_target: int) -> dict[str, Any]:
+        import mlx.core as mx
+
+        mx.reset_peak_memory()
         prompt_ids = [int(value) for value in prompt.tolist()]
         uid = self.generator.insert(
             [prompt_ids],
@@ -246,9 +288,11 @@ class _Runner:
                 if decode_seconds and len(output_tokens) > 1
                 else None
             ),
+            "token_ids": output_tokens,
             "token_ids_sha256": hashlib.sha256(
                 ",".join(map(str, output_tokens)).encode()
             ).hexdigest(),
+            "memory": _memory_snapshot(mx),
         }
 
 
@@ -416,6 +460,14 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--baseline-report", type=Path)
     parser.add_argument("--acceptance", action="store_true")
+    parser.add_argument(
+        "--expect-lm-head-denied",
+        action="store_true",
+        help=(
+            "optimized profile only: assert the lm_head cache was requested "
+            "but declined admission, proving the fail-closed path stays native"
+        ),
+    )
     parser.add_argument("--min-decode-ratio", type=float, default=0.98)
     parser.add_argument("--min-prefill-ratio", type=float, default=0.95)
     parser.add_argument("--min-sample-decode-ratio", type=float, default=0.75)
@@ -459,7 +511,10 @@ def main() -> int:
     # model implementation. This makes the benchmark's source boundary
     # explicit and prevents an installed package from silently satisfying a
     # checkout-under-test import later in the run.
+    load_started = time.perf_counter()
     model, tokenizer = load_jangtq_dsv4_model(str(model_path))
+    load_seconds = time.perf_counter() - load_started
+    post_load_memory = _memory_snapshot(mx)
     source_root = Path(vmlx_engine.__file__).resolve().parents[1]
     if source_root != REPOSITORY_ROOT:
         raise RuntimeError(
@@ -491,7 +546,11 @@ def main() -> int:
         "lm_head": dsv4_lm_head_fastpath_status(model),
         "rope_cache": dsv4_rope_cache_status(model),
     }
-    expected_head = args.profile == "optimized" and args.features in {"all", "lm-head"}
+    expected_head = (
+        args.profile == "optimized"
+        and args.features in {"all", "lm-head"}
+        and not args.expect_lm_head_denied
+    )
     expected_rope = args.profile == "optimized" and args.features in {"all", "rope-cache"}
     head_active = bool(
         feature_state["lm_head"]["installed"]
@@ -503,6 +562,10 @@ def main() -> int:
         and feature_state["rope_cache"]["table_entries"] > 0
     )
     feature_state_passed = head_active == expected_head and rope_active == expected_rope
+    if args.expect_lm_head_denied:
+        feature_state_passed = bool(
+            feature_state_passed and not feature_state["lm_head"]["installed"]
+        )
 
     report: dict[str, Any] = {
         "schema": SCHEMA,
@@ -526,6 +589,12 @@ def main() -> int:
         },
         "feature_state": feature_state,
         "feature_state_passed": feature_state_passed,
+        "telemetry": {
+            "load_to_ready_seconds": load_seconds,
+            "post_load_memory": post_load_memory,
+            "final_memory": _memory_snapshot(mx),
+            "expect_lm_head_denied": bool(args.expect_lm_head_denied),
+        },
         "cases": [case.__dict__ | {"key": case.key} for case in cases],
         "results": results,
         "decode_floor_sanity": _decode_floor_sanity(
