@@ -1,0 +1,126 @@
+{
+  "H_vs_N": {
+    "G1_exact": true,
+    "G2_complete_finish": false,
+    "G3_core_decode_ratios": {
+      "p1024-g30": 1.2807,
+      "p2048-g30": 1.3366,
+      "p256-g1000": 1.2515,
+      "p256-g30": 2.2984,
+      "p256-g8000": 1.2576,
+      "p400-g30": 1.4611,
+      "p4096-g30": 1.3216,
+      "p512-g30": 1.3585,
+      "p8192-g30": 1.3199
+    },
+    "G3_pass": true,
+    "G4_geomean_core": 1.5084,
+    "G4_pass": true,
+    "G5_pass": true,
+    "G6_pass": true,
+    "G7_prefill_ratios": {
+      "p1024-g30": 1.0274,
+      "p2048-g30": 1.0397,
+      "p256-g30": 1.1679,
+      "p400-g30": 1.0122,
+      "p512-g30": 1.0272
+    },
+    "G7_aggregate": 1.0534,
+    "G7_pass": true,
+    "label": "H",
+    "all_pass": true
+  },
+  "R_vs_N": {
+    "G1_exact": true,
+    "G2_complete_finish": false,
+    "G3_core_decode_ratios": {
+      "p1024-g30": 1.0897,
+      "p2048-g30": 1.0371,
+      "p256-g1000": 0.9989,
+      "p256-g30": 1.7689,
+      "p256-g8000": 1.0023,
+      "p400-g30": 1.176,
+      "p4096-g30": 1.0292,
+      "p512-g30": 1.0782,
+      "p8192-g30": 1.0295
+    },
+    "G3_pass": true,
+    "G4_geomean_core": 1.2044,
+    "G4_pass": true,
+    "G5_pass": false,
+    "G6_pass": true,
+    "G7_prefill_ratios": {
+      "p1024-g30": 1.0176,
+      "p2048-g30": 1.0366,
+      "p256-g30": 1.1471,
+      "p400-g30": 1.0029,
+      "p512-g30": 1.0158
+    },
+    "G7_aggregate": 1.0427,
+    "G7_pass": true,
+    "label": "R",
+    "all_pass": false
+  },
+  "HR_vs_N": {
+    "G1_exact": true,
+    "G2_complete_finish": false,
+    "G3_core_decode_ratios": {
+      "p1024-g30": 1.302,
+      "p2048-g30": 1.2972,
+      "p256-g1000": 1.1999,
+      "p256-g30": 2.3735,
+      "p256-g8000": 1.2057,
+      "p400-g30": 1.4557,
+      "p4096-g30": 1.2898,
+      "p512-g30": 1.3155,
+      "p8192-g30": 1.2786
+    },
+    "G3_pass": true,
+    "G4_geomean_core": 1.5032,
+    "G4_pass": true,
+    "G5_pass": true,
+    "G6_pass": true,
+    "G7_prefill_ratios": {
+      "p1024-g30": 1.0254,
+      "p2048-g30": 1.0097,
+      "p256-g30": 1.179,
+      "p400-g30": 1.0368,
+      "p512-g30": 1.0295
+    },
+    "G7_aggregate": 1.0543,
+    "G7_pass": true,
+    "label": "HR",
+    "all_pass": true
+  },
+  "G9": {
+    "geomean_H": 1.5084,
+    "geomean_R": 1.2044,
+    "geomean_HR": 1.5033,
+    "G9_pass": true
+  },
+  "G10_memory": {
+    "cases": {
+      "p1024-g30": 0.9675,
+      "p2048-g30": 0.9698,
+      "p256-g1000": 0.965,
+      "p256-g30": 0.9651,
+      "p256-g8000": 0.9651,
+      "p400-g30": 0.9674,
+      "p4096-g30": 0.9897,
+      "p512-g30": 0.967,
+      "p8192-g30": 0.9906
+    },
+    "swap_growth_candidate": -45539656,
+    "swap_growth_native": -256764806,
+    "head_cache_bytes": 2118123520,
+    "allocator_ceiling": 22620888104,
+    "G10_pass": true
+  },
+  "G11": {
+    "exact": true,
+    "native_speed": true,
+    "denied": true,
+    "G11_pass": true
+  },
+  "ACCEPTED": false
+}

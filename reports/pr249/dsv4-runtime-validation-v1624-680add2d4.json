@@ -1,0 +1,59 @@
+{
+  "api_envelopes": {
+    "identical_after_id_normalization": true,
+    "note": "native vs product-default (optimized) servers, same request set; only per-request ids differ once the persistent disk prefix tier is warm on both sides",
+    "surfaces": [
+      "chat_nonstream",
+      "chat_stream",
+      "chat_tools_nonstream",
+      "chat_stop",
+      "responses_nonstream",
+      "responses_stream",
+      "anthropic_nonstream"
+    ]
+  },
+  "load_to_ready_seconds": {
+    "break_even": "head materialization ~0.1-0.5 s, recovered within the first 30-token response",
+    "native": 7.31,
+    "optimized_profiles": "7.4-7.8"
+  },
+  "schema": "dsv4_runtime_validation.v1",
+  "sealing_revision": "680add2d4",
+  "soak_product_defaults": {
+    "concurrent_burst_finishes_ok": true,
+    "greedy_drift_free": true,
+    "long_streams": [
+      {
+        "at": "start",
+        "chars": 1217,
+        "finish": "length"
+      },
+      {
+        "at": "mid",
+        "chars": 1217,
+        "finish": "length"
+      },
+      {
+        "at": "end",
+        "chars": 1217,
+        "finish": "length"
+      }
+    ],
+    "requests": 100,
+    "swap_after": "2541.12M",
+    "swap_before": "2621.12M",
+    "total_completion_tokens": 9720,
+    "wall_s_p50": 6.6815787499945145
+  },
+  "unload_reload_cycles": {
+    "ceiling_deducted_bytes": 2118123520,
+    "ceiling_restored_exactly": true,
+    "cycles": 2,
+    "passed": true
+  },
+  "unsupported_dispatch_overhead": {
+    "absolute_overhead_ns_per_call": 80.07300000000001,
+    "bound": "< 5000 ns (0.01% of a 50 ms decode step); plan bound is 1%",
+    "passed": true
+  }
+}
