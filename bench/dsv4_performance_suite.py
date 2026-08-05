@@ -528,7 +528,15 @@ def main() -> int:
     }
     mx.eval(*prompts.values())
     runner = _Runner(model, max_tokens=max(case.generation_target for case in cases))
-    runner.request(next(iter(prompts.values())), min(4, cases[0].generation_target))
+    # Warm the full decode path before the first measured case. A 4-token
+    # warmup leaves kernel compilation, page-in, and allocator steady-state to
+    # the first case, whose samples then carry order-of-magnitude jitter (seen
+    # as 0.7 tok/s first samples on a 128 GB M4 Max). Two full-length warm
+    # requests on the smallest prompt make case one measurable.
+    warmup_prompt = prompts[min(prompts)]
+    warmup_tokens = min(30, max(case.generation_target for case in cases))
+    for _warmup in range(2):
+        runner.request(warmup_prompt, warmup_tokens)
 
     results: dict[str, Any] = {}
     for case in cases:
