@@ -1515,6 +1515,18 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
             _lm_head_err,
         )
 
+    try:
+        from ..models.dsv4_rope_cache import install_dsv4_rope_cache
+
+        rope_instances = install_dsv4_rope_cache(model)
+        if rope_instances:
+            _log.info(
+                "DSV4 exact RoPE table sharing installed for %d instances",
+                rope_instances,
+            )
+    except Exception as _rope_cache_err:
+        _log.warning("DSV4 exact RoPE table sharing unavailable: %s", _rope_cache_err)
+
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template
     # that PARSES `reasoning_effort` but never branches on it — every effort
