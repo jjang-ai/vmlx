@@ -12,6 +12,7 @@ the transformer or mutates its cache twice.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import weakref
@@ -47,7 +48,7 @@ def _positive_float_env(name: str, default: float) -> float:
     except (TypeError, ValueError):
         logger.warning("Ignoring invalid %s=%r", name, raw)
         return default
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         logger.warning("Ignoring non-positive %s=%r", name, raw)
         return default
     return value
