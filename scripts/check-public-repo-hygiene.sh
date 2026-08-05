@@ -13,6 +13,8 @@ forbidden=$(
         !/^docs\/mlxstudio-releases-readme\.md$/ &&
         !/^docs\/api\// &&
         !/^docs\/benchmarks\// &&
+        !/^docs\/development\/dsv4-decode-acceptance\.md$/ &&
+        !/^docs\/development\/dsv4-encoder-contract\.md$/ &&
         !/^docs\/development\/(architecture|build-test-deploy|contributing)\.md$/ &&
         !/^docs\/getting-started\// &&
         !/^docs\/guides\// &&
@@ -152,6 +154,8 @@ historical_forbidden=$(
         !/^docs\/mlxstudio-releases-readme\.md$/ &&
         !/^docs\/api\// &&
         !/^docs\/benchmarks\// &&
+        !/^docs\/development\/dsv4-decode-acceptance\.md$/ &&
+        !/^docs\/development\/dsv4-encoder-contract\.md$/ &&
         !/^docs\/development\/(architecture|build-test-deploy|contributing)\.md$/ &&
         !/^docs\/getting-started\// &&
         !/^docs\/guides\// &&

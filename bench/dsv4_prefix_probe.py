@@ -9,13 +9,17 @@ identity(turn N+1).
 import json
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.environ.get("VMLX_SRC", "/Users/eric/mlx/vllm-mlx-r20-dsv4"))
+sys.path.insert(
+    0,
+    os.environ.get("VMLX_SRC", str(Path(__file__).resolve().parents[1])),
+)
 
-from vmlx_engine.loaders import dsv4_chat_encoder as E  # noqa: E402
+from vmlx_engine.loaders import dsv4_chat_encoder as E  # noqa: E402, N812
 
 MODEL_PATH = os.environ.get(
-    "DSV4_BUNDLE", "/Volumes/EricsLLMDrive/models/DeepSeek-V4-Flash-0731-JANG"
+    "DSV4_BUNDLE", "/path/to/DeepSeek-V4-Flash-0731-JANG"
 )
 
 TOOLS = [
