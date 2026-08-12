@@ -3530,7 +3530,7 @@ class TestStandardArchitectures:
     def test_common_types_in_standard_architectures(self):
         from vmlx_engine.utils.tokenizer import _STANDARD_ARCHITECTURES
         common = ["llama", "qwen2", "qwen3", "gemma2", "gemma3", "mistral",
-                  "deepseek_v3", "phi3"]
+                  "deepseek_v3", "phi3", "minicpm"]
         for t in common:
             assert t in _STANDARD_ARCHITECTURES, \
                 f"model_type '{t}' missing from _STANDARD_ARCHITECTURES"
@@ -8375,6 +8375,47 @@ class TestStartupCompatibilityGuards:
 
         assert tokenizer._register_mimo_v2_runtime_for_mlx_lm() is False
         assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
+
+    def test_load_model_with_fallback_applies_authoritative_minicpm_defaults(
+        self, tmp_path, monkeypatch
+    ):
+        import mlx_lm
+
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        from vmlx_engine.utils import tokenizer
+
+        raw_config = {"architectures": ["MiniCPMForCausalLM"]}
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps(raw_config))
+        loaded = (object(), SimpleNamespace(chat_template="present"))
+        seen = {}
+
+        def fake_load(*args, **kwargs):
+            seen.update(kwargs)
+            return loaded
+
+        monkeypatch.setattr(mlx_lm, "load", fake_load)
+        monkeypatch.setattr(
+            tokenizer, "_inject_chat_template_if_missing", lambda *_: None
+        )
+        registry = get_model_config_registry()
+        registry.set_family_override("minicpm")
+        try:
+            assert tokenizer.load_model_with_fallback(
+                str(tmp_path), skip_turboquant=True
+            ) == loaded
+        finally:
+            registry.set_family_override(None)
+
+        assert seen["model_config"] == {
+            "model_type": "minicpm",
+            "rope_theta": 10_000.0,
+        }
+        assert json.loads(config_path.read_text()) == raw_config
+        assert tokenizer._minicpm_model_config_override(raw_config, "unknown") is None
+        assert tokenizer._minicpm_model_config_override(
+            {"model_type": "llama"}, "minicpm"
+        ) is None
 
     def test_mllm_registers_mimo_v2_before_mlx_vlm_resolution(
         self, tmp_path, monkeypatch

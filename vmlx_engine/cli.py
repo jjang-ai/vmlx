@@ -48,6 +48,10 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_MAX_OUTPUT_TOKENS_REASONING = DEFAULT_MAX_OUTPUT_TOKENS * 4
 
 
+class MiniCPMCachePolicyError(ValueError):
+    """Raised when MiniCPM is launched with an unsafe stored-KV codec."""
+
+
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
@@ -78,6 +82,37 @@ def _split_cli_values(values: list[str] | None) -> list[str]:
             if item:
                 out.append(item)
     return out
+
+
+def _apply_minicpm_cache_policy(args, model_config, logger) -> bool:
+    """Keep MiniCPM on the cache mode cleared by live validation."""
+    hints = dict(getattr(model_config, "architecture_hints", None) or {})
+    family = str(getattr(model_config, "family_name", "unknown") or "unknown")
+    if family != "minicpm":
+        return False
+
+    selected = str(
+        getattr(args, "kv_cache_quantization", "none") or "none"
+    ).strip().lower()
+    blocked = set(hints.get("blocked_kv_cache_storage_quantizations") or ())
+    if getattr(args, "kv_cache_quantization_explicit", False):
+        if selected in blocked:
+            raise MiniCPMCachePolicyError(
+                "MiniCPM blocks explicit --kv-cache-quantization "
+                f"{selected}: source-model validation reproduced cold/warm "
+                "output divergence. Use automatic mode or "
+                "--kv-cache-quantization none."
+            )
+        return True
+
+    args.kv_cache_quantization = "none"
+    os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+    os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+    logger.info(
+        "MiniCPM cache policy: automatic mode uses native raw KV because "
+        "source-model validation reproduced cold/warm divergence with q4/q8"
+    )
+    return True
 
 
 def _parse_lora_scales(values: list[str] | None) -> list[float] | None:
@@ -1184,6 +1219,7 @@ def serve_command(args):
     try:
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
+        _apply_minicpm_cache_policy(args, _mc, logger)
         # SSM disk restore remains governed by the explicit
         # VMLX_DISABLE_SSM_DISK_RESTORE opt-out in the disk store. Do not
         # silently disable it by family here: current Qwen hybrid records are
@@ -1495,6 +1531,9 @@ def serve_command(args):
                                 )
                 except Exception as _jit_e:
                     logger.debug(f"JANG-affine JIT auto-default skipped: {_jit_e}")
+    except MiniCPMCachePolicyError as e:
+        logger.error("MiniCPM cache policy rejected startup: %s", e)
+        raise SystemExit(2) from e
     except Exception as e:
         logger.debug(f"Registry auto-apply skipped: {e}")
 
@@ -2252,9 +2291,13 @@ def bench_command(args):
         from .model_config_registry import get_model_config_registry
 
         _mc = get_model_config_registry().lookup(args.model)
+        _apply_minicpm_cache_policy(args, _mc, logger)
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
+    except MiniCPMCachePolicyError as exc:
+        print(f"ERROR: MiniCPM cache policy rejected benchmark: {exc}")
+        raise SystemExit(2) from exc
     except Exception as exc:
         logger.debug("Bench model runtime policy lookup failed: %s", exc)
 
@@ -3547,6 +3590,12 @@ Examples:
     # Bench command
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")
     bench_parser.add_argument("model", type=str, help="Model to benchmark")
+    bench_parser.add_argument(
+        "--model-family",
+        type=str,
+        default=None,
+        help="Manually force the model family, matching the serve command.",
+    )
     bench_parser.add_argument(
         "--num-prompts", type=int, default=10, help="Number of prompts"
     )

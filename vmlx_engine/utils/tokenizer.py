@@ -123,6 +123,48 @@ def _sanitize_nemotron_quantization_config_for_load(config: dict) -> tuple[dict 
     return override, removed
 
 
+def _minicpm_model_config_override(
+    config: dict,
+    resolved_family: str | None,
+) -> dict | None:
+    """Mirror missing official defaults after authoritative family resolution.
+
+    Architecture metadata alone must not identify MiniCPM, and an explicit
+    non-MiniCPM identity remains authoritative even under a manual override.
+    """
+    if not isinstance(config, dict) or resolved_family != "minicpm":
+        return None
+
+    model_type = str(config.get("model_type") or "").lower()
+    if model_type not in {"", "minicpm"}:
+        return None
+
+    override: dict = {}
+    if not model_type:
+        override["model_type"] = "minicpm"
+    if "rope_theta" not in config:
+        override["rope_theta"] = 10_000.0
+    return override or None
+
+
+def _minicpm_model_config_override_for_path(model_path: str | Path) -> dict | None:
+    """Resolve MiniCPM authority, then build its load-only config overlay."""
+    config_path = Path(model_path) / "config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+
+    from ..model_config_registry import get_model_config_registry
+
+    resolved = get_model_config_registry().lookup(str(model_path))
+    return _minicpm_model_config_override(config, resolved.family_name)
+
+
 def _apply_turboquant_to_model(model, model_path: str):
     """Apply TurboQuant KV cache compression to any MLX model.
 
@@ -499,6 +541,7 @@ _STANDARD_ARCHITECTURES = {
     "cogvlm2",
     "florence2",
     "molmo",
+    "minicpm",
     "minicpmv",
     "smolvlm",
     "internvl_chat",
@@ -1260,6 +1303,20 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         _inject_chat_template_if_missing(_t, local_model_path)
         return _finalize_loaded_model(_m, _t)
 
+    # MiniCPM's official config class supplies model_type/rope_theta, while
+    # MLX-LM consumes the raw mapping. Apply those missing defaults only after
+    # the registry has already resolved plain-text MiniCPM through its normal
+    # authority tiers; architecture metadata alone must remain fail-closed.
+    _model_config_override = _minicpm_model_config_override_for_path(
+        local_model_path
+    )
+    if _model_config_override:
+        logger.info(
+            "MiniCPM authority resolved: applying missing official config-class "
+            "defaults in memory (%s)",
+            ", ".join(sorted(_model_config_override)),
+        )
+
     # Check if model needs tokenizer fallback (e.g., Nemotron).
     # Pass resolved local path so _get_model_type_from_config can read config.json.
     if _needs_tokenizer_fallback(local_model_path):
@@ -1274,7 +1331,10 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
 
     try:
         model, tokenizer = load(
-            model_name, tokenizer_config=tokenizer_config, lazy=False
+            model_name,
+            tokenizer_config=tokenizer_config,
+            lazy=False,
+            model_config=_model_config_override,
         )
         if not skip_turboquant:
             _apply_turboquant_to_model(model, local_model_path)

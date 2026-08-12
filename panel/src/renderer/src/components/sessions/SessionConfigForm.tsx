@@ -219,7 +219,7 @@ export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
   'gemma', 'gemma3', 'gemma3_text', 'gemma4', 'gemma4_text', 'medgemma',
   'phi4', 'phi4_reasoning', 'phi4_multimodal', 'phi3',
   'nemotron', 'nemotron_h', 'cohere', 'granite', 'granitemoehybrid', 'lfm2',
-  'minimax', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
+  'minimax', 'minicpm', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
   'hy_v3', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
   'openpangu_v2',
 ]
@@ -353,6 +353,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const normalizedEffectiveFamily = normalizeDetectedFamilyName(
     resolveEffectiveModelFamily(config.modelFamily, normalizedDetectedFamily),
   )
+  const minicpmCacheCodecRestricted = normalizedEffectiveFamily === 'minicpm'
   const dsv4Active = normalizedEffectiveFamily === 'deepseek-v4'
   const m3Active = normalizedDetectedFamily === 'minimax_m3'
   const hy3Active = normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'
@@ -452,7 +453,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   // "Auto / TurboQuant" when the runtime contract is intentionally "None".
   const effectiveStoredCacheQuantization = openPanguExactTypedCache
     ? 'none'
-    : nativeTypedCacheOwnsStoredCodec ? 'auto' : config.kvCacheQuantization
+    : minicpmCacheCodecRestricted && (config.kvCacheQuantization === 'q4' || config.kvCacheQuantization === 'q8')
+      ? 'auto'
+      : nativeTypedCacheOwnsStoredCodec ? 'auto' : config.kvCacheQuantization
   const explicitStoredCacheCodec = effectiveStoredCacheQuantization !== 'auto'
   const liveCacheCodecLabel = openPanguExactTypedCache
     ? 'openPangu typed composite cache'
@@ -623,6 +626,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       refreshMcpStatus()
     }
   }, [expandedSections.tools, sessionId])
+
+  useEffect(() => {
+    if (
+      minicpmCacheCodecRestricted &&
+      (config.kvCacheQuantization === 'q4' || config.kvCacheQuantization === 'q8')
+    ) {
+      onChange('kvCacheQuantization', 'auto')
+    }
+  }, [minicpmCacheCodecRestricted, config.kvCacheQuantization, onChange])
 
   const joinPolicyList = (values: Iterable<string>) => Array.from(values).sort().join('\n')
   const policyServers = normalizeMcpPolicyList(config.mcpEnabledServers)
@@ -1150,6 +1162,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic TurboQuant KV q4/q8 disabled. Prefix RAM/SSD records preserve native SWA+CSA/HCA state, while CSA/HCA pool quantization is read from the loaded bundle rather than a generic cache-codec override." />}
         {!effectivelyNoBatching && m3Active && <PerformanceHint text="MiniMax-M3 keeps generic KV q4/q8 disabled. Prefix reuse uses native MSA snapshots with keys, values, idx_keys, and absolute offsets; generic stored-KV codecs cannot preserve that cache format." />}
         {!effectivelyNoBatching && openPanguExactTypedCache && <PerformanceHint text="openPangu keeps generic KV q4/q8 disabled. Its exact typed snapshot owns MLA KV, DSA indexer, rotating-SWA metadata, and causal-convolution state as one full-precision record." />}
+        {!effectivelyNoBatching && minicpmCacheCodecRestricted && <PerformanceHint text="MiniCPM keeps generic KV q4/q8 disabled because live source-artifact validation reproduced cold/warm output divergence. Auto uses native raw KV; None explicitly disables cache quantization." />}
         {/* Live/native cache codec — automatic per architecture. */}
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
@@ -1200,8 +1213,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || nativeTypedCacheOwnsStoredCodec}>
             <option value="auto">{dsv4Active ? 'Native typed codec (bundle-derived)' : 'Auto (engine-selected: native/TurboQuant + stored fallback)'}</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
-            <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
-            <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>
+            {!minicpmCacheCodecRestricted && <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>}
+            {!minicpmCacheCodecRestricted && <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>}
           </select>
         </div>
         {effectiveStoredCacheQuantization !== 'auto' && effectiveStoredCacheQuantization !== 'none' && (

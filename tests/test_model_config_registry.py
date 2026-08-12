@@ -1969,6 +1969,23 @@ class TestModelConfigs:
         config = self._lookup(registry, "allenai/Molmo-7B", "molmo")
         assert config.is_mllm is True
 
+    def test_minicpm_text_config(self, registry):
+        config = self._lookup(registry, "openbmb/MiniCPM4-0.5B", "minicpm")
+
+        assert config.family_name == "minicpm"
+        assert config.cache_type == "kv"
+        assert config.tool_parser is None
+        assert config.reasoning_parser is None
+        assert config.supports_native_tools is False
+        assert config.supports_thinking is False
+        assert config.is_mllm is False
+        assert config.architecture_hints == {
+            "attention_arch": "full_attention_kv",
+            "live_turboquant_default": False,
+            "blocked_kv_cache_storage_quantizations": ["q4", "q8"],
+            "chat_encode_add_special_tokens": True,
+        }
+
     def test_minicpm_v_config(self, registry):
         config = self._lookup(registry, "openbmb/MiniCPM-V-2_6", "minicpmv")
         assert config.is_mllm is True

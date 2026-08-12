@@ -388,6 +388,16 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return None
 
+    def _chat_encode_add_special_tokens(self) -> bool:
+        """Return the registry-owned chat encoding policy for this family."""
+        try:
+            hints = get_model_config_registry().get_architecture_hints(
+                self._model_name
+            )
+            return bool(hints.get("chat_encode_add_special_tokens", False))
+        except Exception:
+            return False
+
     def _m3_vl_active(
         self,
         images: list | None,
@@ -1455,8 +1465,13 @@ class BatchedEngine(BaseEngine):
             else:
                 return 0, None
 
-            tokens_with = self._encode_rendered_prompt(enc, prompt_with_gen)
-            tokens_without = self._encode_rendered_prompt(enc, prompt_without_gen)
+            add_special_tokens = self._chat_encode_add_special_tokens()
+            tokens_with = self._encode_rendered_prompt(
+                enc, prompt_with_gen, add_special_tokens
+            )
+            tokens_without = self._encode_rendered_prompt(
+                enc, prompt_without_gen, add_special_tokens
+            )
             gen_len = len(tokens_with) - len(tokens_without)
             if gen_len > 0:
                 logger.debug(f"Gen prompt len: {gen_len} tokens")
@@ -1521,10 +1536,12 @@ class BatchedEngine(BaseEngine):
         return gen_len
 
     @staticmethod
-    def _encode_rendered_prompt(enc, prompt: str) -> list[int]:
-        """Encode an already-rendered chat template without adding BOS/EOS."""
+    def _encode_rendered_prompt(
+        enc, prompt: str, add_special_tokens: bool = False
+    ) -> list[int]:
+        """Encode rendered chat with the registry-owned special-token policy."""
         try:
-            return enc(prompt, add_special_tokens=False)
+            return enc(prompt, add_special_tokens=add_special_tokens)
         except TypeError:
             return enc(prompt)
 
@@ -1604,7 +1621,11 @@ class BatchedEngine(BaseEngine):
                 f"Tokenizer {type(tokenizer).__name__} has no encode method"
             )
 
-        token_ids = list(self._encode_rendered_prompt(enc, prompt))
+        token_ids = list(
+            self._encode_rendered_prompt(
+                enc, prompt, self._chat_encode_add_special_tokens()
+            )
+        )
         gen_prompt_len = max(0, min(int(gen_prompt_len or 0), len(token_ids)))
         cache_prompt_token_ids = (
             token_ids[:-gen_prompt_len] if gen_prompt_len > 0 else token_ids
@@ -1696,7 +1717,11 @@ class BatchedEngine(BaseEngine):
                         extra_template_kwargs=extra_template_kwargs,
                         skip_generation_prompt=True,
                     )
-                    cur_count = len(self._encode_rendered_prompt(enc, rendered))
+                    cur_count = len(
+                        self._encode_rendered_prompt(
+                            enc, rendered, self._chat_encode_add_special_tokens()
+                        )
+                    )
                 except Exception:
                     # Re-rendering can fail for partial histories on some
                     # templates (e.g. assistant-prefix-only). Skip this
@@ -2571,7 +2596,7 @@ class BatchedEngine(BaseEngine):
             videos=all_videos if all_videos else None,
             audio=all_audio if all_audio else None,
             gen_prompt_len=gen_prompt_len,
-            encode_add_special_tokens=False,
+            encode_add_special_tokens=self._chat_encode_add_special_tokens(),
             enable_thinking=thinking_enabled,
             **kwargs,
         )
@@ -2746,7 +2771,7 @@ class BatchedEngine(BaseEngine):
             audio=all_audio if all_audio else None,
             request_id=request_id,
             gen_prompt_len=gen_prompt_len,
-            encode_add_special_tokens=False,
+            encode_add_special_tokens=self._chat_encode_add_special_tokens(),
             enable_thinking=thinking_enabled,
             **kwargs,
         ):

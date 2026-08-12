@@ -122,6 +122,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   cogvlm2: "cogvlm",
   florence2: "florence",
   molmo: "molmo",
+  minicpm: "minicpm",
   minicpmv: "minicpm-v",
   smolvlm: "smolvlm",
   internvl_chat: "internvl",

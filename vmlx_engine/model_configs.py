@@ -1416,6 +1416,27 @@ def register_all(registry=None):
 
     _register(
         ModelConfig(
+            family_name="minicpm",
+            model_types=["minicpm"],
+            cache_type="kv",
+            tool_parser=None,
+            supports_native_tools=False,
+            reasoning_parser=None,
+            supports_thinking=False,
+            is_mllm=False,
+            architecture_hints={
+                "attention_arch": "full_attention_kv",
+                "live_turboquant_default": False,
+                "blocked_kv_cache_storage_quantizations": ["q4", "q8"],
+                "chat_encode_add_special_tokens": True,
+            },
+            priority=20,
+            description="MiniCPM text",
+        )
+    )
+
+    _register(
+        ModelConfig(
             family_name="minicpm_v",
             model_types=["minicpmv"],
             cache_type="kv",
