@@ -6324,6 +6324,10 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
         from mlx_lm.generate import BatchRotatingKVCache
     except ImportError:
         BatchRotatingKVCache = None
+    from .models.minimax_m3.cache import (
+        BatchMiniMaxM3SparseCache,
+        MiniMaxM3SparseCache,
+    )
 
     batch_cache = []
     for i in range(len(caches[0])):
@@ -6331,7 +6335,11 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
         layer_caches = [c[i] for c in caches]
 
         try:
-            if _QuantizedKVCache is not None and isinstance(layer_cache, _QuantizedKVCache):
+            if isinstance(layer_cache, MiniMaxM3SparseCache):
+                batch_cache.append(
+                    BatchMiniMaxM3SparseCache.merge(layer_caches)
+                )
+            elif _QuantizedKVCache is not None and isinstance(layer_cache, _QuantizedKVCache):
                 # Dequantize all layers before merging as regular KVCache
                 dequantized = []
                 for qkv in layer_caches:
@@ -6397,6 +6405,10 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
                 logger.warning(f"Layer {i}: {type(layer_cache).__name__} has no merge(), using empty BatchKVCache")
                 batch_cache.append(BatchKVCache([0] * len(caches)))
         except Exception as e:
+            if isinstance(layer_cache, MiniMaxM3SparseCache):
+                # Dropping the index lane would make every subsequent decode
+                # retry fail less clearly. Let the prompt batch fail intact.
+                raise
             logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using fallback empty cache: {e}")
             if isinstance(layer_cache, (_MambaCache, ArraysCache)):
                 from .utils.mamba_cache import BatchMambaCache
@@ -6434,10 +6446,18 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
         from mlx_lm.generate import BatchRotatingKVCache
     except ImportError:
         BatchRotatingKVCache = None
+    from .models.minimax_m3.cache import (
+        BatchMiniMaxM3SparseCache,
+        MiniMaxM3SparseCache,
+    )
 
     converted = []
     for c in cache:
-        if isinstance(c, BatchKVCache):
+        if isinstance(c, BatchMiniMaxM3SparseCache):
+            converted.append(c)
+        elif isinstance(c, MiniMaxM3SparseCache):
+            converted.append(BatchMiniMaxM3SparseCache.merge([c]))
+        elif isinstance(c, BatchKVCache):
             converted.append(c)  # Already batch-aware
         elif QuantizedKVCache is not None and isinstance(c, QuantizedKVCache):
             # QuantizedKVCache (sibling of KVCache, both extend _BaseCache)

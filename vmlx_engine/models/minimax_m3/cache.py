@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import Any
 
 import mlx.core as mx
-from mlx_lm.models.cache import KVCache
+from mlx_lm.models.cache import BatchKVCache, KVCache, dynamic_roll
 
 CACHE_TUPLE_TAG = "minimax_m3"
 
@@ -108,6 +108,219 @@ class MiniMaxM3SparseCache(KVCache):
             self.idx_keys = self.idx_keys[..., : self.offset, :]
             self._idx_offset = self.offset
         return trimmed
+
+
+class BatchMiniMaxM3SparseCache(BatchKVCache):
+    """Batch-aware MiniMax-M3 cache that keeps indexer keys aligned with K/V.
+
+    ``MiniMaxM3SparseCache`` subclasses ``KVCache``, so the generic vMLX batch
+    promotion used to silently turn it into a stock ``BatchKVCache``.  That
+    discarded ``idx_keys`` and made the first concurrent decode step fail at
+    ``update_index``.  This class mirrors every BatchKVCache operation that can
+    change sequence or batch alignment and applies it to the third tensor too.
+    """
+
+    def __init__(self, left_padding: list[int]):
+        super().__init__(left_padding)
+        self.idx_keys: mx.array | None = None
+        self._idx_offset = 0
+
+    def update_index(self, idx_k: mx.array) -> mx.array:
+        """Append batched indexer keys after the matching K/V append."""
+        if idx_k.ndim != 4:
+            raise ValueError(f"idx_k must have shape [B, H, T, D], got {idx_k.shape}")
+        if int(idx_k.shape[0]) != int(self.offset.shape[0]):
+            raise ValueError(
+                "idx_k batch does not match cache batch: "
+                f"{idx_k.shape[0]} != {self.offset.shape[0]}"
+            )
+
+        prev = self._idx_offset
+        target = prev + int(idx_k.shape[2])
+        # QSA appends K/V immediately before calling update_index.  Refuse to
+        # continue if a future call site breaks that lockstep invariant.
+        if target != self._idx:
+            raise ValueError(
+                "indexer and K/V cache lengths diverged: "
+                f"idx target={target}, kv target={self._idx}"
+            )
+
+        if self.idx_keys is None or target > int(self.idx_keys.shape[2]):
+            batch, heads, _, dim = idx_k.shape
+            n_steps = (self.step + int(idx_k.shape[2]) - 1) // self.step
+            new_idx = mx.zeros(
+                (batch, heads, n_steps * self.step, dim), dtype=idx_k.dtype
+            )
+            if self.idx_keys is not None:
+                if prev % self.step != 0:
+                    self.idx_keys = self.idx_keys[..., :prev, :]
+                self.idx_keys = mx.concatenate([self.idx_keys, new_idx], axis=2)
+            else:
+                self.idx_keys = new_idx
+
+        self.idx_keys[..., prev:target, :] = idx_k
+        self._idx_offset = target
+        return self.idx_keys[..., :target, :]
+
+    @classmethod
+    def merge(cls, caches: list[MiniMaxM3SparseCache]):
+        """Right-align single-request sparse caches into one decode batch."""
+        if not caches:
+            raise ValueError("cannot merge an empty cache list")
+
+        lengths = [int(c.size()) for c in caches]
+        max_length = max(lengths)
+        padding = [max_length - length for length in lengths]
+        if max_length == 0:
+            return cls([0] * len(caches))
+
+        for cache in caches:
+            if cache.keys is not None and cache.idx_keys is None:
+                raise ValueError("sparse cache has K/V state but no idx_keys")
+
+        base = BatchKVCache.merge(caches)
+        populated = [c for c in caches if c.idx_keys is not None]
+        heads = max(int(c.idx_keys.shape[1]) for c in populated)
+        dim = max(int(c.idx_keys.shape[3]) for c in populated)
+        dtype = populated[0].idx_keys.dtype
+        idx_keys = mx.zeros((len(caches), heads, max_length, dim), dtype=dtype)
+        for row, (pad, cache) in enumerate(zip(padding, caches)):
+            if cache.idx_keys is None:
+                continue
+            length = lengths[row]
+            idx_keys[row : row + 1, :, pad : pad + length, :] = cache.idx_keys[
+                ..., :length, :
+            ]
+
+        merged = cls(padding)
+        merged.keys = base.keys
+        merged.values = base.values
+        merged.offset = base.offset
+        merged.left_padding = base.left_padding
+        merged._idx = base._idx
+        merged.idx_keys = idx_keys
+        merged._idx_offset = max_length
+        return merged
+
+    def extract(self, idx: int) -> MiniMaxM3SparseCache:
+        """Extract one row without losing the sparse indexer history."""
+        cache = MiniMaxM3SparseCache()
+        if self.keys is None:
+            return cache
+        padding = int(self.left_padding[idx].item())
+        cache.keys = mx.contiguous(self.keys[idx : idx + 1, :, padding : self._idx])
+        cache.values = mx.contiguous(self.values[idx : idx + 1, :, padding : self._idx])
+        if self.idx_keys is None:
+            raise ValueError("batched sparse cache has K/V state but no idx_keys")
+        cache.idx_keys = mx.contiguous(
+            self.idx_keys[idx : idx + 1, :, padding : self._idx]
+        )
+        cache.offset = int(cache.keys.shape[2])
+        cache._idx_offset = cache.offset
+        return cache
+
+    def filter(self, batch_indices) -> None:
+        """Keep selected rows and shift all three tensors by the same padding."""
+        selected_padding = self.left_padding[batch_indices]
+        min_left_pad = int(selected_padding.min().item())
+        if self.idx_keys is not None:
+            self.idx_keys = self.idx_keys[batch_indices]
+        super().filter(batch_indices)
+        # BatchKVCache.filter() removes the minimum remaining left padding from
+        # K/V but retains any 256-token capacity reserve. Apply that exact shift
+        # instead of inferring it from the allocated tensor length.
+        if self.idx_keys is not None and min_left_pad > 0:
+            self.idx_keys = self.idx_keys[..., min_left_pad:, :]
+        self._idx_offset = self._idx
+
+    @staticmethod
+    def _pad_idx_for_extend(
+        cache: BatchMiniMaxM3SparseCache,
+        *,
+        max_idx: int,
+        max_size: int,
+        heads: int,
+        dim: int,
+        dtype,
+    ) -> mx.array:
+        if cache.idx_keys is None:
+            if cache.keys is not None:
+                raise ValueError("sparse cache has K/V state but no idx_keys")
+            idx_keys = mx.zeros(
+                (int(cache.offset.shape[0]), heads, 0, dim), dtype=dtype
+            )
+        else:
+            idx_keys = cache.idx_keys
+
+        left = max_idx - int(cache._idx)
+        right = max_size - int(idx_keys.shape[2]) - left
+        if right < 0:
+            idx_keys = idx_keys[..., :right, :]
+            right = 0
+        if left or right:
+            idx_keys = mx.pad(
+                idx_keys,
+                [(0, 0), (0, 0), (left, right), (0, 0)],
+            )
+        return idx_keys
+
+    def extend(self, other) -> None:
+        """Append batch rows while retaining right-aligned indexer histories."""
+        if not isinstance(other, BatchMiniMaxM3SparseCache):
+            raise TypeError(
+                "BatchMiniMaxM3SparseCache can only extend the same cache type"
+            )
+        if self.keys is None and other.keys is None:
+            super().extend(other)
+            self._idx_offset = self._idx
+            return
+
+        populated = [c.idx_keys for c in (self, other) if c.idx_keys is not None]
+        if not populated:
+            raise ValueError("sparse caches have K/V state but no idx_keys")
+        heads = max(int(value.shape[1]) for value in populated)
+        dim = max(int(value.shape[3]) for value in populated)
+        dtype = populated[0].dtype
+        max_idx = max(int(self._idx), int(other._idx))
+        max_size = max(
+            int(self.keys.shape[2]) if self.keys is not None else 0,
+            int(other.keys.shape[2]) if other.keys is not None else 0,
+        )
+        left_idx = self._pad_idx_for_extend(
+            self,
+            max_idx=max_idx,
+            max_size=max_size,
+            heads=heads,
+            dim=dim,
+            dtype=dtype,
+        )
+        right_idx = self._pad_idx_for_extend(
+            other,
+            max_idx=max_idx,
+            max_size=max_size,
+            heads=heads,
+            dim=dim,
+            dtype=dtype,
+        )
+        super().extend(other)
+        self.idx_keys = mx.concatenate([left_idx, right_idx], axis=0)
+        self._idx_offset = self._idx
+
+    def trim(self, n: int) -> int:
+        trimmed = super().trim(n)
+        self._idx_offset = self._idx
+        return trimmed
+
+    def finalize(self) -> None:
+        padding = self._right_padding
+        if padding is not None and self.idx_keys is not None:
+            self.idx_keys = dynamic_roll(self.idx_keys, padding[:, None], axis=2)
+        super().finalize()
+        self._idx_offset = self._idx
+
+    @property
+    def nbytes(self):
+        return super().nbytes + (0 if self.idx_keys is None else self.idx_keys.nbytes)
 
 
 def restore_minimax_m3_sparse(keys, values, idx) -> MiniMaxM3SparseCache:
