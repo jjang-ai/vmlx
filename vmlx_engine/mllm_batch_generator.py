@@ -1815,6 +1815,45 @@ def _normalize_qwen_video_arrays_for_processor(
     return normalized
 
 
+def _fetch_video_for_processor(
+    video_path: str,
+    *,
+    fps: float,
+    max_frames: int,
+) -> tuple[Any, float]:
+    """Load video frames across supported mlx-vlm API generations.
+
+    mlx-vlm 0.5 exposed ``video_generate.fetch_video``. Newer releases expose
+    the equivalent decoder as ``utils.load_video`` instead.
+    """
+    try:
+        video_generate = importlib.import_module("mlx_vlm.video_generate")
+        fetch_video = getattr(video_generate, "fetch_video")
+    except (ImportError, AttributeError):
+        from mlx_vlm.utils import load_video
+
+        video_input, sample_fps = load_video(
+            str(video_path),
+            fps=float(fps),
+            max_frames=int(max_frames),
+        )
+        return video_input, float(sample_fps)
+
+    video_result = fetch_video(
+        {
+            "video": str(video_path),
+            "fps": float(fps),
+            "max_frames": int(max_frames),
+        },
+        return_video_sample_fps=True,
+    )
+    if isinstance(video_result, tuple) and len(video_result) == 2:
+        video_input, sample_fps = video_result
+    else:
+        video_input, sample_fps = video_result, fps
+    return video_input, float(sample_fps)
+
+
 def _call_processor_direct_unscoped(
     processor: Any,
     *,
@@ -7314,8 +7353,6 @@ class MLLMBatchGenerator:
                 MAX_FRAMES,
                 process_video_input,
             )
-            from mlx_vlm.video_generate import fetch_video
-
             fps = request.video_fps or DEFAULT_FPS
             max_frames = request.video_max_frames or MAX_FRAMES
 
@@ -7323,14 +7360,11 @@ class MLLMBatchGenerator:
                 try:
                     video_path = process_video_input(video)
                     video_cache_sources.append(video_path)
-                    video_result = fetch_video(
-                        {"video": video_path, "fps": fps, "max_frames": max_frames},
-                        return_video_sample_fps=True,
+                    video_input, sample_fps = _fetch_video_for_processor(
+                        video_path,
+                        fps=fps,
+                        max_frames=max_frames,
                     )
-                    if isinstance(video_result, tuple) and len(video_result) == 2:
-                        video_input, sample_fps = video_result
-                    else:
-                        video_input, sample_fps = video_result, fps
                     video_inputs.append(video_input)
                     video_sample_fps.append(float(sample_fps))
                     video_sample_timestamps.append(

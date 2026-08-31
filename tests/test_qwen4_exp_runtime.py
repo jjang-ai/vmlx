@@ -1497,6 +1497,41 @@ def test_qwen_video_float_255_input_preserves_uint8_processor_scale():
     assert untouched is unit_interval
 
 
+@pytest.mark.parametrize("legacy_module", [None, object()])
+def test_current_mlx_vlm_video_loader_replaces_removed_fetch_video(
+    monkeypatch, legacy_module
+):
+    import mlx_vlm.utils as mlx_vlm_utils
+
+    import vmlx_engine.mllm_batch_generator as batch_generator
+
+    calls = []
+    frames = np.zeros((4, 3, 8, 8), dtype=np.uint8)
+
+    def import_module(name, package=None):
+        assert name == "mlx_vlm.video_generate"
+        if legacy_module is None:
+            raise ModuleNotFoundError(name)
+        return legacy_module
+
+    def load_video(path, *, fps, max_frames):
+        calls.append((path, fps, max_frames))
+        return frames, 1.5
+
+    monkeypatch.setattr(batch_generator.importlib, "import_module", import_module)
+    monkeypatch.setattr(mlx_vlm_utils, "load_video", load_video)
+
+    result, sample_fps = batch_generator._fetch_video_for_processor(
+        "/tmp/clip.mp4",
+        fps=2.0,
+        max_frames=16,
+    )
+
+    assert result is frames
+    assert sample_fps == 1.5
+    assert calls == [("/tmp/clip.mp4", 2.0, 16)]
+
+
 def test_qwen4_exp_reasoning_and_tools_preserve_native_bundle_contract():
     from vmlx_engine.model_config_registry import ModelConfigRegistry
     from vmlx_engine.model_configs import register_all
