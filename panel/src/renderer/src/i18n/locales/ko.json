@@ -1668,7 +1668,7 @@
     "picker": {
       "title": "이미지 서버 시작",
       "genHint": "생성: Schnell이 가장 빠르고 (4단계), Dev가 최고 품질입니다. 4비트는 ~6GB, 전체 정밀도는 ~24GB를 사용합니다.",
-      "editHint": "편집: 전체 정밀도만 지원 — 양자화된 편집 모델은 사용할 수 없는 결과를 생성합니다.",
+      "editHint": "편집: 테스트한 번들에서 4비트 이하 편집 변형은 사용할 수 없는 결과를 냈습니다. 8비트 또는 전체 정밀도를 사용하세요.",
       "imageGeneration": "이미지 생성",
       "imageEditing": "이미지 편집",
       "customPathPlaceholder": "예: black-forest-labs/FLUX.1-schnell 또는 /path/to/model",
@@ -1715,7 +1715,7 @@
       "genStrong": "생성:",
       "genHintBody": "Schnell이 가장 빠르고(4스텝), Dev가 품질이 가장 좋습니다. 4비트는 약 6GB, 전체는 약 24GB를 사용합니다. 16GB RAM에서는 Schnell 또는 Klein 4B를 4비트로 사용하세요.",
       "editStrong": "편집:",
-      "editHintBody": "전체 정밀도 전용 — 양자화된 편집 모델은 쓸 수 없는 결과를 냅니다. 모델에 따라 24-54GB가 필요합니다.",
+      "editHintBody": "테스트한 번들에서 4비트 이하 편집 변형은 사용할 수 없는 결과를 냈습니다. 8비트 또는 전체 정밀도를 사용하세요.",
       "editModelsIntro": "사진과 텍스트 프롬프트를 제출하여 이미지를 편집, 인페인팅, 변환하세요. 최고 품질을 위해 전체 정밀도만 지원합니다. 더 많은 편집 모델이 곧 추가됩니다.",
       "serverTabDownloadStrong": "서버 탭 > 다운로드",
       "sectionSuffix": "섹션에서.",
@@ -1913,6 +1913,10 @@
         "pathMissing": "\"{path}\"이(가) 존재하지 않습니다.",
         "storedVolumeUnavailable": "\"{model}\"은(는) 마운트되지 않은 볼륨 \"{volume}\"의 \"{path}\"에 등록되어 있습니다. 드라이브를 연결한 뒤 다시 시도하세요.",
         "notDownloaded": "모델 \"{model}\"이(가) 다운로드되지 않았습니다. 먼저 다운로드 버튼을 사용하세요."
+      },
+      "warnings": {
+        "editLowPrecision": "이 편집 모델은 {bits}비트로 실행 중입니다. 테스트한 번들에서 4비트 이하 편집 변형은 노이즈를 반환하고 지시를 무시했으며, 8비트 변형은 올바르게 편집했습니다.",
+        "useAlternative": "{name} 사용"
       }
     }
   },

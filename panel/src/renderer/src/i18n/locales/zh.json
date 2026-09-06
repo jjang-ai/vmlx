@@ -1668,7 +1668,7 @@
     "picker": {
       "title": "启动图像服务器",
       "genHint": "生成:Schnell 最快 (4 步),Dev 质量最高。4-bit 约占用 6GB,全精度约 24GB。",
-      "editHint": "编辑:仅支持全精度 — 量化编辑模型会产生不可用的结果。",
+      "editHint": "编辑：在测试的模型包中，4 位及以下的编辑变体输出无法使用；请使用 8 位或全精度。",
       "imageGeneration": "图像生成",
       "imageEditing": "图像编辑",
       "customPathPlaceholder": "例如 black-forest-labs/FLUX.1-schnell 或 /path/to/model",
@@ -1715,7 +1715,7 @@
       "genStrong": "生成：",
       "genHintBody": "Schnell 最快（4 步），Dev 质量最高。4 位约占 6GB，完整版约 24GB。16GB 内存建议使用 4 位的 Schnell 或 Klein 4B。",
       "editStrong": "编辑：",
-      "editHintBody": "仅支持全精度 — 量化的编辑模型会产生不可用的结果。视模型需要 24-54 GB。",
+      "editHintBody": "在测试的模型包中，4 位及以下的编辑变体输出无法使用；请使用 8 位或全精度。",
       "editModelsIntro": "提交照片 + 文字提示词即可编辑、修复或变换图片。为保证最佳质量仅支持全精度。更多编辑模型即将推出。",
       "serverTabDownloadStrong": "服务器标签页 > 下载",
       "sectionSuffix": "部分。",
@@ -1913,6 +1913,10 @@
         "pathMissing": "\"{path}\" 不存在。",
         "storedVolumeUnavailable": "\"{model}\" 已注册在未挂载的卷 \"{volume}\" 上的 \"{path}\"。请连接驱动器后重试。",
         "notDownloaded": "模型 \"{model}\" 尚未下载。请先使用下载按钮。"
+      },
+      "warnings": {
+        "editLowPrecision": "此编辑模型以 {bits} 位运行。在测试的模型包中，4 位及以下的编辑变体返回噪点并忽略指令；8 位变体能正确编辑。",
+        "useAlternative": "使用 {name}"
       }
     }
   },

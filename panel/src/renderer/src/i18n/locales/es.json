@@ -1668,7 +1668,7 @@
     "picker": {
       "title": "Iniciar servidor de imágenes",
       "genHint": "Generación: Schnell es el más rápido (4 pasos), Dev ofrece la mejor calidad. 4 bits usa ~6GB, precisión completa ~24GB.",
-      "editHint": "Edición: solo precisión completa — los modelos de edición cuantizados producen resultados inservibles.",
+      "editHint": "Edición: las variantes de edición de 4 bits o menos produjeron resultados inutilizables en los paquetes probados; usa 8 bits o precisión completa.",
       "imageGeneration": "Generación de imágenes",
       "imageEditing": "Edición de imágenes",
       "customPathPlaceholder": "p. ej., black-forest-labs/FLUX.1-schnell o /ruta/al/modelo",
@@ -1715,7 +1715,7 @@
       "genStrong": "Generación:",
       "genHintBody": "Schnell es el más rápido (4 pasos), Dev es el de mayor calidad. 4 bits usa ~6GB, completo ~24GB. Con 16GB de RAM, usa Schnell o Klein 4B en 4 bits.",
       "editStrong": "Edición:",
-      "editHintBody": "Solo precisión completa — los modelos de edición cuantizados producen resultados inutilizables. Requiere 24-54 GB según el modelo.",
+      "editHintBody": "las variantes de edición de 4 bits o menos produjeron resultados inutilizables en los paquetes probados; usa 8 bits o precisión completa.",
       "editModelsIntro": "Envía una foto + prompt de texto para editar, rellenar o transformar imágenes. Solo precisión completa para la mejor calidad. Pronto habrá más modelos de edición.",
       "serverTabDownloadStrong": "pestaña Servidor > Descargas",
       "sectionSuffix": "sección.",
@@ -1913,6 +1913,10 @@
         "pathMissing": "\"{path}\" no existe.",
         "storedVolumeUnavailable": "\"{model}\" está registrado en \"{path}\" en el volumen \"{volume}\", que no está montado. Conecta la unidad e inténtalo de nuevo.",
         "notDownloaded": "El modelo \"{model}\" no está descargado. Usa primero el botón Descargar."
+      },
+      "warnings": {
+        "editLowPrecision": "Este modelo de edición funciona a {bits} bits. En el paquete probado, las variantes de edición de 4 bits o menos devolvieron ruido e ignoraron la instrucción; la variante de 8 bits produjo ediciones correctas.",
+        "useAlternative": "Usar {name}"
       }
     }
   },

@@ -1668,7 +1668,7 @@
     "picker": {
       "title": "画像サーバーを開始",
       "genHint": "生成: Schnell が最速 (4 ステップ)、Dev が最高品質です。4-bit は約 6GB、フル精度は約 24GB を使用します。",
-      "editHint": "編集: フル精度のみ — 量子化された編集モデルは使用に耐えない結果になります。",
+      "editHint": "編集: テストしたバンドルでは 4 ビット以下の編集バリアントは使用に耐えない出力になりました。8 ビットまたはフル精度を使ってください。",
       "imageGeneration": "画像生成",
       "imageEditing": "画像編集",
       "customPathPlaceholder": "例: black-forest-labs/FLUX.1-schnell または /path/to/model",
@@ -1715,7 +1715,7 @@
       "genStrong": "生成:",
       "genHintBody": "Schnellは最速（4ステップ）、Devは最高品質です。4ビットは約6GB、フルは約24GB使用します。RAM 16GBの場合はSchnellまたはKlein 4Bを4ビットで使ってください。",
       "editStrong": "編集:",
-      "editHintBody": "フル精度のみ — 量子化した編集モデルは使い物にならない結果を生みます。モデルにより24-54 GBが必要です。",
+      "editHintBody": "テストしたバンドルでは 4 ビット以下の編集バリアントは使用に耐えない出力になりました。8 ビットまたはフル精度を使ってください。",
       "editModelsIntro": "写真とテキストプロンプトを送信して、画像の編集・インペイント・変換ができます。最高品質のためフル精度のみ。編集モデルは今後追加予定です。",
       "serverTabDownloadStrong": "サーバータブ > ダウンロード",
       "sectionSuffix": "セクション。",
@@ -1913,6 +1913,10 @@
         "pathMissing": "\"{path}\" は存在しません。",
         "storedVolumeUnavailable": "\"{model}\" はマウントされていないボリューム \"{volume}\" 上の \"{path}\" に登録されています。ドライブを接続してからやり直してください。",
         "notDownloaded": "モデル \"{model}\" はダウンロードされていません。先にダウンロードボタンを使用してください。"
+      },
+      "warnings": {
+        "editLowPrecision": "この編集モデルは {bits} ビットで動作しています。テストしたバンドルでは 4 ビット以下の編集バリアントはノイズを返し指示を無視しましたが、8 ビットのバリアントは正しく編集できました。",
+        "useAlternative": "{name} を使用"
       }
     }
   },

@@ -86,7 +86,7 @@ export interface LocalImageModelVariant {
 }
 
 export type LocalImageModelResolution =
-  | { kind: 'model'; path: string; quantize: number | null; quantizeSource: QuantizeSource | null; mfluxVersion: string | null }
+  | { kind: 'model'; path: string; quantize: number | null; quantizeSource: QuantizeSource | null; mfluxVersion: string | null; siblings?: LocalImageModelVariant[] }
   | { kind: 'variants'; path: string; variants: LocalImageModelVariant[]; requestedQuantize: number }
   | { kind: 'not-a-model-directory'; path: string }
   | { kind: 'path-missing'; path: string; volume: string | null }
@@ -199,7 +199,7 @@ export function resolveLocalImageModelDirectory(
     return { kind: 'path-missing', path: dir, volume: unmountedVolume(dir, fs) }
   }
 
-  if (isModelDirectory(dir, fs)) return describeModel(dir, requestedQuantize, fs)
+  if (isModelDirectory(dir, fs)) return withSiblings(describeModel(dir, requestedQuantize, fs), fs)
 
   const variants: LocalImageModelVariant[] = []
   for (const name of fs.readdirSync(dir).sort()) {
@@ -210,9 +210,36 @@ export function resolveLocalImageModelDirectory(
   }
   if (variants.length === 0) return { kind: 'not-a-model-directory', path: dir }
   const match = requestedQuantize > 0 ? variants.find((v) => v.quantize === requestedQuantize) : undefined
-  if (match) return describeModel(match.path, requestedQuantize, fs)
+  if (match) return { ...describeModel(match.path, requestedQuantize, fs), siblings: variants.filter((v) => v.path !== match.path) }
   if (variants.length === 1) return describeModel(variants[0].path, requestedQuantize, fs)
   return { kind: 'variants', path: dir, variants, requestedQuantize }
+}
+
+/** Other model variants living next to `res.path` (q3/ q4/ q8/ … under one parent), if any. */
+function withSiblings(res: Extract<LocalImageModelResolution, { kind: 'model' }>, fs: LocalImageModelFs): Extract<LocalImageModelResolution, { kind: 'model' }> {
+  const parent = resolve(res.path, '..')
+  if (!fs.isDirectory(parent)) return res
+  const siblings: LocalImageModelVariant[] = []
+  for (const name of fs.readdirSync(parent).sort()) {
+    const sub = join(parent, name)
+    if (sub === res.path || !fs.isDirectory(sub) || !isModelDirectory(sub, fs)) continue
+    const declared = readBundleQuantization(sub, fs)
+    siblings.push({ path: sub, quantize: declared.bits, quantizeSource: declared.source, name })
+  }
+  return siblings.length ? { ...res, siblings } : res
+}
+
+/**
+ * Edit classes at 4-bit and below: measured 2026-09-06 on Qwen-Image-Edit-mflux
+ * through mflux directly (no vMLX): q4 returned noise and ignored the
+ * instruction on a synthetic and a photographic source; q8 followed it.
+ * Returns the best higher-precision sibling to offer, or null.
+ */
+export const EDIT_LOW_PRECISION_MAX_BITS = 4
+export function editPrecisionAlternative(res: Extract<LocalImageModelResolution, { kind: 'model' }>): LocalImageModelVariant | null {
+  if (res.quantize === null || res.quantize > EDIT_LOW_PRECISION_MAX_BITS) return null
+  const better = (res.siblings || []).filter((v) => v.quantize === null || v.quantize >= 8).sort((a, b) => (a.quantize ?? 99) - (b.quantize ?? 99))
+  return better[0] || null
 }
 
 export function describeVariants(res: Extract<LocalImageModelResolution, { kind: 'variants' }>): string {

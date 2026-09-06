@@ -521,6 +521,9 @@ declare global {
           error?: string;
           /** Precision the server was configured with (a local bundle's own level wins over the request). */
           quantize?: number;
+          /** Non-fatal advisory the renderer translates (image.server.warnings.<code>), e.g. a low-precision edit variant. */
+          warningCode?: string;
+          warningParams?: Record<string, string>;
           /** Stable error identity the renderer translates (image.server.errors.<code>). */
           errorCode?: string;
           errorParams?: Record<string, string>;

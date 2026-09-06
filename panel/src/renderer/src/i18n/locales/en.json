@@ -1668,7 +1668,7 @@
     "picker": {
       "title": "Start Image Server",
       "genHint": "Generation: Schnell is fastest (4 steps), Dev is highest quality. 4-bit uses ~6GB, Full ~24GB.",
-      "editHint": "Editing: Full precision only — quantized edit models produce unusable results.",
+      "editHint": "Editing: 4-bit and lower edit variants produced unusable output on tested bundles; use 8-bit or full precision.",
       "imageGeneration": "Image Generation",
       "imageEditing": "Image Editing",
       "customPathPlaceholder": "e.g., black-forest-labs/FLUX.1-schnell or /path/to/model",
@@ -1715,7 +1715,7 @@
       "genStrong": "Generation:",
       "genHintBody": "Schnell is fastest (4 steps), Dev is highest quality. 4-bit uses ~6GB, Full ~24GB. For 16GB RAM, use Schnell or Klein 4B at 4-bit.",
       "editStrong": "Editing:",
-      "editHintBody": "Full precision only — quantized edit models produce unusable results. Requires 24-54 GB depending on model.",
+      "editHintBody": "4-bit and lower edit variants produced unusable output on tested bundles; use 8-bit or full precision.",
       "editModelsIntro": "Submit a photo + text prompt to edit, inpaint, or transform images. Full precision only for best quality. More editing models coming soon.",
       "serverTabDownloadStrong": "Server tab > Download",
       "sectionSuffix": "section.",
@@ -1913,6 +1913,10 @@
         "pathMissing": "\"{path}\" does not exist.",
         "storedVolumeUnavailable": "\"{model}\" is registered at \"{path}\" on the volume \"{volume}\", which is not mounted. Connect the drive and try again.",
         "notDownloaded": "Model \"{model}\" not downloaded. Use the Download button first."
+      },
+      "warnings": {
+        "editLowPrecision": "This edit model runs at {bits}-bit. On the tested bundle, 4-bit and lower edit variants returned noise and ignored the instruction; the 8-bit variant produced correct edits.",
+        "useAlternative": "Use {name}"
       }
     }
   },

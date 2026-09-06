@@ -76,6 +76,8 @@ export function ImageTab() {
   const [generating, setGenerating] = useState(false)
   const [generations, setGenerations] = useState<ImageGenerationInfo[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Non-fatal advisory from the start handler (e.g. low-precision edit variant) with an optional alternative to start instead.
+  const [warning, setWarning] = useState<{ text: string; alternativePath?: string; alternativeName?: string; alternativeBits?: number } | null>(null)
   const [quantize, setQuantize] = useState<number>(4)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -375,6 +377,17 @@ export function ImageTab() {
       if (result.success) {
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
+        if (result.warningCode) {
+          const p = result.warningParams || {}
+          setWarning({
+            text: t(`image.server.warnings.${result.warningCode}`, { ...p, defaultValue: result.warningCode }),
+            alternativePath: p.alternativePath || undefined,
+            alternativeName: p.alternative || undefined,
+            alternativeBits: p.alternativeBits ? Number(p.alternativeBits) : undefined,
+          })
+        } else {
+          setWarning(null)
+        }
         // A local folder runs at its own precision whatever the picker said;
         // show and persist the effective value the main process resolved.
         if (typeof result.quantize === 'number' && result.quantize !== q) {
@@ -632,6 +645,22 @@ export function ImageTab() {
           </div>
         )}
 
+        {warning && (
+          <div role="alert" data-vmlx-tone="warning" data-vmlx-control="image-warning" className="mx-4 mt-2 px-3 py-2 bg-warning/10 border border-warning/30 rounded-md text-sm text-warning flex items-center gap-3">
+            <span className="flex-1">{warning.text}</span>
+            {warning.alternativePath && (
+              <button
+                type="button"
+                data-vmlx-control="image-use-alternative"
+                onClick={() => { const alt = warning; setWarning(null); handleModelSelect(alt.alternativePath!, alt.alternativeBits, 'edit') }}
+                className="px-2 py-1 rounded border border-warning/40 hover:bg-warning/20 text-xs"
+              >
+                {t('image.server.warnings.useAlternative', { name: warning.alternativeName || '' })}
+              </button>
+            )}
+            <button onClick={() => setWarning(null)} className="text-xs underline">{t('image.tab.dismissError')}</button>
+          </div>
+        )}
         {error && (
           <div role="alert" data-vmlx-tone="error" className="mx-4 mt-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-md text-sm text-destructive">
             {error}

@@ -99,7 +99,7 @@ describe('local image model directories (external drive bundles)', () => {
     const parent = join(tmp(), 'Qwen-Image-Edit-mflux'); mkdirSync(parent)
     writeFileSync(join(parent, 'README.md'), 'x')
     for (const [name, bits] of [['q3', 3], ['q4', 4], ['q8', 8]] as const) mfluxBundle(parent, name, bits, '0.17.4')
-    expect(resolveLocalImageModelDirectory(parent, 8)).toEqual({ kind: 'model', path: join(parent, 'q8'), quantize: 8, quantizeSource: 'metadata', mfluxVersion: '0.17.4' })
+    expect(resolveLocalImageModelDirectory(parent, 8)).toMatchObject({ kind: 'model', path: join(parent, 'q8'), quantize: 8, quantizeSource: 'metadata', mfluxVersion: '0.17.4' })
     const none = resolveLocalImageModelDirectory(parent, 6)
     expect(none?.kind).toBe('variants')
     if (none?.kind === 'variants') {
@@ -183,6 +183,38 @@ describe('local image model directories (external drive bundles)', () => {
         const got = (other[key].match(/\{\w+\}/g) || []).sort()
         expect(got, `${loc}.${key} placeholders`).toEqual(want)
       }
+    }
+  })
+})
+
+describe('low-precision edit variants: warn and offer the better sibling', () => {
+  it('reports sibling variants and picks a >= 8-bit alternative for a 4-bit edit model', async () => {
+    const { editPrecisionAlternative } = await import('../src/shared/imageLocalModel')
+    const parent = join(mkdtempSync(join(tmpdir(), 'vmlx-img-')), 'Qwen-Image-Edit-mflux'); mkdirSync(parent)
+    for (const [name, bits] of [['q3', 3], ['q4', 4], ['q8', 8]] as const) mfluxBundle(parent, name, bits, '0.17.4')
+    const chosen = resolveLocalImageModelDirectory(join(parent, 'q4'), 4)
+    expect(chosen?.kind).toBe('model')
+    if (chosen?.kind === 'model') {
+      expect((chosen.siblings || []).map((v) => v.name)).toEqual(['q3', 'q8'])
+      expect(editPrecisionAlternative(chosen)?.name).toBe('q8')
+      const viaFolder = resolveLocalImageModelDirectory(parent, 4)
+      expect(viaFolder?.kind === 'model' && editPrecisionAlternative(viaFolder)?.name).toBe('q8')
+      const eight = resolveLocalImageModelDirectory(join(parent, 'q8'), 8)
+      expect(eight?.kind === 'model' && editPrecisionAlternative(eight)).toBeNull()
+    }
+  })
+  it('the start handler warns on a <= 4-bit edit class and the tab offers the alternative', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'main', 'ipc', 'image.ts'), 'utf8')
+    expect(src).toContain("warningCode = 'editLowPrecision'")
+    expect(src).toContain('localDir.quantize <= 4')
+    const tab = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'image', 'ImageTab.tsx'), 'utf8')
+    expect(tab).toContain('data-vmlx-control="image-use-alternative"')
+    expect(tab).toContain('image.server.warnings.')
+    const locales = join(__dirname, '..', 'src', 'renderer', 'src', 'i18n', 'locales')
+    for (const loc of ['en', 'es', 'ja', 'ko', 'zh']) {
+      const w = JSON.parse(readFileSync(join(locales, `${loc}.json`), 'utf8')).image.server.warnings
+      expect(w.editLowPrecision).toContain('{bits}')
+      expect(w.useAlternative).toContain('{name}')
     }
   })
 })

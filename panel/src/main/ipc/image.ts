@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSyn
 import { sessionManager } from '../sessions'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
-import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume } from '../../shared/imageLocalModel'
+import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative } from '../../shared/imageLocalModel'
 import {
   beginImageGeneration,
   classifyImageGenerationError,
@@ -687,6 +687,18 @@ export function registerImageHandlers(): void {
           // imageMode, imageQuantize, and servedModelName are stored in config fields
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
           const mode = imageMode || 'generate'
+          // Edit classes at 4-bit and below produce unusable output (measured
+          // through mflux directly, see shared/imageLocalModel.ts). Start it
+          // anyway (the user chose it) but say so, and offer the higher-precision
+          // sibling variant when the folder has one.
+          let warningCode: string | undefined
+          let warningParams: Record<string, string> | undefined
+          if (mode === 'edit' && localDir?.kind === 'model' && localDir.quantize !== null && localDir.quantize <= 4) {
+            const alt = editPrecisionAlternative(localDir)
+            warningCode = 'editLowPrecision'
+            warningParams = { bits: String(localDir.quantize), alternative: alt ? alt.name : '', alternativePath: alt ? alt.path : '', alternativeBits: alt && alt.quantize !== null ? String(alt.quantize) : '' }
+            console.log(`[IMAGE] Edit class at ${localDir.quantize}-bit: warning issued${alt ? `, alternative ${alt.path}` : ''}`)
+          }
 
           // Look up model definition.
           // mlxstudio#82: use fuzzy resolver (directory basenames like
@@ -723,7 +735,7 @@ export function registerImageHandlers(): void {
 
           // The precision actually configured (the bundle's own level for a local
           // folder), so the renderer shows what runs rather than what was picked.
-          return { success: true, sessionId: session.id, port: session.port, quantize: effectiveQuantize }
+          return { success: true, sessionId: session.id, port: session.port, quantize: effectiveQuantize, warningCode, warningParams }
         } catch (error) {
           console.error('[IMAGE] Failed to start server:', error)
           return { success: false, error: (error as Error).message }
