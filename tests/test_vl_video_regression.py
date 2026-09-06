@@ -11114,3 +11114,42 @@ class TestVideoFrameFallbackFamilyGate:
             'model_type in {"gemma4_unified", "step3p7"} and video_frame_counts',
         ):
             assert stale not in src, f"stale literal gate returned: {stale}"
+
+
+class TestPixelCacheKeyCarriesVideoControls:
+    """The pixel/tokenization cache is keyed by media hashes plus a prompt
+    string. Two requests with the SAME video bytes and DIFFERENT video_fps or
+    video_max_frames produce different frames, token ids and grids, so they
+    must not share a pixel-cache entry. Before this key carried the controls,
+    the second request silently reused the first request's input_ids and video
+    pixel values."""
+
+    def test_fps_and_frame_cap_change_the_key(self):
+        from vmlx_engine.mllm_batch_generator import _pixel_cache_prompt_key
+        base = _pixel_cache_prompt_key("describe", has_videos=True, video_fps=2.0, video_max_frames=8)
+        assert _pixel_cache_prompt_key("describe", has_videos=True, video_fps=4.0, video_max_frames=8) != base
+        assert _pixel_cache_prompt_key("describe", has_videos=True, video_fps=2.0, video_max_frames=16) != base
+        assert _pixel_cache_prompt_key("describe", has_videos=True, video_fps=2.0, video_max_frames=8) == base
+
+    def test_unset_controls_equal_spelled_out_defaults(self):
+        """Leaving the controls unset and sending the defaults explicitly is the
+        same extraction, so it must be the same key (no needless miss)."""
+        from vmlx_engine.mllm_batch_generator import _pixel_cache_prompt_key
+        from vmlx_engine.models.mllm import DEFAULT_FPS, MAX_FRAMES
+        unset = _pixel_cache_prompt_key("describe", has_videos=True)
+        explicit = _pixel_cache_prompt_key("describe", has_videos=True, video_fps=DEFAULT_FPS, video_max_frames=MAX_FRAMES)
+        assert unset == explicit
+
+    def test_video_controls_do_not_touch_image_only_keys(self):
+        from vmlx_engine.mllm_batch_generator import _pixel_cache_prompt_key
+        assert _pixel_cache_prompt_key("describe", has_videos=False, video_fps=4.0) == "describe"
+        assert _pixel_cache_prompt_key("describe", image_token_budget=280) == "describe\n\x00vmlx:image_token_budget=280"
+
+    def test_batch_generator_keys_the_pixel_cache_through_the_helper(self):
+        """Both the lookup and the store use the same helper-built prompt."""
+        import inspect
+        import vmlx_engine.mllm_batch_generator as g
+        src = inspect.getsource(g)
+        assert src.count("pixel_cache_prompt = _pixel_cache_prompt_key(") == 1
+        assert "video_fps=request.video_fps," in src and "video_max_frames=request.video_max_frames," in src
+        assert src.count("prompt=pixel_cache_prompt,") == 1

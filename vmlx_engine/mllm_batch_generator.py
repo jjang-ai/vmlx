@@ -1850,6 +1850,36 @@ def _normalize_qwen_video_arrays_for_processor(
     return normalized
 
 
+def _pixel_cache_prompt_key(
+    prompt: str,
+    *,
+    image_token_budget=None,
+    has_videos: bool = False,
+    video_fps=None,
+    video_max_frames=None,
+) -> str:
+    """Prompt component of the pixel/tokenization cache key.
+
+    The pixel cache is keyed by media content hashes plus this string. Every
+    per-request control that changes what the processor produces from the SAME
+    media bytes must be folded in here, otherwise a second request with the same
+    video and a different frame rate or frame cap silently reuses the first
+    request's input_ids / pixel values / grids. Video controls are folded in at
+    their EFFECTIVE values (the same defaults the extraction uses), so a request
+    that leaves them unset and one that spells out the defaults share a key.
+    """
+    key = prompt
+    if image_token_budget is not None:
+        key += f"\n\x00vmlx:image_token_budget={int(image_token_budget)}"
+    if has_videos:
+        from .models.mllm import DEFAULT_FPS, MAX_FRAMES
+
+        fps = video_fps or DEFAULT_FPS
+        max_frames = video_max_frames or MAX_FRAMES
+        key += f"\n\x00vmlx:video_fps={float(fps):g}:video_max_frames={int(max_frames)}"
+    return key
+
+
 def _fetch_video_for_processor(
     video_path: str,
     *,
@@ -8149,11 +8179,13 @@ class MLLMBatchGenerator:
 
         # Check pixel cache first
         media_cache_sources = all_images + video_cache_sources + all_audio
-        pixel_cache_prompt = request.prompt
-        if request.image_token_budget is not None:
-            pixel_cache_prompt += (
-                f"\n\x00vmlx:image_token_budget={int(request.image_token_budget)}"
-            )
+        pixel_cache_prompt = _pixel_cache_prompt_key(
+            request.prompt,
+            image_token_budget=request.image_token_budget,
+            has_videos=bool(video_cache_sources),
+            video_fps=request.video_fps,
+            video_max_frames=request.video_max_frames,
+        )
         _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
         cached_pixels = None
         if not _mllm_bypass:
