@@ -61,4 +61,21 @@ def test_media_policy_skip_records_its_own_reason_not_the_generic_empty_cache():
     assert policy < generic
     # the generic outcome is guarded by the flag the policy skip sets
     assert "if cache_blocks is None and _media_skip_recorded:" in src
-    assert src.count("_media_skip_recorded = True") == 1
+    # set at the media-policy skip and at the already-durable branch
+    assert src.count("_media_skip_recorded = True") == 2
+
+
+def test_already_durable_outcome_is_not_overwritten_by_the_generic_empty_cache_skip():
+    """Warm turn: the restored boundary covers the whole cache-key prefix
+    (cached_tokens >= len(truncated)). The store records already_durable and
+    nulls the handle; the generic "resolved extracted cache is empty" branch
+    must then stay silent. Live: Flash-Next 4S, prompt 1795, restored 1794 →
+    ledger said skipped/empty instead of already_durable (chatcmpl-1d5804a8)."""
+    import inspect
+    import vmlx_engine.mllm_scheduler as m
+    src = inspect.getsource(m)
+    durable = src.index('_PERSIST.record(request_id, "already_durable"')
+    generic = src.index('_PERSIST.record(request_id, "skipped", "resolved extracted cache is empty")')
+    guard = src.index("_media_skip_recorded = True", durable)
+    assert durable < guard < generic
+    assert "if cache_blocks is None and _media_skip_recorded:" in src

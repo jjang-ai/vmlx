@@ -311,3 +311,53 @@ class TestPixelCacheKeyStability:
         assert '"DISABLED" if not self.vision_cache.enabled else "MISS"' in src
         # a disabled cache never claims a STORE
         assert "and self.vision_cache.enabled\n            and media_cache_sources" in src
+
+
+class TestCleanMediaBoundaryMatchesFetchContract:
+    """The fetch side admits a media hit only when it covers every placeholder
+    or ends before the first one. The store side must not capture a boundary
+    inside the media span (declined next time, store wasted)."""
+
+    def _gen(self, placeholder=99, block=64):
+        import types
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        fake = types.SimpleNamespace(
+            _ssm_block_aligned_boundary=lambda n: (n // block) * block,
+            block_aware_cache=types.SimpleNamespace(block_size=block),
+            _media_placeholder_token_ids=lambda: {placeholder},
+        )
+        fake._media_placeholder_span = lambda ids: MLLMBatchGenerator._media_placeholder_span(fake, ids)
+        return fake, MLLMBatchGenerator._media_clean_cache_boundary_for
+
+    def test_boundary_after_the_media_when_it_fits(self):
+        import types
+        fake, fn = self._gen()
+        tokens = [1] * 100 + [99] * 500 + [2] * 200   # media 100..600, N=800, N-1=799 -> 768 >= 600
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 768
+
+    def test_boundary_inside_media_falls_back_to_pre_media(self):
+        import types
+        fake, fn = self._gen()
+        tokens = [1] * 100 + [99] * 680 + [2] * 20    # media 100..780, N-1=799 -> 768 cuts the media -> 64 (before)
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 64
+        # a tail that leaves an aligned boundary after the media keeps it
+        tokens = [1] * 100 + [99] * 650 + [2] * 20    # media 100..750, N-1=769 -> 768 >= 750
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 768
+
+    def test_no_boundary_when_media_starts_in_the_first_block(self):
+        import types
+        fake, fn = self._gen()
+        tokens = [1] * 10 + [99] * 700 + [2] * 20     # media 10..710, N-1=729 -> 704 cuts; before = 0 -> none
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 0
+
+    def test_text_only_prompt_keeps_the_terminal_boundary(self):
+        import types
+        fake, fn = self._gen()
+        tokens = [1] * 300
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 256
+
+    def test_capture_site_skips_when_no_boundary(self):
+        import vmlx_engine.mllm_batch_generator as g
+        src = inspect.getsource(g)
+        assert '"MLLM media prefix cache: no boundary outside the "' in src and '"media span for %s (N-1=%d); nothing stored for "' in src
+        assert "if clean_media_cache is None and _clean_media_len > 0:" in src

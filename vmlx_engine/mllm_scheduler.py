@@ -3904,6 +3904,13 @@ class MLLMScheduler:
                                 _PERSIST.record(request_id, "already_durable", f"cached prefix covers {cached_tokens}/{len(truncated_tokens)} cache-key tokens", retained_tokens=cached_tokens)
                                 cache_blocks = None
                                 request._extracted_cache = None
+                                # A warm turn whose prompt is covered by the
+                                # restored boundary has nothing new to store.
+                                # The generic "resolved extracted cache is
+                                # empty" outcome below must not overwrite this
+                                # one: it did, so every such turn read as a
+                                # lost cache in the persistence ledger.
+                                _media_skip_recorded = True
                             else:
                                 raw = request._extracted_cache
                                 _mixed_swa_boundary_cache = None

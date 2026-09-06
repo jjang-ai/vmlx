@@ -9386,21 +9386,68 @@ class MLLMBatchGenerator:
         except (TypeError, ValueError):
             required = 0
         block_size = int(getattr(self.block_aware_cache, "block_size", 0) or 0)
+        # The fetch side admits a media hit only when it COVERS every
+        # placeholder or ends strictly BEFORE the first one; a boundary that
+        # cuts through the media span is declined on the next request
+        # ("the tail still contains media placeholders"). Storing such a
+        # boundary costs a clean prefill and a companion for nothing, so pick
+        # a boundary the fetch side can use: after the media when one fits
+        # under N-1, else before the media, else none.
+        span = self._media_placeholder_span(token_ids)
+        chosen = terminal
         if (
-            required <= 0
-            or required >= len(token_ids)
-            or block_size <= 0
-            or required % block_size != 0
+            required > 0
+            and required < len(token_ids)
+            and block_size > 0
+            and required % block_size == 0
         ):
-            return terminal
+            logger.info(
+                "MLLM media prefix cache: repairing learned KV-only boundary "
+                "for %s at %d tokens instead of terminal %d",
+                getattr(request, "request_id", "?"),
+                required,
+                terminal,
+            )
+            chosen = required
+        if span is None:
+            return chosen
+        media_start, media_end = span
+        if chosen >= media_end or chosen <= media_start:
+            return chosen
+        before = self._ssm_block_aligned_boundary(media_start)
+        if before <= 0 and block_size > 0:
+            before = (media_start // block_size) * block_size
         logger.info(
-            "MLLM media prefix cache: repairing learned KV-only boundary "
-            "for %s at %d tokens instead of terminal %d",
+            "MLLM media prefix cache: boundary %d for %s would cut through the "
+            "media span %d..%d (N-1=%d); using %s",
+            chosen,
             getattr(request, "request_id", "?"),
-            required,
-            terminal,
+            media_start,
+            media_end,
+            len(token_ids) - 1,
+            f"the pre-media boundary {before}" if before > 0 else "no boundary (nothing reusable outside the media)",
         )
-        return required
+        return before if before > 0 else 0
+
+    def _media_placeholder_span(self, token_ids: List[int]) -> Optional[tuple[int, int]]:
+        """(first placeholder index, index after the last placeholder), or
+        None when the prompt carries no media placeholder tokens."""
+        try:
+            ids = self._media_placeholder_token_ids()
+        except Exception:
+            return None
+        if not ids:
+            return None
+        first = None
+        last = None
+        for idx, tok in enumerate(token_ids):
+            if tok in ids:
+                if first is None:
+                    first = idx
+                last = idx
+        if first is None or last is None:
+            return None
+        return first, last + 1
 
     def _media_placeholder_token_ids_by_modality(self) -> Dict[str, set[int]]:
         """Return exact configured placeholder ids grouped by modality."""
@@ -14061,12 +14108,23 @@ class MLLMBatchGenerator:
                         _clean_media_len = self._media_clean_cache_boundary_for(
                             req, _media_tokens
                         )
-                        clean_media_cache = (
-                            self._prefill_for_clean_media_prefix_cache(
-                                req, _media_tokens[:_clean_media_len]
+                        if _clean_media_len <= 0:
+                            logger.info(
+                                "MLLM media prefix cache: no boundary outside the "
+                                "media span for %s (N-1=%d); nothing stored for "
+                                "this turn -- the next turn's longer prompt will "
+                                "carry one after the media",
+                                req.request_id,
+                                len(_media_tokens) - 1,
                             )
-                        )
-                        if clean_media_cache is None:
+                            clean_media_cache = None
+                        else:
+                            clean_media_cache = (
+                                self._prefill_for_clean_media_prefix_cache(
+                                    req, _media_tokens[:_clean_media_len]
+                                )
+                            )
+                        if clean_media_cache is None and _clean_media_len > 0:
                             # Exact in-media embedding capture is capability-
                             # gated. Preserve the safe terminal snapshot when
                             # a wrapper cannot expose all conditioned state.
