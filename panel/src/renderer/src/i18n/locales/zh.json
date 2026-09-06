@@ -617,6 +617,9 @@
       "elapsedTitle": "已用时间",
       "totalLabel": "共 {v} 秒",
       "totalTitle": "请求总时间"
+    },
+    "message": {
+      "tokenCount": "{n} 个 token"
     }
   },
   "sessions": {
@@ -1855,7 +1858,9 @@
       "save": "保存",
       "promptButton": "提示词",
       "editing": "编辑中",
-      "generating": "生成中"
+      "generating": "生成中",
+      "strengthLabel": "强度: {v}",
+      "seedLabel": "种子: {v}"
     },
     "history": {
       "title": "历史",
@@ -1890,7 +1895,10 @@
       "imageEditing": "图像编辑",
       "browseCustomModel": "浏览自定义模型...",
       "imageEdit": "图像编辑",
-      "imageGen": "图像生成"
+      "imageGen": "图像生成",
+      "statusRunning": "运行中",
+      "statusLoading": "加载中",
+      "statusReady": "就绪"
     },
     "promptBar": {
       "uploadSourceImage": "上传要编辑的源图像（必填）",

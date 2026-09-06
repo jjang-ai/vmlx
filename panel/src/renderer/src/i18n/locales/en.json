@@ -617,6 +617,9 @@
       "elapsedTitle": "Elapsed time",
       "totalLabel": "{v}s total",
       "totalTitle": "Total request time"
+    },
+    "message": {
+      "tokenCount": "{n} tokens"
     }
   },
   "sessions": {
@@ -1855,7 +1858,9 @@
       "save": "Save",
       "promptButton": "Prompt",
       "editing": "Editing",
-      "generating": "Generating"
+      "generating": "Generating",
+      "strengthLabel": "str: {v}",
+      "seedLabel": "seed: {v}"
     },
     "history": {
       "title": "History",
@@ -1890,7 +1895,10 @@
       "imageEditing": "Image Editing",
       "browseCustomModel": "Browse custom model...",
       "imageEdit": "Image Edit",
-      "imageGen": "Image Gen"
+      "imageGen": "Image Gen",
+      "statusRunning": "running",
+      "statusLoading": "loading",
+      "statusReady": "ready"
     },
     "promptBar": {
       "uploadSourceImage": "Upload source image to edit (required)",

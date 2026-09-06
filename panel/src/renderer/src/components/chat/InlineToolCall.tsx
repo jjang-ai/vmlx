@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { useTranslation } from '../../i18n'
 import { Check, X, Square, ChevronRight, Loader2 } from 'lucide-react'
 import { parseToolArgs, getToolSummary, formatJson } from './chat-utils'
 
@@ -40,6 +41,7 @@ export function InlineToolCall({ group, isStreaming }: InlineToolCallProps) {
   const isError = group.statuses.some(s => s.phase === 'error')
   const callingStatus = group.statuses.find(s => s.phase === 'calling')
   const resultStatus = group.statuses.find(s => s.phase === 'result' || s.phase === 'error')
+  const { t } = useTranslation()
   const args = useMemo(() => parseToolArgs(callingStatus?.detail), [callingStatus?.detail])
   const summary = useMemo(() => getToolSummary(group.name, args), [group.name, args])
   const iteration = callingStatus?.iteration
@@ -96,7 +98,7 @@ export function InlineToolCall({ group, isStreaming }: InlineToolCallProps) {
         )}
 
         {/* Error label */}
-        {isError && <span className="text-destructive text-[11px] flex-shrink-0">failed</span>}
+        {isError && <span className="text-destructive text-[11px] flex-shrink-0">{t('chat.inlineTool.failed')}</span>}
 
         <ChevronRight className={`ml-auto h-3 w-3 text-muted-foreground/50 flex-shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
       </button>

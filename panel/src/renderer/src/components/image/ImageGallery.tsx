@@ -284,12 +284,12 @@ function ImageCard({
           </span>
           <span>{t('image.gallery.stepsCount', { n: generation.steps })}</span>
           {generation.strength != null && (
-            <span>str: {generation.strength}</span>
+            <span>{t('image.gallery.strengthLabel', { v: generation.strength })}</span>
           )}
           {generation.elapsedSeconds != null && (
             <span>{generation.elapsedSeconds.toFixed(1)}s</span>
           )}
-          {generation.seed != null && <span>seed: {generation.seed}</span>}
+          {generation.seed != null && <span>{t('image.gallery.seedLabel', { v: generation.seed })}</span>}
         </div>
 
         {/* Action buttons — always visible */}

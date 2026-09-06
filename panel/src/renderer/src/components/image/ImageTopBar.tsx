@@ -284,6 +284,7 @@ function ModelRow({ model, active, downloaded, checking, running, onSelect }: {
   running: boolean
   onSelect: () => void
 }) {
+  const { t } = useTranslation()
   const isEdit = model.category === 'edit'
   const dotColor = isEdit ? 'bg-violet-500' : 'bg-blue-500'
 
@@ -309,15 +310,15 @@ function ModelRow({ model, active, downloaded, checking, running, onSelect }: {
       {/* Right side: status badges */}
       <div className="ml-auto flex items-center gap-1.5">
         {running && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/15 text-green-500">running</span>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/15 text-green-500">{t('image.topBar.statusRunning')}</span>
         )}
         {!running && active && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-500">loading</span>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-500">{t('image.topBar.statusLoading')}</span>
         )}
         {checking ? (
           <Loader2 className="h-3 w-3 text-muted-foreground animate-spin" />
         ) : downloaded ? (
-          <span className="text-[9px] text-green-500">ready</span>
+          <span className="text-[9px] text-green-500">{t('image.topBar.statusReady')}</span>
         ) : (
           <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
             <Download className="h-2.5 w-2.5" />

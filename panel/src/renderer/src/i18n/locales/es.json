@@ -579,7 +579,7 @@
       "phaseDetected": "detectada",
       "phaseWaiting": "esperando…",
       "phaseRunning": "ejecutando…",
-      "failed": "con error",
+      "failed": "falló",
       "argsLabel": "args",
       "resultLabel": "resultado",
       "errorLabel": "error",
@@ -617,6 +617,9 @@
       "elapsedTitle": "Tiempo transcurrido",
       "totalLabel": "{v}s en total",
       "totalTitle": "Tiempo total de la solicitud"
+    },
+    "message": {
+      "tokenCount": "{n} tokens"
     }
   },
   "sessions": {
@@ -1855,7 +1858,9 @@
       "save": "Guardar",
       "promptButton": "Prompt",
       "editing": "Editando",
-      "generating": "Generando"
+      "generating": "Generando",
+      "strengthLabel": "int.: {v}",
+      "seedLabel": "semilla: {v}"
     },
     "history": {
       "title": "Historial",
@@ -1890,7 +1895,10 @@
       "imageEditing": "Edición de imágenes",
       "browseCustomModel": "Buscar modelo personalizado...",
       "imageEdit": "Editar imagen",
-      "imageGen": "Generar imagen"
+      "imageGen": "Generar imagen",
+      "statusRunning": "en ejecución",
+      "statusLoading": "cargando",
+      "statusReady": "listo"
     },
     "promptBar": {
       "uploadSourceImage": "Sube la imagen de origen para editar (obligatorio)",

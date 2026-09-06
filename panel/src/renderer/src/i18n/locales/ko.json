@@ -617,6 +617,9 @@
       "elapsedTitle": "경과 시간",
       "totalLabel": "총 {v}초",
       "totalTitle": "총 요청 시간"
+    },
+    "message": {
+      "tokenCount": "{n} 토큰"
     }
   },
   "sessions": {
@@ -1855,7 +1858,9 @@
       "save": "저장",
       "promptButton": "프롬프트",
       "editing": "편집 중",
-      "generating": "생성 중"
+      "generating": "생성 중",
+      "strengthLabel": "강도: {v}",
+      "seedLabel": "시드: {v}"
     },
     "history": {
       "title": "기록",
@@ -1890,7 +1895,10 @@
       "imageEditing": "이미지 편집",
       "browseCustomModel": "사용자 지정 모델 찾아보기...",
       "imageEdit": "이미지 편집",
-      "imageGen": "이미지 생성"
+      "imageGen": "이미지 생성",
+      "statusRunning": "실행 중",
+      "statusLoading": "로드 중",
+      "statusReady": "준비됨"
     },
     "promptBar": {
       "uploadSourceImage": "편집할 원본 이미지를 업로드하세요 (필수)",

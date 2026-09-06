@@ -617,6 +617,9 @@
       "elapsedTitle": "経過時間",
       "totalLabel": "合計 {v}秒",
       "totalTitle": "リクエストの合計時間"
+    },
+    "message": {
+      "tokenCount": "{n} トークン"
     }
   },
   "sessions": {
@@ -1855,7 +1858,9 @@
       "save": "保存",
       "promptButton": "プロンプト",
       "editing": "編集中",
-      "generating": "生成中"
+      "generating": "生成中",
+      "strengthLabel": "強度: {v}",
+      "seedLabel": "シード: {v}"
     },
     "history": {
       "title": "履歴",
@@ -1890,7 +1895,10 @@
       "imageEditing": "画像編集",
       "browseCustomModel": "カスタムモデルを参照...",
       "imageEdit": "画像編集",
-      "imageGen": "画像生成"
+      "imageGen": "画像生成",
+      "statusRunning": "実行中",
+      "statusLoading": "読み込み中",
+      "statusReady": "準備完了"
     },
     "promptBar": {
       "uploadSourceImage": "編集する元画像をアップロード (必須)",

@@ -408,7 +408,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     if (message.tokens) {
       return (
         <div className="mt-2 text-[11px] text-muted-foreground/60">
-          {message.tokens} tokens
+          {t('chat.message.tokenCount', { n: message.tokens })}
         </div>
       )
     }
