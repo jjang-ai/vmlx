@@ -190,6 +190,23 @@ def _ollama_media_content_parts(source: dict, text: str) -> list[dict] | None:
     return parts
 
 
+
+def _apply_ollama_video_controls(body: dict, req: dict) -> None:
+    """vMLX extension on Ollama-shaped bodies: the per-request video controls
+    (video_fps, video_max_frames, pixel budgets, explicit frame size) may sit
+    at the top level or inside ``options``; forward whichever is set so the
+    Ollama dialect honours them like chat/responses/anthropic do."""
+    from ..video_controls import VIDEO_CONTROL_FIELDS
+
+    opts = body.get("options") if isinstance(body.get("options"), dict) else {}
+    for field in VIDEO_CONTROL_FIELDS:
+        value = body.get(field)
+        if value is None:
+            value = opts.get(field)
+        if value is not None:
+            req[field] = value
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -268,6 +285,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
     if body.get("tools"):
         req["tools"] = body["tools"]
     _apply_ollama_thinking(body, req)
+    _apply_ollama_video_controls(body, req)
     # vMLX extensions on Ollama-shaped bodies: clients that set reasoning_effort
     # (Mistral 4 / GPT-OSS: "none"/"low"/"medium"/"high") or supply custom
     # chat_template_kwargs must reach the parser. Without this passthrough,

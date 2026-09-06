@@ -1041,7 +1041,12 @@
       "clearSsdCacheFailed": "No se pudo borrar: {{error}}. La sesión debe estar en ejecución.",
       "clearSsdCacheEmpty": "Nada que borrar: esta sesión no tenía prompts en caché.",
       "clearSsdCachePartial": "Se borraron {{count}} nivel(es); {{skipped}} se dejó intacto (aún lo usa una solicitud en curso). Inténtalo cuando la sesión esté inactiva.",
-      "blockCacheArchitecturePoolNote": "Un único grupo para todo: este límite cubre todos los tipos de caché que escribe vMLX — bloques KV simples, estado de acompañantes tipados (SSM/GatedDelta), registros compuestos nativos (DeepSeek-V4 DSA/CSA/HCA), estado de ventana deslizante y bloques multimodales — para cada modelo y cada sesión. Cuando se llena, se eliminan primero los prompts más antiguos de todos ellos, incluidos modelos que no estés usando."
+      "blockCacheArchitecturePoolNote": "Un único grupo para todo: este límite cubre todos los tipos de caché que escribe vMLX — bloques KV simples, estado de acompañantes tipados (SSM/GatedDelta), registros compuestos nativos (DeepSeek-V4 DSA/CSA/HCA), estado de ventana deslizante y bloques multimodales — para cada modelo y cada sesión. Cuando se llena, se eliminan primero los prompts más antiguos de todos ellos, incluidos modelos que no estés usando.",
+      "videoMaxPixels": "Presupuesto de píxeles por fotograma",
+      "videoMaxPixelsTooltip": "Máximo de píxeles por fotograma de vídeo muestreado tras el redimensionado (se conserva la relación de aspecto, redondeado al tamaño de parche del modelo). Menos = menos tokens de visión por fotograma = prefill más rápido, menos detalle espacial. Deja el valor por defecto del procesador para mantener el tamaño propio del modelo. El cargador nativo lo limita a 602k.",
+      "videoMaxPixelsDefault": "Valor por defecto del procesador",
+      "videoMaxPixelsFastest": "más rápido",
+      "videoMaxPixelsMax": "máximo del cargador"
     },
     "create": {
       "title": "Crear sesión",

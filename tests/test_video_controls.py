@@ -1,0 +1,225 @@
+"""Per-request video controls: validation, effective defaults, cache-key
+identity, loader element, fallback sizing, and transport through every
+API dialect and engine hop."""
+import inspect
+import math
+
+import pytest
+
+from vmlx_engine.video_controls import (
+    MLX_VLM_VIDEO_MAX_PIXELS,
+    VIDEO_CONTROL_FIELDS,
+    VideoControls,
+    bound_video_frames,
+    pop_video_control_kwargs,
+    validate_video_controls,
+    video_control_kwargs,
+    video_controls_from_kwargs,
+)
+
+
+class TestValidation:
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("video_fps", 0), ("video_fps", -1), ("video_fps", float("nan")), ("video_fps", float("inf")), ("video_fps", "2"), ("video_fps", True),
+            ("video_max_frames", 0), ("video_max_frames", 2.5), ("video_max_frames", -3),
+            ("video_max_pixels", 0), ("video_max_pixels", -1), ("video_max_pixels", 1.5),
+            ("video_min_pixels", 0), ("video_total_pixels", 0),
+            ("video_resized_height", 0), ("video_resized_width", -8),
+        ],
+    )
+    def test_rejects_non_finite_zero_negative_and_non_integer(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            validate_video_controls({field: value})
+
+    def test_resized_dimensions_come_together(self):
+        with pytest.raises(ValueError, match="together"):
+            validate_video_controls({"video_resized_height": 224})
+        with pytest.raises(ValueError, match="together"):
+            validate_video_controls({"video_resized_width": 224})
+        ok = validate_video_controls({"video_resized_height": 224, "video_resized_width": 336})
+        assert (ok.resized_height, ok.resized_width) == (224, 336)
+
+    def test_contradictions(self):
+        with pytest.raises(ValueError, match="video_min_pixels must not exceed"):
+            validate_video_controls({"video_min_pixels": 500_000, "video_max_pixels": 100_000})
+        with pytest.raises(ValueError, match="exceeds video_max_pixels"):
+            validate_video_controls({"video_resized_height": 1000, "video_resized_width": 1000, "video_max_pixels": 100_000})
+
+    def test_accepts_and_normalizes(self):
+        c = validate_video_controls({"video_fps": 4, "video_max_frames": 16.0, "video_max_pixels": 200_000})
+        assert c == VideoControls(fps=4.0, max_frames=16, max_pixels=200_000)
+        assert validate_video_controls({}).is_unset
+        assert validate_video_controls(None).is_unset
+
+
+class TestEffectiveAndKeys:
+    def test_unset_equals_spelled_out_defaults(self):
+        from vmlx_engine.models.mllm import DEFAULT_FPS, MAX_FRAMES
+        unset = VideoControls()
+        explicit = VideoControls(fps=DEFAULT_FPS, max_frames=MAX_FRAMES)
+        assert unset.effective_fps() == DEFAULT_FPS and unset.effective_max_frames() == MAX_FRAMES
+        assert unset.cache_key_fragment() == explicit.cache_key_fragment()
+
+    def test_every_control_changes_the_key(self):
+        base = VideoControls(fps=2.0, max_frames=8).cache_key_fragment()
+        for change in (
+            dict(fps=4.0, max_frames=8), dict(fps=2.0, max_frames=16), dict(fps=2.0, max_frames=8, max_pixels=100_000),
+            dict(fps=2.0, max_frames=8, min_pixels=50_000), dict(fps=2.0, max_frames=8, total_pixels=5_000_000),
+            dict(fps=2.0, max_frames=8, resized_height=224, resized_width=224),
+        ):
+            assert VideoControls(**change).cache_key_fragment() != base, change
+
+    def test_forwarding_kwargs_only_carry_set_fields_plus_the_object(self):
+        class Req:
+            video_fps = 3.0
+            video_max_frames = None
+            video_max_pixels = 150_000
+            video_min_pixels = None
+            video_total_pixels = None
+            video_resized_height = None
+            video_resized_width = None
+        kw = video_control_kwargs(Req())
+        assert kw == {"video_fps": 3.0, "video_max_pixels": 150_000, "video_controls": VideoControls(fps=3.0, max_pixels=150_000)}
+        assert video_control_kwargs({"video_fps": None}) == {}
+        assert video_controls_from_kwargs({"foo": 1}) is None
+        kwargs = {"video_fps": 5, "video_max_pixels": 1000, "other": 1}
+        c = pop_video_control_kwargs(kwargs)
+        assert c == VideoControls(fps=5, max_pixels=1000) and kwargs == {"other": 1}
+
+    def test_loader_element_and_clamp_note(self):
+        c = VideoControls(fps=1.0, max_frames=4, max_pixels=200_000, min_pixels=50_000, total_pixels=2_000_000, resized_height=224, resized_width=336)
+        ele = c.fetch_video_element("/tmp/x.mp4")
+        assert ele == {"video": "/tmp/x.mp4", "fps": 1.0, "max_frames": 4, "min_pixels": 50_000, "max_pixels": 200_000, "total_pixels": 2_000_000, "resized_height": 224, "resized_width": 336}
+        assert VideoControls(max_pixels=MLX_VLM_VIDEO_MAX_PIXELS).clamp_note() is None
+        assert "clamps" in VideoControls(max_pixels=MLX_VLM_VIDEO_MAX_PIXELS + 1).clamp_note()
+        assert set(ele) - {"video"} <= {f[len("video_"):] for f in VIDEO_CONTROL_FIELDS}
+
+
+class TestFallbackFrames:
+    def test_pixel_budget_scales_aspect_preserved_and_never_upscales(self):
+        np = pytest.importorskip("numpy")
+        pytest.importorskip("cv2")
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        out = bound_video_frames([frame], max_pixels=100_000)[0]
+        h, w = out.shape[:2]
+        assert h * w <= 100_000
+        assert abs((w / h) - (1280 / 720)) < 0.02
+        assert bound_video_frames([frame], max_pixels=10_000_000)[0].shape == frame.shape
+        # both caps: the tighter one wins
+        out2 = bound_video_frames([frame], max_long_edge=640, max_pixels=100_000)[0]
+        assert max(out2.shape[:2]) <= 640 and out2.shape[0] * out2.shape[1] <= 100_000
+
+    def test_explicit_size_wins(self):
+        np = pytest.importorskip("numpy")
+        pytest.importorskip("cv2")
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        out = bound_video_frames([frame], max_long_edge=256, max_pixels=100, resize=(224, 336))[0]
+        assert out.shape[:2] == (224, 336)
+
+    def test_bounds_from_controls(self):
+        b = VideoControls(max_pixels=123_456).fallback_bounds(default_long_edge=768)
+        assert (b.max_long_edge, b.max_pixels, b.resize) == (768, 123_456, None)
+        b = VideoControls(resized_height=224, resized_width=224).fallback_bounds(default_long_edge=768)
+        assert b.resize == (224, 224)
+
+
+class TestApiTransport:
+    def test_chat_and_responses_models_validate_and_carry_the_fields(self):
+        from vmlx_engine.api.models import ChatCompletionRequest, ResponsesRequest
+        for cls, base in ((ChatCompletionRequest, {"model": "m", "messages": [{"role": "user", "content": "hi"}]}), (ResponsesRequest, {"model": "m", "input": "hi"})):
+            req = cls(**base, video_fps=3, video_max_frames=12, video_max_pixels=200_000, video_resized_height=224, video_resized_width=224)
+            assert (req.video_fps, req.video_max_frames, req.video_max_pixels, req.video_resized_height, req.video_resized_width) == (3, 12, 200_000, 224, 224)
+            with pytest.raises(ValueError):
+                cls(**base, video_fps=-2)
+            with pytest.raises(ValueError):
+                cls(**base, video_resized_height=224)
+            with pytest.raises(ValueError):
+                cls(**base, video_max_frames=0)
+
+    def test_anthropic_request_forwards_every_control(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(model="m", messages=[{"role": "user", "content": "hi"}], max_tokens=10, video_fps=2.5, video_max_frames=6, video_max_pixels=150_000, video_min_pixels=50_000, video_total_pixels=900_000, video_resized_height=224, video_resized_width=336)
+        chat = to_chat_completion(req)
+        assert video_control_kwargs(chat)["video_controls"] == VideoControls(fps=2.5, max_frames=6, max_pixels=150_000, min_pixels=50_000, total_pixels=900_000, resized_height=224, resized_width=336)
+        with pytest.raises(ValueError):
+            AnthropicRequest(model="m", messages=[{"role": "user", "content": "hi"}], max_tokens=10, video_fps=0)
+
+    def test_ollama_chat_forwards_top_level_and_options_controls(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "video_fps": 4, "options": {"video_max_pixels": 120_000}}
+        req = ollama_chat_to_openai(body)
+        assert req["video_fps"] == 4 and req["video_max_pixels"] == 120_000
+        assert "video_max_frames" not in req
+
+    def test_server_forwards_on_all_four_dialect_sites(self):
+        import vmlx_engine.server as server
+        src = inspect.getsource(server)
+        # chat + responses + anthropic + ollama streaming
+        assert src.count("video_control_kwargs(request)") >= 2
+        assert "_msg_kwargs.update(video_control_kwargs(chat_req))" in src
+        assert "chat_kwargs.update(video_control_kwargs(chat_req))" in src
+        # the truthiness forwarding that dropped explicit values is gone
+        assert 'if request.video_fps:\n        chat_kwargs["video_fps"]' not in src
+
+
+class TestEngineHops:
+    def test_scheduler_and_batch_request_carry_the_object(self):
+        from vmlx_engine.mllm_scheduler import MLLMRequest
+        from vmlx_engine.mllm_batch_generator import MLLMBatchRequest
+        assert "video_controls" in MLLMRequest.__dataclass_fields__
+        assert "video_controls" in MLLMBatchRequest.__dataclass_fields__
+
+    def test_media_digests_change_with_pixel_controls(self):
+        from vmlx_engine.mllm_batch_generator import _mllm_media_item_digest, _mllm_media_cache_extra_keys
+
+        class Req:
+            images = []
+            videos = ["data:video/mp4;base64,AAAA"]
+            audio = None
+            image_token_budget = None
+            video_fps = 2.0
+            video_max_frames = 8
+            video_controls = None
+            image_grid_thw = None
+            video_grid_thw = None
+            audio_codes = None
+            pixel_values = None
+            pixel_values_videos = None
+            video_pixel_values = None
+        a = Req()
+        b = Req(); b.video_controls = VideoControls(fps=2.0, max_frames=8, max_pixels=100_000)
+        c = Req(); c.video_controls = VideoControls(fps=2.0, max_frames=8)  # same as the plain fields
+        assert _mllm_media_item_digest(a, "video", a.videos[0]) != _mllm_media_item_digest(b, "video", b.videos[0])
+        assert _mllm_media_item_digest(a, "video", a.videos[0]) == _mllm_media_item_digest(c, "video", c.videos[0])
+        ka, kb = _mllm_media_cache_extra_keys(a), _mllm_media_cache_extra_keys(b)
+        assert ka is not None and kb is not None and ka != kb
+
+    def test_pixel_cache_key_carries_pixel_controls(self):
+        from vmlx_engine.mllm_batch_generator import _pixel_cache_prompt_key
+        base = _pixel_cache_prompt_key("p", has_videos=True, video_fps=2.0, video_max_frames=8)
+        with_px = _pixel_cache_prompt_key("p", has_videos=True, video_fps=2.0, video_max_frames=8, video_controls=VideoControls(fps=2.0, max_frames=8, max_pixels=100_000))
+        same = _pixel_cache_prompt_key("p", has_videos=True, video_controls=VideoControls(fps=2.0, max_frames=8))
+        assert with_px != base and same == base
+
+    def test_native_fetch_builds_the_loader_element_from_controls(self, monkeypatch):
+        import types, sys
+        import vmlx_engine.mllm_batch_generator as g
+        seen = {}
+        fake = types.ModuleType("mlx_vlm.video_generate")
+        def fetch_video(ele, return_video_sample_fps=False):
+            seen.update(ele); return ([1, 2], 1.5)
+        fake.fetch_video = fetch_video
+        monkeypatch.setitem(sys.modules, "mlx_vlm.video_generate", fake)
+        frames, fps = g._fetch_video_for_processor("/tmp/v.mp4", fps=2.0, max_frames=8, controls=VideoControls(fps=2.0, max_frames=8, max_pixels=100_000, resized_height=224, resized_width=224))
+        assert frames == [1, 2] and fps == 1.5
+        assert seen == {"video": "/tmp/v.mp4", "fps": 2.0, "max_frames": 8, "max_pixels": 100_000, "resized_height": 224, "resized_width": 224}
+
+    def test_frame_fallback_and_simple_engine_use_the_controls(self):
+        import vmlx_engine.engine.batched as b
+        import vmlx_engine.models.mllm as m
+        bs, ms = inspect.getsource(b), inspect.getsource(m)
+        assert "controls.fallback_bounds(" in bs and "controls.cache_key_fragment()" in bs
+        assert "bound_video_frames(" in bs
+        assert "pop_video_control_kwargs(kwargs)" in ms and "controls.pixel_fragment()" in ms

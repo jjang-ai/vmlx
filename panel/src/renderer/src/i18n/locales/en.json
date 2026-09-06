@@ -1041,7 +1041,12 @@
       "clearSsdCacheFailed": "Could not clear: {{error}}. The session must be running.",
       "clearSsdCacheEmpty": "Nothing to clear — this session had no cached prompts.",
       "clearSsdCachePartial": "Cleared {{count}} tier(s); {{skipped}} was left alone (still in use by a running request). Try again once the session is idle.",
-      "blockCacheArchitecturePoolNote": "One pool for everything: this budget covers every cache type vMLX writes — plain KV blocks, typed companion state (SSM/GatedDelta), native composite records (DeepSeek-V4 DSA/CSA/HCA), rotating sliding-window state, and multimodal blocks — for every model and every session. When it fills, the oldest prompts are removed first, across all of them, including models you are not using right now."
+      "blockCacheArchitecturePoolNote": "One pool for everything: this budget covers every cache type vMLX writes — plain KV blocks, typed companion state (SSM/GatedDelta), native composite records (DeepSeek-V4 DSA/CSA/HCA), rotating sliding-window state, and multimodal blocks — for every model and every session. When it fills, the oldest prompts are removed first, across all of them, including models you are not using right now.",
+      "videoMaxPixels": "Video Frame Pixel Budget",
+      "videoMaxPixelsTooltip": "Maximum pixels per sampled video frame after resizing (aspect ratio preserved, rounded to the model's patch size). Lower = fewer vision tokens per frame = faster prefill, less spatial detail. Leave at Processor default to keep the model's own sizing. The native loader caps this at 602k.",
+      "videoMaxPixelsDefault": "Processor default",
+      "videoMaxPixelsFastest": "fastest",
+      "videoMaxPixelsMax": "loader maximum"
     },
     "create": {
       "title": "Create Session",

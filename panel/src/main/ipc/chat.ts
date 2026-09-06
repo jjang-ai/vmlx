@@ -1083,6 +1083,7 @@ export function registerChatHandlers(
       // Default undefined = engine default (2.0 fps, 8 max frames).
       let sessionVideoFps: number | undefined;
       let sessionVideoMaxFrames: number | undefined;
+      let sessionVideoMaxPixels: number | undefined;
       let chatSession: import("../database").Session | undefined;
       if (chat.modelPath) {
         chatSession = sessionManager.getSessionByModelPath(
@@ -1183,6 +1184,8 @@ export function registerChatHandlers(
               sessionVideoFps = sessionConfig.videoFps;
             if (typeof sessionConfig.videoMaxFrames === "number" && sessionConfig.videoMaxFrames > 0)
               sessionVideoMaxFrames = sessionConfig.videoMaxFrames;
+            if (typeof sessionConfig.videoMaxPixels === "number" && sessionConfig.videoMaxPixels > 0)
+              sessionVideoMaxPixels = sessionConfig.videoMaxPixels;
           } catch (_) {}
         }
       }
@@ -2388,6 +2391,8 @@ export function registerChatHandlers(
               obj.video_fps = sessionVideoFps;
             if (!isRemote && sessionVideoMaxFrames !== undefined)
               obj.video_max_frames = sessionVideoMaxFrames;
+            if (!isRemote && sessionVideoMaxPixels !== undefined)
+              obj.video_max_pixels = sessionVideoMaxPixels;
             // Do not serialize the session timeout as the API's explicit
             // per-request `timeout`. The engine deliberately defines an
             // explicit request timeout as a hard wall-clock budget, while its
@@ -2464,6 +2469,8 @@ export function registerChatHandlers(
               obj.video_fps = sessionVideoFps;
             if (!isRemote && sessionVideoMaxFrames !== undefined)
               obj.video_max_frames = sessionVideoMaxFrames;
+            if (!isRemote && sessionVideoMaxPixels !== undefined)
+              obj.video_max_pixels = sessionVideoMaxPixels;
             // Keep the local engine on its progress-aware server default. An
             // API caller that explicitly sends `timeout` still gets the
             // documented hard wall-clock behavior.

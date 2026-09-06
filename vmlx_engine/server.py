@@ -75,6 +75,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Import from new modular API
 # Re-export for backwards compatibility with tests
+from .video_controls import video_control_kwargs
 from .api.models import (
     AssistantMessage,  # noqa: F401
     ChatCompletionChoice,  # noqa: F401
@@ -16406,6 +16407,9 @@ async def create_anthropic_message(
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
+    # Video controls reach the engine on this dialect too.
+    _msg_kwargs.update(video_control_kwargs(chat_req))
+
     # Pass tools to engine so batched.py knows not to inject <think></think>
     if _msg_effective_tools:
         from .api.tool_calling import convert_tools_for_template
@@ -17242,6 +17246,9 @@ async def ollama_chat(fastapi_request: Request):
     if chat_req.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = chat_req.reasoning_effort
         _ollama_ct_kwargs.setdefault("reasoning_effort", chat_req.reasoning_effort)
+    # Video controls on the streaming Ollama route (the non-streaming route
+    # delegates to create_chat_completion, which forwards them itself).
+    chat_kwargs.update(video_control_kwargs(chat_req))
 
     # Auto-map the public thinking bool onto Mistral 4's template vocabulary.
     # Non-streaming Ollama delegates through create_chat_completion(), which
@@ -19673,10 +19680,9 @@ async def create_chat_completion(
         chat_kwargs["image_token_budget"] = request.image_token_budget
     # Video controls — passed regardless of has_media since MLLM models
     # extract media from messages internally (has_media is always False for them)
-    if request.video_fps:
-        chat_kwargs["video_fps"] = request.video_fps
-    if request.video_max_frames:
-        chat_kwargs["video_max_frames"] = request.video_max_frames
+    # Video controls: every SET field (0 is invalid and rejected at the model,
+    # so no truthiness filter is needed), plus the normalized object.
+    chat_kwargs.update(video_control_kwargs(request))
 
     _suppress_tools = _tool_choice == "none"
 
@@ -22892,10 +22898,9 @@ async def create_response(
     # Video processing controls (MLLM models)
     if request.image_token_budget:
         chat_kwargs["image_token_budget"] = request.image_token_budget
-    if request.video_fps:
-        chat_kwargs["video_fps"] = request.video_fps
-    if request.video_max_frames:
-        chat_kwargs["video_max_frames"] = request.video_max_frames
+    # Video controls: every SET field (0 is invalid and rejected at the model,
+    # so no truthiness filter is needed), plus the normalized object.
+    chat_kwargs.update(video_control_kwargs(request))
 
     _suppress_tools = _tool_choice == "none"
 

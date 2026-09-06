@@ -270,6 +270,21 @@ def _hash_mllm_media_array(hasher: Any, label: str, value: Any) -> None:
         _hash_mllm_media_text(hasher, label, value)
 
 
+def _request_video_controls(request: Any) -> "VideoControls":
+    """The request's normalized video controls (object if attached, else
+    rebuilt from the two legacy fields)."""
+    from .video_controls import VideoControls
+
+    return VideoControls.from_request(request)
+
+
+def _request_video_pixel_fragment(request: Any) -> Optional[str]:
+    """Pixel/size part of the controls for cache identity; None when unset so
+    requests without pixel controls keep their pre-existing digests."""
+    controls = _request_video_controls(request)
+    return controls.pixel_fragment() if controls.has_pixel_controls else None
+
+
 def _mllm_media_item_digest(
     request: Any,
     modality: str,
@@ -293,6 +308,9 @@ def _mllm_media_item_digest(
             hasher,
             "video_max_frames",
             getattr(request, "video_max_frames", None),
+        )
+        _hash_mllm_media_text(
+            hasher, "video_pixels", _request_video_pixel_fragment(request)
         )
     return hasher.hexdigest()
 
@@ -428,6 +446,9 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
             hasher,
             "video_max_frames",
             getattr(request, "video_max_frames", None),
+        )
+        _hash_mllm_media_text(
+            hasher, "video_pixels", _request_video_pixel_fragment(request)
         )
     for source in audio_sources or []:
         _hash_mllm_media_source(hasher, "audio", source)
@@ -1857,6 +1878,7 @@ def _pixel_cache_prompt_key(
     has_videos: bool = False,
     video_fps=None,
     video_max_frames=None,
+    video_controls=None,
 ) -> str:
     """Prompt component of the pixel/tokenization cache key.
 
@@ -1872,11 +1894,16 @@ def _pixel_cache_prompt_key(
     if image_token_budget is not None:
         key += f"\n\x00vmlx:image_token_budget={int(image_token_budget)}"
     if has_videos:
-        from .models.mllm import DEFAULT_FPS, MAX_FRAMES
+        from .video_controls import VideoControls
 
-        fps = video_fps or DEFAULT_FPS
-        max_frames = video_max_frames or MAX_FRAMES
-        key += f"\n\x00vmlx:video_fps={float(fps):g}:video_max_frames={int(max_frames)}"
+        controls = (
+            video_controls
+            if isinstance(video_controls, VideoControls)
+            else VideoControls(fps=video_fps, max_frames=video_max_frames)
+        )
+        key += f"\n\x00vmlx:video_fps={controls.effective_fps():g}:video_max_frames={controls.effective_max_frames()}"
+        if controls.has_pixel_controls:
+            key += f"\n\x00vmlx:video_pixels={controls.pixel_fragment()}"
     return key
 
 
@@ -1885,31 +1912,44 @@ def _fetch_video_for_processor(
     *,
     fps: float,
     max_frames: int,
+    controls: Any = None,
 ) -> tuple[Any, float]:
     """Load video frames across supported mlx-vlm API generations.
 
-    mlx-vlm 0.5 exposed ``video_generate.fetch_video``. Newer releases expose
-    the equivalent decoder as ``utils.load_video`` instead.
+    mlx-vlm 0.5 exposed ``video_generate.fetch_video`` (qwen-vl-utils
+    contract: fps, max_frames, per-frame/per-clip pixel budgets, explicit
+    size). Newer releases expose the equivalent decoder as
+    ``utils.load_video`` instead, which takes only fps and max_frames; pixel
+    controls cannot be honoured there and are reported, not silently dropped.
     """
+    from .video_controls import VideoControls
+
+    if not isinstance(controls, VideoControls):
+        controls = VideoControls(fps=fps, max_frames=max_frames)
     try:
         video_generate = importlib.import_module("mlx_vlm.video_generate")
         fetch_video = getattr(video_generate, "fetch_video")
     except (ImportError, AttributeError):
         from mlx_vlm.utils import load_video
 
+        if controls.has_pixel_controls:
+            logger.warning(
+                "Video pixel controls (%s) are not supported by this mlx-vlm "
+                "video loader; frames keep the processor's default sizing",
+                controls.pixel_fragment(),
+            )
         video_input, sample_fps = load_video(
             str(video_path),
-            fps=float(fps),
-            max_frames=int(max_frames),
+            fps=float(controls.effective_fps()),
+            max_frames=int(controls.effective_max_frames()),
         )
         return video_input, float(sample_fps)
 
+    note = controls.clamp_note()
+    if note:
+        logger.warning("%s", note)
     video_result = fetch_video(
-        {
-            "video": str(video_path),
-            "fps": float(fps),
-            "max_frames": int(max_frames),
-        },
+        controls.fetch_video_element(video_path),
         return_video_sample_fps=True,
     )
     if isinstance(video_result, tuple) and len(video_result) == 2:
@@ -6793,6 +6833,7 @@ class MLLMBatchRequest:
     image_token_budget: Optional[int] = None
     video_fps: Optional[float] = None
     video_max_frames: Optional[int] = None
+    video_controls: Optional[Any] = None  # normalized VideoControls (pixel budgets, explicit size)
 
     # Processed inputs (set after vision preprocessing)
     input_ids: Optional[mx.array] = None
@@ -8135,8 +8176,9 @@ class MLLMBatchGenerator:
                 MAX_FRAMES,
                 process_video_input,
             )
-            fps = request.video_fps or DEFAULT_FPS
-            max_frames = request.video_max_frames or MAX_FRAMES
+            _controls = _request_video_controls(request)
+            fps = _controls.effective_fps()
+            max_frames = _controls.effective_max_frames()
 
             for video in request.videos:
                 try:
@@ -8146,6 +8188,7 @@ class MLLMBatchGenerator:
                         video_path,
                         fps=fps,
                         max_frames=max_frames,
+                        controls=_controls,
                     )
                     video_inputs.append(video_input)
                     video_sample_fps.append(float(sample_fps))
@@ -8185,6 +8228,7 @@ class MLLMBatchGenerator:
             has_videos=bool(video_cache_sources),
             video_fps=request.video_fps,
             video_max_frames=request.video_max_frames,
+            video_controls=getattr(request, "video_controls", None),
         )
         _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
         cached_pixels = None

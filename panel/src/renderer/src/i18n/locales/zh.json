@@ -1041,7 +1041,12 @@
       "clearSsdCacheFailed": "无法清除：{{error}}。会话必须正在运行。",
       "clearSsdCacheEmpty": "没有可清除的内容 — 此会话没有缓存的提示。",
       "clearSsdCachePartial": "已清除 {{count}} 个层；{{skipped}} 保持不变（仍被运行中的请求占用）。请在会话空闲后重试。",
-      "blockCacheArchitecturePoolNote": "所有内容共用一个池：该容量涵盖 vMLX 写入的所有缓存类型——普通 KV 块、类型化伴随状态 (SSM/GatedDelta)、原生复合记录 (DeepSeek-V4 DSA/CSA/HCA)、滑动窗口状态和多模态块——适用于每个模型和每个会话。占满时会跨所有这些内容优先删除最旧的提示，包括你当前没有在用的模型。"
+      "blockCacheArchitecturePoolNote": "所有内容共用一个池：该容量涵盖 vMLX 写入的所有缓存类型——普通 KV 块、类型化伴随状态 (SSM/GatedDelta)、原生复合记录 (DeepSeek-V4 DSA/CSA/HCA)、滑动窗口状态和多模态块——适用于每个模型和每个会话。占满时会跨所有这些内容优先删除最旧的提示，包括你当前没有在用的模型。",
+      "videoMaxPixels": "视频帧像素预算",
+      "videoMaxPixelsTooltip": "每个采样视频帧在缩放后允许的最大像素数（保持宽高比，并按模型的 patch 尺寸取整）。数值越小，每帧的视觉 token 越少，预填充越快，但空间细节越少。保持“处理器默认”则沿用模型自身的尺寸设置。原生加载器的上限为 602k。",
+      "videoMaxPixelsDefault": "处理器默认",
+      "videoMaxPixelsFastest": "最快",
+      "videoMaxPixelsMax": "加载器上限"
     },
     "create": {
       "title": "创建会话",

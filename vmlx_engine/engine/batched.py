@@ -189,10 +189,14 @@ def _merge_cache_extra_keys(
     return merged
 
 
+from ..video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
+
 def _bound_video_fallback_frames(
     frames: list[Any],
     *,
     max_long_edge: int,
+    max_pixels: int | None = None,
+    resize: tuple[int, int] | None = None,
 ) -> list[Any]:
     """Downscale sampled video frames without changing their aspect ratio.
 
@@ -200,37 +204,15 @@ def _bound_video_fallback_frames(
     handful of full-resolution desktop frames can therefore expand into a
     quadratic attention prompt large enough to exceed the VLM prefill guard.
     Keep the real sampled pixels, but bound each frame before image-token
-    expansion. Invalid/test sentinel frames are left untouched.
+    expansion. Invalid/test sentinel frames are left untouched. An explicit
+    ``resize`` or a per-frame ``max_pixels`` from the request's video
+    controls tightens the default long-edge bound.
     """
-    if max_long_edge <= 0:
-        return frames
+    from ..video_controls import bound_video_frames
 
-    try:
-        import cv2
-    except Exception:
-        return frames
-
-    bounded: list[Any] = []
-    for frame in frames:
-        try:
-            height, width = (int(frame.shape[0]), int(frame.shape[1]))
-            long_edge = max(height, width)
-            if long_edge <= max_long_edge:
-                bounded.append(frame)
-                continue
-            scale = max_long_edge / float(long_edge)
-            resized_width = max(1, int(round(width * scale)))
-            resized_height = max(1, int(round(height * scale)))
-            bounded.append(
-                cv2.resize(
-                    frame,
-                    (resized_width, resized_height),
-                    interpolation=cv2.INTER_AREA,
-                )
-            )
-        except Exception:
-            bounded.append(frame)
-    return bounded
+    return bound_video_frames(
+        frames, max_long_edge=max_long_edge, max_pixels=max_pixels, resize=resize
+    )
 
 
 def _raise_prompt_too_long_from_output(output: Any) -> None:
@@ -840,6 +822,7 @@ class BatchedEngine(BaseEngine):
         *,
         video_fps: float | None = None,
         video_max_frames: int | None = None,
+        video_controls: Any = None,
     ) -> list[dict[str, Any]]:
         """Route selected VLM video turns through sampled image frames.
 
@@ -872,8 +855,15 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return messages
 
-        fps = video_fps or DEFAULT_FPS
-        max_frames = video_max_frames or MAX_FRAMES
+        from ..video_controls import VideoControls
+
+        controls = (
+            video_controls
+            if isinstance(video_controls, VideoControls)
+            else VideoControls(fps=video_fps, max_frames=video_max_frames)
+        )
+        fps = controls.effective_fps()
+        max_frames = controls.effective_max_frames()
         try:
             frame_max_long_edge = max(
                 224,
@@ -881,6 +871,10 @@ class BatchedEngine(BaseEngine):
             )
         except (TypeError, ValueError):
             frame_max_long_edge = 768
+        # Per-request sizing (explicit size, or per-frame pixel budget) on top
+        # of the long-edge default; it is also part of the frame cache key.
+        frame_bounds = controls.fallback_bounds(default_long_edge=frame_max_long_edge)
+        controls_key = controls.cache_key_fragment()
         rewritten: list[dict[str, Any]] = []
         changed = False
         converted_videos = 0
@@ -1001,10 +995,10 @@ class BatchedEngine(BaseEngine):
                         stat = os.stat(video_path)
                         fallback_cache_key = (
                             f"{family}|{video_path}|{stat.st_size}|{stat.st_mtime_ns}|"
-                            f"{fps}|{max_frames}"
+                            f"{controls_key}|edge={frame_max_long_edge}"
                         )
                     except Exception:
-                        fallback_cache_key = f"{family}|{video_path}|{fps}|{max_frames}"
+                        fallback_cache_key = f"{family}|{video_path}|{controls_key}|edge={frame_max_long_edge}"
                     frames = extract_video_frames_smart(
                         video_path,
                         fps=fps,
@@ -1012,7 +1006,9 @@ class BatchedEngine(BaseEngine):
                     )
                     frames = _bound_video_fallback_frames(
                         frames,
-                        max_long_edge=frame_max_long_edge,
+                        max_long_edge=frame_bounds.max_long_edge,
+                        max_pixels=frame_bounds.max_pixels,
+                        resize=frame_bounds.resize,
                     )
                     frame_paths = save_frames_to_temp(frames)
                     frame_paths = _dedup_video_frames(
@@ -1066,11 +1062,13 @@ class BatchedEngine(BaseEngine):
         *,
         video_fps: float | None = None,
         video_max_frames: int | None = None,
+        video_controls: Any = None,
     ) -> list[dict[str, Any]]:
         return self._video_frame_fallback_messages(
             messages,
             video_fps=video_fps,
             video_max_frames=video_max_frames,
+            video_controls=video_controls,
         )
 
     @property
@@ -2387,6 +2385,7 @@ class BatchedEngine(BaseEngine):
                 image_token_budget=kwargs.get("image_token_budget"),
                 video_fps=kwargs.get("video_fps"),
                 video_max_frames=kwargs.get("video_max_frames"),
+                video_controls=_video_controls_from_kwargs(kwargs),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
                 enable_thinking=kwargs.get("enable_thinking"),
@@ -2556,6 +2555,7 @@ class BatchedEngine(BaseEngine):
                 image_token_budget=kwargs.get("image_token_budget"),
                 video_fps=kwargs.get("video_fps"),
                 video_max_frames=kwargs.get("video_max_frames"),
+                video_controls=_video_controls_from_kwargs(kwargs),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
                 enable_thinking=kwargs.get("enable_thinking"),
@@ -2707,6 +2707,7 @@ class BatchedEngine(BaseEngine):
             messages,
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
+            video_controls=_video_controls_from_kwargs(kwargs),
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)
@@ -2892,6 +2893,7 @@ class BatchedEngine(BaseEngine):
             messages,
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
+            video_controls=_video_controls_from_kwargs(kwargs),
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)

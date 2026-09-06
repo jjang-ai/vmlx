@@ -33,7 +33,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from ..video_controls import VIDEO_CONTROL_FIELDS, validate_video_controls
 
 from .models import (
     ChatCompletionRequest,
@@ -107,6 +109,20 @@ class AnthropicRequest(BaseModel):
     repetition_penalty: float | None = None
     cache_salt: str | None = None
     skip_prefix_cache: bool | None = None
+    # vMLX extension: per-request video preprocessing controls, same names
+    # and validation as the chat/responses dialects.
+    video_fps: float | None = None
+    video_max_frames: int | None = None
+    video_max_pixels: int | None = None
+    video_min_pixels: int | None = None
+    video_total_pixels: int | None = None
+    video_resized_height: int | None = None
+    video_resized_width: int | None = None
+
+    @model_validator(mode="after")
+    def validate_video_controls(self):
+        validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
+        return self
 
     @field_validator("max_tokens")
     @classmethod
@@ -293,6 +309,7 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
             if req.reasoning_effort is not None
             else (chat_template_kwargs or {}).get("reasoning_effort")
         ),
+        **{f: getattr(req, f) for f in VIDEO_CONTROL_FIELDS},
     )
 
 

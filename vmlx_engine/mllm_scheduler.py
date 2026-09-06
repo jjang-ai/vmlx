@@ -141,6 +141,7 @@ KEY CLASSES
 """
 
 from .persistence_outcome import LEDGER as _PERSIST, format_outcome as _format_persistence_outcome
+from .video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
 import asyncio
 import hashlib
 import logging
@@ -477,6 +478,10 @@ class MLLMRequest:
     image_token_budget: Optional[int] = None
     video_fps: Optional[float] = None
     video_max_frames: Optional[int] = None
+    # Normalized per-request video controls (fps, frame cap, pixel budgets,
+    # explicit size); video_fps/video_max_frames above stay for callers that
+    # only know those two.
+    video_controls: Optional[Any] = None
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Error recovery
@@ -2675,6 +2680,7 @@ class MLLMScheduler:
             image_token_budget=kwargs.get("image_token_budget"),
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
+            video_controls=_video_controls_from_kwargs(kwargs),
         )
         request.extra_kwargs = {
             key: value
@@ -3042,6 +3048,7 @@ class MLLMScheduler:
                 image_token_budget=request.image_token_budget,
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
+                video_controls=getattr(request, "video_controls", None),
             )
             if request.extra_kwargs:
                 batch_req.extra_kwargs.update(request.extra_kwargs)

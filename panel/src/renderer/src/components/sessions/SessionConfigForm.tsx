@@ -116,6 +116,8 @@ export interface SessionConfig {
   imageTokenBudget?: number
   videoFps?: number
   videoMaxFrames?: number
+  /** Per-frame pixel budget for sampled video frames (aspect preserved); unset = processor default. */
+  videoMaxPixels?: number
   // Distributed compute
   distributedEnabled?: boolean
   distributedMode?: 'pipeline' | 'tensor'
@@ -1712,6 +1714,21 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={2}
               defaultValue={8}
             />
+            <Field label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
+              <select
+                className="cfg-input"
+                data-vmlx-setting="videoMaxPixels"
+                value={config.videoMaxPixels ? String(config.videoMaxPixels) : ''}
+                onChange={e => onChange('videoMaxPixels', e.target.value ? Number(e.target.value) : undefined)}
+              >
+                <option value="">{t('sessions.config.videoMaxPixelsDefault')}</option>
+                <option value="100352">128 px² · 100k ({t('sessions.config.videoMaxPixelsFastest')})</option>
+                <option value="200704">256 px² · 200k</option>
+                <option value="301056">301k</option>
+                <option value="401408">401k</option>
+                <option value="602112">602k ({t('sessions.config.videoMaxPixelsMax')})</option>
+              </select>
+            </Field>
           </>
         )}
       </Section>

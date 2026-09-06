@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
+from ..video_controls import VIDEO_CONTROL_FIELDS, validate_video_controls
+
 
 _NO_REASONING_EFFORTS = {"none", "off", "false", "disabled", "disable", "0"}
 
@@ -269,6 +271,13 @@ class ChatCompletionRequest(BaseModel):
     image_token_budget: int | None = None
     video_fps: float | None = None
     video_max_frames: int | None = None
+    # Per-frame / per-clip pixel budgets and an explicit frame size (both
+    # dimensions or neither). Validated together in validate_video_controls.
+    video_max_pixels: int | None = None
+    video_min_pixels: int | None = None
+    video_total_pixels: int | None = None
+    video_resized_height: int | None = None
+    video_resized_width: int | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
     # vMLX extension: per-request prompt/context admission cap. This can
@@ -388,6 +397,11 @@ class ChatCompletionRequest(BaseModel):
     @classmethod
     def validate_image_token_budget(cls, v):
         return _validate_image_token_budget(v)
+
+    @model_validator(mode="after")
+    def validate_video_controls(self):
+        validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
+        return self
 
     @field_validator("temperature")
     @classmethod
@@ -1003,6 +1017,13 @@ class ResponsesRequest(BaseModel):
     image_token_budget: int | None = None
     video_fps: float | None = None
     video_max_frames: int | None = None
+    # Per-frame / per-clip pixel budgets and an explicit frame size (both
+    # dimensions or neither). Validated together in validate_video_controls.
+    video_max_pixels: int | None = None
+    video_min_pixels: int | None = None
+    video_total_pixels: int | None = None
+    video_resized_height: int | None = None
+    video_resized_width: int | None = None
     # Cache bypass — parity with ChatCompletionRequest.cache_salt /
     # skip_prefix_cache. Without these fields, `model_config={"extra":
     # "ignore"}` silently drops them, and Responses-API clients (Claude
@@ -1068,6 +1089,11 @@ class ResponsesRequest(BaseModel):
     @classmethod
     def validate_image_token_budget(cls, v):
         return _validate_image_token_budget(v)
+
+    @model_validator(mode="after")
+    def validate_video_controls(self):
+        validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
+        return self
 
     @field_validator("temperature")
     @classmethod

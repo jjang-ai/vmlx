@@ -4255,6 +4255,16 @@ def smart_nframes(
     return int(nframes)
 
 
+
+def _video_pixel_key_suffix(controls: Any) -> str:
+    """Cache-key suffix for per-request pixel controls; empty when unset."""
+    from ..video_controls import VideoControls
+
+    if isinstance(controls, VideoControls) and controls.has_pixel_controls:
+        return f":px{controls.pixel_fragment()}"
+    return ""
+
+
 def extract_video_frames_smart(
     video_path: str,
     fps: float = DEFAULT_FPS,
@@ -4803,6 +4813,7 @@ class MLXMultimodalLM:
         video_input: str | dict,
         fps: float = DEFAULT_FPS,
         max_frames: int = MAX_FRAMES,
+        controls: Any = None,
     ) -> list[str]:
         """
         Process video input and extract frames.
@@ -4830,6 +4841,18 @@ class MLXMultimodalLM:
             fps=fps,
             max_frames=max_frames,
         )
+        # Per-request sizing (explicit size or per-frame pixel budget) applies
+        # to the sampled frames before they become image inputs.
+        from ..video_controls import VideoControls, bound_video_frames
+
+        if isinstance(controls, VideoControls) and controls.has_pixel_controls:
+            bounds = controls.fallback_bounds(default_long_edge=0)
+            frames = bound_video_frames(
+                frames,
+                max_long_edge=bounds.max_long_edge,
+                max_pixels=bounds.max_pixels,
+                resize=bounds.resize,
+            )
         return save_frames_to_temp(frames)
 
     def _guard_simple_image_prefill(
@@ -5544,6 +5567,7 @@ class MLXMultimodalLM:
         video_fps: float = DEFAULT_FPS,
         video_max_frames: int = MAX_FRAMES,
         use_cache: bool = True,
+        video_controls: Any = None,
         **kwargs,
     ) -> MLLMOutput:
         """
@@ -5605,12 +5629,15 @@ class MLXMultimodalLM:
                 video_path,
                 fps=video_fps,
                 max_frames=video_max_frames,
+                controls=video_controls,
             )
             all_images.extend(frames)
-            # Include video params in cache key
+            # Include video params in cache key (pixel controls only when set,
+            # so requests without them keep their pre-existing keys)
             video_str = video_path if isinstance(video_path, str) else str(video_path)
             all_sources.append(
                 f"video:{video_str}:fps{video_fps}:max{video_max_frames}"
+                + _video_pixel_key_suffix(video_controls)
             )
             logger.info(f"Added {len(frames)} frames from video: {video_path}")
 
@@ -5786,6 +5813,7 @@ class MLXMultimodalLM:
         temperature: float = 0.7,
         video_fps: float = DEFAULT_FPS,
         video_max_frames: int = MAX_FRAMES,
+        video_controls: Any = None,
         **kwargs,
     ) -> Iterator[str]:
         """
@@ -5835,11 +5863,14 @@ class MLXMultimodalLM:
             all_images.extend(self._prepare_images(images))
             all_sources.extend(images)
         for video_path in videos:
-            frames = self._prepare_video(video_path, fps=video_fps, max_frames=video_max_frames)
+            frames = self._prepare_video(
+                video_path, fps=video_fps, max_frames=video_max_frames, controls=video_controls
+            )
             all_images.extend(frames)
             video_str = video_path if isinstance(video_path, str) else str(video_path)
             all_sources.append(
                 f"video:{video_str}:fps{video_fps}:max{video_max_frames}"
+                + _video_pixel_key_suffix(video_controls)
             )
 
         # Guard against excessive total images (including video frames)
@@ -6042,12 +6073,15 @@ class MLXMultimodalLM:
             all_audio.extend(self._prepare_audio(audio_inputs))
 
         # Process videos
-        video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
-        video_max_frames = kwargs.pop("video_max_frames", MAX_FRAMES)
+        from ..video_controls import pop_video_control_kwargs
+
+        _video_controls = pop_video_control_kwargs(kwargs)
+        video_fps = _video_controls.effective_fps() if _video_controls else DEFAULT_FPS
+        video_max_frames = _video_controls.effective_max_frames() if _video_controls else MAX_FRAMES
         video_frame_counts: list[int] = []
         for video_path in videos:
             frames = self._prepare_video(
-                video_path, fps=video_fps, max_frames=video_max_frames
+                video_path, fps=video_fps, max_frames=video_max_frames, controls=_video_controls
             )
             all_images.extend(frames)
             video_frame_counts.append(len(frames))
@@ -6383,12 +6417,15 @@ class MLXMultimodalLM:
             all_audio.extend(self._prepare_audio(audio_inputs))
 
         # Process videos
-        video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
-        video_max_frames = kwargs.pop("video_max_frames", MAX_FRAMES)
+        from ..video_controls import pop_video_control_kwargs
+
+        _video_controls = pop_video_control_kwargs(kwargs)
+        video_fps = _video_controls.effective_fps() if _video_controls else DEFAULT_FPS
+        video_max_frames = _video_controls.effective_max_frames() if _video_controls else MAX_FRAMES
         video_frame_counts: list[int] = []
         for video_path in videos:
             frames = self._prepare_video(
-                video_path, fps=video_fps, max_frames=video_max_frames
+                video_path, fps=video_fps, max_frames=video_max_frames, controls=_video_controls
             )
             all_images.extend(frames)
             video_frame_counts.append(len(frames))
