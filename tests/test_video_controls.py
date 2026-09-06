@@ -327,6 +327,8 @@ class TestCleanMediaBoundaryMatchesFetchContract:
             _media_placeholder_token_ids=lambda: {placeholder},
         )
         fake._media_placeholder_span = lambda ids: MLLMBatchGenerator._media_placeholder_span(fake, ids)
+        fake._media_placeholder_run_at = lambda ids, b: MLLMBatchGenerator._media_placeholder_run_at(fake, ids, b)
+        fake._model_type = "qwen4_exp"
         return fake, MLLMBatchGenerator._media_clean_cache_boundary_for
 
     def test_boundary_after_the_media_when_it_fits(self):
@@ -349,6 +351,21 @@ class TestCleanMediaBoundaryMatchesFetchContract:
         fake, fn = self._gen()
         tokens = [1] * 10 + [99] * 700 + [2] * 20     # media 10..710, N-1=729 -> 704 cuts; before = 0 -> none
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 0
+
+    def test_qwen_family_refuses_any_boundary_inside_the_media_span(self):
+        import types
+        fake, fn = self._gen()
+        fake._model_type = "qwen4_exp"
+        # two videos with text between; N-1 aligned boundary (768) lands between them → still inside the span for Qwen
+        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 40 + [2] * 20    # span 100..940, N-1=959 -> 896 inside the span -> before = 64
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 64
+
+    def test_other_families_keep_a_boundary_between_whole_media_items(self):
+        import types
+        fake, fn = self._gen()
+        fake._model_type = "muse_glimmer"
+        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 40 + [2] * 20    # 896 lies in the text between the two runs -> kept
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 896
 
     def test_text_only_prompt_keeps_the_terminal_boundary(self):
         import types

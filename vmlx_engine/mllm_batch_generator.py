@@ -9386,14 +9386,20 @@ class MLLMBatchGenerator:
         except (TypeError, ValueError):
             required = 0
         block_size = int(getattr(self.block_aware_cache, "block_size", 0) or 0)
-        # The fetch side admits a media hit only when it COVERS every
-        # placeholder or ends strictly BEFORE the first one; a boundary that
-        # cuts through the media span is declined on the next request
-        # ("the tail still contains media placeholders"). Storing such a
-        # boundary costs a clean prefill and a companion for nothing, so pick
-        # a boundary the fetch side can use: after the media when one fits
-        # under N-1, else before the media, else none.
-        span = self._media_placeholder_span(token_ids)
+        # The fetch side can never restore a hit that cuts THROUGH a
+        # placeholder run (partial media). The Qwen families additionally
+        # admit a media hit only when it covers every placeholder or ends
+        # strictly before the first one (their tail preparer), so for them the
+        # whole media span is off limits; Muse and others admit a boundary
+        # between whole media items. A boundary the fetch side declines costs
+        # a clean prefill and a companion for nothing, so pick one it can use:
+        # after the forbidden region when it fits under N-1, else before it,
+        # else none.
+        family = str(getattr(self, "_model_type", "") or "").lower()
+        if family in {"qwen3_5", "qwen3_5_moe", "qwen4_exp"}:
+            span = self._media_placeholder_span(token_ids)
+        else:
+            span = None
         chosen = terminal
         if (
             required > 0
@@ -9409,6 +9415,9 @@ class MLLMBatchGenerator:
                 terminal,
             )
             chosen = required
+        if span is None:
+            # Any family: never cut through a contiguous placeholder run.
+            span = self._media_placeholder_run_at(token_ids, chosen)
         if span is None:
             return chosen
         media_start, media_end = span
@@ -9428,6 +9437,26 @@ class MLLMBatchGenerator:
             f"the pre-media boundary {before}" if before > 0 else "no boundary (nothing reusable outside the media)",
         )
         return before if before > 0 else 0
+
+    def _media_placeholder_run_at(self, token_ids: List[int], boundary: int) -> Optional[tuple[int, int]]:
+        """The contiguous placeholder run that ``boundary`` cuts through
+        (tokens on both sides of the cut are placeholders), as (start, end),
+        else None."""
+        try:
+            ids = self._media_placeholder_token_ids()
+        except Exception:
+            return None
+        if not ids or boundary <= 0 or boundary >= len(token_ids):
+            return None
+        if token_ids[boundary - 1] not in ids or token_ids[boundary] not in ids:
+            return None
+        start = boundary
+        while start > 0 and token_ids[start - 1] in ids:
+            start -= 1
+        end = boundary
+        while end < len(token_ids) and token_ids[end] in ids:
+            end += 1
+        return start, end
 
     def _media_placeholder_span(self, token_ids: List[int]) -> Optional[tuple[int, int]]:
         """(first placeholder index, index after the last placeholder), or

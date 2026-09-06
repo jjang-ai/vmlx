@@ -70,13 +70,28 @@ def test_media_kv_only_miss_teaches_the_next_clean_boundary():
     assert generator._media_clean_cache_boundary_for(request, tokens) == 4672
 
 
-def test_media_required_boundary_can_target_exact_embedding_prefix_inside_media():
+def test_media_required_boundary_inside_a_placeholder_run_moves_before_the_run():
+    """A learned boundary that cuts THROUGH a placeholder run can never be
+    restored (the tail would need partial media), so the store no longer
+    targets it: it moves to the aligned boundary before the run. Seen live on
+    Flash-Next (762-token variants) and 27B ("the 72-token tail still contains
+    media placeholders" → hit declined) before the change."""
     generator = _Gen(64).gen
     generator._media_placeholder_token_ids = lambda: {99}
     request = SimpleNamespace(_ssm_required_checkpoint_tokens=4032)
     tokens = [1] * 4000 + [99] * 128 + [2] * 2200
 
-    assert generator._media_clean_cache_boundary_for(request, tokens) == 4032
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 3968
+
+
+def test_media_required_boundary_between_whole_media_items_is_kept_for_non_qwen_families():
+    generator = _Gen(64).gen
+    generator._media_placeholder_token_ids = lambda: {99}
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=4160)
+    # image A (4000..4128), text, image B (4200..4328): 4160 sits between whole items
+    tokens = [1] * 4000 + [99] * 128 + [3] * 72 + [99] * 128 + [2] * 2200
+
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 4160
 
 
 def test_in_media_clean_prefill_encodes_full_media_then_forwards_exact_prefix():
