@@ -18,6 +18,10 @@ const CONTRACT: Record<string, string[]> = {
   'sessions/SessionCard.tsx': ['session-card-open', 'session-card-start', 'session-card-stop', 'session-card-configure', 'session-card-sleep', 'session-card-wake', 'session-card-delete', 'session-card-repoint'],
   'layout/ChatModeToolbar.tsx': ['chat-settings', 'server-settings'],
   'sessions/SessionView.tsx': ['session-start', 'session-stop'],
+  'chat/ChatSettings.tsx': ['chat-thinking-auto', 'chat-thinking-on', 'chat-thinking-off', 'chat-effort-default'],
+  'sessions/ServerSettingsDrawer.tsx': ['server-settings-save', 'server-settings-save-restart', 'server-settings-reset'],
+  'sessions/SessionDashboard.tsx': ['session-create'],
+  'layout/SidebarHeader.tsx': ['chat-new'],
 }
 
 describe('stable control contract (data-vmlx-*)', () => {
@@ -33,6 +37,11 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(src).toContain('data-vmlx-state={active ? "active" : "inactive"}')
     for (const m of ['code', 'chat', 'server', 'tools', 'image', 'api']) expect(src).toContain(`mode="${m}"`)
   })
+  it('selected state is an attribute, not a class, on the thinking and effort groups', () => {
+    const src = R('chat/ChatSettings.tsx')
+    expect(src).toContain("data-vmlx-control={`chat-effort-${effort}`}")
+    expect((src.match(/data-vmlx-state=\{[^}]*\? 'selected' : 'unselected'\}/g) || []).length).toBeGreaterThanOrEqual(5)
+  })
   it('session card actions carry the session id', () => {
     const src = R('sessions/SessionCard.tsx')
     expect((src.match(/data-vmlx-session-id=\{session\.id\}/g) || []).length).toBeGreaterThanOrEqual(8)
@@ -42,6 +51,11 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(src).toContain('data-vmlx-setting={settingKey}')
     expect(src).toContain('data-vmlx-section={sectionKey}')
     expect(src).toContain("data-vmlx-state={expanded ? 'open' : 'closed'}")
-    for (const k of ['videoFps', 'videoMaxFrames', 'videoMaxPixels', 'videoTokenBudget']) expect(src).toContain(`settingKey="${k}"`)
+    for (const k of ['videoFps', 'videoMaxFrames', 'videoMaxPixels', 'videoTokenBudget', 'isMultimodal']) expect(src).toContain(`settingKey="${k}"`)
+    // the multimodal/video controls live in their own, default-open section, not under Tool Integration & MCP
+    expect(src).toContain('sectionKey="multimodal"')
+    expect(src).toContain('multimodal: true,')
+    expect(src.indexOf('sectionKey="tools"')).toBeLessThan(src.indexOf('sectionKey="multimodal"'))
+    expect(src.indexOf("t('sessions.config.multimodalSupport')")).toBeGreaterThan(src.indexOf('sectionKey="multimodal"'))
   })
 })

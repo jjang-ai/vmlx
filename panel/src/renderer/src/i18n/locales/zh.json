@@ -1051,7 +1051,8 @@
       "videoMaxPixelsFastest": "最快",
       "videoMaxPixelsMax": "加载器上限",
       "videoTokenBudget": "视频 token 预算",
-      "videoTokenBudgetTooltip": "整段视频的视觉 token 数量上限（近似值）。引擎将其换算为整段视频的像素预算（token 数 × 28² 像素），由视频加载器分配到各采样帧，使长视频或高分辨率视频的预填充成本保持可预测。帧尺寸仍会按模型的 patch 尺寸取整，因此实际数量可能略有出入。"
+      "videoTokenBudgetTooltip": "整段视频的视觉 token 数量上限（近似值）。引擎将其换算为整段视频的像素预算（token 数 × 28² 像素），由视频加载器分配到各采样帧，使长视频或高分辨率视频的预填充成本保持可预测。帧尺寸仍会按模型的 patch 尺寸取整，因此实际数量可能略有出入。",
+      "multimodalSection": "多模态与视频"
     },
     "create": {
       "title": "创建会话",

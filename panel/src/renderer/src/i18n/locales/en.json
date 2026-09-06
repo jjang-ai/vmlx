@@ -1051,7 +1051,8 @@
       "videoMaxPixelsFastest": "fastest",
       "videoMaxPixelsMax": "loader maximum",
       "videoTokenBudget": "Video Token Budget",
-      "videoTokenBudgetTooltip": "Approximate cap on vision tokens for the whole clip. The engine turns it into a per-clip pixel budget (tokens × 28² pixels) that the video loader spreads across the sampled frames, so long or high-resolution clips stay within a predictable prefill cost. Frames still round to the model's patch size, so the exact count can differ slightly."
+      "videoTokenBudgetTooltip": "Approximate cap on vision tokens for the whole clip. The engine turns it into a per-clip pixel budget (tokens × 28² pixels) that the video loader spreads across the sampled frames, so long or high-resolution clips stay within a predictable prefill cost. Frames still round to the model's patch size, so the exact count can differ slightly.",
+      "multimodalSection": "Multimodal & Video"
     },
     "create": {
       "title": "Create Session",

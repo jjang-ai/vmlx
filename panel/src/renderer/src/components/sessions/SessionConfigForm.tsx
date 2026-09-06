@@ -346,6 +346,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     power: false,
     performance: false,
     tools: false,
+    multimodal: true,
     specDecode: false,
     nativeMtp: true,
   })
@@ -1492,7 +1493,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Tool Integration */}
-      <Section title={t('sessions.config.toolIntegrationMCP')} expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage}>
+      <Section title={t('sessions.config.toolIntegrationMCP')} expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage} sectionKey="tools">
         <PerformanceHint text={t('sessions.config.mcpHint')} />
         <Field label={t('sessions.config.mcpConfigFile')} tooltip={t('sessions.config.mcpConfigFileTooltip')}>
           <div className="flex gap-2">
@@ -1641,7 +1642,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             style={{ resize: 'vertical', minHeight: '3rem' }}
           />
         </Field>
+      </Section>
+
+      {/* Multimodal & video: vision on/off, image token budget, video sampling
+          and pixel/token budgets. Own section (was nested under Tool
+          Integration & MCP, collapsed by default, where nobody looks for it). */}
+      <Section title={t('sessions.config.multimodalSection')} expanded={expandedSections.multimodal} onToggle={() => toggleSection('multimodal')} hidden={isImage} sectionKey="multimodal">
         <SelectField
+          settingKey="isMultimodal"
           label={t('sessions.config.multimodalSupport')}
           tooltip={t('sessions.config.multimodalSupportTooltip')}
           value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
@@ -1755,7 +1763,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Native in-model MTP */}
-      <Section title={t('sessions.config.nativeMtp')} expanded={expandedSections.nativeMtp} onToggle={() => toggleSection('nativeMtp')} hidden={isImage || dsv4Active || !nativeMtpDetected}>
+      <Section title={t('sessions.config.nativeMtp')} expanded={expandedSections.nativeMtp} onToggle={() => toggleSection('nativeMtp')} sectionKey="nativeMtp" hidden={isImage || dsv4Active || !nativeMtpDetected}>
         {!nativeMtpSupported && (
           <IncompatWarning text={detectedNativeMtp?.blockedReason || t('sessions.config.nativeMtpBlockedFallback')} />
         )}
