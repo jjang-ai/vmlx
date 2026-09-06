@@ -42,6 +42,14 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(src).toContain("data-vmlx-control={`chat-effort-${effort}`}")
     expect((src.match(/data-vmlx-state=\{[^}]*\? 'selected' : 'unselected'\}/g) || []).length).toBeGreaterThanOrEqual(5)
   })
+  it('alerts carry a tone attribute the harness reads instead of a class', () => {
+    expect(R('Toast.tsx')).toContain('data-vmlx-tone={toast.type}')
+    expect(R('image/ImageTab.tsx')).toContain('role="alert" data-vmlx-tone="error"')
+    expect(R('chat/ChatSettings.tsx')).toContain('data-vmlx-tone="warning"')
+    expect(R('tools/ModelConverter.tsx')).toContain('data-vmlx-tone="warning"')
+    const harness = readFileSync(join(__dirname, '..', 'scripts', 'live-real-ui-model-proof.mjs'), 'utf8')
+    expect(harness).toContain("const tone = alert.getAttribute('data-vmlx-tone')")
+  })
   it('session card actions carry the session id', () => {
     const src = R('sessions/SessionCard.tsx')
     expect((src.match(/data-vmlx-session-id=\{session\.id\}/g) || []).length).toBeGreaterThanOrEqual(8)

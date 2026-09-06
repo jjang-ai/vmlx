@@ -633,7 +633,7 @@ export function ImageTab() {
         )}
 
         {error && (
-          <div className="mx-4 mt-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-md text-sm text-destructive">
+          <div role="alert" data-vmlx-tone="error" className="mx-4 mt-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-md text-sm text-destructive">
             {error}
             <button onClick={() => setError(null)} className="ml-2 text-xs underline">{t('image.tab.dismissError')}</button>
           </div>

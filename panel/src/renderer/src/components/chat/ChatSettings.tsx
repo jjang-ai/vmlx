@@ -535,6 +535,7 @@ function statusToneClass(status: string): string {
         {dsv4TopPMismatch && (
           <div
             data-vmlx-warning="dsv4-top-p-advisory"
+            data-vmlx-tone="warning"
             role="alert"
             className="flex items-start gap-2 rounded border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
           >
@@ -675,6 +676,8 @@ function statusToneClass(status: string): string {
                 <button
                   disabled={!thinkingSupported}
                   onClick={() => updateThinkingMode(undefined, undefined)}
+                  data-vmlx-control="chat-thinking-auto"
+                  data-vmlx-state={displayedEnableThinking == null ? 'selected' : 'unselected'}
                   className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                     displayedEnableThinking == null
                       ? 'bg-primary text-primary-foreground'
@@ -686,6 +689,8 @@ function statusToneClass(status: string): string {
                 <button
                   disabled={!thinkingSupported}
                   onClick={() => updateThinkingMode(true, displayedOverrides.reasoningEffort)}
+                  data-vmlx-control="chat-thinking-on"
+                  data-vmlx-state={displayedEnableThinking === true ? 'selected' : 'unselected'}
                   className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                     displayedEnableThinking === true
                       ? 'bg-primary text-primary-foreground'
@@ -698,6 +703,8 @@ function statusToneClass(status: string): string {
                   <button
                     disabled={!thinkingSupported}
                     onClick={() => updateThinkingMode(false, undefined)}
+                    data-vmlx-control="chat-thinking-off"
+                    data-vmlx-state={displayedEnableThinking === false ? 'selected' : 'unselected'}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                       displayedEnableThinking === false
                         ? 'bg-primary text-primary-foreground'
@@ -724,6 +731,8 @@ function statusToneClass(status: string): string {
                   <div className="flex gap-1 bg-background rounded border border-border p-0.5">
                     <button
                       onClick={() => update('reasoningEffort', undefined)}
+                      data-vmlx-control="chat-effort-default"
+                      data-vmlx-state={displayedOverrides.reasoningEffort == null ? 'selected' : 'unselected'}
                       className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                         displayedOverrides.reasoningEffort == null
                           ? 'bg-primary text-primary-foreground'
@@ -740,6 +749,8 @@ function statusToneClass(status: string): string {
                       <button
                         key={effort}
                         data-reasoning-effort={effort}
+                        data-vmlx-control={`chat-effort-${effort}`}
+                        data-vmlx-state={displayedOverrides.reasoningEffort === effort ? 'selected' : 'unselected'}
                         onClick={() => updateThinkingMode(true, effort)}
                         className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                           displayedOverrides.reasoningEffort === effort

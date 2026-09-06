@@ -9286,7 +9286,9 @@ async function main() {
           for (const alert of document.querySelectorAll('[role="alert"]')) {
             if (!isVisible(alert)) continue;
             const text = (alert.textContent || '').replace(/\\s+/g, ' ').trim();
-            const isError = String(alert.className || '').includes('destructive')
+            const tone = alert.getAttribute('data-vmlx-tone');
+            const isError = tone === 'error'
+              || (!tone && String(alert.className || '').includes('destructive'))
               || /(?:failed|error|exception|traceback|invalid)/i.test(text);
             if (isError && text && !observedAlertText.has(text)) {
               observedAlertText.add(text);

@@ -445,6 +445,7 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
         {jangCompatWarning && (
           <div
             role="alert"
+            data-vmlx-tone="warning"
             data-testid="jang-compat-warning"
             className="flex items-start gap-2 p-3 border border-amber-500/40 bg-amber-500/5 rounded-lg"
           >

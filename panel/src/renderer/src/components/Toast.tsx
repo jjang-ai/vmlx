@@ -83,6 +83,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
     <div
       className={`border rounded-lg px-4 py-3 shadow-lg backdrop-blur-sm transition-all duration-200 ${colors[toast.type]} ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
       role="alert"
+      data-vmlx-tone={toast.type}
     >
       <div className="flex items-start gap-3">
         <span className={`text-sm font-bold flex-shrink-0 mt-0.5 ${iconColors[toast.type]}`}>
