@@ -22,6 +22,14 @@ are the engine's ``DEFAULT_FPS`` / ``MAX_FRAMES`` and are folded into the
 key at their effective values, so leaving a control unset and spelling out
 the default is the same key.
 
+Scope of the token budget: it applies PER VIDEO ATTACHMENT (each video gets
+its own clip budget), never to image attachments, never to output tokens or
+context size, and it is an ESTIMATE, not a hard cap: frames round to the
+patch factor, ``min_pixels`` floors each frame, and the transformers video
+processor (mlx-vlm 0.5 delegates to Qwen3VLVideoProcessor) applies its own
+whole-clip bounds (16,384 .. ~12.6 M pixels over all frames). The processed
+grid the engine logs per request is the actual token count.
+
 Known library limit (mlx-vlm 0.5 ``fetch_video``): a per-frame budget above
 ``MLX_VLM_VIDEO_MAX_PIXELS`` is clamped by the loader with a warning, and
 the frame-fallback path has no such clamp. ``clamp_note`` reports the first

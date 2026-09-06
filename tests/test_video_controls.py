@@ -378,3 +378,15 @@ class TestCleanMediaBoundaryMatchesFetchContract:
         src = inspect.getsource(g)
         assert '"MLLM media prefix cache: no boundary outside the "' in src and '"media span for %s (N-1=%d); nothing stored for "' in src
         assert "if clean_media_cache is None and _clean_media_len > 0:" in src
+
+
+def test_processed_video_grid_is_logged_with_media_tokens():
+    import types
+    import vmlx_engine.mllm_batch_generator as g
+    src = inspect.getsource(g)
+    assert '"Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d"' in src
+    class Grid:
+        def tolist(self): return [[16, 26, 46]]
+    assert g._format_grid(Grid()) == "[16x26x46]"
+    proc = types.SimpleNamespace(video_processor=types.SimpleNamespace(merge_size=2))
+    assert g._grid_media_tokens(Grid(), proc) == f"{16*26*46//4} (merge=2)"

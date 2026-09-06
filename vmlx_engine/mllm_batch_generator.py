@@ -284,6 +284,31 @@ def _format_timestamps(ts: Any) -> str:
     return "[" + ",".join(fmt(v) for v in vals[:4]) + ",...," + ",".join(fmt(v) for v in vals[-3:]) + f"] n={len(vals)}"
 
 
+def _format_grid(grid: Any) -> str:
+    try:
+        rows = grid.tolist() if hasattr(grid, "tolist") else list(grid)
+        return "[" + ",".join("x".join(str(int(v)) for v in r) for r in rows) + "]"
+    except Exception:
+        return "?"
+
+
+def _grid_media_tokens(grid: Any, processor: Any) -> str:
+    """Tokens a video grid occupies after the spatial merge (t*h*w / merge^2)."""
+    try:
+        rows = grid.tolist() if hasattr(grid, "tolist") else list(grid)
+        merge = 2
+        for attr in ("video_processor", "image_processor"):
+            sub = getattr(processor, attr, None)
+            ms = getattr(sub, "merge_size", None)
+            if isinstance(ms, int) and ms > 0:
+                merge = ms
+                break
+        total = sum(int(r[0]) * int(r[1]) * int(r[2]) for r in rows) // (merge * merge)
+        return f"{total} (merge={merge})"
+    except Exception:
+        return "?"
+
+
 def _video_frame_count(video_input: Any) -> int:
     """Frames the loader produced (array T x C x H x W, or a list of frames)."""
     try:
@@ -8442,6 +8467,18 @@ class MLLMBatchGenerator:
         request.pixel_values = _ensure_mx_array(pixel_values)
         request.video_pixel_values = _ensure_mx_array(video_pixel_values)
         request.attention_mask = _ensure_mx_array(inputs.get("attention_mask"))
+        if video_cache_sources:
+            # What the PROCESSOR produced (the loader's frames may be re-sized
+            # by the sub-processor): the temporal/spatial patch grid per video
+            # and the media tokens it will occupy after merging.
+            _grid = inputs.get("video_grid_thw")
+            logger.info(
+                "Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d",
+                request.request_id,
+                _format_grid(_grid),
+                _grid_media_tokens(_grid, self.processor),
+                int(request.input_ids.shape[-1]) if getattr(request.input_ids, "shape", None) else -1,
+            )
 
         # Extract extra kwargs
         request.extra_kwargs = {
