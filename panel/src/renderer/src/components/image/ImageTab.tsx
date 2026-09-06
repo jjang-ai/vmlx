@@ -360,6 +360,12 @@ export function ImageTab() {
       if (result.success) {
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
+        // A local folder runs at its own precision whatever the picker said;
+        // show and persist the effective value the main process resolved.
+        if (typeof result.quantize === 'number' && result.quantize !== q) {
+          setQuantize(result.quantize)
+          setSettings(prev => ({ ...prev, quantize: result.quantize as number }))
+        }
         setShowLogs(true) // Auto-show logs during startup so user can see loading progress
         // Status will transition to 'running' via polling or session events
       } else {

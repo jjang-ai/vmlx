@@ -519,6 +519,8 @@ declare global {
           sessionId?: string;
           port?: number;
           error?: string;
+          /** Precision the server was configured with (a local bundle's own level wins over the request). */
+          quantize?: number;
           /** Stable error identity the renderer translates (image.server.errors.<code>). */
           errorCode?: string;
           errorParams?: Record<string, string>;

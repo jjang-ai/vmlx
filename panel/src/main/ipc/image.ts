@@ -721,7 +721,9 @@ export function registerImageHandlers(): void {
           await sessionManager.startSession(session.id)
           activeImageSessionId = session.id
 
-          return { success: true, sessionId: session.id, port: session.port }
+          // The precision actually configured (the bundle's own level for a local
+          // folder), so the renderer shows what runs rather than what was picked.
+          return { success: true, sessionId: session.id, port: session.port, quantize: effectiveQuantize }
         } catch (error) {
           console.error('[IMAGE] Failed to start server:', error)
           return { success: false, error: (error as Error).message }
