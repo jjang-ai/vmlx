@@ -1827,3 +1827,4 @@ describe('App Lifecycle', () => {
     })
   })
 })
+

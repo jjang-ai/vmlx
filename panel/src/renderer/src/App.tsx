@@ -143,7 +143,12 @@ function App() {
       ? sessions.find(s => s.id === state.activeSessionId)
       : null
     const running = sessions.find(s => s.status === 'running')
-    const target = explicit || running || sessions[0]
+    // A pinned session that is no longer running must not win over a session
+    // that is: the new chat would open against a stopped server and sit with
+    // a disabled composer while another model is up (seen live after
+    // stopping one session and starting another from the Server tab).
+    const explicitUsable = explicit && (explicit.status === 'running' || explicit.status === 'loading' || !running)
+    const target = (explicitUsable ? explicit : null) || running || explicit || sessions[0]
 
     if (!target) {
       // No sessions — switch to server mode to create one
