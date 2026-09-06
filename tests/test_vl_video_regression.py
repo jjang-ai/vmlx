@@ -10283,8 +10283,17 @@ class TestImageModelDirectoryNameResolution:
         # is correct for real loads and irrelevant here: stand in for the gate
         # so the alias/normalization layers under test are what gets exercised.
         # The gate has its own tests (tests/test_model_bundle_integrity.py).
+        #
+        # Patch the module object that `from .model_bundle_integrity import`
+        # resolves (sys.modules), not the package attribute: an earlier test
+        # file imports this module inside patch.dict(sys.modules, ...), whose
+        # restore drops it from sys.modules while the package attribute keeps
+        # the stale object, so a dotted-string patch lands on the wrong module.
+        import importlib
+        mbi = importlib.import_module("vmlx_engine.model_bundle_integrity")
         monkeypatch.setattr(
-            "vmlx_engine.model_bundle_integrity.prepare_model_bundle_for_load",
+            mbi,
+            "prepare_model_bundle_for_load",
             lambda model, *args, **kwargs: (str(model), {"stand_in": True}),
         )
 

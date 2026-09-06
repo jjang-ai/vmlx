@@ -697,9 +697,17 @@ class ImageGenEngine:
             )
 
         is_img2img = image_path is not None and image_strength is not None
+        # Say what happens to the negative prompt: the caller sent one and the
+        # model takes it (applied), the caller sent none (omitted), or the
+        # model's generate signature has no such parameter (unsupported), in
+        # which case it is dropped rather than silently "used".
+        negative_supported = 'negative_prompt' in self._get_generate_params()
+        negative_disposition = (
+            "omitted" if not negative_prompt else ("applied" if negative_supported else "unsupported")
+        )
         logger.info(
             f"{'img2img' if is_img2img else 'txt2img'}: {width}x{height}, {steps} steps, "
-            f"guidance={guidance}, seed={seed}"
+            f"guidance={guidance}, seed={seed}, negative_prompt={negative_disposition}"
             + (f", strength={image_strength}" if is_img2img else "")
         )
         start = time.perf_counter()
@@ -713,7 +721,7 @@ class ImageGenEngine:
             guidance=guidance,
         )
         # Not all models accept negative_prompt (Klein doesn't)
-        if negative_prompt and 'negative_prompt' in self._get_generate_params():
+        if negative_prompt and negative_supported:
             kwargs["negative_prompt"] = negative_prompt
         if is_img2img:
             kwargs["image_path"] = image_path
@@ -773,9 +781,14 @@ class ImageGenEngine:
         width = (width // 16) * 16
         height = (height // 16) * 16
 
+        edit_negative_disposition = (
+            "omitted" if not negative_prompt
+            else ("applied" if 'negative_prompt' in self._get_generate_params() else "unsupported")
+        )
         logger.info(
             f"Editing image: model={self._model_name}, {width}x{height}, "
-            f"{steps} steps, guidance={guidance}, strength={strength}, seed={seed}"
+            f"{steps} steps, guidance={guidance}, strength={strength}, seed={seed}, "
+            f"negative_prompt={edit_negative_disposition}"
         )
         start = time.perf_counter()
 
