@@ -1730,7 +1730,8 @@
       "descQwenImageEdit": "指示ベースの編集（28ステップ）",
       "descKontext": "被写体を保った編集（24ステップ）",
       "descFill": "マスクによるインペインティング（20ステップ）",
-      "keepCurrent": "{model} を維持"
+      "keepCurrent": "{model} を維持",
+      "classFlux2KleinEdit": "Flux2KleinEdit（Klein 編集）"
     },
     "prompt": {
       "variationLabel": "バリエーション",
@@ -1799,7 +1800,19 @@
       "negativeHelpExample": "「ぼやけ、低品質、文字、透かし、変形した手」",
       "advanced": "詳細設定",
       "server": "サーバー",
-      "modelLine": "モデル: {model}"
+      "modelLine": "モデル: {model}",
+      "strengthNotUsed": "{model} は強度を使用しません。この編集モデルは元画像を条件として使います。",
+      "negativeNotUsed": "{model} はネガティブプロンプトを使用しません。",
+      "capClass": "読み込み中のクラス: {cls}（{mode}）",
+      "capNegativePrompt": "ネガティブプロンプト",
+      "capStrength": "強度",
+      "capMask": "マスク",
+      "capCount": "複数画像",
+      "capYes": "あり",
+      "capNo": "なし",
+      "capRequired": "必須",
+      "capVariationOnly": "バリエーションのみ",
+      "capSingle": "1リクエストにつき1枚"
     },
     "topbar": {
       "historyTitle": "履歴を表示",

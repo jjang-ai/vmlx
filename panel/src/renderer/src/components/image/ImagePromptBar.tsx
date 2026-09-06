@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, Cli
 import { Send, ImagePlus, X, Pencil, RefreshCw, HelpCircle, Paintbrush } from 'lucide-react'
 import { MaskPainter } from './MaskPainter'
 import { useTranslation } from '../../i18n'
+import type { ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 /** Inline help icon with tooltip */
 function Help({ tip }: { tip: string }) {
@@ -49,9 +50,11 @@ interface ImagePromptBarProps {
   iterateCounter?: number
   /** Called when user clears the iterate state */
   onClearIterate?: () => void
+  /** From /health.image of the running server; null while unknown. */
+  capabilities?: ImageCapabilities | null
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, modelName, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
+export function ImagePromptBar({ capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, modelName, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
   const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -250,8 +253,8 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
             min={0} max={20} step={0.5} />
         </div>
-        {/* Strength: show for edit mode and variation mode */}
-        {(isEdit || isVariation) && (
+        {/* Strength: edit mode / variation mode, and only when the loaded model takes it */}
+        {((isEdit && capabilities?.edit_strength !== false) || (isVariation && capabilities?.variation_strength !== false)) && (
           <div className="flex items-center gap-1">
             <label className="text-muted-foreground">{t('image.prompt.strength')}</label>
             <Help tip={isEdit

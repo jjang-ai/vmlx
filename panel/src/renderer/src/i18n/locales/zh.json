@@ -1730,7 +1730,8 @@
       "descQwenImageEdit": "基于指令的编辑（28 步）",
       "descKontext": "主体一致性编辑（24 步）",
       "descFill": "蒙版修复填充（20 步）",
-      "keepCurrent": "保留 {model}"
+      "keepCurrent": "保留 {model}",
+      "classFlux2KleinEdit": "Flux2KleinEdit（Klein 编辑）"
     },
     "prompt": {
       "variationLabel": "变体",
@@ -1799,7 +1800,19 @@
       "negativeHelpExample": "\"模糊、低质量、文字、水印、变形的手\"",
       "advanced": "高级",
       "server": "服务器",
-      "modelLine": "模型：{model}"
+      "modelLine": "模型：{model}",
+      "strengthNotUsed": "{model} 不使用强度：此编辑模型以源图像为条件。",
+      "negativeNotUsed": "{model} 不使用负面提示词。",
+      "capClass": "已加载类：{cls}（{mode}）",
+      "capNegativePrompt": "负面提示词",
+      "capStrength": "强度",
+      "capMask": "遮罩",
+      "capCount": "多张图像",
+      "capYes": "是",
+      "capNo": "否",
+      "capRequired": "必需",
+      "capVariationOnly": "仅变体",
+      "capSingle": "每次请求一张"
     },
     "topbar": {
       "historyTitle": "显示历史",

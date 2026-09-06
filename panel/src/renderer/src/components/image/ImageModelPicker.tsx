@@ -435,6 +435,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                     <option value="QwenImageEdit">{t('image.picker.classQwenImageEdit')}</option>
                     <option value="Flux1Kontext">{t('image.picker.classFlux1Kontext')}</option>
                     <option value="Flux1Fill">{t('image.picker.classFlux1Fill')}</option>
+                    <option value="Flux2KleinEdit">{t('image.picker.classFlux2KleinEdit')}</option>
                     <option value="FIBO">{t('image.picker.classFIBO')}</option>
                     <option value="SeedVR2">{t('image.picker.classSeedVR2')}</option>
                   </select>

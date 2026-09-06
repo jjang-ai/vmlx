@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, HelpCircle } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import type { ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 interface ImageSettingsData {
   steps: number
@@ -19,6 +20,8 @@ interface ImageSettingsProps {
   onChange: (settings: ImageSettingsData) => void
   model: string | null
   mode: 'generate' | 'edit'
+  /** From /health.image of the running server; null while unknown. */
+  capabilities?: ImageCapabilities | null
 }
 
 const SIZE_PRESETS = [
@@ -30,9 +33,13 @@ const SIZE_PRESETS = [
   { label: '1280x720 (16:9)', width: 1280, height: 720 },
 ]
 
-export function ImageSettings({ settings, onChange, model, mode }: ImageSettingsProps) {
+export function ImageSettings({ settings, onChange, model, mode, capabilities }: ImageSettingsProps) {
   const { t } = useTranslation()
   const isEdit = mode === 'edit'
+  // Only claim a control is effective when the loaded model takes it.
+  const strengthUnused = isEdit && capabilities?.edit_strength === false
+  const negativeUnused = capabilities?.negative_prompt === false
+  const capModel = capabilities?.mflux_class || model || ''
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showServer, setShowServer] = useState(false)
   const [showNegativeHelp, setShowNegativeHelp] = useState(false)
@@ -110,8 +117,13 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
           />
         </div>
 
-        {/* Strength (edit mode only) */}
-        {isEdit && (
+        {/* Strength (edit mode only; hidden with a note when the loaded edit class never uses it) */}
+        {strengthUnused && (
+          <div data-vmlx-image-cap="strength-unused" className="text-[10px] text-muted-foreground self-end pb-1">
+            {t('image.settings.strengthNotUsed', { model: capModel })}
+          </div>
+        )}
+        {isEdit && !strengthUnused && (
           <div>
             <label className="text-xs text-muted-foreground block mb-1" title={t('image.settings.strengthTitle')}>{t('image.settings.strength')} &#9432;</label>
             <input
@@ -172,9 +184,14 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
           type="text"
           value={settings.negativePrompt}
           onChange={(e) => update('negativePrompt', e.target.value)}
-          placeholder={t('image.settings.negativePlaceholder')}
-          className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+          placeholder={negativeUnused ? t('image.settings.negativeNotUsed', { model: capModel }) : t('image.settings.negativePlaceholder')}
+          disabled={negativeUnused}
+          data-vmlx-image-cap={negativeUnused ? 'negative-unused' : 'negative'}
+          className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         />
+        {negativeUnused && (
+          <p className="text-[10px] text-muted-foreground mt-1">{t('image.settings.negativeNotUsed', { model: capModel })}</p>
+        )}
       </div>
 
       {/* Advanced Section (collapsed) */}
@@ -227,6 +244,15 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
           <p>{t('image.settings.hostLocalhost')}</p>
           <p>{t('image.settings.portAutoAssigned')}</p>
           <p>{t('image.settings.modelLine', { model: model || 'none' })}</p>
+          {capabilities && (
+            <div data-vmlx-image-cap="summary" className="mt-1 space-y-0.5">
+              <p>{t('image.settings.capClass', { cls: capabilities.mflux_class || '?', mode: capabilities.mode || '?' })}</p>
+              <p>{t('image.settings.capNegativePrompt')}: {capabilities.negative_prompt ? t('image.settings.capYes') : t('image.settings.capNo')}</p>
+              <p>{t('image.settings.capStrength')}: {capabilities.mode === 'edit' ? (capabilities.edit_strength ? t('image.settings.capYes') : t('image.settings.capNo')) : (capabilities.variation_strength ? t('image.settings.capVariationOnly') : t('image.settings.capNo'))}</p>
+              <p>{t('image.settings.capMask')}: {capabilities.mask === 'required' ? t('image.settings.capRequired') : t('image.settings.capNo')}</p>
+              <p>{t('image.settings.capCount')}: {capabilities.count ? t('image.settings.capYes') : t('image.settings.capSingle')}</p>
+            </div>
+          )}
           <p className="text-[10px] mt-2 opacity-70">
             {t('image.settings.serverManagedAutomatically')}
           </p>

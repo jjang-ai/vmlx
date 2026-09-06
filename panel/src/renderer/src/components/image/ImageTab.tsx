@@ -8,6 +8,7 @@ import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
 import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
+import { fetchImageCapabilities, type ImageCapabilities } from '../../../../shared/imageCapabilities'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -64,6 +65,8 @@ export function ImageTab() {
   const [selectedModelDisplayName, setSelectedModelDisplayName] = useState<string | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('stopped')
   const [serverPort, setServerPort] = useState<number | null>(null)
+  // What the loaded model actually accepts (from /health.image); null until known.
+  const [capabilities, setCapabilities] = useState<ImageCapabilities | null>(null)
   const [serverSessionId, _setServerSessionId] = useState<string | null>(null)
   const serverSessionIdRef = useRef<string | null>(null)
   const setServerSessionId = (id: string | null) => { serverSessionIdRef.current = id; _setServerSessionId(id) }
@@ -219,6 +222,18 @@ export function ImageTab() {
       unsubError()
     }
   }, []) // Uses ref, not state — no dependency needed
+
+  // Read the loaded model's real capabilities once the server runs; forget
+  // them when it stops so stale limits never apply to the next model.
+  useEffect(() => {
+    if (serverStatus === 'running' && serverPort) {
+      let cancelled = false
+      fetchImageCapabilities(serverPort).then(caps => { if (!cancelled) setCapabilities(caps) })
+      return () => { cancelled = true }
+    }
+    if (serverStatus === 'stopped' || serverStatus === 'error') setCapabilities(null)
+    return undefined
+  }, [serverStatus, serverPort])
 
   // Poll for server health when starting
   useEffect(() => {
@@ -598,6 +613,7 @@ export function ImageTab() {
             onChange={handleSettingsChange}
             model={selectedModel}
             mode={sessionMode}
+            capabilities={capabilities}
           />
         )}
 
@@ -685,6 +701,7 @@ export function ImageTab() {
           onSettingsChange={handleSettingsChange}
           mode={sessionMode}
           modelName={selectedModel}
+          capabilities={capabilities}
           sourceImage={sourceImage}
           onSourceImageChange={handleSourceImageChange}
           maskBase64={maskBase64}

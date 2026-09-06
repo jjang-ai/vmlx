@@ -1730,7 +1730,8 @@
       "descQwenImageEdit": "지시 기반 편집 (28스텝)",
       "descKontext": "피사체 일관성 편집 (24스텝)",
       "descFill": "마스크 인페인팅 (20스텝)",
-      "keepCurrent": "{model} 유지"
+      "keepCurrent": "{model} 유지",
+      "classFlux2KleinEdit": "Flux2KleinEdit (Klein 편집)"
     },
     "prompt": {
       "variationLabel": "변형",
@@ -1799,7 +1800,19 @@
       "negativeHelpExample": "\"흐릿함, 저품질, 텍스트, 워터마크, 변형된 손\"",
       "advanced": "고급",
       "server": "서버",
-      "modelLine": "모델: {model}"
+      "modelLine": "모델: {model}",
+      "strengthNotUsed": "{model}은(는) 강도를 사용하지 않습니다. 이 편집 모델은 원본 이미지를 조건으로 사용합니다.",
+      "negativeNotUsed": "{model}은(는) 네거티브 프롬프트를 사용하지 않습니다.",
+      "capClass": "로드된 클래스: {cls} ({mode})",
+      "capNegativePrompt": "네거티브 프롬프트",
+      "capStrength": "강도",
+      "capMask": "마스크",
+      "capCount": "여러 이미지",
+      "capYes": "예",
+      "capNo": "아니요",
+      "capRequired": "필수",
+      "capVariationOnly": "변형만",
+      "capSingle": "요청당 1장"
     },
     "topbar": {
       "historyTitle": "기록 표시",

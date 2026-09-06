@@ -13326,6 +13326,13 @@ async def health():
             "engine_type": "mflux",
             "last_request_time": _last_request_time if _last_request_time > 0 else None,
         }
+        # What the loaded model actually accepts (negative prompt, strength,
+        # mask, count), so clients and the app can show only effective controls.
+        if _image_gen is not None and _image_gen.is_loaded:
+            try:
+                result["image"] = _image_gen.capabilities()
+            except Exception as exc:  # never let a probe break /health
+                result["image"] = {"loaded": True, "error": str(exc)[:200]}
     else:
         result = {
             "status": status,

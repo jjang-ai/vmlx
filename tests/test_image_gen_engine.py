@@ -117,3 +117,47 @@ class TestMPOConversion:
         rounded_h = (height // 16) * 16
         assert rounded_w == 800  # 800 is already multiple of 16
         assert rounded_h == 592  # 600 → 592
+
+
+class TestImageCapabilities:
+    """The loaded model's real contract, derived from class + signature."""
+
+    def _engine(self, mclass, params):
+        from vmlx_engine.image_gen import ImageGenEngine
+
+        class Model:
+            pass
+
+        def make(names):
+            src = "def generate_image(self, " + ", ".join(f"{n}=None" for n in names) + "): pass"
+            ns = {}
+            exec(src, ns)
+            return ns["generate_image"]
+
+        Model.generate_image = make(params)
+        eng = ImageGenEngine()
+        eng._model = Model()
+        eng._mflux_class = mclass
+        eng._model_name = "m"
+        eng._quantize = 8
+        return eng
+
+    def test_generation_model_with_negative_prompt_and_img2img(self):
+        caps = self._engine("Flux1", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance", "image_path", "image_strength", "negative_prompt"]).capabilities()
+        assert caps["mode"] == "generate" and caps["negative_prompt"] is True and caps["variation_strength"] is True
+        assert caps["edit_strength"] is None and caps["mask"] == "none" and caps["count"] is True and caps["quantize"] == 8
+
+    def test_klein_has_no_negative_prompt(self):
+        caps = self._engine("Flux2Klein", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance"]).capabilities()
+        assert caps["negative_prompt"] is False and caps["variation_strength"] is False
+
+    def test_edit_classes_never_take_strength_and_fill_needs_a_mask(self):
+        for mclass in ("QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"):
+            caps = self._engine(mclass, ["seed", "prompt", "num_inference_steps", "height", "width", "guidance", "image_path", "image_strength", "negative_prompt"]).capabilities()
+            assert caps["mode"] == "edit" and caps["edit_strength"] is False and caps["count"] is False, mclass
+            assert caps["mask"] == ("required" if mclass == "Flux1Fill" else "none")
+
+    def test_health_exposes_the_capabilities(self):
+        import inspect
+        import vmlx_engine.server as server
+        assert 'result["image"] = _image_gen.capabilities()' in inspect.getsource(server)

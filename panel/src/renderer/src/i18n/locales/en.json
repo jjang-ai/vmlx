@@ -1730,7 +1730,8 @@
       "descQwenImageEdit": "Instruction-based editing (28 steps)",
       "descKontext": "Subject-consistent editing (24 steps)",
       "descFill": "Inpainting with mask (20 steps)",
-      "keepCurrent": "Keep {model}"
+      "keepCurrent": "Keep {model}",
+      "classFlux2KleinEdit": "Flux2KleinEdit (Klein edit)"
     },
     "prompt": {
       "variationLabel": "Variation",
@@ -1799,7 +1800,19 @@
       "negativeHelpExample": "\"blurry, low quality, text, watermark, deformed hands\"",
       "advanced": "Advanced",
       "server": "Server",
-      "modelLine": "Model: {model}"
+      "modelLine": "Model: {model}",
+      "strengthNotUsed": "Strength is not used by {model}: this edit model conditions on the source image.",
+      "negativeNotUsed": "Negative prompt is not used by {model}.",
+      "capClass": "Loaded class: {cls} ({mode})",
+      "capNegativePrompt": "Negative prompt",
+      "capStrength": "Strength",
+      "capMask": "Mask",
+      "capCount": "Multiple images",
+      "capYes": "yes",
+      "capNo": "no",
+      "capRequired": "required",
+      "capVariationOnly": "variations only",
+      "capSingle": "one per request"
     },
     "topbar": {
       "historyTitle": "Show history",

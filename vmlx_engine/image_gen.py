@@ -890,6 +890,41 @@ class ImageGenEngine:
             elapsed_seconds=elapsed,
         )
 
+    # Explicit edit classes handled by edit(); each has its own branch and none
+    # of them forwards image_strength (Kontext/Fill/Klein condition on the
+    # reference or the mask; Qwen edit conditions on the source image).
+    _EDIT_CLASSES = frozenset({"QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"})
+
+    def capabilities(self) -> dict:
+        """What the LOADED model actually accepts, from its class and its
+        generate signature. The UI and the API pages follow this instead of
+        presenting every control as effective:
+
+        - negative_prompt: the model's generate_image takes one (Flux1,
+          QwenImage, QwenImageEdit do; Klein does not).
+        - variation_strength: img2img strength on a generation model (the
+          gallery's "Iterate"), i.e. generate_image takes image_strength.
+        - edit_strength: strength on an edit model. False for every edit class
+          edit() accepts, because their branches never forward it.
+        - mask: "required" for Flux1Fill (inpainting), otherwise "none".
+        - count: generation models return n images; edit always returns one.
+        """
+        params = self._get_generate_params()
+        mclass = self._mflux_class or ""
+        is_edit = mclass in self._EDIT_CLASSES
+        return {
+            "loaded": bool(self.is_loaded),
+            "model": self._model_name,
+            "mflux_class": mclass,
+            "quantize": self._quantize,
+            "mode": "edit" if is_edit else "generate",
+            "negative_prompt": "negative_prompt" in params,
+            "variation_strength": (not is_edit) and "image_strength" in params,
+            "edit_strength": False if is_edit else None,
+            "mask": "required" if mclass == "Flux1Fill" else "none",
+            "count": not is_edit,
+        }
+
     def _get_generate_params(self) -> set[str]:
         """Get the parameter names of the model's generate_image method."""
         import inspect

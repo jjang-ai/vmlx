@@ -1730,7 +1730,8 @@
       "descQwenImageEdit": "Edición por instrucciones (28 pasos)",
       "descKontext": "Edición con sujeto consistente (24 pasos)",
       "descFill": "Inpainting con máscara (20 pasos)",
-      "keepCurrent": "Mantener {model}"
+      "keepCurrent": "Mantener {model}",
+      "classFlux2KleinEdit": "Flux2KleinEdit (edición Klein)"
     },
     "prompt": {
       "variationLabel": "Variación",
@@ -1799,7 +1800,19 @@
       "negativeHelpExample": "\"borroso, baja calidad, texto, marca de agua, manos deformes\"",
       "advanced": "Avanzado",
       "server": "Servidor",
-      "modelLine": "Modelo: {model}"
+      "modelLine": "Modelo: {model}",
+      "strengthNotUsed": "{model} no usa la intensidad: este modelo de edición se condiciona con la imagen de origen.",
+      "negativeNotUsed": "{model} no usa el prompt negativo.",
+      "capClass": "Clase cargada: {cls} ({mode})",
+      "capNegativePrompt": "Prompt negativo",
+      "capStrength": "Intensidad",
+      "capMask": "Máscara",
+      "capCount": "Varias imágenes",
+      "capYes": "sí",
+      "capNo": "no",
+      "capRequired": "obligatoria",
+      "capVariationOnly": "solo variaciones",
+      "capSingle": "una por petición"
     },
     "topbar": {
       "historyTitle": "Mostrar historial",
