@@ -4193,12 +4193,18 @@ class MLLMScheduler:
                                     "Skipping VLM paged cache store for %s: "
                                     "resolved extracted cache is empty "
                                     "(mixed_swa=%s, zaya_cca=%s, prompt_tokens=%d, "
-                                    "cache_callable=%s)",
+                                    "cache_callable=%s, cached_tokens=%d, "
+                                    "truncated_tokens=%d, media_context=%s, "
+                                    "hybrid_clean_store=%s)",
                                     request_id,
                                     _uses_mixed_attention_cache,
                                     _uses_zaya_cache,
                                     prompt_len,
                                     callable(getattr(request, "_extracted_cache", None)),
+                                    cached_tokens,
+                                    len(truncated_tokens or []),
+                                    bool(media_context),
+                                    bool(_uses_hybrid_clean_store),
                                 )
                             else:
                                 if _uses_zaya_cache or _uses_mixed_attention_cache:
