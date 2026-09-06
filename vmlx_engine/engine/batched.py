@@ -1045,13 +1045,18 @@ class BatchedEngine(BaseEngine):
         if changed:
             logger.info(
                 "%s video frame fallback converted %d video(s) to %d real "
-                "sampled frame image(s) (fps=%s, max_frames=%s, max_long_edge=%s)",
+                "sampled frame image(s) (fps=%s, max_frames=%s, frames=%d, "
+                "max_long_edge=%s, max_pixels=%s, resize=%s, controls=%s)",
                 family,
                 converted_videos,
                 converted_frames,
                 fps,
                 max_frames,
-                frame_max_long_edge,
+                converted_frames,
+                frame_bounds.max_long_edge,
+                frame_bounds.max_pixels,
+                frame_bounds.resize,
+                controls_key,
             )
             return rewritten
         return messages

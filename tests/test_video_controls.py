@@ -272,3 +272,9 @@ class TestVideoTokenBudget:
         assert ResponsesRequest(model="m", input="hi", video_token_budget=2048).video_token_budget == 2048
         a = AnthropicRequest(model="m", messages=[{"role": "user", "content": "hi"}], max_tokens=5, video_token_budget=2048)
         assert to_chat_completion(a).video_token_budget == 2048
+
+
+def test_frame_fallback_summary_logs_bounds_and_controls():
+    import vmlx_engine.engine.batched as b
+    src = inspect.getsource(b)
+    assert '"max_long_edge=%s, max_pixels=%s, resize=%s, controls=%s)"' in src
