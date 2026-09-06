@@ -54,9 +54,13 @@ export interface ImageServerSettings {
 
 interface ImageModelPickerProps {
   onSelect: (modelId: string, quantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => void
+  /** Display name of the model whose server is still running while this picker is open. */
+  currentModel?: string | null
+  /** Close the picker and keep that running server. */
+  onKeepCurrent?: () => void
 }
 
-export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
+export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: ImageModelPickerProps) {
   const { t } = useTranslation()
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
@@ -264,6 +268,16 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
               <span className="text-warning"> {t('image.picker.noHfTokenWarning')}</span>
             )}
           </p>
+          {currentModel && onKeepCurrent && (
+            <button
+              type="button"
+              onClick={onKeepCurrent}
+              data-vmlx-control="image-keep-current-model"
+              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent transition-colors"
+            >
+              {t('image.picker.keepCurrent', { model: currentModel })}
+            </button>
+          )}
           <p className="text-xs text-muted-foreground mt-2">
             <strong>{t('image.picker.genStrong')}</strong> {t('image.picker.genHintBody')}
             <br />

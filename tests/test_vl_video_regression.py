@@ -10275,6 +10275,19 @@ class TestImageModelDirectoryNameResolution:
     These tests lock all three layers against regression.
     """
 
+    @pytest.fixture(autouse=True)
+    def _bundle_gate_stand_in(self, monkeypatch):
+        # The load() tests build EMPTY directories to exercise name resolution
+        # only. The bundle integrity gate (dff701da) now refuses a directory
+        # without safetensors weights before the mflux class is resolved, which
+        # is correct for real loads and irrelevant here: stand in for the gate
+        # so the alias/normalization layers under test are what gets exercised.
+        # The gate has its own tests (tests/test_model_bundle_integrity.py).
+        monkeypatch.setattr(
+            "vmlx_engine.model_bundle_integrity.prepare_model_bundle_for_load",
+            lambda model, *args, **kwargs: (str(model), {"stand_in": True}),
+        )
+
     def test_normalize_lowercases_and_strips_hf_org(self):
         from vmlx_engine.image_gen import _normalize_for_lookup
         assert _normalize_for_lookup("black-forest-labs/FLUX.2-klein-9B") == "flux.2-klein-9b"

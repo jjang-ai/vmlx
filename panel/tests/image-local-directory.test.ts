@@ -1,0 +1,188 @@
+import { describe, expect, it } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import {
+  inferImageQuantizeFromName,
+  looksLikeLocalPath,
+  readBundleQuantization,
+  readSafetensorsHeaderMetadata,
+  resolveLocalImageModelDirectory,
+  describeVariants,
+  localImageModelError,
+  unmountedVolume,
+  type LocalImageModelFs,
+} from '../src/shared/imageLocalModel'
+
+/** Write a safetensors file the way mflux does: LE u64 header length, JSON header with `__metadata__`, then bytes. */
+function writeSafetensors(p: string, metadata: Record<string, string> | null): void {
+  const header: Record<string, unknown> = { 'x.weight': { dtype: 'BF16', shape: [2, 2], data_offsets: [0, 8] } }
+  if (metadata) header.__metadata__ = metadata
+  const json = Buffer.from(JSON.stringify(header), 'utf8')
+  const len = Buffer.alloc(8)
+  len.writeBigUInt64LE(BigInt(json.length))
+  writeFileSync(p, Buffer.concat([len, json, Buffer.alloc(8)]))
+}
+
+/** An mflux bundle: transformer/ + text_encoder/, shards stamped with (or without) a quantization level. */
+function mfluxBundle(root: string, name: string, stored: number | null, mfluxVersion = '0.19.0'): string {
+  const dir = join(root, name)
+  mkdirSync(join(dir, 'transformer'), { recursive: true })
+  mkdirSync(join(dir, 'text_encoder'), { recursive: true })
+  writeFileSync(join(dir, 'README.md'), 'x')
+  const meta: Record<string, string> = { mflux_version: mfluxVersion }
+  if (stored !== null) meta.quantization_level = String(stored)
+  writeSafetensors(join(dir, 'transformer', '0.safetensors'), meta)
+  writeSafetensors(join(dir, 'transformer', '1.safetensors'), meta)
+  return dir
+}
+
+const tmp = () => mkdtempSync(join(tmpdir(), 'vmlx-img-'))
+
+describe('local image model directories (external drive bundles)', () => {
+  it('reads the safetensors header metadata the way mflux writes it', () => {
+    const root = tmp()
+    const f = join(root, 'a.safetensors')
+    writeSafetensors(f, { mflux_version: '0.6.2', quantization_level: '8' })
+    expect(readSafetensorsHeaderMetadata(f)).toEqual({ mflux_version: '0.6.2', quantization_level: '8' })
+    const g = join(root, 'b.safetensors')
+    writeSafetensors(g, null)
+    expect(readSafetensorsHeaderMetadata(g)).toBeNull()
+    expect(readSafetensorsHeaderMetadata(join(root, 'missing.safetensors'))).toBeNull()
+  })
+
+  it('reads the precision from the folder name only as a hint', () => {
+    expect(inferImageQuantizeFromName('FLUX.1-schnell-mflux-8bit')).toBe(8)
+    expect(inferImageQuantizeFromName('/Volumes/EricsLLMDrive/image/Qwen-Image-mflux-6bit')).toBe(6)
+    expect(inferImageQuantizeFromName('q8')).toBe(8)
+    expect(inferImageQuantizeFromName('FLUX.2-klein-9B')).toBeNull()
+  })
+
+  it('treats only filesystem-looking strings as local paths', () => {
+    expect(looksLikeLocalPath('/Volumes/EricsLLMDrive/image/FLUX.1-schnell-mflux-8bit')).toBe(true)
+    expect(looksLikeLocalPath('~/models/x')).toBe(true)
+    expect(looksLikeLocalPath('black-forest-labs/FLUX.1-schnell')).toBe(false)
+    expect(looksLikeLocalPath('schnell')).toBe(false)
+    expect(resolveLocalImageModelDirectory('black-forest-labs/FLUX.1-schnell', 4)).toBeNull()
+  })
+
+  it('the bundle metadata decides the precision, not the picker (8-bit bundle, picker said 4)', () => {
+    const dir = mfluxBundle(tmp(), 'FLUX.1-schnell-mflux-8bit', 8, '0.6.2')
+    expect(resolveLocalImageModelDirectory(dir, 4)).toEqual({ kind: 'model', path: dir, quantize: 8, quantizeSource: 'metadata', mfluxVersion: '0.6.2' })
+  })
+
+  it('the bundle metadata also beats a misleading folder name', () => {
+    // folder says 4bit, shards say 8 — the shards are what loads (mflux ignores a conflicting request)
+    const dir = mfluxBundle(tmp(), 'model-4bit', 8)
+    expect(readBundleQuantization(dir)).toEqual({ bits: 8, source: 'metadata', mfluxVersion: '0.19.0' })
+    expect(resolveLocalImageModelDirectory(dir, 0)?.kind === 'model' && resolveLocalImageModelDirectory(dir, 0)).toMatchObject({ quantize: 8, quantizeSource: 'metadata' })
+  })
+
+  it('a full-precision bundle keeps the requested precision as an on-the-fly quantization, or none', () => {
+    const dir = mfluxBundle(tmp(), 'FLUX.2-klein-9B', null)
+    expect(resolveLocalImageModelDirectory(dir, 4)).toEqual({ kind: 'model', path: dir, quantize: 4, quantizeSource: 'requested', mfluxVersion: '0.19.0' })
+    expect(resolveLocalImageModelDirectory(dir, 0)).toEqual({ kind: 'model', path: dir, quantize: null, quantizeSource: null, mfluxVersion: '0.19.0' })
+  })
+
+  it('falls back to config.json quantization_config.bits, then to the folder name', () => {
+    const root = tmp()
+    const cfgDir = join(root, 'some-diffusers-model'); mkdirSync(cfgDir)
+    writeFileSync(join(cfgDir, 'model_index.json'), '{"_class_name": "FluxPipeline"}')
+    writeFileSync(join(cfgDir, 'config.json'), '{"quantization_config": {"bits": 6}}')
+    expect(readBundleQuantization(cfgDir)).toEqual({ bits: 6, source: 'config', mfluxVersion: null })
+    const nameDir = join(root, 'plain-model-4bit'); mkdirSync(join(nameDir, 'transformer'), { recursive: true }); mkdirSync(join(nameDir, 'vae'))
+    expect(readBundleQuantization(nameDir)).toEqual({ bits: 4, source: 'name', mfluxVersion: null })
+    expect(resolveLocalImageModelDirectory(nameDir, 8)).toMatchObject({ kind: 'model', quantize: 4, quantizeSource: 'name' })
+  })
+
+  it('picks the variant whose stored precision matches, or lists the variants', () => {
+    const parent = join(tmp(), 'Qwen-Image-Edit-mflux'); mkdirSync(parent)
+    writeFileSync(join(parent, 'README.md'), 'x')
+    for (const [name, bits] of [['q3', 3], ['q4', 4], ['q8', 8]] as const) mfluxBundle(parent, name, bits, '0.17.4')
+    expect(resolveLocalImageModelDirectory(parent, 8)).toEqual({ kind: 'model', path: join(parent, 'q8'), quantize: 8, quantizeSource: 'metadata', mfluxVersion: '0.17.4' })
+    const none = resolveLocalImageModelDirectory(parent, 6)
+    expect(none?.kind).toBe('variants')
+    if (none?.kind === 'variants') {
+      expect(none.variants.map((v) => [v.name, v.quantize])).toEqual([['q3', 3], ['q4', 4], ['q8', 8]])
+      expect(describeVariants(none)).toContain('q8 (8-bit)')
+      const err = localImageModelError(none)
+      expect(err.code).toBe('variants')
+      expect(err.params).toEqual({ name: 'Qwen-Image-Edit-mflux', variants: 'q3 (3-bit), q4 (4-bit), q8 (8-bit)' })
+    }
+  })
+
+  it('reports a directory that holds no model instead of pretending it needs a download', () => {
+    const dir = join(tmp(), 'empty'); mkdirSync(dir)
+    const res = resolveLocalImageModelDirectory(dir, 4)
+    expect(res).toEqual({ kind: 'not-a-model-directory', path: dir })
+    expect(localImageModelError(res as any).code).toBe('notAModelDirectory')
+  })
+
+  it('tells an unmounted external volume apart from a deleted folder', () => {
+    const gone = join(tmp(), 'deleted-model')
+    const res = resolveLocalImageModelDirectory(gone, 4)
+    expect(res).toEqual({ kind: 'path-missing', path: gone, volume: null })
+    expect(localImageModelError(res as any).code).toBe('pathMissing')
+
+    const fakeFs: LocalImageModelFs = {
+      existsSync: () => false,
+      isDirectory: (p) => p === '/Volumes/Mounted',
+      readdirSync: () => [],
+      readSafetensorsMetadata: () => null,
+      readJson: () => null,
+    }
+    expect(unmountedVolume('/Volumes/EricsLLMDrive/image/x', fakeFs)).toBe('EricsLLMDrive')
+    expect(unmountedVolume('/Volumes/Mounted/image/x', fakeFs)).toBeNull()
+    expect(unmountedVolume('/Users/eric/models/x', fakeFs)).toBeNull()
+    const unplugged = resolveLocalImageModelDirectory('/Volumes/EricsLLMDrive/image/FLUX.1-schnell-mflux-8bit', 4, fakeFs)
+    expect(unplugged).toEqual({ kind: 'path-missing', path: '/Volumes/EricsLLMDrive/image/FLUX.1-schnell-mflux-8bit', volume: 'EricsLLMDrive' })
+    const err = localImageModelError(unplugged as any)
+    expect(err.code).toBe('volumeUnavailable')
+    expect(err.params.volume).toBe('EricsLLMDrive')
+  })
+
+  it('the image server start handler resolves the target BEFORE stopping the running server, and keeps registrations', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'main', 'ipc', 'image.ts'), 'utf8')
+    const handler = src.slice(src.indexOf("ipcMain.handle('image:startServer'"), src.indexOf("ipcMain.handle('image:stopServer'"))
+    const resolveAt = handler.indexOf('resolveLocalImageModelDirectory(modelName')
+    expect(resolveAt).toBeGreaterThan(-1)
+    // local directory first, registry second
+    expect(resolveAt).toBeLessThan(handler.indexOf('db.getImageModelPath('))
+    // validate first, stop second: a rejected folder must leave the running server untouched
+    expect(handler.indexOf('db.getImageModelPath(')).toBeLessThan(handler.indexOf('sessionManager.stopSession(activeImageSessionId)'))
+    expect(handler).toContain('serverKept: true')
+    // a registration whose folder is temporarily missing (drive unplugged) is kept, not deleted
+    expect(handler).not.toContain('deleteImageModelPath(')
+    expect(handler).toContain('Using local model directory')
+    // the registry fallback and its literals stay (pinned elsewhere)
+    expect(handler).toContain('findDownloadedImageModelPath(modelName')
+    expect(handler).toContain('not downloaded. Use the Download button first.')
+    // every failure carries a stable code the renderer translates
+    for (const code of ['variants', 'notAModelDirectory', 'volumeUnavailable', 'pathMissing', 'storedVolumeUnavailable', 'notDownloaded']) {
+      expect(handler.includes(`'${code}'`) || handler.includes(`localImageModelError(`)).toBe(true)
+    }
+  })
+
+  it('the renderer no longer stops the running server before the main process has validated the new folder', () => {
+    const tab = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'image', 'ImageTab.tsx'), 'utf8')
+    const select = tab.slice(tab.indexOf('const handleModelSelect'), tab.indexOf('window.api.image.startServer('))
+    expect(select).not.toContain('window.api.image.stopServer()')
+    expect(tab).toContain('result.serverKept')
+    expect(tab).toContain('image.server.errors.')
+  })
+
+  it('every locale carries the image server error strings with their placeholders', () => {
+    const locales = join(__dirname, '..', 'src', 'renderer', 'src', 'i18n', 'locales')
+    const en = JSON.parse(readFileSync(join(locales, 'en.json'), 'utf8'))
+    const errors = en.image.server.errors
+    expect(Object.keys(errors).sort()).toEqual(['notAModelDirectory', 'notDownloaded', 'pathMissing', 'storedVolumeUnavailable', 'variants', 'volumeUnavailable'])
+    for (const loc of ['es', 'ja', 'ko', 'zh']) {
+      const other = JSON.parse(readFileSync(join(locales, `${loc}.json`), 'utf8')).image.server.errors
+      for (const key of Object.keys(errors)) {
+        const want = (errors[key].match(/\{\w+\}/g) || []).sort()
+        const got = (other[key].match(/\{\w+\}/g) || []).sort()
+        expect(got, `${loc}.${key} placeholders`).toEqual(want)
+      }
+    }
+  })
+})

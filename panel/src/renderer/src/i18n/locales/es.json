@@ -1722,7 +1722,8 @@
       "descQwenImage": "Gran comprensión del prompt (20 pasos)",
       "descQwenImageEdit": "Edición por instrucciones (28 pasos)",
       "descKontext": "Edición con sujeto consistente (24 pasos)",
-      "descFill": "Inpainting con máscara (20 pasos)"
+      "descFill": "Inpainting con máscara (20 pasos)",
+      "keepCurrent": "Mantener {model}"
     },
     "prompt": {
       "variationLabel": "Variación",
@@ -1874,6 +1875,16 @@
     "promptBar": {
       "uploadSourceImage": "Sube la imagen de origen para editar (obligatorio)",
       "variationOf": "Variación de:"
+    },
+    "server": {
+      "errors": {
+        "variants": "\"{name}\" contiene varias variantes del modelo: {variants}. Elige una carpeta de variante como ruta del modelo o selecciona una precisión que coincida.",
+        "notAModelDirectory": "\"{path}\" existe pero no contiene ningún modelo de imagen (se esperaba transformer/ con text_encoder/ o vae/, o un model_index.json).",
+        "volumeUnavailable": "\"{path}\" está en el volumen \"{volume}\", que no está montado. Conecta la unidad e inténtalo de nuevo.",
+        "pathMissing": "\"{path}\" no existe.",
+        "storedVolumeUnavailable": "\"{model}\" está registrado en \"{path}\" en el volumen \"{volume}\", que no está montado. Conecta la unidad e inténtalo de nuevo.",
+        "notDownloaded": "El modelo \"{model}\" no está descargado. Usa primero el botón Descargar."
+      }
     }
   },
   "downloads": {

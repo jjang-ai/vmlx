@@ -1722,7 +1722,8 @@
       "descQwenImage": "提示词理解力强（20 步）",
       "descQwenImageEdit": "基于指令的编辑（28 步）",
       "descKontext": "主体一致性编辑（24 步）",
-      "descFill": "蒙版修复填充（20 步）"
+      "descFill": "蒙版修复填充（20 步）",
+      "keepCurrent": "保留 {model}"
     },
     "prompt": {
       "variationLabel": "变体",
@@ -1874,6 +1875,16 @@
     "promptBar": {
       "uploadSourceImage": "上传要编辑的源图像（必填）",
       "variationOf": "变体来源："
+    },
+    "server": {
+      "errors": {
+        "variants": "\"{name}\" 包含多个模型变体：{variants}。请选择一个变体文件夹作为模型路径，或选择匹配的精度。",
+        "notAModelDirectory": "\"{path}\" 存在但不包含图像模型（需要 transformer/ 以及 text_encoder/ 或 vae/，或者 model_index.json）。",
+        "volumeUnavailable": "\"{path}\" 位于未挂载的卷 \"{volume}\" 上。请连接驱动器后重试。",
+        "pathMissing": "\"{path}\" 不存在。",
+        "storedVolumeUnavailable": "\"{model}\" 已注册在未挂载的卷 \"{volume}\" 上的 \"{path}\"。请连接驱动器后重试。",
+        "notDownloaded": "模型 \"{model}\" 尚未下载。请先使用下载按钮。"
+      }
     }
   },
   "downloads": {

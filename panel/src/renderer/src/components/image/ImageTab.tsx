@@ -289,26 +289,41 @@ export function ImageTab() {
     setMaskBase64(null)
   }, [])
 
+  // Main-process start failures carry a stable code plus parameters; translate
+  // those here and fall back to the English message the process sent.
+  const describeStartError = useCallback((result: { error?: string; errorCode?: string; errorParams?: Record<string, string> }): string => {
+    if (result.errorCode) {
+      return t(`image.server.errors.${result.errorCode}`, { ...(result.errorParams || {}), defaultValue: result.error || t('sessions.view.toast.failedToStartServer') })
+    }
+    return result.error || t('sessions.view.toast.failedToStartServer')
+  }, [t])
+
   const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => {
     const mode = category || 'generate'
 
-    // Stop any currently running/starting server before switching models
-    if (serverStatus === 'running' || serverStatus === 'starting') {
-      try {
-        await window.api.image.stopServer()
-        setServerPort(null)
-        setServerSessionId(null)
-      } catch (err) {
-        console.error('Failed to stop previous image server:', err)
-      }
+    // The main process validates the requested folder BEFORE it stops the
+    // running server, so a bad path (unplugged drive, typo, folder of
+    // variants) leaves the current server, and this selection, untouched.
+    // Snapshot the selection so it can be restored when that happens.
+    const previous = {
+      model: selectedModel,
+      displayName: selectedModelDisplayName,
+      status: serverStatus,
+      quantize,
+      mode: sessionMode,
+      settings,
     }
+    const serverWasLive = serverStatus === 'running' || serverStatus === 'starting'
 
     setSelectedModel(modelId)
     setSelectedModelDisplayName(null)
     setShowModelPicker(false)
     setError(null)
-    // Use the provided quantize, or fall back to the model's first supported quantize option
-    const modelDef = getImageModel(modelId)
+    // A custom path is a directory, not a registry id: resolve its basename to
+    // the registry entry (FLUX.1-dev-mflux-8bit -> dev) so quantize options,
+    // default steps and guidance follow the model instead of the generic 4/3.5.
+    const modelDef = getImageModel(modelId) || resolveImageModelFromDirectoryName(modelId.split('/').filter(Boolean).pop() || modelId)
+    const resolvedModelId = modelDef?.id ?? modelId
     const q = modelQuantize ?? modelDef?.quantizeOptions[0] ?? 4
     setQuantize(q)
 
@@ -324,8 +339,8 @@ export function ImageTab() {
     // `shared/imageModels.ts` (e.g. Schnell=4/0, Dev=20/3.5, Qwen=20/4,
     // Fill=20/30) — mirrors the Python engine's DEFAULT_STEPS table so the
     // UI doesn't silently clobber model-recommended values.
-    const defaultSteps = getDefaultSteps(modelId)
-    const defaultGuidance = getDefaultGuidance(modelId)
+    const defaultSteps = getDefaultSteps(resolvedModelId)
+    const defaultGuidance = getDefaultGuidance(resolvedModelId)
     setSettings({
       steps: defaultSteps,
       width: 1024,
@@ -348,8 +363,20 @@ export function ImageTab() {
         setShowLogs(true) // Auto-show logs during startup so user can see loading progress
         // Status will transition to 'running' via polling or session events
       } else {
-        setServerStatus('error')
-        setError(result.error || t('sessions.view.toast.failedToStartServer'))
+        const message = describeStartError(result)
+        if (result.serverKept && serverWasLive) {
+          // Nothing was stopped: put the previous selection back and surface why.
+          setSelectedModel(previous.model)
+          setSelectedModelDisplayName(previous.displayName)
+          setServerStatus(previous.status)
+          setQuantize(previous.quantize)
+          setSessionMode(previous.mode)
+          setSettings(previous.settings)
+          setShowModelPicker(false)
+        } else {
+          setServerStatus('error')
+        }
+        setError(message)
       }
     } catch (err) {
       setServerStatus('error')
@@ -452,8 +479,14 @@ export function ImageTab() {
   }, [])
 
   const handleChangeModel = useCallback(async () => {
-    // Stop the running server before switching models (including error state cleanup)
-    if (serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'error') {
+    if (serverStatus === 'running' || serverStatus === 'starting') {
+      // Keep the server up: the picker opens over it, and the main process
+      // only stops it once the replacement folder has been validated. "Keep
+      // current" in the picker returns here with nothing changed.
+      setShowModelPicker(true)
+      return
+    }
+    if (serverStatus === 'error') {
       await handleStop()
     }
     setSelectedModel(null)
@@ -470,7 +503,7 @@ export function ImageTab() {
     setIteratePrompt(null)
     // Reset mode to match the currently running model's category
     if (selectedModel) {
-      const modelDef = getImageModel(selectedModel)
+      const modelDef = getImageModel(selectedModel) || resolveImageModelFromDirectoryName(selectedModel.split('/').filter(Boolean).pop() || selectedModel)
       if (modelDef) setSessionMode(modelDef.category)
     }
   }, [selectedModel])
@@ -503,11 +536,16 @@ export function ImageTab() {
     setSettings(newSettings)
   }, [])
 
-  // Show model picker if no model selected
-  if (showModelPicker && !selectedModel) {
+  // Show model picker if no model selected, or when switching while a server runs
+  const serverLive = serverStatus === 'running' || serverStatus === 'starting'
+  if (showModelPicker && (!selectedModel || serverLive)) {
     return (
       <div className="h-full flex flex-col">
-        <ImageModelPicker onSelect={handleModelSelect} />
+        <ImageModelPicker
+          onSelect={handleModelSelect}
+          currentModel={selectedModel && serverLive ? (selectedModelDisplayName || selectedModel) : null}
+          onKeepCurrent={selectedModel && serverLive ? () => setShowModelPicker(false) : undefined}
+        />
       </div>
     )
   }

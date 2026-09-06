@@ -1722,7 +1722,8 @@
       "descQwenImage": "高いプロンプト理解力（20ステップ）",
       "descQwenImageEdit": "指示ベースの編集（28ステップ）",
       "descKontext": "被写体を保った編集（24ステップ）",
-      "descFill": "マスクによるインペインティング（20ステップ）"
+      "descFill": "マスクによるインペインティング（20ステップ）",
+      "keepCurrent": "{model} を維持"
     },
     "prompt": {
       "variationLabel": "バリエーション",
@@ -1874,6 +1875,16 @@
     "promptBar": {
       "uploadSourceImage": "編集する元画像をアップロード (必須)",
       "variationOf": "元画像:"
+    },
+    "server": {
+      "errors": {
+        "variants": "\"{name}\" には複数のモデルバリアントがあります: {variants}。モデルパスとしてバリアントのフォルダを1つ選ぶか、一致する精度を選択してください。",
+        "notAModelDirectory": "\"{path}\" は存在しますが画像モデルが含まれていません（transformer/ と text_encoder/ または vae/、あるいは model_index.json が必要です）。",
+        "volumeUnavailable": "\"{path}\" はマウントされていないボリューム \"{volume}\" 上にあります。ドライブを接続してからやり直してください。",
+        "pathMissing": "\"{path}\" は存在しません。",
+        "storedVolumeUnavailable": "\"{model}\" はマウントされていないボリューム \"{volume}\" 上の \"{path}\" に登録されています。ドライブを接続してからやり直してください。",
+        "notDownloaded": "モデル \"{model}\" はダウンロードされていません。先にダウンロードボタンを使用してください。"
+      }
     }
   },
   "downloads": {

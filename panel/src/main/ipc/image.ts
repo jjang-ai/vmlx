@@ -1,12 +1,13 @@
 // MLX Studio Image System — mlx.studio — Jinho Jang
 import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
-import { join, resolve } from 'path'
+import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
+import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume } from '../../shared/imageLocalModel'
 import {
   beginImageGeneration,
   classifyImageGenerationError,
@@ -600,7 +601,71 @@ export function registerImageHandlers(): void {
       .catch(() => {})  // Don't let a previous failure block the next call
       .then(async () => {
         try {
-          // Stop any existing image server first
+          // Resolve the requested model BEFORE touching the running server: a
+          // rejected folder (unmounted drive, typo, folder of variants) must
+          // leave the working server and its session untouched.
+          //
+          // A typed or browsed LOCAL DIRECTORY is the model itself: use it
+          // as-is at the precision the bundle declares, and only fall back to
+          // the downloaded-model registry for registry ids / Hugging Face
+          // names. Before this, an external-drive folder fell through the
+          // registry and the user was told to "download" a model already on
+          // disk.
+          let modelPath = modelName
+          let effectiveQuantize = quantize || 0
+          const localDir = resolveLocalImageModelDirectory(modelName, effectiveQuantize)
+          if (localDir && localDir.kind !== 'model') {
+            const err = localImageModelError(localDir)
+            console.log(`[IMAGE] Rejected local model path (${err.code}): ${modelName}`)
+            return { success: false, error: err.message, errorCode: err.code, errorParams: err.params, serverKept: true }
+          }
+          if (localDir?.kind === 'model') {
+            modelPath = localDir.path
+            if (localDir.quantize !== null) effectiveQuantize = localDir.quantize
+            console.log(`[IMAGE] Using local model directory: ${modelPath} (quantize=${effectiveQuantize || 'full'}, source=${localDir.quantizeSource || 'none'}${localDir.mfluxVersion ? `, mflux ${localDir.mfluxVersion}` : ''})`)
+            // Register it under its resolved registry id so the preset card and
+            // the availability check find this folder next time.
+            const resolvedDef = resolveImageModelFromDirectoryName(basename(modelPath))
+            if (resolvedDef) {
+              try { db.setImageModelPath(resolvedDef.id, effectiveQuantize, modelPath, undefined) } catch (e) { console.warn('[IMAGE] Could not register local model directory:', e) }
+            }
+          }
+          // Look up model path from DB — no directory scanning needed.
+          const storedPath = localDir?.kind === 'model' ? null : db.getImageModelPath(modelName, effectiveQuantize)
+          if (localDir?.kind === 'model') {
+            // already resolved from the filesystem above
+          } else if (storedPath && existsSync(storedPath.localPath)) {
+            modelPath = storedPath.localPath
+            console.log(`[IMAGE] Using stored model path: ${modelPath}`)
+          } else {
+            // The registration's folder is not reachable right now. A drive
+            // that is unplugged is not a deleted model: keep the registration
+            // either way and only report what is actually the case.
+            const storedVolume = storedPath ? unmountedVolume(storedPath.localPath) : null
+            if (storedPath) {
+              console.log(`[IMAGE] Registered path for ${modelName} (quantize=${quantize}) is not reachable: ${storedPath.localPath}${storedVolume ? ` (volume "${storedVolume}" not mounted)` : ''}; registration kept.`)
+            }
+            const discovered = findDownloadedImageModelPath(modelName, effectiveQuantize)
+            if (discovered) {
+              modelPath = discovered.localPath
+              db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)
+              console.log(`[IMAGE] Registered existing downloaded image model: ${discovered.modelId} q=${quantize || 0} → ${modelPath}`)
+            } else if (storedPath && storedVolume) {
+              return {
+                success: false,
+                error: `Model "${modelName}" is registered at "${storedPath.localPath}" on the volume "${storedVolume}", which is not mounted. Connect the drive and try again.`,
+                errorCode: 'storedVolumeUnavailable',
+                errorParams: { model: modelName, path: storedPath.localPath, volume: storedVolume },
+                serverKept: true,
+              }
+            } else {
+              console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
+              return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.`, errorCode: 'notDownloaded', errorParams: { model: modelName }, serverKept: true }
+            }
+          }
+
+          // Stop any existing image server only now that the replacement is
+          // known to exist.
           if (activeImageSessionId) {
             const controller = getActiveImageGenerationController()
             if (controller) {
@@ -616,29 +681,6 @@ export function registerImageHandlers(): void {
               console.error('[IMAGE] Failed to stop previous image server:', e)
             }
             activeImageSessionId = null
-          }
-
-          // Look up model path from DB — no directory scanning needed.
-          let modelPath = modelName
-          const storedPath = db.getImageModelPath(modelName, quantize || 0)
-          if (storedPath && existsSync(storedPath.localPath)) {
-            modelPath = storedPath.localPath
-            console.log(`[IMAGE] Using stored model path: ${modelPath}`)
-          } else {
-            // Clean up stale DB entry (file was deleted from disk)
-            if (storedPath) {
-              console.log(`[IMAGE] Stale DB entry for ${modelName} (quantize=${quantize}): path no longer exists, removing.`)
-              db.deleteImageModelPath(modelName, quantize || 0)
-            }
-            const discovered = findDownloadedImageModelPath(modelName, quantize || 0)
-            if (discovered) {
-              modelPath = discovered.localPath
-              db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)
-              console.log(`[IMAGE] Registered existing downloaded image model: ${discovered.modelId} q=${quantize || 0} → ${modelPath}`)
-            } else {
-              console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
-              return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.` }
-            }
           }
 
           // Create a session config for image serving
@@ -666,7 +708,7 @@ export function registerImageHandlers(): void {
             timeout: 1800,  // 30 minutes — image edits can take 10+ minutes for large models
             modelType: 'image',
             imageMode: mode,
-            imageQuantize: quantize || 0,
+            imageQuantize: effectiveQuantize,
             // Pass mflux canonical name so engine uses the correct class (not directory name)
             servedModelName: mfluxName,
             // Explicit mflux class — buildArgs passes --mflux-class flag

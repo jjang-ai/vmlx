@@ -1722,7 +1722,8 @@
       "descQwenImage": "Strong prompt understanding (20 steps)",
       "descQwenImageEdit": "Instruction-based editing (28 steps)",
       "descKontext": "Subject-consistent editing (24 steps)",
-      "descFill": "Inpainting with mask (20 steps)"
+      "descFill": "Inpainting with mask (20 steps)",
+      "keepCurrent": "Keep {model}"
     },
     "prompt": {
       "variationLabel": "Variation",
@@ -1874,6 +1875,16 @@
     "promptBar": {
       "uploadSourceImage": "Upload source image to edit (required)",
       "variationOf": "Variation of:"
+    },
+    "server": {
+      "errors": {
+        "variants": "\"{name}\" holds several model variants: {variants}. Pick one variant folder as the model path, or choose a matching precision.",
+        "notAModelDirectory": "\"{path}\" exists but holds no image model (expected transformer/ with text_encoder/ or vae/, or a model_index.json).",
+        "volumeUnavailable": "\"{path}\" is on the volume \"{volume}\", which is not mounted. Connect the drive and try again.",
+        "pathMissing": "\"{path}\" does not exist.",
+        "storedVolumeUnavailable": "\"{model}\" is registered at \"{path}\" on the volume \"{volume}\", which is not mounted. Connect the drive and try again.",
+        "notDownloaded": "Model \"{model}\" not downloaded. Use the Download button first."
+      }
     }
   },
   "downloads": {

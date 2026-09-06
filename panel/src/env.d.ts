@@ -519,6 +519,11 @@ declare global {
           sessionId?: string;
           port?: number;
           error?: string;
+          /** Stable error identity the renderer translates (image.server.errors.<code>). */
+          errorCode?: string;
+          errorParams?: Record<string, string>;
+          /** True when the failure was detected before the running server was touched. */
+          serverKept?: boolean;
         }>;
         stopServer: () => Promise<{ success: boolean; error?: string }>;
         getRunningServer: () => Promise<{
