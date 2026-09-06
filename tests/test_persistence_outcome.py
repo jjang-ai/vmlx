@@ -45,3 +45,20 @@ def test_no_lane_claims_persistence_without_a_recorded_outcome():
         src = (root / name).read_text()
         for outcome in ("\"stored\"", "\"skipped\"", "\"failed\""):
             assert f"_PERSIST.record(request_id, {outcome}" in src, (name, outcome)
+
+
+def test_media_policy_skip_records_its_own_reason_not_the_generic_empty_cache():
+    """A media-bearing prompt on a family outside the media prefix-cache
+    allow-list nulls the extracted handle on purpose. That skip must be
+    recorded as the family policy it is; before, the nulled handle fell
+    through to the generic "resolved extracted cache is empty" outcome, which
+    read like a lost cache in the terminal ledger."""
+    import inspect
+    import vmlx_engine.mllm_scheduler as m
+    src = inspect.getsource(m)
+    policy = src.index('"media context: prefix reuse not allowed for this family"')
+    generic = src.index('_PERSIST.record(request_id, "skipped", "resolved extracted cache is empty")')
+    assert policy < generic
+    # the generic outcome is guarded by the flag the policy skip sets
+    assert "if cache_blocks is None and _media_skip_recorded:" in src
+    assert src.count("_media_skip_recorded = True") == 1

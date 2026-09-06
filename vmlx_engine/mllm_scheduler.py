@@ -3811,6 +3811,7 @@ class MLLMScheduler:
                                     request, token_list
                                 )
                             )
+                            _media_skip_recorded = False
                             if media_context and not media_cache_allowed:
                                 logger.info(
                                     "Skipping VLM prefix cache store for %s: "
@@ -3820,6 +3821,17 @@ class MLLMScheduler:
                                     request_id,
                                 )
                                 request._extracted_cache = None
+                                # Record the REAL reason here. Nulling the handle
+                                # used to fall through to the generic "resolved
+                                # extracted cache is empty" outcome below, which
+                                # hid a deliberate family policy behind what read
+                                # like a lost cache.
+                                _PERSIST.record(
+                                    request_id,
+                                    "skipped",
+                                    "media context: prefix reuse not allowed for this family",
+                                )
+                                _media_skip_recorded = True
                             prompt_len = len(token_list)
                             truncated_tokens = (
                                 token_list[: prompt_len - 1]
@@ -4166,7 +4178,9 @@ class MLLMScheduler:
                                             )
                                 else:
                                     cache_blocks = raw() if callable(raw) else raw
-                            if cache_blocks is None:
+                            if cache_blocks is None and _media_skip_recorded:
+                                pass  # outcome already recorded with its real reason above
+                            elif cache_blocks is None:
                                 _PERSIST.record(request_id, "skipped", "resolved extracted cache is empty")
                                 logger.info(
                                     "Skipping VLM paged cache store for %s: "
