@@ -422,6 +422,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             fired (#191 lead 6). Stable selectors end that trap. */}
         <button
           data-testid="server-settings-save"
+          data-vmlx-control="server-settings-save"
           onPointerDown={commitActiveSettingsInput}
           onClick={handleSave}
           disabled={!dirty || saving || restarting}
@@ -434,6 +435,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         {isRunning && !isRemote && (
           <button
             data-testid="server-settings-save-restart"
+            data-vmlx-control="server-settings-save-restart"
             onPointerDown={commitActiveSettingsInput}
             onClick={handleSaveAndRestart}
             disabled={saving || restarting}
@@ -444,6 +446,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         )}
         <button
           data-testid="server-settings-reset"
+          data-vmlx-control="server-settings-reset"
           onClick={handleReset}
           disabled={restarting}
           className="px-3 py-1.5 text-sm border border-border rounded hover:bg-accent disabled:opacity-40"

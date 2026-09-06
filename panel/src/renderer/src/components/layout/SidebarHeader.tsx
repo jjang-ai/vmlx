@@ -36,6 +36,7 @@ export function SidebarHeader({ onNewChat, onSearch }: SidebarHeaderProps) {
         </button>
         <button
           onClick={onNewChat}
+          data-vmlx-control="chat-new"
           className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors"
           title={t('layout.sidebarHeader.newTitle')}
         >

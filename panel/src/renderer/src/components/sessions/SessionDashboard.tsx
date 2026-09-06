@@ -251,6 +251,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
           </button>
           <button
             onClick={onCreateSession}
+            data-vmlx-control="session-create"
             className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
           >
             {t('sessions.dashboard.newSession')}
@@ -286,6 +287,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
           <div className="flex gap-3">
             <button
               onClick={onCreateSession}
+            data-vmlx-control="session-create"
               className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 font-medium text-sm transition-colors"
             >
               {t('sessions.dashboard.createSession')}
