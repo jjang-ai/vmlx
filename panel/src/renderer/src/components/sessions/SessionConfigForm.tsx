@@ -556,6 +556,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     'qwen3-vl',
     'qwen3.5',
     'qwen3.5-moe',
+    // Qwen3.8 Flash-Next (engine family qwen4_exp): native video path,
+    // live-proven with per-request fps / frame / pixel / token controls.
+    'qwen4-exp',
+    'qwen4_exp',
     'qwen2-vl',
     'gemma4',
     'nemotron-h',

@@ -8286,6 +8286,14 @@ class MLLMBatchGenerator:
         )
         _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
         cached_pixels = None
+        # One key for lookup AND store: media temp files may not outlive the
+        # processor call, and a key rebuilt afterwards would hash the missing
+        # path instead of the bytes and never match again.
+        pixel_cache_key = (
+            self.vision_cache.make_key(media_cache_sources, pixel_cache_prompt)
+            if media_cache_sources
+            else None
+        )
         if not _mllm_bypass:
             cached_pixels = self.vision_cache.get_pixel_cache(
                 media_cache_sources, pixel_cache_prompt
@@ -8535,6 +8543,23 @@ class MLLMBatchGenerator:
                 video_grid_thw=request.video_grid_thw,
                 extra_kwargs=request.extra_kwargs,
                 processing_time=processing_time,
+                key=pixel_cache_key,
+            )
+            logger.info(
+                "Vision pixel cache STORE for %s: %d media item(s), %.2fs of processing",
+                request.request_id,
+                len(media_cache_sources),
+                processing_time,
+            )
+        elif media_cache_sources:
+            # Say why nothing was stored instead of leaving the next request's
+            # MISS unexplained.
+            logger.info(
+                "Vision pixel cache NOT STORED for %s: %s",
+                request.request_id,
+                "prefix-cache bypass requested"
+                if _mllm_bypass
+                else "processor returned no pixel payload (pixel_values and video_pixel_values are None)",
             )
 
         self._stats.num_images_processed += len(media_cache_sources)

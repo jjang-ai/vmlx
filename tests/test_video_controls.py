@@ -278,3 +278,31 @@ def test_frame_fallback_summary_logs_bounds_and_controls():
     import vmlx_engine.engine.batched as b
     src = inspect.getsource(b)
     assert '"max_long_edge=%s, max_pixels=%s, resize=%s, controls=%s)"' in src
+
+
+class TestPixelCacheKeyStability:
+    def test_store_with_the_lookup_key_survives_a_removed_temp_file(self):
+        import os, tempfile
+        import mlx.core as mx
+        from vmlx_engine.vision_embedding_cache import VisionEmbeddingCache
+        c = VisionEmbeddingCache(max_pixel_entries=4)
+        a = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False); a.write(b"same bytes" * 50); a.close()
+        key = c.make_key([a.name], "p")
+        assert c.get_pixel_cache([a.name], "p") is None
+        os.unlink(a.name)  # the temp file is gone before the store
+        c.set_pixel_cache([a.name], "p", pixel_values=None, video_pixel_values=mx.array([1.0]), input_ids=mx.array([1]), key=key)
+        b = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False); b.write(b"same bytes" * 50); b.close()
+        assert c.get_pixel_cache([b.name], "p") is not None  # same bytes, new path: HIT
+        # and the unstable way (key rebuilt after removal) would have missed
+        c2 = VisionEmbeddingCache(max_pixel_entries=4)
+        d = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False); d.write(b"other" * 50); d.close(); os.unlink(d.name)
+        c2.set_pixel_cache([d.name], "p", pixel_values=None, video_pixel_values=mx.array([1.0]), input_ids=mx.array([1]))
+        e = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False); e.write(b"other" * 50); e.close()
+        assert c2.get_pixel_cache([e.name], "p") is None
+
+    def test_batch_generator_stores_under_the_lookup_key_and_logs_the_outcome(self):
+        import vmlx_engine.mllm_batch_generator as g
+        src = inspect.getsource(g)
+        assert "pixel_cache_key = (" in src and "key=pixel_cache_key," in src
+        assert '"Vision pixel cache STORE for %s: %d media item(s), %.2fs of processing"' in src
+        assert '"Vision pixel cache NOT STORED for %s: %s"' in src

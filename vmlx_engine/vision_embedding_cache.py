@@ -188,6 +188,13 @@ class VisionEmbeddingCache:
         prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:12]
         return f"{img_hash}_{prompt_hash}"
 
+    def make_key(self, images: List[str], prompt: str) -> str:
+        """Public key builder: compute ONCE at lookup and hand the same key to
+        ``set_pixel_cache``. Local media are hashed by content while the file
+        exists and by path string once it is gone, so a key rebuilt after a
+        temp file was removed would never match the lookup key again."""
+        return self._make_key(images, prompt)
+
     def get_pixel_cache(
         self,
         images: List[str],
@@ -231,12 +238,14 @@ class VisionEmbeddingCache:
         video_grid_thw: Optional[mx.array] = None,
         extra_kwargs: Optional[Dict[str, Any]] = None,
         processing_time: float = 0.0,
+        key: Optional[str] = None,
     ) -> None:
-        """Store pixel values in cache."""
+        """Store pixel values in cache (under ``key`` when the caller computed
+        it at lookup time, else rebuilt from images + prompt)."""
         if not self.enabled or not images:
             return
 
-        key = self._make_key(images, prompt)
+        key = key or self._make_key(images, prompt)
 
         # Evict oldest if at capacity
         evicted = False
