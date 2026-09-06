@@ -49,6 +49,8 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(R('tools/ModelConverter.tsx')).toContain('data-vmlx-tone="warning"')
     const harness = readFileSync(join(__dirname, '..', 'scripts', 'live-real-ui-model-proof.mjs'), 'utf8')
     expect(harness).toContain("const tone = alert.getAttribute('data-vmlx-tone')")
+    // selected thinking/effort buttons are read from the state attribute, the class is only a fallback for older builds
+    expect((harness.match(/getAttribute\('data-vmlx-state'\) === 'selected'/g) || []).length).toBeGreaterThanOrEqual(2)
   })
   it('session card actions carry the session id', () => {
     const src = R('sessions/SessionCard.tsx')

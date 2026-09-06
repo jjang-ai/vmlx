@@ -10675,14 +10675,16 @@ async function main() {
               && acceptablePersistedThinkingLabels.includes(
                 (button.textContent || '').replace(/\\s+/g, ' ').trim()
               )
-              && String(button.className || '').includes('bg-primary')
+              && (button.getAttribute('data-vmlx-state') === 'selected'
+                || (!button.hasAttribute('data-vmlx-state') && String(button.className || '').includes('bg-primary')))
             ));
           const reopenedReasoningEffortButton = [...(reopenedDrawer?.querySelectorAll(
             '[data-reasoning-effort]'
           ) || [])].find((button) => (
             button instanceof HTMLButtonElement
             && isVisible(button)
-            && String(button.className || '').includes('bg-primary')
+            && (button.getAttribute('data-vmlx-state') === 'selected'
+              || (!button.hasAttribute('data-vmlx-state') && String(button.className || '').includes('bg-primary')))
           ));
           const reopenedWorkingDirectory = [...(reopenedDrawer?.querySelectorAll('input[type="text"]') || [])]
             .find((candidate) =>
