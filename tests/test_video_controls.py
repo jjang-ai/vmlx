@@ -242,7 +242,8 @@ class TestVideoTelemetry:
         from vmlx_engine.mllm_batch_generator import _format_timestamps
         assert _format_timestamps([0.0, 0.5, 1.0]) == "[0.00,0.50,1.00]"
         assert _format_timestamps(list(range(12))).endswith("] n=12") and _format_timestamps(None) == "[]"
-        assert '"Vision pixel cache %s for %s: %d media item(s)%s"' in src
+        assert '"Vision pixel cache %s for %s: %d media item(s) key=%s%s"' in src
+        assert "_dump_pixel_cache_miss(request.request_id, media_cache_sources, pixel_cache_prompt, pixel_cache_key)" in src
 
 
 class TestVideoTokenBudget:

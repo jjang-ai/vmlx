@@ -313,6 +313,30 @@ def _video_frame_size(video_input: Any) -> str:
     return "?"
 
 
+def _dump_pixel_cache_miss(request_id: str, sources: List[str], prompt: str, key: Optional[str]) -> None:
+    """Opt-in (VMLX_PIXEL_CACHE_DEBUG_DIR): write the miss's prompt text and
+    media sources so two "identical" requests can be diffed offline."""
+    out_dir = os.environ.get("VMLX_PIXEL_CACHE_DEBUG_DIR", "").strip()
+    if not out_dir:
+        return
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, f"pixel-miss-{request_id}.txt"), "w", encoding="utf-8") as fh:
+            fh.write(f"key={key}\n")
+            for src in sources:
+                size = None
+                try:
+                    size = os.path.getsize(src)
+                except Exception:
+                    pass
+                fh.write(f"source={src} size={size}\n")
+            fh.write("prompt<<<\n")
+            fh.write(prompt)
+            fh.write("\n>>>\n")
+    except Exception as exc:  # diagnostics never break a request
+        logger.debug("pixel cache miss dump failed: %s", exc)
+
+
 def _request_video_controls(request: Any) -> "VideoControls":
     """The request's normalized video controls (object if attached, else
     rebuilt from the two legacy fields)."""
@@ -8299,15 +8323,20 @@ class MLLMBatchGenerator:
                 media_cache_sources, pixel_cache_prompt
             )
         if media_cache_sources:
+            # key = <media content hash>_<prompt hash>: with both halves in the
+            # line, a miss on an exact repeat says WHICH half moved.
             logger.info(
-                "Vision pixel cache %s for %s: %d media item(s)%s",
+                "Vision pixel cache %s for %s: %d media item(s) key=%s%s",
                 "HIT" if cached_pixels is not None else ("BYPASS" if _mllm_bypass else "MISS"),
                 request.request_id,
                 len(media_cache_sources),
+                pixel_cache_key,
                 (" video controls " + _request_video_controls(request).cache_key_fragment())
                 if video_cache_sources
                 else "",
             )
+            if cached_pixels is None and not _mllm_bypass:
+                _dump_pixel_cache_miss(request.request_id, media_cache_sources, pixel_cache_prompt, pixel_cache_key)
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
             request.input_ids = cached_pixels.input_ids
