@@ -785,10 +785,14 @@ class ImageGenEngine:
             "omitted" if not negative_prompt
             else ("applied" if 'negative_prompt' in self._get_generate_params() else "unsupported")
         )
+        # Every edit class edit() accepts conditions on the source image (or
+        # the mask); none of their branches forwards image_strength. Say so in
+        # the log rather than printing a value that reads as applied.
         logger.info(
             f"Editing image: model={self._model_name}, {width}x{height}, "
-            f"{steps} steps, guidance={guidance}, strength={strength}, seed={seed}, "
-            f"negative_prompt={edit_negative_disposition}"
+            f"{steps} steps, guidance={guidance}, strength={strength} "
+            f"(not forwarded: {self._mflux_class or 'edit'} conditions on the source image), "
+            f"seed={seed}, negative_prompt={edit_negative_disposition}"
         )
         start = time.perf_counter()
 
