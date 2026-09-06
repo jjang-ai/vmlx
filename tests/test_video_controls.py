@@ -223,3 +223,52 @@ class TestEngineHops:
         assert "controls.fallback_bounds(" in bs and "controls.cache_key_fragment()" in bs
         assert "bound_video_frames(" in bs
         assert "pop_video_control_kwargs(kwargs)" in ms and "controls.pixel_fragment()" in ms
+
+
+class TestVideoTelemetry:
+    def test_frame_count_and_size_helpers(self):
+        np = pytest.importorskip("numpy")
+        from vmlx_engine.mllm_batch_generator import _video_frame_count, _video_frame_size
+        arr = np.zeros((6, 3, 224, 336), dtype=np.uint8)
+        assert (_video_frame_count(arr), _video_frame_size(arr)) == (6, "224x336")
+        frames = [np.zeros((180, 320, 3), dtype=np.uint8)] * 4
+        assert (_video_frame_count(frames), _video_frame_size(frames)) == (4, "180x320")
+        assert _video_frame_count(object()) == -1 and _video_frame_size(object()) == "?"
+
+    def test_batch_generator_logs_video_input_and_pixel_cache_outcome(self):
+        import vmlx_engine.mllm_batch_generator as g
+        src = inspect.getsource(g)
+        assert '"Video input for %s: sampled_frames=%d sample_fps=%.3f frame=%s timestamps=%s controls=%s"' in src
+        from vmlx_engine.mllm_batch_generator import _format_timestamps
+        assert _format_timestamps([0.0, 0.5, 1.0]) == "[0.00,0.50,1.00]"
+        assert _format_timestamps(list(range(12))).endswith("] n=12") and _format_timestamps(None) == "[]"
+        assert '"Vision pixel cache %s for %s: %d media item(s)%s"' in src
+
+
+class TestVideoTokenBudget:
+    def test_token_budget_derives_the_clip_pixel_budget(self):
+        from vmlx_engine.video_controls import VIDEO_TOKEN_IMAGE_FACTOR
+        c = validate_video_controls({"video_token_budget": 1024})
+        assert c.token_budget == 1024
+        assert c.effective_total_pixels() == 1024 * VIDEO_TOKEN_IMAGE_FACTOR ** 2
+        assert c.fetch_video_element("/v.mp4")["total_pixels"] == 1024 * 784
+        # an explicit total_pixels wins over the derivation
+        both = validate_video_controls({"video_token_budget": 1024, "video_total_pixels": 5000})
+        assert both.fetch_video_element("/v.mp4")["total_pixels"] == 5000
+        with pytest.raises(ValueError, match="video_token_budget"):
+            validate_video_controls({"video_token_budget": 0})
+
+    def test_token_budget_is_part_of_cache_identity_and_fallback_bounds(self):
+        a = VideoControls(fps=2.0, max_frames=8)
+        b = VideoControls(fps=2.0, max_frames=8, token_budget=512)
+        assert a.cache_key_fragment() != b.cache_key_fragment() and b.has_pixel_controls
+        bounds = b.fallback_bounds(default_long_edge=768)
+        assert bounds.max_pixels == (512 * 784) // 8
+
+    def test_api_models_accept_token_budget(self):
+        from vmlx_engine.api.models import ChatCompletionRequest, ResponsesRequest
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        assert ChatCompletionRequest(model="m", messages=[{"role": "user", "content": "hi"}], video_token_budget=2048).video_token_budget == 2048
+        assert ResponsesRequest(model="m", input="hi", video_token_budget=2048).video_token_budget == 2048
+        a = AnthropicRequest(model="m", messages=[{"role": "user", "content": "hi"}], max_tokens=5, video_token_budget=2048)
+        assert to_chat_completion(a).video_token_budget == 2048

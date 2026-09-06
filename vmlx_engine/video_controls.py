@@ -41,7 +41,15 @@ VIDEO_CONTROL_FIELDS: tuple[str, ...] = (
     "video_total_pixels",
     "video_resized_height",
     "video_resized_width",
+    "video_token_budget",
 )
+
+# Qwen-style video geometry: one token per (image_factor x image_factor)
+# pixel patch after merging, over pairs of frames (temporal patch 2). The
+# loader's per-clip budget ``total_pixels`` therefore maps to tokens as
+# tokens ~= total_pixels / image_factor**2 (see fetch_video: per-frame
+# max_pixels = total_pixels / nframes * FRAME_FACTOR).
+VIDEO_TOKEN_IMAGE_FACTOR = 28
 
 # mlx-vlm 0.5 ``video_generate.VIDEO_MAX_PIXELS``: the loader clamps a larger
 # per-frame budget to this value (768 * 28 * 28).
@@ -84,6 +92,10 @@ class VideoControls:
     total_pixels: int | None = None
     resized_height: int | None = None
     resized_width: int | None = None
+    # Whole-clip vision-token budget; derived into total_pixels for the loader
+    # (approximate: smart_resize rounds to the patch factor and min_pixels
+    # floors each frame).
+    token_budget: int | None = None
 
     # ── construction ──────────────────────────────────────────────────
     @classmethod
@@ -113,8 +125,16 @@ class VideoControls:
     def has_pixel_controls(self) -> bool:
         return any(
             v is not None
-            for v in (self.max_pixels, self.min_pixels, self.total_pixels, self.resized_height, self.resized_width)
+            for v in (self.max_pixels, self.min_pixels, self.total_pixels, self.resized_height, self.resized_width, self.token_budget)
         )
+
+    def effective_total_pixels(self) -> int | None:
+        """``total_pixels`` as sent, else the value derived from ``token_budget``."""
+        if self.total_pixels is not None:
+            return int(self.total_pixels)
+        if self.token_budget is not None:
+            return int(self.token_budget) * VIDEO_TOKEN_IMAGE_FACTOR * VIDEO_TOKEN_IMAGE_FACTOR
+        return None
 
     def effective_fps(self) -> float:
         if self.fps is not None:
@@ -144,6 +164,7 @@ class VideoControls:
             f"max_pixels={self.max_pixels if self.max_pixels is not None else '-'}"
             f":min_pixels={self.min_pixels if self.min_pixels is not None else '-'}"
             f":total_pixels={self.total_pixels if self.total_pixels is not None else '-'}"
+            f":token_budget={self.token_budget if self.token_budget is not None else '-'}"
             f":resized={self.resized_height if self.resized_height is not None else '-'}x"
             f"{self.resized_width if self.resized_width is not None else '-'}"
         )
@@ -165,8 +186,9 @@ class VideoControls:
             ele["min_pixels"] = int(self.min_pixels)
         if self.max_pixels is not None:
             ele["max_pixels"] = int(self.max_pixels)
-        if self.total_pixels is not None:
-            ele["total_pixels"] = int(self.total_pixels)
+        total = self.effective_total_pixels()
+        if total is not None:
+            ele["total_pixels"] = total
         if self.resized_height is not None and self.resized_width is not None:
             ele["resized_height"] = int(self.resized_height)
             ele["resized_width"] = int(self.resized_width)
@@ -178,9 +200,15 @@ class VideoControls:
         resize = None
         if self.resized_height is not None and self.resized_width is not None:
             resize = (int(self.resized_height), int(self.resized_width))
+        max_pixels = int(self.max_pixels) if self.max_pixels is not None else None
+        total = self.effective_total_pixels()
+        if max_pixels is None and total is not None:
+            # Spread the clip budget over the frames the fallback will sample
+            # (each sampled frame becomes one image, so no temporal pairing).
+            max_pixels = max(1, int(total // max(1, self.effective_max_frames())))
         return FallbackFrameBounds(
             max_long_edge=int(default_long_edge),
-            max_pixels=int(self.max_pixels) if self.max_pixels is not None else None,
+            max_pixels=max_pixels,
             resize=resize,
         )
 
@@ -212,7 +240,7 @@ def validate_video_controls(values: Mapping[str, Any] | None) -> VideoControls:
     if max_frames is not None:
         max_frames = _positive_int("video_max_frames", max_frames)
     ints: dict[str, int | None] = {}
-    for name in ("video_max_pixels", "video_min_pixels", "video_total_pixels", "video_resized_height", "video_resized_width"):
+    for name in ("video_max_pixels", "video_min_pixels", "video_total_pixels", "video_resized_height", "video_resized_width", "video_token_budget"):
         v = values.get(name)
         ints[name] = _positive_int(name, v) if v is not None else None
     if (ints["video_resized_height"] is None) != (ints["video_resized_width"] is None):
@@ -237,6 +265,7 @@ def validate_video_controls(values: Mapping[str, Any] | None) -> VideoControls:
         total_pixels=ints["video_total_pixels"],
         resized_height=ints["video_resized_height"],
         resized_width=ints["video_resized_width"],
+        token_budget=ints["video_token_budget"],
     )
 
 

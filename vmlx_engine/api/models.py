@@ -278,6 +278,8 @@ class ChatCompletionRequest(BaseModel):
     video_total_pixels: int | None = None
     video_resized_height: int | None = None
     video_resized_width: int | None = None
+    # Whole-clip vision-token budget (derived into the loader's per-clip pixel budget).
+    video_token_budget: int | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
     # vMLX extension: per-request prompt/context admission cap. This can
@@ -1024,6 +1026,8 @@ class ResponsesRequest(BaseModel):
     video_total_pixels: int | None = None
     video_resized_height: int | None = None
     video_resized_width: int | None = None
+    # Whole-clip vision-token budget (derived into the loader's per-clip pixel budget).
+    video_token_budget: int | None = None
     # Cache bypass — parity with ChatCompletionRequest.cache_salt /
     # skip_prefix_cache. Without these fields, `model_config={"extra":
     # "ignore"}` silently drops them, and Responses-API clients (Claude

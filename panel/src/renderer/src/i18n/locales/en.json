@@ -1046,7 +1046,9 @@
       "videoMaxPixelsTooltip": "Maximum pixels per sampled video frame after resizing (aspect ratio preserved, rounded to the model's patch size). Lower = fewer vision tokens per frame = faster prefill, less spatial detail. Leave at Processor default to keep the model's own sizing. The native loader caps this at 602k.",
       "videoMaxPixelsDefault": "Processor default",
       "videoMaxPixelsFastest": "fastest",
-      "videoMaxPixelsMax": "loader maximum"
+      "videoMaxPixelsMax": "loader maximum",
+      "videoTokenBudget": "Video Token Budget",
+      "videoTokenBudgetTooltip": "Approximate cap on vision tokens for the whole clip. The engine turns it into a per-clip pixel budget (tokens × 28² pixels) that the video loader spreads across the sampled frames, so long or high-resolution clips stay within a predictable prefill cost. Frames still round to the model's patch size, so the exact count can differ slightly."
     },
     "create": {
       "title": "Create Session",

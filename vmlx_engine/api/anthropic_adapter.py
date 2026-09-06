@@ -118,6 +118,7 @@ class AnthropicRequest(BaseModel):
     video_total_pixels: int | None = None
     video_resized_height: int | None = None
     video_resized_width: int | None = None
+    video_token_budget: int | None = None
 
     @model_validator(mode="after")
     def validate_video_controls(self):

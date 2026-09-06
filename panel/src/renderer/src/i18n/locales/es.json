@@ -1046,7 +1046,9 @@
       "videoMaxPixelsTooltip": "Máximo de píxeles por fotograma de vídeo muestreado tras el redimensionado (se conserva la relación de aspecto, redondeado al tamaño de parche del modelo). Menos = menos tokens de visión por fotograma = prefill más rápido, menos detalle espacial. Deja el valor por defecto del procesador para mantener el tamaño propio del modelo. El cargador nativo lo limita a 602k.",
       "videoMaxPixelsDefault": "Valor por defecto del procesador",
       "videoMaxPixelsFastest": "más rápido",
-      "videoMaxPixelsMax": "máximo del cargador"
+      "videoMaxPixelsMax": "máximo del cargador",
+      "videoTokenBudget": "Presupuesto de tokens de vídeo",
+      "videoTokenBudgetTooltip": "Límite aproximado de tokens de visión para todo el clip. El motor lo convierte en un presupuesto de píxeles por clip (tokens × 28² píxeles) que el cargador de vídeo reparte entre los fotogramas muestreados, de modo que los clips largos o de alta resolución mantienen un coste de prefill predecible. Los fotogramas se redondean al tamaño de parche del modelo, así que el recuento exacto puede variar ligeramente."
     },
     "create": {
       "title": "Crear sesión",

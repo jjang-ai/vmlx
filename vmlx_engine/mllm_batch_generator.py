@@ -270,6 +270,49 @@ def _hash_mllm_media_array(hasher: Any, label: str, value: Any) -> None:
         _hash_mllm_media_text(hasher, label, value)
 
 
+def _format_timestamps(ts: Any) -> str:
+    """Compact 's0,s1,...' (all when <= 8, else first 4 ... last 3) in seconds."""
+    try:
+        vals = [float(v) for v in (ts or [])]
+    except Exception:
+        return "?"
+    if not vals:
+        return "[]"
+    fmt = lambda v: f"{v:.2f}"
+    if len(vals) <= 8:
+        return "[" + ",".join(fmt(v) for v in vals) + "]"
+    return "[" + ",".join(fmt(v) for v in vals[:4]) + ",...," + ",".join(fmt(v) for v in vals[-3:]) + f"] n={len(vals)}"
+
+
+def _video_frame_count(video_input: Any) -> int:
+    """Frames the loader produced (array T x C x H x W, or a list of frames)."""
+    try:
+        shape = getattr(video_input, "shape", None)
+        if shape is not None and len(shape) >= 1:
+            return int(shape[0])
+        return len(video_input)
+    except Exception:
+        return -1
+
+
+def _video_frame_size(video_input: Any) -> str:
+    """'HxW' of the loader's frames (array T x C x H x W, or PIL/array frames)."""
+    try:
+        shape = getattr(video_input, "shape", None)
+        if shape is not None and len(shape) == 4:
+            return f"{int(shape[2])}x{int(shape[3])}"
+        first = video_input[0]
+        size = getattr(first, "size", None)  # PIL: (W, H)
+        if isinstance(size, tuple) and len(size) == 2:
+            return f"{int(size[1])}x{int(size[0])}"
+        fshape = getattr(first, "shape", None)
+        if fshape is not None and len(fshape) >= 2:
+            return f"{int(fshape[0])}x{int(fshape[1])}"
+    except Exception:
+        pass
+    return "?"
+
+
 def _request_video_controls(request: Any) -> "VideoControls":
     """The request's normalized video controls (object if attached, else
     rebuilt from the two legacy fields)."""
@@ -8192,12 +8235,23 @@ class MLLMBatchGenerator:
                     )
                     video_inputs.append(video_input)
                     video_sample_fps.append(float(sample_fps))
-                    video_sample_timestamps.append(
-                        _sampled_video_timestamps(
-                            video_path,
-                            len(video_input),
-                            float(sample_fps),
-                        )
+                    _timestamps = _sampled_video_timestamps(
+                        video_path,
+                        len(video_input),
+                        float(sample_fps),
+                    )
+                    video_sample_timestamps.append(_timestamps)
+                    # What the loader actually produced for THIS request (not
+                    # what was asked): frames, sample rate, frame size, the
+                    # sampled timestamps, and the controls that shaped them.
+                    logger.info(
+                        "Video input for %s: sampled_frames=%d sample_fps=%.3f frame=%s timestamps=%s controls=%s",
+                        request.request_id,
+                        _video_frame_count(video_input),
+                        float(sample_fps),
+                        _video_frame_size(video_input),
+                        _format_timestamps(_timestamps),
+                        _controls.cache_key_fragment(),
                     )
                 except Exception as e:
                     logger.warning(f"Failed to process video: {e}")
@@ -8235,6 +8289,16 @@ class MLLMBatchGenerator:
         if not _mllm_bypass:
             cached_pixels = self.vision_cache.get_pixel_cache(
                 media_cache_sources, pixel_cache_prompt
+            )
+        if media_cache_sources:
+            logger.info(
+                "Vision pixel cache %s for %s: %d media item(s)%s",
+                "HIT" if cached_pixels is not None else ("BYPASS" if _mllm_bypass else "MISS"),
+                request.request_id,
+                len(media_cache_sources),
+                (" video controls " + _request_video_controls(request).cache_key_fragment())
+                if video_cache_sources
+                else "",
             )
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
