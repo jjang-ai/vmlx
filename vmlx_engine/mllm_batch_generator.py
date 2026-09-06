@@ -8327,7 +8327,8 @@ class MLLMBatchGenerator:
             # line, a miss on an exact repeat says WHICH half moved.
             logger.info(
                 "Vision pixel cache %s for %s: %d media item(s) key=%s%s",
-                "HIT" if cached_pixels is not None else ("BYPASS" if _mllm_bypass else "MISS"),
+                "HIT" if cached_pixels is not None
+                else ("BYPASS" if _mllm_bypass else ("DISABLED" if not self.vision_cache.enabled else "MISS")),
                 request.request_id,
                 len(media_cache_sources),
                 pixel_cache_key,
@@ -8335,7 +8336,7 @@ class MLLMBatchGenerator:
                 if video_cache_sources
                 else "",
             )
-            if cached_pixels is None and not _mllm_bypass:
+            if cached_pixels is None and not _mllm_bypass and self.vision_cache.enabled:
                 _dump_pixel_cache_miss(request.request_id, media_cache_sources, pixel_cache_prompt, pixel_cache_key)
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
@@ -8555,6 +8556,7 @@ class MLLMBatchGenerator:
         # Store in pixel cache for future reuse
         if (
             not _mllm_bypass
+            and self.vision_cache.enabled
             and media_cache_sources
             and (
                 request.pixel_values is not None
@@ -8588,7 +8590,11 @@ class MLLMBatchGenerator:
                 request.request_id,
                 "prefix-cache bypass requested"
                 if _mllm_bypass
-                else "processor returned no pixel payload (pixel_values and video_pixel_values are None)",
+                else (
+                    "vision memory cache disabled (--no-vision-memory-cache); media reuse relies on the prefix cache"
+                    if not self.vision_cache.enabled
+                    else "processor returned no pixel payload (pixel_values and video_pixel_values are None)"
+                ),
             )
 
         self._stats.num_images_processed += len(media_cache_sources)

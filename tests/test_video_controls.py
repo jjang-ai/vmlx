@@ -307,3 +307,7 @@ class TestPixelCacheKeyStability:
         assert "pixel_cache_key = (" in src and "key=pixel_cache_key," in src
         assert '"Vision pixel cache STORE for %s: %d media item(s), %.2fs of processing"' in src
         assert '"Vision pixel cache NOT STORED for %s: %s"' in src
+        assert '"vision memory cache disabled (--no-vision-memory-cache); media reuse relies on the prefix cache"' in src
+        assert '"DISABLED" if not self.vision_cache.enabled else "MISS"' in src
+        # a disabled cache never claims a STORE
+        assert "and self.vision_cache.enabled\n            and media_cache_sources" in src
