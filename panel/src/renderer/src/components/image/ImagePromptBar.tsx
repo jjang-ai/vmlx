@@ -288,12 +288,12 @@ export function ImagePromptBar({ capabilities, onGenerate, disabled, generating,
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
         {generating ? (
-          <button onClick={() => window.api.image.cancelGeneration()}
+          <button onClick={() => window.api.image.cancelGeneration()} data-vmlx-control="image-cancel"
             className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center gap-2 self-end">
             <X className="h-4 w-4" /><span className="text-sm">{t('image.prompt.cancel')}</span>
           </button>
         ) : (
-          <button onClick={handleSubmit} disabled={!canSubmit}
+          <button onClick={handleSubmit} disabled={!canSubmit} data-vmlx-control="image-generate"
             className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
               isVariation ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                 : isEdit ? 'bg-violet-600 text-white hover:bg-violet-700'

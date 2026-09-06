@@ -1701,6 +1701,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {showVideoControls && (
           <>
             <SliderField
+              settingKey="videoFps"
               label={t('sessions.config.videoFps')}
               tooltip={t('sessions.config.videoFpsTooltip')}
               value={config.videoFps ?? 2}
@@ -1711,6 +1712,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               defaultValue={2}
             />
             <SliderField
+              settingKey="videoMaxFrames"
               label={t('sessions.config.maxVideoFrames')}
               tooltip={t('sessions.config.maxVideoFramesTooltip')}
               value={config.videoMaxFrames ?? 8}
@@ -1720,7 +1722,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={2}
               defaultValue={8}
             />
-            <Field label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
+            <Field settingKey="videoMaxPixels" label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
               <select
                 className="cfg-input"
                 data-vmlx-setting="videoMaxPixels"
@@ -1735,7 +1737,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 <option value="602112">602k ({t('sessions.config.videoMaxPixelsMax')})</option>
               </select>
             </Field>
-            <Field label={t('sessions.config.videoTokenBudget')} tooltip={t('sessions.config.videoTokenBudgetTooltip')}>
+            <Field settingKey="videoTokenBudget" label={t('sessions.config.videoTokenBudget')} tooltip={t('sessions.config.videoTokenBudgetTooltip')}>
               <select
                 className="cfg-input"
                 data-vmlx-setting="videoTokenBudget"
@@ -2353,13 +2355,15 @@ function PerformanceHint({ text }: { text: string }) {
   )
 }
 
-export function Section({ title, expanded, onToggle, children, hidden }: {
+export function Section({ title, expanded, onToggle, children, hidden, sectionKey }: {
   title: string; expanded: boolean; onToggle: () => void; children: React.ReactNode; hidden?: boolean
+  /** Stable, untranslated identity: data-vmlx-section on the wrapper, data-vmlx-state open/closed on the toggle. */
+  sectionKey?: string
 }) {
   if (hidden) return null
   return (
-    <div className="mb-3 border border-border rounded">
-      <button onClick={onToggle} className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-accent rounded-t">
+    <div className="mb-3 border border-border rounded" data-vmlx-section={sectionKey}>
+      <button onClick={onToggle} data-vmlx-control={sectionKey ? `section-${sectionKey}` : undefined} data-vmlx-state={expanded ? 'open' : 'closed'} className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-accent rounded-t">
         <span className={`transition-transform ${expanded ? 'rotate-90' : ''}`}>&#9654;</span>
         {title}
       </button>
@@ -2368,9 +2372,11 @@ export function Section({ title, expanded, onToggle, children, hidden }: {
   )
 }
 
-export function Field({ label, tooltip, children }: { label: string; tooltip?: string; children: React.ReactNode }) {
+export function Field({ label, tooltip, children, settingKey }: { label: string; tooltip?: string; children: React.ReactNode
+  /** Stable, untranslated identity: data-vmlx-setting on the field wrapper. */
+  settingKey?: string }) {
   return (
-    <label className="block">
+    <label className="block" data-vmlx-setting={settingKey}>
       <span className="text-xs font-medium text-muted-foreground">
         {label}
         {tooltip && <Tooltip text={tooltip} />}
@@ -2392,13 +2398,13 @@ export function CheckField({ label, tooltip, checked, onChange, disabled }: {
   )
 }
 
-export function SelectField({ label, tooltip, value, onChange, options, disabled }: {
+export function SelectField({ label, tooltip, value, onChange, options, disabled, settingKey }: {
   label: string; tooltip?: string; value: string; onChange: (v: string) => void
-  options: { value: string; label: string }[]; disabled?: boolean
+  options: { value: string; label: string }[]; disabled?: boolean; settingKey?: string
 }) {
   return (
-    <Field label={label} tooltip={tooltip}>
-      <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="cfg-input">
+    <Field label={label} tooltip={tooltip} settingKey={settingKey}>
+      <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="cfg-input" data-vmlx-control={settingKey ? `setting-${settingKey}` : undefined}>
         {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </Field>
@@ -2406,6 +2412,8 @@ export function SelectField({ label, tooltip, value, onChange, options, disabled
 }
 
 interface SliderFieldProps {
+  /** Stable, untranslated identity: data-vmlx-setting on the field wrapper. */
+  settingKey?: string
   label: string
   tooltip?: string
   value: number
@@ -2425,7 +2433,8 @@ interface SliderFieldProps {
 export function SliderField({
   label, tooltip, value, onChange, min, max, step, defaultValue,
   allowUnlimited = false, unlimitedValue = 0, unlimitedLabel = 'Unlimited',
-  disabled = false, maxInput
+  disabled = false, maxInput,
+  settingKey
 }: SliderFieldProps) {
   const isUnlimited = allowUnlimited && value === unlimitedValue
   // Local string state for the number input so typing isn't clamped mid-keystroke.
@@ -2499,7 +2508,7 @@ export function SliderField({
   return (
     <div
       className={`block ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
-      data-setting-label={label}
+      data-vmlx-setting={settingKey} data-setting-label={label}
       data-setting-value={String(value)}
       data-unlimited-active={String(isUnlimited)}
     >

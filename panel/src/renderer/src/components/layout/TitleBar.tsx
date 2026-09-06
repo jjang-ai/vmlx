@@ -61,18 +61,21 @@ export function TitleBar() {
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <ModeButton
+            mode="code"
             active={state.mode === "code"}
             onClick={() => setMode("code")}
             icon={<Terminal className="h-3 w-3" />}
             label={t("app.mode.code")}
           />
           <ModeButton
+            mode="chat"
             active={state.mode === "chat"}
             onClick={() => setMode("chat")}
             icon={<MessageSquare className="h-3 w-3" />}
             label={t("app.mode.chat")}
           />
           <ModeButton
+            mode="server"
             active={state.mode === "server"}
             onClick={() => {
               setMode("server");
@@ -83,18 +86,21 @@ export function TitleBar() {
             label={t("app.mode.server")}
           />
           <ModeButton
+            mode="tools"
             active={state.mode === "tools"}
             onClick={() => setMode("tools")}
             icon={<Wrench className="h-3 w-3" />}
             label={t("app.mode.tools")}
           />
           <ModeButton
+            mode="image"
             active={state.mode === "image"}
             onClick={() => setMode("image")}
             icon={<ImageIcon className="h-3 w-3" />}
             label={t("app.mode.image")}
           />
           <ModeButton
+            mode="api"
             active={state.mode === "api"}
             onClick={() => setMode("api")}
             icon={<Code2 className="h-3 w-3" />}
@@ -224,16 +230,21 @@ function ModeButton({
   onClick,
   icon,
   label,
+  mode,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  /** Stable, untranslated identity for automation and theming: data-vmlx-control="mode-<mode>". */
+  mode: string;
 }) {
   return (
     <button
       onClick={onClick}
       aria-label={label}
+      data-vmlx-control={`mode-${mode}`}
+      data-vmlx-state={active ? "active" : "inactive"}
       title={label}
       className={`flex items-center gap-1.5 max-[720px]:gap-0 px-3 max-[720px]:px-2 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
         active

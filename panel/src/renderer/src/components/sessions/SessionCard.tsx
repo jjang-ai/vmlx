@@ -284,6 +284,8 @@ export function SessionCard({
             {(session.status === "running" || session.status === "loading" || session.status === "standby") && (
               <button
                 onClick={() => onStop(session.id)}
+              data-vmlx-control="session-card-stop"
+              data-vmlx-session-id={session.id}
                 className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
               >
                 {t('sessions.card.stop')}
@@ -291,6 +293,8 @@ export function SessionCard({
             )}
             <button
               onClick={() => onRepoint(session.id)}
+              data-vmlx-control="session-card-repoint"
+              data-vmlx-session-id={session.id}
               className="flex-1 px-3 py-1.5 text-sm rounded border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 flex items-center justify-center gap-1.5"
             >
               <FolderSearch className="h-3.5 w-3.5" />
@@ -298,6 +302,8 @@ export function SessionCard({
             </button>
             <button
               onClick={() => onDelete(session.id)}
+              data-vmlx-control="session-card-delete"
+              data-vmlx-session-id={session.id}
               className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive flex items-center gap-1.5"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -309,6 +315,8 @@ export function SessionCard({
         {session.status === "running" && (
           <button
             onClick={() => onOpen(session.id)}
+              data-vmlx-control="session-card-open"
+              data-vmlx-session-id={session.id}
             className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:bg-primary/90"
           >
             {t('sessions.card.open')}
@@ -318,6 +326,8 @@ export function SessionCard({
         {session.status === "standby" && onWake && (
           <button
             onClick={() => onWake(session.id)}
+              data-vmlx-control="session-card-wake"
+              data-vmlx-session-id={session.id}
             className="flex-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center justify-center gap-1.5"
             title={
               session.standbyDepth === "deep"
@@ -334,6 +344,8 @@ export function SessionCard({
           <>
             <button
               onClick={() => onOpen(session.id)}
+              data-vmlx-control="session-card-open"
+              data-vmlx-session-id={session.id}
               className="flex-1 px-3 py-1.5 bg-warning/20 text-warning text-sm rounded hover:bg-warning/30 flex items-center justify-center gap-1.5"
             >
               <ScrollText className="h-3.5 w-3.5" />
@@ -345,6 +357,8 @@ export function SessionCard({
         {session.status === "stopped" || session.status === "error" ? (
           <button
             onClick={() => onStart(session.id)}
+              data-vmlx-control="session-card-start"
+              data-vmlx-session-id={session.id}
             className="flex-1 px-3 py-1.5 bg-success text-success-foreground text-sm rounded hover:bg-success/90"
           >
             {isRemote ? t('sessions.card.connect') : t('sessions.card.start')}
@@ -354,6 +368,8 @@ export function SessionCard({
         {!isRemote && (
           <button
             onClick={() => onConfigure(session.id)}
+              data-vmlx-control="session-card-configure"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
             title={t('sessions.card.configureTitle')}
           >
@@ -364,6 +380,8 @@ export function SessionCard({
         {session.status === "running" && !isRemote && onSleep && (
           <button
             onClick={() => onSleep(session.id)}
+              data-vmlx-control="session-card-sleep"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30"
             title={t('sessions.card.sleepTitle')}
           >
@@ -374,6 +392,8 @@ export function SessionCard({
         {(session.status === "running" || session.status === "loading") && (
           <button
             onClick={() => onStop(session.id)}
+              data-vmlx-control="session-card-stop"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 bg-destructive text-destructive-foreground text-sm rounded hover:bg-destructive/90"
           >
             {isRemote ? t('sessions.card.disconnect') : t('sessions.card.stop')}
@@ -383,6 +403,8 @@ export function SessionCard({
         {session.status === "standby" && (
           <button
             onClick={() => onStop(session.id)}
+              data-vmlx-control="session-card-stop"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
             title={t('sessions.card.stopStandbyTitle')}
           >
@@ -393,6 +415,8 @@ export function SessionCard({
         {session.status === "error" && (
           <button
             onClick={() => onOpen(session.id)}
+              data-vmlx-control="session-card-open"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
             title={t('sessions.card.viewCrashLogsTitle')}
           >
@@ -403,6 +427,8 @@ export function SessionCard({
         {(session.status === "stopped" || session.status === "error") && (
           <button
             onClick={() => onDelete(session.id)}
+              data-vmlx-control="session-card-delete"
+              data-vmlx-session-id={session.id}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
           >
             {t('sessions.card.delete')}

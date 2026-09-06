@@ -132,6 +132,7 @@ export function ImageTopBar({
         {sidebarCollapsed && (
           <button
             onClick={onToggleSidebar}
+            data-vmlx-control="image-toggle-sidebar"
             className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors mr-1"
             title={t('image.topbar.historyTitle')}
           >
@@ -143,6 +144,7 @@ export function ImageTopBar({
         <div className="relative" ref={pickerRef}>
           <button
             onClick={() => !generating && setShowPicker(!showPicker)}
+            data-vmlx-control="image-switch-model"
             disabled={generating}
             className={`flex items-center gap-1 text-sm font-medium transition-colors ${generating ? 'opacity-50 cursor-not-allowed' : 'hover:text-primary'}`}
             title={generating ? t('image.topbar.cannotSwitchTitle') : t('image.topbar.switchModelTitle')}
@@ -192,6 +194,7 @@ export function ImageTopBar({
               {/* Custom / Browse */}
               <button
                 onClick={() => { setShowPicker(false); onChangeModel() }}
+                data-vmlx-control="image-browse-custom"
                 className="w-full text-left px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
               >
                 {t('image.topBar.browseCustomModel')}
@@ -234,6 +237,7 @@ export function ImageTopBar({
       <div className="flex items-center gap-1">
         <button
           onClick={onLogs}
+          data-vmlx-control="image-logs"
           className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
           title={t('image.topbar.logsTitle')}
         >
@@ -241,6 +245,7 @@ export function ImageTopBar({
         </button>
         <button
           onClick={onSettings}
+          data-vmlx-control="image-settings"
           className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
           title={t('image.topbar.settingsTitle')}
         >
@@ -249,6 +254,7 @@ export function ImageTopBar({
         {(status === 'running' || status === 'starting') && (
           <button
             onClick={onStop}
+            data-vmlx-control="image-stop"
             className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-destructive transition-colors"
             title={status === 'starting' ? t('image.topbar.cancelLoadingTitle') : t('image.topbar.stopServerTitle')}
           >
@@ -258,6 +264,7 @@ export function ImageTopBar({
         {status === 'error' && (
           <button
             onClick={onChangeModel}
+            data-vmlx-control="image-retry"
             className="p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
             title={t('image.topbar.retryTitle')}
           >

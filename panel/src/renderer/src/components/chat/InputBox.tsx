@@ -261,6 +261,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <div className="flex items-center gap-1">
           <button
             onClick={() => fileInputRef.current?.click()}
+            data-vmlx-control="chat-attach"
             disabled={disabled && !loading}
             className="p-2 rounded-lg hover:bg-accent disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
             title={t('chat.input.attachTitle')}
@@ -275,6 +276,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
           />
         </div>
         <textarea
+          data-vmlx-control="chat-composer"
           ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -288,6 +290,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         {loading ? (
           <button
             onClick={onAbort}
+            data-vmlx-control="chat-stop"
             className="p-2.5 bg-destructive text-destructive-foreground rounded-xl hover:bg-destructive/90 transition-colors flex-shrink-0"
             title={t('chat.input.stopTitle')}
           >
@@ -296,6 +299,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         ) : (
           <button
             onClick={handleSend}
+            data-vmlx-control="chat-send"
             disabled={disabled || (!message.trim() && attachments.length === 0)}
             className="p-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 disabled:opacity-30 transition-colors flex-shrink-0"
             title={t('chat.input.sendTitle')}
