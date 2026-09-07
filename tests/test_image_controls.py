@@ -181,8 +181,9 @@ def test_derived_image_files_are_released_after_preprocessing_on_every_path(tmp_
     r._derived_media_files = [str(f1), str(f2)]
     assert g._release_derived_media_files(r) == 2 and not f1.exists() and not (tmp_path / "d").exists() and r._derived_media_files == []
     assert g._release_derived_media_files(Req()) == 0  # nothing owned: no-op
-    src = inspect.getsource(g.MLLMBatchGenerator._preprocess_request)
-    assert "try:" in src and "finally:" in src and "_release_derived_media_files(request)" in src and "_preprocess_request_inner" in src
+    src = inspect.getsource(g.MLLMBatchGenerator._process_prompts)
+    call = src.index("self._preprocess_request(req)")
+    assert src.index("finally:", call) < src.index("_release_derived_media_files(req)", call) < call + 6000
     helper = inspect.getsource(g.MLLMBatchGenerator._apply_image_controls)
     assert "request._derived_media_files = derived" in helper and "factor=" in helper
 

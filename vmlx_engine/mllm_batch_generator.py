@@ -8423,15 +8423,6 @@ class MLLMBatchGenerator:
         return False
 
     def _preprocess_request(self, request: MLLMBatchRequest) -> None:
-        """Tokenize + process media for one request, then release every
-        request-owned derived media file (bounded image copies) whether the
-        processor consumed it, rejected the request or raised."""
-        try:
-            self._preprocess_request_inner(request)
-        finally:
-            _release_derived_media_files(request)
-
-    def _preprocess_request_inner(self, request: MLLMBatchRequest) -> None:
         """
         Preprocess a single MLLM request (vision encoding).
 
@@ -13152,6 +13143,11 @@ class MLLMBatchGenerator:
                     )
                 )
                 continue
+            finally:
+                # request-owned bounded image copies are consumed by the
+                # processor inside _preprocess_request; release them whether it
+                # returned, rejected the request or raised
+                _release_derived_media_files(req)
             # Save full token list BEFORE cache fetch can mutate req.input_ids.
             # Used later for SSM state cache keying (must be consistent with fetch key).
             _all_tokens = (
