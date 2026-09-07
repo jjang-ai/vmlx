@@ -128,7 +128,7 @@ def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
     assert fb.index("except MediaControlsUnmeetableError:\n                    raise") < fb.index("video frame fallback failed; using native video path")
     src = open(g.__file__).read()
     assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video for {request.request_id}: {e}\")" in src
-    i = src.index("except MediaControlsUnmeetableError as strict_err:")
+    i = src.index("except (MediaControlsUnmeetableError, MediaInputError) as strict_err:")
     block = src[i:src.index("continue", i)]
     assert "error_code=MediaControlsUnmeetableError.code," in block and "strict_err.prompt_tokens" not in block
 
