@@ -130,7 +130,7 @@ def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
     assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video for {request.request_id}: {e}\")" in src
     i = src.index("except (MediaControlsUnmeetableError, MediaInputError) as strict_err:")
     block = src[i:src.index("continue", i)]
-    assert "error_code=MediaControlsUnmeetableError.code," in block and "strict_err.prompt_tokens" not in block
+    assert "error_code=type(strict_err).code," in block and "strict_err.prompt_tokens" not in block
 
 
 def test_two_images_with_the_same_basename_get_exclusive_output_files(tmp_path):
