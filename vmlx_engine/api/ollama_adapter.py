@@ -580,6 +580,12 @@ def _openai_stream_error_to_ollama(chunk: dict[str, Any]) -> str | None:
     error = chunk.get("error")
     if isinstance(error, dict):
         message = error.get("message") or error.get("detail") or error.get("type")
+        # Ollama's row carries one string: keep the typed code in front of the
+        # message so a client can still tell a strict media-control rejection
+        # (media_controls_unmeetable) from a prompt-length or server failure.
+        code = error.get("code")
+        if code and message and error.get("type") == "invalid_request_error" and str(code) not in str(message):
+            message = f"{code}: {message}"
     else:
         message = error
     if message is None:

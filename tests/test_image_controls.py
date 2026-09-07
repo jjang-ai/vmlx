@@ -185,3 +185,20 @@ def test_derived_image_files_are_released_after_preprocessing_on_every_path(tmp_
     assert "try:" in src and "finally:" in src and "_release_derived_media_files(request)" in src and "_preprocess_request_inner" in src
     helper = inspect.getsource(g.MLLMBatchGenerator._apply_image_controls)
     assert "request._derived_media_files = derived" in helper and "factor=" in helper
+
+
+def test_strict_rejection_is_typed_on_every_transport_lane():
+    """Prepackage audit item 5 + live 4S receipt at 8670635f: only chat JSON returned the typed 400; chat stream,
+    Responses, Anthropic and Ollama returned 200 with an untyped error or an empty answer (Anthropic: 500)."""
+    from vmlx_engine import server
+    from vmlx_engine.api import ollama_adapter
+
+    src = open(server.__file__).read()
+    assert "@app.exception_handler(MediaControlsUnmeetableError)" in src
+    assert src.count("except MediaControlsUnmeetableError as e:") >= 7  # 4 JSON sites + 3 streaming lanes
+    assert src.count('"code": MediaControlsUnmeetableError.code,') >= 4
+    assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
+    assert '**({"code": _e["code"]} if _e.get("code") else {})' in src
+    row = ollama_adapter._openai_stream_error_to_ollama({"error": {"message": "budget cannot be met", "type": "invalid_request_error", "code": "media_controls_unmeetable"}})
+    assert row == "media_controls_unmeetable: budget cannot be met"
+    assert ollama_adapter._openai_stream_error_to_ollama({"error": "plain"}) == "plain"

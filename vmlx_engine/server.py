@@ -6197,6 +6197,13 @@ async def _prompt_too_long_handler(request, exc):
     return _prompt_too_long_response_from_error(exc)
 
 
+@app.exception_handler(MediaControlsUnmeetableError)
+async def _media_controls_unmeetable_handler(request, exc):
+    """A strict media-control rejection is a 400 on every JSON door, however
+    deep it was raised (live: the Anthropic lane surfaced it as a 500)."""
+    return _media_controls_unmeetable_response_from_error(exc)
+
+
 security = HTTPBearer(auto_error=False)
 
 
@@ -16240,6 +16247,22 @@ async def create_anthropic_message(
             from starlette.responses import JSONResponse as _JR
             if isinstance(cc, _JR):
                 cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
+                if int(getattr(cc, "status_code", 200) or 200) >= 400 and isinstance(cc_dict.get("error"), dict):
+                    # a typed rejection keeps its status and code in the
+                    # Anthropic error envelope (live: a strict media-control
+                    # rejection came back as a 500 server_error)
+                    _e = cc_dict["error"]
+                    return _JR(
+                        status_code=int(cc.status_code),
+                        content={
+                            "type": "error",
+                            "error": {
+                                "type": _e.get("type") or "invalid_request_error",
+                                "message": _e.get("message") or "request rejected",
+                                **({"code": _e["code"]} if _e.get("code") else {}),
+                            },
+                        },
+                    )
                 return _JR(
                     content=to_anthropic_response(cc_dict, resolved_name)
                 )
@@ -17188,6 +17211,23 @@ async def ollama_chat(fastapi_request: Request):
     if not is_streaming:
         _ollama_started_ns = time.perf_counter_ns()
         result = await create_chat_completion(chat_req, fastapi_request)
+        # A typed rejection from the chat handler (4xx JSONResponse) keeps
+        # its status on the Ollama door as Ollama's {"error": "..."} row;
+        # live it was flattened into an empty 200 answer.
+        if hasattr(result, "body") and int(getattr(result, "status_code", 200) or 200) >= 400:
+            try:
+                _err = json.loads(result.body).get("error")
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                _err = None
+            if isinstance(_err, dict):
+                _msg = _err.get("message") or _err.get("type") or "request rejected"
+                _code = _err.get("code")
+                _msg = f"{_code}: {_msg}" if _code and str(_code) not in str(_msg) else _msg
+            else:
+                _msg = str(_err or "request rejected")
+            from starlette.responses import JSONResponse as _OllamaJR
+
+            return _OllamaJR(status_code=int(result.status_code), content={"error": _msg})
         # Convert Pydantic response to dict
         if hasattr(result, "model_dump"):
             result_dict = result.model_dump(exclude_none=True)
@@ -24114,6 +24154,19 @@ async def stream_completions_multi(
         # PrefillAdmissionError rides along: same class of client error (the
         # device cannot serve this context), and the body below uses only
         # str(e), so it needs no PromptTooLongError-specific fields.
+        except MediaControlsUnmeetableError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(prompt_request_id)
+            error_data = {
+                "id": response_id,
+                "object": "text_completion",
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "code": MediaControlsUnmeetableError.code,
+                },
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
         except (PromptTooLongError, PrefillAdmissionError) as e:
             if hasattr(engine, "abort_request"):
                 await engine.abort_request(prompt_request_id)
@@ -25637,6 +25690,21 @@ async def stream_chat_completion(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
+    except MediaControlsUnmeetableError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        error_data = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "error": {
+                "message": str(e),
+                "type": "invalid_request_error",
+                "code": MediaControlsUnmeetableError.code,
+            },
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
     except (PromptTooLongError, PrefillAdmissionError) as e:
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
@@ -27858,6 +27926,20 @@ async def stream_responses_api(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
+    except MediaControlsUnmeetableError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(e),
+                    "code": MediaControlsUnmeetableError.code,
+                },
+            },
+        )
     except (PromptTooLongError, PrefillAdmissionError) as e:
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
