@@ -7184,6 +7184,7 @@ def get_engine() -> BaseEngine:
 
 from .request_diagnostics import DIAGNOSTICS as _REQUEST_DIAGNOSTICS  # noqa: E402
 from .request_diagnostics import note_request_id as _note_request_diagnostics_id  # noqa: E402
+from .request_diagnostics import take as _rd_take  # noqa: E402
 
 # One bucket for every per-request diagnostic that reaches ``warnings``:
 # dropped tool calls (recorded here) and the engine's effective video settings
@@ -7216,12 +7217,12 @@ def _record_tool_call_drop(diagnostic: str) -> None:
 
 
 def _take_tool_call_drop_diagnostics() -> list[str]:
-    """Return accumulated diagnostics and reset the capture bucket."""
-    bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
-    if not bucket:
-        return []
-    _TOOL_CALL_DROP_DIAGNOSTICS.set([])
-    return bucket
+    """Return accumulated diagnostics and reset the capture bucket.
+
+    Delegates to the shared module so entries recorded by request id off this
+    context (the engine's effective video settings) are drained as well.
+    """
+    return _rd_take()
 
 
 def _parse_tool_calls_with_parser(

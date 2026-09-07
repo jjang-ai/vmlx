@@ -638,6 +638,11 @@ def test_effective_video_settings_reach_the_response_warnings_in_both_lanes():
     from vmlx_engine import mllm_batch_generator, request_diagnostics
 
     assert server._TOOL_CALL_DROP_DIAGNOSTICS is request_diagnostics.DIAGNOSTICS
+    # 1e9214e5 aliased the bucket but the server's take still read it directly (live: 17 recorded lines, empty warnings)
+    request_diagnostics.DIAGNOSTICS.set(None); request_diagnostics.note_request_id("chatcmpl-take")
+    request_diagnostics.record_for("chatcmpl-take", "video_controls: via server take")
+    assert server._take_tool_call_drop_diagnostics() == ["video_controls: via server take"]
+    request_diagnostics.note_request_id(None)
     fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
     assert "fallback_plan_diagnostics(" in fb and "record_for(request_id, _msg)" in fb
     gen = inspect.getsource(batched.BatchedEngine.generate)
