@@ -12232,6 +12232,12 @@ class MLLMBatchGenerator:
                     output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
                     logger.info("restore fingerprint WARM(text-path) first-token logits for %s: %s", request.request_id, _diag_logits_fp(output))
+                    _total = int(getattr(request, "_cached_tokens", 0) or 0) + int(seq_len)
+                    logger.info(
+                        "restore fingerprint WARM(text-path) cache-after-tail for %s at %d: %s",
+                        request.request_id, _total,
+                        _diag_cache_fingerprint(cache, self._hybrid_kv_positions, _total),
+                    )
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -12598,6 +12604,11 @@ class MLLMBatchGenerator:
                     )
             if _diag_fingerprints_enabled() and clean_boundary > 0 and end == seq_len and output is not None:
                 logger.info("restore fingerprint COLD first-token logits for %s: %s", getattr(request, "request_id", "?"), _diag_logits_fp(output))
+                logger.info(
+                    "restore fingerprint COLD cache-after-tail for %s at %d: %s",
+                    getattr(request, "request_id", "?"), seq_len,
+                    _diag_cache_fingerprint(cache, self._hybrid_kv_positions, seq_len),
+                )
             if end == seq_len and output is not None:
                 # The final chunk is the only logits payload the caller uses.
                 # Keep just that token and realize it before clearing MLX's
