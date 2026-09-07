@@ -81,11 +81,13 @@ describe('keyboard interaction on the server settings drawer', () => {
 describe('every collapsible settings section carries its contract key', () => {
   it('each Section bound to expandedSections.<key> declares sectionKey="<key>"', () => {
     const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionConfigForm.tsx'), 'utf8')
-    const sections = src.match(/<Section [^>]*?expanded=\{expandedSections\.[a-zA-Z]+\}[^>]*>/gs) || []
+    // one Section opening per line; arrow functions inside the tag contain '>' so match by line, not by tag
+    const sections = src.split('\n').filter(l => l.includes('<Section ') && l.includes('expandedSections.'))
     expect(sections.length).toBeGreaterThan(10)
     for (const sec of sections) {
       const key = sec.match(/expandedSections\.([a-zA-Z]+)/)![1]
       expect(sec, `section ${key}`).toContain(`sectionKey="${key}"`)
+      expect(sec.split(`sectionKey="${key}"`).length, `section ${key} declared once`).toBe(2)
     }
   })
 })
