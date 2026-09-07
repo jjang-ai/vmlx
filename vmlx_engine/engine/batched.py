@@ -2822,7 +2822,7 @@ class BatchedEngine(BaseEngine):
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
-            request_id=request_id,
+            request_id=kwargs.get("request_id"),
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)
