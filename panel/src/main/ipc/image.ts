@@ -687,19 +687,6 @@ export function registerImageHandlers(): void {
           // imageMode, imageQuantize, and servedModelName are stored in config fields
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
           const mode = imageMode || 'generate'
-          // Edit classes at 4-bit and below produce unusable output (measured
-          // through mflux directly, see shared/imageLocalModel.ts). Start it
-          // anyway (the user chose it) but say so, and offer the higher-precision
-          // sibling variant when the folder has one.
-          let warningCode: string | undefined
-          let warningParams: Record<string, string> | undefined
-          if (mode === 'edit' && localDir?.kind === 'model' && localDir.quantize !== null && localDir.quantize <= 4) {
-            const alt = editPrecisionAlternative(localDir)
-            warningCode = 'editLowPrecision'
-            warningParams = { bits: String(localDir.quantize), alternative: alt ? alt.name : '', alternativePath: alt ? alt.path : '', alternativeBits: alt && alt.quantize !== null ? String(alt.quantize) : '' }
-            console.log(`[IMAGE] Edit class at ${localDir.quantize}-bit: warning issued${alt ? `, alternative ${alt.path}` : ''}`)
-          }
-
           // Look up model definition.
           // mlxstudio#82: use fuzzy resolver (directory basenames like
           // "FLUX.2-klein-9B" or "FLUX.1-dev-mflux-8bit" need more than
@@ -713,6 +700,20 @@ export function registerImageHandlers(): void {
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           if (modelDef && modelDef.id !== modelName) {
             console.log(`[IMAGE] mlxstudio#82: resolved '${modelName}' -> modelDef id=${modelDef.id}, mfluxClass=${modelDef.mfluxClass}, mfluxName=${modelDef.mfluxName}`)
+          }
+          // Low precision on an EDIT class. The measured claim is scoped to the
+          // artifact it was measured on (Qwen-Image-Edit-mflux through mflux
+          // directly: q4 noise + instruction ignored, q8 correct); any other
+          // edit class at <= 4-bit gets a neutral "not measured" note. Start it
+          // either way (the user chose it) and offer the higher-precision
+          // sibling when the folder has one; never switch silently.
+          let warningCode: string | undefined
+          let warningParams: Record<string, string> | undefined
+          if (mode === 'edit' && localDir?.kind === 'model' && localDir.quantize !== null && localDir.quantize <= 4) {
+            const alt = editPrecisionAlternative(localDir)
+            warningCode = mfluxClass === 'QwenImageEdit' ? 'editLowPrecision' : 'editLowPrecisionUntested'
+            warningParams = { bits: String(localDir.quantize), alternative: alt ? alt.name : '', alternativePath: alt ? alt.path : '', alternativeBits: alt && alt.quantize !== null ? String(alt.quantize) : '' }
+            console.log(`[IMAGE] Edit class ${mfluxClass || '(unknown)'} at ${localDir.quantize}-bit: ${warningCode}${alt ? `, alternative ${alt.path}` : ''}`)
           }
 
           const config: Partial<ServerConfig> = {

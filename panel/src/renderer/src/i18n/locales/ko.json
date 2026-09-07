@@ -1915,8 +1915,9 @@
         "notDownloaded": "모델 \"{model}\"이(가) 다운로드되지 않았습니다. 먼저 다운로드 버튼을 사용하세요."
       },
       "warnings": {
-        "editLowPrecision": "이 편집 모델은 {bits}비트로 실행 중입니다. 테스트한 번들에서 4비트 이하 편집 변형은 노이즈를 반환하고 지시를 무시했으며, 8비트 변형은 올바르게 편집했습니다.",
-        "useAlternative": "{name} 사용"
+        "editLowPrecision": "이 Qwen Image Edit 모델은 {bits}비트로 실행 중입니다. Qwen-Image-Edit-mflux에서 측정한 결과 4비트 변형은 노이즈를 반환하고 지시를 무시했으며, 8비트 변형은 올바르게 편집했습니다.",
+        "useAlternative": "{name} 사용",
+        "editLowPrecisionUntested": "이 편집 모델은 {bits}비트로 실행 중입니다. 이 모델 클래스의 저정밀 편집 출력은 측정되지 않았습니다. 편집 결과에 노이즈가 있으면 더 높은 정밀도의 변형을 사용해 보세요."
       }
     }
   },

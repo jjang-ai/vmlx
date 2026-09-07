@@ -207,7 +207,8 @@ describe('low-precision edit variants: warn and offer the better sibling', () =>
   })
   it('the start handler warns on a <= 4-bit edit class and the tab offers the alternative', () => {
     const src = readFileSync(join(__dirname, '..', 'src', 'main', 'ipc', 'image.ts'), 'utf8')
-    expect(src).toContain("warningCode = 'editLowPrecision'")
+    // the measured claim is scoped to the class it was measured on; other edit classes get the neutral note
+    expect(src).toContain("warningCode = mfluxClass === 'QwenImageEdit' ? 'editLowPrecision' : 'editLowPrecisionUntested'")
     expect(src).toContain('localDir.quantize <= 4')
     const tab = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'image', 'ImageTab.tsx'), 'utf8')
     expect(tab).toContain('data-vmlx-control="image-use-alternative"')
@@ -216,6 +217,8 @@ describe('low-precision edit variants: warn and offer the better sibling', () =>
     for (const loc of ['en', 'es', 'ja', 'ko', 'zh']) {
       const w = JSON.parse(readFileSync(join(locales, `${loc}.json`), 'utf8')).image.server.warnings
       expect(w.editLowPrecision).toContain('{bits}')
+      expect(w.editLowPrecision).toContain('Qwen')
+      expect(w.editLowPrecisionUntested).toContain('{bits}')
       expect(w.useAlternative).toContain('{name}')
     }
   })
@@ -243,5 +246,7 @@ describe('a precision variant folder resolves its model through the bundle root'
     const tab = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'image', 'ImageTab.tsx'), 'utf8')
     expect(tab).toContain("handleModelSelect(alt.alternativePath!, alt.alternativeBits, 'edit', serverSettingsRef.current)")
     expect(tab).toContain("serverSettingsRef.current = serverSettings")
+    // a switch over a live server re-arms readiness on the new session (the old session's stopped event had left the tab at Stopped)
+    expect(tab.split("serverSettingsRef.current = serverSettings")[1]).toContain("setServerStatus('starting')")
   })
 })

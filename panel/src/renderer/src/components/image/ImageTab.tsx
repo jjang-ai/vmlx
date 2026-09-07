@@ -77,7 +77,7 @@ export function ImageTab() {
   const [generations, setGenerations] = useState<ImageGenerationInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   // Non-fatal advisory from the start handler (e.g. low-precision edit variant) with an optional alternative to start instead.
-  const [warning, setWarning] = useState<{ text: string; alternativePath?: string; alternativeName?: string; alternativeBits?: number } | null>(null)
+  const [warning, setWarning] = useState<{ text: string; tone: 'warning' | 'info'; alternativePath?: string; alternativeName?: string; alternativeBits?: number } | null>(null)
   const [quantize, setQuantize] = useState<number>(4)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -382,10 +382,19 @@ export function ImageTab() {
         serverSettingsRef.current = serverSettings
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
+        // Switching over a live server: the previous session's stopped event
+        // arrived while this tab still tracked that session and left the
+        // status at 'stopped', and the new session's ready event fired before
+        // the tab learned its id. Re-arm readiness on the new session: the
+        // health poll (or a later ready event) promotes it to 'running'.
+        // Seen live: q4 -> "Use q8" left the tab at Stopped with a disabled
+        // composer while the q8 server answered /health.
+        setServerStatus('starting')
         if (result.warningCode) {
           const p = result.warningParams || {}
           setWarning({
             text: t(`image.server.warnings.${result.warningCode}`, { ...p, defaultValue: result.warningCode }),
+            tone: result.warningCode === 'editLowPrecisionUntested' ? 'info' : 'warning',
             alternativePath: p.alternativePath || undefined,
             alternativeName: p.alternative || undefined,
             alternativeBits: p.alternativeBits ? Number(p.alternativeBits) : undefined,
@@ -651,7 +660,7 @@ export function ImageTab() {
         )}
 
         {warning && (
-          <div role="alert" data-vmlx-tone="warning" data-vmlx-control="image-warning" className="mx-4 mt-2 px-3 py-2 bg-warning/10 border border-warning/30 rounded-md text-sm text-warning flex items-center gap-3">
+          <div role="alert" data-vmlx-tone={warning.tone} data-vmlx-control="image-warning" className={`mx-4 mt-2 px-3 py-2 rounded-md text-sm flex items-center gap-3 ${warning.tone === 'info' ? 'bg-primary/10 border border-primary/30 text-foreground' : 'bg-warning/10 border border-warning/30 text-warning'}`}>
             <span className="flex-1">{warning.text}</span>
             {warning.alternativePath && (
               <button

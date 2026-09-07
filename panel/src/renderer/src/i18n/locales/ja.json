@@ -1915,8 +1915,9 @@
         "notDownloaded": "モデル \"{model}\" はダウンロードされていません。先にダウンロードボタンを使用してください。"
       },
       "warnings": {
-        "editLowPrecision": "この編集モデルは {bits} ビットで動作しています。テストしたバンドルでは 4 ビット以下の編集バリアントはノイズを返し指示を無視しましたが、8 ビットのバリアントは正しく編集できました。",
-        "useAlternative": "{name} を使用"
+        "editLowPrecision": "この Qwen Image Edit モデルは {bits} ビットで動作しています。Qwen-Image-Edit-mflux での測定では、4 ビットのバリアントはノイズを返して指示を無視し、8 ビットのバリアントは正しく編集できました。",
+        "useAlternative": "{name} を使用",
+        "editLowPrecisionUntested": "この編集モデルは {bits} ビットで動作しています。このモデルクラスでは低精度の編集出力を測定していません。編集結果にノイズが出る場合は、より高精度のバリアントをお試しください。"
       }
     }
   },

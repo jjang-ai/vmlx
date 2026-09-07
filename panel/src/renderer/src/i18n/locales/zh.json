@@ -1915,8 +1915,9 @@
         "notDownloaded": "模型 \"{model}\" 尚未下载。请先使用下载按钮。"
       },
       "warnings": {
-        "editLowPrecision": "此编辑模型以 {bits} 位运行。在测试的模型包中，4 位及以下的编辑变体返回噪点并忽略指令；8 位变体能正确编辑。",
-        "useAlternative": "使用 {name}"
+        "editLowPrecision": "此 Qwen Image Edit 模型以 {bits} 位运行。在 Qwen-Image-Edit-mflux 上的测量结果：4 位变体返回噪点并忽略指令；8 位变体能正确编辑。",
+        "useAlternative": "使用 {name}",
+        "editLowPrecisionUntested": "此编辑模型以 {bits} 位运行。尚未测量此模型类别的低精度编辑输出；如果编辑结果出现噪点，请尝试更高精度的变体。"
       }
     }
   },

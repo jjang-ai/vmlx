@@ -1915,8 +1915,9 @@
         "notDownloaded": "Model \"{model}\" not downloaded. Use the Download button first."
       },
       "warnings": {
-        "editLowPrecision": "This edit model runs at {bits}-bit. On the tested bundle, 4-bit and lower edit variants returned noise and ignored the instruction; the 8-bit variant produced correct edits.",
-        "useAlternative": "Use {name}"
+        "editLowPrecision": "This Qwen Image Edit model runs at {bits}-bit. Measured on Qwen-Image-Edit-mflux: the 4-bit variant returned noise and ignored the instruction; the 8-bit variant produced correct edits.",
+        "useAlternative": "Use {name}",
+        "editLowPrecisionUntested": "This edit model runs at {bits}-bit. Low-precision edit output has not been measured for this model class; if edits come out noisy, try a higher-precision variant."
       }
     }
   },

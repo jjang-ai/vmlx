@@ -1915,8 +1915,9 @@
         "notDownloaded": "El modelo \"{model}\" no está descargado. Usa primero el botón Descargar."
       },
       "warnings": {
-        "editLowPrecision": "Este modelo de edición funciona a {bits} bits. En el paquete probado, las variantes de edición de 4 bits o menos devolvieron ruido e ignoraron la instrucción; la variante de 8 bits produjo ediciones correctas.",
-        "useAlternative": "Usar {name}"
+        "editLowPrecision": "Este modelo Qwen Image Edit funciona a {bits} bits. Medido en Qwen-Image-Edit-mflux: la variante de 4 bits devolvió ruido e ignoró la instrucción; la variante de 8 bits produjo ediciones correctas.",
+        "useAlternative": "Usar {name}",
+        "editLowPrecisionUntested": "Este modelo de edición funciona a {bits} bits. La salida de edición en baja precisión no se ha medido para esta clase de modelo; si las ediciones salen con ruido, prueba una variante de mayor precisión."
       }
     }
   },
