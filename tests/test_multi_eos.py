@@ -201,3 +201,20 @@ def test_collect_multi_eos_ids_ignores_malformed_jang_stop_ids(tmp_path: Path):
     )
 
     assert resolved == [1, 7]
+
+
+def test_bundle_declared_stop_ids_reads_both_spellings_in_order(tmp_path: Path):
+    """The bundle's declared stop set is one contract with two spellings.
+
+    Gemma-4 declares ``eos_token_id: [1, 106, 50]`` — ``<eos>``, ``<turn|>``
+    and ``<|tool_response>``, the tool-role opener the assistant must never
+    produce. Both lanes read it through this helper; the jang spelling is
+    merged after it, duplicates and malformed entries dropped.
+    """
+    from vmlx_engine.utils.multi_eos import bundle_declared_stop_ids
+
+    _write_json(tmp_path / "generation_config.json", {"eos_token_id": [1, 106, 50, True, "x"]})
+    _write_json(tmp_path / "jang_config.json", {"chat": {"stop_token_ids": [50, 7, -1, None]}})
+
+    assert bundle_declared_stop_ids(str(tmp_path)) == [1, 106, 50, 7]
+    assert bundle_declared_stop_ids(str(tmp_path / "missing")) == []

@@ -2554,6 +2554,23 @@ class MLLMScheduler:
                             pass
             except Exception:
                 pass
+            # The bundle's own declared stop set (generation_config eos list /
+            # jang_config chat.stop_token_ids). The text lane has always
+            # honoured it; this lane only read the tokenizer and the registry
+            # strings, so Gemma-4's declared <|tool_response> (id 50) never
+            # stopped a tool-call turn here and every call ran to max_tokens.
+            try:
+                from .utils.multi_eos import bundle_declared_stop_ids
+                declared = bundle_declared_stop_ids(model_name)
+                added = [tid for tid in declared if tid not in stop_tokens]
+                stop_tokens.update(declared)
+                if added:
+                    logger.info(
+                        f"MLLM stop tokens: bundle-declared ids {added} added "
+                        f"(tokenizer/registry set {sorted(stop_tokens - set(added))})"
+                    )
+            except Exception:
+                pass
 
         return stop_tokens
 
