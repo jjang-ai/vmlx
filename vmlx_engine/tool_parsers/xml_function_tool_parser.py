@@ -278,7 +278,7 @@ class XMLFunctionToolParser(ToolParser):
         if tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=True,
-                tool_calls=tool_calls,
+                tool_calls=self._coerce_nullable_arguments(tool_calls, request),
                 content=cleaned_text if cleaned_text else None,
             )
         return ExtractedToolCallInformation(
@@ -286,6 +286,69 @@ class XMLFunctionToolParser(ToolParser):
             tool_calls=[],
             content=model_output,
         )
+
+    # XML parameter values are text: a model writes ``None``/``null`` for a
+    # parameter the schema declares nullable, and json.loads keeps ``None`` as
+    # the STRING "None" (live 2026-09-07, Qwen3.8-27B: search(path="None")
+    # searched a directory literally named None). Only a schema that allows
+    # null turns those spellings into JSON null; a plain string field keeps
+    # the text the model wrote.
+    _NULL_SPELLINGS = frozenset({"none", "null", "nil"})
+
+    @classmethod
+    def _schema_allows_null(cls, prop: Any) -> bool:
+        if not isinstance(prop, dict):
+            return False
+        if prop.get("nullable") is True:
+            return True
+        typ = prop.get("type")
+        if typ == "null":
+            return True
+        if isinstance(typ, (list, tuple)) and "null" in typ:
+            return True
+        for key in ("anyOf", "oneOf"):
+            options = prop.get(key)
+            if isinstance(options, list) and any(
+                isinstance(o, dict) and o.get("type") == "null" for o in options
+            ):
+                return True
+        return False
+
+    def _coerce_nullable_arguments(
+        self, tool_calls: list[dict[str, Any]], request: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        if not request:
+            return tool_calls
+        out: list[dict[str, Any]] = []
+        for call in tool_calls:
+            schema = self._function_schema_for_tool(request, str(call.get("name") or ""))
+            props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+            raw = call.get("arguments")
+            if not isinstance(props, dict) or not isinstance(raw, str):
+                out.append(call)
+                continue
+            try:
+                args = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                out.append(call)
+                continue
+            if not isinstance(args, dict):
+                out.append(call)
+                continue
+            changed = False
+            for key, value in list(args.items()):
+                if (
+                    isinstance(value, str)
+                    and value.strip().lower() in self._NULL_SPELLINGS
+                    and self._schema_allows_null(props.get(key))
+                ):
+                    args[key] = None
+                    changed = True
+            if changed:
+                call = dict(call)
+                call["arguments"] = json.dumps(args, ensure_ascii=False)
+            out.append(call)
+        return out
 
     def extract_tool_calls_streaming(
         self,

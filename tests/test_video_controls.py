@@ -500,12 +500,17 @@ class TestFrameFallbackPlan:
         p = self.plan(None, frames=32, cap=10)
         assert p.num_frames == 10 and p.expected_total is None and p.met is None and p.reason == "no budget"
 
-    def test_explicit_max_pixels_wins_over_the_budget_split(self):
+    def test_explicit_max_pixels_fixes_the_frame_size_and_the_budget_bounds_the_count(self):
+        """Contract change (successor, 2026-09-07): an explicit max_pixels used to make the plan IGNORE the token
+        budget (16 frames x 91 tokens = 1456 under a budget of 512, and strict mode had nothing to reject — live on
+        the 27B fallback). The explicit size still wins per frame; the budget now decides how many frames fit."""
         from vmlx_engine.video_controls import VideoControls, plan_fallback_frames
 
         c = VideoControls(max_pixels=100_000, token_budget=512, token_pixels=2048)
         p = plan_fallback_frames(c, frames_available=16, frame_cap=20, **self.GEOM)
-        assert p.num_frames == 16 and p.per_frame_max_pixels == 100_000 and p.reason == "explicit max_pixels"
+        assert p.per_frame_max_pixels == 100_000 and p.expected_tokens_per_frame is not None
+        assert p.num_frames == 512 // p.expected_tokens_per_frame and p.expected_total <= 512 and p.met is True
+        assert p.reason.startswith("frames reduced 16->")
 
     def test_frame_tokens_model_the_processor_floor_after_our_bound(self):
         from vmlx_engine.video_controls import fallback_frame_tokens, smart_resize_dims
@@ -686,3 +691,27 @@ def test_server_notes_the_engine_request_id_before_every_engine_hand_off():
     for pos in hand_offs:
         window = src[max(0, pos - 4000):pos]
         assert "_note_request_diagnostics_id(response_id)" in window, f"hand-off at {pos} without a noted request id"
+
+
+def test_fallback_plan_honours_the_budget_under_an_explicit_pixel_bound():
+    """Live 2026-09-07 (Qwen3.8-27B frame fallback, strict): with video_max_pixels AND video_token_budget the plan
+    returned "explicit max_pixels" with no token estimate, so a budget of 2 was accepted with 8 full frames and strict
+    mode had nothing to reject. The explicit bound fixes each frame's size; the budget decides how many frames fit."""
+    from vmlx_engine.video_controls import VideoControls, plan_fallback_frames
+
+    c = VideoControls(max_pixels=65536, token_budget=2)
+    plan = plan_fallback_frames(c, frames_available=8, frame_cap=8, frame_height=336, frame_width=168, token_pixels=1024, pixel_floor=65536)
+    assert plan.expected_tokens_per_frame is not None and plan.expected_total is not None
+    assert plan.num_frames == 1 and plan.met is False and "below one frame" in plan.reason
+    # a budget that fits some frames reduces the count instead of ignoring the budget
+    tokens = plan.expected_tokens_per_frame
+    c2 = VideoControls(max_pixels=65536, token_budget=tokens * 3)
+    plan2 = plan_fallback_frames(c2, frames_available=8, frame_cap=8, frame_height=336, frame_width=168, token_pixels=1024, pixel_floor=65536)
+    assert plan2.num_frames == 3 and plan2.met is True and plan2.per_frame_max_pixels == 65536
+    # a generous budget keeps every frame at the explicit bound
+    c3 = VideoControls(max_pixels=65536, token_budget=tokens * 100)
+    plan3 = plan_fallback_frames(c3, frames_available=8, frame_cap=8, frame_height=336, frame_width=168, token_pixels=1024, pixel_floor=65536)
+    assert plan3.num_frames == 8 and plan3.met is True and plan3.reason == "budget met at the explicit max_pixels"
+    # explicit bound WITHOUT a budget is unchanged
+    plan4 = plan_fallback_frames(VideoControls(max_pixels=65536), frames_available=8, frame_cap=8, frame_height=336, frame_width=168, token_pixels=1024, pixel_floor=65536)
+    assert plan4.num_frames == 8 and plan4.expected_total is None and plan4.per_frame_max_pixels == 65536 and plan4.reason in ("explicit max_pixels", "no budget")
