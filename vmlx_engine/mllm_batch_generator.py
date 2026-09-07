@@ -130,6 +130,7 @@ from .errors import (
     UnsupportedMediaModalityError,
     VLMImagePrefillBudgetError,
     MediaControlsUnmeetableError,
+    MediaInputError,
 )
 from .vision_embedding_cache import VisionEmbeddingCache
 from .cache_key import CACHE_EXTRA_SCOPES_KEY, scope_cache_extra_key
@@ -8517,7 +8518,11 @@ class MLLMBatchGenerator:
                 except MediaControlsUnmeetableError:
                     raise
                 except Exception as e:
-                    logger.warning(f"Failed to process image: {e}")
+                    # never a silent drop into a text-only answer
+                    logger.warning(f"Failed to process image for {request.request_id}: {e}")
+                    raise MediaInputError(
+                        f"image input cannot be used: {e}", request_id=request.request_id
+                    ) from e
             if request.images and getattr(request, "image_token_budget", None) is not None:
                 from .image_controls import image_token_budget_support
                 from .request_diagnostics import record_for
@@ -8579,7 +8584,10 @@ class MLLMBatchGenerator:
                 except MediaControlsUnmeetableError:
                     raise
                 except Exception as e:
-                    logger.warning(f"Failed to process video: {e}")
+                    logger.warning(f"Failed to process video for {request.request_id}: {e}")
+                    raise MediaInputError(
+                        f"video input cannot be used: {e}", request_id=request.request_id
+                    ) from e
             if request.videos and not video_inputs:
                 raise ValueError("All video inputs failed to process")
 
@@ -13102,7 +13110,7 @@ class MLLMBatchGenerator:
                 trace.start("preprocess")
                 self._preprocess_request(req)
                 trace.stop("preprocess")
-            except MediaControlsUnmeetableError as strict_err:
+            except (MediaControlsUnmeetableError, MediaInputError) as strict_err:
                 trace.stop("preprocess")
                 logger.info(
                     "Rejected VLM prompt for %s before cache lookup/store: %s",
@@ -13117,7 +13125,7 @@ class MLLMBatchGenerator:
                         logprobs=mx.zeros((1,)),
                         finish_reason="error",
                         error=str(strict_err),
-                        error_code=MediaControlsUnmeetableError.code,
+                        error_code=type(strict_err).code,
                     )
                 )
                 continue
@@ -15657,6 +15665,8 @@ class MLLMBatchGenerator:
                     _err_code = UnsupportedMediaModalityError.code
                 elif isinstance(prefill_err, MediaControlsUnmeetableError):
                     _err_code = MediaControlsUnmeetableError.code
+                elif isinstance(prefill_err, MediaInputError):
+                    _err_code = MediaInputError.code
                 elif isinstance(prefill_err, PromptTooLongError):
                     _err_code = "prompt_too_long"
                 elif isinstance(prefill_err, PrefillAdmissionError):
@@ -15676,6 +15686,7 @@ class MLLMBatchGenerator:
                     VLMImagePrefillBudgetError.code,
                     UnsupportedMediaModalityError.code,
                     MediaControlsUnmeetableError.code,
+                    MediaInputError.code,
                     "prompt_too_long",
                     "prefill_admission_declined",
                 }:

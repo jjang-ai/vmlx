@@ -26,6 +26,7 @@ from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_fo
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
 from ..errors import (
     MediaControlsUnmeetableError,
+    MediaInputError,
     PromptTooLongError,
     UnsupportedMediaModalityError,
     VLMImagePrefillBudgetError,
@@ -254,6 +255,12 @@ def _raise_prompt_too_long_from_output(output: Any) -> None:
             detail,
             request_id=getattr(output, "request_id", None),
         )
+    if getattr(output, "error_code", None) == MediaInputError.code:
+        detail = str(getattr(output, "error", None) or "media input cannot be used")
+        prefix = f"{MediaInputError.__name__}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):]
+        raise MediaInputError(detail, request_id=getattr(output, "request_id", None))
     if getattr(output, "error_code", None) == MediaControlsUnmeetableError.code:
         detail = str(getattr(output, "error", None) or "media controls cannot be honoured as sent")
         prefix = f"{MediaControlsUnmeetableError.__name__}: "

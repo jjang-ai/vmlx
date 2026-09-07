@@ -139,6 +139,7 @@ from .errors import (
     PromptTooLongError,
     UnsupportedMediaModalityError,
     MediaControlsUnmeetableError,
+    MediaInputError,
     VLMImagePrefillBudgetError,
 )
 from .utils.prefill_admission import PrefillAdmissionError
@@ -1199,6 +1200,21 @@ def _media_controls_unmeetable_response_from_error(exc: MediaControlsUnmeetableE
                 "type": "invalid_request_error",
                 "code": MediaControlsUnmeetableError.code,
                 "param": "media_controls_strict",
+            }
+        },
+    )
+
+
+def _media_input_error_response_from_error(exc: MediaInputError):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "message": str(exc),
+                "type": "invalid_request_error",
+                "code": MediaInputError.code,
             }
         },
     )
@@ -6195,6 +6211,12 @@ async def _prefill_admission_declined_handler(request, exc):
 async def _prompt_too_long_handler(request, exc):
     """Same rationale as the admission handler: 413 on every door."""
     return _prompt_too_long_response_from_error(exc)
+
+
+@app.exception_handler(MediaInputError)
+async def _media_input_error_handler(request, exc):
+    """A media part the request cannot use is a 400 on every JSON door."""
+    return _media_input_error_response_from_error(exc)
 
 
 @app.exception_handler(MediaControlsUnmeetableError)
@@ -19120,6 +19142,8 @@ async def create_completion(request: CompletionRequest):
             return _prefill_admission_declined_response(e)
         except VLMImagePrefillBudgetError as e:
             return _vlm_image_prefill_budget_response_from_error(e)
+        except MediaInputError as e:
+            return _media_input_error_response_from_error(e)
         except MediaControlsUnmeetableError as e:
             return _media_controls_unmeetable_response_from_error(e)
         except UnsupportedMediaModalityError as e:
@@ -19969,6 +19993,8 @@ async def create_chat_completion(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaInputError as e:
+        return _media_input_error_response_from_error(e)
     except MediaControlsUnmeetableError as e:
         return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
@@ -21498,8 +21524,6 @@ def _responses_input_to_messages(
                     t = p.get("type")
                     if t == "input_image":
                         # `input_image: {image_url: "data:image/...;base64,..."}`
-                        # OR `input_image: {file_id: "..."}` (not supported,
-                        # left as-is for clear downstream error).
                         url = p.get("image_url")
                         if isinstance(url, dict):
                             url = url.get("url")
@@ -21507,16 +21531,27 @@ def _responses_input_to_messages(
                             normalized.append({"type": "image_url",
                                                "image_url": _drop_none_fields({"url": url})})
                         else:
-                            normalized.append(p)
+                            # a media-typed part with no readable source used
+                            # to pass through and be ignored downstream (the
+                            # request then succeeded text-only)
+                            raise MediaInputError(
+                                "input_image part has no readable source: expected "
+                                "'image_url' (a URL, data: URL or local path); "
+                                f"got keys {sorted(k for k in p if k != 'type')}"
+                            )
                     elif t == "input_video":
-                        url = p.get("video_url") or p.get("file_id")
+                        url = p.get("video_url")
                         if isinstance(url, dict):
                             url = url.get("url")
                         if url:
                             normalized.append({"type": "video_url",
                                                "video_url": _drop_none_fields({"url": url})})
                         else:
-                            normalized.append(p)
+                            raise MediaInputError(
+                                "input_video part has no readable source: expected "
+                                "'video_url' (a URL, data: URL or local path); "
+                                f"got keys {sorted(k for k in p if k != 'type')}"
+                            )
                     elif t == "input_text":
                         # OpenAI Responses uses input_text; chat completions
                         # uses just `text`. Re-tag for consistency.
@@ -23311,6 +23346,8 @@ async def create_response(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaInputError as e:
+        return _media_input_error_response_from_error(e)
     except MediaControlsUnmeetableError as e:
         return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
@@ -24171,7 +24208,7 @@ async def stream_completions_multi(
         # PrefillAdmissionError rides along: same class of client error (the
         # device cannot serve this context), and the body below uses only
         # str(e), so it needs no PromptTooLongError-specific fields.
-        except MediaControlsUnmeetableError as e:
+        except (MediaControlsUnmeetableError, MediaInputError) as e:
             if hasattr(engine, "abort_request"):
                 await engine.abort_request(prompt_request_id)
             error_data = {
@@ -24180,7 +24217,7 @@ async def stream_completions_multi(
                 "error": {
                     "message": str(e),
                     "type": "invalid_request_error",
-                    "code": MediaControlsUnmeetableError.code,
+                    "code": type(e).code,
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
@@ -24207,20 +24244,6 @@ async def stream_completions_multi(
                     "message": str(e),
                     "type": "invalid_request_error",
                     "code": VLMImagePrefillBudgetError.code,
-                },
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
-        except MediaControlsUnmeetableError as e:
-            if hasattr(engine, "abort_request"):
-                await engine.abort_request(prompt_request_id)
-            error_data = {
-                "id": response_id,
-                "object": "text_completion",
-                "error": {
-                    "message": str(e),
-                    "type": "invalid_request_error",
-                    "code": MediaControlsUnmeetableError.code,
-                    "param": "media_controls_strict",
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
@@ -25707,7 +25730,7 @@ async def stream_chat_completion(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
-    except MediaControlsUnmeetableError as e:
+    except (MediaControlsUnmeetableError, MediaInputError) as e:
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
         error_data = {
@@ -25716,7 +25739,7 @@ async def stream_chat_completion(
             "error": {
                 "message": str(e),
                 "type": "invalid_request_error",
-                "code": MediaControlsUnmeetableError.code,
+                "code": type(e).code,
             },
         }
         yield f"data: {json.dumps(error_data)}\n\n"
@@ -27943,7 +27966,7 @@ async def stream_responses_api(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
-    except MediaControlsUnmeetableError as e:
+    except (MediaControlsUnmeetableError, MediaInputError) as e:
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
         yield _sse(
@@ -27953,7 +27976,7 @@ async def stream_responses_api(
                 "error": {
                     "type": "invalid_request_error",
                     "message": str(e),
-                    "code": MediaControlsUnmeetableError.code,
+                    "code": type(e).code,
                 },
             },
         )

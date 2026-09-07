@@ -86,7 +86,7 @@ def test_strict_error_maps_to_a_400_on_every_lane_and_never_a_500():
     from vmlx_engine.engine import batched
 
     src = open(server.__file__).read()
-    assert src.count("except MediaControlsUnmeetableError as e:") >= 4
+    assert src.count("except MediaControlsUnmeetableError as e:") + src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") >= 4
     assert "_media_controls_unmeetable_response_from_error" in src and 'status_code=400' in inspect.getsource(server._media_controls_unmeetable_response_from_error)
     assert "MediaControlsUnmeetableError.code" in inspect.getsource(batched._raise_prompt_too_long_from_output)
     assert issubclass(MediaControlsUnmeetableError, ValueError) and MediaControlsUnmeetableError.code == "media_controls_unmeetable"
@@ -127,7 +127,7 @@ def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
     fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
     assert fb.index("except MediaControlsUnmeetableError:\n                    raise") < fb.index("video frame fallback failed; using native video path")
     src = open(g.__file__).read()
-    assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video: {e}\")" in src
+    assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video for {request.request_id}: {e}\")" in src
     i = src.index("except MediaControlsUnmeetableError as strict_err:")
     block = src[i:src.index("continue", i)]
     assert "error_code=MediaControlsUnmeetableError.code," in block and "strict_err.prompt_tokens" not in block
@@ -196,8 +196,9 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
 
     src = open(server.__file__).read()
     assert "@app.exception_handler(MediaControlsUnmeetableError)" in src
-    assert src.count("except MediaControlsUnmeetableError as e:") >= 7  # 4 JSON sites + 3 streaming lanes
-    assert src.count('"code": MediaControlsUnmeetableError.code,') >= 4
+    assert src.count("except MediaControlsUnmeetableError as e:") == 3  # JSON sites
+    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 3  # streaming lanes
+    assert src.count('"code": type(e).code,') == 3
     assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
     assert src.count('**({"code": _e["code"]} if _e.get("code") else {})') == 2  # anthropic + responses JSON passthroughs
     assert src.count('**({"code": err["code"]} if err.get("code") else {})') == 1  # anthropic non-omni envelope
@@ -207,3 +208,27 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
     row = ollama_adapter._openai_stream_error_to_ollama({"error": {"message": "budget cannot be met", "type": "invalid_request_error", "code": "media_controls_unmeetable"}})
     assert row == "media_controls_unmeetable: budget cannot be met"
     assert ollama_adapter._openai_stream_error_to_ollama({"error": "plain"}) == "plain"
+
+
+def test_media_part_with_no_readable_source_is_a_typed_400_not_a_text_only_success():
+    """Backlog S7 (live at 5f7c56e0/76f17940: a Responses input_video under the key `video` ran text-only with 200).
+    The converter now raises MediaInputError naming the accepted key; an image or video the loader cannot open raises
+    it too; every lane maps it like the strict error."""
+    from vmlx_engine import server
+    from vmlx_engine.errors import MediaInputError
+
+    src = open(server.__file__).read()
+    conv = src[src.index("def _responses_input_to_messages("):]
+    conv = conv[:conv.index("\n    messages = []")]
+    assert conv.count("raise MediaInputError(") == 2 and "expected \"\n                                \"'video_url'" in conv
+    assert "@app.exception_handler(MediaInputError)" in src and src.count("except MediaInputError as e:") == 3
+    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 3
+    from vmlx_engine import mllm_batch_generator as g
+    gsrc = open(g.__file__).read()
+    assert 'raise MediaInputError(\n                        f"image input cannot be used: {e}"' in gsrc
+    assert 'raise MediaInputError(\n                        f"video input cannot be used: {e}"' in gsrc
+    assert MediaInputError.code == "media_input_invalid" and issubclass(MediaInputError, ValueError)
+    with pytest.raises(MediaInputError, match="'video_url'"):
+        server._responses_input_to_messages([{"role": "user", "content": [{"type": "input_video", "video": "data:video/mp4;base64,AAAA"}, {"type": "input_text", "text": "q"}]}], preserve_multimodal=True)
+    ok = server._responses_input_to_messages([{"role": "user", "content": [{"type": "input_video", "video_url": "data:video/mp4;base64,AAAA"}, {"type": "input_text", "text": "q"}]}], preserve_multimodal=True)
+    assert ok[0]["content"][0] == {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}}
