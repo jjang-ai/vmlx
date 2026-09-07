@@ -1628,7 +1628,8 @@
       "ssmResidentMemory": "SSM 상주 메모리",
       "memActive": "활성",
       "memPeak": "피크",
-      "notReported": "보고되지 않음"
+      "notReported": "보고되지 않음",
+      "mtpRuntimeScope": "MTP 런타임 범위"
     },
     "context": {
       "startTimedOut": "세션 시작 시간이 초과되었습니다",

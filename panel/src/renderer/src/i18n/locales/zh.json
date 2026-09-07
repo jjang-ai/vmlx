@@ -1628,7 +1628,8 @@
       "ssmResidentMemory": "SSM 驻留内存",
       "memActive": "活跃",
       "memPeak": "峰值",
-      "notReported": "未报告"
+      "notReported": "未报告",
+      "mtpRuntimeScope": "MTP 运行时范围"
     },
     "context": {
       "startTimedOut": "会话启动超时",

@@ -1628,7 +1628,8 @@
       "ssmResidentMemory": "SSM Resident Memory",
       "memActive": "Active",
       "memPeak": "Peak",
-      "notReported": "not reported"
+      "notReported": "not reported",
+      "mtpRuntimeScope": "MTP Runtime Scope"
     },
     "context": {
       "startTimedOut": "Session start timed out",

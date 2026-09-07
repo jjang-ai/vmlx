@@ -438,7 +438,7 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             )}
             {health.mtp?.runtime_scope && health.mtp.runtime_available && (
               <InfoCard
-                label={t('sessions.performance.mtpScope')}
+                label={t('sessions.performance.mtpRuntimeScope')}
                 value={health.mtp.vl_runtime_available
                   ? health.mtp.runtime_scope
                   : t('sessions.performance.scopeOnlyValue', { scope: health.mtp.runtime_scope })}

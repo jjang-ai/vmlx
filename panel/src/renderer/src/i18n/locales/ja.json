@@ -1628,7 +1628,8 @@
       "ssmResidentMemory": "SSM 常駐メモリ",
       "memActive": "アクティブ",
       "memPeak": "ピーク",
-      "notReported": "未報告"
+      "notReported": "未報告",
+      "mtpRuntimeScope": "MTP ランタイム範囲"
     },
     "context": {
       "startTimedOut": "セッションの起動がタイムアウトしました",

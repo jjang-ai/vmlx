@@ -1628,7 +1628,8 @@
       "ssmResidentMemory": "Memoria residente SSM",
       "memActive": "Activa",
       "memPeak": "Pico",
-      "notReported": "no informado"
+      "notReported": "no informado",
+      "mtpRuntimeScope": "Alcance MTP en tiempo de ejecución"
     },
     "context": {
       "startTimedOut": "Se agotó el tiempo de inicio de la sesión",
