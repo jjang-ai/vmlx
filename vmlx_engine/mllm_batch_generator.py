@@ -2081,6 +2081,29 @@ def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, re
     from .video_controls import clip_budget_dims, clip_budget_factor
 
     total = getattr(controls, "effective_total_pixels", lambda: None)()
+    try:
+        # An explicit size the video loader could not sample exactly (it rounds
+        # frame edges to its own factor) is reported with the effective size.
+        _rh = getattr(controls, "resized_height", None)
+        _rw = getattr(controls, "resized_width", None)
+        if _rh is not None and _rw is not None:
+            import numpy as _np
+
+            _arr = _np.asarray(video_input)
+            if _arr.ndim == 4:
+                _cf = _arr.shape[1] in (1, 3) and _arr.shape[-1] not in (1, 3)
+                _h, _w = (_arr.shape[2], _arr.shape[3]) if _cf else (_arr.shape[1], _arr.shape[2])
+                if (int(_h), int(_w)) != (int(_rh), int(_rw)):
+                    from .request_diagnostics import record_for
+
+                    _msg = (
+                        f"video_controls: explicit size {int(_rh)}x{int(_rw)} was sampled as {int(_h)}x{int(_w)} by the "
+                        f"video loader (edge rounding to its patch factor); effective {int(_h)}x{int(_w)} frames"
+                    )
+                    logger.info("%s for %s", _msg, request_id)
+                    record_for(request_id, _msg)
+    except Exception as _size_exc:  # noqa: BLE001
+        logger.debug("explicit size diagnostics skipped: %s", _size_exc)
     if not total or total <= 0:
         return video_input
     try:

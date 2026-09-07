@@ -7183,6 +7183,7 @@ def get_engine() -> BaseEngine:
 
 
 from .request_diagnostics import DIAGNOSTICS as _REQUEST_DIAGNOSTICS  # noqa: E402
+from .request_diagnostics import note_request_id as _note_request_diagnostics_id  # noqa: E402
 
 # One bucket for every per-request diagnostic that reaches ``warnings``:
 # dropped tool calls (recorded here) and the engine's effective video settings
@@ -19571,6 +19572,7 @@ async def create_chat_completion(
     # knows a substitution happened — a request-vs-effective diff at mint
     # time would false-positive on the hy3/enable_thinking mappings.
     response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    _note_request_diagnostics_id(response_id)
     _apply_stamped_effort_policy(
         chat_kwargs,
         _ct_kwargs,
@@ -19885,6 +19887,7 @@ async def create_chat_completion(
                     chat_kwargs["max_tokens"] = _ns_pre_capped
 
     try:
+        _note_request_diagnostics_id(response_id)
         output = await _await_chat_with_disconnect_abort(
             engine,
             messages=messages,
@@ -22784,6 +22787,7 @@ async def create_response(
     # surfaces (non-stream ResponsesObject / stream terminal snapshot) pop the
     # substitution record by this id. Both branches below reuse this id.
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
+    _note_request_diagnostics_id(response_id)
     _apply_stamped_effort_policy(
         chat_kwargs,
         _ct_kwargs,
@@ -23207,6 +23211,7 @@ async def create_response(
                     chat_kwargs["max_tokens"] = _ns_pre_capped
 
     try:
+        _note_request_diagnostics_id(response_id)
         output = await _await_chat_with_disconnect_abort(
             engine,
             messages=messages,
@@ -23749,6 +23754,7 @@ async def create_response(
         if _ns_visible_answer_finish_reason is not None
         else getattr(output, "finish_reason", None)
     )
+    _note_request_diagnostics_id(response_id)
     _response_terminal = _responses_terminal_state(
         _response_finish, request_id=response_id
     )
@@ -23811,6 +23817,7 @@ async def create_response(
     # a warning.
     _reasoning_only = _responses_output_is_reasoning_only(output_items)
     if _reasoning_only:
+        _note_request_diagnostics_id(response_id)
         _response_terminal = _responses_terminal_state(
             _response_finish,
             reasoning_only_no_content=True,
@@ -27910,6 +27917,7 @@ async def stream_responses_api(
         )
     )
     _resp_finish = getattr(last_output, "finish_reason", None) if last_output else None
+    _note_request_diagnostics_id(response_id)
     _response_terminal = _responses_terminal_state(
         _resp_finish,
         cancelled=_response_was_cancelled,
@@ -28572,6 +28580,7 @@ async def stream_responses_api(
                     if _ans_last_out is not None:
                         last_output = _ans_last_out
                         _resp_finish = getattr(last_output, "finish_reason", None)
+                        _note_request_diagnostics_id(response_id)
                         _response_terminal = _responses_terminal_state(
                             _resp_finish,
                             cancelled=_response_was_cancelled,
@@ -28829,6 +28838,7 @@ async def stream_responses_api(
     # terminal state so a natural EOS inside the reasoning rail cannot be
     # reported as response.completed.
     _stream_reasoning_only = _responses_output_is_reasoning_only(all_output_items)
+    _note_request_diagnostics_id(response_id)
     _response_terminal = _responses_terminal_state(
         _resp_finish,
         cancelled=_response_was_cancelled,

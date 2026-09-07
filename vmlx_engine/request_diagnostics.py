@@ -27,6 +27,12 @@ from collections import OrderedDict
 DIAGNOSTICS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "vmlx_request_diagnostics", default=None
 )
+# The id the HTTP handler hands the engine for this request. ``take`` drains
+# the registry for it, so entries recorded off-task (or before the handler
+# opened its bucket) still reach the response that owns them.
+CURRENT_REQUEST_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "vmlx_request_diagnostics_id", default=None
+)
 
 _REGISTRY: "OrderedDict[str, list[str]]" = OrderedDict()
 _REGISTRY_LOCK = threading.Lock()
@@ -51,14 +57,30 @@ def record(diagnostic: str) -> bool:
     return True
 
 
-def take() -> list[str]:
-    """Return the accumulated diagnostics and reset the bucket."""
+def note_request_id(request_id: str | None) -> None:
+    """Remember the engine-facing request id for the current context."""
 
+    CURRENT_REQUEST_ID.set(str(request_id) if request_id else None)
+
+
+def take() -> list[str]:
+    """Return the accumulated diagnostics and reset the bucket.
+
+    Entries recorded for the current request id by code outside this context
+    (scheduler thread, or the engine before the handler opened its bucket)
+    are drained here first, so the response that owns them delivers them.
+    """
+
+    request_id = CURRENT_REQUEST_ID.get()
+    pending: list[str] = []
+    if request_id:
+        with _REGISTRY_LOCK:
+            pending = _REGISTRY.pop(request_id, None) or []
     bucket = DIAGNOSTICS.get()
-    if not bucket:
+    if not bucket and not pending:
         return []
     DIAGNOSTICS.set([])
-    return list(bucket)
+    return list(bucket or []) + pending
 
 
 def record_for(request_id: str | None, diagnostic: str) -> bool:
@@ -89,13 +111,13 @@ def pending_for(request_id: str | None) -> list[str]:
 def drain_into_context(request_id: str | None) -> int:
     """Move a request's registry entries into the current context bucket.
 
-    Returns how many were delivered. Entries are dropped (not delivered) when
-    no capture is running in this context, so a stale registry never leaks a
-    diagnostic into a later, unrelated request that reuses nothing but the
-    process.
+    Returns how many were delivered. When no capture is running in this
+    context the entries stay in the registry for ``take`` (which drains by the
+    handler's request id); the bounded registry drops the oldest requests, so
+    an abandoned request never grows it without limit.
     """
 
-    if not request_id:
+    if not request_id or DIAGNOSTICS.get() is None:
         return 0
     with _REGISTRY_LOCK:
         entries = _REGISTRY.pop(request_id, None)

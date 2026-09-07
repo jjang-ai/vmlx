@@ -646,3 +646,38 @@ def test_effective_video_settings_reach_the_response_warnings_in_both_lanes():
     assert "if output.finished:" in st and st.index("_drain_request_diagnostics(request_id)") < st.index("yield GenerationOutput(")
     clip = inspect.getsource(mllm_batch_generator._apply_clip_pixel_budget)
     assert "clip_budget_diagnostics(" in clip and "record_for(request_id, _msg)" in clip
+
+
+def test_take_drains_the_registry_for_the_noted_request_id_even_without_an_open_bucket():
+    """Live at 670b5e58: every video row had the right effective settings in the engine log and an EMPTY warnings
+    array — the JSON chat handler opens its capture bucket only AFTER the engine returns, and the engine's drain
+    dropped the entries. Now the handler notes the request id up front and take() drains the registry for it; the
+    engine-side drain leaves entries alone when no capture is open."""
+    from vmlx_engine import request_diagnostics as rd
+
+    rd.DIAGNOSTICS.set(None); rd.CURRENT_REQUEST_ID.set(None)
+    with rd._REGISTRY_LOCK:
+        rd._REGISTRY.clear()
+    rd.record_for("chatcmpl-v", "video_controls: effective")
+    assert rd.drain_into_context("chatcmpl-v") == 0 and rd.pending_for("chatcmpl-v") == ["video_controls: effective"]  # kept, not dropped
+    rd.note_request_id("chatcmpl-v")
+    assert rd.take() == ["video_controls: effective"] and rd.pending_for("chatcmpl-v") == []
+    # another request's entries never leak into this one
+    rd.record_for("chatcmpl-other", "video_controls: other")
+    assert rd.take() == [] and rd.pending_for("chatcmpl-other") == ["video_controls: other"]
+    with rd._REGISTRY_LOCK:
+        rd._REGISTRY.clear()
+
+
+def test_server_notes_the_engine_request_id_before_every_engine_hand_off():
+    import re
+
+    from vmlx_engine import server
+    from pathlib import Path
+
+    src = Path(server.__file__).read_text()
+    hand_offs = [m.start() for m in re.finditer(r"request_id=response_id[,)]?\n", src)]
+    assert hand_offs, "no engine hand-off found"
+    for pos in hand_offs:
+        window = src[max(0, pos - 4000):pos]
+        assert "_note_request_diagnostics_id(response_id)" in window, f"hand-off at {pos} without a noted request id"
