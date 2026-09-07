@@ -2895,11 +2895,12 @@ class TestMLLMMixedSWACleanStorePolicy:
         with caplog.at_level(logging.INFO, logger="vmlx_engine.mllm_scheduler"):
             scheduler._cleanup_finished({"mimo-clean"})
 
+        # the ` prefix_key=<hash>` identity suffix is graded by test_cache_identity_telemetry
         assert (
             "VLM Scheduler stored paged Prefix Cache for mimo-clean: "
             "1 layers, retained_tokens=2, block_table_blocks=1, "
             "requested_cache_key_tokens=3"
-        ) in caplog.messages
+        ) in [m.split(" prefix_key=")[0] for m in caplog.messages]
         assert all(
             "truncated to 3 tokens" not in message for message in caplog.messages
         )

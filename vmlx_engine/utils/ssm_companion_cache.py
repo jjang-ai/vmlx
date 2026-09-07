@@ -617,13 +617,27 @@ class SSMCompanionCache:
 
         # SSD is authoritative in disk-only mode. Freeze/write the detached
         # snapshot before deciding whether it also belongs in retained RAM.
+        disk_written = False
         if self._disk is not None:
             try:
                 self._disk.store(
                     key, stored_states, is_complete, token_ids, num_tokens
                 )
+                disk_written = True
             except Exception as e:
                 logger.debug("SSM disk write-through failed: %s", e)
+        # The store-side identity, in the same units as "SSM disk HIT": a
+        # fetch can be bound to the publication that wrote it by (N, hash)
+        # instead of by token count alone (S5 audit: length is eligibility,
+        # not identity).
+        logger.info(
+            "SSM stored: N=%d hash=%s states=%d complete=%s disk=%s",
+            num_tokens,
+            key[:12],
+            len(stored_states),
+            is_complete,
+            disk_written,
+        )
 
         if not self.ram_enabled:
             logger.debug(
