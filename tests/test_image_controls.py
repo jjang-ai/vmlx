@@ -114,3 +114,20 @@ def test_native_clip_budget_and_fallback_plan_raise_in_strict_mode():
     assert "strict and \"cannot be met\" in _msg" in clip and "except MediaControlsUnmeetableError:" in clip
     fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
     assert "strict and (\"cannot be met\" in _msg or \"below the image processor floor\" in _msg)" in fb
+
+
+def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
+    """Live at f8323832: every strict row returned 200 with prompt_tokens 0 — the fallback's 'using native video path'
+    catch, the generator's 'Failed to process video' catch, and the preprocess try (PromptTooLongError only) each
+    swallowed the strict error; the scheduler then retried the batch and answered empty. Live at fbf40ced: the stamp
+    read prompt_too_long-only fields off the strict error and crashed the batch step instead."""
+    from vmlx_engine import mllm_batch_generator as g
+    from vmlx_engine.engine import batched
+
+    fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
+    assert fb.index("except MediaControlsUnmeetableError:\n                    raise") < fb.index("video frame fallback failed; using native video path")
+    src = open(g.__file__).read()
+    assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video: {e}\")" in src
+    i = src.index("except MediaControlsUnmeetableError as strict_err:")
+    block = src[i:src.index("continue", i)]
+    assert "error_code=MediaControlsUnmeetableError.code," in block and "strict_err.prompt_tokens" not in block

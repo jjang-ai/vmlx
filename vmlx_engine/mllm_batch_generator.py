@@ -13078,9 +13078,6 @@ class MLLMBatchGenerator:
                         finish_reason="error",
                         error=str(strict_err),
                         error_code=MediaControlsUnmeetableError.code,
-                        error_prompt_tokens=strict_err.prompt_tokens,
-                        error_max_prompt_tokens=strict_err.max_prompt_tokens,
-                        error_source=strict_err.source,
                     )
                 )
                 continue
