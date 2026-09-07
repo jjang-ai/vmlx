@@ -2824,6 +2824,32 @@ class BlockAwarePrefixCache:
             return None
         return self.prefix_key_for_blocks([block])
 
+    # A later request that shares only a PREFIX of a stored chain hits an
+    # interior block, so its terminal key is not the chain's terminal key.
+    # The store line lists every block key for chains up to this many
+    # blocks (4k tokens at 64) so such a partial restore can still be bound
+    # to its publication by identity; longer chains log the terminal key only.
+    BLOCK_KEYS_LOG_MAX_BLOCKS = 64
+
+    def block_keys_for_block_ids(self, block_ids: Optional[Any]) -> Optional[str]:
+        """Comma-joined short keys of every block in a stored chain, or None
+        when the chain is longer than ``BLOCK_KEYS_LOG_MAX_BLOCKS``."""
+        if not isinstance(block_ids, (list, tuple)) or not block_ids:
+            return None
+        if len(block_ids) > self.BLOCK_KEYS_LOG_MAX_BLOCKS:
+            return None
+        keys = []
+        for bid in block_ids:
+            try:
+                block = self.paged_cache.blocks[int(bid)]
+            except (AttributeError, IndexError, TypeError, ValueError):
+                return None
+            key = self.prefix_key_for_blocks([block])
+            if key is None:
+                return None
+            keys.append(key)
+        return ",".join(keys)
+
     @staticmethod
     def _fetch_telemetry_cache_key(blocks: Optional[List[Any]]) -> Optional[str]:
         if not blocks:

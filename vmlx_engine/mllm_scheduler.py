@@ -4424,7 +4424,7 @@ class MLLMScheduler:
                                                     "VLM Scheduler stored paged Prefix Cache "
                                                     "for %s: %d layers, retained_tokens=%s, "
                                                     "block_table_blocks=%s, "
-                                                    "requested_cache_key_tokens=%d%s prefix_key=%s",
+                                                    "requested_cache_key_tokens=%d%s prefix_key=%s%s",
                                                     request_id,
                                                     len(cache_states),
                                                     retained_tokens,
@@ -4436,6 +4436,17 @@ class MLLMScheduler:
                                                         "prefix_key_for_block_ids",
                                                         lambda _ids: None,
                                                     )(block_table_ids),
+                                                    (
+                                                        f" block_keys={_bk}"
+                                                        if (
+                                                            _bk := getattr(
+                                                                self.block_aware_cache,
+                                                                "block_keys_for_block_ids",
+                                                                lambda _ids: None,
+                                                            )(block_table_ids)
+                                                        )
+                                                        else ""
+                                                    ),
                                                 )
                                             _PERSIST.record(
                                                 request_id, "stored",

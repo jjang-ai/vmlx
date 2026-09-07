@@ -84,5 +84,23 @@ def test_store_and_hit_log_lines_carry_prefix_key():
     hit = inspect.getsource(prefix_cache)
     assert 'checkpoint_tokens=%d%s prefix_key=%s' in hit
     store = open(mllm_scheduler.__file__).read()
-    assert '"requested_cache_key_tokens=%d%s prefix_key=%s"' in store
+    assert '"requested_cache_key_tokens=%d%s prefix_key=%s%s"' in store
     assert 'prefix_key_for_block_ids' in store
+
+
+def test_store_line_lists_the_block_chain_keys_for_bounded_chains():
+    """A later request sharing only a prefix hits an interior block; the store
+    line's block_keys let that partial restore be bound by identity."""
+    blocks = [SimpleNamespace(block_hash=bytes([i]) * 32) for i in range(1, 6)]
+    cache = object.__new__(BlockAwarePrefixCache)
+    cache.paged_cache = SimpleNamespace(blocks=[SimpleNamespace(block_hash=None)] + blocks)
+    keys = cache.block_keys_for_block_ids([1, 2, 3, 4, 5])
+    assert keys == ",".join((bytes([i]) * 32).hex()[:12] for i in range(1, 6))
+    # the terminal key of a 3-block partial hit is inside the 5-block chain
+    assert BlockAwarePrefixCache.prefix_key_for_blocks(blocks[:3]) in keys.split(",")
+    assert cache.block_keys_for_block_ids([]) is None and cache.block_keys_for_block_ids([99]) is None
+    cache.paged_cache = SimpleNamespace(blocks=[SimpleNamespace(block_hash=bytes([7]) * 32)] * 100)
+    assert cache.block_keys_for_block_ids(list(range(65))) is None  # bounded: long chains log the terminal key only
+    assert cache.block_keys_for_block_ids(list(range(64))) is not None
+    from vmlx_engine import mllm_scheduler
+    assert 'block_keys=' in open(mllm_scheduler.__file__).read()
