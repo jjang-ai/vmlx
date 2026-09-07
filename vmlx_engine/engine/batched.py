@@ -25,6 +25,7 @@ from typing import Any
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
 from ..errors import (
+    MediaControlsUnmeetableError,
     PromptTooLongError,
     UnsupportedMediaModalityError,
     VLMImagePrefillBudgetError,
@@ -191,6 +192,15 @@ def _merge_cache_extra_keys(
 
 from ..video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
 
+def _image_controls_from_kwargs(kwargs: dict) -> Any:
+    try:
+        from ..image_controls import image_controls_from_kwargs
+
+        return image_controls_from_kwargs(kwargs)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _drain_request_diagnostics(request_id: str | None) -> None:
     """Deliver diagnostics recorded for ``request_id`` off the request's task
     (scheduler thread) into the request context that assembles ``warnings``."""
@@ -244,6 +254,12 @@ def _raise_prompt_too_long_from_output(output: Any) -> None:
             detail,
             request_id=getattr(output, "request_id", None),
         )
+    if getattr(output, "error_code", None) == MediaControlsUnmeetableError.code:
+        detail = str(getattr(output, "error", None) or "media controls cannot be honoured as sent")
+        prefix = f"{MediaControlsUnmeetableError.__name__}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):]
+        raise MediaControlsUnmeetableError(detail, request_id=getattr(output, "request_id", None))
     if getattr(output, "error_code", None) == UnsupportedMediaModalityError.code:
         detail = str(getattr(output, "error", None) or "unsupported media modality")
         prefix = f"{UnsupportedMediaModalityError.__name__}: "
@@ -858,6 +874,7 @@ class BatchedEngine(BaseEngine):
         video_max_frames: int | None = None,
         video_controls: Any = None,
         request_id: str | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
         """Route selected VLM video turns through sampled image frames.
 
@@ -1136,7 +1153,13 @@ class BatchedEngine(BaseEngine):
                             token_pixels=image_token_px,
                         ):
                             logger.info("%s for %s", _msg, request_id or "-")
+                            if strict and ("cannot be met" in _msg or "below the image processor floor" in _msg):
+                                raise MediaControlsUnmeetableError(
+                                    f"media_controls_strict: {_msg}", request_id=request_id
+                                )
                             record_for(request_id, _msg)
+                    except MediaControlsUnmeetableError:
+                        raise
                     except Exception as _diag_exc:  # noqa: BLE001
                         logger.debug("fallback plan diagnostics skipped: %s", _diag_exc)
                     frames = _bound_video_fallback_frames(
@@ -2524,6 +2547,8 @@ class BatchedEngine(BaseEngine):
                 seed=kwargs.get("seed"),
                 image_token_budget=kwargs.get("image_token_budget"),
                 video_fps=kwargs.get("video_fps"),
+                image_controls=_image_controls_from_kwargs(kwargs),
+                media_controls_strict=bool(kwargs.get("media_controls_strict") or False),
                 video_max_frames=kwargs.get("video_max_frames"),
                 video_controls=_video_controls_from_kwargs(kwargs),
                 num_messages=kwargs.get("num_messages", 1),
@@ -2696,6 +2721,8 @@ class BatchedEngine(BaseEngine):
                 seed=kwargs.get("seed"),
                 image_token_budget=kwargs.get("image_token_budget"),
                 video_fps=kwargs.get("video_fps"),
+                image_controls=_image_controls_from_kwargs(kwargs),
+                media_controls_strict=bool(kwargs.get("media_controls_strict") or False),
                 video_max_frames=kwargs.get("video_max_frames"),
                 video_controls=_video_controls_from_kwargs(kwargs),
                 num_messages=kwargs.get("num_messages", 1),
@@ -2856,6 +2883,7 @@ class BatchedEngine(BaseEngine):
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
             request_id=kwargs.get("request_id"),
+            strict=bool(kwargs.get("media_controls_strict") or False),
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)
@@ -3043,6 +3071,7 @@ class BatchedEngine(BaseEngine):
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
             request_id=request_id,
+            strict=bool(kwargs.get("media_controls_strict") or False),
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)

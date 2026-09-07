@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..video_controls import VIDEO_CONTROL_FIELDS, validate_video_controls
+from ..image_controls import IMAGE_CONTROL_FIELDS, validate_image_controls
 
 from .models import (
     ChatCompletionRequest,
@@ -119,9 +120,15 @@ class AnthropicRequest(BaseModel):
     video_resized_height: int | None = None
     video_resized_width: int | None = None
     video_token_budget: int | None = None
+    image_max_pixels: int | None = None
+    image_min_pixels: int | None = None
+    image_resized_height: int | None = None
+    image_resized_width: int | None = None
+    media_controls_strict: bool | None = None
 
     @model_validator(mode="after")
     def validate_video_controls(self):
+        validate_image_controls({f: getattr(self, f, None) for f in IMAGE_CONTROL_FIELDS})
         validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
         return self
 
@@ -311,6 +318,8 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
             else (chat_template_kwargs or {}).get("reasoning_effort")
         ),
         **{f: getattr(req, f) for f in VIDEO_CONTROL_FIELDS},
+        **{f: getattr(req, f) for f in IMAGE_CONTROL_FIELDS},
+        media_controls_strict=req.media_controls_strict,
     )
 
 

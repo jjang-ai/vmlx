@@ -197,9 +197,10 @@ def _apply_ollama_video_controls(body: dict, req: dict) -> None:
     at the top level or inside ``options``; forward whichever is set so the
     Ollama dialect honours them like chat/responses/anthropic do."""
     from ..video_controls import VIDEO_CONTROL_FIELDS
+    from ..image_controls import IMAGE_CONTROL_FIELDS
 
     opts = body.get("options") if isinstance(body.get("options"), dict) else {}
-    for field in VIDEO_CONTROL_FIELDS:
+    for field in (*VIDEO_CONTROL_FIELDS, *IMAGE_CONTROL_FIELDS, "media_controls_strict"):
         value = body.get(field)
         if value is None:
             value = opts.get(field)

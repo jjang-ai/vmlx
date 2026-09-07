@@ -129,6 +129,7 @@ from .errors import (
     PromptTooLongError,
     UnsupportedMediaModalityError,
     VLMImagePrefillBudgetError,
+    MediaControlsUnmeetableError,
 )
 from .vision_embedding_cache import VisionEmbeddingCache
 from .cache_key import CACHE_EXTRA_SCOPES_KEY, scope_cache_extra_key
@@ -391,6 +392,12 @@ def _mllm_media_item_digest(
             hasher,
             "image_token_budget",
             getattr(request, "image_token_budget", None),
+        )
+        _ic = getattr(request, "image_controls", None)
+        _hash_mllm_media_text(
+            hasher,
+            "image_controls",
+            _ic.fragment() if _ic is not None and hasattr(_ic, "fragment") and not getattr(_ic, "is_unset", True) else None,
         )
     elif modality == "video":
         _hash_mllm_media_text(
@@ -1988,6 +1995,7 @@ def _pixel_cache_prompt_key(
     prompt: str,
     *,
     image_token_budget=None,
+    image_controls=None,
     has_videos: bool = False,
     video_fps=None,
     video_max_frames=None,
@@ -2006,6 +2014,8 @@ def _pixel_cache_prompt_key(
     key = prompt
     if image_token_budget is not None:
         key += f"\n\x00vmlx:image_token_budget={int(image_token_budget)}"
+    if image_controls is not None and not getattr(image_controls, "is_unset", True):
+        key += f"\n\x00vmlx:image_pixels={image_controls.fragment()}"
     if has_videos:
         from .video_controls import VideoControls
 
@@ -2072,7 +2082,7 @@ def _fetch_video_for_processor(
     return video_input, float(sample_fps)
 
 
-def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, request_id: str) -> Any:
+def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, request_id: str, *, strict: bool = False) -> Any:
     """Resize the sampled clip so its total pixels meet the request's clip
     budget (``total_pixels`` / ``token_budget``) before the processor sees it.
     The loader's per-frame cap floors at its own minimum and this engine's
@@ -2126,7 +2136,11 @@ def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, re
                 controls, num_frames=frames, height=height, width=width, resized=(h, w), factor=factor, temporal=temporal
             ):
                 logger.info("%s for %s", _msg, request_id)
+                if strict and "cannot be met" in _msg:
+                    raise MediaControlsUnmeetableError(f"media_controls_strict: {_msg}", request_id=request_id)
                 record_for(request_id, _msg)
+        except MediaControlsUnmeetableError:
+            raise
         except Exception as _diag_exc:  # noqa: BLE001
             logger.debug("clip budget diagnostics skipped: %s", _diag_exc)
         if (h, w) == (height, width) or h <= 0 or w <= 0:
@@ -2145,6 +2159,8 @@ def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, re
             request_id, int(total), getattr(controls, "token_budget", None), frames, height, width, h, w, factor, temporal,
         )
         return resized
+    except MediaControlsUnmeetableError:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("Video clip budget not applied for %s: %s", request_id, exc)
         return video_input
@@ -7126,6 +7142,8 @@ class MLLMBatchRequest:
 
     # Video processing parameters (per-request overrides)
     image_token_budget: Optional[int] = None
+    image_controls: Optional[Any] = None  # ImageControls (request-local)
+    media_controls_strict: bool = False
     video_fps: Optional[float] = None
     video_max_frames: Optional[int] = None
     video_controls: Optional[Any] = None  # normalized VideoControls (pixel budgets, explicit size)
@@ -8458,12 +8476,33 @@ class MLLMBatchGenerator:
         if request.images:
             from .models.mllm import process_image_input
 
+            _image_controls = getattr(request, "image_controls", None)
+            _strict = bool(getattr(request, "media_controls_strict", False))
+            if _image_controls is not None and getattr(_image_controls, "is_unset", True):
+                _image_controls = None
             for img in request.images:
                 try:
                     path = process_image_input(img)
+                    if _image_controls is not None:
+                        path = self._apply_image_controls(request, path, _image_controls, strict=_strict)
                     all_images.append(path)
+                except MediaControlsUnmeetableError:
+                    raise
                 except Exception as e:
                     logger.warning(f"Failed to process image: {e}")
+            if request.images and getattr(request, "image_token_budget", None) is not None:
+                from .image_controls import image_token_budget_support
+                from .request_diagnostics import record_for
+
+                if not image_token_budget_support(self.processor):
+                    _msg = (
+                        f"image_controls: image_token_budget={request.image_token_budget} is not supported by this "
+                        f"processor ({type(self.processor).__name__}; Gemma 4 only) and was not applied"
+                    )
+                    logger.info("%s for %s", _msg, request.request_id)
+                    if _strict:
+                        raise MediaControlsUnmeetableError(f"media_controls_strict: {_msg}", request_id=request.request_id)
+                    record_for(request.request_id, _msg)
 
         if request.videos:
             from .models.mllm import (
@@ -8485,7 +8524,10 @@ class MLLMBatchGenerator:
                         max_frames=max_frames,
                         controls=_controls,
                     )
-                    video_input = _apply_clip_pixel_budget(video_input, _controls, self.processor, request.request_id)
+                    video_input = _apply_clip_pixel_budget(
+                        video_input, _controls, self.processor, request.request_id,
+                        strict=bool(getattr(request, "media_controls_strict", False)),
+                    )
                     video_inputs.append(video_input)
                     video_sample_fps.append(float(sample_fps))
                     _timestamps = _sampled_video_timestamps(
@@ -8532,6 +8574,7 @@ class MLLMBatchGenerator:
         pixel_cache_prompt = _pixel_cache_prompt_key(
             request.prompt,
             image_token_budget=request.image_token_budget,
+            image_controls=getattr(request, "image_controls", None),
             has_videos=bool(video_cache_sources),
             video_fps=request.video_fps,
             video_max_frames=request.video_max_frames,
@@ -12881,6 +12924,32 @@ class MLLMBatchGenerator:
             logger.info("mRoPE tail positions unavailable for %s: %s", getattr(request, "request_id", "?"), exc)
             return False
 
+    def _apply_image_controls(self, request: Any, path: str, controls: Any, *, strict: bool = False) -> str:
+        """Bound one image for THIS request (a request-local copy; the processor
+        and the source file are untouched), report what the processor will still
+        change, and reject it in strict mode."""
+        import tempfile
+
+        from .image_controls import bound_image_file, image_controls_diagnostics, image_processor_geometry
+        from .request_diagnostics import record_for
+
+        out_dir = os.path.join(tempfile.gettempdir(), "vmlx_image_controls", str(request.request_id))
+        new_path, before, after = bound_image_file(path, controls, out_dir)
+        token_px, floor, ceiling = image_processor_geometry(self.processor)
+        reports, unmeetable = image_controls_diagnostics(
+            controls, before=before, after=after, token_pixels=token_px, pixel_floor=floor, pixel_ceiling=ceiling
+        )
+        logger.info(
+            "Image controls for %s: %s -> %s (%s) reports=%d",
+            request.request_id, f"{before[0]}x{before[1]}", f"{after[0]}x{after[1]}", controls.fragment(), len(reports),
+        )
+        if strict and unmeetable:
+            raise MediaControlsUnmeetableError(f"media_controls_strict: {unmeetable[0]}", request_id=request.request_id)
+        for msg in reports:
+            logger.info("%s for %s", msg, request.request_id)
+            record_for(request.request_id, msg)
+        return new_path
+
     def _text_prefill_position_ids(
         self, request: "MLLMBatchRequest", input_ids: Any, cache: Optional[List[Any]], lm: Any
     ) -> Optional[Any]:
@@ -15520,6 +15589,8 @@ class MLLMBatchGenerator:
                     _err_code = VLMImagePrefillBudgetError.code
                 elif isinstance(prefill_err, UnsupportedMediaModalityError):
                     _err_code = UnsupportedMediaModalityError.code
+                elif isinstance(prefill_err, MediaControlsUnmeetableError):
+                    _err_code = MediaControlsUnmeetableError.code
                 elif isinstance(prefill_err, PromptTooLongError):
                     _err_code = "prompt_too_long"
                 elif isinstance(prefill_err, PrefillAdmissionError):
@@ -15538,6 +15609,7 @@ class MLLMBatchGenerator:
                 if _err_code in {
                     VLMImagePrefillBudgetError.code,
                     UnsupportedMediaModalityError.code,
+                    MediaControlsUnmeetableError.code,
                     "prompt_too_long",
                     "prefill_admission_declined",
                 }:

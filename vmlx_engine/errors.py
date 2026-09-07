@@ -55,3 +55,17 @@ class UnsupportedMediaModalityError(RuntimeError):
         if family:
             prefix += f" for {family}"
         super().__init__(f"{prefix}: {self.detail}")
+
+
+class MediaControlsUnmeetableError(ValueError):
+    """Raised with ``media_controls_strict`` when a video/image control cannot
+    be honoured as sent (the processor's floor/ceiling/grid, an unsupported
+    control on this processor). Without strict mode the engine does the closest
+    thing and reports the effective settings in ``warnings`` instead."""
+
+    code = "media_controls_unmeetable"
+
+    def __init__(self, detail: str, *, request_id: str | None = None):
+        self.detail = str(detail)
+        self.request_id = request_id
+        super().__init__(self.detail)

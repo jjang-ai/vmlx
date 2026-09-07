@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 from ..video_controls import VIDEO_CONTROL_FIELDS, validate_video_controls
+from ..image_controls import IMAGE_CONTROL_FIELDS, validate_image_controls
 
 
 _NO_REASONING_EFFORTS = {"none", "off", "false", "disabled", "disable", "0"}
@@ -280,6 +281,13 @@ class ChatCompletionRequest(BaseModel):
     video_resized_width: int | None = None
     # Whole-clip vision-token budget (derived into the loader's per-clip pixel budget).
     video_token_budget: int | None = None
+    # vMLX extension: per-request IMAGE preprocessing controls (request-local, cache-keyed);
+    # media_controls_strict rejects a control the processor cannot honour instead of best-effort + warnings
+    image_max_pixels: int | None = None
+    image_min_pixels: int | None = None
+    image_resized_height: int | None = None
+    image_resized_width: int | None = None
+    media_controls_strict: bool | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
     # vMLX extension: per-request prompt/context admission cap. This can
@@ -403,6 +411,7 @@ class ChatCompletionRequest(BaseModel):
     @model_validator(mode="after")
     def validate_video_controls(self):
         validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
+        validate_image_controls({f: getattr(self, f, None) for f in IMAGE_CONTROL_FIELDS})
         return self
 
     @field_validator("temperature")
@@ -1028,6 +1037,13 @@ class ResponsesRequest(BaseModel):
     video_resized_width: int | None = None
     # Whole-clip vision-token budget (derived into the loader's per-clip pixel budget).
     video_token_budget: int | None = None
+    # vMLX extension: per-request IMAGE preprocessing controls (request-local, cache-keyed);
+    # media_controls_strict rejects a control the processor cannot honour instead of best-effort + warnings
+    image_max_pixels: int | None = None
+    image_min_pixels: int | None = None
+    image_resized_height: int | None = None
+    image_resized_width: int | None = None
+    media_controls_strict: bool | None = None
     # Cache bypass — parity with ChatCompletionRequest.cache_salt /
     # skip_prefix_cache. Without these fields, `model_config={"extra":
     # "ignore"}` silently drops them, and Responses-API clients (Claude
@@ -1097,6 +1113,7 @@ class ResponsesRequest(BaseModel):
     @model_validator(mode="after")
     def validate_video_controls(self):
         validate_video_controls({f: getattr(self, f, None) for f in VIDEO_CONTROL_FIELDS})
+        validate_image_controls({f: getattr(self, f, None) for f in IMAGE_CONTROL_FIELDS})
         return self
 
     @field_validator("temperature")

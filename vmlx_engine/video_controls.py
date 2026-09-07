@@ -548,6 +548,16 @@ def video_control_kwargs(source: Any) -> dict[str, Any]:
     out = controls.as_request_kwargs()
     if out:
         out["video_controls"] = controls
+    # image controls and the strict flag ride the same hop
+    from .image_controls import ImageControls
+
+    image = ImageControls.from_mapping(source, validate=False) if isinstance(source, Mapping) else ImageControls.from_request(source)
+    if not image.is_unset:
+        out.update(image.as_request_kwargs())
+        out["image_controls"] = image
+    strict = source.get("media_controls_strict") if isinstance(source, Mapping) else getattr(source, "media_controls_strict", None)
+    if strict:
+        out["media_controls_strict"] = True
     return out
 
 

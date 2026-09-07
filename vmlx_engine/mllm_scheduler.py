@@ -476,6 +476,9 @@ class MLLMRequest:
 
     # Video processing parameters (per-request overrides)
     image_token_budget: Optional[int] = None
+    # Per-request image controls (ImageControls) and the strict flag
+    image_controls: Optional[Any] = None
+    media_controls_strict: bool = False
     video_fps: Optional[float] = None
     video_max_frames: Optional[int] = None
     # Normalized per-request video controls (fps, frame cap, pixel budgets,
@@ -2678,6 +2681,8 @@ class MLLMScheduler:
             audio=audio,
             sampling_params=sampling_params,
             image_token_budget=kwargs.get("image_token_budget"),
+            image_controls=kwargs.get("image_controls"),
+            media_controls_strict=bool(kwargs.get("media_controls_strict") or False),
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
@@ -3046,6 +3051,8 @@ class MLLMScheduler:
                 max_prompt_tokens=int(getattr(request, "_max_prompt_tokens", 0) or 0),
                 enable_thinking=getattr(request, "enable_thinking", None),
                 image_token_budget=request.image_token_budget,
+                image_controls=getattr(request, "image_controls", None),
+                media_controls_strict=bool(getattr(request, "media_controls_strict", False)),
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
                 video_controls=getattr(request, "video_controls", None),

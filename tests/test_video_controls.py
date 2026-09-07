@@ -455,7 +455,7 @@ class TestClipBudgetAppliedToTheSampledClip:
         import vmlx_engine.mllm_batch_generator as g
         from vmlx_engine.video_controls import VideoControls
         src = inspect.getsource(g)
-        assert "video_input = _apply_clip_pixel_budget(video_input, _controls, self.processor, request.request_id)" in src
+        assert "video_input = _apply_clip_pixel_budget(" in src and "strict=bool(getattr(request, \"media_controls_strict\", False))" in src
         proc = types.SimpleNamespace(video_processor=types.SimpleNamespace(patch_size=16, merge_size=2, temporal_patch_size=2))
         clip = np.random.randint(0, 255, size=(16, 3, 364, 644)).astype(np.float32)
         out = g._apply_clip_pixel_budget(clip, VideoControls(token_budget=512).with_processor(proc), proc, "r")

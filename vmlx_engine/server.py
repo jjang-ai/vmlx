@@ -138,6 +138,7 @@ from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
 from .errors import (
     PromptTooLongError,
     UnsupportedMediaModalityError,
+    MediaControlsUnmeetableError,
     VLMImagePrefillBudgetError,
 )
 from .utils.prefill_admission import PrefillAdmissionError
@@ -1182,6 +1183,22 @@ def _vlm_image_prefill_budget_response_from_error(exc: VLMImagePrefillBudgetErro
                 "message": detail,
                 "type": "invalid_request_error",
                 "code": VLMImagePrefillBudgetError.code,
+            }
+        },
+    )
+
+
+def _media_controls_unmeetable_response_from_error(exc: MediaControlsUnmeetableError):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "message": str(exc),
+                "type": "invalid_request_error",
+                "code": MediaControlsUnmeetableError.code,
+                "param": "media_controls_strict",
             }
         },
     )
@@ -19062,6 +19079,8 @@ async def create_completion(request: CompletionRequest):
             return _prefill_admission_declined_response(e)
         except VLMImagePrefillBudgetError as e:
             return _vlm_image_prefill_budget_response_from_error(e)
+        except MediaControlsUnmeetableError as e:
+            return _media_controls_unmeetable_response_from_error(e)
         except UnsupportedMediaModalityError as e:
             return _unsupported_media_modality_response_from_error(e)
         except Exception as e:
@@ -19909,6 +19928,8 @@ async def create_chat_completion(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaControlsUnmeetableError as e:
+        return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
         return _unsupported_media_modality_response_from_error(e)
     except ValueError as e:
@@ -23233,6 +23254,8 @@ async def create_response(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaControlsUnmeetableError as e:
+        return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
         return _unsupported_media_modality_response_from_error(e)
     except Exception as e:
@@ -24114,6 +24137,20 @@ async def stream_completions_multi(
                     "message": str(e),
                     "type": "invalid_request_error",
                     "code": VLMImagePrefillBudgetError.code,
+                },
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+        except MediaControlsUnmeetableError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(prompt_request_id)
+            error_data = {
+                "id": response_id,
+                "object": "text_completion",
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "code": MediaControlsUnmeetableError.code,
+                    "param": "media_controls_strict",
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
