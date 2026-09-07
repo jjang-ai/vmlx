@@ -12805,6 +12805,24 @@ class MLLMBatchGenerator:
                 return override
         return _absolute_text_position_ids(input_ids, cache, lm)
 
+    def _diag_decode_fingerprint(self, batch: Any, req: Any, cache: Optional[List[Any]], output: Any, site: str) -> None:
+        """Opt-in: logits and sparse-lane fingerprints for the first four decode
+        steps of each request, whichever decode call site ran."""
+        try:
+            reqs = list(getattr(batch, "requests", None) or ([] if req is None else [req]))
+            for _req in reqs:
+                _n = int(getattr(_req, "_diag_decode_steps", 0) or 0)
+                if _n < 4:
+                    _req._diag_decode_steps = _n + 1  # type: ignore[attr-defined]
+                    off = int(cache[0].offset) if cache and hasattr(cache[0], "offset") and cache[0].offset is not None else 0
+                    logger.info(
+                        "restore fingerprint DECODE step %d [%s] for %s: %s | cache %s",
+                        _n + 1, site, getattr(_req, "request_id", "?"), _diag_logits_fp(output),
+                        _diag_cache_fingerprint(cache, self._hybrid_kv_positions, off),
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("restore fingerprint DECODE failed at %s: %s", site, exc)
+
     def _media_prefill_chunk_tokens(self, seq_len: int) -> int:
         """Chunk size for a media-expanded prefill. BIGGER IS BETTER HERE.
 
@@ -16229,6 +16247,8 @@ class MLLMBatchGenerator:
             cache=cache,
             return_hidden=True,
         )
+        if _diag_fingerprints_enabled():
+            self._diag_decode_fingerprint(locals().get("batch"), locals().get("req") or locals().get("request"), cache if "cache" in locals() else None, output, "def _seed_native_mtp_from_prefill(")
         if isinstance(output, tuple):
             logits, hidden = output
         elif hasattr(output, "logits") and hasattr(output, "hidden_states"):
@@ -16368,6 +16388,8 @@ class MLLMBatchGenerator:
             cache=cache,
             return_hidden=True,
         )
+        if _diag_fingerprints_enabled():
+            self._diag_decode_fingerprint(locals().get("batch"), locals().get("req") or locals().get("request"), cache if "cache" in locals() else None, output, "def _replay_native_mtp_confirmed_tokens(")
         if isinstance(output, tuple):
             _logits, hidden = output
         elif hasattr(output, "hidden_states"):
@@ -16427,6 +16449,8 @@ class MLLMBatchGenerator:
                 return_hidden=True,
                 **verify_kwargs,
             )
+            if _diag_fingerprints_enabled():
+                self._diag_decode_fingerprint(locals().get("batch"), locals().get("req") or locals().get("request"), cache if "cache" in locals() else None, output, "def _submit_native_mtp_verify(")
         state.stats.verify_qmm_calls += int(
             verify_qmm_scope_stats.get("calls", 0)
         ) + int(verify_pad_scope_stats.get("padded", 0))
@@ -17059,7 +17083,7 @@ class MLLMBatchGenerator:
         output = self.language_model(input_tokens, **lm_kwargs)
         if _diag_fingerprints_enabled():
             try:
-                for _req in (getattr(batch, "requests", None) or []):
+                for _req in (getattr(getattr(self, "active_batch", None), "requests", None) or []):
                     _n = int(getattr(_req, "_diag_decode_steps", 0) or 0)
                     if _n < 4:
                         _req._diag_decode_steps = _n + 1  # type: ignore[attr-defined]
