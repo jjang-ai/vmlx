@@ -9503,7 +9503,13 @@ class TestStartupCompatibilityGuards:
         assert "_tight_text_prefill_step_size < self.prefill_step_size" in block
         assert "seq_len > _tight_text_prefill_step_size + 1" in block
         assert "and not _mimo_tight_text_prefill_requires_chunking" in block
-        assert "_absolute_text_position_ids(input_ids, cache, lm)" in block
+        # 80156e49: the text prefill asks the request-aware helper, which returns
+        # the absolute text positions unless a media hit recorded an mRoPE tail
+        # for exactly this prefill (text-only mimo path: absolute positions).
+        assert "_text_prefill_position_ids(request, input_ids, cache, lm)" in block
+        helper = source[source.index("def _text_prefill_position_ids("):]
+        helper = helper[:helper.index("\n    def ", 10)]
+        assert "return _absolute_text_position_ids(input_ids, cache, lm)" in helper
         assert 'kwargs["position_ids"] = position_ids' in block
         assert "_seed_text_rope_delta_for_decode(lm, input_ids)" in block
         assert "output = lm(input_ids, **kwargs)" in block
