@@ -540,6 +540,130 @@ def check_and_inject_fallback_tools(
             search_from = payload_start
 
     _lfm2_has_native_tool_schema = _lfm2_has_exact_native_tool_schema()
+
+    def _parameter_contract(schema: Any) -> Any:
+        """Canonical form of a JSON-schema parameter block.
+
+        Names, required-ness, types, enums and nested object/array structure
+        are the contract; descriptions, titles, defaults and key order are
+        not. Two renders with the same contract are the same native catalog
+        even when their prose differs, so a byte-level difference alone never
+        forces the fallback (which would rewrite the opening system bytes and
+        move every SSD prefix).
+        """
+        if not isinstance(schema, dict):
+            return None
+        contract: dict[str, Any] = {}
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            contract["type"] = sorted(str(t) for t in schema_type)
+        elif isinstance(schema_type, str):
+            contract["type"] = schema_type
+        if isinstance(schema.get("enum"), list):
+            contract["enum"] = sorted(
+                json.dumps(value, sort_keys=True) for value in schema["enum"]
+            )
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            contract["properties"] = {
+                str(name): _parameter_contract(sub) for name, sub in properties.items()
+            }
+        required = schema.get("required")
+        if isinstance(required, list):
+            contract["required"] = sorted(str(name) for name in required)
+        items = schema.get("items")
+        if isinstance(items, dict):
+            contract["items"] = _parameter_contract(items)
+        return contract
+
+    def _rendered_function_schema(entry: Any) -> Optional[dict]:
+        """A rendered catalog entry: OpenAI ``{type, function}`` wrapper, flat
+        Responses shape, or the bare function object some templates emit
+        (MiniMax renders ``tool.function | tojson``)."""
+        normalized = _normalized_function_schema(entry)
+        if normalized is not None:
+            return normalized
+        if (
+            isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and entry.get("name")
+            and isinstance(entry.get("parameters"), dict)
+            and not isinstance(entry.get("function"), dict)
+        ):
+            bare = dict(entry)
+            bare.pop("type", None)
+            return bare
+        return None
+
+    def _rendered_tools_block_schema_verdict() -> Optional[bool]:
+        """Semantic check of the JSON entries a template rendered inside
+        ``<tools>``...``</tools>`` against this request's tools.
+
+        ``None``  — no decodable JSON entry in any block (an XML-only catalog):
+                    no opinion, the name-based recognition applies unchanged.
+        ``True``  — exactly the requested tools are rendered, each once, and
+                    every parameter contract matches the request.
+        ``False`` — a requested tool is missing, duplicated or rendered with a
+                    different parameter contract, or the block carries tools
+                    this request did not authorize.
+
+        Names alone are not a contract: a render that named ``read_file`` and
+        ``terminal`` while omitting ``path`` and ``command`` was accepted as
+        native and the model was never told the required arguments
+        (cross-family schema audit 2026-09-06, mechanism B).
+        """
+        expected_by_name: dict[str, Any] = {}
+        for tool in template_tools:
+            normalized = _normalized_function_schema(tool)
+            if normalized is None or normalized["name"] in expected_by_name:
+                return False
+            expected_by_name[normalized["name"]] = _parameter_contract(
+                normalized["parameters"]
+            )
+        if not expected_by_name:
+            return None
+        decoder = json.JSONDecoder()
+        rendered_by_name: dict[str, Any] = {}
+        found_entry = False
+        search_from = 0
+        while True:
+            block_start = instruction_prompt.find("<tools>", search_from)
+            if block_start < 0:
+                break
+            block_end = instruction_prompt.find("</tools>", block_start)
+            if block_end < 0:
+                block_end = len(instruction_prompt)
+                search_from = block_end
+            else:
+                search_from = block_end + len("</tools>")
+            block = instruction_prompt[block_start + len("<tools>") : block_end]
+            position = 0
+            while True:
+                brace = block.find("{", position)
+                if brace < 0:
+                    break
+                try:
+                    entry, consumed = decoder.raw_decode(block[brace:])
+                except (json.JSONDecodeError, TypeError):
+                    position = brace + 1
+                    continue
+                position = brace + max(consumed, 1)
+                normalized = _rendered_function_schema(entry)
+                if normalized is None:
+                    continue
+                found_entry = True
+                if normalized["name"] in rendered_by_name:
+                    return False
+                rendered_by_name[normalized["name"]] = _parameter_contract(
+                    normalized["parameters"]
+                )
+        if not found_entry:
+            return None
+        return rendered_by_name == expected_by_name
+
+    # Computed once per request; ``is not False`` keeps XML-only catalogs on
+    # their existing name-based recognition.
+    _native_tools_schema_verdict = _rendered_tools_block_schema_verdict()
     _openpangu_has_concrete_tool_examples = (
         is_openpangu_native_tool_prompt
         and not explicit_tool_requested
@@ -567,6 +691,7 @@ def check_and_inject_fallback_tools(
         and "<tools>" in instruction_prompt
         and "</tools>" in instruction_prompt
         and all(name in instruction_prompt for name in tool_names)
+        and _native_tools_schema_verdict is not False
     )
     # Two native dialects render the schema block: MiMo-style XML entries
     # (<name>tool</name>) and JSON entries ({"name": "tool", ...}) as emitted
@@ -584,6 +709,7 @@ def check_and_inject_fallback_tools(
             or f'"name":"{name}"' in instruction_prompt
             for name in tool_names
         )
+        and _native_tools_schema_verdict is not False
     )
     _step3p5_has_concrete_tool_examples = (
         is_step3p5_native_tool_prompt
@@ -595,6 +721,7 @@ def check_and_inject_fallback_tools(
         and "</tools>" in instruction_prompt
         and "<function=example_function_name>" in instruction_prompt
         and all(name in instruction_prompt for name in tool_names)
+        and _native_tools_schema_verdict is not False
     )
     if all(name in prompt for name in tool_names) and (
         (
@@ -607,6 +734,9 @@ def check_and_inject_fallback_tools(
             or _qwen_has_concrete_tool_examples
             or (
                 _qwen_has_native_tool_schema
+                # The rendered JSON entries must carry this request's
+                # parameter contracts, not just its tool names.
+                and _native_tools_schema_verdict is not False
                 and not tool_choice_required
             )
         )
