@@ -7820,7 +7820,9 @@ def _parse_tool_calls_with_parser(
             # (handles Nemotron, Llama, raw JSON, etc.)
             return _generic_parse_filtered(output_text)
     except Exception as e:
-        logger.warning(f"Tool parser error: {e}")
+        # A parser exception is a parser DEFECT, never a model shape: log it
+        # with the traceback so it cannot hide behind a one-line warning.
+        logger.warning(f"Tool parser error: {e}", exc_info=True)
         if bool(getattr(locals().get("parser_cls", None), "STRICT_NATIVE_TOOL_FORMAT", False)):
             if _has_tool_marker_or_partial_suffix(output_text) or (
                 _is_pending_required_tool_choice(request)
@@ -7841,6 +7843,26 @@ def _parse_tool_calls_with_parser(
                 )
                 return safe_content or "", None
             return output_text, None
+        # The generic repair understands Hermes / JSON / <function=...> shapes
+        # only. Handing it a NATIVE block after the native parser crashed
+        # fabricated arguments: the ATEM parser raised on a nullable type list
+        # and the generic attribute regex returned every value as the raw
+        # markup between quotes (Muse-Glimmer-30B, agentic-eval-074524; the
+        # tool then executed with '>magic</atem:parameter>\n<atem:parameter
+        # name=' as its pattern). When the output carries this parser's own
+        # native markers, the call is dropped with a visible diagnostic and
+        # only the visible prefix survives; outputs without native markers
+        # keep the generic repair (that is the path it exists for).
+        _native_markers = tuple(
+            getattr(locals().get("parser_cls", None), "NATIVE_MARKERS", ()) or ()
+        )
+        if any(m in output_text for m in _native_markers):
+            _record_tool_call_drop(
+                f"The '{active_parser}' native tool parser failed ({type(e).__name__}: "
+                f"{str(e)[:160]}); the native tool block was dropped instead of being "
+                "repaired by the generic parser, which cannot decode this format."
+            )
+            return _visible_prefix_before_unparsed_tool_markup(output_text), None
         return _generic_parse_filtered(output_text)
 
 

@@ -7219,3 +7219,75 @@ class TestToolChoiceNonePromptParity:
         assert visible == "M27-CHAT-TOOL-CONTINUE-DONE SIZE=5.2 KB"
         assert reasoning == ""
         assert finish_reasons == ["stop"]
+
+
+class TestNativeParserExceptionNeverRepairsNativeMarkup:
+    """A native parser that RAISES must not hand its own markup to the generic repair.
+
+    Measured on Muse-Glimmer-30B (agentic-eval-074524 nullable_enum_bounds_valid): the
+    ATEM parser raised on a nullable JSON-Schema type list, the except-all fell to the
+    generic repair, and the tool executed with every argument set to the raw markup
+    between attribute quotes. The parser bug is fixed separately (23f4660b); this pins
+    the server rule that a crashed native parser drops the block with a diagnostic.
+    """
+
+    @staticmethod
+    def _install(monkeypatch, name, markers):
+        import vmlx_engine.server as server
+        from vmlx_engine.tool_parsers import ToolParserManager
+        from vmlx_engine.tool_parsers.abstract_tool_parser import ToolParser
+
+        class Boom(ToolParser):
+            NATIVE_MARKERS = markers
+            SUPPORTS_NATIVE_TOOL_FORMAT = True
+
+            def __init__(self, tokenizer=None):
+                pass
+
+            def extract_tool_calls(self, model_output, request=None):
+                raise TypeError("unhashable type: 'list'")
+
+            def extract_tool_calls_streaming(self, *a, **k):
+                return None
+
+        ToolParserManager.register_module(name, Boom)
+        monkeypatch.setattr(server, "_tool_call_parser", name)
+        monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+        monkeypatch.setattr(server, "_engine", None)
+        return server
+
+    @staticmethod
+    def _request():
+        from vmlx_engine.api.models import ChatCompletionRequest
+
+        return ChatCompletionRequest(
+            model="m",
+            messages=[{"role": "user", "content": "search"}],
+            tools=[{"type": "function", "function": {"name": "search", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": ["string", "null"]}}}}}],
+        )
+
+    def test_native_block_is_dropped_with_a_diagnostic_not_repaired(self, monkeypatch):
+        server = self._install(monkeypatch, "boom_native_test", ("<atem:function_calls>", "<atem:invoke"))
+        raw = (
+            "Looking now.\n<atem:function_calls>\n<atem:invoke name=\"search\">\n"
+            '<atem:parameter name="pattern">magic</atem:parameter>\n'
+            '<atem:parameter name="path">null</atem:parameter>\n'
+            "</atem:invoke>\n</atem:function_calls>"
+        )
+        server._begin_tool_call_drop_capture()
+        cleaned, calls = server._parse_tool_calls_with_parser(raw, self._request())
+        diags = server._take_tool_call_drop_diagnostics()
+
+        assert calls is None
+        assert "<atem:" not in cleaned
+        assert cleaned.strip() == "Looking now."
+        assert diags and "boom_native_test" in diags[0] and "TypeError" in diags[0]
+
+    def test_output_without_native_markers_keeps_the_generic_repair(self, monkeypatch):
+        server = self._install(monkeypatch, "boom_native_test2", ("<atem:function_calls>", "<atem:invoke"))
+        raw = '<tool_call>{"name": "search", "arguments": {"pattern": "magic"}}</tool_call>'
+        server._begin_tool_call_drop_capture()
+        cleaned, calls = server._parse_tool_calls_with_parser(raw, self._request())
+        server._take_tool_call_drop_diagnostics()
+
+        assert calls is not None and calls[0].function.name == "search"
