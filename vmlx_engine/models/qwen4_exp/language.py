@@ -1980,6 +1980,8 @@ class Qwen4ExpTextModel(nn.Module):
             )
             if _layer_fp:
                 _log_layer_fingerprint(layer_index, h, c)
+                if layer_index < 2:
+                    _log_module_state(layer_index, layer)
         mixed = self.hyper_connection_mixer(h)
         if profile:
             mixer_ms = _profile_eval(mixed)
@@ -2034,6 +2036,32 @@ def _materialize_recurrent_state(cache) -> None:
             c.cache = new
 
 
+def _log_module_state(layer_index: int, layer) -> None:
+    """Array-valued attributes of the layer module (and its direct children)
+    that are not registered parameters: carries, scratch buffers, caches."""
+    try:
+        import hashlib
+        import numpy as np
+
+        found = []
+        def scan(mod, prefix, depth):
+            if depth > 2:
+                return
+            for k, v in vars(mod).items():
+                if k.startswith("__"):
+                    continue
+                if hasattr(v, "shape") and not k in ("weight", "bias", "scales", "biases"):
+                    found.append(f"{prefix}{k}:{list(v.shape)}:{hashlib.sha256(np.asarray(v).tobytes()).hexdigest()[:8]}")
+                elif isinstance(v, (int, float, bool, str)) and k.startswith("_"):
+                    found.append(f"{prefix}{k}={v}")
+                elif hasattr(v, "__dict__") and not hasattr(v, "shape") and depth < 2 and not isinstance(v, (list, dict)):
+                    scan(v, prefix + k + ".", depth + 1)
+        scan(layer, "", 0)
+        logger.info("QWEN4_LAYER_MODSTATE layer=%d %s", layer_index, " ".join(found)[:1500])
+    except Exception as exc:  # noqa: BLE001
+        logger.info("QWEN4_LAYER_MODSTATE failed at layer %d: %s", layer_index, exc)
+
+
 def _log_layer_fingerprint(layer_index: int, h, c) -> None:
     try:
         import hashlib
@@ -2057,6 +2085,14 @@ def _log_layer_fingerprint(layer_index: int, h, c) -> None:
                 phys.append(f"s{j}:{a.dtype} sum={float(aa.astype(np.float64).sum()):.6e} sha={hashlib.sha256(np.asarray(a).tobytes()).hexdigest()[:10]}")
         attrs = {k: v for k, v in vars(c).items() if not hasattr(v, "shape") and not isinstance(v, (list, dict))}
         phys.append("attrs=" + repr(attrs)[:160])
+        for k, v in vars(c).items():
+            if k == "cache":
+                continue
+            if hasattr(v, "shape"):
+                phys.append(f"attr.{k}:{v.dtype}{list(v.shape)} sha={hashlib.sha256(np.asarray(v).tobytes()).hexdigest()[:10]}")
+            elif isinstance(v, (list, tuple)) and v and all(hasattr(x, "shape") for x in v if x is not None):
+                phys.append(f"attr.{k}=[" + ",".join(f"{list(x.shape)}:{hashlib.sha256(np.asarray(x).tobytes()).hexdigest()[:8]}" for x in v if x is not None) + "]")
+        phys.append("keys=" + ",".join(sorted(vars(c).keys())))
         logger.info(
             "QWEN4_LAYER_FP step=%d layer=%d cache=%s idx=%s offset=%s phys=%s h: sum=%.6e max=%.6e sha=%s",
             _LAYER_FP_STEPS["n"], layer_index, type(c).__name__, getattr(c, "_idx", None), getattr(c, "offset", None),
