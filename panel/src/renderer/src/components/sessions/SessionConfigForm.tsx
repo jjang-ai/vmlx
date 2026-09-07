@@ -1214,7 +1214,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 <span className="text-[11px] text-muted-foreground">{ssdClearResult}</span>
               )}
             </div>
-            <div className="block">
+            <div className="block" data-vmlx-setting="blockDiskCacheDir">
               <span className="text-xs font-medium text-muted-foreground">
                 {t('sessions.config.blockCacheDirectory')}
                 <Tooltip text={t('sessions.config.blockCacheDirectoryTooltip')} />
@@ -1932,7 +1932,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Additional */}
       <div className="mb-4">
-        <Field label={t('sessions.config.additionalArgs')} tooltip={t('sessions.config.additionalArgsTooltip')}>
+        <Field settingKey="additionalArgs" label={t('sessions.config.additionalArgs')} tooltip={t('sessions.config.additionalArgsTooltip')}>
           <input type="text" value={config.additionalArgs} onChange={e => onChange('additionalArgs', e.target.value)} placeholder={t('sessions.config.additionalArgsPlaceholder')} className="cfg-input" />
         </Field>
       </div>

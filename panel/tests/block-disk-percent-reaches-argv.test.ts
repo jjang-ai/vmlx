@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { buildCacheLaunchArgs } from '../src/shared/cacheLaunchArgs'
+import { usesExactTypedPromptDiskCache } from '../src/shared/detectedFamilyNames'
 
 /**
  * The SSD budget slider must reach the engine.
@@ -113,7 +114,11 @@ describe('the v17 SSD-first default runs as a post-pass', () => {
     )
     expect(fn).toContain('config.usePagedCache = false')
     expect(fn).not.toContain('isZayaCacheStackMigrationTarget')
-    expect(fn).toContain("'openpangu_v2'")
+    // the exact-typed prompt-L2 families (openPangu v2, GLM5-Next) keep their own disk format: the
+    // post-pass returns before rewriting it, through the shared family helper
+    expect(fn).toContain('if (usesExactTypedPromptDiskCache(detectedFamily)) return changed')
+    expect(usesExactTypedPromptDiskCache('openpangu_v2')).toBe(true)
+    expect(usesExactTypedPromptDiskCache('qwen3_5')).toBe(false)
   })
 })
 
