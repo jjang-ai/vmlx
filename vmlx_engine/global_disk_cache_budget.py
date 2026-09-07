@@ -217,6 +217,14 @@ class GlobalBudgetResult:
     accounting_generation: int
     reconciliation_generation: int
     error: str | None = None
+    # Cumulative totals from the shared ledger: every eviction any writer in
+    # any process performed on this root since the ledger was created. The
+    # per-reconcile fields above only describe the LAST reconcile, and a
+    # store's own counter never sees evictions triggered by another writer
+    # (live: the SSM companion writer evicted 7 entries while the block
+    # store's counter and the last-reconcile fields both read 0).
+    evicted_entries_total: int = 0
+    evicted_bytes_total: int = 0
 
 
 class GlobalDiskCacheBudget:
@@ -606,6 +614,12 @@ class GlobalDiskCacheBudget:
                 "reconciled_at_ns": max(
                     0,
                     int(state.get("reconciled_at_ns") or 0),
+                ),
+                "evicted_entries_total": max(
+                    0, int(state.get("evicted_entries_total") or 0)
+                ),
+                "evicted_bytes_total": max(
+                    0, int(state.get("evicted_bytes_total") or 0)
                 ),
             }
         except (TypeError, ValueError, KeyError) as exc:
@@ -1547,6 +1561,8 @@ class GlobalDiskCacheBudget:
                         0, int(state["accounting_generation"])
                     ),
                     reconciliation_generation=reconciliation_generation,
+                    evicted_entries_total=int(state.get("evicted_entries_total") or 0),
+                    evicted_bytes_total=int(state.get("evicted_bytes_total") or 0),
                 )
                 self._last_result = result
                 return result
@@ -1655,6 +1671,8 @@ class GlobalDiskCacheBudget:
             "accounting_generation": 0,
             "reconciliation_generation": 0,
             "reconciled_at_ns": 0,
+            "evicted_entries_total": 0,
+            "evicted_bytes_total": 0,
         }
         now_ns = time.time_ns()
         candidates, total, _protected = self._scan_locked(now_ns=now_ns)
@@ -1859,12 +1877,20 @@ class GlobalDiskCacheBudget:
         account_started = time.perf_counter()
         reconciled_at_ns = time.time_ns()
         reconciliation_generation = accounting["reconciliation_generation"] + 1
+        evicted_entries_total = (
+            int(accounting.get("evicted_entries_total") or 0) + evicted_entries
+        )
+        evicted_bytes_total = (
+            int(accounting.get("evicted_bytes_total") or 0) + evicted_bytes
+        )
         self._write_accounting_locked(
             {
                 "bytes_estimate": after,
                 "accounting_generation": accounting["accounting_generation"],
                 "reconciliation_generation": reconciliation_generation,
                 "reconciled_at_ns": reconciled_at_ns,
+                "evicted_entries_total": evicted_entries_total,
+                "evicted_bytes_total": evicted_bytes_total,
             }
         )
         result = GlobalBudgetResult(
@@ -1880,6 +1906,8 @@ class GlobalDiskCacheBudget:
             accounted=True,
             accounting_generation=accounting["accounting_generation"],
             reconciliation_generation=reconciliation_generation,
+            evicted_entries_total=evicted_entries_total,
+            evicted_bytes_total=evicted_bytes_total,
         )
         self._last_result = result
         self._last_reconcile_monotonic_ns = time.monotonic_ns()

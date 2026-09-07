@@ -1115,3 +1115,44 @@ def test_maintenance_never_starts_while_requests_are_in_flight_and_crossing_stay
         assert budget.deferred_reconcile_due is False
     finally:
         store.shutdown()
+
+
+def test_eviction_totals_accumulate_in_the_shared_ledger_and_survive_a_refresh(tmp_path: Path) -> None:
+    """Live on an isolated 1 GB root: seven entries were evicted over two reconciles, yet /health showed
+    disk_evictions=0 (the block store's counter never sees evictions the SSM companion writer triggers) and
+    global_budget.evicted_entries=0 (a later reconcile without evictions overwrote the last-reconcile field).
+    The ledger now carries cumulative totals every writer in every process adds to, and a health refresh
+    reports them without a scan."""
+    root = tmp_path / "root"
+    now = time.time()
+    _indexed_block(root / "aaaaaaaaaaaa", "aa-old", size=64_000, accessed=now - 300)
+    _indexed_block(root / "aaaaaaaaaaaa", "aa-mid", size=64_000, accessed=now - 200)
+    recent = _indexed_block(root / "bbbbbbbbbbbb", "bb-new", size=64_000, accessed=now)
+    before = _physical_total(root)
+
+    budget = GlobalDiskCacheBudget(root, before - 32_000, orphan_grace_seconds=0)
+    try:
+        first = budget.enforce(force=True)
+        assert first.evicted_entries >= 1
+        assert first.evicted_entries_total == first.evicted_entries
+        assert first.evicted_bytes_total == first.evicted_bytes > 0
+        # a second enforce below the (now lower) usage evicts nothing but keeps the totals
+        second = budget.enforce(force=True)
+        assert second.evicted_entries == 0
+        assert second.evicted_entries_total == first.evicted_entries
+        # a refresh from the ledger (what /health reads) carries the totals too
+        health = budget.refresh_health()
+        assert health.evicted_entries_total == first.evicted_entries and health.evicted_bytes_total == first.evicted_bytes
+        # another writer on the same root (a second coordinator, as the SSM companion store holds) adds to the same ledger
+        _indexed_block(root / "cccccccccccc", "cc-new", size=64_000, accessed=now + 1)
+        other = GlobalDiskCacheBudget(root, 100_000, orphan_grace_seconds=0)  # below the current usage: must evict
+        try:
+            third = other.enforce(force=True)
+            assert third.evicted_entries >= 1
+            assert third.evicted_entries_total == first.evicted_entries + third.evicted_entries
+            assert budget.refresh_health().evicted_entries_total == third.evicted_entries_total
+        finally:
+            other._remove_lease()
+        assert recent.exists()
+    finally:
+        budget._remove_lease()

@@ -3811,6 +3811,9 @@ class BlockDiskStore:
             "accounted": global_health.accounted,
             "scan_performed": global_health.scan_performed,
             "evicted_entries": global_health.evicted_entries,
+            # cumulative across every writer/process on this root (ledger)
+            "evicted_entries_total": global_health.evicted_entries_total,
+            "evicted_bytes_total": global_health.evicted_bytes_total,
             "evicted_bytes": global_health.evicted_bytes,
             "accounting_generation": global_health.accounting_generation,
             "reconciliation_generation": (
