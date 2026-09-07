@@ -2022,6 +2022,14 @@ def _log_layer_fingerprint(layer_index: int, h, c) -> None:
         state = getattr(c, "cache", None)
         if isinstance(state, list):
             phys.append("state[" + ",".join(str(list(a.shape)) for a in state if a is not None) + "]")
+            for j, a in enumerate(state):
+                if a is None:
+                    phys.append(f"s{j}=None")
+                    continue
+                aa = np.asarray(a.astype(mx.float32)) if a.dtype != mx.float32 else np.asarray(a)
+                phys.append(f"s{j}:{a.dtype} sum={float(aa.astype(np.float64).sum()):.6e} sha={hashlib.sha256(np.asarray(a).tobytes()).hexdigest()[:10]}")
+        attrs = {k: v for k, v in vars(c).items() if not hasattr(v, "shape") and not isinstance(v, (list, dict))}
+        phys.append("attrs=" + repr(attrs)[:160])
         logger.info(
             "QWEN4_LAYER_FP step=%d layer=%d cache=%s idx=%s offset=%s phys=%s h: sum=%.6e max=%.6e sha=%s",
             _LAYER_FP_STEPS["n"], layer_index, type(c).__name__, getattr(c, "_idx", None), getattr(c, "offset", None),
