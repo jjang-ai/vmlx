@@ -1711,6 +1711,27 @@ def _absolute_text_position_ids(
     return mx.broadcast_to(pos[None, ...], (3, batch_size, seq_len))
 
 
+def _restore_mrope_module_state(request: Any, language_model: Any) -> bool:
+    """After a media cache hit forwarded a text tail, leave the language model
+    in the module state a cold media prefill leaves: the mRoPE position plan
+    for the full prompt and its rope delta. The text-path seeding zeroes the
+    delta (right for text-only prompts); for a media hit that made the first
+    decode step differ from the cold pass with identical caches, inputs and
+    explicit positions (fingerprints on the box). Returns True when applied."""
+    deltas = getattr(request, "_mrope_tail_rope_deltas", None)
+    plan = getattr(request, "_mrope_full_position_ids", None)
+    if language_model is None or deltas is None or plan is None:
+        return False
+    try:
+        if hasattr(language_model, "_rope_deltas"):
+            language_model._rope_deltas = deltas
+        if hasattr(language_model, "_position_ids"):
+            language_model._position_ids = plan
+        return True
+    except Exception:
+        return False
+
+
 def _seed_text_rope_delta_for_decode(language_model: Any, input_ids: mx.array) -> None:
     """Seed Qwen-style rope delta state after explicit cache-tail positions.
 
@@ -11062,6 +11083,7 @@ class MLLMBatchGenerator:
                     if position_ids is not None:
                         kwargs["position_ids"] = position_ids
                 _seed_text_rope_delta_for_decode(lm, input_ids)
+                _restore_mrope_module_state(request, lm)
                 output = lm(input_ids, **kwargs)
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
@@ -11083,6 +11105,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
+                    _restore_mrope_module_state(request, lm)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs: Dict[str, Any] = {"cache": cache}
@@ -11217,6 +11240,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
+                    _restore_mrope_module_state(request, lm)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs: Dict[str, Any] = {"cache": cache}
@@ -12187,6 +12211,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if cache is not None and _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
+                    _restore_mrope_module_state(request, lm)
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
                     logger.info(
                         "restore fingerprint WARM(text-path) tail-inputs for %s: positions %s cache %s",
@@ -12791,6 +12816,7 @@ class MLLMBatchGenerator:
             mx.eval(tail)
             request._mrope_tail_position_ids = tail  # type: ignore[attr-defined]
             request._mrope_tail_rope_deltas = rope_deltas  # type: ignore[attr-defined]
+            request._mrope_full_position_ids = position_ids  # type: ignore[attr-defined]
             logger.info(
                 "VLM HYBRID media hit: text tail of %d token(s) keeps mRoPE positions for %s (first=%s, last=%s)",
                 total - cached,
