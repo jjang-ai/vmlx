@@ -281,7 +281,7 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; cacheSubtype?: string; family?: string; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null
+  detected?: { toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; cacheSubtype?: string; family?: string; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const requestedDistributed = !!(config as any).distributedEnabled
@@ -568,7 +568,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null>(null)
   const sessionIdRef = useRef(sessionId)
   const resetRequestRef = useRef(0)
   sessionIdRef.current = sessionId
@@ -841,7 +841,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedUsePagedCache={detectedConfig?.usePagedCache} detectedCacheSubtype={detectedConfig?.cacheSubtype} detectedFamily={detectedConfig?.family} detectedArchitectureHints={detectedConfig?.architectureHints} detectedToolParser={detectedConfig?.toolParser} detectedReasoningParser={detectedConfig?.reasoningParser} detectedEnableAutoToolChoice={detectedConfig?.enableAutoToolChoice} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} modelIdentity={`${session.modelName || ''} ${session.modelPath}`} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedUsePagedCache={detectedConfig?.usePagedCache} detectedCacheSubtype={detectedConfig?.cacheSubtype} detectedFamily={detectedConfig?.family} detectedArchitectureHints={detectedConfig?.architectureHints} detectedToolParser={detectedConfig?.toolParser} detectedReasoningParser={detectedConfig?.reasoningParser} detectedEnableAutoToolChoice={detectedConfig?.enableAutoToolChoice} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedRuntimeModalities={detectedConfig?.runtimeModalities} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} modelIdentity={`${session.modelName || ''} ${session.modelPath}`} />
 
         {/* Command Preview */}
         <div className="mt-4">

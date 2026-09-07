@@ -25,6 +25,7 @@ import {
   normalizeDetectedFamilyName,
   usesExactTypedPromptDiskCache,
 } from '../../../../shared/detectedFamilyNames'
+import { isRuntimeVideoCapable } from '../../../../shared/videoCapableFamilies'
 import { computeEffectiveJit, isJitSuppressedByRuntime } from '../../../../shared/jitPolicy'
 import { isMixedSwaBundle } from '../../../../shared/storedKvQuantPolicy'
 export interface SessionConfig {
@@ -308,6 +309,8 @@ interface SessionConfigFormProps {
   detectedIsMultimodal?: boolean
   /** True when a model has media metadata but must use the text runtime */
   detectedForceTextOnly?: boolean
+  /** Bundle-declared runtime modalities (capabilities.modalities) when detection read them. */
+  detectedRuntimeModalities?: string[]
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
   /** Native MTP capability from config/index metadata */
@@ -331,7 +334,7 @@ interface SessionConfigFormProps {
   modelIdentity?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedArchitectureHints, detectedToolParser, detectedReasoningParser, detectedEnableAutoToolChoice, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId, modelIdentity }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedArchitectureHints, detectedToolParser, detectedReasoningParser, detectedEnableAutoToolChoice, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedRuntimeModalities, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId, modelIdentity }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -553,22 +556,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
-  const detectedRuntimeVideoCapable = [
-    'qwen3-vl',
-    'qwen3.5',
-    'qwen3.5-moe',
-    // Qwen3.8 Flash-Next (engine family qwen4_exp): native video path,
-    // live-proven with per-request fps / frame / pixel / token controls.
-    'qwen4-exp',
-    'qwen4_exp',
-    'qwen2-vl',
-    'gemma4',
-    'nemotron-h',
-    'mistral3',
-    'mistral4',
-    'pixtral',
-    'kimi-k25',
-  ].includes(normalizedDetectedFamily || '')
+  const detectedRuntimeVideoCapable = isRuntimeVideoCapable({
+    normalizedFamily: normalizedDetectedFamily,
+    runtimeModalities: detectedRuntimeModalities,
+  })
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive && (
     detectedRuntimeVideoCapable ||
     (!normalizedDetectedFamily && config.isMultimodal === true)
