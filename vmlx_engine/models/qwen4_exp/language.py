@@ -1963,6 +1963,7 @@ class Qwen4ExpTextModel(nn.Module):
             )
         if cache is None:
             cache = [None] * len(self.layers)
+        _layer_fp = _layer_fingerprint_enabled(inputs)
         for layer_index, (layer, c) in enumerate(zip(self.layers, cache)):
             h = layer(
                 h,
@@ -1973,11 +1974,60 @@ class Qwen4ExpTextModel(nn.Module):
                 profile_layer=layer_index if profile else None,
                 n_confirmed=n_confirmed,
             )
+            if _layer_fp:
+                _log_layer_fingerprint(layer_index, h, c)
         mixed = self.hyper_connection_mixer(h)
         if profile:
             mixer_ms = _profile_eval(mixed)
             logger.info("QWEN4_LAYER_PROFILE final_mixer_ms=%.3f", mixer_ms)
         return (mixed, h) if return_expanded else mixed
+
+
+_LAYER_FP_STEPS = {"n": 0}
+
+
+def _layer_fingerprint_enabled(inputs) -> bool:
+    """Opt-in (VMLX_DIAG_RESTORE_FINGERPRINT=1): per-layer hidden-state
+    fingerprints for the first few single-token decode steps of the process,
+    so the first layer whose output differs between two runs can be read off
+    the log."""
+    import os
+
+    if os.environ.get("VMLX_DIAG_RESTORE_FINGERPRINT") not in ("1", "true", "True", "yes", "on"):
+        return False
+    try:
+        if int(inputs.shape[-1]) != 1:
+            return False
+    except Exception:
+        return False
+    if _LAYER_FP_STEPS["n"] >= 12:
+        return False
+    _LAYER_FP_STEPS["n"] += 1
+    return True
+
+
+def _log_layer_fingerprint(layer_index: int, h, c) -> None:
+    try:
+        import hashlib
+        import numpy as np
+
+        arr = np.asarray(h.astype(mx.float32))
+        sha = hashlib.sha256(np.asarray(h).tobytes()).hexdigest()[:12]
+        phys = []
+        for name in ("keys", "values", "idx_keys"):
+            v = getattr(c, name, None)
+            if v is not None and hasattr(v, "shape"):
+                phys.append(f"{name}{list(v.shape)}")
+        state = getattr(c, "cache", None)
+        if isinstance(state, list):
+            phys.append("state[" + ",".join(str(list(a.shape)) for a in state if a is not None) + "]")
+        logger.info(
+            "QWEN4_LAYER_FP step=%d layer=%d cache=%s idx=%s offset=%s phys=%s h: sum=%.6e max=%.6e sha=%s",
+            _LAYER_FP_STEPS["n"], layer_index, type(c).__name__, getattr(c, "_idx", None), getattr(c, "offset", None),
+            " ".join(phys), float(arr.astype(np.float64).sum()), float(np.abs(arr).max()), sha,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("QWEN4_LAYER_FP failed at layer %d: %s", layer_index, exc)
 
 
 class MTPModule(nn.Module):
