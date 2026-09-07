@@ -2145,7 +2145,18 @@ def _diag_cache_fingerprint(cache: Optional[List[Any]], kv_positions: Any, upto:
                 except Exception:
                     pass
             if keys is not None:
-                parts.append(f"L{idx}[{type(c).__name__} off={getattr(c, 'offset', None)}] K:{_diag_array_fp(keys, upto)} V:{_diag_array_fp(values, upto) if values is not None else '-'}")
+                extra = ""
+                idx_keys = getattr(c, "idx_keys", None)
+                if idx_keys is not None:
+                    extra += f" idx_off={getattr(c, '_idx_offset', None)} idx:{_diag_array_fp(idx_keys, upto)}"
+                derived = getattr(c, "derived", None)
+                if isinstance(derived, dict):
+                    items = []
+                    for name, value in list(derived.items())[:3]:
+                        arrs = [a for a in (getattr(value, "keys", None), getattr(value, "pooled", None), value if hasattr(value, "shape") else None) if a is not None]
+                        items.append(f"{name}={type(value).__name__}" + (":" + _diag_array_fp(arrs[0]) if arrs else f"(n={len(getattr(value, '__dict__', {}))})"))
+                    extra += " derived{" + ",".join(items) + "}" if items else " derived{}"
+                parts.append(f"L{idx}[{type(c).__name__} off={getattr(c, 'offset', None)}] K:{_diag_array_fp(keys, upto)} V:{_diag_array_fp(values, upto) if values is not None else '-'}{extra}")
                 kv_done += 1
         elif idx not in kv_set and ssm_done < 2 and hasattr(c, "cache") and isinstance(c.cache, list):
             arrs = [a for a in c.cache if a is not None]
@@ -17046,6 +17057,19 @@ class MLLMBatchGenerator:
                 self, "_decode_trace_posid_s", 0.0
             ) + (time.perf_counter() - _posid_t0)
         output = self.language_model(input_tokens, **lm_kwargs)
+        if _diag_fingerprints_enabled():
+            try:
+                for _req in (getattr(batch, "requests", None) or []):
+                    _n = int(getattr(_req, "_diag_decode_steps", 0) or 0)
+                    if _n < 4:
+                        _req._diag_decode_steps = _n + 1  # type: ignore[attr-defined]
+                        logger.info(
+                            "restore fingerprint DECODE step %d for %s: %s | cache %s",
+                            _n + 1, getattr(_req, "request_id", "?"), _diag_logits_fp(output),
+                            _diag_cache_fingerprint(cache, self._hybrid_kv_positions, int(cache[0].offset) if cache and hasattr(cache[0], "offset") else 0),
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.info("restore fingerprint DECODE failed: %s", exc)
         if trace:
             mx.synchronize()
             model_s = time.perf_counter() - model_t0
