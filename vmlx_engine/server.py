@@ -7856,7 +7856,11 @@ def _parse_tool_calls_with_parser(
         _native_markers = tuple(
             getattr(locals().get("parser_cls", None), "NATIVE_MARKERS", ()) or ()
         )
-        if any(m in output_text for m in _native_markers):
+        _native_present = any(m in output_text for m in _native_markers) or any(
+            _tool_marker_partial_suffix_length(output_text, m, minimum=4)
+            for m in _native_markers
+        )
+        if _native_present:
             _record_tool_call_drop(
                 f"The '{active_parser}' native tool parser failed ({type(e).__name__}: "
                 f"{str(e)[:160]}); the native tool block was dropped instead of being "

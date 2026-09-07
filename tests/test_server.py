@@ -7291,3 +7291,14 @@ class TestNativeParserExceptionNeverRepairsNativeMarkup:
         server._take_tool_call_drop_diagnostics()
 
         assert calls is not None and calls[0].function.name == "search"
+
+    def test_truncated_native_marker_at_the_tail_is_not_repaired_either(self, monkeypatch):
+        server = self._install(monkeypatch, "boom_native_test3", ("<atem:function_calls>", "<atem:invoke"))
+        raw = "Looking now.\n<atem:functi"  # cut by max_tokens inside the opener
+        server._begin_tool_call_drop_capture()
+        cleaned, calls = server._parse_tool_calls_with_parser(raw, self._request())
+        diags = server._take_tool_call_drop_diagnostics()
+
+        assert calls is None
+        assert "<atem" not in cleaned
+        assert diags and "boom_native_test3" in diags[0]
