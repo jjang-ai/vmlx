@@ -418,3 +418,57 @@ def bound_video_frames(
         except Exception:
             bounded.append(frame)
     return bounded
+
+
+def clip_budget_dims(
+    num_frames: int,
+    height: int,
+    width: int,
+    *,
+    total_pixels: int,
+    min_total_pixels: int = 0,
+    factor: int = 32,
+    temporal: int = 2,
+) -> tuple[int, int]:
+    """Frame size (h, w) that keeps the whole sampled clip within
+    ``total_pixels`` under the Qwen3-VL processor's own rounding (frame edges
+    to multiples of ``factor`` = patch x merge, frames to multiples of
+    ``temporal``), i.e. transformers' video ``smart_resize``. Returns the
+    input size unchanged when it already fits.
+
+    Why here and not in the processor: the mlx-vlm Qwen3-VL processor this
+    engine runs ignores per-call ``videos_kwargs`` (measured: size and
+    do_sample_frames had no effect), so the budget is applied to the sampled
+    frames before they reach it. Measured: 16 frames of 364x644 under a
+    1,048,576-pixel budget -> 192x320 -> grid 8x12x20 -> 480 tokens, exactly
+    what the transformers processor produced from the same size request."""
+    import math
+
+    num_frames = max(1, int(num_frames)); height = max(1, int(height)); width = max(1, int(width))
+    t_bar = max(temporal, math.ceil(num_frames / temporal) * temporal)
+    h_bar = max(factor, round(height / factor) * factor)
+    w_bar = max(factor, round(width / factor) * factor)
+    if total_pixels and t_bar * h_bar * w_bar > total_pixels:
+        beta = math.sqrt((num_frames * height * width) / float(total_pixels))
+        h_bar = max(factor, math.floor(height / beta / factor) * factor)
+        w_bar = max(factor, math.floor(width / beta / factor) * factor)
+    elif min_total_pixels and t_bar * h_bar * w_bar < min_total_pixels:
+        beta = math.sqrt(min_total_pixels / float(num_frames * height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+    return int(h_bar), int(w_bar)
+
+
+def clip_budget_factor(processor: Any = None) -> tuple[int, int]:
+    """(spatial factor = patch x merge, temporal patch) of the loaded video
+    processor; (32, 2) for Qwen3-VL, (28, 2) legacy."""
+    vp = getattr(processor, "video_processor", None) if processor is not None else None
+    if vp is None:
+        vp = processor
+    try:
+        patch = int(getattr(vp, "patch_size", 0) or 0); merge = int(getattr(vp, "merge_size", 0) or 0); temporal = int(getattr(vp, "temporal_patch_size", 0) or 0)
+    except (TypeError, ValueError):
+        return VIDEO_TOKEN_IMAGE_FACTOR, 2
+    if patch > 0 and merge > 0 and temporal > 0:
+        return patch * merge, temporal
+    return VIDEO_TOKEN_IMAGE_FACTOR, 2

@@ -435,3 +435,30 @@ class TestProcessorSideClipBudget:
         assert "videos_kwargs=(" in src and ".with_processor(self.processor).processor_video_kwargs(self.processor)" in src
         assert 'kwargs["videos_kwargs"] = dict(videos_kwargs)' in src
         assert 'token_budget=%s"' in src  # the processed-grid line names the budget it was asked to meet
+
+
+class TestClipBudgetAppliedToTheSampledClip:
+    """The engine's mlx-vlm Qwen3-VL processor ignores per-call videos_kwargs (probe on the box: size and
+    do_sample_frames changed nothing, 1760 tokens every time), so the clip budget is applied to the sampled frames
+    with the processor's own rounding before they reach it."""
+
+    def test_dims_match_the_transformers_smart_resize_result(self):
+        from vmlx_engine.video_controls import clip_budget_dims
+        # measured: 16 frames 364x644 under 512 tokens x 2048 px -> 192x320 -> grid 8x12x20 -> 480 tokens
+        assert clip_budget_dims(16, 364, 644, total_pixels=512 * 2048, factor=32, temporal=2) == (192, 320)
+        assert clip_budget_dims(16, 364, 644, total_pixels=256 * 2048, factor=32, temporal=2) == (128, 224)  # 8x4x7 -> 224 tokens
+        # already within budget: unchanged rounding only
+        assert clip_budget_dims(16, 364, 644, total_pixels=16 * 364 * 644 * 4, factor=32, temporal=2) == (352, 640)
+
+    def test_the_loader_site_applies_it_and_the_helper_resizes_channels_first_clips(self):
+        import inspect, numpy as np, types
+        import vmlx_engine.mllm_batch_generator as g
+        from vmlx_engine.video_controls import VideoControls
+        src = inspect.getsource(g)
+        assert "video_input = _apply_clip_pixel_budget(video_input, _controls, self.processor, request.request_id)" in src
+        proc = types.SimpleNamespace(video_processor=types.SimpleNamespace(patch_size=16, merge_size=2, temporal_patch_size=2))
+        clip = np.random.randint(0, 255, size=(16, 3, 364, 644)).astype(np.float32)
+        out = g._apply_clip_pixel_budget(clip, VideoControls(token_budget=512).with_processor(proc), proc, "r")
+        assert out.shape == (16, 3, 192, 320) and out.dtype == np.float32
+        # no budget -> the same object comes back
+        assert g._apply_clip_pixel_budget(clip, VideoControls(fps=2), proc, "r") is clip

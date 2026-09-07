@@ -2051,6 +2051,50 @@ def _fetch_video_for_processor(
     return video_input, float(sample_fps)
 
 
+def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, request_id: str) -> Any:
+    """Resize the sampled clip so its total pixels meet the request's clip
+    budget (``total_pixels`` / ``token_budget``) before the processor sees it.
+    The loader's per-frame cap floors at its own minimum and this engine's
+    processor ignores per-call size kwargs, so this is where a small budget is
+    honoured. No-op without a budget or when the clip already fits."""
+    from .video_controls import clip_budget_dims, clip_budget_factor
+
+    total = getattr(controls, "effective_total_pixels", lambda: None)()
+    if not total or total <= 0:
+        return video_input
+    try:
+        import numpy as np
+
+        arr = np.asarray(video_input)
+        if arr.ndim != 4:
+            return video_input
+        channels_first = arr.shape[1] in (1, 3) and arr.shape[-1] not in (1, 3)
+        frames = arr.shape[0]
+        height, width = (arr.shape[2], arr.shape[3]) if channels_first else (arr.shape[1], arr.shape[2])
+        factor, temporal = clip_budget_factor(processor)
+        min_total = int(getattr(controls, "min_pixels", None) or 0) * frames
+        h, w = clip_budget_dims(frames, height, width, total_pixels=int(total), min_total_pixels=min_total, factor=factor, temporal=temporal)
+        if (h, w) == (height, width) or h <= 0 or w <= 0:
+            return video_input
+        from PIL import Image
+
+        out = []
+        for frame in arr:
+            hwc = np.transpose(frame, (1, 2, 0)) if channels_first else frame
+            img = Image.fromarray(np.clip(np.rint(hwc), 0, 255).astype(np.uint8)).resize((w, h), Image.BILINEAR)
+            res = np.asarray(img)
+            out.append(np.transpose(res, (2, 0, 1)) if channels_first else res)
+        resized = np.stack(out).astype(arr.dtype)
+        logger.info(
+            "Video clip budget for %s: total_pixels=%d (token_budget=%s) frames=%d %dx%d -> %dx%d (factor=%d temporal=%d)",
+            request_id, int(total), getattr(controls, "token_budget", None), frames, height, width, h, w, factor, temporal,
+        )
+        return resized
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Video clip budget not applied for %s: %s", request_id, exc)
+        return video_input
+
+
 def _call_processor_direct_unscoped(
     processor: Any,
     *,
@@ -8289,6 +8333,7 @@ class MLLMBatchGenerator:
                         max_frames=max_frames,
                         controls=_controls,
                     )
+                    video_input = _apply_clip_pixel_budget(video_input, _controls, self.processor, request.request_id)
                     video_inputs.append(video_input)
                     video_sample_fps.append(float(sample_fps))
                     _timestamps = _sampled_video_timestamps(
