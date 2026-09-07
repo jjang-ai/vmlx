@@ -222,6 +222,17 @@ class DotsToolParser(ToolParser):
         declared = (
             prop_schema.get("type") if isinstance(prop_schema, dict) else None
         )
+        # A JSON-Schema TYPE LIST (``["string", "null"]`` for a nullable
+        # parameter) is a declaration, not a decode hint: a string member keeps
+        # the value verbatim, a null spelling decodes to None only when null is
+        # a member, and only a list without "string" falls through to JSON.
+        if isinstance(declared, (list, tuple)):
+            kinds = [str(t) for t in declared if t is not None]
+            if "null" in kinds and value.strip().lower() in {"null", "none", "nil"}:
+                return None
+            if "string" in kinds:
+                return value
+            declared = kinds[0] if len(kinds) == 1 else "object"
         if declared == "string":
             return value
         if declared is not None:

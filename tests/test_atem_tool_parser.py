@@ -342,3 +342,24 @@ class TestNullableTypeLists:
         assert _coerce("3", ["integer", "null"]) == 3
         assert _coerce("none", ["integer", "null"]) is None
         assert _coerce("x", ["integer", "string"]) == "x"
+
+
+class TestEscapingIsData:
+    """Same contract for the ATEM dialect: a declared string keeps every byte."""
+
+    REQUEST = {"tools": [{"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {"content": {"type": "string"}}}}}]}
+
+    @pytest.mark.parametrize("payload", [
+        'He said "hi\\n" — 日本語 🚀 \\ path\\to\\file\nsecond line',
+        "line/none\r\nwindows\tTab",
+        "\\\\double \\n\\t single-escapes stay two chars",
+        "  leading and trailing  ",
+    ])
+    def test_string_parameter_round_trips_byte_for_byte(self, parser, payload):
+        block = (
+            '<atem:function_calls>\n<atem:invoke name="write_file">\n'
+            f'<atem:parameter name="content">{payload}</atem:parameter>\n'
+            "</atem:invoke>\n</atem:function_calls>"
+        )
+        out = parser.extract_tool_calls(block, self.REQUEST)
+        assert json.loads(out.tool_calls[0]["arguments"])["content"] == payload

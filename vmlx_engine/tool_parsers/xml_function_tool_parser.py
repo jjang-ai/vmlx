@@ -53,8 +53,14 @@ class XMLFunctionToolParser(ToolParser):
         r"<function=([^>]+)>\s*(.*?)\s*</function>",
         re.DOTALL,
     )
+    # The value is captured RAW. The template frames a value with one newline
+    # on each side (``<parameter=K>\nV\n</parameter>``); only that frame is
+    # removed, in ``_unframe``. A ``\s*`` on both ends here ate a string
+    # argument's own leading indentation and trailing newlines — a file whose
+    # first line is indented, or that ends in blank lines, was written wrong
+    # (LOSSLESS-API-TOOL-HISTORY-CONTRACT: escaping and whitespace are data).
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>(.*?)</parameter>",
         re.DOTALL,
     )
     # Ornith-1.0 (qwen3.5 + Gemma vocab frankenmerge) emits a malformed
@@ -89,16 +95,34 @@ class XMLFunctionToolParser(ToolParser):
         re.DOTALL,
     )
 
+    @staticmethod
+    def _unframe(value: str) -> str:
+        """Drop the template's one-newline frame on each side, nothing more."""
+        if value.startswith("\r\n"):
+            value = value[2:]
+        elif value.startswith("\n"):
+            value = value[1:]
+        if value.endswith("\r\n"):
+            value = value[:-2]
+        elif value.endswith("\n"):
+            value = value[:-1]
+        return value
+
     @classmethod
     def _coerce_value(cls, value: str) -> Any:
-        value = value.strip()
-        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
+        # Strip only to TEST for a JSON shape (and the <value> wrapper); the
+        # string result keeps its own bytes — indentation, trailing newlines,
+        # literal backslash sequences — exactly as the model wrote them.
+        raw = cls._unframe(value)
+        candidate = raw.strip()
+        wrapped = cls.VALUE_WRAPPER_PATTERN.match(candidate)
         if wrapped:
-            value = wrapped.group(1).strip()
+            raw = wrapped.group(1)
+            candidate = raw.strip()
         try:
-            return json.loads(value)
+            return json.loads(candidate)
         except (json.JSONDecodeError, ValueError):
-            return value
+            return raw
 
     # _request_tool_names and the doubled-wrapper recovery live on ToolParser:
     # the malformed shape arrives on both the qwen and xml_function routes.

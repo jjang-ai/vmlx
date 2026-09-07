@@ -294,3 +294,31 @@ def test_nullable_schema_field_turns_none_spelling_into_json_null(parser):
     # anyOf / nullable:true spellings also count as allowing null
     request2 = {"tools": [{"type": "function", "name": "search", "parameters": {"type": "object", "properties": {"path": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}}]}
     assert json.loads(parser.extract_tool_calls(output, request2).tool_calls[0]["arguments"])["path"] is None
+
+
+class TestEscapingIsData:
+    """Newline U+000A, the two characters backslash+n, slash+n, CRLF, tab, quotes, backslashes and
+    XML entities are distinct data. A string parameter's bytes must survive parse -> JSON arguments
+    -> JSON decode unchanged (LOSSLESS-API-TOOL-HISTORY-CONTRACT). The live 27B-4D escaping case
+    (probe-27b-replay-164849) diverged at GENERATION: the model wrote a real newline for the
+    prompt's literal backslash+n, and the parser preserved that byte-for-byte."""
+
+    REQUEST = {"tools": [{"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}}]}
+
+    @pytest.mark.parametrize("payload", [
+        'He said "hi\\n" — 日本語 🚀 \\ path\\to\\file\nsecond line',  # literal backslash+n AND a real newline
+        "line/none\r\nwindows\tTab",  # slash+n, CRLF, tab
+        "a &amp; b &lt;c&gt; 'q' \"dq\"",  # XML entities and quotes stay literal
+        "\\\\double \\n\\t single-escapes stay two chars",
+        "    indented first line\n\n\ntrailing blank lines\n\n",
+    ])
+    def test_string_parameter_round_trips_byte_for_byte(self, parser, payload):
+        block = (
+            "<tool_call>\n<function=write_file>\n<parameter=path>\nout/x.txt\n</parameter>\n"
+            f"<parameter=content>\n{payload}\n</parameter>\n</function>\n</tool_call>"
+        )
+        out = parser.extract_tool_calls(block, self.REQUEST)
+        assert out.tools_called
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args["content"] == payload
+        assert args["path"] == "out/x.txt"
