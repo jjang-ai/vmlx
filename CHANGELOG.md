@@ -4,6 +4,17 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.56] - 2026-09-07
+
+- **Video controls report what they did.** A per-request video control the processor cannot honour as sent (a token budget below the smallest frame grid, a minimum pixel count above the budget, an explicit size the loader rounds, or frames dropped to meet a budget on a frame-fallback family) is applied best-effort and the effective frame count, resolution and media tokens are reported in the response `warnings` on every API and in the chat bubble. Nothing is reported when the request was honoured exactly.
+- **Per-request image controls.** `image_max_pixels`, `image_min_pixels` and `image_resized_height`/`image_resized_width` on Chat, Responses, Anthropic and Ollama bound each image in a request-local copy before the processor; the bound is aligned to the processor's patch grid, every control is part of the cache identity, and a bound the processor's own floor or grid still changes is reported. `image_token_budget` is reported as unsupported on non-Gemma processors instead of being ignored.
+- **Strict media controls.** `media_controls_strict: true` rejects an unmeetable or unsupported control with HTTP 400 `media_controls_unmeetable` on every lane, including the streaming lanes' error events and the Anthropic and Ollama envelopes. Documented in docs/api/media-controls.md.
+- **Frame-fallback video budgets are enforced.** On families that present sampled frames as images, a `video_token_budget` now selects the frame count the image processor's pixel floor allows, and sampled frames no longer count against the request's image limit as if they were user images.
+- **Prefix cache: a partial hit is no longer discarded after the companion delta is accepted.** A hybrid hit whose SSM checkpoint sat less than a block below the KV hit was re-prefilled in full since v1.6.36.
+- **Media prefix cache: cached answers match uncached answers.** The hit path keeps the media positions for the text tail, the text-path seeding no longer clears the rope state, and the media prefill always splits at the clean boundary, so a cached media prompt produces the same output as a cold one at temperature 0.
+- **SSD cache janitor runs while idle.** An idle engine now rescans its cache root after unscanned writes and on a 300-second cadence, so dead-writer temp files and unreferenced payloads age out without a request or a restart; `/health` reports the janitor constants and scan age.
+- **Media prefix cache: a short question after a video is reused.** The store aligns into the media span and the fetch asks for the exact boundary, so a follow-up that ends inside the media still restores.
+
 ## [1.6.55] - 2026-09-06
 
 - **Native MTP: adopting a running engine keeps its sampling policy and depth.** Adoption mapped the Auto session's own `deterministic-defaults` launch policy to the Deterministic override, which the launcher re-emitted as `greedy-only` on the next restart, pinning explicit request temperatures to greedy. Adoption now recovers the live engine's request policy, depth policy and effective depth (from `/health` first, the process arguments second) and maps them back so a restart relaunches the same policy: Auto stays Auto, the Deterministic override stays Deterministic, a disabled engine adopts as Off, and explicit depth 1/2/3 or Adaptive survive. Only an engine that exposes none of this falls back to the family default (fixed depth 3 for Qwen3.8 MTP families, as before).
