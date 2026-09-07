@@ -16587,6 +16587,7 @@ async def create_anthropic_message(
                         "error": {
                             "type": err.get("type", "server_error"),
                             "message": err.get("message", "Generation failed"),
+                            **({"code": err["code"]} if err.get("code") else {}),
                         },
                     },
                 )
@@ -22346,6 +22347,7 @@ async def _adapt_omni_chat_stream_to_responses(
                         "message": error.get(
                             "message", "Omni multimodal generation failed"
                         ),
+                        **({"code": error["code"]} if error.get("code") else {}),
                     },
                 },
             )
@@ -23172,6 +23174,21 @@ async def create_response(
             cc_dict = None
             if isinstance(cc, _JR2):
                 cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
+                if int(getattr(cc, "status_code", 200) or 200) >= 400 and isinstance(cc_dict.get("error"), dict):
+                    # a typed rejection keeps its status and code on the
+                    # Responses door (live: a strict media-control rejection
+                    # became a 200 "incomplete" response)
+                    _e = cc_dict["error"]
+                    return _JR2(
+                        status_code=int(cc.status_code),
+                        content={
+                            "error": {
+                                "type": _e.get("type") or "invalid_request_error",
+                                "message": _e.get("message") or "request rejected",
+                                **({"code": _e["code"]} if _e.get("code") else {}),
+                            }
+                        },
+                    )
             elif isinstance(cc, dict):
                 cc_dict = cc
             if cc_dict is not None:

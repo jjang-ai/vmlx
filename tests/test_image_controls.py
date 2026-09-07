@@ -198,7 +198,11 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
     assert src.count("except MediaControlsUnmeetableError as e:") >= 7  # 4 JSON sites + 3 streaming lanes
     assert src.count('"code": MediaControlsUnmeetableError.code,') >= 4
     assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
-    assert '**({"code": _e["code"]} if _e.get("code") else {})' in src
+    assert src.count('**({"code": _e["code"]} if _e.get("code") else {})') == 2  # anthropic + responses JSON passthroughs
+    assert src.count('**({"code": err["code"]} if err.get("code") else {})') == 1  # anthropic non-omni envelope
+    assert src.count('**({"code": error["code"]} if error.get("code") else {})') == 1  # omni-to-responses error event
+    from vmlx_engine.api import anthropic_adapter
+    assert '**({"code": ecode} if ecode else {})' in inspect.getsource(anthropic_adapter)
     row = ollama_adapter._openai_stream_error_to_ollama({"error": {"message": "budget cannot be met", "type": "invalid_request_error", "code": "media_controls_unmeetable"}})
     assert row == "media_controls_unmeetable: budget cannot be met"
     assert ollama_adapter._openai_stream_error_to_ollama({"error": "plain"}) == "plain"

@@ -775,14 +775,16 @@ class AnthropicStreamAdapter:
         # of silently ending the stream (harnesses cannot recover from silent EOF).
         if isinstance(chunk, dict) and chunk.get("error"):
             err = chunk["error"]
+            ecode = None
             if isinstance(err, dict):
                 etype = err.get("type", "api_error")
                 emsg = err.get("message", str(err))
+                ecode = err.get("code")
             else:
                 etype, emsg = "api_error", str(err)
             events.append(self._sse("error", {
                 "type": "error",
-                "error": {"type": etype, "message": emsg},
+                "error": {"type": etype, "message": emsg, **({"code": ecode} if ecode else {})},
             }))
             self._errored = True
             return events
