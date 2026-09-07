@@ -12634,7 +12634,7 @@ class MLLMBatchGenerator:
                     _diag_array_fp(embeds[:, start:end]), _diag_array_fp(position_ids[..., start:end]) if position_ids is not None else "-",
                 )
             output = lm(input_ids[:, start:end], **call_kwargs)
-            if end == clean_boundary:
+            if end == clean_boundary and getattr(request, "_media_clean_snapshot_allowed", True):
                 self._snapshot_native_media_clean_boundary(request, cache, clean_boundary)
                 if _diag_fingerprints_enabled():
                     logger.info(
@@ -12743,12 +12743,15 @@ class MLLMBatchGenerator:
         if len(tokens) <= 1 or len(tokens) > int(seq_len):
             return 0
         try:
-            if not self._media_prefix_cache_allowed(request, tokens):
-                logger.info(
-                    "MLLM media prefix cache: native boundary not taken for %s (media prefix cache not allowed for this family)",
-                    getattr(request, "request_id", "?"),
-                )
-                return 0
+            # The SPLIT is taken whether or not a snapshot may be stored (a
+            # request with skip_prefix_cache, or a family without a media
+            # prefix cache, still prefills in the same two pieces), so the
+            # answer does not depend on the cache flag: a single-pass prefill
+            # and the split prefill are not bit-identical (live: 45 vs 34
+            # tokens on the long question). Only the snapshot is gated.
+            request._media_clean_snapshot_allowed = bool(  # type: ignore[attr-defined]
+                self._media_prefix_cache_allowed(request, tokens)
+            )
             boundary = int(self._media_clean_cache_boundary_for(request, tokens) or 0)
         except Exception as exc:  # noqa: BLE001
             logger.info("MLLM media prefix cache: native boundary not chosen for %s: %s", getattr(request, "request_id", "?"), exc)

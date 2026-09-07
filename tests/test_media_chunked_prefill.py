@@ -490,3 +490,18 @@ class TestMediaHitTextTailKeepsMRoPEPositions:
         assert not hasattr(req, "_mrope_tail_position_ids")
         gen = self._gen()
         assert gen._mrope_tail_position_ids(SimpleNamespace(request_id="r", image_grid_thw=None, video_grid_thw=None), mx.zeros((1, 10)), 10) is False
+
+
+def test_the_media_split_does_not_depend_on_the_prefix_cache_flag():
+    """A request that may not store (skip_prefix_cache) still prefills in the same two pieces as a storing request,
+    so its answer matches; only the snapshot is skipped. Live: single-pass vs split prefill gave 45 vs 34 tokens."""
+    import mlx.core as mx
+    from types import SimpleNamespace
+    T = TestNativeCleanMediaBoundary
+    tokens = [1] * 4 + [99] * 1760 + [2] * 8; n = len(tokens) + 7
+    gen, cache, req = T()._gen(n, tokens)
+    gen._media_prefix_cache_allowed = lambda r, t: False  # e.g. skip_prefix_cache
+    out = gen._media_forward(req, _FakeIds(n), n, cache, {})
+    assert gen.language_model.spans == [1771, 8]          # split taken
+    assert not hasattr(req, "_media_clean_prefix_cache")  # no snapshot stored
+    assert req._media_clean_snapshot_allowed is False
