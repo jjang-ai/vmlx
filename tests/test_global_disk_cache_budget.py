@@ -1144,8 +1144,8 @@ def test_eviction_totals_accumulate_in_the_shared_ledger_and_survive_a_refresh(t
         health = budget.refresh_health()
         assert health.evicted_entries_total == first.evicted_entries and health.evicted_bytes_total == first.evicted_bytes
         # another writer on the same root (a second coordinator, as the SSM companion store holds) adds to the same ledger
-        _indexed_block(root / "cccccccccccc", "cc-new", size=64_000, accessed=now + 1)
-        other = GlobalDiskCacheBudget(root, 100_000, orphan_grace_seconds=0)  # below the current usage: must evict
+        newest = _indexed_block(root / "cccccccccccc", "cc-new", size=64_000, accessed=now + 1)
+        other = GlobalDiskCacheBudget(root, 150_000, orphan_grace_seconds=0)  # below the current usage (~165 KB): one more eviction
         try:
             third = other.enforce(force=True)
             assert third.evicted_entries >= 1
@@ -1153,6 +1153,7 @@ def test_eviction_totals_accumulate_in_the_shared_ledger_and_survive_a_refresh(t
             assert budget.refresh_health().evicted_entries_total == third.evicted_entries_total
         finally:
             other._remove_lease()
-        assert recent.exists()
+        # LRU across namespaces: the newest block survives every pass
+        assert newest.exists()
     finally:
         budget._remove_lease()
