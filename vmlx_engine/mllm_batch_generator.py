@@ -2095,6 +2095,77 @@ def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, re
         return video_input
 
 
+
+def _diag_fingerprints_enabled() -> bool:
+    return os.environ.get("VMLX_DIAG_RESTORE_FINGERPRINT") in ("1", "true", "True", "yes", "on")
+
+
+def _diag_array_fp(arr: Any, upto: Optional[int] = None, axis: int = -2) -> str:
+    """Compact fingerprint: dtype, shape, float64 sum, max|x|, sha256[:12] of the
+    raw bytes — over positions [:upto] along ``axis`` when given."""
+    try:
+        import hashlib
+        import numpy as np
+
+        x = arr
+        if upto is not None and getattr(x, "ndim", 0) >= 2:
+            index = [slice(None)] * x.ndim
+            index[axis] = slice(0, int(upto))
+            x = x[tuple(index)]
+        n = np.asarray(x.astype(mx.float32)) if hasattr(x, "astype") else np.asarray(x, dtype=np.float32)
+        raw = np.asarray(x)
+        return (
+            f"{getattr(arr, 'dtype', '?')}{list(getattr(x, 'shape', []))} sum={float(n.astype(np.float64).sum()):.6e} "
+            f"max={float(np.abs(n).max()) if n.size else 0.0:.6e} sha={hashlib.sha256(raw.tobytes()).hexdigest()[:12]}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"fp-error:{exc}"
+
+
+def _diag_cache_fingerprint(cache: Optional[List[Any]], kv_positions: Any, upto: int) -> str:
+    """Per-layer fingerprints of a live/restored cache at ``upto`` tokens: the
+    first two KV layers' keys and values, the first two recurrent layers' state
+    arrays, plus every layer's class name."""
+    if not cache:
+        return "no-cache"
+    kv_set = set(kv_positions or [])
+    parts = []
+    kv_done = 0
+    ssm_done = 0
+    classes: Dict[str, int] = {}
+    for idx, c in enumerate(cache):
+        classes[type(c).__name__] = classes.get(type(c).__name__, 0) + 1
+        if idx in kv_set and kv_done < 2:
+            keys = getattr(c, "keys", None)
+            values = getattr(c, "values", None)
+            state = getattr(c, "state", None)
+            if keys is None and state is not None:
+                try:
+                    keys, values = state[0], state[1]
+                except Exception:
+                    pass
+            if keys is not None:
+                parts.append(f"L{idx}[{type(c).__name__} off={getattr(c, 'offset', None)}] K:{_diag_array_fp(keys, upto)} V:{_diag_array_fp(values, upto) if values is not None else '-'}")
+                kv_done += 1
+        elif idx not in kv_set and ssm_done < 2 and hasattr(c, "cache") and isinstance(c.cache, list):
+            arrs = [a for a in c.cache if a is not None]
+            parts.append(f"L{idx}[{type(c).__name__}] " + " ".join(f"s{j}:{_diag_array_fp(a)}" for j, a in enumerate(arrs[:2])))
+            ssm_done += 1
+    return f"classes={classes} " + " | ".join(parts)
+
+
+def _diag_logits_fp(output: Any) -> str:
+    try:
+        import numpy as np
+
+        logits = getattr(output, "logits", output)
+        last = logits[:, -1, :] if getattr(logits, "ndim", 0) == 3 else logits
+        row = np.asarray(last.astype(mx.float32)).reshape(-1)
+        top = np.argsort(row)[-2:][::-1]
+        return f"argmax={int(top[0])} margin={float(row[top[0]] - row[top[1]]):.6e} {_diag_array_fp(last)}"
+    except Exception as exc:  # noqa: BLE001
+        return f"logits-fp-error:{exc}"
+
 def _call_processor_direct_unscoped(
     processor: Any,
     *,
@@ -12223,6 +12294,17 @@ class MLLMBatchGenerator:
             position_ids = getattr(self.language_model, "_position_ids", None)
             if position_ids is None or position_ids.shape[-1] != full_input_ids.shape[1]:
                 raise ValueError("Qwen wrapper returned incomplete mRoPE positions")
+            if _diag_fingerprints_enabled():
+                logger.info(
+                    "restore fingerprint WARM cache-at-boundary for %s at %d: %s",
+                    getattr(request, "request_id", "?"), cached_tokens,
+                    _diag_cache_fingerprint(cache, self._hybrid_kv_positions, cached_tokens),
+                )
+                logger.info(
+                    "restore fingerprint WARM tail-inputs for %s [%d:%d]: embeds %s positions %s",
+                    getattr(request, "request_id", "?"), cached_tokens, int(full_input_ids.shape[1]),
+                    _diag_array_fp(embeds[:, cached_tokens:]), _diag_array_fp(position_ids[..., cached_tokens:]),
+                )
 
             output = None
             tail_len = int(input_ids.shape[1])
@@ -12240,6 +12322,8 @@ class MLLMBatchGenerator:
                 )
             if output is None:
                 raise ValueError("Qwen conditioned tail produced no output")
+            if _diag_fingerprints_enabled():
+                logger.info("restore fingerprint WARM first-token logits for %s: %s", getattr(request, "request_id", "?"), _diag_logits_fp(output))
             logger.info(
                 "Qwen HYBRID conditioned media tail forwarded for %s: "
                 "%d cached + %d conditioned tokens",
@@ -12483,9 +12567,23 @@ class MLLMBatchGenerator:
                 call_kwargs["per_layer_inputs"] = per_layer_inputs
             if image_mask is not None and "image_mask" in lm_names:
                 call_kwargs["image_mask"] = image_mask[:, start:end]
+            if _diag_fingerprints_enabled() and clean_boundary > 0 and start == clean_boundary:
+                logger.info(
+                    "restore fingerprint COLD tail-inputs for %s [%d:%d]: embeds %s positions %s",
+                    getattr(request, "request_id", "?"), start, end,
+                    _diag_array_fp(embeds[:, start:end]), _diag_array_fp(position_ids[..., start:end]) if position_ids is not None else "-",
+                )
             output = lm(input_ids[:, start:end], **call_kwargs)
             if end == clean_boundary:
                 self._snapshot_native_media_clean_boundary(request, cache, clean_boundary)
+                if _diag_fingerprints_enabled():
+                    logger.info(
+                        "restore fingerprint COLD cache-at-boundary for %s at %d: %s",
+                        getattr(request, "request_id", "?"), clean_boundary,
+                        _diag_cache_fingerprint(cache, self._hybrid_kv_positions, clean_boundary),
+                    )
+            if _diag_fingerprints_enabled() and clean_boundary > 0 and end == seq_len and output is not None:
+                logger.info("restore fingerprint COLD first-token logits for %s: %s", getattr(request, "request_id", "?"), _diag_logits_fp(output))
             if end == seq_len and output is not None:
                 # The final chunk is the only logits payload the caller uses.
                 # Keep just that token and realize it before clearing MLX's
