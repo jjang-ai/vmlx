@@ -338,16 +338,21 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
 
   const isRunning = session.status === 'running' || session.status === 'loading'
 
+  // Keyboard parity with the modal: Escape closes the drawer while it is
+  // mounted, wherever focus sits. After a keyboard save the Save button
+  // disables itself and focus falls to the body, so a handler scoped to the
+  // drawer element never saw the key (live: drawer stayed open). A native
+  // <select> consumes Escape for its own list first (defaultPrevented).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
     <div
       data-vmlx-surface="server-settings"
       className="w-full max-w-96 h-full border-l border-border bg-card flex flex-col overflow-hidden flex-shrink-0"
-      onKeyDown={e => {
-        // Keyboard parity with the modal: Escape closes the drawer when focus
-        // is inside it. A native <select> consumes Escape to close its own
-        // list first, so this only fires once the list is closed.
-        if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); onClose() }
-      }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">

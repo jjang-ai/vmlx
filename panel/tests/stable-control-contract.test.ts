@@ -73,8 +73,10 @@ describe('stable control contract (data-vmlx-*)', () => {
 describe('keyboard interaction on the server settings drawer', () => {
   it('Escape closes the drawer from anywhere inside it (parity with the modal)', () => {
     const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'ServerSettingsDrawer.tsx'), 'utf8')
-    const surface = src.slice(src.indexOf('data-vmlx-surface="server-settings"'))
-    expect(surface.slice(0, 900)).toContain("if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); onClose() }")
+    // document-level while mounted: after a keyboard save the focused Save button disables itself and focus
+    // falls to the body, so a drawer-scoped key handler never saw Escape (live contract run at c740cac8)
+    expect(src).toContain("const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose() }")
+    expect(src).toContain("document.addEventListener('keydown', onKey)")
   })
 })
 
