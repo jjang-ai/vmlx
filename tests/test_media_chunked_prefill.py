@@ -420,17 +420,18 @@ class TestNativeCleanMediaBoundary:
 
     def test_splits_at_the_boundary_and_snapshots_the_recurrent_state_there(self):
         import mlx.core as mx
-        tokens = [1] * 4 + [99] * 1760 + [2] * 8  # N=1772, media 4..1764, exact N-1 = 1771
-        gen, cache, req = self._gen(len(tokens), tokens)
+        tokens = [1] * 4 + [99] * 1760 + [2] * 8  # cache-key tokens: 1772, media 4..1764, exact N-1 = 1771
+        n = len(tokens) + 7  # the processed input carries a 7-token generation-prompt suffix the key excludes (live 1772 vs 1779)
+        gen, cache, req = self._gen(n, tokens)
         from tests.test_media_chunked_prefill import _FakeIds
-        out = gen._media_forward(req, _FakeIds(len(tokens)), len(tokens), cache, {})
-        assert gen.language_model.spans == [1771, 1]
+        out = gen._media_forward(req, _FakeIds(n), n, cache, {})
+        assert gen.language_model.spans == [1771, 8]
         assert req._media_clean_prefix_len == 1771 and req._media_clean_native is True
         snap = req._media_clean_prefix_cache
         assert snap[0] is cache[0]  # KV layers are not cloned (the paged store slices the main cache)
         assert snap[1] is not cache[1]
-        assert float(snap[1].cache[0].item()) == 1771.0  # state at the boundary, not at the end (1772)
-        assert float(cache[1].cache[0].item()) == 1772.0
+        assert float(snap[1].cache[0].item()) == 1771.0  # state at the boundary, not at the end (1779)
+        assert float(cache[1].cache[0].item()) == 1779.0
 
     def test_warm_requests_and_non_hybrid_models_keep_the_previous_behavior(self):
         tokens = [1] * 4 + [99] * 1760 + [2] * 8

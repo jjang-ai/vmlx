@@ -12573,17 +12573,24 @@ class MLLMBatchGenerator:
             return 0
         if getattr(request, "_media_clean_prefix_cache", None) is not None:
             return 0
+        # The cache-key tokens exclude the generation-prompt suffix the
+        # processed input carries (live: 1,772 key tokens for 1,779 input
+        # ids), so the key is a PREFIX of the input, never its full length.
         tokens = list(getattr(request, "_original_token_ids", None) or [])
-        if len(tokens) <= 1 or len(tokens) != int(seq_len):
+        if len(tokens) <= 1 or len(tokens) > int(seq_len):
             return 0
         try:
             if not self._media_prefix_cache_allowed(request, tokens):
+                logger.info(
+                    "MLLM media prefix cache: native boundary not taken for %s (media prefix cache not allowed for this family)",
+                    getattr(request, "request_id", "?"),
+                )
                 return 0
             boundary = int(self._media_clean_cache_boundary_for(request, tokens) or 0)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("native media boundary not chosen for %s: %s", getattr(request, "request_id", "?"), exc)
+            logger.info("MLLM media prefix cache: native boundary not chosen for %s: %s", getattr(request, "request_id", "?"), exc)
             return 0
-        if boundary <= 0 or boundary >= int(seq_len):
+        if boundary <= 0 or boundary >= len(tokens):
             return 0
         return boundary
 
