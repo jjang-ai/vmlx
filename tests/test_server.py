@@ -642,7 +642,13 @@ class TestHelperFunctions:
         assert chat_stream_src.count("except (PromptTooLongError") == 1
         assert "code\": \"prompt_too_long\"" in chat_stream_src
         assert "PromptTooLongError" in responses_stream_src
-        assert "code\": \"prompt_too_long\"" in responses_stream_src
+        # the Responses stream maps PromptTooLong/PrefillAdmission to the typed
+        # code inside ONE fatal handler that ends with response.failed
+        assert '"prompt_too_long"' in responses_stream_src
+        typed_handler = responses_stream_src[
+            responses_stream_src.index("MediaControlsUnmeetableError,") :
+        ]
+        assert typed_handler.index('"prompt_too_long"') < typed_handler.index('"response.failed"')
 
     def test_is_mllm_model_detection(self, tmp_path):
         """Test MLLM model detection via config.json and force flag.
@@ -3618,6 +3624,95 @@ class TestOpenAILogprobsFormatting:
         assert "response.output_text.delta" in event_types
         assert event_types.index("error") < event_types.index("response.failed")
         assert not any(event.get("type") == "response.completed" for event in events)
+        assert len(_Engine.aborted) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc_factory, expected_code",
+        [
+            (
+                lambda: __import__(
+                    "vmlx_engine.errors", fromlist=["MediaControlsUnmeetableError"]
+                ).MediaControlsUnmeetableError("video_controls: cannot fit 64 frames"),
+                "media_controls_unmeetable",
+            ),
+            (
+                lambda: __import__(
+                    "vmlx_engine.errors", fromlist=["PromptTooLongError"]
+                ).PromptTooLongError(prompt_tokens=9000, max_prompt_tokens=4096),
+                "prompt_too_long",
+            ),
+        ],
+    )
+    async def test_streaming_responses_typed_rejection_emits_failed_terminal(
+        self, monkeypatch, exc_factory, expected_code
+    ):
+        """A typed request rejection is FATAL for the Responses stream.
+
+        Live at e6262e3a (strict-multi-4S-033105 resp_b8b3d8425246): the typed
+        handlers yielded the ``error`` event and then fell through into the
+        normal finalization, which emitted ``response.completed`` with an
+        empty output — a fatal rejection reported as a success. The stream
+        must end with ``response.failed`` carrying the typed code.
+        """
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+
+        exc = exc_factory()
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+            aborted = []
+
+            async def stream_chat(self, *, messages, **kwargs):
+                raise exc
+                yield  # pragma: no cover - makes this an async generator
+
+            async def abort_request(self, request_id):
+                self.aborted.append(request_id)
+                return True
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "rejection-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ResponsesRequest(
+            model="rejection-test",
+            input="reject me",
+            stream=True,
+            enable_thinking=False,
+        )
+
+        events = []
+        async for chunk in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "reject me"}],
+            request,
+            fastapi_request=None,
+        ):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line.removeprefix("data: ")))
+
+        event_types = [event.get("type") for event in events]
+        errors = [event for event in events if event.get("type") == "error"]
+        assert len(errors) == 1
+        assert errors[0]["error"]["code"] == expected_code
+        failed = [event for event in events if event.get("type") == "response.failed"]
+        assert len(failed) == 1
+        assert failed[0]["response"]["status"] == "failed"
+        assert failed[0]["response"]["error"]["code"] == expected_code
+        assert event_types[-1] == "response.failed"
+        assert event_types.index("error") < event_types.index("response.failed")
+        # never a success terminal, never an empty message after the rejection
+        assert "response.completed" not in event_types
+        assert "response.output_item.added" not in event_types
+        assert "response.output_text.delta" not in event_types
         assert len(_Engine.aborted) == 1
 
     @pytest.mark.asyncio

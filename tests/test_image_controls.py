@@ -196,7 +196,10 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
 
     src = open(server.__file__).read()
     assert "@app.exception_handler(MediaControlsUnmeetableError)" in src
-    assert src.count("except MediaControlsUnmeetableError as e:") >= 7  # 4 JSON sites + 3 streaming lanes
+    # 4 JSON sites + chat/anthropic streaming lanes name it alone; the Responses
+    # stream names it in ONE fatal tuple handler (error -> response.failed)
+    assert src.count("except MediaControlsUnmeetableError as e:") >= 6
+    assert src.count("        MediaControlsUnmeetableError,\n        PromptTooLongError,") == 1
     assert src.count('"code": MediaControlsUnmeetableError.code,') >= 4
     assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
     assert src.count('**({"code": _e["code"]} if _e.get("code") else {})') == 2  # anthropic + responses JSON passthroughs
