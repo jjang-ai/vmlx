@@ -1964,6 +1964,10 @@ class Qwen4ExpTextModel(nn.Module):
         if cache is None:
             cache = [None] * len(self.layers)
         _layer_fp = _layer_fingerprint_enabled(inputs)
+        if _layer_fp:
+            _log_layer_fingerprint(-1, h, cache[0] if cache else None)  # input to layer 0
+            if _contiguous_state_experiment_enabled():
+                _materialize_recurrent_state(cache)
         for layer_index, (layer, c) in enumerate(zip(self.layers, cache)):
             h = layer(
                 h,
@@ -2005,6 +2009,29 @@ def _layer_fingerprint_enabled(inputs) -> bool:
         return False
     _LAYER_FP_STEPS["n"] += 1
     return True
+
+
+def _contiguous_state_experiment_enabled() -> bool:
+    import os
+
+    return os.environ.get("VMLX_DIAG_CONTIGUOUS_STATE") in ("1", "true", "True", "yes", "on")
+
+
+def _materialize_recurrent_state(cache) -> None:
+    """Experiment: rewrite every recurrent state array as a contiguous,
+    evaluated array before the decode step, on whichever path runs."""
+    for c in cache or []:
+        state = getattr(c, "cache", None)
+        if isinstance(state, list):
+            new = []
+            for a in state:
+                if a is None:
+                    new.append(None)
+                else:
+                    b = mx.contiguous(a)
+                    mx.eval(b)
+                    new.append(b)
+            c.cache = new
 
 
 def _log_layer_fingerprint(layer_index: int, h, c) -> None:
