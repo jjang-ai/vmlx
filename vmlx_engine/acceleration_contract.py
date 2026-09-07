@@ -26,6 +26,8 @@ _FAMILY_ALIASES = {
     "qwen3_5_moe_text": "qwen3_5_moe",
     "glm5_next": "glm5_next",
     "deepseek_v4": "deepseek_v4",
+    "ernie4_5_moe": "ernie4_5",
+    "ernie4_5": "ernie4_5",
 }
 
 
@@ -409,6 +411,25 @@ _FAMILIES: dict[str, dict[str, Any]] = {
                 scopes=("prefill", "ar_decode", "mtp_decode"),
                 default=True,
                 env=("VMLX_DSV4_ROPE_CACHE",),
+            ),
+        ],
+    },
+    "ernie4_5": {
+        "display_family": "ERNIE-4.5",
+        "native_state": ["MoE"],
+        "features": [
+            _feature(
+                "mtp_prompt_priming",
+                label="ERNIE MTP-head prompt-history priming",
+                kind="state_algorithm",
+                scopes=("prefill", "mtp_decode"),
+                default=True,
+                # Same order as batch_generator._TEXT_PROMPT_PRIMING_FLAGS so the
+                # report and the runtime gate agree when both aliases are set.
+                env=(
+                    "VMLINUX_ERNIE45_MTP_PROMPT_PRIMING",
+                    "VMLX_ERNIE45_MTP_PROMPT_PRIMING",
+                ),
             ),
         ],
     },

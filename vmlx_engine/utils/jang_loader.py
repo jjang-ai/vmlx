@@ -1843,6 +1843,20 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
 
     ensure_spark2_5_runtime_registered(path, config=config)
 
+    if "ernie4_5_moe" in model_types:
+        # vMLX-owned runtime installed OVER upstream mlx-lm's ernie4_5_moe, which
+        # drops the router selection bias (models/ernie4_5/ernie4_5_moe.py).
+        # Registering here covers every load path, not just the CLI entry.
+        try:
+            from vmlx_engine.models.ernie4_5.register import register_ernie4_5_runtime
+
+            register_ernie4_5_runtime()
+        except Exception as exc:
+            raise RuntimeError(
+                f"ERNIE-4.5 (ernie4_5_moe) bundle at {path} requires the vendored "
+                f"vmlx_engine/models/ernie4_5 runtime, but registration failed: {exc}"
+            ) from exc
+
     if "openpangu_v2" in model_types:
         # vMLX-owned vendored runtime (no upstream mlx-lm/jang_tools package).
         # Registering here covers every load path, not just the CLI entry.
@@ -5298,6 +5312,11 @@ def load_jang_model(
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract
 
         model, tokenizer = result
+        # ERNIE sanitizes shard-local dictionaries; absence can only be decided
+        # once the public loader has consumed the complete checkpoint.
+        finalize_ernie = getattr(model, "finalize_ernie_weight_loading", None)
+        if callable(finalize_ernie):
+            finalize_ernie()
         validate_nanbeige_loop_cache_contract(
             model,
             path,

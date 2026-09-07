@@ -52,6 +52,8 @@ _FAMILY_ALIAS = {
     "qwen3_6_text": "qwen3_5",
     "qwen3_5_moe_text": "qwen3_5_moe",
     "qwen4_exp_text": "qwen4_exp",
+    # config.model_type for the ERNIE-4.5 MoE checkpoints; registry family is ernie4_5
+    "ernie4_5_moe": "ernie4_5",
 }
 
 # Keep this narrow. The copied mlx-lm patch currently wires Qwen3.5/3.6 MTP
@@ -66,6 +68,11 @@ _RUNTIME_SUPPORTED_FAMILIES = {
     "qwen3_5_moe",
     "qwen4_exp",
     "hy_v3",
+    # ernie4_5: vMLX-owned models/ernie4_5 runtime exposes the full contract
+    # (model.mtp module, mtp_forward taking the backbone's pre-norm hidden and
+    # applying model.norm itself, make_mtp_cache = one KVCache). Head parity
+    # gated against a plain-torch reference (see the introducing PR).
+    "ernie4_5",
     # glm5_next: the vendored model owns the layer-45 draft head, pre-output
     # hidden handoff, KDA accepted-prefix snapshots, and trimmable MLA cache.
     # It runs through the same GenerationBatch verifier as Qwen.
@@ -604,10 +611,16 @@ def _index_mtp_keys(bundle_path: str | Path | None) -> tuple[list[str], str | No
 
 
 def _mtp_keys_from_weight_keys(weight_keys: list[str]) -> list[str]:
+    # `mtp.` covers Qwen/DeepSeek-style heads. ERNIE-4.5 ships its head as
+    # `model.mtp_block.N.*`, `model.mtp_emb_norm.N`, `model.mtp_hidden_norm.N`,
+    # `model.mtp_linear_proj.N` (underscore, no `mtp.` segment), so without the
+    # second alternative a preserved ERNIE head counts as 0 tensors and the
+    # status reads "not declared" although config.num_nextn_predict_layers=1.
     return [
         str(key)
         for key in weight_keys
         if re.search(r"(^|\.)mtp(\.|$)", str(key))
+        or re.search(r"(^|\.)mtp_(block|emb_norm|hidden_norm|linear_proj)(\.|$)", str(key))
     ]
 
 
@@ -616,6 +629,8 @@ _MTP_LAYER_PATTERNS = (
     re.compile(r"^mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp_layers\.(\d+)(?:\.|$)"),
+    # ERNIE-4.5: one decoder block per draft step under model.mtp_block.<n>
+    re.compile(r"(?:^|\.)mtp_block\.(\d+)(?:\.|$)"),
 )
 
 
@@ -865,6 +880,10 @@ def native_mtp_effective_depth(
         family = None
     if family == "hy_v3":
         return 1, "family_default:hy_v3"
+    if family == "ernie4_5":
+        # D1 is the conservative seed; deeper chaining has prompt-dependent
+        # speedups and requires an explicit override or validated tuning.
+        return 1, "family_default:ernie4_5"
     return max(1, min(native_mtp_max_depth(), depth)), source
 
 

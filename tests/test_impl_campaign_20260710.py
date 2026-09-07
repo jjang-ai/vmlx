@@ -208,7 +208,8 @@ def test_ui_defaults_prefix_on_paged_off_and_hy3_mtp_native_type_visible():
     assert "usePagedCache: config.usePagedCache ?? false" in registry
     assert "config.isMultimodal ? false : true" not in registry
     assert "'hy_v3'" in registry
-    assert "nativeCacheType: hy3 ? 'plain_kv_v1'" in " ".join(registry.split())
+    # Both HY3 and ERNIE expose plain attention state through native MTP.
+    assert "nativeCacheType: hy3 || ernie45 ? 'plain_kv_v1'" in " ".join(registry.split())
     # The "native cache: <type>" note renders from the locale catalog since the
     # i18n pass. The invariant is what this test is named for — the DETECTED
     # native cache type (hy3's plain_kv_v1) stays visible in the UI — so assert

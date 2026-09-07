@@ -1369,20 +1369,61 @@ def _glm_aligned_head_cache_enabled(gen_batch: Any) -> bool:
     return value not in {"", "0", "false", "off", "no"}
 
 
+# Text-path prompt priming is a measured, per-family policy.  A family is
+# listed here only once its head-input contract (pre-norm trunk hidden at token
+# t plus token t+1, one KVCache per MTP layer) has been proven.  The default is
+# off until an exact-output A/B shows a wall-speed win (see the Qwen3.5 note in
+# mllm_batch_generator._prepare_native_mtp_prompt_priming); a family measured
+# faster may default on, with its env flag as the explicit opt-out.
+# Value: (default_enabled, env flag names checked in order).
+_TEXT_PROMPT_PRIMING_FLAGS: dict[str, tuple[bool, tuple[str, ...]]] = {
+    "glm5_next": (
+        False,
+        (
+            "VMLINUX_GLM5_MTP_PROMPT_PRIMING",
+            "VMLX_GLM5_MTP_PROMPT_PRIMING",
+        ),
+    ),
+    # ERNIE-4.5-21B-A3B JANG_6M, fixed depth 1, prefix cache off, six greedy
+    # prompts, fresh process per arm (2026-09-05, measurements in the PR that
+    # introduced this family).  64-token replies: acceptance 69.4% -> 85.2%
+    # (deterministic across repeats), tok/s +1.7% / +7% (inside noise).
+    # 256-token replies, three alternating pairs: acceptance 74.4% -> 85.1%,
+    # mean tok/s 111.1 -> 115.9 (+4.3%), within-arm spread <=1.5%, every primed
+    # arm faster than every unprimed arm, output identical in all arms.  The
+    # primed acceptance matches the teacher-forced head top-1 band, so the
+    # unprimed gap was the missing prompt context.  Default on; set the flag
+    # to 0 to opt out.
+    "ernie4_5_moe": (
+        True,
+        (
+            "VMLINUX_ERNIE45_MTP_PROMPT_PRIMING",
+            "VMLX_ERNIE45_MTP_PROMPT_PRIMING",
+        ),
+    ),
+}
+
+
 def _glm_prompt_priming_enabled(model: Any) -> bool:
+    """Whether the text-path prompt-priming seam is armed for ``model``.
+
+    Historic name (GLM was the first family); the gate is table-driven.
+    """
     inner = getattr(model, "language_model", model)
     model_type = getattr(inner, "model_type", None)
     if model_type is None:
         config = getattr(inner, "config", None)
         if isinstance(config, dict):
             model_type = config.get("model_type")
-    if str(model_type or "") != "glm5_next":
+    entry = _TEXT_PROMPT_PRIMING_FLAGS.get(str(model_type or ""))
+    if entry is None:
         return False
-    value = os.environ.get(
-        "VMLINUX_GLM5_MTP_PROMPT_PRIMING",
-        os.environ.get("VMLX_GLM5_MTP_PROMPT_PRIMING", "0"),
-    ).strip().lower()
-    return value not in {"", "0", "false", "off", "no"}
+    default_enabled, flags = entry
+    for name in flags:
+        if name in os.environ:
+            value = os.environ[name].strip().lower()
+            return value not in {"", "0", "false", "off", "no"}
+    return bool(default_enabled)
 
 
 def _trim_glm_head_chain(state: "_MtpState") -> bool:
