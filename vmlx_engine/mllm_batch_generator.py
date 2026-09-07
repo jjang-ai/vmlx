@@ -13615,9 +13615,16 @@ class MLLMBatchGenerator:
                                                     )
                                                 # Fall through to reconstruct with the trimmed
                                                 # block_table + ssm_states.
-                                            else:
+                                            elif not _delta_states:
                                                 # Trim returned None (e.g. checkpoint below
                                                 # one block) — fall back to full prefill.
+                                                # (An accepted DELTA leaves ``trimmed`` None
+                                                # on purpose: the FULL KV hit pairs with the
+                                                # advanced companion; it must fall through
+                                                # to reconstruction, not into this branch.
+                                                # Live: DELTA accepted at 704 tokens, then
+                                                # this branch zeroed the credit and forced a
+                                                # full prefill one millisecond later.)
                                                 self._stats.hybrid_kv_without_ssm_hits += 1
                                                 self._stats.hybrid_kv_without_ssm_tokens += int(
                                                     getattr(block_table, "num_tokens", 0) or 0

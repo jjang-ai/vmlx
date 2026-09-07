@@ -1226,6 +1226,29 @@ class TestPerfCacheTimeouts:
 class TestHybridSSMResumeRemaining:
     """Regression coverage for hybrid SSM resume after a shorter checkpoint."""
 
+    def test_accepted_companion_delta_falls_through_to_reconstruction(self):
+        """vmlx#91 DELTA: when the KV hit runs past the companion checkpoint by less than a block, the
+        companion is advanced to the hit and the FULL block table is kept (``trimmed = None`` on purpose).
+        Since e89006fb the branch after it read ``else:`` and treated that None as "trim returned None ->
+        full prefill": the accepted delta was zeroed a millisecond later (live at 22ee605e: 'DELTA accepted
+        ... kept the full 704-token KV hit' then 'RESUME skipped ... checkpoint at 702 below one block',
+        credited=704 accepted=0, cached_tokens=0). The below-one-block branch must be guarded by
+        ``not _delta_states`` so an accepted delta reaches reconstruction."""
+        import inspect
+
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        accepted = source.index('f"vmlx#91 DELTA accepted for "')
+        assert "trimmed = None" in source[accepted:accepted + 900]
+        below = source.index("below one block — ", accepted)
+        guard = source.rfind("elif not _delta_states:", accepted, below)
+        assert guard != -1, "the below-one-block fallback must be an 'elif not _delta_states:' branch"
+        assert "else:\n" not in source[guard:below].replace(" ", ""), "no bare else may sit between the delta guard and the below-one-block fallback"
+        # the misalignment refusal is likewise delta-guarded
+        misaligned = source.index("is not block-aligned", accepted)
+        assert "not _delta_states" in source[accepted:misaligned]
+
     def test_mllm_resume_recomputes_remaining_from_trimmed_checkpoint(self):
         """After vmlx#91 trims KV to a shorter SSM checkpoint, MLLM must
         re-feed tokens from that trimmed checkpoint, not from the longer
