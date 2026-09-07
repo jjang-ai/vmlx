@@ -1005,7 +1005,7 @@ class TestFallbackToolPromptFormat:
 
         prompt = (
             "<|im_start|>system\n# Tools\n<tools>\n"
-            '{"type":"function","function":{"name":"list_directory"}}\n'
+            '{"type":"function","function":{"name":"list_directory","description":"List a directory","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}\n'
             "</tools>\n"
             "<tool_call>\n"
             "<function=example_function_name>\n"
@@ -1163,7 +1163,7 @@ class TestFallbackToolPromptFormat:
 
         prompt = (
             "<|im_start|>system\n<tools>\n"
-            '{"type":"function","function":{"name":"list_directory"}}\n'
+            '{"type":"function","function":{"name":"list_directory","description":"List a directory","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}\n'
             "</tools>\n"
             "<tool_call>\n<function=example_function_name>\n"
             "<parameter=example_parameter_1>value_1</parameter>\n"
@@ -1219,7 +1219,7 @@ class TestFallbackToolPromptFormat:
 
         prompt = (
             "<|im_start|>system\n<tools>\n"
-            '{"type":"function","function":{"name":"read_file"}}\n'
+            '{"type":"function","function":{"name":"read_file","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}\n'
             "</tools>\n"
             "<tool_call>\n<function=example_function_name>\n"
             "<parameter=example_parameter_1>value_1</parameter>\n"
@@ -1289,7 +1289,7 @@ class TestFallbackToolPromptFormat:
 
         prompt = (
             "<|im_start|>system\n<tools>\n"
-            '{"type":"function","function":{"name":"read_file"}}\n'
+            '{"type":"function","function":{"name":"read_file","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}\n'
             "</tools>\n"
             "<tool_call>\n<function=example_function_name>\n"
             "<parameter=example_parameter_1>value_1</parameter>\n"
