@@ -69,3 +69,11 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(src.indexOf("t('sessions.config.multimodalSupport')")).toBeGreaterThan(src.indexOf('sectionKey="multimodal"'))
   })
 })
+
+describe('keyboard interaction on the server settings drawer', () => {
+  it('Escape closes the drawer from anywhere inside it (parity with the modal)', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'ServerSettingsDrawer.tsx'), 'utf8')
+    const surface = src.slice(src.indexOf('data-vmlx-surface="server-settings"'))
+    expect(surface.slice(0, 900)).toContain("if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); onClose() }")
+  })
+})
