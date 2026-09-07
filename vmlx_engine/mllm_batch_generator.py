@@ -12377,7 +12377,18 @@ class MLLMBatchGenerator:
         # the common case and one-shot is strictly better for it: one pass
         # over the weights instead of several, and the peak was never the
         # problem at that size.
-        if chunk <= 0 or seq_len <= max(chunk, _MEDIA_PREFILL_CHUNK_MIN_SEQ):
+        # The clean media boundary is a chunk edge of the MAIN forward: the
+        # recurrent (SSM) layers are snapshotted there natively, so the stored
+        # companion is the very state the cold answer was computed from. The
+        # auxiliary clean prefill it replaces re-ran the truncated prefix as a
+        # separate forward whose recurrent state differs numerically from the
+        # main pass — measured live as a deterministic wording change between
+        # cached and uncached answers on media prompts only (text prompts,
+        # whose stores slice the main pass, were byte-identical).
+        clean_boundary = self._native_media_clean_boundary(request, seq_len, cache)
+        if clean_boundary <= 0 and (
+            chunk <= 0 or seq_len <= max(chunk, _MEDIA_PREFILL_CHUNK_MIN_SEQ)
+        ):
             return one_shot()
 
         try:
@@ -12414,7 +12425,13 @@ class MLLMBatchGenerator:
         except Exception:
             token_list = None
         runs = _media_placeholder_runs(token_list, media_ids)
-        bounds = _media_chunk_boundaries(seq_len, chunk, runs)
+        bounds = (
+            _media_chunk_boundaries(seq_len, chunk, runs)
+            if chunk > 0 and seq_len > max(chunk, _MEDIA_PREFILL_CHUNK_MIN_SEQ)
+            else [seq_len]
+        )
+        if clean_boundary > 0:
+            bounds = sorted(set(bounds) | {int(clean_boundary)})
 
         # Verify the invariant the wrapper asked for instead of trusting it.
         _split_run = None
@@ -12467,6 +12484,8 @@ class MLLMBatchGenerator:
             if image_mask is not None and "image_mask" in lm_names:
                 call_kwargs["image_mask"] = image_mask[:, start:end]
             output = lm(input_ids[:, start:end], **call_kwargs)
+            if end == clean_boundary:
+                self._snapshot_native_media_clean_boundary(request, cache, clean_boundary)
             if end == seq_len and output is not None:
                 # The final chunk is the only logits payload the caller uses.
                 # Keep just that token and realize it before clearing MLX's
@@ -12488,6 +12507,126 @@ class MLLMBatchGenerator:
                 pass
             start = end
         return output
+
+    def _diag_native_vs_aux_media_boundary(self, request: "MLLMBatchRequest", tokens: List[int]) -> None:
+        """Opt-in (VMLX_DIAG_MEDIA_BOUNDARY_DIFF=1): also run the auxiliary
+        clean prefill the native snapshot replaced and log, per recurrent
+        layer, how far its state at the boundary is from the main forward's.
+        This is the evidence for the cached-vs-uncached wording difference:
+        the two forwards do not agree numerically on the recurrent state."""
+        if os.environ.get("VMLX_DIAG_MEDIA_BOUNDARY_DIFF") not in ("1", "true", "True", "yes", "on"):
+            return
+        boundary = int(getattr(request, "_media_clean_prefix_len", 0) or 0)
+        native = getattr(request, "_media_clean_prefix_cache", None)
+        if boundary <= 0 or not native:
+            return
+        try:
+            aux = self._prefill_for_clean_media_prefix_cache(request, list(tokens[:boundary]))
+        except Exception as exc:  # noqa: BLE001
+            logger.info("media boundary diag: auxiliary prefill failed for %s: %s", request.request_id, exc)
+            return
+        if not aux:
+            logger.info("media boundary diag: auxiliary prefill returned nothing for %s", request.request_id)
+            return
+        kv_set = set(self._hybrid_kv_positions or [])
+        rows = []
+        for idx, (a, b) in enumerate(zip(native, aux)):
+            if idx in kv_set or _companion_exempt_cache(a):
+                continue
+            if not (hasattr(a, "cache") and hasattr(b, "cache") and isinstance(a.cache, list) and isinstance(b.cache, list)):
+                continue
+            worst = 0.0
+            nonzero = 0
+            for x, y in zip(a.cache, b.cache):
+                if x is None or y is None or getattr(x, "shape", None) != getattr(y, "shape", None):
+                    continue
+                d = float(mx.max(mx.abs(x.astype(mx.float32) - y.astype(mx.float32))).item())
+                worst = max(worst, d)
+                if d > 0:
+                    nonzero += 1
+            rows.append((idx, worst, nonzero))
+        differing = [r for r in rows if r[1] > 0]
+        logger.info(
+            "media boundary diag for %s at %d tokens: %d recurrent layer(s) compared, %d differ between the main "
+            "forward's snapshot and the auxiliary truncated forward; max |diff| per differing layer: %s",
+            request.request_id, boundary, len(rows), len(differing),
+            ", ".join(f"L{i}={w:.3e}" for i, w, _ in differing[:12]) or "none",
+        )
+
+    def _native_media_clean_boundary(
+        self, request: "MLLMBatchRequest", seq_len: int, cache: Optional[List[Any]]
+    ) -> int:
+        """The clean media boundary to snapshot INSIDE the main forward, or 0.
+
+        Cold hybrid media requests only (a warm request already owns its
+        boundary). The boundary is the one the fetch side can use
+        (``_media_clean_cache_boundary_for``) and must lie strictly inside the
+        prompt. Opt out with VMLX_DISABLE_NATIVE_MEDIA_BOUNDARY=1 (the
+        auxiliary clean prefill then runs as before)."""
+        if os.environ.get("VMLX_DISABLE_NATIVE_MEDIA_BOUNDARY") in ("1", "true", "True", "yes", "on"):
+            return 0
+        if cache is None or not getattr(self, "_is_hybrid", False) or getattr(self, "_ssm_state_cache", None) is None:
+            return 0
+        if not getattr(self, "_hybrid_kv_positions", None):
+            return 0
+        if int(getattr(request, "_cached_tokens", 0) or 0) > 0:
+            return 0
+        if getattr(request, "_media_clean_prefix_cache", None) is not None:
+            return 0
+        tokens = list(getattr(request, "_original_token_ids", None) or [])
+        if len(tokens) <= 1 or len(tokens) != int(seq_len):
+            return 0
+        try:
+            if not self._media_prefix_cache_allowed(request, tokens):
+                return 0
+            boundary = int(self._media_clean_cache_boundary_for(request, tokens) or 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("native media boundary not chosen for %s: %s", getattr(request, "request_id", "?"), exc)
+            return 0
+        if boundary <= 0 or boundary >= int(seq_len):
+            return 0
+        return boundary
+
+    def _snapshot_native_media_clean_boundary(
+        self, request: "MLLMBatchRequest", cache: List[Any], boundary: int
+    ) -> None:
+        """Clone the recurrent layers of the live cache at ``boundary`` and
+        stash them where the store reads the clean media companion from
+        (``_media_clean_prefix_cache`` / ``_media_clean_prefix_len``)."""
+        from copy import deepcopy
+
+        kv_set = set(self._hybrid_kv_positions or [])
+        clean: List[Any] = []
+        materialize: List[Any] = []
+        for layer_idx, cache_obj in enumerate(cache):
+            if layer_idx in kv_set or _companion_exempt_cache(cache_obj):
+                clean.append(cache_obj)
+                continue
+            if hasattr(cache_obj, "cache") and isinstance(cache_obj.cache, list):
+                cloned = deepcopy(cache_obj)
+                cloned_cache = []
+                for arr in cache_obj.cache:
+                    if arr is None:
+                        cloned_cache.append(None)
+                        continue
+                    contiguous = mx.contiguous(arr)
+                    cloned_cache.append(contiguous)
+                    materialize.append(contiguous)
+                cloned.cache = cloned_cache
+                clean.append(cloned)
+            else:
+                clean.append(cache_obj)
+        if materialize:
+            mx.eval(*materialize)
+        request._media_clean_prefix_cache = clean  # type: ignore[attr-defined]
+        request._media_clean_prefix_len = int(boundary)  # type: ignore[attr-defined]
+        request._media_clean_native = True  # type: ignore[attr-defined]
+        logger.info(
+            "MLLM media prefix cache: captured clean media boundary NATIVELY for %s "
+            "at %d tokens inside the main prefill (no auxiliary forward)",
+            getattr(request, "request_id", "?"),
+            int(boundary),
+        )
 
     def _media_prefill_chunk_tokens(self, seq_len: int) -> int:
         """Chunk size for a media-expanded prefill. BIGGER IS BETTER HERE.
@@ -14272,6 +14411,7 @@ class MLLMBatchGenerator:
                             and getattr(req, "_mixed_swa_boundary", None)
                             is not None
                         )
+                        or getattr(req, "_media_clean_native", False)
                     )
                     if (
                         _native_media_boundary_captured
@@ -14283,6 +14423,8 @@ class MLLMBatchGenerator:
                             "snapshot already captured at end of prefill",
                             req.request_id,
                         )
+                        if getattr(req, "_media_clean_native", False):
+                            self._diag_native_vs_aux_media_boundary(req, _media_tokens)
                     if (
                         int(getattr(req, "_cached_tokens", 0) or 0) == 0
                         and len(_media_tokens) > 1

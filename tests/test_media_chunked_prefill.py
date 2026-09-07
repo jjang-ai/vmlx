@@ -369,3 +369,76 @@ class TestMediaSpansAreNeverSplit:
             assert not (200 < end < 6200), "oversized run was split at %d" % end
         assert bounds[-1] == 9000
         assert all(b2 > b1 for b1, b2 in zip(bounds, bounds[1:]))
+
+
+class TestNativeCleanMediaBoundary:
+    """The clean media boundary is a chunk edge of the MAIN forward and the recurrent layers are snapshotted there,
+    replacing the auxiliary truncated forward whose recurrent state differed numerically from the main pass (live:
+    cached vs uncached wording changed on media prompts only; text stores slice the main pass and were identical)."""
+
+    class _SSM:
+        def __init__(self, arr): self.cache = [arr]
+
+    class _KV:
+        offset = 0
+
+    class _LM:
+        def __init__(self): self.spans = []
+        def __call__(self, inputs, inputs_embeds=None, cache=None, mask=None, position_ids=None):
+            import mlx.core as mx
+            self.spans.append(int(inputs_embeds.shape[1]))
+            # the recurrent state advances with every chunk (so the snapshot at the boundary must differ from the end)
+            cache[1].cache[0] = cache[1].cache[0] + mx.array(float(inputs_embeds.shape[1]))
+            return mx.zeros((1, int(inputs_embeds.shape[1]), 4))
+
+    class _Model:
+        def __init__(self, n): self.n = n
+        def get_input_embeddings(self, ids, **kwargs):
+            import mlx.core as mx
+            from types import SimpleNamespace
+            return SimpleNamespace(inputs_embeds=mx.zeros((1, self.n, 8)))
+        def __call__(self, ids, **kwargs):
+            raise AssertionError("one-shot forward must not run when a native boundary applies")
+
+    def _gen(self, n, tokens, hybrid=True):
+        import mlx.core as mx
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        gen = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        gen.prefill_step_size = 2048
+        gen.model = self._Model(n); gen.language_model = self._LM()
+        gen._is_hybrid = hybrid; gen._ssm_state_cache = object(); gen._hybrid_kv_positions = [0]
+        gen._model_type = "qwen3_5"; gen.block_aware_cache = SimpleNamespace(block_size=64)
+        gen._media_placeholder_token_ids = lambda: {99}
+        gen._media_prefix_cache_allowed = lambda req, toks: True
+        lm = gen.language_model
+        # the language model's position ids for the merged sequence
+        lm._position_ids = mx.broadcast_to(mx.arange(n)[None, None, :], (3, 1, n))
+        cache = [self._KV(), self._SSM(mx.array(0.0))]
+        req = SimpleNamespace(request_id="r", _original_token_ids=tokens, _cached_tokens=0)
+        return gen, cache, req
+
+    def test_splits_at_the_boundary_and_snapshots_the_recurrent_state_there(self):
+        import mlx.core as mx
+        tokens = [1] * 4 + [99] * 1760 + [2] * 8  # N=1772, media 4..1764, exact N-1 = 1771
+        gen, cache, req = self._gen(len(tokens), tokens)
+        from tests.test_media_chunked_prefill import _FakeIds
+        out = gen._media_forward(req, _FakeIds(len(tokens)), len(tokens), cache, {})
+        assert gen.language_model.spans == [1771, 1]
+        assert req._media_clean_prefix_len == 1771 and req._media_clean_native is True
+        snap = req._media_clean_prefix_cache
+        assert snap[0] is cache[0]  # KV layers are not cloned (the paged store slices the main cache)
+        assert snap[1] is not cache[1]
+        assert float(snap[1].cache[0].item()) == 1771.0  # state at the boundary, not at the end (1772)
+        assert float(cache[1].cache[0].item()) == 1772.0
+
+    def test_warm_requests_and_non_hybrid_models_keep_the_previous_behavior(self):
+        tokens = [1] * 4 + [99] * 1760 + [2] * 8
+        gen, cache, req = self._gen(len(tokens), tokens, hybrid=False)
+        assert gen._native_media_clean_boundary(req, len(tokens), cache) == 0
+        gen, cache, req = self._gen(len(tokens), tokens)
+        req._cached_tokens = 1771
+        assert gen._native_media_clean_boundary(req, len(tokens), cache) == 0
+        # media running to the very end: no boundary after it -> 0 (the store's pre-media fallback is not a native snapshot)
+        gen, cache, req = self._gen(1764, [1] * 4 + [99] * 1760)
+        assert gen._native_media_clean_boundary(req, 1764, cache) == 0
