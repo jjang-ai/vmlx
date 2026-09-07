@@ -7744,6 +7744,27 @@ def _parse_tool_calls_with_parser(
                     safe_content = safe_content_fn(output_text) or ""
             return safe_content, None
         result = parser_instance.extract_tool_calls(output_text, request=parser_request)
+        # Raw model tool syntax -> parsed call is otherwise invisible: log a
+        # bounded head/tail of the raw text whenever the parser saw a native
+        # tool block (Muse ATEM multi-parameter values arrived mangled and
+        # nothing showed what the model had written, 2026-09-07).
+        try:
+            _native_markers = tuple(getattr(parser_instance, "NATIVE_MARKERS", ()) or ())
+            if result.tools_called or any(m in output_text for m in _native_markers):
+                from .request_diagnostics import CURRENT_REQUEST_ID as _CUR_RID
+
+                logger.info(
+                    "Tool-call raw for %s (%s): tools_called=%s calls=%d len=%d head=%r tail=%r",
+                    _CUR_RID.get() or "-",
+                    type(parser_instance).__name__,
+                    bool(result.tools_called),
+                    len(result.tool_calls or []),
+                    len(output_text),
+                    output_text[:400],
+                    output_text[-200:] if len(output_text) > 400 else "",
+                )
+        except Exception:  # noqa: BLE001 - telemetry must never change parsing
+            pass
         if result.tools_called:
             tool_calls = [
                 ToolCall(
