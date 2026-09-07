@@ -8366,6 +8366,12 @@ class MLLMBatchGenerator:
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
             request.input_ids = cached_pixels.input_ids
+            if os.environ.get("VMLX_PROMPT_DUMP_DIR") and getattr(request.input_ids, "shape", None):
+                _maybe_dump_prompt_tokens(
+                    request.request_id,
+                    request.input_ids.reshape(-1).tolist(),
+                    getattr(self, "tokenizer", None),
+                )
             request.pixel_values = cached_pixels.pixel_values
             request.attention_mask = cached_pixels.attention_mask
             request.image_grid_thw = cached_pixels.image_grid_thw
@@ -8462,6 +8468,12 @@ class MLLMBatchGenerator:
         # Qwen3.5-VL, Gemma 4, and future VLM families without having to
         # special-case each processor's output format.
         request.input_ids = _ensure_mx_array(inputs.get("input_ids"), mx.int32)
+        if os.environ.get("VMLX_PROMPT_DUMP_DIR") and getattr(request.input_ids, "shape", None):
+            _maybe_dump_prompt_tokens(
+                request.request_id,
+                request.input_ids.reshape(-1).tolist(),
+                getattr(self, "tokenizer", None),
+            )
         pixel_values = inputs.get("pixel_values")
         video_pixel_values = inputs.get("pixel_values_videos")
         request.pixel_values = _ensure_mx_array(pixel_values)
@@ -9437,43 +9449,102 @@ class MLLMBatchGenerator:
             span = self._media_placeholder_span(token_ids)
         else:
             span = None
-        chosen = terminal
+        n_minus_1 = len(token_ids) - 1
+
+        def _outside_media(cand: int) -> tuple[bool, Optional[tuple[int, int]]]:
+            run = span
+            if run is None:
+                # Any family: never cut through a contiguous placeholder run.
+                run = self._media_placeholder_run_at(token_ids, cand)
+            if run is None:
+                return True, None
+            return (cand >= run[1] or cand <= run[0]), run
+
+        def _pre_media(run: tuple[int, int]) -> int:
+            before = self._ssm_block_aligned_boundary(run[0])
+            if before <= 0 and block_size > 0:
+                before = (run[0] // block_size) * block_size
+            return before if before > 0 else 0
+
+        request_id = getattr(request, "request_id", "?")
+        # 1. A learned KV-only boundary repairs the miss that taught it. When it
+        #    cuts through media, the sibling prompt that produced it shares the
+        #    prefix up to that media, so the boundary before the media serves
+        #    it; when no such boundary exists (media at the very start) the
+        #    turn still deserves its own after-media boundary below.
         if (
             required > 0
             and required < len(token_ids)
             and block_size > 0
             and required % block_size == 0
         ):
-            logger.info(
-                "MLLM media prefix cache: repairing learned KV-only boundary "
-                "for %s at %d tokens instead of terminal %d",
-                getattr(request, "request_id", "?"),
-                required,
-                terminal,
-            )
-            chosen = required
-        if span is None:
-            # Any family: never cut through a contiguous placeholder run.
-            span = self._media_placeholder_run_at(token_ids, chosen)
-        if span is None:
-            return chosen
-        media_start, media_end = span
-        if chosen >= media_end or chosen <= media_start:
-            return chosen
-        before = self._ssm_block_aligned_boundary(media_start)
-        if before <= 0 and block_size > 0:
-            before = (media_start // block_size) * block_size
+            ok, run = _outside_media(required)
+            if ok:
+                logger.info(
+                    "MLLM media prefix cache: repairing learned KV-only boundary "
+                    "for %s at %d tokens instead of terminal %d",
+                    request_id,
+                    required,
+                    terminal,
+                )
+                return required
+            before = _pre_media(run) if run is not None else 0
+            if before > 0:
+                logger.info(
+                    "MLLM media prefix cache: learned boundary %d for %s would cut "
+                    "through the media span %d..%d (N-1=%d); using the pre-media "
+                    "boundary %d",
+                    required,
+                    request_id,
+                    run[0],
+                    run[1],
+                    n_minus_1,
+                    before,
+                )
+                return before
+        # 2. The block-aligned terminal keeps a checkpoint below the final block
+        #    for a next turn that diverges inside it.
+        ok, first_run = _outside_media(terminal) if terminal > 0 else (False, None)
+        if ok:
+            return terminal
+        # 3. The exact N-1 is what the fetch side asks for on a repeat or a
+        #    longer next turn (the paged chain matches a stored terminal
+        #    checkpoint exactly, partial last block included). Live on
+        #    Flash-Next: a short question after a video had N-1=1771 with the
+        #    media ending at 1764; aligning to 1728 landed inside the video,
+        #    nothing was stored, and the exact repeat then found "1771 KV
+        #    blocks but no SSM companion".
+        if n_minus_1 > 0 and n_minus_1 != terminal:
+            ok, run = _outside_media(n_minus_1)
+            if ok:
+                logger.info(
+                    "MLLM media prefix cache: terminal boundary %d for %s would cut "
+                    "through the media span %d..%d (N-1=%d); using the exact N-1 "
+                    "boundary after the media",
+                    terminal,
+                    request_id,
+                    first_run[0] if first_run else -1,
+                    first_run[1] if first_run else -1,
+                    n_minus_1,
+                )
+                return n_minus_1
+            if first_run is None:
+                first_run = run
+        if first_run is None:
+            return 0
+        media_start, media_end = first_run
+        before = _pre_media(first_run)
         logger.info(
             "MLLM media prefix cache: boundary %d for %s would cut through the "
             "media span %d..%d (N-1=%d); using %s",
-            chosen,
-            getattr(request, "request_id", "?"),
+            terminal,
+            request_id,
             media_start,
             media_end,
-            len(token_ids) - 1,
+            n_minus_1,
             f"the pre-media boundary {before}" if before > 0 else "no boundary (nothing reusable outside the media)",
         )
-        return before if before > 0 else 0
+        return before
 
     def _media_placeholder_run_at(self, token_ids: List[int], boundary: int) -> Optional[tuple[int, int]]:
         """The contiguous placeholder run that ``boundary`` cuts through
@@ -14159,18 +14230,15 @@ class MLLMBatchGenerator:
                         and not _native_media_boundary_captured
                         and self._media_prefix_cache_allowed(req, _media_tokens)
                     ):
-                        # BLOCK-ALIGN the clean media boundary. Capturing at
-                        # N-1 is what made every media turn re-prefill from
-                        # scratch: the paged chain can only ever be MATCHED on
-                        # block boundaries, so a companion stored at 7607 is
-                        # invisible to the next turn's 7488-token block hit,
-                        # and the whole found hit gets discarded with "KV
-                        # blocks found but no SSM companion state". Measured
-                        # live on Qwen3.8 VL: 7,488 tokens found and thrown
-                        # away on turn 3, 7,488 again on turn 4, TTFT climbing
-                        # 35s -> 60s -> 85s until the prompt hit a hard guard
-                        # and the conversation died. Giving up <= block_size-1
-                        # tokens of stored prefix buys back all of it.
+                        # BLOCK-ALIGN the clean media boundary when that keeps
+                        # it outside the media. A companion below the final
+                        # block survives a next turn that diverges inside that
+                        # block (measured live on Qwen3.8 VL: 7,488 tokens found
+                        # and thrown away on turns 3 and 4, TTFT 35s -> 60s ->
+                        # 85s, when the only companion sat at 7607). When the
+                        # aligned boundary lands inside the media span the
+                        # chooser falls back to the exact N-1, which the paged
+                        # fetch matches as a stored terminal checkpoint.
                         _clean_media_len = self._media_clean_cache_boundary_for(
                             req, _media_tokens
                         )

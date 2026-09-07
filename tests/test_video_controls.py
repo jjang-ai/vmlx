@@ -337,19 +337,23 @@ class TestCleanMediaBoundaryMatchesFetchContract:
         tokens = [1] * 100 + [99] * 500 + [2] * 200   # media 100..600, N=800, N-1=799 -> 768 >= 600
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 768
 
-    def test_boundary_inside_media_falls_back_to_pre_media(self):
+    def test_aligned_boundary_inside_media_falls_back_to_the_exact_n_minus_1(self):
         import types
         fake, fn = self._gen()
-        tokens = [1] * 100 + [99] * 680 + [2] * 20    # media 100..780, N-1=799 -> 768 cuts the media -> 64 (before)
-        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 64
+        # media 100..780, N-1=799 -> aligned 768 cuts the media; the exact N-1 sits after it and is what
+        # the paged fetch matches on a repeat or a longer next turn (live: 1771 vs media 4..1764)
+        tokens = [1] * 100 + [99] * 680 + [2] * 20
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 799
         # a tail that leaves an aligned boundary after the media keeps it
         tokens = [1] * 100 + [99] * 650 + [2] * 20    # media 100..750, N-1=769 -> 768 >= 750
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 768
 
-    def test_no_boundary_when_media_starts_in_the_first_block(self):
+    def test_no_boundary_only_when_nothing_lies_outside_the_media(self):
         import types
         fake, fn = self._gen()
-        tokens = [1] * 10 + [99] * 700 + [2] * 20     # media 10..710, N-1=729 -> 704 cuts; before = 0 -> none
+        tokens = [1] * 10 + [99] * 700 + [2] * 20     # media 10..710, N-1=729 -> 704 cuts; exact 729 is after it
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 729
+        tokens = [1] * 10 + [99] * 720                # media runs to the end and starts in the first block -> none
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 0
 
     def test_qwen_family_refuses_any_boundary_inside_the_media_span(self):
@@ -357,7 +361,9 @@ class TestCleanMediaBoundaryMatchesFetchContract:
         fake, fn = self._gen()
         fake._model_type = "qwen4_exp"
         # two videos with text between; N-1 aligned boundary (768) lands between them → still inside the span for Qwen
-        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 40 + [2] * 20    # span 100..940, N-1=959 -> 896 inside the span -> before = 64
+        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 40 + [2] * 20    # span 100..940, N-1=959 -> 896 inside the span -> exact 959
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 959
+        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 60               # media to the end -> pre-media 64
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 64
 
     def test_other_families_keep_a_boundary_between_whole_media_items(self):

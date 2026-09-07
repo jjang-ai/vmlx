@@ -84,6 +84,45 @@ def test_media_required_boundary_inside_a_placeholder_run_moves_before_the_run()
     assert generator._media_clean_cache_boundary_for(request, tokens) == 3968
 
 
+def test_terminal_inside_the_media_falls_back_to_the_exact_n_minus_1_after_it():
+    """Live on Flash-Next (video_cache_chain S1): a short question after a
+    video has N-1=1771 with the video placeholders spanning 4..1764. The
+    block-aligned terminal 1728 lands inside the video, so nothing was stored,
+    and the exact repeat then found "1771 KV blocks but no SSM companion".
+    The paged fetch matches a stored terminal checkpoint exactly, so the
+    exact N-1 is the boundary it will ask for."""
+    generator = _Gen(64).gen
+    generator._media_placeholder_token_ids = lambda: {99}
+    generator._model_type = "qwen3_5"
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=0)
+    tokens = [1] * 4 + [99] * 1760 + [2] * 8  # N=1772, N-1=1771, media 4..1764
+
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 1771
+
+
+def test_learned_boundary_inside_the_media_falls_back_to_the_aligned_terminal():
+    """Live (video_cache_chain M1): the previous turn's KV-only miss taught
+    1728 (inside the video); the terminal 1792 sits after the media and the
+    fetch side would accept it, so the store must not give up on the turn."""
+    generator = _Gen(64).gen
+    generator._media_placeholder_token_ids = lambda: {99}
+    generator._model_type = "qwen3_5"
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=1728)
+    tokens = [1] * 4 + [99] * 1760 + [2] * 43  # N=1807, N-1=1806 -> aligned 1792
+
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 1792
+
+
+def test_nothing_after_the_media_keeps_the_pre_media_fallback():
+    generator = _Gen(64).gen
+    generator._media_placeholder_token_ids = lambda: {99}
+    generator._model_type = "qwen3_5"
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=0)
+    tokens = [1] * 100 + [99] * 1760  # media runs to the end: N-1 is inside it too
+
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 64
+
+
 def test_media_required_boundary_between_whole_media_items_is_kept_for_non_qwen_families():
     generator = _Gen(64).gen
     generator._media_placeholder_token_ids = lambda: {99}
