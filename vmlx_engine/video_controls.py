@@ -675,3 +675,86 @@ def clip_budget_factor(processor: Any = None) -> tuple[int, int]:
     if patch > 0 and merge > 0 and temporal > 0:
         return patch * merge, temporal
     return VIDEO_TOKEN_IMAGE_FACTOR, 2
+
+
+# ── effective-settings reporting (best-effort contract) ─────────────────────
+# The engine never refuses a video because its controls cannot be met exactly;
+# it does the closest thing the processor allows and REPORTS the effective
+# settings in the response ``warnings`` (prefix ``video_controls:``). These
+# builders produce those messages; an empty return means nothing to report
+# (the request was honoured as sent).
+
+def fallback_plan_diagnostics(
+    plan: "FallbackFramePlan",
+    *,
+    sampled: int,
+    pixel_floor: int | None,
+    resize: tuple[int, int] | None = None,
+    token_pixels: int | None = None,
+) -> list[str]:
+    """Messages for the sampled-frame (image) fallback path."""
+    out: list[str] = []
+    floor_txt = f"{pixel_floor} px" if pixel_floor else "unknown"
+    if plan.budget is not None and plan.met is False:
+        out.append(
+            f"video_controls: video_token_budget={plan.budget} cannot be met on the frame fallback: one frame at the "
+            f"image processor floor ({floor_txt}) is {plan.expected_tokens_per_frame} tokens; effective {plan.num_frames} "
+            f"frame(s), {plan.expected_total} media tokens (best effort, request not rejected)"
+        )
+    elif plan.budget is not None and plan.num_frames < min(int(sampled), int(plan.frame_cap)):
+        out.append(
+            f"video_controls: frame fallback kept {plan.num_frames} of {sampled} sampled frames to meet "
+            f"video_token_budget={plan.budget} at the image processor floor ({floor_txt}, {plan.expected_tokens_per_frame} "
+            f"tokens/frame): effective {plan.num_frames} frames x {plan.per_frame_max_pixels} px, {plan.expected_total} media tokens"
+        )
+    if int(sampled) > int(plan.frame_cap):
+        out.append(
+            f"video_controls: {sampled} sampled frames exceed the per-video frame cap {plan.frame_cap} (the request's "
+            f"image limit shared by its videos); effective {plan.num_frames} frames, spread evenly"
+        )
+    if resize is not None and pixel_floor and token_pixels:
+        h, w = int(resize[0]), int(resize[1])
+        if h * w < int(pixel_floor):
+            factor = max(1, int(round(math.sqrt(max(1, int(token_pixels))))))
+            eh, ew = smart_resize_dims(h, w, factor=factor, min_pixels=int(pixel_floor), max_pixels=None)
+            out.append(
+                f"video_controls: explicit size {h}x{w} is below the image processor floor ({pixel_floor} px); "
+                f"each frame is upscaled by the processor: effective {eh}x{ew}, {(eh * ew) // int(token_pixels)} tokens/frame"
+            )
+    return out
+
+
+def clip_budget_diagnostics(
+    controls: "VideoControls",
+    *,
+    num_frames: int,
+    height: int,
+    width: int,
+    resized: tuple[int, int],
+    factor: int,
+    temporal: int,
+) -> list[str]:
+    """Messages for the native clip path (whole sampled clip under one budget)."""
+    out: list[str] = []
+    total = controls.effective_total_pixels()
+    if not total:
+        return out
+    frames = max(1, int(num_frames))
+    t_bar = max(temporal, math.ceil(frames / temporal) * temporal)
+    h_bar, w_bar = int(resized[0]), int(resized[1])
+    tokens = (h_bar // factor) * (w_bar // factor) * (t_bar // temporal)
+    budget = int(controls.token_budget) if controls.token_budget is not None else None
+    min_pixels = int(controls.min_pixels) if controls.min_pixels is not None else None
+    if min_pixels and min_pixels * frames > int(total):
+        out.append(
+            f"video_controls: video_min_pixels={min_pixels} x {frames} frames ({min_pixels * frames} px) exceeds the clip "
+            f"budget ({int(total)} px{f', video_token_budget={budget}' if budget is not None else ''}); the budget wins: "
+            f"clip resized {height}x{width} -> {h_bar}x{w_bar}, {tokens} media tokens"
+        )
+    if budget is not None and tokens > budget:
+        out.append(
+            f"video_controls: video_token_budget={budget} cannot be met: the smallest clip grid is {factor}x{factor} per "
+            f"frame pair ({t_bar // temporal} pairs for {frames} frames = {tokens} tokens); effective {h_bar}x{w_bar} frames, "
+            f"{tokens} media tokens (best effort, request not rejected)"
+        )
+    return out

@@ -7182,9 +7182,13 @@ def get_engine() -> BaseEngine:
     return _engine
 
 
-_TOOL_CALL_DROP_DIAGNOSTICS: contextvars.ContextVar[list[str] | None] = (
-    contextvars.ContextVar("vmlx_tool_call_drop_diagnostics", default=None)
-)
+from .request_diagnostics import DIAGNOSTICS as _REQUEST_DIAGNOSTICS  # noqa: E402
+
+# One bucket for every per-request diagnostic that reaches ``warnings``:
+# dropped tool calls (recorded here) and the engine's effective video settings
+# (recorded off-task by request id and drained into this bucket after
+# generation, see vmlx_engine/request_diagnostics.py).
+_TOOL_CALL_DROP_DIAGNOSTICS: contextvars.ContextVar[list[str] | None] = _REQUEST_DIAGNOSTICS
 
 
 def _begin_tool_call_drop_capture() -> None:

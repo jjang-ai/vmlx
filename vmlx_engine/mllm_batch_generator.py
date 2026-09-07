@@ -2095,6 +2095,17 @@ def _apply_clip_pixel_budget(video_input: Any, controls: Any, processor: Any, re
         factor, temporal = clip_budget_factor(processor)
         min_total = int(getattr(controls, "min_pixels", None) or 0) * frames
         h, w = clip_budget_dims(frames, height, width, total_pixels=int(total), min_total_pixels=min_total, factor=factor, temporal=temporal)
+        try:
+            from .request_diagnostics import record_for
+            from .video_controls import clip_budget_diagnostics
+
+            for _msg in clip_budget_diagnostics(
+                controls, num_frames=frames, height=height, width=width, resized=(h, w), factor=factor, temporal=temporal
+            ):
+                logger.info("%s for %s", _msg, request_id)
+                record_for(request_id, _msg)
+        except Exception as _diag_exc:  # noqa: BLE001
+            logger.debug("clip budget diagnostics skipped: %s", _diag_exc)
         if (h, w) == (height, width) or h <= 0 or w <= 0:
             return video_input
         from PIL import Image

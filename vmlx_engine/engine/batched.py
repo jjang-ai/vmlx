@@ -191,6 +191,17 @@ def _merge_cache_extra_keys(
 
 from ..video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
 
+def _drain_request_diagnostics(request_id: str | None) -> None:
+    """Deliver diagnostics recorded for ``request_id`` off the request's task
+    (scheduler thread) into the request context that assembles ``warnings``."""
+    try:
+        from ..request_diagnostics import drain_into_context
+
+        drain_into_context(request_id)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _bound_video_fallback_frames(
     frames: list[Any],
     *,
@@ -1113,6 +1124,21 @@ class BatchedEngine(BaseEngine):
                         plan.met if plan.met is not None else "-",
                         plan.reason,
                     )
+                    try:
+                        from ..request_diagnostics import record_for
+                        from ..video_controls import fallback_plan_diagnostics
+
+                        for _msg in fallback_plan_diagnostics(
+                            plan,
+                            sampled=sampled,
+                            pixel_floor=image_floor,
+                            resize=video_bounds.resize,
+                            token_pixels=image_token_px,
+                        ):
+                            logger.info("%s for %s", _msg, request_id or "-")
+                            record_for(request_id, _msg)
+                    except Exception as _diag_exc:  # noqa: BLE001
+                        logger.debug("fallback plan diagnostics skipped: %s", _diag_exc)
                     frames = _bound_video_fallback_frames(
                         frames,
                         max_long_edge=video_bounds.max_long_edge,
@@ -2511,6 +2537,8 @@ class BatchedEngine(BaseEngine):
                 _vmlx_template_tools=kwargs.get("_vmlx_template_tools"),
                 _vmlx_tool_choice=kwargs.get("tool_choice"),
             )
+            # effective video settings recorded on the scheduler thread reach this request's warnings
+            _drain_request_diagnostics(request_id)
             _raise_prompt_too_long_from_output(output)
 
             # Preserve raw (pre-clean) output so reasoning parsers on the
@@ -2691,6 +2719,10 @@ class BatchedEngine(BaseEngine):
                     finished=bool(output.finished),
                 )
                 emitted_text += new_text
+                if output.finished:
+                    # before the terminal chunk is yielded: the handler builds
+                    # the warnings array from this context after our last yield
+                    _drain_request_diagnostics(request_id)
                 yield GenerationOutput(
                     text=clean_output_text(output.output_text),
                     new_text=new_text,
@@ -2701,6 +2733,7 @@ class BatchedEngine(BaseEngine):
                     finished=output.finished,
                     finish_reason=output.finish_reason,
                 )
+            _drain_request_diagnostics(request_id)
             return
 
         # Use LLM engine for text-only

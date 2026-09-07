@@ -548,3 +548,101 @@ class TestFrameFallbackPlan:
              {"role": "user", "content": [{"type": "input_video", "video": "c"}]}]
         )
         assert (videos, images) == (2, 1)
+
+
+class TestEffectiveSettingsReporting:
+    """Best-effort contract: when a control cannot be honoured as sent, the response carries a `video_controls:` warning
+    naming the effective settings. Nothing is reported when the request was honoured exactly."""
+
+    GEOM = dict(frame_height=364, frame_width=644, token_pixels=1024, pixel_floor=65536, pixel_ceiling=16_777_216)
+
+    def plan(self, budget, frames=16, cap=20):
+        from vmlx_engine.video_controls import VideoControls, plan_fallback_frames
+
+        return plan_fallback_frames(VideoControls(token_budget=budget, token_pixels=2048), frames_available=frames, frame_cap=cap, **self.GEOM)
+
+    def test_fallback_reduced_frames_are_reported_with_effective_values(self):
+        from vmlx_engine.video_controls import fallback_plan_diagnostics
+
+        msgs = fallback_plan_diagnostics(self.plan(512), sampled=16, pixel_floor=65536, token_pixels=1024)
+        assert len(msgs) == 1 and msgs[0].startswith("video_controls: frame fallback kept 7 of 16 sampled frames")
+        assert "462 media tokens" in msgs[0] and "74898 px" in msgs[0]
+
+    def test_fallback_impossible_budget_reports_best_effort_not_rejection(self):
+        from vmlx_engine.video_controls import fallback_plan_diagnostics
+
+        msgs = fallback_plan_diagnostics(self.plan(4), sampled=16, pixel_floor=65536, token_pixels=1024)
+        assert len(msgs) == 1 and "video_token_budget=4 cannot be met" in msgs[0] and "not rejected" in msgs[0]
+        assert "77 media tokens" in msgs[0]
+
+    def test_fallback_frame_cap_and_explicit_size_below_floor_are_reported(self):
+        from vmlx_engine.video_controls import fallback_plan_diagnostics
+
+        msgs = fallback_plan_diagnostics(self.plan(8192, frames=32, cap=10), sampled=32, pixel_floor=65536, token_pixels=1024, resize=(224, 224))
+        assert any("32 sampled frames exceed the per-video frame cap 10" in m for m in msgs)
+        assert any("explicit size 224x224 is below the image processor floor" in m and "effective 256x256, 64 tokens/frame" in m for m in msgs)
+
+    def test_fallback_honoured_budget_reports_nothing(self):
+        from vmlx_engine.video_controls import fallback_plan_diagnostics
+
+        assert fallback_plan_diagnostics(self.plan(2048), sampled=16, pixel_floor=65536, token_pixels=1024) == []
+
+    def test_native_min_pixels_override_and_impossible_budget_are_reported(self):
+        from vmlx_engine.video_controls import VideoControls, clip_budget_diagnostics, clip_budget_dims
+
+        c = VideoControls(token_budget=256, min_pixels=100352, token_pixels=2048)
+        h, w = clip_budget_dims(16, 364, 644, total_pixels=c.effective_total_pixels(), min_total_pixels=100352 * 16, factor=32, temporal=2)
+        msgs = clip_budget_diagnostics(c, num_frames=16, height=364, width=644, resized=(h, w), factor=32, temporal=2)
+        assert len(msgs) == 1 and "video_min_pixels=100352 x 16 frames" in msgs[0] and "the budget wins" in msgs[0]
+        c4 = VideoControls(token_budget=4, token_pixels=2048)
+        h, w = clip_budget_dims(16, 364, 644, total_pixels=c4.effective_total_pixels(), factor=32, temporal=2)
+        msgs = clip_budget_diagnostics(c4, num_frames=16, height=364, width=644, resized=(h, w), factor=32, temporal=2)
+        assert (h, w) == (32, 32) and len(msgs) == 1 and "video_token_budget=4 cannot be met" in msgs[0] and "8 media tokens" in msgs[0]
+
+    def test_native_honoured_budget_reports_nothing(self):
+        from vmlx_engine.video_controls import VideoControls, clip_budget_diagnostics, clip_budget_dims
+
+        c = VideoControls(token_budget=512, token_pixels=2048)
+        h, w = clip_budget_dims(16, 364, 644, total_pixels=c.effective_total_pixels(), factor=32, temporal=2)
+        assert clip_budget_diagnostics(c, num_frames=16, height=364, width=644, resized=(h, w), factor=32, temporal=2) == []
+
+
+def test_request_diagnostics_registry_drains_into_the_context_bucket():
+    from vmlx_engine import request_diagnostics as rd
+
+    rd.DIAGNOSTICS.set(None)  # another test may have left a capture open in this context
+    with rd._REGISTRY_LOCK:
+        rd._REGISTRY.clear()
+    assert rd.record("x") is False  # no capture running: dropped, never raised
+    rd.record_for("chatcmpl-a", "video_controls: one")
+    rd.record_for("chatcmpl-a", "video_controls: two")
+    assert rd.pending_for("chatcmpl-a") == ["video_controls: one", "video_controls: two"]
+    rd.begin_capture()
+    assert rd.drain_into_context("chatcmpl-a") == 2 and rd.pending_for("chatcmpl-a") == []
+    assert rd.drain_into_context("chatcmpl-missing") == 0
+    assert rd.take() == ["video_controls: one", "video_controls: two"] and rd.take() == []
+    # bounded: the oldest request's entries are dropped past the cap
+    for i in range(rd._REGISTRY_MAX_REQUESTS + 5):
+        rd.record_for(f"r{i}", "m")
+    assert rd.pending_for("r0") == [] and rd.pending_for(f"r{rd._REGISTRY_MAX_REQUESTS + 4}") == ["m"]
+
+
+def test_effective_video_settings_reach_the_response_warnings_in_both_lanes():
+    """Wiring pin: the fallback plan and the native clip budget record by request id; the engine drains the registry
+    into the request context after generation (non-stream) and before the terminal chunk (stream); the server's
+    warnings bucket IS the shared context variable, so the existing take() delivers them on every lane."""
+    import inspect
+
+    from vmlx_engine import server
+    from vmlx_engine.engine import batched
+    from vmlx_engine import mllm_batch_generator, request_diagnostics
+
+    assert server._TOOL_CALL_DROP_DIAGNOSTICS is request_diagnostics.DIAGNOSTICS
+    fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
+    assert "fallback_plan_diagnostics(" in fb and "record_for(request_id, _msg)" in fb
+    gen = inspect.getsource(batched.BatchedEngine.generate)
+    assert gen.index("self._mllm_scheduler.generate(") < gen.index("_drain_request_diagnostics(request_id)")
+    st = inspect.getsource(batched.BatchedEngine.stream_generate)
+    assert "if output.finished:" in st and st.index("_drain_request_diagnostics(request_id)") < st.index("yield GenerationOutput(")
+    clip = inspect.getsource(mllm_batch_generator._apply_clip_pixel_budget)
+    assert "clip_budget_diagnostics(" in clip and "record_for(request_id, _msg)" in clip
