@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "Tokens generated so far",
       "tokensTitleDone": "Completion tokens",
       "tpsTitle": "Decode speed after first token; includes reasoning and tool-loop completion tokens",
-      "ppsTitle": "Prompt processing speed",
+      "ppsTitle": "Uncached prompt tokens divided by time to first token. That window includes queueing, media processing, cache restore and first-token compute, so it is not isolated prefill throughput.",
       "ppsTailLabel": "{speed} pp/s to first token (uncached input)",
-      "ppsTailTitle": "Prompt processing speed for the uncached tail only; cached tokens were restored separately",
+      "ppsTailTitle": "Uncached-input rate to first token after a cache hit: only the uncached tail was processed; cached tokens were restored separately.",
       "promptLabel": "{n} prompt",
       "cachedSuffix": " ({cached} cached)",
       "promptTitleCache": "Prompt tokens — cache: {detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "Time to first token",
       "elapsedTitle": "Elapsed time",
       "totalLabel": "{v}s total",
-      "totalTitle": "Total request time"
+      "totalTitle": "Total request time",
+      "ppsLabel": "{speed} pp/s to first token"
     },
     "message": {
       "tokenCount": "{n} tokens"

@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "到目前为止生成的 token",
       "tokensTitleDone": "补全 token",
       "tpsTitle": "首个 token 之后的解码速度；包含推理和工具循环的补全 token",
-      "ppsTitle": "提示词处理速度",
+      "ppsTitle": "未缓存的提示令牌数除以到首个令牌的时间。该时间窗包含排队、媒体处理、缓存恢复和首个令牌计算，因此不是单独的预填充吞吐量。",
       "ppsTailLabel": "{speed} 未缓存尾部 pp/s",
-      "ppsTailTitle": "仅未缓存尾部的提示词处理速度；已缓存 token 已单独恢复",
+      "ppsTailTitle": "缓存命中后到首个令牌的未缓存输入速率：仅处理了未缓存尾部，已缓存令牌被单独恢复。",
       "promptLabel": "提示词 {n}",
       "cachedSuffix": "（{cached} 已缓存）",
       "promptTitleCache": "提示词 token — 缓存：{detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "首个 token 时间",
       "elapsedTitle": "已用时间",
       "totalLabel": "共 {v} 秒",
-      "totalTitle": "请求总时间"
+      "totalTitle": "请求总时间",
+      "ppsLabel": "{speed} pp/s（至首个令牌）"
     },
     "message": {
       "tokenCount": "{n} 个 token"
@@ -1403,7 +1404,13 @@
       "warmCache": "预热缓存",
       "warming": "预热中...",
       "clearRamTitle": "清除驻留/已索引的缓存状态，同时保留磁盘上的 L2",
-      "clearPrefixTitle": "从内存和磁盘 L2 中清除前缀缓存"
+      "clearPrefixTitle": "从内存和磁盘 L2 中清除前缀缓存",
+      "requestId": "请求",
+      "durabilityWait": "围栏等待",
+      "durabilityAlreadyDurable": "已持久化",
+      "durabilityOutcome": "保存结果",
+      "durabilityRetained": "已提交令牌",
+      "durabilityDetail": "发布"
     },
     "logs": {
       "filterPlaceholder": "筛选日志...",
@@ -1531,7 +1538,8 @@
       "clearPrefixL2": "清除前缀 + L2",
       "clearAll": "全部清除",
       "reuseExplainer": "复用匹配从第 0 个 token 起最长的连续因果前缀。只有未匹配的尾部会被预填充；任意后缀或中间片段永远不会被复用。对于路径依赖的模型系列（DeepSeek V4、ZAYA CCA，以及 Gemma 4、Muse 等旋转 KV 模型），比缓存链更短的提示可能完全无法复用，需要全量预填充。",
-      "clearSkipped": "部分缓存层未被清除：{{skipped}}。它们仍被运行中的请求占用，请在会话空闲后重试。"
+      "clearSkipped": "部分缓存层未被清除：{{skipped}}。它们仍被运行中的请求占用，请在会话空闲后重试。",
+      "lastDurability": "最近一次生成的持久性（终端围栏）"
     },
     "embeddings": {
       "sessionMustBeRunning": "会话必须正在运行才能生成嵌入。",
@@ -1619,7 +1627,8 @@
       "ssmL2": "SSM L2",
       "ssmResidentMemory": "SSM 驻留内存",
       "memActive": "活跃",
-      "memPeak": "峰值"
+      "memPeak": "峰值",
+      "notReported": "未报告"
     },
     "context": {
       "startTimedOut": "会话启动超时",

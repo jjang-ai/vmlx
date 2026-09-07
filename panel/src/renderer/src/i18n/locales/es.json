@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "Tokens generados hasta ahora",
       "tokensTitleDone": "Tokens de la respuesta",
       "tpsTitle": "Velocidad de decodificación tras el primer token; incluye tokens de razonamiento y del bucle de herramientas",
-      "ppsTitle": "Velocidad de procesamiento del prompt",
+      "ppsTitle": "Tokens de prompt no cacheados divididos por el tiempo hasta el primer token. Esa ventana incluye cola, procesamiento de medios, restauración de caché y cómputo del primer token, así que no es un rendimiento de prefill aislado.",
       "ppsTailLabel": "{speed} pp/s del tramo no cacheado",
-      "ppsTailTitle": "Velocidad de procesamiento solo del tramo no cacheado; los tokens en caché se restauraron por separado",
+      "ppsTailTitle": "Tasa de entrada no cacheada hasta el primer token tras un acierto de caché: solo se procesó el tramo no cacheado; los tokens cacheados se restauraron por separado.",
       "promptLabel": "{n} de prompt",
       "cachedSuffix": " ({cached} en caché)",
       "promptTitleCache": "Tokens del prompt — caché: {detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "Tiempo hasta el primer token",
       "elapsedTitle": "Tiempo transcurrido",
       "totalLabel": "{v}s en total",
-      "totalTitle": "Tiempo total de la solicitud"
+      "totalTitle": "Tiempo total de la solicitud",
+      "ppsLabel": "{speed} pp/s hasta el primer token"
     },
     "message": {
       "tokenCount": "{n} tokens"
@@ -1403,7 +1404,13 @@
       "warmCache": "Precalentar caché",
       "warming": "Precalentando...",
       "clearRamTitle": "Vacía el estado de caché residente/indexado conservando la L2 respaldada en disco",
-      "clearPrefixTitle": "Vacía la caché de prefijos de la RAM y de la L2 respaldada en disco"
+      "clearPrefixTitle": "Vacía la caché de prefijos de la RAM y de la L2 respaldada en disco",
+      "requestId": "Solicitud",
+      "durabilityWait": "Espera de barrera",
+      "durabilityAlreadyDurable": "ya durable",
+      "durabilityOutcome": "Resultado del guardado",
+      "durabilityRetained": "Tokens confirmados",
+      "durabilityDetail": "Publicación"
     },
     "logs": {
       "filterPlaceholder": "Filtrar registros...",
@@ -1531,7 +1538,8 @@
       "clearPrefixL2": "Vaciar prefijos + L2",
       "clearAll": "Vaciar todo",
       "reuseExplainer": "La reutilización coincide con el prefijo causal continuo más largo desde el token 0. Solo se preprocesa la cola no coincidente; nunca se reutilizan sufijos arbitrarios ni secuencias intermedias. En familias dependientes de la ruta (DeepSeek V4, ZAYA CCA y modelos de KV rotatorio como Gemma 4 y Muse), un prompt MÁS CORTO que la cadena almacenada puede no reutilizar nada y preprocesarse por completo.",
-      "clearSkipped": "Algunos niveles de caché no se borraron: {{skipped}}. Siguen en uso por una solicitud en curso; inténtalo cuando la sesión esté inactiva."
+      "clearSkipped": "Algunos niveles de caché no se borraron: {{skipped}}. Siguen en uso por una solicitud en curso; inténtalo cuando la sesión esté inactiva.",
+      "lastDurability": "Durabilidad de la última generación (barrera terminal)"
     },
     "embeddings": {
       "sessionMustBeRunning": "La sesión debe estar en ejecución para generar incrustaciones.",
@@ -1619,7 +1627,8 @@
       "ssmL2": "SSM L2",
       "ssmResidentMemory": "Memoria residente SSM",
       "memActive": "Activa",
-      "memPeak": "Pico"
+      "memPeak": "Pico",
+      "notReported": "no informado"
     },
     "context": {
       "startTimedOut": "Se agotó el tiempo de inicio de la sesión",

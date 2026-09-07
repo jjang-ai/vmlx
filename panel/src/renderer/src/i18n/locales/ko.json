@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "지금까지 생성된 토큰",
       "tokensTitleDone": "완성 토큰",
       "tpsTitle": "첫 토큰 이후의 디코드 속도이며, 추론 및 도구 루프 완성 토큰을 포함합니다",
-      "ppsTitle": "프롬프트 처리 속도",
+      "ppsTitle": "미캐시 프롬프트 토큰 수를 첫 토큰까지의 시간으로 나눈 값입니다. 이 구간에는 대기, 미디어 처리, 캐시 복원, 첫 토큰 계산이 포함되므로 순수 프리필 처리량이 아닙니다.",
       "ppsTailLabel": "{speed} 미캐시 테일 pp/s",
-      "ppsTailTitle": "캐시되지 않은 테일만의 프롬프트 처리 속도입니다. 캐시된 토큰은 별도로 복원되었습니다",
+      "ppsTailTitle": "캐시 적중 후 첫 토큰까지의 미캐시 입력 속도: 미캐시 테일만 처리되었고 캐시된 토큰은 별도로 복원되었습니다.",
       "promptLabel": "프롬프트 {n}",
       "cachedSuffix": " ({cached} 캐시됨)",
       "promptTitleCache": "프롬프트 토큰 — 캐시: {detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "첫 토큰까지 걸린 시간",
       "elapsedTitle": "경과 시간",
       "totalLabel": "총 {v}초",
-      "totalTitle": "총 요청 시간"
+      "totalTitle": "총 요청 시간",
+      "ppsLabel": "{speed} pp/s (첫 토큰까지)"
     },
     "message": {
       "tokenCount": "{n} 토큰"
@@ -1403,7 +1404,13 @@
       "warmCache": "캐시 예열",
       "warming": "예열 중...",
       "clearRamTitle": "디스크 기반 L2는 유지한 채 상주/인덱싱된 캐시 상태를 지웁니다",
-      "clearPrefixTitle": "RAM과 디스크 기반 L2에서 프리픽스 캐시를 지웁니다"
+      "clearPrefixTitle": "RAM과 디스크 기반 L2에서 프리픽스 캐시를 지웁니다",
+      "requestId": "요청",
+      "durabilityWait": "펜스 대기",
+      "durabilityAlreadyDurable": "이미 영속화됨",
+      "durabilityOutcome": "저장 결과",
+      "durabilityRetained": "커밋된 토큰",
+      "durabilityDetail": "게시"
     },
     "logs": {
       "filterPlaceholder": "로그 필터링...",
@@ -1531,7 +1538,8 @@
       "clearPrefixL2": "프리픽스 + L2 지우기",
       "clearAll": "모두 지우기",
       "reuseExplainer": "재사용은 토큰 0부터 이어지는 가장 긴 연속 인과 접두사와 일치합니다. 일치하지 않는 꼬리만 프리필되며, 임의의 접미사나 중간 구간은 재사용되지 않습니다. 경로 의존 계열(DeepSeek V4, ZAYA CCA, 그리고 Gemma 4·Muse 같은 회전 KV 모델)에서는 캐시된 체인보다 짧은 프롬프트가 전혀 재사용되지 않고 전체를 프리필할 수 있습니다.",
-      "clearSkipped": "일부 캐시 계층이 지워지지 않았습니다: {{skipped}}. 실행 중인 요청이 사용 중입니다. 세션이 유휴 상태가 되면 다시 시도하세요."
+      "clearSkipped": "일부 캐시 계층이 지워지지 않았습니다: {{skipped}}. 실행 중인 요청이 사용 중입니다. 세션이 유휴 상태가 되면 다시 시도하세요.",
+      "lastDurability": "마지막 생성 영속성 (터미널 펜스)"
     },
     "embeddings": {
       "sessionMustBeRunning": "임베딩을 생성하려면 세션이 실행 중이어야 합니다.",
@@ -1619,7 +1627,8 @@
       "ssmL2": "SSM L2",
       "ssmResidentMemory": "SSM 상주 메모리",
       "memActive": "활성",
-      "memPeak": "피크"
+      "memPeak": "피크",
+      "notReported": "보고되지 않음"
     },
     "context": {
       "startTimedOut": "세션 시작 시간이 초과되었습니다",
