@@ -197,8 +197,11 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
     src = open(server.__file__).read()
     assert "@app.exception_handler(MediaControlsUnmeetableError)" in src
     assert src.count("except MediaControlsUnmeetableError as e:") == 3  # JSON sites
-    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 3  # streaming lanes
-    assert src.count('"code": type(e).code,') == 3
+    # chat + anthropic streaming lanes name the pair; the Responses stream names
+    # them in ONE fatal tuple handler (error -> response.failed)
+    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 2
+    assert src.count("        MediaControlsUnmeetableError,\n        MediaInputError,\n        PromptTooLongError,") == 1
+    assert src.count('"code": type(e).code,') == 2
     assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
     assert src.count('**({"code": _e["code"]} if _e.get("code") else {})') == 2  # anthropic + responses JSON passthroughs
     assert src.count('**({"code": err["code"]} if err.get("code") else {})') == 1  # anthropic non-omni envelope
@@ -222,7 +225,10 @@ def test_media_part_with_no_readable_source_is_a_typed_400_not_a_text_only_succe
     conv = conv[:conv.index("\n    messages = []")]
     assert conv.count("raise MediaInputError(") == 2 and "expected \"\n                                \"'video_url'" in conv
     assert "@app.exception_handler(MediaInputError)" in src and src.count("except MediaInputError as e:") == 3
-    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 3
+    # chat + anthropic streams name the pair; the Responses stream carries
+    # MediaInputError inside its one fatal tuple handler (error -> response.failed)
+    assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 2
+    assert src.count("        MediaControlsUnmeetableError,\n        MediaInputError,\n") == 1
     from vmlx_engine import mllm_batch_generator as g
     gsrc = open(g.__file__).read()
     assert 'raise MediaInputError(\n                        f"image input cannot be used: {e}"' in gsrc

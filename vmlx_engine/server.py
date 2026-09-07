@@ -27966,62 +27966,56 @@ async def stream_responses_api(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
-    except (MediaControlsUnmeetableError, MediaInputError) as e:
+    except (
+        MediaControlsUnmeetableError,
+        MediaInputError,
+        PromptTooLongError,
+        PrefillAdmissionError,
+        VLMImagePrefillBudgetError,
+        UnsupportedMediaModalityError,
+    ) as e:
+        # A typed request rejection is FATAL for the stream: emit the typed
+        # error event for incremental consumers, then the failed terminal,
+        # and stop. Live (e6262e3a, strict-multi-4S-033105 resp_b8b3d8425246):
+        # these handlers yielded the error event and fell through into the
+        # normal finalization, which emitted response.completed with an
+        # empty output — a fatal rejection reported as a success.
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
+        _typed_code = (
+            "prompt_too_long"
+            if isinstance(e, (PromptTooLongError, PrefillAdmissionError))
+            else type(e).code
+        )
+        _typed_error = {
+            "type": "invalid_request_error",
+            "message": str(e),
+            "code": _typed_code,
+        }
+        yield _sse("error", {"type": "error", "error": dict(_typed_error)})
+        _err_usage = {}
+        if prompt_tokens > 0 or completion_tokens > 0:
+            _err_usage = {
+                "usage": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+            }
         yield _sse(
-            "error",
+            "response.failed",
             {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "message": str(e),
-                    "code": type(e).code,
+                "type": "response.failed",
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "status": "failed",
+                    "error": dict(_typed_error),
+                    **_err_usage,
                 },
             },
         )
-    except (PromptTooLongError, PrefillAdmissionError) as e:
-        if hasattr(engine, "abort_request"):
-            await engine.abort_request(response_id)
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "message": str(e),
-                    "code": "prompt_too_long",
-                },
-            },
-        )
-    except VLMImagePrefillBudgetError as e:
-        if hasattr(engine, "abort_request"):
-            await engine.abort_request(response_id)
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "message": str(e),
-                    "code": VLMImagePrefillBudgetError.code,
-                },
-            },
-        )
-    except UnsupportedMediaModalityError as e:
-        if hasattr(engine, "abort_request"):
-            await engine.abort_request(response_id)
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "message": str(e),
-                    "code": UnsupportedMediaModalityError.code,
-                },
-            },
-        )
+        return
     except asyncio.CancelledError:
         logger.info("Responses stream cancelled, aborting %s", response_id)
         if hasattr(engine, "abort_request"):
