@@ -11047,7 +11047,7 @@ class MLLMBatchGenerator:
                 # metadata advance exactly as the model runtime expects.
                 kwargs: Dict[str, Any] = {"cache": cache}
                 if _lm_supports_position_ids(lm):
-                    position_ids = _absolute_text_position_ids(input_ids, cache, lm)
+                    position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm)
                     if position_ids is not None:
                         kwargs["position_ids"] = position_ids
                 _seed_text_rope_delta_for_decode(lm, input_ids)
@@ -11069,9 +11069,7 @@ class MLLMBatchGenerator:
             lm = self.language_model
             if lm is not None and cache is not None:
                 _supports_position_ids = _lm_supports_position_ids(lm)
-                _abs_position_ids = _absolute_text_position_ids(
-                    input_ids, cache, lm
-                ) if _supports_position_ids else None
+                _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
@@ -11205,9 +11203,7 @@ class MLLMBatchGenerator:
             lm = self.language_model
             if lm is not None and cache is not None:
                 _supports_position_ids = _lm_supports_position_ids(lm)
-                _abs_position_ids = _absolute_text_position_ids(
-                    input_ids, cache, lm
-                ) if _supports_position_ids else None
+                _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
@@ -12177,11 +12173,16 @@ class MLLMBatchGenerator:
                 if cache is not None:
                     lm_kwargs["cache"] = cache
                 _supports_position_ids = _lm_supports_position_ids(lm)
-                _abs_position_ids = _absolute_text_position_ids(
-                    input_ids, cache, lm
-                ) if cache is not None and _supports_position_ids else None
+                _abs_position_ids = self._text_prefill_position_ids(request, input_ids, cache, lm) if cache is not None and _supports_position_ids else None
                 if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
+                if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
+                    logger.info(
+                        "restore fingerprint WARM(text-path) tail-inputs for %s: positions %s cache %s",
+                        request.request_id,
+                        _diag_array_fp(_abs_position_ids) if _abs_position_ids is not None else "-",
+                        _diag_cache_fingerprint(cache, self._hybrid_kv_positions, int(getattr(request, "_cached_tokens", 0) or 0)),
+                    )
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs = dict(lm_kwargs)
@@ -12218,6 +12219,8 @@ class MLLMBatchGenerator:
                     output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
                 else:
                     output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
+                if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
+                    logger.info("restore fingerprint WARM(text-path) first-token logits for %s: %s", request.request_id, _diag_logits_fp(output))
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -12732,6 +12735,64 @@ class MLLMBatchGenerator:
             getattr(request, "request_id", "?"),
             int(boundary),
         )
+
+    def _mrope_tail_position_ids(
+        self, request: "MLLMBatchRequest", full_input_ids: Any, cached_tokens: int
+    ) -> bool:
+        """On a cache hit whose cached prefix held the media and whose tail is
+        text, keep the tail's mRoPE positions: the positions the cold pass gave
+        those same tokens (after a video they continue from the media's
+        3-D extent, e.g. ~31..38 after a 1,760-token clip), not the absolute
+        text offsets the text path would assign (1771..1778). Live: this was
+        the first divergent computation between a cached and an uncached
+        answer — KV, recurrent state, embeddings and decode were identical.
+        Index math over the full processed ids and the grids; no pixels."""
+        lm = self.language_model
+        rope_index = getattr(lm, "get_rope_index", None)
+        if not callable(rope_index) or full_input_ids is None:
+            return False
+        try:
+            ids = full_input_ids if getattr(full_input_ids, "ndim", 1) == 2 else full_input_ids[None, :]
+            total = int(ids.shape[1])
+            cached = int(cached_tokens)
+            if cached <= 0 or cached >= total:
+                return False
+            position_ids, rope_deltas = rope_index(
+                ids,
+                getattr(request, "image_grid_thw", None),
+                getattr(request, "video_grid_thw", None),
+                None,
+            )
+            if position_ids is None or getattr(position_ids, "ndim", 0) != 3 or int(position_ids.shape[-1]) != total:
+                return False
+            tail = position_ids[..., cached:]
+            mx.eval(tail)
+            request._mrope_tail_position_ids = tail  # type: ignore[attr-defined]
+            request._mrope_tail_rope_deltas = rope_deltas  # type: ignore[attr-defined]
+            logger.info(
+                "VLM HYBRID media hit: text tail of %d token(s) keeps mRoPE positions for %s (first=%s, last=%s)",
+                total - cached,
+                getattr(request, "request_id", "?"),
+                int(tail[0, 0, 0].item()),
+                int(tail[0, 0, -1].item()),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.info("mRoPE tail positions unavailable for %s: %s", getattr(request, "request_id", "?"), exc)
+            return False
+
+    def _text_prefill_position_ids(
+        self, request: "MLLMBatchRequest", input_ids: Any, cache: Optional[List[Any]], lm: Any
+    ) -> Optional[Any]:
+        """Positions for a text prefill over a cache: the request's mRoPE tail
+        positions when a media hit recorded them for exactly this tail, else
+        the absolute text positions."""
+        override = getattr(request, "_mrope_tail_position_ids", None)
+        if override is not None:
+            seq_len = int(input_ids.shape[-1]) if getattr(input_ids, "ndim", 0) else 0
+            if int(override.shape[-1]) == seq_len:
+                return override
+        return _absolute_text_position_ids(input_ids, cache, lm)
 
     def _media_prefill_chunk_tokens(self, seq_len: int) -> int:
         """Chunk size for a media-expanded prefill. BIGGER IS BETTER HERE.
@@ -13872,6 +13933,9 @@ class MLLMBatchGenerator:
                                             _qwen_tail["kind"],
                                         )
                                     elif _full_remaining:
+                                        self._mrope_tail_position_ids(
+                                            req, getattr(req, "input_ids", None), int(block_table.num_tokens)
+                                        )
                                         req.input_ids = mx.array([_full_remaining])
                                         _clear_mllm_request_media_payloads(req)
                                         req.attention_mask = None
@@ -13882,6 +13946,9 @@ class MLLMBatchGenerator:
                                             f"(incl. {len(_gpl_suffix)}-token gen-prompt suffix)"
                                         )
                                     else:
+                                        self._mrope_tail_position_ids(
+                                            req, getattr(req, "input_ids", None), int(block_table.num_tokens)
+                                        )
                                         req.input_ids = mx.array([token_list[-1:]])
                                         _clear_mllm_request_media_payloads(req)
                                         req.attention_mask = None

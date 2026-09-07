@@ -443,3 +443,50 @@ class TestNativeCleanMediaBoundary:
         # media running to the very end: no boundary after it -> 0 (the store's pre-media fallback is not a native snapshot)
         gen, cache, req = self._gen(1764, [1] * 4 + [99] * 1760)
         assert gen._native_media_clean_boundary(req, 1764, cache) == 0
+
+
+class TestMediaHitTextTailKeepsMRoPEPositions:
+    """First divergent computation between cached and uncached video answers (fingerprints on the box): the warm tail,
+    text after a fully cached video, was forwarded with absolute text positions (1771..1778) while the cold pass gave
+    the same tokens their mRoPE positions (~31..38). KV, recurrent state, embeddings and decode were identical."""
+
+    class _LM:
+        def get_rope_index(self, ids, image_grid_thw=None, video_grid_thw=None, attention_mask=None):
+            import mlx.core as mx
+            n = int(ids.shape[1])
+            # a compressed video: positions after it continue from 40, not from the token count
+            pos = mx.array([[list(range(4)) + [4 + i // 100 for i in range(1760)] + list(range(40, 40 + n - 1764))]] * 3)
+            return pos, mx.array([[40 - 1764]])
+
+    def _gen(self):
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        gen = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        gen.language_model = self._LM()
+        return gen
+
+    def test_hit_records_the_tail_positions_from_the_full_prompt(self):
+        import mlx.core as mx
+        from types import SimpleNamespace
+        gen = self._gen()
+        full = mx.array([[1] * 4 + [99] * 1760 + [2] * 15])  # 1779 processed ids
+        req = SimpleNamespace(request_id="r", image_grid_thw=None, video_grid_thw=mx.array([[8, 22, 40]]))
+        assert gen._mrope_tail_position_ids(req, full, 1771) is True
+        tail = req._mrope_tail_position_ids
+        assert tuple(tail.shape) == (3, 1, 8)
+        assert tail[0, 0, :].tolist() == list(range(47, 55))  # continues from the media's extent, not from 1771
+        # the text-path prefill prefers those positions for exactly that tail, absolute positions otherwise
+        cache = [SimpleNamespace(offset=1771)]
+        got = gen._text_prefill_position_ids(req, mx.zeros((1, 8)), cache, SimpleNamespace())
+        assert got is tail
+        other = gen._text_prefill_position_ids(SimpleNamespace(), mx.zeros((1, 8)), cache, SimpleNamespace())
+        assert other[0, 0, :].tolist() == list(range(1771, 1779))
+
+    def test_no_rope_index_or_bad_shapes_leave_the_request_untouched(self):
+        import mlx.core as mx
+        from types import SimpleNamespace
+        gen = self._gen(); gen.language_model = SimpleNamespace()
+        req = SimpleNamespace(request_id="r")
+        assert gen._mrope_tail_position_ids(req, mx.zeros((1, 10)), 4) is False
+        assert not hasattr(req, "_mrope_tail_position_ids")
+        gen = self._gen()
+        assert gen._mrope_tail_position_ids(SimpleNamespace(request_id="r", image_grid_thw=None, video_grid_thw=None), mx.zeros((1, 10)), 10) is False
