@@ -1970,6 +1970,8 @@ class Qwen4ExpTextModel(nn.Module):
                 _materialize_recurrent_state(cache)
                 logger.info("QWEN4_LAYER_FP contiguous-state experiment applied before step %d", _LAYER_FP_STEPS["n"])
         for layer_index, (layer, c) in enumerate(zip(self.layers, cache)):
+            if _layer_fp and layer_index < 2:
+                _log_layer_fingerprint(-10 - layer_index, h, c)  # PRE: state before this layer runs
             h = layer(
                 h,
                 mask=None,
