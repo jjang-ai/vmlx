@@ -462,6 +462,34 @@ def _mllm_media_prefix_cache_family_enabled(model_type: Any) -> bool:
     return unsafe_ack in ("1", "true", "yes", "on")
 
 
+def _release_derived_media_files(request: Any) -> int:
+    """Remove the request-owned bounded image copies (and their per-request
+    directory). The processor reads image files eagerly, so once preprocessing
+    returned or raised nothing reads them again; the pixel cache stores
+    tensors, never paths. Returns how many files were removed."""
+    derived = getattr(request, "_derived_media_files", None)
+    if not derived:
+        return 0
+    removed = 0
+    dirs = set()
+    for path in list(derived):
+        try:
+            dirs.add(os.path.dirname(path))
+            os.remove(path)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("derived media file not removed (%s): %s", path, exc)
+    for d in dirs:
+        try:
+            os.rmdir(d)  # only the request's own directory; fails harmlessly if not empty
+        except Exception:
+            pass
+    derived.clear()
+    return removed
+
+
 def _clear_mllm_request_media_payloads(request: Any) -> None:
     """Drop every processor payload once restored KV covers all media tokens."""
     for attr in (
@@ -8395,6 +8423,15 @@ class MLLMBatchGenerator:
         return False
 
     def _preprocess_request(self, request: MLLMBatchRequest) -> None:
+        """Tokenize + process media for one request, then release every
+        request-owned derived media file (bounded image copies) whether the
+        processor consumed it, rejected the request or raised."""
+        try:
+            self._preprocess_request_inner(request)
+        finally:
+            _release_derived_media_files(request)
+
+    def _preprocess_request_inner(self, request: MLLMBatchRequest) -> None:
         """
         Preprocess a single MLLM request (vision encoding).
 
@@ -12936,8 +12973,20 @@ class MLLMBatchGenerator:
         from .request_diagnostics import record_for
 
         out_dir = os.path.join(tempfile.gettempdir(), "vmlx_image_controls", str(request.request_id))
-        new_path, before, after = bound_image_file(path, controls, out_dir)
         token_px, floor, ceiling = image_processor_geometry(self.processor)
+        import math as _math
+
+        new_path, before, after = bound_image_file(
+            path, controls, out_dir, factor=max(1, int(round(_math.sqrt(max(1, int(token_px))))))
+        )
+        if new_path != path:
+            # request-owned derived copy: released by _release_derived_media_files
+            # once the processor has consumed it (success, rejection or error)
+            derived = getattr(request, "_derived_media_files", None)
+            if derived is None:
+                derived = []
+                request._derived_media_files = derived  # type: ignore[attr-defined]
+            derived.append(new_path)
         reports, unmeetable = image_controls_diagnostics(
             controls, before=before, after=after, token_pixels=token_px, pixel_floor=floor, pixel_ceiling=ceiling
         )

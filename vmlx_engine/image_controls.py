@@ -140,35 +140,85 @@ def pop_image_control_kwargs(kwargs: dict[str, Any]) -> ImageControls | None:
     return controls
 
 
-def target_size(height: int, width: int, controls: ImageControls) -> tuple[int, int]:
+def target_size(height: int, width: int, controls: ImageControls, *, factor: int = 1) -> tuple[int, int]:
     """(h, w) this module resizes to: explicit size wins; else scale DOWN to fit
-    ``max_pixels`` and UP to reach ``min_pixels``, aspect preserved."""
+    ``max_pixels`` and UP to reach ``min_pixels``, aspect preserved. The result
+    never exceeds ``max_pixels`` (rounding is corrected until it fits); when the
+    aspect ratio admits no integer size inside [min, max] the size honours
+    ``max`` and ``satisfiable`` (below) reports the miss."""
     if controls.resize is not None:
         return max(1, controls.resize[0]), max(1, controls.resize[1])
     h, w = int(height), int(width)
-    if controls.max_pixels and h * w > controls.max_pixels:
-        s = math.sqrt(controls.max_pixels / float(h * w))
-        h, w = max(1, int(math.floor(h * s))), max(1, int(math.floor(w * s)))
+    aspect = h / float(w) if w else 1.0
     if controls.min_pixels and h * w < controls.min_pixels:
         s = math.sqrt(controls.min_pixels / float(h * w))
         h, w = max(1, int(math.ceil(h * s))), max(1, int(math.ceil(w * s)))
+    if controls.max_pixels and h * w > controls.max_pixels:
+        s = math.sqrt(controls.max_pixels / float(h * w))
+        h, w = max(1, int(math.floor(h * s))), max(1, int(math.floor(w * s)))
+        # integer rounding can still overshoot by a few pixels: shrink the
+        # longer edge (then the other) until the product fits
+        while h * w > controls.max_pixels and (h > 1 or w > 1):
+            if w >= h and w > 1:
+                w -= 1
+            elif h > 1:
+                h -= 1
+            else:
+                break
+        # keep the aspect: re-derive the other edge from the reduced one
+        if w and abs((h / float(w)) - aspect) > 0.02 and h > 1:
+            h2 = max(1, int(math.floor(w * aspect)))
+            if h2 * w <= controls.max_pixels:
+                h = h2
+    factor = max(1, int(factor))
+    if factor > 1 and (controls.max_pixels or controls.min_pixels):
+        # Pre-align to the processor's patch grid so ITS nearest-multiple
+        # rounding keeps our size: floor both edges to the grid (never above
+        # max); use the ceiling variant only when it still fits max and the
+        # floor variant would undershoot min.
+        fh, fw = max(factor, (h // factor) * factor), max(factor, (w // factor) * factor)
+        ch, cw = max(factor, int(math.ceil(h / factor)) * factor), max(factor, int(math.ceil(w / factor)) * factor)
+        h, w = fh, fw
+        if controls.min_pixels and fh * fw < controls.min_pixels and (not controls.max_pixels or ch * cw <= controls.max_pixels):
+            h, w = ch, cw
     return h, w
 
 
-def bound_image_file(path: str, controls: ImageControls, out_dir: str) -> tuple[str, tuple[int, int], tuple[int, int]]:
+def bounds_satisfied(height: int, width: int, controls: ImageControls) -> list[str]:
+    """Which requested bounds ``(height, width)`` violates: a list of
+    human-readable reasons, empty when every sent bound holds."""
+    px = int(height) * int(width)
+    out: list[str] = []
+    if controls.max_pixels and px > controls.max_pixels:
+        out.append(f"{px} px exceeds image_max_pixels={controls.max_pixels}")
+    if controls.min_pixels and px < controls.min_pixels:
+        out.append(f"{px} px is below image_min_pixels={controls.min_pixels}")
+    if controls.resize is not None and (int(height), int(width)) != tuple(controls.resize):
+        out.append(f"{height}x{width} differs from the explicit size {controls.resize[0]}x{controls.resize[1]}")
+    return out
+
+
+def bound_image_file(path: str, controls: ImageControls, out_dir: str, *, factor: int = 1) -> tuple[str, tuple[int, int], tuple[int, int]]:
     """Write a bounded copy of the image for THIS request; returns
     (new_path_or_original, (h, w) before, (h, w) after). The original file and
     the processor are untouched."""
+    import tempfile
+
     from PIL import Image
 
     with Image.open(path) as im:
         w0, h0 = im.size
-        h, w = target_size(h0, w0, controls)
+        h, w = target_size(h0, w0, controls, factor=factor)
         if (h, w) == (h0, w0):
             return path, (h0, w0), (h0, w0)
         os.makedirs(out_dir, exist_ok=True)
-        base = os.path.splitext(os.path.basename(path))[0]
-        new_path = os.path.join(out_dir, f"{base}-{h}x{w}.png")
+        # One EXCLUSIVE file per image: two inputs with the same basename (or
+        # the same bytes) in one request must never share an output path.
+        # Live diagnostic: a/same.png and b/same.png both mapped to
+        # <out_dir>/same-8x8.png and the first image became the second.
+        base = os.path.splitext(os.path.basename(path))[0][:40]
+        fd, new_path = tempfile.mkstemp(prefix=f"{base}-{h}x{w}-", suffix=".png", dir=out_dir)
+        os.close(fd)
         im.convert("RGB").resize((w, h), Image.BICUBIC if h * w > h0 * w0 else Image.LANCZOS).save(new_path, format="PNG")
     return new_path, (h0, w0), (h, w)
 
@@ -209,6 +259,20 @@ def image_controls_diagnostics(
     reports: list[str] = []
     unmeetable: list[str] = []
     asked = f"{controls.resize[0]}x{controls.resize[1]}" if controls.resize else (f"image_max_pixels={controls.max_pixels}" if controls.max_pixels else f"image_min_pixels={controls.min_pixels}")
+    # 1. our own bound could not satisfy the sent interval at this aspect
+    # (integer sizes; e.g. min=max=100000 on 480x640 admits no exact size)
+    own_miss = bounds_satisfied(h, w, controls)
+    if own_miss:
+        msg = (f"image_controls: no integer size at aspect {before[0]}:{before[1]} satisfies the sent bounds "
+               f"({'; '.join(own_miss)}); bounded to {h}x{w} ({h * w} px)")
+        reports.append(msg); unmeetable.append(msg)
+    # 2. the processor's own grid/floor/ceiling changes the effective size past a sent bound
+    proc_miss = bounds_satisfied(eh, ew, controls) if (eh, ew) != (h, w) else []
+    if proc_miss and not (pixel_floor and h * w < int(pixel_floor)) and not (pixel_ceiling and h * w > int(pixel_ceiling)):
+        msg = (f"image_controls: the processor rounds {h}x{w} to its patch grid: effective {eh}x{ew} ({eh * ew} px, {tokens} tokens), "
+               f"which {'; '.join(proc_miss)}")
+        reports.append(msg); unmeetable.append(msg)
+        return reports, unmeetable
     if pixel_floor and h * w < int(pixel_floor):
         msg = (f"image_controls: {asked} bounded the image to {h}x{w}, below the image processor floor ({pixel_floor} px); "
                f"the processor upscales it: effective {eh}x{ew}, {tokens} tokens")
@@ -217,8 +281,6 @@ def image_controls_diagnostics(
         msg = (f"image_controls: {asked} leaves the image at {h}x{w}, above the image processor ceiling ({pixel_ceiling} px); "
                f"the processor downscales it: effective {eh}x{ew}, {tokens} tokens")
         reports.append(msg); unmeetable.append(msg)
-    elif (eh, ew) != (h, w) and controls.resize is not None:
-        reports.append(f"image_controls: explicit size {h}x{w} is rounded by the processor to its patch grid: effective {eh}x{ew}, {tokens} tokens")
     return reports, unmeetable
 
 

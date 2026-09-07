@@ -131,3 +131,57 @@ def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
     i = src.index("except MediaControlsUnmeetableError as strict_err:")
     block = src[i:src.index("continue", i)]
     assert "error_code=MediaControlsUnmeetableError.code," in block and "strict_err.prompt_tokens" not in block
+
+
+def test_two_images_with_the_same_basename_get_exclusive_output_files(tmp_path):
+    """Prepackage audit defect 1: a/same.png and b/same.png resized into ONE path; the first image became the second."""
+    (tmp_path / "a").mkdir(); (tmp_path / "b").mkdir()
+    Image.new("RGB", (16, 16), "red").save(tmp_path / "a" / "same.png")
+    Image.new("RGB", (16, 16), "blue").save(tmp_path / "b" / "same.png")
+    c = ic.ImageControls(resized_height=8, resized_width=8); out = str(tmp_path / "req")
+    p1, *_ = ic.bound_image_file(str(tmp_path / "a" / "same.png"), c, out)
+    p2, *_ = ic.bound_image_file(str(tmp_path / "b" / "same.png"), c, out)
+    assert p1 != p2
+    assert Image.open(p1).getpixel((0, 0)) == (255, 0, 0) and Image.open(p2).getpixel((0, 0)) == (0, 0, 255)
+    # same bytes twice in one request: still two files
+    p3, *_ = ic.bound_image_file(str(tmp_path / "a" / "same.png"), c, out)
+    assert p3 not in (p1, p2)
+
+
+def test_effective_bounds_are_validated_against_the_sent_interval():
+    """Prepackage audit defect 2: min=max=100000 on 480x640 produced 100,284 px with no warning and no strict condition."""
+    G = dict(token_pixels=1024, pixel_floor=65536, pixel_ceiling=16_777_216)
+    c = ic.validate_image_controls({"image_min_pixels": 100_000, "image_max_pixels": 100_000})
+    h, w = ic.target_size(480, 640, c, factor=32)
+    assert h * w <= 100_000  # never above max
+    reports, unmeetable = ic.image_controls_diagnostics(c, before=(480, 640), after=(h, w), **G)
+    assert unmeetable and "no integer size at aspect 480:640 satisfies the sent bounds" in unmeetable[0]
+    # a plain max is honoured exactly through the processor grid: aligned, below max, nothing to report
+    c = ic.validate_image_controls({"image_max_pixels": 100_000})
+    h, w = ic.target_size(480, 640, c, factor=32)
+    assert h % 32 == 0 and w % 32 == 0 and h * w <= 100_000
+    assert ic.image_controls_diagnostics(c, before=(480, 640), after=(h, w), **G) == ([], [])
+    # skinny aspect, max only: still within max and grid-aligned
+    c = ic.validate_image_controls({"image_max_pixels": 150_000})
+    h, w = ic.target_size(200, 2000, c, factor=32)
+    assert h * w <= 150_000 and h % 32 == 0 and w % 32 == 0 and h >= 32
+    # an interval the grid can satisfy: no report
+    c = ic.validate_image_controls({"image_min_pixels": 80_000, "image_max_pixels": 120_000})
+    h, w = ic.target_size(480, 640, c, factor=32)
+    assert 80_000 <= h * w <= 120_000 and ic.image_controls_diagnostics(c, before=(480, 640), after=(h, w), **G) == ([], [])
+    assert ic.bounds_satisfied(300, 300, ic.ImageControls(max_pixels=1000)) and not ic.bounds_satisfied(10, 10, ic.ImageControls(max_pixels=1000))
+
+
+def test_derived_image_files_are_released_after_preprocessing_on_every_path(tmp_path):
+    from vmlx_engine import mllm_batch_generator as g
+
+    class Req:
+        request_id = "r1"
+    r = Req(); f1 = tmp_path / "d" / "x.png"; f1.parent.mkdir(); f1.write_bytes(b"x"); f2 = tmp_path / "d" / "y.png"; f2.write_bytes(b"y")
+    r._derived_media_files = [str(f1), str(f2)]
+    assert g._release_derived_media_files(r) == 2 and not f1.exists() and not (tmp_path / "d").exists() and r._derived_media_files == []
+    assert g._release_derived_media_files(Req()) == 0  # nothing owned: no-op
+    src = inspect.getsource(g.MLLMBatchGenerator._preprocess_request)
+    assert "try:" in src and "finally:" in src and "_release_derived_media_files(request)" in src and "_preprocess_request_inner" in src
+    helper = inspect.getsource(g.MLLMBatchGenerator._apply_image_controls)
+    assert "request._derived_media_files = derived" in helper and "factor=" in helper
