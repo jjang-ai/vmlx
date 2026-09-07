@@ -221,10 +221,12 @@ def test_semantically_equal_schema_is_accepted(
     assert out == prompt, f"{label}: {case} must stay accepted"
 
 
-def test_unrelated_extra_tool_in_render_is_not_a_match():
-    # A render that carries the requested names plus a foreign tool is a
-    # different catalog (stale cache / other request); the request's own
-    # contract still has to be re-rendered.
+def test_superset_render_with_matching_contracts_stays_native():
+    # A render that carries the requested tools (with matching contracts)
+    # plus a tool this request no longer lists is a superset — a narrowed
+    # continuation catalog over a stable source-owned prompt. Re-rendering it
+    # would move the opening system bytes on every agentic turn and defeat
+    # prefix reuse; nothing the request needs is missing.
     tok = _FixtureTokenizer("minimax_m27_chat_template.jinja")
     extra = copy.deepcopy(TOOLS) + [
         {
@@ -243,4 +245,147 @@ def test_unrelated_extra_tool_in_render_is_not_a_match():
     out = check_and_inject_fallback_tools(
         prompt, messages, TOOLS, tok, {"tools": TOOLS}, tool_parser_id="minimax"
     )
-    assert out != prompt
+    assert out == prompt
+
+
+def test_subset_render_missing_a_requested_tool_gets_fallback():
+    tok = _FixtureTokenizer("minimax_m27_chat_template.jinja")
+    # terminal is never rendered
+    messages, prompt = _render_with(tok, [copy.deepcopy(TOOLS[0])])
+    out = check_and_inject_fallback_tools(
+        prompt, messages, TOOLS, tok, {"tools": TOOLS}, tool_parser_id="minimax"
+    )
+    assert out != prompt and re.search(r"\bcommand\b", out)
+
+
+# --- Constraint preservation (audit follow-up, 2026-09-07) -----------------
+# The contract is the whole validation schema, not a hand-picked subset: a
+# rendered catalog that drops a constraint (minLength, additionalProperties,
+# pattern, maxItems, …) or the parameters object itself is deficient even
+# though every property name is still present.
+
+CONSTRAINED_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "pattern": "^[^\\n]+$"}
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "terminal",
+            "description": "Run a command",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 8,
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+]
+
+
+def _drop_min_length(tools):
+    tools[0]["function"]["parameters"]["properties"]["path"].pop("minLength")
+
+
+def _drop_additional_properties(tools):
+    tools[0]["function"]["parameters"].pop("additionalProperties")
+
+
+def _drop_pattern(tools):
+    tools[0]["function"]["parameters"]["properties"]["path"].pop("pattern")
+
+
+def _drop_max_items(tools):
+    tools[1]["function"]["parameters"]["properties"]["args"].pop("maxItems")
+
+
+def _drop_parameters_object(tools):
+    for t in tools:
+        t["function"].pop("parameters")
+
+
+CONSTRAINT_HOLES = (
+    ("minLength omitted", _drop_min_length),
+    ("additionalProperties omitted", _drop_additional_properties),
+    ("pattern omitted", _drop_pattern),
+    ("maxItems omitted", _drop_max_items),
+    ("parameters object deleted", _drop_parameters_object),
+)
+
+
+def _gate_constrained(tok, messages, prompt, parser, caplog):
+    with caplog.at_level(logging.WARNING, logger="vmlx_engine.api.tool_calling"):
+        return check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            CONSTRAINED_TOOLS,
+            tok,
+            {"tools": CONSTRAINED_TOOLS},
+            tool_parser_id=parser,
+        )
+
+
+@pytest.mark.parametrize("fixture, parser, label", ROWS, ids=[r[0] for r in ROWS])
+@pytest.mark.parametrize(
+    "case, mutate", CONSTRAINT_HOLES, ids=[c[0] for c in CONSTRAINT_HOLES]
+)
+def test_dropped_constraint_or_parameters_object_gets_fallback(
+    fixture, parser, label, case, mutate, caplog
+):
+    tok = _FixtureTokenizer(fixture)
+    rendered = copy.deepcopy(CONSTRAINED_TOOLS)
+    mutate(rendered)
+    messages, prompt = _render_with(tok, rendered)
+    assert "read_file" in prompt and "terminal" in prompt, label
+    out = _gate_constrained(tok, messages, prompt, parser, caplog)
+    assert (
+        out != prompt
+    ), f"{label}: {case} — accepted a catalog that lost part of the request's contract"
+    assert re.search(r"\bpath\b", out) and re.search(
+        r"\bcommand\b", out
+    ), f"{label}: {case}"
+
+
+@pytest.mark.parametrize("fixture, parser, label", ROWS, ids=[r[0] for r in ROWS])
+def test_constrained_exact_render_is_accepted(fixture, parser, label, caplog):
+    tok = _FixtureTokenizer(fixture)
+    messages, prompt = _render_with(tok, copy.deepcopy(CONSTRAINED_TOOLS))
+    out = _gate_constrained(tok, messages, prompt, parser, caplog)
+    assert out == prompt, f"{label}: exact constrained render must stay native"
+
+
+def test_prose_only_keys_are_not_part_of_the_contract(caplog):
+    # description / title / examples / $comment may differ freely.
+    tok = _FixtureTokenizer("minimax_m27_chat_template.jinja")
+    rendered = copy.deepcopy(CONSTRAINED_TOOLS)
+    rendered[0]["function"]["parameters"]["properties"]["path"].update(
+        {
+            "description": "different prose",
+            "title": "Path",
+            "examples": ["a.txt"],
+            "$comment": "x",
+        }
+    )
+    rendered[0]["function"]["parameters"]["title"] = "Read-file arguments"
+    messages, prompt = _render_with(tok, rendered)
+    out = _gate_constrained(tok, messages, prompt, "minimax", caplog)
+    assert out == prompt

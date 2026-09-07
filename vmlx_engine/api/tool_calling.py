@@ -541,59 +541,98 @@ def check_and_inject_fallback_tools(
 
     _lfm2_has_native_tool_schema = _lfm2_has_exact_native_tool_schema()
 
+    _CONTRACT_PROSE_KEYS = frozenset({"description", "title", "examples", "$comment"})
+
     def _parameter_contract(schema: Any) -> Any:
         """Canonical form of a JSON-schema parameter block.
 
-        Names, required-ness, types, enums and nested object/array structure
-        are the contract; descriptions, titles, defaults and key order are
-        not. Two renders with the same contract are the same native catalog
-        even when their prose differs, so a byte-level difference alone never
-        forces the fallback (which would rewrite the opening system bytes and
-        move every SSD prefix).
+        Every validation keyword is part of the contract — type, enum, const,
+        properties, required, items, additionalProperties, minLength,
+        pattern, format, minimum, maxItems, oneOf/anyOf, ... — with key order
+        removed. Only prose (description, title, examples, $comment) is
+        ignored: two renders with the same validation schema are the same
+        native catalog even when their wording differs, so a byte-level
+        difference alone never forces the fallback (which would rewrite the
+        opening system bytes and move every SSD prefix). A render that drops
+        a constraint has changed what the model is told to produce and is
+        deficient (audit follow-up 2026-09-07: minLength, additionalProperties
+        and the parameters object itself were previously outside the contract).
         """
-        if not isinstance(schema, dict):
-            return None
-        contract: dict[str, Any] = {}
-        schema_type = schema.get("type")
-        if isinstance(schema_type, list):
-            contract["type"] = sorted(str(t) for t in schema_type)
-        elif isinstance(schema_type, str):
-            contract["type"] = schema_type
-        if isinstance(schema.get("enum"), list):
-            contract["enum"] = sorted(
-                json.dumps(value, sort_keys=True) for value in schema["enum"]
-            )
-        properties = schema.get("properties")
-        if isinstance(properties, dict):
-            contract["properties"] = {
-                str(name): _parameter_contract(sub) for name, sub in properties.items()
+        if isinstance(schema, dict):
+            contract: dict[str, Any] = {}
+            for key, value in schema.items():
+                key_text = str(key)
+                if key_text in _CONTRACT_PROSE_KEYS:
+                    continue
+                if key_text == "properties" and isinstance(value, dict):
+                    contract[key_text] = {
+                        str(name): _parameter_contract(sub)
+                        for name, sub in value.items()
+                    }
+                elif key_text == "required" and isinstance(value, list):
+                    contract[key_text] = sorted(str(name) for name in value)
+                elif key_text == "type" and isinstance(value, list):
+                    contract[key_text] = sorted(str(t) for t in value)
+                elif key_text == "enum" and isinstance(value, list):
+                    contract[key_text] = sorted(
+                        json.dumps(item, sort_keys=True) for item in value
+                    )
+                else:
+                    contract[key_text] = _parameter_contract(value)
+            return contract
+        if isinstance(schema, list):
+            return [_parameter_contract(item) for item in schema]
+        return schema
+
+    def _argument_contract(parameters: Any) -> Any:
+        """The contract of a function's ``parameters`` block. A missing block,
+        ``{}``, ``{"type": "object"}`` and ``{"type": "object", "properties":
+        {}}`` all tell the model "no arguments" and compare equal; anything
+        that names a property or adds a constraint is compared in full."""
+        contract = _parameter_contract(parameters if isinstance(parameters, dict) else {})
+        if isinstance(contract, dict):
+            residue = {
+                key: value
+                for key, value in contract.items()
+                if not (key == "type" and value == "object")
+                and not (key == "properties" and value == {})
+                and not (key == "required" and value == [])
             }
-        required = schema.get("required")
-        if isinstance(required, list):
-            contract["required"] = sorted(str(name) for name in required)
-        items = schema.get("items")
-        if isinstance(items, dict):
-            contract["items"] = _parameter_contract(items)
+            if not residue:
+                return {}
         return contract
+
+    def _requested_function_schema(tool: Any) -> Optional[dict]:
+        """The request side of the comparison: name plus ``parameters`` (None
+        when the caller declared none — a legitimate no-argument tool)."""
+        func = _tool_func(tool)
+        name = func.get("name") if isinstance(func, dict) else None
+        if not isinstance(name, str) or not name:
+            return None
+        return {"name": name, "parameters": func.get("parameters")}
 
     def _rendered_function_schema(entry: Any) -> Optional[dict]:
         """A rendered catalog entry: OpenAI ``{type, function}`` wrapper, flat
         Responses shape, or the bare function object some templates emit
-        (MiniMax renders ``tool.function | tojson``)."""
+        (MiniMax renders ``tool.function | tojson``). An entry that names a
+        function but carries no ``parameters`` object is returned with
+        ``parameters`` = None so it counts as a rendered — and deficient —
+        function, not as an XML-only catalog."""
         normalized = _normalized_function_schema(entry)
         if normalized is not None:
             return normalized
-        if (
-            isinstance(entry, dict)
-            and isinstance(entry.get("name"), str)
-            and entry.get("name")
-            and isinstance(entry.get("parameters"), dict)
-            and not isinstance(entry.get("function"), dict)
-        ):
-            bare = dict(entry)
-            bare.pop("type", None)
-            return bare
-        return None
+        if not isinstance(entry, dict):
+            return None
+        nested = entry.get("function")
+        candidate = nested if isinstance(nested, dict) else entry
+        name = candidate.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        bare = dict(candidate)
+        bare.pop("type", None)
+        if not isinstance(bare.get("parameters"), dict):
+            bare["parameters"] = None
+        return bare
 
     def _rendered_tools_block_schema_verdict() -> Optional[bool]:
         """Semantic check of the JSON entries a template rendered inside
@@ -604,8 +643,8 @@ def check_and_inject_fallback_tools(
         ``True``  — exactly the requested tools are rendered, each once, and
                     every parameter contract matches the request.
         ``False`` — a requested tool is missing, duplicated or rendered with a
-                    different parameter contract, or the block carries tools
-                    this request did not authorize.
+                    different parameter contract. Extra rendered tools are a
+                    superset (narrowed continuation catalogs stay native).
 
         Names alone are not a contract: a render that named ``read_file`` and
         ``terminal`` while omitting ``path`` and ``command`` was accepted as
@@ -614,11 +653,11 @@ def check_and_inject_fallback_tools(
         """
         expected_by_name: dict[str, Any] = {}
         for tool in template_tools:
-            normalized = _normalized_function_schema(tool)
-            if normalized is None or normalized["name"] in expected_by_name:
+            requested = _requested_function_schema(tool)
+            if requested is None or requested["name"] in expected_by_name:
                 return False
-            expected_by_name[normalized["name"]] = _parameter_contract(
-                normalized["parameters"]
+            expected_by_name[requested["name"]] = _argument_contract(
+                requested["parameters"]
             )
         if not expected_by_name:
             return None
@@ -654,12 +693,21 @@ def check_and_inject_fallback_tools(
                 found_entry = True
                 if normalized["name"] in rendered_by_name:
                     return False
-                rendered_by_name[normalized["name"]] = _parameter_contract(
+                rendered_by_name[normalized["name"]] = _argument_contract(
                     normalized["parameters"]
                 )
         if not found_entry:
             return None
-        return rendered_by_name == expected_by_name
+        # Every requested tool must be rendered once with its contract. A
+        # render that ALSO carries tools this request no longer lists (a
+        # continuation turn whose catalog was narrowed to the remaining tool,
+        # a broader source-owned catalog) is a superset, not a deficiency:
+        # forcing the fallback there would rewrite the opening system bytes
+        # on every agentic turn and defeat prefix reuse.
+        return all(
+            name in rendered_by_name and rendered_by_name[name] == contract
+            for name, contract in expected_by_name.items()
+        )
 
     # Computed once per request; ``is not False`` keeps XML-only catalogs on
     # their existing name-based recognition.
