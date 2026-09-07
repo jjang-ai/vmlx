@@ -2198,6 +2198,21 @@ def _diag_logits_fp(output: Any) -> str:
     except Exception as exc:  # noqa: BLE001
         return f"logits-fp-error:{exc}"
 
+
+def _diag_state_point(tag: str, request: Any, cache: Optional[List[Any]], kv_positions: Any) -> None:
+    """Opt-in: layer-0/1 recurrent-state fingerprints at a named point of the
+    request lifecycle, to bracket where a live state changes."""
+    if not _diag_fingerprints_enabled() or not cache:
+        return
+    try:
+        logger.info(
+            "restore fingerprint POINT %s for %s: %s",
+            tag, getattr(request, "request_id", "?"),
+            _diag_cache_fingerprint(cache, kv_positions, int(getattr(cache[0], "offset", 0) or 0) or 4096),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("restore fingerprint POINT %s failed: %s", tag, exc)
+
 def _call_processor_direct_unscoped(
     processor: Any,
     *,
@@ -14610,6 +14625,7 @@ class MLLMBatchGenerator:
                         )
                     self._prepare_native_mtp_prompt_priming(req)
                     logits = self._run_vision_encoding(req, cache=req_cache)
+                    _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                     from .utils.turboquant_config import turboquant_cache_telemetry
 
                     self._stats.last_turboquant_cache = turboquant_cache_telemetry(
@@ -14791,6 +14807,7 @@ class MLLMBatchGenerator:
                             trace.start("forward")
                         self._prepare_native_mtp_prompt_priming(req)
                         logits = self._run_vision_encoding(req, cache=req_cache)
+                        _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                         if trace is not None:
                             trace.stop("forward")
                     else:
@@ -15345,6 +15362,7 @@ class MLLMBatchGenerator:
                         except Exception:
                             req_cache = [KVCache() for _ in self.language_model.layers]
                         logits = self._run_vision_encoding(req, cache=req_cache)
+                        _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                         per_request_caches.append(req_cache)
                         with _MaybeStream():
                             last_logits = logits[:, -1, :]
@@ -15401,6 +15419,7 @@ class MLLMBatchGenerator:
                                 else:
                                     req_cache = [KVCache() for _ in self.language_model.layers]
                                 logits = self._run_vision_encoding(req, cache=req_cache)
+                                _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                                 per_request_caches.append(req_cache)
                                 with _MaybeStream():
                                     last_logits = logits[:, -1, :]
@@ -15596,6 +15615,12 @@ class MLLMBatchGenerator:
                 )
                 if hasattr(requests[0], "_native_mtp_state"):
                     delattr(requests[0], "_native_mtp_state")
+        if _diag_fingerprints_enabled():
+            try:
+                _bc = getattr(batch, "cache", None) or getattr(batch, "caches", None) or getattr(batch, "kv_cache", None)
+                _diag_state_point("end-of-prompts", (getattr(batch, "requests", None) or [None])[0], _bc, self._hybrid_kv_positions)
+            except Exception as _exc:  # noqa: BLE001
+                logger.info("restore fingerprint POINT end-of-prompts failed: %s", _exc)
         return batch
 
     def _make_request_sampler(self, request: MLLMBatchRequest) -> Callable[[mx.array], mx.array]:
