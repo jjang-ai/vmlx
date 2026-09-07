@@ -127,7 +127,8 @@ def test_strict_error_is_never_swallowed_by_the_media_fallbacks():
     fb = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
     assert fb.index("except MediaControlsUnmeetableError:\n                    raise") < fb.index("video frame fallback failed; using native video path")
     src = open(g.__file__).read()
-    assert "except MediaControlsUnmeetableError:\n                    raise\n                except Exception as e:\n                    logger.warning(f\"Failed to process video for {request.request_id}: {e}\")" in src
+    # the loader sites re-raise typed rejections FIRST inside the input-failure scope (never a bare except Exception)
+    assert "    except (MediaControlsUnmeetableError, MediaInputError):\n        raise\n    except _MEDIA_INPUT_FAILURES as e:" in src
     i = src.index("except (MediaControlsUnmeetableError, MediaInputError) as strict_err:")
     block = src[i:src.index("continue", i)]
     assert "error_code=type(strict_err).code," in block and "strict_err.prompt_tokens" not in block
@@ -231,10 +232,53 @@ def test_media_part_with_no_readable_source_is_a_typed_400_not_a_text_only_succe
     assert src.count("        MediaControlsUnmeetableError,\n        MediaInputError,\n") == 1
     from vmlx_engine import mllm_batch_generator as g
     gsrc = open(g.__file__).read()
-    assert 'raise MediaInputError(\n                        f"image input cannot be used: {e}"' in gsrc
-    assert 'raise MediaInputError(\n                        f"video input cannot be used: {e}"' in gsrc
+    # both loader sites run under the input-failure scope (never a bare `except Exception`)
+    assert gsrc.count('with _media_input_failure_scope("image", request.request_id):') == 1
+    assert gsrc.count('with _media_input_failure_scope("video", request.request_id):') == 1
+    assert "except Exception as e:\n                    # never a silent drop" not in gsrc
     assert MediaInputError.code == "media_input_invalid" and issubclass(MediaInputError, ValueError)
     with pytest.raises(MediaInputError, match="'video_url'"):
         server._responses_input_to_messages([{"role": "user", "content": [{"type": "input_video", "video": "data:video/mp4;base64,AAAA"}, {"type": "input_text", "text": "q"}]}], preserve_multimodal=True)
     ok = server._responses_input_to_messages([{"role": "user", "content": [{"type": "input_video", "video_url": "data:video/mp4;base64,AAAA"}, {"type": "input_text", "text": "q"}]}], preserve_multimodal=True)
     assert ok[0]["content"][0] == {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}}
+
+
+
+@pytest.mark.parametrize(
+    "raised, expect_media_input",
+    [
+        (FileNotFoundError("/nonexistent/dir/same.png"), True),   # unreadable source
+        (ValueError("Cannot process image: xx..."), True),         # loader's own unusable-input class
+        (OSError("cannot identify image file"), True),             # PIL UnidentifiedImageError is an OSError
+        (TypeError("processor bug: NoneType is not subscriptable"), False),  # internal failure
+        (MemoryError(), False),                                    # internal failure
+        (RuntimeError("Metal command buffer failed"), False),      # internal failure
+    ],
+)
+def test_media_input_error_wraps_only_input_class_failures(raised, expect_media_input):
+    """Audit lead (2026-09-07): the successor's loader guard wrapped EVERY exception raised inside image/video
+    preprocessing as MediaInputError → a client 400. An internal failure (a processor bug, an allocation failure)
+    would have been reported as the user's invalid input. Only the loaders' input classes (OSError, ValueError) are
+    wrapped; everything else keeps its own class."""
+    from vmlx_engine.errors import MediaControlsUnmeetableError, MediaInputError
+    from vmlx_engine.mllm_batch_generator import _media_input_failure_scope
+
+    def run():
+        with _media_input_failure_scope("image", "req-inject"):
+            raise raised
+
+    if expect_media_input:
+        with pytest.raises(MediaInputError) as ei:
+            run()
+        assert ei.value.__cause__ is raised and ei.value.request_id == "req-inject"
+        assert "image input cannot be used" in str(ei.value) and ei.value.code == "media_input_invalid"
+    else:
+        with pytest.raises(type(raised)) as ei:
+            run()
+        assert not isinstance(ei.value, MediaInputError)
+    # typed rejections pass through untouched, never double-wrapped
+    for exc in (MediaControlsUnmeetableError("video_controls: cannot be met"), MediaInputError("already typed", request_id="r")):
+        with pytest.raises(type(exc)) as ei:
+            with _media_input_failure_scope("video", "req-inject"):
+                raise exc
+        assert ei.value is exc

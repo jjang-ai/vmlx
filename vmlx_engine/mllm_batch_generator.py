@@ -7802,6 +7802,33 @@ def _offset_proxy_needed_for_model_type(model_type: str) -> bool:
     return False
 
 
+# Failures that mean the REQUEST's media cannot be used: an unreadable or
+# undecodable source (the loaders raise ValueError for an unusable input and
+# OSError for a file/URL that cannot be read; PIL's UnidentifiedImageError,
+# urllib's URLError and binascii.Error are subclasses). Anything else raised
+# inside media preprocessing is an INTERNAL failure (TypeError, MemoryError,
+# a processor bug) and must keep its own class — reporting it as the client's
+# invalid input (400) would hide a product defect behind a user-facing message.
+_MEDIA_INPUT_FAILURES = (OSError, ValueError)
+
+
+@contextmanager
+def _media_input_failure_scope(kind: str, request_id):
+    """Turn an input-class failure of ``kind`` ("image"/"video") preprocessing
+    into ``MediaInputError``; let typed rejections and internal failures
+    propagate untouched."""
+    try:
+        yield
+    except (MediaControlsUnmeetableError, MediaInputError):
+        raise
+    except _MEDIA_INPUT_FAILURES as e:
+        # never a silent drop into a text-only answer
+        logger.warning(f"Failed to process {kind} for {request_id}: {e}")
+        raise MediaInputError(
+            f"{kind} input cannot be used: {e}", request_id=request_id
+        ) from e
+
+
 class MLLMBatchGenerator:
     """Batch generator for Vision Language Models on Apple Metal.
 
@@ -8510,19 +8537,11 @@ class MLLMBatchGenerator:
             if _image_controls is not None and getattr(_image_controls, "is_unset", True):
                 _image_controls = None
             for img in request.images:
-                try:
+                with _media_input_failure_scope("image", request.request_id):
                     path = process_image_input(img)
                     if _image_controls is not None:
                         path = self._apply_image_controls(request, path, _image_controls, strict=_strict)
                     all_images.append(path)
-                except MediaControlsUnmeetableError:
-                    raise
-                except Exception as e:
-                    # never a silent drop into a text-only answer
-                    logger.warning(f"Failed to process image for {request.request_id}: {e}")
-                    raise MediaInputError(
-                        f"image input cannot be used: {e}", request_id=request.request_id
-                    ) from e
             if request.images and getattr(request, "image_token_budget", None) is not None:
                 from .image_controls import image_token_budget_support
                 from .request_diagnostics import record_for
@@ -8548,7 +8567,7 @@ class MLLMBatchGenerator:
             max_frames = _controls.effective_max_frames()
 
             for video in request.videos:
-                try:
+                with _media_input_failure_scope("video", request.request_id):
                     video_path = process_video_input(video)
                     video_cache_sources.append(video_path)
                     video_input, sample_fps = _fetch_video_for_processor(
@@ -8581,13 +8600,6 @@ class MLLMBatchGenerator:
                         _format_timestamps(_timestamps),
                         _controls.cache_key_fragment(),
                     )
-                except MediaControlsUnmeetableError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"Failed to process video for {request.request_id}: {e}")
-                    raise MediaInputError(
-                        f"video input cannot be used: {e}", request_id=request.request_id
-                    ) from e
             if request.videos and not video_inputs:
                 raise ValueError("All video inputs failed to process")
 
