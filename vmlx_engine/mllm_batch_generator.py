@@ -8548,6 +8548,8 @@ class MLLMBatchGenerator:
                         _format_timestamps(_timestamps),
                         _controls.cache_key_fragment(),
                     )
+                except MediaControlsUnmeetableError:
+                    raise
                 except Exception as e:
                     logger.warning(f"Failed to process video: {e}")
             if request.videos and not video_inputs:
@@ -13060,6 +13062,28 @@ class MLLMBatchGenerator:
                 trace.start("preprocess")
                 self._preprocess_request(req)
                 trace.stop("preprocess")
+            except MediaControlsUnmeetableError as strict_err:
+                trace.stop("preprocess")
+                logger.info(
+                    "Rejected VLM prompt for %s before cache lookup/store: %s",
+                    req.request_id,
+                    strict_err,
+                )
+                self._prefill_errors.append(
+                    MLLMBatchResponse(
+                        uid=req.uid,
+                        request_id=req.request_id,
+                        token=0,
+                        logprobs=mx.zeros((1,)),
+                        finish_reason="error",
+                        error=str(strict_err),
+                        error_code=MediaControlsUnmeetableError.code,
+                        error_prompt_tokens=strict_err.prompt_tokens,
+                        error_max_prompt_tokens=strict_err.max_prompt_tokens,
+                        error_source=strict_err.source,
+                    )
+                )
+                continue
             except PromptTooLongError as prompt_err:
                 trace.stop("preprocess")
                 logger.info(

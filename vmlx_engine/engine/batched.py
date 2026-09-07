@@ -1173,6 +1173,8 @@ class BatchedEngine(BaseEngine):
                         frame_paths,
                         cache_key=fallback_cache_key,
                     )
+                except MediaControlsUnmeetableError:
+                    raise  # strict mode: the request is rejected, never re-routed
                 except Exception as exc:
                     logger.warning(
                         "%s video frame fallback failed; using native video path: %s",
