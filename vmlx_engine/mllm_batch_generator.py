@@ -17098,9 +17098,16 @@ class MLLMBatchGenerator:
                     _n = int(getattr(_req, "_diag_decode_steps", 0) or 0)
                     if _n < 4:
                         _req._diag_decode_steps = _n + 1  # type: ignore[attr-defined]
+                        _pos = lm_kwargs.get("position_ids")
+                        _lm = self.language_model
+                        _rd = getattr(_lm, "_rope_deltas", None)
+                        _plan = getattr(_lm, "_position_ids", None)
                         logger.info(
-                            "restore fingerprint DECODE step %d for %s: %s | cache %s",
+                            "restore fingerprint DECODE step %d for %s: %s | explicit_positions=%s rope_deltas=%s plan=%s | cache %s",
                             _n + 1, getattr(_req, "request_id", "?"), _diag_logits_fp(output),
+                            (_pos.reshape(-1).tolist()[:6] if _pos is not None else None),
+                            (_rd.reshape(-1).tolist()[:4] if _rd is not None and hasattr(_rd, "reshape") else _rd),
+                            (list(_plan.shape) if _plan is not None else None),
                             _diag_cache_fingerprint(cache, self._hybrid_kv_positions, int(cache[0].offset) if cache and hasattr(cache[0], "offset") else 0),
                         )
             except Exception as exc:  # noqa: BLE001
