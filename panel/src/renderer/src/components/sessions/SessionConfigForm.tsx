@@ -742,7 +742,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <InfoNote text={t('sessions.config.ramCacheTradeoffNotice')} />
 
       {/* Server Settings */}
-      <Section title={t('sessions.config.serverSettings')} expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
+      <Section title={t('sessions.config.serverSettings')} sectionKey="server" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
         <Field label={t('sessions.config.host')} tooltip={t('sessions.config.hostTooltip')}>
           <input type="text" value={config.host} onChange={e => onChange('host', e.target.value)} className="cfg-input" />
         </Field>
@@ -811,7 +811,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </div>
       )}
 
-      <Section title={t('sessions.config.concurrentProcessing')} expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
+      <Section title={t('sessions.config.concurrentProcessing')} sectionKey="concurrent" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
         <div className="flex items-center gap-2 mb-2">
           {!dsv4Active && <PerformanceHint text={t('sessions.config.concurrentHint')} />}
           {!dsv4Active && (
@@ -969,7 +969,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Prefix Cache */}
-      <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
+      <Section title={t('sessions.config.prefixCache')} sectionKey="prefixCache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.prefixCacheHint')} />}
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}
         {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguTypedCacheNote')} />}
@@ -1112,7 +1112,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* In-memory paged cache (RAM) */}
-      <Section title={pagedCacheSectionTitle} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
+      <Section title={pagedCacheSectionTitle} sectionKey="pagedCache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
         <PerformanceHint text={t('sessions.config.pagedCacheHint')} />
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4PagedNote')} />}
         {zayaSsdReuseUnavailable && <IncompatWarning text={t('sessions.config.zayaTypedCacheNote')} />}
@@ -1236,7 +1236,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           recurrent, sparse, or native compressed/typed composite state. q4/q8
           remain explicit diagnostic stored codecs where the architecture
           allows them; they are never silently selected by Auto. */}
-      <Section title={t('sessions.config.kvCacheQuantization')} expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
+      <Section title={t('sessions.config.kvCacheQuantization')} sectionKey="kvCacheQuant" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
         {batchingOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
         {!batchingOff && prefixOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresPrefix')} />}
         {!effectivelyNoBatching && !prefixOff && mixedSwaCacheActive && <PerformanceHint text={t('sessions.config.mixedSwaAutoHint')} />}
@@ -1301,7 +1301,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Disk Cache (L2 Persistent) */}
-      <Section title={t('sessions.config.diskCachePersistent')} expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
+      <Section title={t('sessions.config.diskCachePersistent')} sectionKey="diskCache" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.diskCacheHint')} />}
         {dsv4Active ? (
           <InfoNote text={t('sessions.config.dsv4LegacyDiskNote')} />
@@ -1353,7 +1353,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Power Management — visible for ALL model types (text + image) */}
-      <Section title={t('sessions.config.powerManagement')} expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
+      <Section title={t('sessions.config.powerManagement')} sectionKey="power" expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
         <PerformanceHint text={t('sessions.config.powerManagementDesc')} />
         <Field label={t('sessions.config.autoSleep')} tooltip={t('sessions.config.autoSleepDesc')}>
           <label className="flex items-center gap-2 cursor-pointer">
@@ -1401,7 +1401,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Performance */}
-      <Section title={t('sessions.config.performanceGeneration')} expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
+      <Section title={t('sessions.config.performanceGeneration')} sectionKey="performance" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
         <PerformanceHint text={t('sessions.config.performanceHint')} />
         {/* Whole-model JIT is not available for path-dependent cache models. */}
         <Field label={t('sessions.config.modelWideJit')} tooltip={t('sessions.config.modelWideJitTooltip')}>
@@ -1829,7 +1829,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Speculative Decoding */}
-      <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
+      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
         <PerformanceHint text={t('sessions.config.specDecodeHint')} />
         {config.continuousBatching && !dflash2Speculative && !multimodalActive && <IncompatWarning text={t('sessions.config.specDecodeIncompatBatching')} />}
         {multimodalActive && config.speculativeModel && !dflash2Speculative && <IncompatWarning text={t('sessions.config.specDecodeIncompatVlm')} />}
@@ -1852,7 +1852,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Distributed Compute */}
-      <Section title={t('sessions.config.distributed')} expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage || dsv4Active}>
+      <Section title={t('sessions.config.distributed')} sectionKey="distributed" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage || dsv4Active}>
         <div className="mx-4 mt-3 mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-3 py-3 text-xs text-amber-800 dark:text-amber-100">
           <div className="font-bold uppercase tracking-wide text-[11px] mb-1.5 text-amber-900 dark:text-amber-50">
             {t('sessions.config.preAlphaHeader')}

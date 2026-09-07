@@ -77,3 +77,15 @@ describe('keyboard interaction on the server settings drawer', () => {
     expect(surface.slice(0, 900)).toContain("if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); onClose() }")
   })
 })
+
+describe('every collapsible settings section carries its contract key', () => {
+  it('each Section bound to expandedSections.<key> declares sectionKey="<key>"', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionConfigForm.tsx'), 'utf8')
+    const sections = src.match(/<Section [^>]*?expanded=\{expandedSections\.[a-zA-Z]+\}[^>]*>/gs) || []
+    expect(sections.length).toBeGreaterThan(10)
+    for (const sec of sections) {
+      const key = sec.match(/expandedSections\.([a-zA-Z]+)/)![1]
+      expect(sec, `section ${key}`).toContain(`sectionKey="${key}"`)
+    }
+  })
+})
