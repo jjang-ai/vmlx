@@ -2737,16 +2737,26 @@ class BlockDiskStore:
         )
 
     def _run_deferred_budget_reconcile(self) -> None:
-        """Run an owed interval rescan of the global budget while the writer is idle."""
+        """Run an owed rescan of the global budget while the writer is idle.
+
+        Two owners: the DEFERRED pass a publish raised once the interval was
+        due, and the IDLE pass the coordinator owes when its last scan left the
+        root above its ceiling or protected dead-lease temp files inside the
+        orphan grace (no write is needed for either to run).
+        """
 
         budget = getattr(self, "global_budget", None)
-        if budget is None or not getattr(budget, "deferred_reconcile_due", False):
+        if budget is None:
+            return
+        deferred = bool(getattr(budget, "deferred_reconcile_due", False))
+        idle_due = getattr(budget, "idle_reconcile_due", None)
+        if not deferred and not (callable(idle_due) and idle_due()):
             return
         if not self._writer_quiet_for_maintenance():
             return
         started = time.perf_counter()
         try:
-            result = budget.run_deferred_reconcile()
+            result = budget.run_deferred_reconcile() if deferred else budget.run_idle_reconcile()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Deferred global block-cache budget rescan failed: %s", exc)
             return
@@ -2754,8 +2764,9 @@ class BlockDiskStore:
             return
         self.disk_evictions += int(getattr(result, "evicted_entries", 0) or 0)
         logger.info(
-            "Deferred global block-cache budget rescan: %.3fs scan_performed=%s "
+            "%s global block-cache budget rescan: %.3fs scan_performed=%s "
             "usage=%.3fGB / %.3fGB evicted=%d compliant=%s",
+            "Deferred" if deferred else "Idle",
             time.perf_counter() - started,
             result.scan_performed,
             result.bytes_after / 1e9,
@@ -3814,6 +3825,8 @@ class BlockDiskStore:
             # cumulative across every writer/process on this root (ledger)
             "evicted_entries_total": global_health.evicted_entries_total,
             "evicted_bytes_total": global_health.evicted_bytes_total,
+            "protected_recent_orphans": global_health.protected_recent_orphans,
+            "protected_temp_files": global_health.protected_temp_files,
             "evicted_bytes": global_health.evicted_bytes,
             "accounting_generation": global_health.accounting_generation,
             "reconciliation_generation": (

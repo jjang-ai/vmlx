@@ -390,9 +390,48 @@ def test_processed_video_grid_is_logged_with_media_tokens():
     import types
     import vmlx_engine.mllm_batch_generator as g
     src = inspect.getsource(g)
-    assert '"Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d"' in src
+    assert '"Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d token_budget=%s"' in src
     class Grid:
         def tolist(self): return [[16, 26, 46]]
     assert g._format_grid(Grid()) == "[16x26x46]"
     proc = types.SimpleNamespace(video_processor=types.SimpleNamespace(merge_size=2))
     assert g._grid_media_tokens(Grid(), proc) == f"{16*26*46//4} (merge=2)"
+
+
+class TestProcessorSideClipBudget:
+    """Measured live (video-tokens-194316, Flash-Next 4S): budgets 512/256/128 all produced 728 media tokens because the
+    loader's per-frame cap floors at its own minimum (224x420). The transformers Qwen3-VL video processor sizes the
+    whole clip from size.longest_edge, so the budget is enforced there, request-locally, with the processor's real
+    pixels-per-token factor (patch 16 x merge 2 squared x temporal 2 = 2,048; the legacy 784 asked for 2.6x too few)."""
+
+    def _proc(self, patch=16, merge=2, temporal=2, short=100352, long=12582912):
+        import types
+        return types.SimpleNamespace(video_processor=types.SimpleNamespace(patch_size=patch, merge_size=merge, temporal_patch_size=temporal, size={"shortest_edge": short, "longest_edge": long}))
+
+    def test_pixels_per_token_come_from_the_processor(self):
+        from vmlx_engine.video_controls import video_token_pixels, DEFAULT_VIDEO_TOKEN_PIXELS
+        assert video_token_pixels(self._proc()) == 2048
+        assert video_token_pixels(self._proc(patch=14)) == 1568  # Qwen2.5-VL geometry
+        assert video_token_pixels(None) == DEFAULT_VIDEO_TOKEN_PIXELS == 784
+        assert video_token_pixels(object()) == 784
+
+    def test_budget_becomes_a_request_local_size_for_the_processor(self):
+        from vmlx_engine.video_controls import VideoControls
+        c = VideoControls(token_budget=512).with_processor(self._proc())
+        assert c.token_pixels == 2048 and c.effective_total_pixels() == 512 * 2048
+        assert c.processor_video_kwargs(self._proc()) == {"size": {"shortest_edge": 100352, "longest_edge": 1048576}}
+        # a budget below the processor's own minimum lowers the minimum too, so the size dict stays valid
+        tiny = VideoControls(token_budget=32).with_processor(self._proc())
+        assert tiny.processor_video_kwargs(self._proc()) == {"size": {"shortest_edge": 65536, "longest_edge": 65536}}
+        # explicit total pixels win over the budget; no clip budget -> nothing is sent
+        assert VideoControls(total_pixels=300000).processor_video_kwargs(self._proc())["size"]["longest_edge"] == 300000
+        assert VideoControls(fps=1, max_frames=4).processor_video_kwargs(self._proc()) is None
+        assert VideoControls(max_pixels=100352).processor_video_kwargs(self._proc()) is None  # per-frame cap stays loader-side
+
+    def test_call_site_forwards_the_size_without_touching_the_processor(self):
+        import inspect
+        import vmlx_engine.mllm_batch_generator as g
+        src = inspect.getsource(g)
+        assert "videos_kwargs=(" in src and ".with_processor(self.processor).processor_video_kwargs(self.processor)" in src
+        assert 'kwargs["videos_kwargs"] = dict(videos_kwargs)' in src
+        assert 'token_budget=%s"' in src  # the processed-grid line names the budget it was asked to meet

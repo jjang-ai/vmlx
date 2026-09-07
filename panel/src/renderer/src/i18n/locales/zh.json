@@ -1051,7 +1051,7 @@
       "videoMaxPixelsFastest": "最快",
       "videoMaxPixelsMax": "加载器上限",
       "videoTokenBudget": "视频 token 预算",
-      "videoTokenBudgetTooltip": "每个视频附件的视觉 token 数量上限（近似值；不包含图片，也不限制输出 token 或上下文）。引擎将其换算为每段视频的像素预算（token 数 × 28² 像素），由加载器分配到各采样帧；帧仍按模型的 patch 尺寸取整，处理器还会套用自身的整段限制，因此实际数量可能不同。引擎日志中的“Video processed”行显示真实的 token 数。",
+      "videoTokenBudgetTooltip": "每个视频附件的视觉 token 数量上限（近似值；不包含图片，也不限制输出 token 或上下文）。引擎将其换算为每段视频的像素预算（token 数 × 2,048 (Qwen3-VL) pixels per token 像素），由加载器分配到各采样帧；帧仍按模型的 patch 尺寸取整，处理器还会套用自身的整段限制，因此实际数量可能不同。引擎日志中的“Video processed”行显示真实的 token 数。",
       "multimodalSection": "多模态与视频"
     },
     "create": {

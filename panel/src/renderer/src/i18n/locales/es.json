@@ -1051,7 +1051,7 @@
       "videoMaxPixelsFastest": "más rápido",
       "videoMaxPixelsMax": "máximo del cargador",
       "videoTokenBudget": "Presupuesto de tokens de vídeo",
-      "videoTokenBudgetTooltip": "Límite aproximado de tokens de visión para cada vídeo adjunto (no incluye imágenes y nunca limita los tokens de salida ni el contexto). El motor lo convierte en un presupuesto de píxeles por clip (tokens × 28² píxeles) que el cargador reparte entre los fotogramas muestreados; los fotogramas se redondean al tamaño de parche del modelo y el procesador aplica sus propios límites por clip, así que el recuento exacto puede variar. La línea 'Video processed' del registro del motor muestra el recuento real.",
+      "videoTokenBudgetTooltip": "Límite aproximado de tokens de visión para cada vídeo adjunto (no incluye imágenes y nunca limita los tokens de salida ni el contexto). El motor lo convierte en un presupuesto de píxeles por clip (tokens × 2,048 (Qwen3-VL) pixels per token píxeles) que el cargador reparte entre los fotogramas muestreados; los fotogramas se redondean al tamaño de parche del modelo y el procesador aplica sus propios límites por clip, así que el recuento exacto puede variar. La línea 'Video processed' del registro del motor muestra el recuento real.",
       "multimodalSection": "Multimodal y vídeo"
     },
     "create": {

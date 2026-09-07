@@ -619,8 +619,10 @@ def test_negative_delta_forces_reconcile_instead_of_double_subtracting(
     second = blocks / "second.safetensors"
     first.write_bytes(b"a" * 10_000)
     second.write_bytes(b"b" * 20_000)
-    one = GlobalDiskCacheBudget(root, 10_000_000, orphan_grace_seconds=0)
-    two = GlobalDiskCacheBudget(root, 10_000_000, orphan_grace_seconds=0)
+    # fresh unreferenced payloads inside the orphan grace: counted and protected (an AGED unreferenced payload is
+    # garbage on every reconcile now, whatever the ceiling)
+    one = GlobalDiskCacheBudget(root, 10_000_000, orphan_grace_seconds=3600)
+    two = GlobalDiskCacheBudget(root, 10_000_000, orphan_grace_seconds=3600)
     try:
         assert one.enforce(force=True).bytes_after == 30_000
         first.unlink()
@@ -1157,3 +1159,53 @@ def test_eviction_totals_accumulate_in_the_shared_ledger_and_survive_a_refresh(t
         assert newest.exists()
     finally:
         budget._remove_lease()
+
+
+def test_idle_pass_removes_dead_writer_temp_files_after_the_grace_without_a_write(tmp_path: Path) -> None:
+    """A kill inside a write leaves temp files; the next scan protects them inside the orphan grace and records them
+    (protected_temp_files). Before this, they were removed only when a later WRITE pushed the root over its ceiling
+    and the LRU pass reached them (live: 4 temp files survived a restart and 5 idle minutes). Now: the coordinator owes
+    an IDLE pass once the interval elapsed while its last scan protected temps/orphans or was non-compliant, and the
+    garbage pass removes aged unreferenced payloads whatever the ceiling — here the ceiling is UNLIMITED (0)."""
+    root = tmp_path / "root"
+    now = time.time()
+    _indexed_block(root / "aaaaaaaaaaaa", "aa-keep", size=64_000, accessed=now)
+    namespace = root / "aaaaaaaaaaaa"
+    temp = namespace / "blocks" / "zz" / "zz-dead.tmp.safetensors"
+    temp.parent.mkdir(parents=True, exist_ok=True)
+    temp.write_bytes(b"y" * 32_000)  # ownerless temp file: protected while recent, garbage after the grace
+    old_orphan = namespace / "blocks" / "yy" / "yy-old.safetensors"
+    old_orphan.parent.mkdir(parents=True, exist_ok=True)
+    old_orphan.write_bytes(b"o" * 16_000); os.utime(old_orphan, (now - 3600, now - 3600))  # unreferenced, aged: garbage now
+
+    budget = GlobalDiskCacheBudget(root, 0, orphan_grace_seconds=0.4, reconcile_interval_seconds=0.2)
+    try:
+        first = budget.enforce(force=True)
+        assert not old_orphan.exists(), "an aged unreferenced payload is garbage even under an unlimited ceiling"
+        assert first.evicted_entries >= 1 and first.compliant
+        assert first.protected_temp_files == 1 and temp.exists()
+        assert budget.idle_reconcile_due() is False  # interval not elapsed yet
+        time.sleep(0.25)
+        assert budget.idle_reconcile_due() is True  # interval elapsed, a protected temp is recorded
+        second = budget.run_idle_reconcile()
+        assert second is not None and second.scan_performed
+        if temp.exists():
+            assert second.protected_temp_files == 1  # grace not over: still protected, still owed
+            time.sleep(0.45)
+            assert budget.idle_reconcile_due() is True
+            third = budget.run_idle_reconcile()
+            assert third is not None
+        assert not temp.exists()
+        # nothing protected and compliant: no idle pass is owed, however much time passes
+        time.sleep(0.25)
+        assert budget.idle_reconcile_due() is False
+        assert (namespace / "blocks" / "aa" / "aa-keep.safetensors").exists()
+    finally:
+        budget._remove_lease()
+
+
+def test_writer_idle_poll_runs_the_idle_pass_without_a_publish() -> None:
+    import inspect
+    import vmlx_engine.block_disk_store as store
+    src = inspect.getsource(store.BlockDiskStore._run_deferred_budget_reconcile)
+    assert "budget.run_idle_reconcile()" in src and 'callable(idle_due) and idle_due()' in src

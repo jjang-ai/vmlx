@@ -225,6 +225,10 @@ class GlobalBudgetResult:
     # store's counter and the last-reconcile fields both read 0).
     evicted_entries_total: int = 0
     evicted_bytes_total: int = 0
+    # temp files still protected by a live lease or the orphan grace at the last
+    # scan (a kill inside a write leaves such files; the idle pass owes them a
+    # later look)
+    protected_temp_files: int = 0
 
 
 class GlobalDiskCacheBudget:
@@ -773,6 +777,38 @@ class GlobalDiskCacheBudget:
         """True when an interval-due physical rescan is owed off the publish path."""
 
         return bool(self._deferred_reconcile_due)
+
+    def idle_reconcile_due(self) -> bool:
+        """True when an IDLE pass is owed: no publish has raised the deferred
+        flag, the interval has elapsed since this process last reconciled, and
+        the last scan left something only time can settle — the root was above
+        its ceiling, or dead-lease temp files were protected by the orphan grace.
+        A compliant root without protected orphans never triggers idle scanning.
+        Live: a kill -9 inside a companion write left 4 temp files that the
+        restart's trim protected; they were removed only when the next WRITE
+        happened after the grace. This pass removes them on idle instead."""
+
+        with self._thread_lock:
+            last = self._last_result
+            if last is None or self._deferred_reconcile_due:
+                return False
+            if (
+                time.monotonic_ns() - self._last_reconcile_monotonic_ns
+                < self._reconcile_interval_ns
+            ):
+                return False
+            return (
+                (not last.compliant)
+                or int(last.protected_recent_orphans or 0) > 0
+                or int(last.protected_temp_files or 0) > 0
+            )
+
+    def run_idle_reconcile(self) -> GlobalBudgetResult | None:
+        """Perform an owed idle pass (see ``idle_reconcile_due``)."""
+
+        if not self.idle_reconcile_due():
+            return None
+        return self.enforce(force=True)
 
     def run_deferred_reconcile(self) -> GlobalBudgetResult | None:
         """Perform the owed periodic rescan under the root-exclusive lock.
@@ -1563,6 +1599,9 @@ class GlobalDiskCacheBudget:
                     reconciliation_generation=reconciliation_generation,
                     evicted_entries_total=int(state.get("evicted_entries_total") or 0),
                     evicted_bytes_total=int(state.get("evicted_bytes_total") or 0),
+                    protected_temp_files=(
+                        previous.protected_temp_files if previous is not None else 0
+                    ),
                 )
                 self._last_result = result
                 return result
@@ -1681,6 +1720,40 @@ class GlobalDiskCacheBudget:
         before = total
         evicted_entries = 0
         evicted_bytes = 0
+        protected_temp_files = sum(
+            1 for candidate in candidates if candidate.kind == "protected_temp"
+        )
+        # Garbage first, whatever the ceiling (including unlimited): a finalized
+        # payload no index references once the orphan grace has passed, and a
+        # temp file whose writer lease is dead (or ownerless and aged), can never
+        # be restored by anyone. Before this they lingered until the root went
+        # OVER its ceiling and the LRU pass happened to reach them (live: 4 temp
+        # files from a kill -9 survived a restart and 5 idle minutes).
+        garbage = [
+            candidate
+            for candidate in candidates
+            if candidate.kind in {"orphan", "stale_temp"}
+            and not candidate.publication_pinned
+        ]
+        garbage_entries = 0
+        garbage_bytes = 0
+        for candidate in garbage:
+            freed = self._evict_paths_locked(candidate)
+            if freed <= 0:
+                continue
+            total = max(0, total - freed)
+            garbage_entries += 1
+            garbage_bytes += freed
+        if garbage_entries:
+            evicted_entries += garbage_entries
+            evicted_bytes += garbage_bytes
+            candidates = [candidate for candidate in candidates if candidate not in garbage]
+            logger.info(
+                "Global block-cache garbage: removed %d unreferenced payload(s) "
+                "(%.3fGB: aged orphans and dead-writer temp files)",
+                garbage_entries,
+                garbage_bytes / 1024**3,
+            )
         if max_size_bytes > 0:
             trim_target = (
                 max(0, int(max_size_bytes * 0.9))
@@ -1908,6 +1981,7 @@ class GlobalDiskCacheBudget:
             reconciliation_generation=reconciliation_generation,
             evicted_entries_total=evicted_entries_total,
             evicted_bytes_total=evicted_bytes_total,
+            protected_temp_files=protected_temp_files,
         )
         self._last_result = result
         self._last_reconcile_monotonic_ns = time.monotonic_ns()

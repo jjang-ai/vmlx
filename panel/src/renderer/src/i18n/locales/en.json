@@ -1051,7 +1051,7 @@
       "videoMaxPixelsFastest": "fastest",
       "videoMaxPixelsMax": "loader maximum",
       "videoTokenBudget": "Video Token Budget",
-      "videoTokenBudgetTooltip": "Approximate cap on vision tokens for each video attachment (images are not included; it never limits output tokens or context). The engine turns it into a per-clip pixel budget (tokens × 28² pixels) that the video loader spreads across the sampled frames; frames still round to the model's patch size and the processor keeps its own whole-clip bounds, so the exact count can differ. The engine log line 'Video processed' shows the real token count.",
+      "videoTokenBudgetTooltip": "Approximate cap on vision tokens for each video attachment (images are not included; it never limits output tokens or context). The engine turns it into a per-clip pixel budget (tokens × the model's pixels per video token; 2,048 for Qwen3-VL) that the video loader spreads across the sampled frames; frames still round to the model's patch size and the processor keeps its own whole-clip bounds, so the exact count can differ. The engine log line 'Video processed' shows the real token count.",
       "multimodalSection": "Multimodal & Video"
     },
     "create": {

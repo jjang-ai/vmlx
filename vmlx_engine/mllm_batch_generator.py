@@ -2061,6 +2061,7 @@ def _call_processor_direct_unscoped(
     video_timestamps: Optional[List[List[float]]] = None,
     audio: Optional[List[Any]] = None,
     add_special_tokens: bool,
+    videos_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Call a VLM processor without mlx_vlm.process_inputs' bad `.process` trap.
 
@@ -2156,6 +2157,10 @@ def _call_processor_direct_unscoped(
                 kwargs["fps"] = _video_fps
             if video_timestamps is not None and "video_timestamps" in params:
                 kwargs["video_timestamps"] = video_timestamps
+            # Request-local video processor settings (clip pixel budget): passed
+            # per call, never written to the shared processor.
+            if videos_kwargs and ("videos_kwargs" in params or accepts_var_kwargs):
+                kwargs["videos_kwargs"] = dict(videos_kwargs)
         except Exception:
             kwargs["videos"] = videos
     if audio:
@@ -2230,6 +2235,7 @@ def _call_processor_direct(
     audio: Optional[List[Any]] = None,
     add_special_tokens: bool,
     image_token_budget: Optional[int] = None,
+    videos_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     with _temporary_gemma4_image_token_budget(processor, image_token_budget):
         return _call_processor_direct_unscoped(
@@ -2241,6 +2247,7 @@ def _call_processor_direct(
             video_timestamps=video_timestamps,
             audio=audio,
             add_special_tokens=add_special_tokens,
+            videos_kwargs=videos_kwargs,
         )
 
 
@@ -8268,7 +8275,7 @@ class MLLMBatchGenerator:
                 MAX_FRAMES,
                 process_video_input,
             )
-            _controls = _request_video_controls(request)
+            _controls = _request_video_controls(request).with_processor(self.processor)
             fps = _controls.effective_fps()
             max_frames = _controls.effective_max_frames()
 
@@ -8417,6 +8424,11 @@ class MLLMBatchGenerator:
                 audio=all_audio,
                 add_special_tokens=False,
                 image_token_budget=request.image_token_budget,
+                videos_kwargs=(
+                    _request_video_controls(request).with_processor(self.processor).processor_video_kwargs(self.processor)
+                    if video_inputs
+                    else None
+                ),
             )
         else:
             inputs = _as_input_mapping(prepare_inputs(
@@ -8484,12 +8496,14 @@ class MLLMBatchGenerator:
             # by the sub-processor): the temporal/spatial patch grid per video
             # and the media tokens it will occupy after merging.
             _grid = inputs.get("video_grid_thw")
+            _budget_controls = _request_video_controls(request)
             logger.info(
-                "Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d",
+                "Video processed for %s: grid_thw=%s media_tokens=%s input_ids=%d token_budget=%s",
                 request.request_id,
                 _format_grid(_grid),
                 _grid_media_tokens(_grid, self.processor),
                 int(request.input_ids.shape[-1]) if getattr(request.input_ids, "shape", None) else -1,
+                _budget_controls.token_budget if _budget_controls.token_budget is not None else "-",
             )
 
         # Extract extra kwargs

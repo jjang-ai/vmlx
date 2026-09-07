@@ -52,12 +52,33 @@ VIDEO_CONTROL_FIELDS: tuple[str, ...] = (
     "video_token_budget",
 )
 
-# Qwen-style video geometry: one token per (image_factor x image_factor)
-# pixel patch after merging, over pairs of frames (temporal patch 2). The
-# loader's per-clip budget ``total_pixels`` therefore maps to tokens as
-# tokens ~= total_pixels / image_factor**2 (see fetch_video: per-frame
-# max_pixels = total_pixels / nframes * FRAME_FACTOR).
+# Legacy (qwen-vl-utils) video geometry: one token per (image_factor x
+# image_factor) pixel patch after merging. Only the fallback when the loaded
+# processor does not expose its geometry: the real factor is read from the
+# processor (``video_token_pixels``). Measured on Qwen3-VL (patch 16, merge 2,
+# temporal patch 2): 16 frames of 352x640 -> grid 8x22x40 -> 1,760 tokens, i.e.
+# 2,048 pixels per token, not 784 — a budget converted with 784 asked the
+# processor for 2.6x too few pixels and could never be met.
 VIDEO_TOKEN_IMAGE_FACTOR = 28
+DEFAULT_VIDEO_TOKEN_PIXELS = VIDEO_TOKEN_IMAGE_FACTOR * VIDEO_TOKEN_IMAGE_FACTOR
+
+
+def video_token_pixels(processor: Any = None) -> int:
+    """Pixels of the sampled clip that one merged video token covers:
+    ``temporal_patch_size * (patch_size * merge_size) ** 2`` from the loaded
+    video processor, else the legacy 28x28."""
+    vp = getattr(processor, "video_processor", None) if processor is not None else None
+    if vp is None:
+        vp = processor
+    try:
+        patch = int(getattr(vp, "patch_size", 0) or 0)
+        merge = int(getattr(vp, "merge_size", 0) or 0)
+        temporal = int(getattr(vp, "temporal_patch_size", 0) or 0)
+    except (TypeError, ValueError):
+        return DEFAULT_VIDEO_TOKEN_PIXELS
+    if patch > 0 and merge > 0 and temporal > 0:
+        return temporal * (patch * merge) ** 2
+    return DEFAULT_VIDEO_TOKEN_PIXELS
 
 # mlx-vlm 0.5 ``video_generate.VIDEO_MAX_PIXELS``: the loader clamps a larger
 # per-frame budget to this value (768 * 28 * 28).
@@ -101,9 +122,12 @@ class VideoControls:
     resized_height: int | None = None
     resized_width: int | None = None
     # Whole-clip vision-token budget; derived into total_pixels for the loader
-    # (approximate: smart_resize rounds to the patch factor and min_pixels
+    # AND the processor (approximate: smart_resize rounds to the patch factor and min_pixels
     # floors each frame).
     token_budget: int | None = None
+    # pixels per video token of the processor that will consume the clip;
+    # set by the generator (``video_token_pixels``), legacy 784 otherwise
+    token_pixels: int | None = None
 
     # ── construction ──────────────────────────────────────────────────
     @classmethod
@@ -137,12 +161,45 @@ class VideoControls:
         )
 
     def effective_total_pixels(self) -> int | None:
-        """``total_pixels`` as sent, else the value derived from ``token_budget``."""
+        """``total_pixels`` as sent, else ``token_budget`` x the processor's
+        pixels per token (``token_pixels``; legacy 28x28 when unknown)."""
         if self.total_pixels is not None:
             return int(self.total_pixels)
         if self.token_budget is not None:
-            return int(self.token_budget) * VIDEO_TOKEN_IMAGE_FACTOR * VIDEO_TOKEN_IMAGE_FACTOR
+            per_token = int(self.token_pixels or DEFAULT_VIDEO_TOKEN_PIXELS)
+            return int(self.token_budget) * per_token
         return None
+
+    def with_processor(self, processor: Any) -> "VideoControls":
+        """A copy carrying the processor's pixels-per-token factor."""
+        from dataclasses import replace
+
+        return replace(self, token_pixels=video_token_pixels(processor))
+
+    def processor_video_kwargs(self, processor: Any) -> dict[str, Any] | None:
+        """Request-local ``videos_kwargs`` for the transformers video processor.
+
+        The Qwen3-VL video processor sizes the WHOLE sampled clip from
+        ``size.longest_edge`` (max total pixels) and ``size.shortest_edge`` (min
+        total pixels) — exactly the per-video budget contract — so a
+        ``total_pixels`` / ``token_budget`` request is enforced there instead of
+        being approximated by the loader's per-frame cap (which floors at the
+        loader's own minimum: budgets 512/256/128 all came out as 728 tokens
+        before this). Returns None when the request carries no clip budget.
+        Never mutates the processor."""
+        total = self.effective_total_pixels()
+        if total is None or total <= 0:
+            return None
+        vp = getattr(processor, "video_processor", None) or processor
+        size = getattr(vp, "size", None) or {}
+        try:
+            default_short = int(size.get("shortest_edge") or 0) if isinstance(size, dict) else int(getattr(size, "shortest_edge", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            default_short = 0
+        shortest = default_short if default_short > 0 else 1
+        if shortest > total:
+            shortest = int(total)
+        return {"size": {"shortest_edge": int(shortest), "longest_edge": int(total)}}
 
     def effective_fps(self) -> float:
         if self.fps is not None:
