@@ -93,3 +93,11 @@ describe('every collapsible settings section carries its contract key', () => {
     }
   })
 })
+
+describe('the full-page session settings carry the same contract as the drawer', () => {
+  it('surface, session id and the back / save / save-and-restart controls are addressable', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionSettings.tsx'), 'utf8')
+    expect(src).toContain('data-vmlx-surface="session-settings" data-vmlx-session-id={sessionId}')
+    for (const c of ['session-settings-back', 'session-settings-save', 'session-settings-save-restart']) expect(src).toContain(`data-vmlx-control="${c}"`)
+  })
+})

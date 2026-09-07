@@ -795,7 +795,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const isRunning = session.status === 'running' || session.status === 'loading'
 
   return (
-    <div className="p-6 overflow-auto h-full">
+    <div className="p-6 overflow-auto h-full" data-vmlx-surface="session-settings" data-vmlx-session-id={sessionId}>
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
@@ -860,10 +860,11 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
 
         {/* Actions */}
         <div className="flex flex-wrap gap-3 mt-6 pb-6">
-          <button onClick={onBack} className="px-4 py-2 border border-border rounded hover:bg-accent">
+          <button data-vmlx-control="session-settings-back" onClick={onBack} className="px-4 py-2 border border-border rounded hover:bg-accent">
             {t('common.back')}
           </button>
           <button
+            data-vmlx-control="session-settings-save"
             onPointerDown={commitActiveSettingsInput}
             onClick={handleSave}
             disabled={!dirty || saving || restarting}
@@ -875,6 +876,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
           </button>
           {isRunning && (
             <button
+              data-vmlx-control="session-settings-save-restart"
               onPointerDown={commitActiveSettingsInput}
               onClick={handleSaveAndRestart}
               disabled={saving || restarting}
