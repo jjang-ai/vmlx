@@ -829,6 +829,21 @@ class TestGlmAlignedHeadCache:
         assert _glm_prompt_priming_enabled(glm) is True
         assert _glm_prompt_priming_enabled(qwen) is False
 
+        # ERNIE-4.5 measured a wall-speed win (2026-09-05): default on, its own
+        # flag is the explicit opt-out, and the GLM flag must not leak into it.
+        monkeypatch.delenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", raising=False)
+        monkeypatch.delenv("VMLINUX_ERNIE45_MTP_PROMPT_PRIMING", raising=False)
+        ernie = type("Model", (), {"model_type": "ernie4_5_moe"})()
+        assert _glm_prompt_priming_enabled(ernie) is True
+        monkeypatch.setenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", "0")
+        assert _glm_prompt_priming_enabled(ernie) is False
+        monkeypatch.setenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", "1")
+        assert _glm_prompt_priming_enabled(ernie) is True
+        monkeypatch.delenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", raising=False)
+        monkeypatch.setenv("VMLX_GLM5_MTP_PROMPT_PRIMING", "0")
+        assert _glm_prompt_priming_enabled(ernie) is True
+        assert _glm_prompt_priming_enabled(glm) is False
+
     def test_trim_removes_only_unverified_chain_pairs(self):
         from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
             _MtpState,

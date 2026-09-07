@@ -254,6 +254,14 @@ registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', suppor
 // relies on config.json vision_config, not the family's isMultimodal flag.
 registerFamily('qwen3.5', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 (dense)', priority: 4 })
 registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 MoE', priority: 4 })
+// ERNIE-4.5 MoE (Baidu, model_type ernie4_5_moe; vMLX-owned runtime in
+// vmlx_engine/models/ernie4_5). Plain GQA -> generic kv cache, paged OFF by
+// default like other non-hybrid families. The PT chat template has no tool
+// syntax and no think block, so no parser is stamped and thinking is pinned
+// false; the -Thinking variants get their own row once live-proven. Mirrors
+// the Python model_configs.py row exactly (eos </s> + <|end_of_sentence|>,
+// temp 0.8 / top_p 0.8 recommended by generation_config).
+registerFamily('ernie4.5', { cacheType: 'kv', supportsThinking: false, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: false, enableAutoToolChoice: false, isMultimodal: false, description: 'ERNIE-4.5 MoE (Baidu): dense layer 0 + 64-expert MoE, GQA, MTP head', priority: 20 })
 // Qwen3.8 Flash Next is a Qwen4Exp VL wrapper around the hybrid QSA/Gated
 // DeltaNet decoder.  Base MLX bundles do not require a jang_config sidecar, so
 // every user-visible capability that is invariant for this model_type must be
@@ -551,6 +559,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'qwen3_5': 'qwen3.5',
   'qwen3_5_moe': 'qwen3.5-moe',
   'qwen3_5_moe_text': 'qwen3.5-moe', // Qwen3.6-35B-A3B inner text_config model_type
+  'ernie4_5_moe': 'ernie4.5',
+  'ernie4_5': 'ernie4.5', // engine family_name (capabilities.family) and dense variant
   'qwen4_exp': 'qwen4-exp',
   'glm5_next': 'glm5-next',
   'glm5_next_text': 'glm5-next',
@@ -1306,6 +1316,12 @@ function detectNativeMtpCapability(
     'dots3_note',
     'glm5_next',
     'glm5_next_text',
+    // ERNIE-4.5 MoE (Baidu): one dense MTP block stored as model.mtp_block.0.*
+    // (+ mtp_emb_norm/mtp_hidden_norm/mtp_linear_proj). Text-only, plain GQA
+    // attention -> plain_kv_v1. Measured 2026-09-05 (JANG_6M): D1 the only
+    // depth faster than AR on every prompt; sidecar pins best_depth 1.
+    'ernie4_5_moe',
+    'ernie4_5',
   ])
   const modelTypes = [
     parsedConfig.model_type,
@@ -1315,6 +1331,7 @@ function detectNativeMtpCapability(
   if (!modelTypes.some(value => supportedFamilies.has(value))) return undefined
   const hy3 = modelTypes.includes('hy_v3')
   const glm5Next = modelTypes.includes('glm5_next') || modelTypes.includes('glm5_next_text')
+  const ernie45 = modelTypes.includes('ernie4_5_moe') || modelTypes.includes('ernie4_5')
   const tuningDepth = readNativeMtpTuningDepth(modelPath)
   const hy3OutputEquivalent = hy3
     ? nativeMtpOutputEquivalent(modelPath)
@@ -1340,7 +1357,12 @@ function detectNativeMtpCapability(
       && Number.isInteger(baseLayerCount)
       && baseLayerCount > 0
       && keys.some(key => key.startsWith(`model.layers.${baseLayerCount}.`))
-    const hasMtp = keys.some(key => /(^|\.)mtp(\.|$)/.test(key)) || hasAppendedGlmMtp
+    // ERNIE stores its head as mtp_block / mtp_emb_norm / mtp_hidden_norm /
+    // mtp_linear_proj (no bare "mtp" segment), mirroring the engine's
+    // native_mtp._mtp_keys_from_weight_keys.
+    const hasMtp = keys.some(key =>
+      /(^|\.)mtp(\.|$)/.test(key) || /(^|\.)mtp_(block|emb_norm|hidden_norm|linear_proj)(\.|$)/.test(key),
+    ) || hasAppendedGlmMtp
     if (!hasMtp) return undefined
     const hasVisionWeights = keys.some(key =>
       /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
@@ -1380,7 +1402,7 @@ function detectNativeMtpCapability(
       // (cache.native.schema): hy3 is plain attention (plain_kv_v1); the
       // qwen3.6 hybrid SSM+attention bundle reports hybrid_ssm_v1 (NOT
       // hybrid_ssm_attention_kv_v1, which matched nothing the engine emits).
-      nativeCacheType: hy3
+      nativeCacheType: hy3 || ernie45
         ? 'plain_kv_v1'
         : glm5Next
           ? 'glm5_next_native_v2'

@@ -1226,6 +1226,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     # draft head.  The finalizer below then proves the head survived model
     # construction instead of silently serving the MTP bundle as plain AR.
     _glm5_next_native_mtp_expected = False
+    _ernie4_5_native_mtp_expected = False
     _glm5_next_runtime_expected = False
     _glm5_next_model_config_override = None
 
@@ -1244,8 +1245,13 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     ensure_spark2_5_runtime_registered(local_model_path)
 
     def _finalize_loaded_model(model, tokenizer):
+        # ERNIE sanitizes shard-local dictionaries; absence can only be decided
+        # once the public loader has consumed the complete checkpoint.
+        finalize_ernie = getattr(model, "finalize_ernie_weight_loading", None)
+        if callable(finalize_ernie):
+            finalize_ernie()
         validate_nanbeige_loop_cache_contract(model, local_model_path)
-        if _glm5_next_native_mtp_expected:
+        if _glm5_next_native_mtp_expected or _ernie4_5_native_mtp_expected:
             from ..native_mtp import (
                 deactivate_native_mtp,
                 model_has_native_mtp_runtime,
@@ -1254,7 +1260,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             if not model_has_native_mtp_runtime(model):
                 deactivate_native_mtp()
                 raise RuntimeError(
-                    "GLM-5.3 bundle inspection enabled native MTP, but the "
+                    "bundle inspection enabled native MTP, but the "
                     "loaded model has no attached draft head/runtime contract; "
                     "refusing to silently serve it autoregressively"
                 )
@@ -1352,6 +1358,28 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                             "num_hidden_layers"
                         ),
                     )
+            if _mt_arch == "ernie4_5_moe" or _tc_mt_arch == "ernie4_5_moe":
+                # ERNIE-4.5 bf16/MXFP bundles take mlx_lm's generic load with the
+                # vMLX-owned runtime registered OVER upstream. Native MTP must be
+                # activated here, before Model construction, for the same reason
+                # as GLM above: only the JANG loaders call maybe_apply_native_mtp,
+                # so a plain safetensors bundle used to inspect as
+                # "native_runtime_ready" and then serve AR with the head idle.
+                from ..models.ernie4_5.register import register_ernie4_5_runtime
+                from ..native_mtp import maybe_apply_native_mtp
+                register_ernie4_5_runtime()
+                _ernie_mtp_status = maybe_apply_native_mtp(
+                    local_model_path,
+                    allow_runtime=True,
+                )
+                if _ernie_mtp_status.get("status") == "runtime_patch_failed":
+                    raise RuntimeError(
+                        "ERNIE-4.5 native-MTP activation failed before model load; "
+                        "refusing to discard the preserved draft head"
+                    )
+                _ernie4_5_native_mtp_expected = bool(
+                    _ernie_mtp_status.get("runtime_active")
+                )
             if _mt_arch == "zaya" or _tc_mt_arch == "zaya":
                 _jcfg_path_arch = Path(local_model_path) / "jang_config.json"
                 _zaya_wf = None

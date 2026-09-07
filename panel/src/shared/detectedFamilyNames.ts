@@ -45,6 +45,7 @@ const ENGINE_FAMILY_TO_REGISTRY: Readonly<Record<string, string>> = Object.freez
   nemotron_h: 'nemotron-h',
   glm5_next: 'glm5-next',
   glm5_next_text: 'glm5-next',
+  ernie4_5: 'ernie4.5',
 })
 
 export function normalizeDetectedFamilyName(family?: string): string | undefined {
