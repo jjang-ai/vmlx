@@ -746,7 +746,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <Field label={t('sessions.config.host')} tooltip={t('sessions.config.hostTooltip')}>
           <input type="text" value={config.host} onChange={e => onChange('host', e.target.value)} className="cfg-input" />
         </Field>
-        <SliderField
+        <SliderField settingKey="port"
           label={t('sessions.config.port')}
           tooltip={t('sessions.config.portTooltip')}
           value={config.port}
@@ -762,7 +762,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <Field label={t('sessions.config.servedModelName')} tooltip={t('sessions.config.servedModelNameTooltip')}>
           <input type="text" value={config.servedModelName} onChange={e => onChange('servedModelName', e.target.value)} placeholder={t('sessions.config.servedModelNamePlaceholder')} className="cfg-input" />
         </Field>
-        <SliderField
+        <SliderField settingKey="rateLimit"
           label={t('sessions.config.rateLimit')}
           tooltip={t('sessions.config.rateLimitTooltip')}
           value={config.rateLimit}
@@ -775,7 +775,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel={t('sessions.config.rateLimitDisabled')}
         />
-        <SliderField
+        <SliderField settingKey="timeout"
           label={t('sessions.config.timeout')}
           tooltip={t('sessions.config.timeoutTooltip')}
           value={config.timeout}
@@ -824,7 +824,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </button>
           )}
         </div>
-        <SliderField
+        <SliderField settingKey="maxNumSeqs"
           label={t('sessions.config.maxConcurrentSequences')}
           tooltip={t('sessions.config.maxConcurrentSequencesTooltip')}
           value={effectiveMaxNumSeqs}
@@ -838,7 +838,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel={t('sessions.config.defaultWithValue', { n: 1 })}
           disabled={dsv4Active}
         />
-        <SliderField
+        <SliderField settingKey="prefillBatchSize"
           label={t('sessions.config.prefillBatchSize')}
           tooltip={t('sessions.config.prefillBatchSizeTooltip')}
           value={effectivePrefillBatchSize}
@@ -852,7 +852,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel={t('sessions.config.defaultWithValue', { n: 512 })}
           disabled={dsv4Active}
         />
-        <SliderField
+        <SliderField settingKey="prefillStepSize"
           label={t('sessions.config.prefillStepSize')}
           tooltip={t('sessions.config.prefillStepSizeTooltip')}
           value={config.prefillStepSize}
@@ -866,7 +866,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel={t('sessions.config.defaultWithValue', { n: 2048 })}
           disabled={dsv4Active}
         />
-        <SliderField
+        <SliderField settingKey="completionBatchSize"
           label={t('sessions.config.completionBatchSize')}
           tooltip={t('sessions.config.completionBatchSizeTooltip')}
           value={effectiveCompletionBatchSize}
@@ -898,7 +898,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <IncompatWarning text={t('sessions.config.smeltDisabledFlashMoe')} />
         )}
         {smeltActive && (
-          <SliderField label={t('sessions.config.smeltExpertsPercent')} value={config.smeltExperts} onChange={v => onChange('smeltExperts', v)} min={10} max={100} step={5} defaultValue={50} />
+          <SliderField settingKey="smeltExperts" label={t('sessions.config.smeltExpertsPercent')} value={config.smeltExperts} onChange={v => onChange('smeltExperts', v)} min={10} max={100} step={5} defaultValue={50} />
         )}
         {smeltActive && <PerformanceHint text={t('sessions.config.smeltExpertsHint', { percent: config.smeltExperts })} />}
 
@@ -925,7 +925,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {flashMoeActive && (
           <>
-            <SliderField
+            <SliderField settingKey="flashMoeSlotBank"
               label={t('sessions.config.slotBankSize')}
               tooltip={t('sessions.config.slotBankSizeTooltip')}
               value={config.flashMoeSlotBank}
@@ -935,7 +935,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={16}
               defaultValue={DEFAULT_CONFIG.flashMoeSlotBank}
             />
-            <SliderField
+            <SliderField settingKey="flashMoeIoSplit"
               label={t('sessions.config.ioWorkers')}
               tooltip={t('sessions.config.ioWorkersTooltip')}
               value={config.flashMoeIoSplit}
@@ -982,7 +982,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             {!dsv4Active && !exactTypedPromptDiskCache && config.noMemoryAwareCache ? (
               <>
                 <InfoNote text={t('sessions.config.legacyModeActiveNote')} />
-                <SliderField
+                <SliderField settingKey="prefixCacheSize"
                   label={t('sessions.config.maxCacheEntries')}
                   tooltip={t('sessions.config.maxCacheEntriesTooltip')}
                   value={config.prefixCacheSize}
@@ -995,7 +995,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   unlimitedValue={0}
                   unlimitedLabel={t('sessions.config.defaultWithValue', { n: 100 })}
                 />
-                <SliderField
+                <SliderField settingKey="prefixCacheMaxBytes"
                   label={t('sessions.config.prefixCacheMaxBytes')}
                   tooltip={t('sessions.config.prefixCacheMaxBytesTooltip')}
                   value={Math.floor((config.prefixCacheMaxBytes || 0) / (1024 * 1024))}
@@ -1014,7 +1014,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 {effectiveUsePagedCache && (
                   <IncompatWarning text={t('sessions.config.pagedCacheMemoryIgnored')} />
                 )}
-                <SliderField
+                <SliderField settingKey="cacheMemoryMb"
                   label={t('sessions.config.cacheMemoryLimitMb')}
                   tooltip={t('sessions.config.cacheMemoryLimitTooltip')}
                   value={config.cacheMemoryMb}
@@ -1028,7 +1028,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   unlimitedLabel={t('sessions.config.autoDetect')}
                   disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
                 />
-                <SliderField
+                <SliderField settingKey="cacheMemoryPercent"
                   label={t('sessions.config.cacheMemoryPercent')}
                   tooltip={t('sessions.config.cacheMemoryPercentTooltip')}
                   value={config.cacheMemoryPercent}
@@ -1041,7 +1041,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
                 />
                 {blockDiskOnly && <IncompatWarning text={t('sessions.config.blockDiskOnlyBudgetNote')} />}
-                <SliderField
+                <SliderField settingKey="cacheTtlMinutes"
                   label={t('sessions.config.cacheTtlMinutes')}
                   tooltip={t('sessions.config.cacheTtlTooltip')}
                   value={config.cacheTtlMinutes}
@@ -1134,7 +1134,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <InfoNote text={blockDiskOnly
               ? effectiveBlockDiskCapacityText
               : effectivePagedCapacityText} />
-            <SliderField
+            <SliderField settingKey="pagedCacheBlockSize"
               label={t('sessions.config.blockSizeTokens')}
               tooltip={dsv4Active
                 ? t('sessions.config.blockSizeTooltipDsv4')
@@ -1147,7 +1147,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               defaultValue={dsv4Active ? DSV4_PAGED_CACHE_BLOCK_SIZE : DEFAULT_CONFIG.pagedCacheBlockSize}
               disabled={dsv4Active}
             />
-            <SliderField
+            <SliderField settingKey="maxCacheBlocks"
               label={t('sessions.config.maxCacheBlocks')}
               tooltip={t('sessions.config.maxCacheBlocksTooltip')}
               value={config.maxCacheBlocks}
@@ -1173,7 +1173,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         {cachePolicy.blockDiskCacheChecked && (
           <>
-            <SliderField
+            <SliderField settingKey="blockDiskCacheMaxPercent"
               label={t('sessions.config.blockCacheMaxPercent')}
               tooltip={t('sessions.config.blockCacheMaxPercentTooltip')}
               value={config.blockDiskCacheMaxPercent}
@@ -1322,7 +1322,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         {cachePolicy.legacyDiskCacheChecked && (
           <>
-            <SliderField
+            <SliderField settingKey="diskCacheMaxGb"
               label={t('sessions.config.maxCacheSizeGb')}
               tooltip={t('sessions.config.maxCacheSizeTooltip')}
               value={config.diskCacheMaxGb}
@@ -1370,7 +1370,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </Field>
         {config.autoSleepEnabled !== false && (
           <>
-            <SliderField
+            <SliderField settingKey="idleTimeoutSoftMin"
               label={t('sessions.config.lightSleepAfter')}
               tooltip={t('sessions.config.lightSleepAfterTooltip')}
               value={config.idleTimeoutSoftMin ?? (isImage ? 5 : 10)}
@@ -1383,7 +1383,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel={t('sessions.config.rateLimitDisabled')}
             />
-            <SliderField
+            <SliderField settingKey="idleTimeoutHardMin"
               label={t('sessions.config.deepSleepAfter')}
               tooltip={t('sessions.config.deepSleepAfterTooltip')}
               value={config.idleTimeoutHardMin ?? (isImage ? 15 : 30)}
@@ -1452,7 +1452,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <PerformanceHint text={t('sessions.config.dsv4CompiledDecodeHint')} />
         )}
 
-        <SliderField
+        <SliderField settingKey="streamInterval"
           label={t('sessions.config.streamInterval')}
           tooltip={t('sessions.config.streamIntervalTooltip')}
           value={config.streamInterval}
@@ -1462,7 +1462,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           step={1}
           defaultValue={DEFAULT_CONFIG.streamInterval}
         />
-        <SliderField
+        <SliderField settingKey="maxTokens"
           label={t('sessions.config.maxOutputTokens')}
           tooltip={t('sessions.config.maxOutputTokensTooltip')}
           value={config.maxTokens}
@@ -1476,7 +1476,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel={(config.defaultMaxNewTokens ?? 0) > 0 ? t('sessions.config.bundleWithValue', { n: Math.floor(config.defaultMaxNewTokens ?? 0) }) : t('sessions.config.bundleEngineDefault')}
           maxInput={1000000}
         />
-        <SliderField
+        <SliderField settingKey="maxContextLength"
           label={t('sessions.config.maxContextTokens')}
           tooltip={t('sessions.config.maxContextTokensTooltip')}
           value={config.maxContextLength}
@@ -1622,7 +1622,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           options={REASONING_PARSER_OPTIONS}
           detectedValue={detectedReasoningParser}
         />
-        <SelectField
+        <SelectField settingKey="modelFamily"
           label={t('sessions.config.modelFamilyOverride')}
           tooltip={t('sessions.config.modelFamilyOverrideTooltip')}
           value={config.modelFamily ?? 'auto'}
@@ -1677,7 +1677,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text={t('sessions.config.vlmOffNote')} />
         )}
         {omniBackendVisible && (
-          <SelectField
+          <SelectField settingKey="omniBackend"
             label={t('sessions.config.omniBackend')}
             tooltip={t('sessions.config.omniBackendTooltip')}
             value={config.omniBackend || 'stage1'}
@@ -1689,7 +1689,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           />
         )}
         {normalizedDetectedFamily === 'gemma4' && multimodalActive && (
-          <SelectField
+          <SelectField settingKey="imageTokenBudget"
             label={t('sessions.config.imageTokenBudget')}
             tooltip={t('sessions.config.imageTokenBudgetTooltip')}
             value={String(config.imageTokenBudget ?? 280)}
@@ -1779,7 +1779,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {nativeMtpMode === 'deterministic' && (
           <InfoNote text={t('sessions.config.nativeMtpDeterministicNote', { depth: nativeMtpDepth })} />
         )}
-        <SelectField
+        <SelectField settingKey="nativeMtpMode"
           label={t('sessions.config.nativeMtpMode')}
           tooltip={t('sessions.config.nativeMtpModeTooltip')}
           value={nativeMtpMode}
@@ -1790,7 +1790,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             { value: 'off', label: t('chat.settings.thinkingOff') },
           ]}
         />
-        <SelectField
+        <SelectField settingKey="nativeMtpDepth"
           label={t('sessions.config.nativeMtpDepthPolicy')}
           tooltip={t('sessions.config.nativeMtpDepthPolicyTooltip')}
           value={nativeMtpDepthPolicy}
@@ -1805,7 +1805,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           ]}
           disabled={nativeMtpMode === 'off'}
         />
-        <SliderField
+        <SliderField settingKey="nativeMtpDepth"
           label={t('sessions.config.nativeMtpDepth')}
           tooltip={t('sessions.config.nativeMtpDepthTooltip')}
           value={nativeMtpDepth}
@@ -1837,7 +1837,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={dsv4Active || (!multimodalActive && config.continuousBatching)} />
         </Field>
         {config.speculativeModel && (
-          <SliderField
+          <SliderField settingKey="numDraftTokens"
             label={t('sessions.config.draftTokensPerStep')}
             tooltip={t('sessions.config.draftTokensPerStepTooltip')}
             value={config.numDraftTokens}
@@ -1883,7 +1883,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {config.distributedEnabled && (
           <>
-            <SelectField
+            <SelectField settingKey="distributedMode"
               label={t('sessions.config.parallelismMode')}
               tooltip={t('sessions.config.parallelismModeTooltip')}
               value={config.distributedMode || 'pipeline'}

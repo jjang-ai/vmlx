@@ -101,3 +101,20 @@ describe('the full-page session settings carry the same contract as the drawer',
     for (const c of ['session-settings-back', 'session-settings-save', 'session-settings-save-restart']) expect(src).toContain(`data-vmlx-control="${c}"`)
   })
 })
+
+describe('every config control bound to a config key carries that key as its setting attribute', () => {
+  it("each SliderField / SelectField / Field whose onChange names a key declares settingKey=<key>", () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionConfigForm.tsx'), 'utf8')
+    const re = /<(SliderField|SelectField|Field)\b/g; let m; let checked = 0; const missing: string[] = []
+    while ((m = re.exec(src))) {
+      let j = m.index + m[0].length, depth = 0
+      for (; j < src.length; j++) { const c = src[j]; if (c === '{') depth++; else if (c === '}') depth--; else if (c === '>' && depth === 0) break }
+      const tag = src.slice(m.index, j + 1); const k = tag.match(/onChange\('([a-zA-Z]+)'/)
+      if (!k) continue
+      checked++
+      if (!tag.includes(`settingKey="${k[1]}"`)) missing.push(k[1])
+    }
+    expect(checked).toBeGreaterThan(20)
+    expect(missing).toEqual([])
+  })
+})
