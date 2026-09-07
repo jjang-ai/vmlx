@@ -21,7 +21,8 @@
  */
 import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { basename, isAbsolute, join, resolve } from 'path'
+import { basename, dirname, isAbsolute, join, resolve } from 'path'
+import { resolveImageModelFromDirectoryName, type ImageModelDef } from './imageModels'
 
 export interface LocalImageModelFs {
   existsSync: (p: string) => boolean
@@ -240,6 +241,26 @@ export function editPrecisionAlternative(res: Extract<LocalImageModelResolution,
   if (res.quantize === null || res.quantize > EDIT_LOW_PRECISION_MAX_BITS) return null
   const better = (res.siblings || []).filter((v) => v.quantize === null || v.quantize >= 8).sort((a, b) => (a.quantize ?? 99) - (b.quantize ?? 99))
   return better[0] || null
+}
+
+/**
+ * The registry entry (mflux class, canonical name, defaults) for a LOCAL
+ * folder. A precision variant folder ("q8", "8bit") says nothing about the
+ * model, so its bundle root is consulted too. Before this, the warning's
+ * "Use q8" action started `…/Qwen-Image-Edit-mflux/q8` without a class and the
+ * engine refused with "Cannot determine mflux class".
+ */
+export function resolveImageModelForLocalDirectory(path: string): ImageModelDef | undefined {
+  const base = basename(path)
+  const direct = resolveImageModelFromDirectoryName(base)
+  if (direct) return direct
+  if (isVariantFolderName(base)) return resolveImageModelFromDirectoryName(basename(dirname(path)))
+  return undefined
+}
+
+/** "q8", "8bit", "8-bit", "4_bit", "int4": a precision name, not a model name. */
+export function isVariantFolderName(name: string): boolean {
+  return /^(?:q\d{1,2}|(?:int|fp|bf)\d{1,2}|\d{1,2}[-_ ]?bit)$/i.test(name.trim())
 }
 
 export function describeVariants(res: Extract<LocalImageModelResolution, { kind: 'variants' }>): string {

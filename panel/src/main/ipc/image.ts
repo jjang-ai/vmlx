@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSyn
 import { sessionManager } from '../sessions'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
-import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative } from '../../shared/imageLocalModel'
+import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory } from '../../shared/imageLocalModel'
 import {
   beginImageGeneration,
   classifyImageGenerationError,
@@ -705,7 +705,10 @@ export function registerImageHandlers(): void {
           // "FLUX.2-klein-9B" or "FLUX.1-dev-mflux-8bit" need more than
           // exact-id match). Fuzzy resolver rule #1 is exact-id so this
           // is a strict superset of getImageModel().
-          const modelDef = resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
+          // A local folder resolves through its own name and, for a precision
+          // variant ("q8"), its bundle root: the mflux class must not depend
+          // on the caller passing it (the warning's "Use q8" action did not).
+          const modelDef = (localDir?.kind === 'model' ? resolveImageModelForLocalDirectory(modelPath) : undefined) || resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
           const mfluxName = modelDef?.mfluxName || modelName
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           if (modelDef && modelDef.id !== modelName) {

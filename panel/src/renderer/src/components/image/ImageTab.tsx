@@ -117,6 +117,10 @@ export function ImageTab() {
 
   // Save settings when they change (debounced via the settings object reference)
   const settingsRef = useRef(settings)
+  // The server settings (host, port, api key, log level, mflux class) the
+  // current server was started with; a sibling variant offered by the
+  // low-precision warning starts with the same ones.
+  const serverSettingsRef = useRef<ImageServerSettings | undefined>(undefined)
   settingsRef.current = settings
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -375,6 +379,7 @@ export function ImageTab() {
     try {
       const result = await window.api.image.startServer(modelId, q, mode, serverSettings)
       if (result.success) {
+        serverSettingsRef.current = serverSettings
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
         if (result.warningCode) {
@@ -652,7 +657,7 @@ export function ImageTab() {
               <button
                 type="button"
                 data-vmlx-control="image-use-alternative"
-                onClick={() => { const alt = warning; setWarning(null); handleModelSelect(alt.alternativePath!, alt.alternativeBits, 'edit') }}
+                onClick={() => { const alt = warning; setWarning(null); handleModelSelect(alt.alternativePath!, alt.alternativeBits, 'edit', serverSettingsRef.current) }}
                 className="px-2 py-1 rounded border border-warning/40 hover:bg-warning/20 text-xs"
               >
                 {t('image.server.warnings.useAlternative', { name: warning.alternativeName || '' })}

@@ -8,6 +8,8 @@ import {
   readBundleQuantization,
   readSafetensorsHeaderMetadata,
   resolveLocalImageModelDirectory,
+  resolveImageModelForLocalDirectory,
+  isVariantFolderName,
   describeVariants,
   localImageModelError,
   unmountedVolume,
@@ -216,5 +218,30 @@ describe('low-precision edit variants: warn and offer the better sibling', () =>
       expect(w.editLowPrecision).toContain('{bits}')
       expect(w.useAlternative).toContain('{name}')
     }
+  })
+})
+
+describe('a precision variant folder resolves its model through the bundle root', () => {
+  it('names like q8 / 8bit / int4 are precision names, not model names', () => {
+    for (const n of ['q8', 'Q4', '8bit', '8-bit', '4_bit', 'int4', 'fp8']) expect(isVariantFolderName(n)).toBe(true)
+    for (const n of ['Qwen-Image-Edit-mflux', 'FLUX.1-schnell-mflux-4bit', 'transformer']) expect(isVariantFolderName(n)).toBe(false)
+  })
+
+  it('the q8 sibling of Qwen-Image-Edit-mflux carries the QwenImageEdit class and canonical name', () => {
+    const def = resolveImageModelForLocalDirectory('/Volumes/EricsLLMDrive/image/Qwen-Image-Edit-mflux/q8')
+    expect(def?.mfluxClass).toBe('QwenImageEdit')
+    expect(def?.id).toBe('qwen-image-edit')
+    // a folder that names the model itself resolves directly
+    expect(resolveImageModelForLocalDirectory('/models/FLUX.1-schnell-mflux-4bit')?.id).toBe('schnell')
+    // an unknown bundle root stays unresolved rather than guessing
+    expect(resolveImageModelForLocalDirectory('/models/Some-Unknown-Bundle/q8')).toBeUndefined()
+  })
+
+  it('the start handler resolves the class from the local folder and the warning action reuses the server settings', () => {
+    const main = readFileSync(join(__dirname, '..', 'src', 'main', 'ipc', 'image.ts'), 'utf8')
+    expect(main).toContain("resolveImageModelForLocalDirectory(modelPath)")
+    const tab = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'image', 'ImageTab.tsx'), 'utf8')
+    expect(tab).toContain("handleModelSelect(alt.alternativePath!, alt.alternativeBits, 'edit', serverSettingsRef.current)")
+    expect(tab).toContain("serverSettingsRef.current = serverSettings")
   })
 })
