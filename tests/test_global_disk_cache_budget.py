@@ -1209,3 +1209,93 @@ def test_writer_idle_poll_runs_the_idle_pass_without_a_publish() -> None:
     import vmlx_engine.block_disk_store as store
     src = inspect.getsource(store.BlockDiskStore._run_deferred_budget_reconcile)
     assert "budget.run_idle_reconcile()" in src and 'callable(idle_due) and idle_due()' in src
+
+
+def test_idle_pass_is_owed_after_an_unscanned_publish_and_removes_garbage_planted_after_the_last_scan(tmp_path: Path) -> None:
+    """Live failure shape (ssd-idle-aging-214553, 876ff535): the startup scan ran, the next publish was accounted O(1)
+    (scan_performed=False), an ownerless temp file and an unreferenced payload were planted afterwards, and 341 idle
+    seconds passed with NO request: nothing recorded them as protected and no idle pass was owed. Now an idle pass is
+    owed once the interval elapses after any unscanned publish; the first pass protects the recent garbage, the passes
+    after the grace remove it. No restart, no further write."""
+    root = tmp_path / "root"
+    now = time.time()
+    _indexed_block(root / "aaaaaaaaaaaa", "aa-keep", size=64_000, accessed=now)
+    namespace = root / "aaaaaaaaaaaa"
+    budget = GlobalDiskCacheBudget(root, 0, orphan_grace_seconds=0.6, reconcile_interval_seconds=0.2)
+    try:
+        first = budget.enforce(force=True)
+        assert first.scan_performed and first.compliant and first.protected_temp_files == 0
+        assert budget.idle_reconcile_due() is False  # clean, scanned, interval not elapsed
+        # publish INSIDE the interval (live: 10 s after the startup scan): accounted O(1), no deferred flag raised
+        with budget.exclusive_mutation_guard() as locked:
+            assert locked
+            accounted = budget.account_finalized_write_locked(32_000)
+        assert accounted.scan_performed is False and budget.deferred_reconcile_due is False
+        temp = namespace / "blocks" / "zz" / "zz-dead.tmp.safetensors"
+        temp.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_bytes(b"y" * 32_000)
+        orphan = namespace / "blocks" / "yy" / "yy-unreferenced.safetensors"
+        orphan.parent.mkdir(parents=True, exist_ok=True)
+        orphan.write_bytes(b"o" * 16_000)
+        # a publish since the last physical scan: owed once the interval elapses, without any further write
+        assert budget.idle_reconcile_due() is False
+        time.sleep(0.25)
+        assert budget.idle_reconcile_due() is True
+        second = budget.run_idle_reconcile()
+        assert second is not None and second.scan_performed
+        assert second.protected_temp_files == 1 and second.protected_recent_orphans == 1
+        assert temp.exists() and orphan.exists()  # inside the grace: protected, recorded, still owed
+        deadline = time.time() + 3.0
+        while (temp.exists() or orphan.exists()) and time.time() < deadline:
+            time.sleep(0.25)
+            if budget.idle_reconcile_due():
+                budget.run_idle_reconcile()
+        assert not temp.exists() and not orphan.exists()
+        assert (namespace / "blocks" / "aa" / "aa-keep.safetensors").exists()
+        status = budget.janitor_status()
+        assert status["reconcile_interval_s"] == 0.2 and status["orphan_grace_s"] == 0.6
+        assert status["idle_rescan_interval_s"] == 300.0 and status["last_result_scan_performed"] is True  # default cadence constant
+    finally:
+        budget._remove_lease()
+
+
+def test_idle_cadence_rescans_a_clean_root_without_any_publish(tmp_path: Path) -> None:
+    """Garbage left by ANOTHER process (a crashed writer) on a root this process last scanned clean: no publish here
+    ever raises the deferred flag. The slow idle cadence (default = the orphan grace) rescans anyway, so the garbage is
+    protected, then removed, while this process stays idle."""
+    root = tmp_path / "root"
+    now = time.time()
+    _indexed_block(root / "aaaaaaaaaaaa", "aa-keep", size=64_000, accessed=now)
+    namespace = root / "aaaaaaaaaaaa"
+    budget = GlobalDiskCacheBudget(
+        root, 0, orphan_grace_seconds=0.3, reconcile_interval_seconds=0.1, idle_rescan_interval_seconds=0.5
+    )
+    try:
+        first = budget.enforce(force=True)
+        assert first.scan_performed and first.compliant
+        temp = namespace / "blocks" / "zz" / "zz-other-writer.tmp.safetensors"
+        temp.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_bytes(b"y" * 8_000)
+        time.sleep(0.15)
+        assert budget.idle_reconcile_due() is False  # interval elapsed, but clean+scanned and cadence not reached
+        time.sleep(0.4)
+        assert budget.idle_reconcile_due() is True  # cadence reached with no publish at all
+        second = budget.run_idle_reconcile()
+        assert second is not None and second.scan_performed
+        assert second.protected_temp_files == (1 if temp.exists() else 0)
+        deadline = time.time() + 3.0
+        while temp.exists() and time.time() < deadline:
+            time.sleep(0.15)
+            if budget.idle_reconcile_due():
+                budget.run_idle_reconcile()
+        assert not temp.exists()
+    finally:
+        budget._remove_lease()
+
+
+def test_idle_rescan_interval_never_undercuts_the_reconcile_interval(tmp_path: Path) -> None:
+    budget = GlobalDiskCacheBudget(tmp_path / "root", 0, reconcile_interval_seconds=2.0, idle_rescan_interval_seconds=0.5)
+    try:
+        assert budget.janitor_status()["idle_rescan_interval_s"] == 2.0
+    finally:
+        budget._remove_lease()

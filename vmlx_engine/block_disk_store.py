@@ -3832,6 +3832,8 @@ class BlockDiskStore:
             "reconciliation_generation": (
                 global_health.reconciliation_generation
             ),
+            # source constants + observed scan age (idle janitor)
+            "janitor": self.global_budget.janitor_status(),
         }
         return stats
 

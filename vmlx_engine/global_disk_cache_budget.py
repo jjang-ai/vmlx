@@ -50,6 +50,12 @@ _NAMESPACE_MARKER_NAME = ".vmlx-block-cache-namespace-v1"
 _STATE_VERSION = 1
 _DEFAULT_ORPHAN_GRACE_SECONDS = 5 * 60
 _DEFAULT_RECONCILE_INTERVAL_SECONDS = 30.0
+# Slowest cadence at which an IDLE coordinator rescans a compliant root that
+# its last physical scan left clean. Garbage another process leaves behind
+# (a crashed writer's temp files, an unreferenced payload) is otherwise
+# invisible until this process publishes again. Equal to the orphan grace,
+# so ownerless files are removed at most one grace late while idle.
+_DEFAULT_IDLE_RESCAN_INTERVAL_SECONDS = float(_DEFAULT_ORPHAN_GRACE_SECONDS)
 _DEFAULT_BIRTH_VALIDATION_INTERVAL_SECONDS = 30.0
 _SQLITE_TRANSIENT_SIDECAR_NAMES = frozenset(
     {
@@ -241,6 +247,7 @@ class GlobalDiskCacheBudget:
         *,
         orphan_grace_seconds: float = _DEFAULT_ORPHAN_GRACE_SECONDS,
         reconcile_interval_seconds: float = _DEFAULT_RECONCILE_INTERVAL_SECONDS,
+        idle_rescan_interval_seconds: float = _DEFAULT_IDLE_RESCAN_INTERVAL_SECONDS,
         allow_legacy_hashed_namespaces: bool = False,
         allow_legacy_direct_namespace: bool = False,
     ) -> None:
@@ -255,6 +262,10 @@ class GlobalDiskCacheBudget:
         self._reconcile_interval_ns = max(
             0,
             int(float(reconcile_interval_seconds) * 1_000_000_000),
+        )
+        self._idle_rescan_interval_ns = max(
+            self._reconcile_interval_ns,
+            int(float(idle_rescan_interval_seconds) * 1_000_000_000),
         )
         self._allow_legacy_hashed_namespaces = bool(
             allow_legacy_hashed_namespaces
@@ -779,29 +790,63 @@ class GlobalDiskCacheBudget:
         return bool(self._deferred_reconcile_due)
 
     def idle_reconcile_due(self) -> bool:
-        """True when an IDLE pass is owed: no publish has raised the deferred
-        flag, the interval has elapsed since this process last reconciled, and
-        the last scan left something only time can settle — the root was above
-        its ceiling, or dead-lease temp files were protected by the orphan grace.
-        A compliant root without protected orphans never triggers idle scanning.
-        Live: a kill -9 inside a companion write left 4 temp files that the
-        restart's trim protected; they were removed only when the next WRITE
-        happened after the grace. This pass removes them on idle instead."""
+        """True when an IDLE pass is owed (no publish has raised the deferred
+        flag and the interval has elapsed since this process last physically
+        scanned) because one of these holds:
+
+        * the last scan left something only time can settle — the root was
+          above its ceiling, or dead-lease temp files / unreferenced payloads
+          were protected by the orphan grace;
+        * writes were accounted since the last physical scan (O(1) ledger
+          publications carry ``scan_performed=False``), so garbage that appeared
+          meanwhile has never been looked at;
+        * the slow idle cadence (``idle_rescan_interval_seconds``) elapsed: a
+          clean, compliant root is rescanned at that cadence so garbage left by
+          another process (a crashed writer) ages out without this process
+          ever publishing again.
+
+        Live, before the second and third conditions: an ownerless temp file
+        and an unreferenced payload planted after the last physical scan
+        survived 341 idle seconds — the one later write was accounted O(1),
+        nothing recorded them as protected, and no idle pass was owed."""
+
+        with self._thread_lock:
+            return self._idle_reconcile_due_locked()
+
+    def janitor_status(self) -> dict[str, Any]:
+        """Source constants and the observed scan age, for /health."""
 
         with self._thread_lock:
             last = self._last_result
-            if last is None or self._deferred_reconcile_due:
-                return False
-            if (
-                time.monotonic_ns() - self._last_reconcile_monotonic_ns
-                < self._reconcile_interval_ns
-            ):
-                return False
-            return (
-                (not last.compliant)
-                or int(last.protected_recent_orphans or 0) > 0
-                or int(last.protected_temp_files or 0) > 0
-            )
+            since_scan_ns = time.monotonic_ns() - self._last_reconcile_monotonic_ns
+            return {
+                "reconcile_interval_s": self._reconcile_interval_ns / 1e9,
+                "orphan_grace_s": self._orphan_grace_ns / 1e9,
+                "idle_rescan_interval_s": self._idle_rescan_interval_ns / 1e9,
+                "seconds_since_physical_scan": (
+                    round(since_scan_ns / 1e9, 3) if last is not None else None
+                ),
+                "last_result_scan_performed": (
+                    bool(last.scan_performed) if last is not None else None
+                ),
+                "idle_reconcile_due": self._idle_reconcile_due_locked(),
+            }
+
+    def _idle_reconcile_due_locked(self) -> bool:
+        last = self._last_result
+        if last is None or self._deferred_reconcile_due:
+            return False
+        since_scan_ns = time.monotonic_ns() - self._last_reconcile_monotonic_ns
+        if since_scan_ns < self._reconcile_interval_ns:
+            return False
+        if (
+            (not last.compliant)
+            or int(last.protected_recent_orphans or 0) > 0
+            or int(last.protected_temp_files or 0) > 0
+            or not last.scan_performed
+        ):
+            return True
+        return since_scan_ns >= self._idle_rescan_interval_ns
 
     def run_idle_reconcile(self) -> GlobalBudgetResult | None:
         """Perform an owed idle pass (see ``idle_reconcile_due``)."""
