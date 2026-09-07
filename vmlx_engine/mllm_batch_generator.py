@@ -4442,6 +4442,8 @@ class MLLMNativeMTPStats:
 
         return {
             "request_id": request_id,
+            "policy": self.depth_policy or None,
+            "configured_depth": int(self.configured_depth) if self.configured_depth else None,
             "finish_reason": finish_reason,
             "final_depth": int(final_depth or 1),
             "cycles": int(self.cycles),
@@ -7425,6 +7427,9 @@ class MLLMBatchStats:
         self.hybrid_kv_without_ssm_tokens: int = 0
         self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
         self.last_cache_execution: Optional[Dict[str, Any]] = None
+        # the last completed generation's terminal durability fence
+        # (request id, wait, ledger outcome) — set by the scheduler's barrier
+        self.last_durability: Optional[Dict[str, Any]] = None
         self.last_native_mtp: Optional[Dict[str, Any]] = None
         self.last_native_mtp_skip: Optional[Dict[str, Any]] = None
         self.last_prefill_trace: Optional[Dict[str, Any]] = None
@@ -7473,6 +7478,7 @@ class MLLMBatchStats:
             "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
             "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
             "last_cache_execution": self.last_cache_execution,
+            "last_durability": self.last_durability,
             "last_native_mtp": self.last_native_mtp,
             "last_native_mtp_skip": self.last_native_mtp_skip,
             "last_prefill_trace": self.last_prefill_trace,

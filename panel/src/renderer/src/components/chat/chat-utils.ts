@@ -147,7 +147,7 @@ export function getMetricsItems(
     items.push({
       label: isUncachedTail
         ? t('chat.metrics.ppsTailLabel', { speed: metrics.ppSpeed })
-        : `${metrics.ppSpeed} pp/s`,
+        : `${metrics.ppSpeed} pp/s to first token`,
       value: metrics.ppSpeed,
       title: isUncachedTail
         ? t('chat.metrics.ppsTailTitle')

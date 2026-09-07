@@ -48,6 +48,9 @@ interface HealthData {
           replay?: number
         }
         fallback_reason?: string | null
+        policy?: string | null
+        configured_depth?: number | null
+        at?: number | null
       } | null
       last_native_mtp_skip?: {
         request_id?: string
@@ -468,8 +471,14 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             )}
             {lastNativeMtp && (
               <InfoCard
+                label={t('sessions.performance.mtpScope')}
+                value={formatMtpScope(lastNativeMtp)}
+              />
+            )}
+            {lastNativeMtp && (
+              <InfoCard
                 label={t('sessions.performance.mtpAccept')}
-                value={`${lastNativeMtp.accepted_tokens ?? 0}/${lastNativeMtp.drafted_tokens ?? 0} (${formatPercent(lastNativeMtp.acceptance_rate)})`}
+                value={`${reportedCount(lastNativeMtp.accepted_tokens)}/${reportedCount(lastNativeMtp.drafted_tokens)} (${formatPercent(lastNativeMtp.acceptance_rate)})`}
               />
             )}
             {lastNativeMtp?.depth_acceptance_rates && (
@@ -481,13 +490,13 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             {lastNativeMtp?.forwards && (
               <InfoCard
                 label={t('sessions.performance.mtpForwards')}
-                value={`v${lastNativeMtp.forwards.verify_main ?? 0} / r${lastNativeMtp.forwards.replay_main ?? 0} / m${lastNativeMtp.forwards.mtp ?? 0}`}
+                value={`v${reportedCount(lastNativeMtp.forwards.verify_main)} / r${reportedCount(lastNativeMtp.forwards.replay_main)} / m${reportedCount(lastNativeMtp.forwards.mtp)}`}
               />
             )}
             {lastNativeMtp?.timings_ms && (
               <InfoCard
                 label={t('sessions.performance.mtpTiming')}
-                value={`${Number(lastNativeMtp.timings_ms.avg_cycle ?? 0).toFixed(1)} ms/cyc`}
+                value={typeof lastNativeMtp.timings_ms.avg_cycle === 'number' ? `${lastNativeMtp.timings_ms.avg_cycle.toFixed(1)} ms/cyc` : t('sessions.performance.notReported')}
               />
             )}
             {health.kv_cache_quantization?.enabled && (
@@ -871,6 +880,32 @@ function formatWeightQuant(
   }
   if (qf?.type) return `${qf.type.toUpperCase()}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
   return bits != null ? `${bits}-bit` : t('sessions.performance.unknown')
+}
+
+// A missing MTP measurement is UNKNOWN, never zero: a sparse family payload
+// must not read as "0 accepted / 0 drafted" (Cache/Perf display audit,
+// 2026-09-07). An explicit 0 from the engine still renders as 0.
+export function reportedCount(v: number | null | undefined): string {
+  return typeof v === 'number' && Number.isFinite(v) ? String(v) : '—'
+}
+
+// The MTP cards describe ONE request; say which, with its final state and
+// depth, so a previous generation's statistics are never read as the active
+// tool step or the whole outer turn.
+export function formatMtpScope(m: {
+  request_id?: string
+  finish_reason?: string
+  final_depth?: number
+  policy?: string | null
+  configured_depth?: number | null
+}): string {
+  const id = m.request_id ? m.request_id.slice(-12) : '—'
+  const finish = m.finish_reason || 'last completed'
+  const configured = typeof m.configured_depth === 'number' ? `D${m.configured_depth}` : null
+  const final = typeof m.final_depth === 'number' ? `D${m.final_depth}` : null
+  const depth = configured && final && configured !== final ? `${configured}→${final}` : (final || configured || '—')
+  const policy = m.policy ? ` ${m.policy}` : ''
+  return `${id} · ${finish} · ${depth}${policy}`
 }
 
 function formatPercent(value?: number | null): string {

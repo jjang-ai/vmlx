@@ -13092,6 +13092,7 @@ def _live_batch_generator_request_records(
     records: dict[str, dict[str, Any] | None] = {}
     for attr in (
         "last_cache_execution",
+        "last_durability",
         "last_native_mtp",
         "last_native_mtp_skip",
     ):

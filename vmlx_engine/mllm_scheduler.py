@@ -141,6 +141,31 @@ KEY CLASSES
 """
 
 from .persistence_outcome import LEDGER as _PERSIST, format_outcome as _format_persistence_outcome
+
+
+def _record_last_durability(stats, request_id, wait_ms, waited, outcome):
+    """Retain the terminal durability fence of the last completed generation
+    on the batch stats (published as ``last_durability`` in /health): the
+    request id, the wait the client saw, and the persistence ledger's outcome
+    (stored / already_durable / skipped / refused / failed / unknown) with its
+    retained token count and detail."""
+    if stats is None:
+        return
+    entry = outcome if isinstance(outcome, dict) else {}
+    record = {
+        "request_id": str(request_id),
+        "wait_ms": round(float(wait_ms), 3),
+        "waited": bool(waited),
+        "cache_outcome": str(entry.get("outcome") or "unknown"),
+        "detail": str(entry.get("detail") or "")[:200],
+        "retained_tokens": entry.get("retained_tokens"),
+        "durable": entry.get("durable"),
+        "at": time.time(),
+    }
+    try:
+        stats.last_durability = record
+    except Exception:
+        pass
 from .video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
 import asyncio
 import hashlib
@@ -5518,13 +5543,28 @@ class MLLMScheduler:
                     )
                     await self._terminal_cleanup_complete.wait()
                     _outcome = _PERSIST.take(request_id)
+                    _durability_wait_ms = (
+                        time.perf_counter() - _durability_wait_started
+                    ) * 1000.0
                     logger.info(
                         "Terminal durability barrier: request=%s wait_ms=%.3f "
                         "waited=%s %s",
                         request_id,
-                        (time.perf_counter() - _durability_wait_started) * 1000.0,
+                        _durability_wait_ms,
                         "true" if _durability_was_pending else "false",
                         _format_persistence_outcome(_outcome),
+                    )
+                    # Keep the fence as DATA for /health (Cache panel "last
+                    # generation durability"): request-exact, so a tool step's
+                    # save/fence is visible without reading the log.
+                    _record_last_durability(
+                        getattr(
+                            getattr(self, "batch_generator", None), "_stats", None
+                        ),
+                        request_id,
+                        _durability_wait_ms,
+                        _durability_was_pending,
+                        _outcome,
                     )
                 yield output
         finally:
