@@ -1997,10 +1997,11 @@ def _layer_fingerprint_enabled(inputs) -> bool:
         return False
     try:
         if int(inputs.shape[-1]) != 1:
+            _LAYER_FP_STEPS["n"] = 0  # a prefill starts a new request's trace
             return False
     except Exception:
         return False
-    if _LAYER_FP_STEPS["n"] >= 12:
+    if _LAYER_FP_STEPS["n"] >= 3:
         return False
     _LAYER_FP_STEPS["n"] += 1
     return True
