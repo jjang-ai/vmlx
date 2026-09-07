@@ -62,7 +62,10 @@ def _schema_for(request: Any, fn_name: str) -> dict[str, Any]:
     return {}
 
 
-def _coerce(value: str, declared_type: str | None) -> Any:
+_NULL_SPELLINGS = frozenset({"null", "none", "nil"})
+
+
+def _coerce(value: str, declared_type: Any) -> Any:
     """Decode one parameter value, preferring the declared JSONSchema type.
 
     ``declared_type`` of ``string`` is honoured verbatim: a tool that declares a
@@ -74,6 +77,27 @@ def _coerce(value: str, declared_type: str | None) -> Any:
     value for a string parameter — a tool writing an indent or a separator
     passes exactly that — and returning the stripped text handed it "" instead.
     """
+    # JSON Schema allows a TYPE LIST (``["string", "null"]`` for a nullable
+    # parameter). The set-membership checks below hash the declared type, so a
+    # list raised TypeError, the server's except-all fell through to the
+    # generic tool repair, and that regex handed the tool every value as
+    # ``>magic</atem:parameter>\n<atem:parameter name=`` (measured on
+    # Muse-Glimmer-30B, agentic-eval-074524 nullable_enum_bounds_valid, both
+    # lanes, thinking on and off). Resolve the list first: a null spelling
+    # decodes to None when null is allowed, otherwise the remaining single
+    # type drives the decode and several remaining types fall back to shape.
+    nullable = False
+    if isinstance(declared_type, (list, tuple)):
+        kinds = [str(t) for t in declared_type if t is not None]
+        nullable = "null" in kinds
+        kinds = [t for t in kinds if t != "null"]
+        declared_type = kinds[0] if len(kinds) == 1 else None
+    elif declared_type == "null":
+        nullable = True
+        declared_type = None
+    if nullable and value.strip().lower() in _NULL_SPELLINGS:
+        return None
+
     if declared_type == "string":
         return value
 

@@ -269,3 +269,76 @@ def test_tool_call_dicts_match_the_engine_contract(parser):
         # arguments must be a JSON *string*, not a dict
         assert isinstance(call["arguments"], str)
         json.loads(call["arguments"])
+
+
+class TestNullableTypeLists:
+    """JSON Schema type LISTS (nullable parameters) must decode, never raise.
+
+    Live shape (Muse-Glimmer-30B, agentic-eval-074524 nullable_enum_bounds_valid,
+    reproduced byte-for-byte in probe-muse-atem2-083555): the suite's search tool
+    declares ``path: {"type": ["string", "null"]}``. ``_coerce`` hashed the list,
+    raised TypeError, the server fell back to generic repair and every argument
+    came back as ``>magic</atem:parameter>\\n<atem:parameter name=``.
+    """
+
+    SEARCH_REQUEST = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string"},
+                            "max_results": {"type": "integer", "minimum": 1, "maximum": 5},
+                            "mode": {"type": "string", "enum": ["literal", "regex"]},
+                            "path": {"type": ["string", "null"], "description": "Subdirectory or null for the whole workspace"},
+                        },
+                        "required": ["pattern"],
+                    },
+                },
+            }
+        ]
+    }
+
+    BLOCK = (
+        "<atem:function_calls>\n<atem:invoke name=\"search\">\n"
+        '<atem:parameter name="pattern">magic</atem:parameter>\n'
+        '<atem:parameter name="max_results">3</atem:parameter>\n'
+        '<atem:parameter name="mode">literal</atem:parameter>\n'
+        "{path}"
+        "</atem:invoke>\n</atem:function_calls>"
+    )
+
+    def test_exact_suite_shape_decodes_every_parameter(self, parser):
+        out = parser.extract_tool_calls(self.BLOCK.format(path=""), self.SEARCH_REQUEST)
+        assert out.tools_called
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args == {"pattern": "magic", "max_results": 3, "mode": "literal"}
+
+    def test_null_spelling_decodes_to_none_when_null_is_allowed(self, parser):
+        out = parser.extract_tool_calls(
+            self.BLOCK.format(path='<atem:parameter name="path">null</atem:parameter>\n'), self.SEARCH_REQUEST
+        )
+        assert json.loads(out.tool_calls[0]["arguments"])["path"] is None
+
+    def test_nullable_string_keeps_a_real_value_verbatim(self, parser):
+        out = parser.extract_tool_calls(
+            self.BLOCK.format(path='<atem:parameter name="path">src/null-safe </atem:parameter>\n'), self.SEARCH_REQUEST
+        )
+        assert json.loads(out.tool_calls[0]["arguments"])["path"] == "src/null-safe "
+
+    def test_plain_string_type_never_turns_null_into_none(self, parser):
+        out = parser.extract_tool_calls(
+            self.BLOCK.format(path='<atem:parameter name="pattern">null</atem:parameter>\n'), self.SEARCH_REQUEST
+        )
+        # last occurrence wins for a repeated key; the declared plain string stays the text "null"
+        assert json.loads(out.tool_calls[0]["arguments"])["pattern"] == "null"
+
+    def test_nullable_integer_decodes_the_number(self):
+        from vmlx_engine.tool_parsers.atem_tool_parser import _coerce
+
+        assert _coerce("3", ["integer", "null"]) == 3
+        assert _coerce("none", ["integer", "null"]) is None
+        assert _coerce("x", ["integer", "string"]) == "x"
