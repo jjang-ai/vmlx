@@ -816,6 +816,29 @@ class BatchedEngine(BaseEngine):
             tool_parser_id=self._model_tool_parser_name(),
         )
 
+    @staticmethod
+    def _count_video_and_image_parts(messages: list[dict[str, Any]]) -> tuple[int, int]:
+        """(videos, images) among the content parts of ``messages``."""
+        videos = images = 0
+        for msg in messages:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                item = part
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump(exclude_none=True)
+                elif hasattr(item, "dict"):
+                    item = item.dict()
+                if not isinstance(item, dict):
+                    continue
+                kind = item.get("type")
+                if kind in {"video_url", "video", "input_video"}:
+                    videos += 1
+                elif kind in {"image_url", "image", "input_image"}:
+                    images += 1
+        return videos, images
+
     def _video_frame_fallback_messages(
         self,
         messages: list[dict[str, Any]],
@@ -823,6 +846,7 @@ class BatchedEngine(BaseEngine):
         video_fps: float | None = None,
         video_max_frames: int | None = None,
         video_controls: Any = None,
+        request_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Route selected VLM video turns through sampled image frames.
 
@@ -875,6 +899,50 @@ class BatchedEngine(BaseEngine):
         # of the long-edge default; it is also part of the frame cache key.
         frame_bounds = controls.fallback_bounds(default_long_edge=frame_max_long_edge)
         controls_key = controls.cache_key_fragment()
+        # Every sampled frame becomes one image of the request, so the frames
+        # of ALL videos plus the request's own images share the scheduler's
+        # per-request image limit. Split the headroom across the videos here
+        # instead of letting a 32-frame clip fail admission as "32 images".
+        from ..video_controls import (
+            image_pixel_floor,
+            image_token_pixels,
+            plan_fallback_frames,
+            subsample_frames_evenly,
+        )
+
+        image_limit = getattr(
+            getattr(getattr(self, "_mllm_scheduler", None), "config", None),
+            "max_images_per_request",
+            None,
+        )
+        if image_limit is None:
+            try:
+                from ..mllm_scheduler import MLLMSchedulerConfig
+
+                image_limit = MLLMSchedulerConfig().max_images_per_request
+            except Exception:
+                image_limit = 20
+        n_videos, n_images = self._count_video_and_image_parts(messages)
+        per_video_frame_cap = max(1, (int(image_limit) - n_images) // max(1, n_videos))
+        processor = getattr(self, "_processor", None) or getattr(
+            getattr(self, "_model", None), "processor", None
+        )
+        try:
+            planned_controls = controls.with_processor(processor) if processor is not None else controls
+        except Exception:
+            planned_controls = controls
+        image_token_px = image_token_pixels(processor)
+        image_floor = image_pixel_floor(processor)
+        image_ceiling = None
+        try:
+            ip = getattr(processor, "image_processor", None) or processor
+            size = getattr(ip, "size", None)
+            image_ceiling = getattr(ip, "max_pixels", None) or (
+                size.get("longest_edge") if isinstance(size, dict) else None
+            )
+            image_ceiling = int(image_ceiling) if image_ceiling else None
+        except Exception:
+            image_ceiling = None
         rewritten: list[dict[str, Any]] = []
         changed = False
         converted_videos = 0
@@ -995,20 +1063,61 @@ class BatchedEngine(BaseEngine):
                         stat = os.stat(video_path)
                         fallback_cache_key = (
                             f"{family}|{video_path}|{stat.st_size}|{stat.st_mtime_ns}|"
-                            f"{controls_key}|edge={frame_max_long_edge}"
+                            f"{controls_key}|edge={frame_max_long_edge}|cap={per_video_frame_cap}"
                         )
                     except Exception:
-                        fallback_cache_key = f"{family}|{video_path}|{controls_key}|edge={frame_max_long_edge}"
+                        fallback_cache_key = (
+                            f"{family}|{video_path}|{controls_key}|edge={frame_max_long_edge}"
+                            f"|cap={per_video_frame_cap}"
+                        )
                     frames = extract_video_frames_smart(
                         video_path,
                         fps=fps,
                         max_frames=max_frames,
                     )
+                    sampled = len(frames)
+                    first_shape = getattr(frames[0], "shape", None) if frames else None
+                    plan = plan_fallback_frames(
+                        planned_controls,
+                        frames_available=sampled,
+                        frame_cap=min(int(max_frames), per_video_frame_cap),
+                        frame_height=int(first_shape[0]) if first_shape is not None and len(first_shape) >= 2 else None,
+                        frame_width=int(first_shape[1]) if first_shape is not None and len(first_shape) >= 2 else None,
+                        token_pixels=image_token_px,
+                        pixel_floor=image_floor,
+                        pixel_ceiling=image_ceiling,
+                    )
+                    frames = subsample_frames_evenly(frames, plan.num_frames)
+                    video_bounds = controls.fallback_bounds(
+                        default_long_edge=frame_max_long_edge,
+                        num_frames=len(frames),
+                        per_frame_max_pixels=plan.per_frame_max_pixels,
+                    )
+                    logger.info(
+                        "%s video frame fallback plan for %s: sampled=%d kept=%d frame_cap=%d "
+                        "(image limit %s, %d video(s), %d image(s) in request) "
+                        "per_frame_max_pixels=%s expected_tokens_per_frame=%s expected_total=%s "
+                        "token_budget=%s met=%s reason=%s",
+                        family,
+                        request_id or "-",
+                        sampled,
+                        len(frames),
+                        plan.frame_cap,
+                        image_limit,
+                        n_videos,
+                        n_images,
+                        video_bounds.max_pixels,
+                        plan.expected_tokens_per_frame,
+                        plan.expected_total,
+                        plan.budget if plan.budget is not None else "-",
+                        plan.met if plan.met is not None else "-",
+                        plan.reason,
+                    )
                     frames = _bound_video_fallback_frames(
                         frames,
-                        max_long_edge=frame_bounds.max_long_edge,
-                        max_pixels=frame_bounds.max_pixels,
-                        resize=frame_bounds.resize,
+                        max_long_edge=video_bounds.max_long_edge,
+                        max_pixels=video_bounds.max_pixels,
+                        resize=video_bounds.resize,
                     )
                     frame_paths = save_frames_to_temp(frames)
                     frame_paths = _dedup_video_frames(
@@ -2713,6 +2822,7 @@ class BatchedEngine(BaseEngine):
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
+            request_id=request_id,
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)
@@ -2899,6 +3009,7 @@ class BatchedEngine(BaseEngine):
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
             video_controls=_video_controls_from_kwargs(kwargs),
+            request_id=request_id,
         )
 
         # Extract images/videos from messages (OpenAI multimodal format)

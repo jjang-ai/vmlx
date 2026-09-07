@@ -462,3 +462,89 @@ class TestClipBudgetAppliedToTheSampledClip:
         assert out.shape == (16, 3, 192, 320) and out.dtype == np.float32
         # no budget -> the same object comes back
         assert g._apply_clip_pixel_budget(clip, VideoControls(fps=2), proc, "r") is clip
+
+
+class TestFrameFallbackPlan:
+    """27B (qwen3_5) frame fallback: every sampled frame is one IMAGE with the image processor's own pixel floor
+    (Qwen2VLImageProcessorFast size.shortest_edge=65536 -> >=64 tokens/frame at 1024 px/token). Live at 8a664585 the
+    per-frame budget was total // frame CAP (128), so a 16-frame clip got an eighth of its budget and the floor made
+    every budget land at ~1101-1277 prompt tokens; 32-frame rows failed admission as '32 images' (limit 20)."""
+
+    GEOM = dict(frame_height=364, frame_width=644, token_pixels=1024, pixel_floor=65536, pixel_ceiling=16_777_216)
+
+    def plan(self, budget, *, frames=16, cap=20, **kw):
+        from vmlx_engine.video_controls import VideoControls, plan_fallback_frames
+
+        c = VideoControls(token_budget=budget, token_pixels=2048)
+        return plan_fallback_frames(c, frames_available=frames, frame_cap=cap, **{**self.GEOM, **kw})
+
+    def test_budget_reduces_frames_at_the_processor_floor_and_expected_total_fits(self):
+        p = self.plan(512)
+        assert p.num_frames == 7 and p.expected_tokens_per_frame == 66 and p.expected_total == 462 and p.met is True
+        assert "reduced 16->7" in p.reason
+        p = self.plan(1024)
+        assert p.num_frames == 15 and p.expected_total == 990 and p.met is True
+
+    def test_generous_budget_keeps_every_sampled_frame(self):
+        p = self.plan(2048)
+        assert p.num_frames == 16 and p.expected_total == 1920 and p.met is True and p.reason == "budget met"
+
+    def test_impossible_budget_keeps_one_frame_and_reports_not_met(self):
+        p = self.plan(4)
+        assert p.num_frames == 1 and p.met is False and "below the image processor floor" in p.reason
+        assert p.expected_tokens_per_frame >= 64  # the floor, never a fabricated 4
+
+    def test_frame_cap_from_the_image_limit_bounds_the_plan(self):
+        p = self.plan(8192, frames=32, cap=10)
+        assert p.num_frames == 10 and p.frame_cap == 10
+        p = self.plan(None, frames=32, cap=10)
+        assert p.num_frames == 10 and p.expected_total is None and p.met is None and p.reason == "no budget"
+
+    def test_explicit_max_pixels_wins_over_the_budget_split(self):
+        from vmlx_engine.video_controls import VideoControls, plan_fallback_frames
+
+        c = VideoControls(max_pixels=100_000, token_budget=512, token_pixels=2048)
+        p = plan_fallback_frames(c, frames_available=16, frame_cap=20, **self.GEOM)
+        assert p.num_frames == 16 and p.per_frame_max_pixels == 100_000 and p.reason == "explicit max_pixels"
+
+    def test_frame_tokens_model_the_processor_floor_after_our_bound(self):
+        from vmlx_engine.video_controls import fallback_frame_tokens, smart_resize_dims
+
+        # bounded to 3136 px (the old 512-token/128-cap split) the processor upsizes to >= 65536 px
+        assert fallback_frame_tokens(364, 644, per_frame_max_pixels=3136, token_pixels=1024, pixel_floor=65536) >= 64
+        assert smart_resize_dims(364, 644, factor=32, min_pixels=65536, max_pixels=16_777_216) == (352, 640)
+        assert smart_resize_dims(30, 50, factor=32, min_pixels=65536, max_pixels=None)[0] % 32 == 0
+
+    def test_even_subsample_keeps_first_and_last(self):
+        from vmlx_engine.video_controls import subsample_frames_evenly
+
+        assert subsample_frames_evenly(list(range(32)), 10) == [0, 3, 7, 10, 14, 17, 21, 24, 28, 31]
+        assert subsample_frames_evenly(list(range(5)), 5) == [0, 1, 2, 3, 4]
+        assert subsample_frames_evenly(list(range(5)), 1) == [0]
+        assert subsample_frames_evenly([], 3) == []
+
+    def test_fallback_bounds_spread_the_budget_over_the_sampled_frames_not_the_cap(self):
+        from vmlx_engine.video_controls import VideoControls
+
+        c = VideoControls(token_budget=512, token_pixels=784)  # cap 128 (default), 16 sampled
+        assert c.fallback_bounds(default_long_edge=768).max_pixels == 512 * 784 // 128  # legacy split (cap)
+        assert c.fallback_bounds(default_long_edge=768, num_frames=16).max_pixels == 512 * 784 // 16
+        assert c.fallback_bounds(default_long_edge=768, per_frame_max_pixels=70_000).max_pixels == 70_000
+
+    def test_engine_fallback_splits_the_image_limit_across_videos_and_plans_per_video(self):
+        import inspect
+
+        from vmlx_engine.engine import batched
+
+        src = inspect.getsource(batched.BatchedEngine._video_frame_fallback_messages)
+        assert "max_images_per_request" in src and "_count_video_and_image_parts(messages)" in src
+        assert "per_video_frame_cap = max(1, (int(image_limit) - n_images) // max(1, n_videos))" in src
+        assert "plan_fallback_frames(" in src and "subsample_frames_evenly(frames, plan.num_frames)" in src
+        assert "per_frame_max_pixels=plan.per_frame_max_pixels" in src and "|cap={per_video_frame_cap}" in src
+        assert "video frame fallback plan" in src
+        videos, images = batched.BatchedEngine._count_video_and_image_parts(
+            [{"role": "user", "content": [{"type": "video_url", "video_url": {"url": "a"}}, {"type": "image_url", "image_url": {"url": "b"}}, {"type": "text", "text": "q"}]},
+             {"role": "user", "content": "plain"},
+             {"role": "user", "content": [{"type": "input_video", "video": "c"}]}]
+        )
+        assert (videos, images) == (2, 1)

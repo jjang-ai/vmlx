@@ -113,6 +113,200 @@ class FallbackFrameBounds:
 
 
 @dataclass(frozen=True)
+class FallbackFramePlan:
+    """How many sampled frames the image fallback keeps and how large each one
+    is, so that a request's video-token budget is met on a path where every
+    frame is a separate image with the image processor's OWN pixel floor.
+
+    ``expected_tokens_per_frame`` is the image processor's smart-resize result
+    for a frame bounded to ``per_frame_max_pixels`` (its pixel floor applies
+    even when the budget asks for less), so ``expected_total`` is what the
+    processor will actually emit for ``num_frames`` frames of this size.
+    """
+
+    num_frames: int
+    per_frame_max_pixels: int | None
+    expected_tokens_per_frame: int | None
+    expected_total: int | None
+    budget: int | None
+    frame_cap: int
+    reason: str
+
+    @property
+    def met(self) -> bool | None:
+        if self.budget is None or self.expected_total is None:
+            return None
+        return self.expected_total <= self.budget
+
+
+def image_token_pixels(processor: Any = None) -> int:
+    """Pixels one merged IMAGE token covers: ``(patch_size * merge_size) ** 2``
+    from the loaded image processor (no temporal pairing on the image path),
+    else the legacy 28x28."""
+    ip = getattr(processor, "image_processor", None) if processor is not None else None
+    if ip is None:
+        ip = processor
+    try:
+        patch = int(getattr(ip, "patch_size", 0) or 0)
+        merge = int(getattr(ip, "merge_size", 0) or 0)
+    except (TypeError, ValueError):
+        return 28 * 28
+    if patch > 0 and merge > 0:
+        return (patch * merge) ** 2
+    return 28 * 28
+
+
+def image_pixel_floor(processor: Any = None) -> int | None:
+    """The image processor's minimum pixels per image (``min_pixels`` or
+    ``size.shortest_edge``), below which it UPSCALES; ``None`` when unknown."""
+    ip = getattr(processor, "image_processor", None) if processor is not None else None
+    if ip is None:
+        ip = processor
+    if ip is None:
+        return None
+    value = getattr(ip, "min_pixels", None)
+    if value is None:
+        size = getattr(ip, "size", None)
+        if isinstance(size, dict):
+            value = size.get("shortest_edge") or size.get("min_pixels")
+    try:
+        value = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return value if value and value > 0 else None
+
+
+def smart_resize_dims(
+    height: int,
+    width: int,
+    *,
+    factor: int,
+    min_pixels: int | None,
+    max_pixels: int | None,
+) -> tuple[int, int]:
+    """The Qwen-VL image processor's ``smart_resize``: dims rounded to
+    ``factor``, scaled DOWN to fit ``max_pixels`` or UP to reach ``min_pixels``."""
+    factor = max(1, int(factor))
+    h_bar = max(factor, int(round(height / factor)) * factor)
+    w_bar = max(factor, int(round(width / factor)) * factor)
+    if max_pixels is not None and max_pixels > 0 and h_bar * w_bar > max_pixels:
+        beta = math.sqrt((height * width) / float(max_pixels))
+        h_bar = max(factor, int(math.floor(height / beta / factor)) * factor)
+        w_bar = max(factor, int(math.floor(width / beta / factor)) * factor)
+    elif min_pixels is not None and min_pixels > 0 and h_bar * w_bar < min_pixels:
+        beta = math.sqrt(float(min_pixels) / (height * width))
+        h_bar = int(math.ceil(height * beta / factor)) * factor
+        w_bar = int(math.ceil(width * beta / factor)) * factor
+    return h_bar, w_bar
+
+
+def _bounded_frame_dims(height: int, width: int, max_pixels: int | None) -> tuple[int, int]:
+    """Dims ``bound_video_frames`` produces for a per-frame pixel bound (never upscales)."""
+    if not max_pixels or max_pixels <= 0 or height * width <= max_pixels:
+        return height, width
+    scale = math.sqrt(max_pixels / float(height * width))
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    if resized_width * resized_height > max_pixels:
+        resized_width = max(1, int(math.floor(width * scale)))
+        resized_height = max(1, int(math.floor(height * scale)))
+    return resized_height, resized_width
+
+
+def fallback_frame_tokens(
+    height: int,
+    width: int,
+    *,
+    per_frame_max_pixels: int | None,
+    token_pixels: int,
+    pixel_floor: int | None,
+    pixel_ceiling: int | None = None,
+) -> int:
+    """Image tokens the processor emits for one sampled frame bounded to
+    ``per_frame_max_pixels`` (its floor/ceiling applied after our bound)."""
+    factor = max(1, int(round(math.sqrt(max(1, int(token_pixels))))))
+    h, w = _bounded_frame_dims(int(height), int(width), per_frame_max_pixels)
+    h_bar, w_bar = smart_resize_dims(h, w, factor=factor, min_pixels=pixel_floor, max_pixels=pixel_ceiling)
+    return max(1, (h_bar * w_bar) // max(1, int(token_pixels)))
+
+
+def plan_fallback_frames(
+    controls: "VideoControls",
+    *,
+    frames_available: int,
+    frame_cap: int,
+    frame_height: int | None,
+    frame_width: int | None,
+    token_pixels: int,
+    pixel_floor: int | None,
+    pixel_ceiling: int | None = None,
+) -> FallbackFramePlan:
+    """Choose the frame count and per-frame pixel bound for the image fallback.
+
+    ``frame_cap`` is the hard per-video ceiling (the request's image limit
+    split across its videos, and the request's ``video_max_frames``). With a
+    token budget (or ``total_pixels``) the plan keeps the LARGEST frame count
+    ``n <= cap`` whose ``n x tokens(total / n)`` fits, where ``tokens`` is what
+    the image processor emits after its own pixel floor. When even one frame
+    at the floor exceeds the budget, one frame is kept and ``met`` is False
+    (the floor is the processor's, reported honestly, never silently skipped).
+    Without a budget the controls' explicit ``max_pixels`` (if any) applies.
+    """
+    cap = max(1, min(int(frames_available), int(frame_cap))) if frames_available > 0 else 0
+    explicit = int(controls.max_pixels) if controls.max_pixels is not None else None
+    total = controls.effective_total_pixels()
+    budget = int(controls.token_budget) if controls.token_budget is not None else None
+    if cap == 0:
+        return FallbackFramePlan(0, explicit, None, None, budget, int(frame_cap), "no frames")
+    if total is None or explicit is not None:
+        reason = "explicit max_pixels" if explicit is not None else "no budget"
+        return FallbackFramePlan(cap, explicit, None, None, budget, int(frame_cap), reason)
+    # a video budget was spent in units of the VIDEO processor's pixels per
+    # token (temporal pairs); each fallback frame is a single image
+    video_token_px = int(controls.token_pixels or DEFAULT_VIDEO_TOKEN_PIXELS)
+    budget_tokens = budget if budget is not None else max(1, int(total // max(1, video_token_px)))
+    image_total = budget_tokens * max(1, int(token_pixels))
+    if frame_height is None or frame_width is None or frame_height <= 0 or frame_width <= 0:
+        per = max(1, int(image_total // cap))
+        return FallbackFramePlan(cap, per, None, None, budget, int(frame_cap), "frame size unknown; even split")
+    best: tuple[int, int, int] | None = None
+    for n in range(cap, 0, -1):
+        per = max(1, int(image_total // n))
+        tokens = fallback_frame_tokens(
+            frame_height, frame_width, per_frame_max_pixels=per, token_pixels=token_pixels,
+            pixel_floor=pixel_floor, pixel_ceiling=pixel_ceiling,
+        )
+        if n * tokens <= budget_tokens:
+            best = (n, per, tokens)
+            break
+    if best is None:
+        per = max(1, int(image_total))
+        tokens = fallback_frame_tokens(
+            frame_height, frame_width, per_frame_max_pixels=per, token_pixels=token_pixels,
+            pixel_floor=pixel_floor, pixel_ceiling=pixel_ceiling,
+        )
+        return FallbackFramePlan(
+            1, per, tokens, tokens, budget, int(frame_cap),
+            f"budget below the image processor floor ({pixel_floor} px -> {tokens} tokens/frame); one frame kept",
+        )
+    n, per, tokens = best
+    reason = "budget met" if n == cap else f"frames reduced {cap}->{n} to fit the budget at the processor floor"
+    return FallbackFramePlan(n, per, tokens, n * tokens, budget, int(frame_cap), reason)
+
+
+def subsample_frames_evenly(frames: list[Any], keep: int) -> list[Any]:
+    """Keep ``keep`` frames spread evenly over the sampled clip (first and last kept)."""
+    n = len(frames)
+    keep = max(0, min(int(keep), n))
+    if keep == n or keep == 0:
+        return list(frames[:keep])
+    if keep == 1:
+        return [frames[0]]
+    idx = sorted({int(round(i * (n - 1) / (keep - 1))) for i in range(keep)})
+    return [frames[i] for i in idx]
+
+
+@dataclass(frozen=True)
 class VideoControls:
     fps: float | None = None
     max_frames: int | None = None
@@ -259,18 +453,27 @@ class VideoControls:
             ele["resized_width"] = int(self.resized_width)
         return ele
 
-    def fallback_bounds(self, *, default_long_edge: int) -> FallbackFrameBounds:
+    def fallback_bounds(
+        self, *, default_long_edge: int, num_frames: int | None = None, per_frame_max_pixels: int | None = None
+    ) -> FallbackFrameBounds:
         """Sizing for the sampled-frame fallback: explicit size wins, else the
-        per-frame pixel budget (aspect preserved), else the long-edge default."""
+        per-frame pixel budget (aspect preserved), else the long-edge default.
+        ``per_frame_max_pixels`` (from ``plan_fallback_frames``) wins over the
+        even split; ``num_frames`` is the count actually sampled (the split
+        used the frame CAP before, so a 16-frame clip under a 128-frame cap got
+        an eighth of its budget)."""
         resize = None
         if self.resized_height is not None and self.resized_width is not None:
             resize = (int(self.resized_height), int(self.resized_width))
         max_pixels = int(self.max_pixels) if self.max_pixels is not None else None
         total = self.effective_total_pixels()
-        if max_pixels is None and total is not None:
-            # Spread the clip budget over the frames the fallback will sample
+        if max_pixels is None and per_frame_max_pixels is not None:
+            max_pixels = max(1, int(per_frame_max_pixels))
+        elif max_pixels is None and total is not None:
+            # Spread the clip budget over the frames the fallback sampled
             # (each sampled frame becomes one image, so no temporal pairing).
-            max_pixels = max(1, int(total // max(1, self.effective_max_frames())))
+            frames = int(num_frames) if num_frames else self.effective_max_frames()
+            max_pixels = max(1, int(total // max(1, frames)))
         return FallbackFrameBounds(
             max_long_edge=int(default_long_edge),
             max_pixels=max_pixels,

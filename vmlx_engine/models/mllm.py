@@ -4846,7 +4846,7 @@ class MLXMultimodalLM:
         from ..video_controls import VideoControls, bound_video_frames
 
         if isinstance(controls, VideoControls) and controls.has_pixel_controls:
-            bounds = controls.fallback_bounds(default_long_edge=0)
+            bounds = controls.fallback_bounds(default_long_edge=0, num_frames=len(frames))
             frames = bound_video_frames(
                 frames,
                 max_long_edge=bounds.max_long_edge,
