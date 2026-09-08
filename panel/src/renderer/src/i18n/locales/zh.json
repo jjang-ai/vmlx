@@ -1,5 +1,5 @@
 {
-  "console": {"chatImages":"聊天与图像","serversApi":"服务器与 API","models":"模型","libraryTools":"模型库与工具","findDownload":"搜索与下载","sections":"页面分区","pages":"主要页面","preferences":"偏好设置"},
+  "console": {"chatImages":"聊天与图像","serversApi":"服务器与 API","models":"模型","libraryTools":"模型库与工具","findDownload":"搜索与下载","sections":"页面分区","pages":"主要页面","preferences":"偏好设置","oneModelLoaded":"仅保持一个模型加载"},
   "ssdPool": {
     "capacity": "SSD 缓存已达到共享池的有效上限：{used} / {cap}。自动驱逐可能移除较旧的可复用条目。",
     "evicted": "SSD 缓存达到上限，较旧的条目已被自动驱逐。当前用量：{used} / {cap}。",

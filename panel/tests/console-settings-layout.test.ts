@@ -4,6 +4,20 @@ import { resolve } from 'node:path'
 
 const read = (path: string) => readFileSync(resolve(__dirname, '../src', path), 'utf8')
 describe('Console settings and responsive layout contract', () => {
+  it('puts global preferences on the existing gateway and language owners', () => {
+    const app = read('renderer/src/App.tsx')
+    expect(app).toContain('data-vmlx-surface="general-preferences"')
+    expect(app).toContain('<SingleModelPreference />')
+    expect(app).toContain('data-vmlx-control={`preferences-locale-${l}`}')
+    const preference = read('renderer/src/components/layout/SingleModelPreference.tsx')
+    expect(preference).toContain('window.api.gateway.getStatus()')
+    expect(preference).toContain('window.api.gateway.setSingleModelMode(!enabled)')
+    expect(preference).toContain('window.api.gateway.onSingleModelModeChanged')
+    expect(preference).toContain('revision.current === requestedRevision')
+    expect(preference).toContain('disabled={pending || enabled === null}')
+    expect(preference).not.toContain('localStorage')
+    expect(preference).not.toContain('window.api.settings.set')
+  })
   it('uses dark on-accent Markdown without recoloring assistant prose or code surfaces', () => {
     expect(read('renderer/src/components/chat/MessageBubble.tsx')).toContain('prose-on-accent bg-primary text-primary-foreground')
     const css = read('renderer/src/index.css')

@@ -4,6 +4,7 @@ import { TitleBar } from './components/layout/TitleBar'
 import { ConsoleSubnavigation } from './components/layout/ConsoleSubnavigation'
 import { DownloadTab } from './components/sessions/DownloadTab'
 import { ConsoleSidebar } from './components/layout/ConsoleSidebar'
+import { SingleModelPreference } from './components/layout/SingleModelPreference'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
 import { CreateSession } from './components/sessions/CreateSession'
 import { SessionView } from './components/sessions/SessionView'
@@ -398,7 +399,7 @@ function ServerModeContent() {
       )}
 
       {serverPanel === 'about' && (
-        <div className="p-8 overflow-auto h-full">
+        <div data-vmlx-surface="general-preferences" className="p-4 sm:p-8 overflow-auto h-full min-h-0 min-w-0">
           <div className="max-w-3xl mx-auto space-y-6">
             <button
               onClick={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
@@ -407,26 +408,16 @@ function ServerModeContent() {
               <ArrowLeft className="h-3 w-3" />
               {t('common.back')}
             </button>
-            <h2 className="text-2xl font-bold">{t('app.about.title')}</h2>
-            <p className="text-sm text-muted-foreground">
-              {t('app.about.desc')}
-            </p>
-            <p className="text-xs text-muted-foreground/70">
-              {t('app.about.creator')}
-            </p>
-            <AppVersion />
-            <div className="flex gap-4 text-xs">
-              <a href="https://mlx.studio" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">mlx.studio</a>
-              <a href="https://github.com/jjang-ai/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
-              <a href="https://jangq.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">JANG</a>
-              <a href="https://ko-fi.com/jinhojang" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Ko-fi</a>
-            </div>
+            <h2 className="text-2xl font-bold">{t('console.preferences')}</h2>
+            <SingleModelPreference />
             <div className="border border-border rounded-lg p-5">
               <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">{t('app.about.language')}</h3>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {LOCALES.map((l) => (
                   <button
                     key={l}
+                    data-vmlx-control={`preferences-locale-${l}`}
+                    aria-pressed={locale === l}
                     onClick={() => setLocale(l)}
                     className={`px-3 py-1.5 text-sm rounded-md border transition-colors ${
                       locale === l
@@ -440,6 +431,18 @@ function ServerModeContent() {
               </div>
             </div>
             <ApiKeysSection />
+            <section className="border-t border-border pt-5 space-y-3">
+              <h3 className="text-sm font-semibold">{t('app.about.title')}</h3>
+              <p className="text-sm text-muted-foreground">{t('app.about.desc')}</p>
+              <p className="text-xs text-muted-foreground/70">{t('app.about.creator')}</p>
+              <AppVersion />
+              <div className="flex flex-wrap gap-4 text-xs">
+                <a href="https://mlx.studio" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">mlx.studio</a>
+                <a href="https://github.com/jjang-ai/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+                <a href="https://jangq.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">JANG</a>
+                <a href="https://ko-fi.com/jinhojang" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Ko-fi</a>
+              </div>
+            </section>
           </div>
         </div>
       )}

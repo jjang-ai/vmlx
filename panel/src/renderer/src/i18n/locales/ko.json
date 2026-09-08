@@ -1,5 +1,5 @@
 {
-  "console": {"chatImages":"채팅 및 이미지","serversApi":"서버 및 API","models":"모델","libraryTools":"라이브러리 및 도구","findDownload":"검색 및 다운로드","sections":"페이지 섹션","pages":"주요 페이지","preferences":"환경설정"},
+  "console": {"chatImages":"채팅 및 이미지","serversApi":"서버 및 API","models":"모델","libraryTools":"라이브러리 및 도구","findDownload":"검색 및 다운로드","sections":"페이지 섹션","pages":"주요 페이지","preferences":"환경설정","oneModelLoaded":"모델 하나만 로드 상태로 유지"},
   "ssdPool": {
     "capacity": "SSD 캐시가 유효 공유 한도에 도달했습니다: {used} / {cap}. 오래된 재사용 항목이 자동으로 삭제될 수 있습니다.",
     "evicted": "SSD 캐시가 한도에 도달하여 오래된 항목이 자동으로 삭제되었습니다. 현재 사용량: {used} / {cap}.",
