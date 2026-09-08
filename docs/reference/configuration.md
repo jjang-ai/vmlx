@@ -48,6 +48,7 @@
 |--------|-------------|---------|
 | `--enable-auto-tool-choice` | Enable automatic tool calling | `false` |
 | `--tool-call-parser` | Tool call parser (see [Tool Calling](../guides/tool-calling.md)) | None |
+| `--tool-parser-plugin` | Import a tool-parser plugin (a `.py` file or dotted module) before the parser is resolved; the module registers or replaces parsers through `ToolParserManager.register_module`. Repeatable. Runs code from the given path with the engine's own privileges, so treat it like any other command-line flag; a missing plugin is a startup error. | None |
 
 ### Reasoning Options
 
