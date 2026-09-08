@@ -16421,6 +16421,21 @@ class MLLMBatchGenerator:
         if first_id in self.stop_tokens:
             return False
 
+        # Prefix restore replaces input_ids with the unprocessed tail. Profiles
+        # and governor context describe the whole prompt, not the work left to
+        # prefill. The canonical cache key omits the template generation suffix.
+        original_ids = getattr(request, "_original_token_ids", None)
+        if original_ids is not None:
+            prompt_token_count = len(original_ids) + len(
+                getattr(request, "_gen_prefix_tokens", None) or []
+            )
+        else:
+            prompt_token_count = int(getattr(request, "_cached_tokens", 0) or 0) + (
+                int(request.input_ids.shape[-1])
+                if getattr(request, "input_ids", None) is not None
+                else 0
+            )
+
         # Resolve the AR-vs-MTP decision BEFORE the MTP seed forward below:
         # a skipped activation must not pay the extra hidden-state forward.
         from .native_mtp import native_mtp_effective_depth, native_mtp_max_depth
@@ -16451,11 +16466,7 @@ class MLLMBatchGenerator:
                 restored_prefix=bool(
                     int(getattr(request, "_cached_tokens", 0) or 0) > 0
                 ),
-                prompt_tokens=(
-                    int(request.input_ids.shape[-1])
-                    if getattr(request, "input_ids", None) is not None
-                    else 0
-                ),
+                prompt_tokens=prompt_token_count,
                 has_tools=_native_mtp_request_has_tools(request),
             )
             # Lazy fallback: some fixtures build the generator via __new__
@@ -16590,11 +16601,7 @@ class MLLMBatchGenerator:
             ),
             profile_key=request_profile_key,
         )
-        state.ar_safety.prompt_tokens = (
-            int(request.input_ids.shape[-1])
-            if getattr(request, "input_ids", None) is not None
-            else 0
-        )
+        state.ar_safety.prompt_tokens = prompt_token_count
         state.ladder_depth = max(1, int(depth))
         if (
             depth > 1
@@ -16638,13 +16645,17 @@ class MLLMBatchGenerator:
         request._native_mtp_state = state
         logger.info(
             "MLLM native MTP path activated for request=%s depth=%d seed=%s "
-            "prompt_prime=%s folded_pairs=%d seed_ar_ms=%.1f",
+            "prompt_prime=%s folded_pairs=%d seed_ar_ms=%.1f "
+            "prompt_tokens=%d cached_tokens=%d profile=%s",
             request.request_id,
             depth,
             profile_seed,
             prime_source,
             int(primed_pairs),
             float(_seed_ar_ms),
+            prompt_token_count,
+            int(getattr(request, "_cached_tokens", 0) or 0),
+            state.stats.profile_key_label or "configured",
         )
         return True
 

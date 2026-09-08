@@ -340,6 +340,46 @@ class TestSeedPathIntegration:
         assert state.depth == 3
         assert state.stats.profile_seed == "configured"
 
+    def test_cached_prompt_uses_full_context_for_profile_and_governor(self, monkeypatch):
+        import mlx.core as mx
+
+        generator, req, first_token = self._build_generator(monkeypatch)
+        generator._model_type = "qwen4_exp"
+        req._original_token_ids = [101] * 10000
+        req._gen_prefix_tokens = [102, 103]
+        req._cached_tokens = 9999
+        req.input_ids = mx.array([[101, 102, 103]])
+        assert generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None]
+        ) is True
+        state = req._native_mtp_state
+        assert state.stats.profile_key_label == "greedy|True|medium|False"
+        assert state.ar_safety.prompt_tokens == 10002
+
+    def test_fixed_cached_prompt_keeps_full_context_across_reseed(self, monkeypatch):
+        import mlx.core as mx
+
+        generator, req, first_token = self._build_generator(monkeypatch)
+        monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
+        req._original_token_ids = [101] * 10000
+        req._cached_tokens = 9998
+        req.input_ids = mx.array([[101, 102]])
+        for override in (None, 1):
+            assert generator._seed_native_mtp_from_prefill(
+                req, [object()], first_token, [None], start_depth_override=override
+            ) is True
+            assert req._native_mtp_state.ar_safety.prompt_tokens == 10000
+
+    def test_seed_without_canonical_ids_includes_restored_prefix(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
+        del req._original_token_ids
+        req._cached_tokens = 8000
+        assert generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None]
+        ) is True
+        assert req._native_mtp_state.ar_safety.prompt_tokens == 8002
+
     def test_qwen4_exp_unseen_profile_starts_at_measured_d3(self, monkeypatch):
         generator, req, first_token = self._build_generator(monkeypatch)
         generator._model_type = "qwen4_exp"
