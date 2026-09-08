@@ -988,8 +988,10 @@ class ModelConfigRegistry:
             # The MiniCPM5 JANG artifact carries a coarse Llama capability
             # stamp, but an explicit native XML dialect + thinking contract.
             # Resolve that declared dialect without changing generic Llama.
+            declared_tool_calling = jcfg.get("tool_calling")
             if (model_type_from_config == "llama"
-                    and (jcfg.get("tool_calling") or {}).get("dialect") == "minicpm5_xml_function"):
+                    and isinstance(declared_tool_calling, dict)
+                    and declared_tool_calling.get("dialect") == "minicpm5_xml_function"):
                 updates.update(tool_parser="minicpm5", supports_native_tools=True,
                                preserve_native_tool_format=True, reasoning_parser="qwen3",
                                supports_thinking=True, think_in_template=False)

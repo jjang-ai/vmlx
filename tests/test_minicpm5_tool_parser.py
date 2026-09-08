@@ -70,3 +70,13 @@ def test_explicit_dialect_overrides_only_coarse_stamp(tmp_path, dialect, parser,
     assert config.supports_thinking is thinking
     assert config.think_in_template is False
     assert "default_enable_thinking" not in config.architecture_hints
+
+
+@pytest.mark.parametrize("metadata", ["llama", [], 7, None])
+def test_unrelated_legacy_tool_metadata_does_not_enter_dialect_override(tmp_path, metadata):
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "capabilities": {"family": "llama", "tool_parser": "llama"},
+        "tool_calling": metadata,
+    }))
+    assert get_model_config_registry().lookup(str(tmp_path)).tool_parser == "llama"
