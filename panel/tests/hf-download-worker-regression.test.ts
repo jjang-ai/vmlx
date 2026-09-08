@@ -106,6 +106,8 @@ describe('HuggingFace download worker fallback', () => {
           'test-org/test-model',
           downloadDir,
           'http://127.0.0.1:9',
+          // repo subfolder: the worker takes it as its fourth argument (empty = whole repo)
+          '',
         ],
         {
           encoding: 'utf-8',
