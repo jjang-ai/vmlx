@@ -1264,6 +1264,9 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             model_path=local_model_path,
             log=logger,
         )
+        from .minicpm5_qkv import prepare_minicpm5_qkv
+
+        prepare_minicpm5_qkv(model, local_model_path)
         if _glm5_next_runtime_expected:
             _warm_glm5_next_first_forward(model)
             logger.info(
