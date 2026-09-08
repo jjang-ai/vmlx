@@ -9,6 +9,14 @@ from types import SimpleNamespace
 import pytest
 
 
+def _write_stub_shard(root, name="model.safetensors"):
+    """A minimal valid safetensors file so bundle integrity (which now requires a
+    weight shard) accepts a test bundle that never loads weights."""
+    import json as _json, struct as _struct
+    header = _json.dumps({"__metadata__": {"format": "pt"}}).encode()
+    (root / name).write_bytes(_struct.pack("<Q", len(header)) + header)
+
+
 def _write_bundle(tmp_path, *, runtime_slots: int = 44):
     config = {
         "model_type": "nanbeige",
@@ -39,6 +47,7 @@ def _write_bundle(tmp_path, *, runtime_slots: int = 44):
     }
     (tmp_path / "config.json").write_text(json.dumps(config))
     (tmp_path / "jang_config.json").write_text(json.dumps(jang))
+    _write_stub_shard(tmp_path)
     return config, jang
 
 
@@ -326,6 +335,7 @@ def test_generic_loader_uses_shared_nanbeige_registration_and_validator(
         "num_loops": 2,
     }
     (tmp_path / "config.json").write_text(json.dumps(config))
+    _write_stub_shard(tmp_path)
     model = _FakeNanbeige()
     tokenizer = object()
     calls = []

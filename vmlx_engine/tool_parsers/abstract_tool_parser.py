@@ -414,6 +414,35 @@ class ToolParserManager:
     lazy_parsers: dict[str, tuple[str, str]] = {}  # name -> (module_path, class_name)
 
     @classmethod
+    def load_plugin(cls, spec: str) -> list[str]:
+        """Import a tool-parser plugin and return the names it registered.
+
+        ``spec`` is a ``.py`` file path or a dotted module name. The module
+        registers parsers itself through ``register_module`` (a plugin may
+        re-register an existing name — ``force`` defaults to True — which is
+        how a controlled fault-injection parser stands in for a real one in a
+        live proof without shipping test code in the engine).
+        """
+        import importlib.util as _ilu
+        import os as _os
+
+        before = set(cls.tool_parsers)
+        if spec.endswith(".py") or _os.sep in spec:
+            mod_name = "vmlx_tool_parser_plugin_" + re.sub(r"[^A-Za-z0-9_]", "_", _os.path.basename(spec))
+            if not _os.path.isfile(spec):
+                raise ImportError(f"tool parser plugin not found: {spec}")
+            module_spec = _ilu.spec_from_file_location(mod_name, spec)
+            if module_spec is None or module_spec.loader is None:
+                raise ImportError(f"tool parser plugin not loadable: {spec}")
+            module = _ilu.module_from_spec(module_spec)
+            module_spec.loader.exec_module(module)
+        else:
+            importlib.import_module(spec)
+        return sorted(set(cls.tool_parsers) - before) or sorted(
+            n for n in cls.tool_parsers if getattr(cls.tool_parsers[n], "__module__", "").startswith("vmlx_tool_parser_plugin_")
+        )
+
+    @classmethod
     def get_tool_parser(cls, name: str) -> type[ToolParser]:
         """
         Retrieve a registered ToolParser class by name.

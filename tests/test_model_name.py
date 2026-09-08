@@ -627,8 +627,10 @@ class TestSSEStreamingFix:
         import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
-        # The parser path condition
-        assert "if request_parser and delta_text:" in source
+        # The parser path condition: a parser needs text to work on, and the
+        # finished flag lets the last buffered tokens flush through the parser
+        # (a trailing tool block that arrives with the final chunk).
+        assert "if request_parser and (delta_text or output.finished):" in source
 
     def test_empty_chunk_skip_in_parser_path(self):
         """Parser path skips chunks with nothing to emit (no content, no reasoning)."""

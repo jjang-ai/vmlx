@@ -2082,8 +2082,10 @@ class TestNativeMtpAutodetect:
         monkeypatch.setattr(native_mtp, "_set_mtp_active", lambda _active: None)
         monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", None, raising=False)
         _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+        # A tuning block is honoured only when it attests its own measurement
+        # (2026-07-10 audit High-4: unattested depth hints stay advisory).
         (tmp_path / "vmlx_mtp_tuning.json").write_text(
-            json.dumps({"native_mtp": {"best_depth": 2}})
+            json.dumps({"native_mtp": {"best_depth": 2, "validated": True}})
         )
 
         native_mtp.maybe_apply_native_mtp(tmp_path, allow_runtime=True)
