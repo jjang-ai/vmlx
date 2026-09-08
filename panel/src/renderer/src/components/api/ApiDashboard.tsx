@@ -5,6 +5,7 @@ import { EndpointList } from "./EndpointList";
 import { CodeSnippets } from "./CodeSnippets";
 import { useTranslation } from '../../i18n';
 import { CodingToolIntegration } from "./CodingToolIntegration";
+import { apiCapabilityKey, apiCapabilityLabel } from '../../../../shared/apiModelCapabilities';
 
 export type ApiFormat = "openai" | "anthropic" | "ollama";
 
@@ -19,6 +20,7 @@ interface SessionSummary {
   type?: "local" | "remote";
   config?: string;
   remoteUrl?: string;
+  pid?: number | null;
 }
 
 function getModelDisplayName(s: SessionSummary): string {
@@ -59,6 +61,24 @@ export function ApiDashboard() {
   const [portError, setPortError] = useState<string | null>(null);
   const [format, setFormat] = useState<ApiFormat>("openai");
   const portRef = useRef<HTMLInputElement>(null);
+  const [liveCapabilities, setLiveCapabilities] = useState<Record<string, string>>({});
+  const capabilitySessions = JSON.stringify(runningSessions.map(s => ({
+    id: s.id, host: s.host, port: s.port, modelPath: s.modelPath,
+    pid: s.pid, status: s.status, type: s.type,
+  })));
+  useEffect(() => {
+    let cancelled = false;
+    const targets: SessionSummary[] = JSON.parse(capabilitySessions);
+    setLiveCapabilities({});
+    void Promise.all(targets.filter(s => s.status === 'running' && s.type !== 'remote').map(async s => {
+      const result = await window.api.performance.capabilities(s.id).catch(() => null);
+      const label = apiCapabilityLabel(result?.capabilities);
+      return result?.key === apiCapabilityKey(s) && label ? [result.key, label] as const : null;
+    })).then(rows => {
+      if (!cancelled) setLiveCapabilities(Object.fromEntries(rows.filter((r): r is readonly [string, string] => r !== null)));
+    });
+    return () => { cancelled = true; };
+  }, [capabilitySessions]);
 
   // Load gateway port and host on mount
   useEffect(() => {
@@ -293,7 +313,8 @@ export function ApiDashboard() {
                     />
                     <span className="font-medium flex-1 truncate">{name}</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                      {type}
+                      {type === 'image-gen' || type === 'image-edit'
+                        ? type : liveCapabilities[apiCapabilityKey(s)] ?? '—'}
                     </span>
                     {isSleeping && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">

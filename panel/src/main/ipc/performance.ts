@@ -1,5 +1,7 @@
 import { ipcMain } from 'electron'
 import { resolveUrl, connectHost } from '../sessions'
+import { db } from '../database'
+import { apiCapabilityKey } from '../../shared/apiModelCapabilities'
 
 /**
  * Performance IPC handlers.
@@ -31,6 +33,26 @@ function isExpectedPerformanceEndpointDisconnectError(err: unknown): boolean {
 }
 
 export function registerPerformanceHandlers(): void {
+  ipcMain.handle('performance:capabilities', async (_, sessionId: string) => {
+    const session = db.getSession(sessionId)
+    // Display requests must never wake a sleeping model or probe a remote provider.
+    if (!session || session.type === 'remote' || session.status !== 'running') return null
+    const key = apiCapabilityKey(session)
+    try {
+      const cfg = JSON.parse(session.config || '{}')
+      const base = await resolveUrl(`http://${connectHost(session.host)}:${session.port}`)
+      const headers: Record<string, string> = {}
+      if (typeof cfg.apiKey === 'string' && cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`
+      const response = await fetch(`${base}/v1/capabilities`, { headers, signal: AbortSignal.timeout(5000) })
+      if (!response.ok) return null
+      const capabilities = await response.json()
+      const current = db.getSession(sessionId)
+      if (!current || apiCapabilityKey(current) !== key) return null
+      return { key, capabilities }
+    } catch {
+      return null // Unknown is not text-only, and metadata failure must not stop inference.
+    }
+  })
   ipcMain.handle('performance:health', async (_, endpoint: { host: string; port: number }) => {
     try {
       const baseUrl = await resolveUrl(`http://${connectHost(endpoint.host)}:${endpoint.port}`)

@@ -242,6 +242,7 @@ const api = {
 
   // Performance monitoring
   performance: {
+    capabilities: (sessionId: string) => ipcRenderer.invoke('performance:capabilities', sessionId),
     health: (endpoint: { host: string; port: number }) =>
       ipcRenderer.invoke('performance:health', endpoint)
   },

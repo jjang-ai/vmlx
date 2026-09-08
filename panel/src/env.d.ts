@@ -321,6 +321,7 @@ declare global {
         ) => Promise<any>;
       };
       performance: {
+        capabilities: (sessionId: string) => Promise<{ key: string; capabilities: unknown } | null>;
         health: (endpoint: { host: string; port: number }) => Promise<any>;
       };
       engine: {
