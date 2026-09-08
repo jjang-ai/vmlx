@@ -7528,6 +7528,11 @@ def _parse_tool_calls_with_parser(
             stripped,
             flags=re.IGNORECASE | re.DOTALL,
         )
+        if not m and not _has_tool_marker_or_partial_suffix(stripped):
+            # A tool name in prose or application JSON is not a call. In
+            # particular, a parameterless tool must not execute merely because
+            # its name occurs in a service config printed by the assistant.
+            return text, None
         name = m.group(1) if m else None
         if not name:
             named_hits = [n for n in allowed if re.search(rf"\b{re.escape(n)}\b", stripped)]

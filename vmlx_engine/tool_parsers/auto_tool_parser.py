@@ -246,6 +246,8 @@ class AutoToolParser(ToolParser):
         - Single JSON object: {"name": "func", "arguments": {...}}
         - JSON array: [{...}, {...}]
         """
+        from ..api.tool_calling import _is_explicit_raw_json_tool_call
+
         if not text:
             return []
 
@@ -258,11 +260,11 @@ class AutoToolParser(ToolParser):
                 parsed = json.loads(text)
                 if isinstance(parsed, list):
                     for item in parsed:
-                        if isinstance(item, dict):
+                        if _is_explicit_raw_json_tool_call(item, allow_type_name=True):
                             # Support "name" and "type" fields (Granite)
                             func_name = item.get("name") or item.get("type")
                             if func_name:
-                                args = item.get("arguments", {})
+                                args = item.get("arguments", item.get("parameters", {}))
                                 tool_calls.append(
                                     {
                                         "id": generate_tool_id(),
@@ -311,11 +313,11 @@ class AutoToolParser(ToolParser):
                     json_str = text[start : i + 1]
                     try:
                         obj = json.loads(json_str)
-                        if isinstance(obj, dict):
+                        if _is_explicit_raw_json_tool_call(obj, allow_type_name=True):
                             # Support both "name" and "type" fields
                             func_name = obj.get("name") or obj.get("type")
                             if func_name:
-                                args = obj.get("arguments", {})
+                                args = obj.get("arguments", obj.get("parameters", {}))
                                 tool_calls.append(
                                     {
                                         "id": generate_tool_id(),

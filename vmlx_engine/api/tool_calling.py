@@ -2509,6 +2509,24 @@ def check_and_inject_fallback_tools(
         return prompt
 
 
+def _is_explicit_raw_json_tool_call(value: Any, *, allow_type_name: bool = False) -> bool:
+    """Bare JSON needs an explicit argument object; a name alone is data."""
+    if not isinstance(value, dict):
+        return False
+    name = value.get("name") or (value.get("type") if allow_type_name else None)
+    if not isinstance(name, str) or not name.strip():
+        return False
+    if "arguments" not in value and "parameters" not in value:
+        return False
+    args = value.get("arguments", value.get("parameters"))
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except (ValueError, TypeError):
+            return False
+    return isinstance(args, dict)
+
+
 def _parse_raw_json_tool_calls(text: str) -> Optional[List[dict]]:
     """
     Parse raw JSON tool calls from model output.
@@ -2534,7 +2552,7 @@ def _parse_raw_json_tool_calls(text: str) -> Optional[List[dict]]:
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list) and all(
-                isinstance(item, dict) and "name" in item for item in parsed
+                _is_explicit_raw_json_tool_call(item) for item in parsed
             ):
                 return [
                     {"name": item["name"], "arguments": item.get("arguments", item.get("parameters", {}))}
@@ -2572,7 +2590,7 @@ def _parse_raw_json_tool_calls(text: str) -> Optional[List[dict]]:
                 json_str = text[start : i + 1]
                 try:
                     obj = json.loads(json_str)
-                    if isinstance(obj, dict) and "name" in obj:
+                    if _is_explicit_raw_json_tool_call(obj):
                         # Accept both "arguments" and "parameters" keys
                         args = obj.get("arguments", obj.get("parameters", {}))
                         tool_calls.append(
