@@ -985,6 +985,15 @@ class ModelConfigRegistry:
                     stamped_default_thinking_source
                 )
                 updates["architecture_hints"] = hints
+            # The MiniCPM5 JANG artifact carries a coarse Llama capability
+            # stamp, but an explicit native XML dialect + thinking contract.
+            # Resolve that declared dialect without changing generic Llama.
+            if (model_type_from_config == "llama"
+                    and (jcfg.get("tool_calling") or {}).get("dialect") == "minicpm5_xml_function"):
+                updates.update(tool_parser="minicpm5", supports_native_tools=True,
+                               preserve_native_tool_format=True, reasoning_parser="qwen3",
+                               supports_thinking=True, think_in_template=False)
+                # Auto leaves enable_thinking absent; the template decides.
             if updates:
                 base = replace(base, **updates)
             base = _with_hybrid_override_pattern_hint(base, local_model_config)

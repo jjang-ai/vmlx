@@ -2174,6 +2174,9 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
+    value: 'minicpm5', label: 'MiniCPM5 — XML function', format: '<function name="fn"><param name="arg">val</param></function>', models: ['MiniCPM5 JANG (text, optional thinking)']
+  },
+  {
     value: 'atem', label: 'Muse Glimmer — ATEM', format: '<atem:function_calls><atem:invoke name="fn"><atem:parameter name="arg">val</atem:parameter></atem:invoke></atem:function_calls>', models: [
       'Muse Glimmer 30B (text+vision+video)',
     ]

@@ -6,6 +6,20 @@ import { detectModelConfigFromDir } from '../src/main/model-config-registry'
 
 const createdDirs: string[] = []
 
+describe('MiniCPM5 declared XML dialect', () => {
+  it.each(['minicpm5_xml_function', 'unrelated'])('scopes the capability correction to %s', (dialect) => {
+    const dir = makeModelDir({ model_type: 'llama' }, {
+      capabilities: { family: 'llama', tool_parser: 'llama', supports_thinking: false, think_in_template: false },
+      tool_calling: { dialect },
+    })
+    const config = detectModelConfigFromDir(dir)
+    expect(config.toolParser).toBe(dialect === 'minicpm5_xml_function' ? 'minicpm5' : 'llama')
+    expect(config.supportsThinking).toBe(dialect === 'minicpm5_xml_function')
+    expect(config.defaultEnableThinking).toBeUndefined()
+    expect(config.isMultimodal).toBe(false)
+  })
+})
+
 function makeModelDir(config: Record<string, unknown>, jangConfig?: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), 'vmlx-model-config-'))
   createdDirs.push(dir)

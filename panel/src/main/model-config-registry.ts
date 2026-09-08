@@ -1820,6 +1820,17 @@ function applyJangCapabilities(
   if (zayaTypedCca) {
     next.usePagedCache = false
   }
+  // Explicit native dialect supersedes this artifact's coarse Llama stamp.
+  // Keep Auto unspecified: the template distinguishes omitted/true/false.
+  if (['llama', 'llama3'].includes(next.family) && jangCfg?.tool_calling?.dialect === 'minicpm5_xml_function') {
+    next.toolParser = 'minicpm5'
+    next.reasoningParser = 'qwen3'
+    next.supportsThinking = true
+    next.honorsEnableThinking = true
+    next.thinkInTemplate = false
+    next.defaultEnableThinking = undefined
+    next.enableAutoToolChoice = true
+  }
   return next
 }
 
