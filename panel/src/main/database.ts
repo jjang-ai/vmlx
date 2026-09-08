@@ -11,6 +11,7 @@ import {
   staleSessionResetSql,
 } from "../shared/sessionStatusReconcile";
 import { decryptValue, encryptValue } from "./secretStorage";
+import { GATEWAY_SINGLE_MODEL_MODE_KEY } from "../shared/gatewaySettingsKeys";
 
 export interface Chat {
   id: string;
@@ -182,9 +183,17 @@ class DatabaseManager {
   constructor() {
     this.dbPath = join(app.getPath("userData"), "chats.db");
     const dbPath = this.dbPath;
+    // New installs start with one resident model. An existing profile's absent
+    // value historically meant Off, so this must not be a settings migration or
+    // a change to the shared getter. Surviving SQLite sidecars are not new users.
+    const newProfile = ![dbPath, `${dbPath}-wal`, `${dbPath}-shm`].some(existsSync);
     try {
       this.db = new Database(dbPath);
       this.initialize();
+      if (newProfile) {
+        this.db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
+          .run(GATEWAY_SINGLE_MODEL_MODE_KEY, "true");
+      }
     } catch (err) {
       // DB is corrupt — back up the bad file and start fresh
       console.error("[DB] Database corrupt, recreating:", err);
