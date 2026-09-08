@@ -42,7 +42,7 @@ def _config(root: Path) -> None:
     )
 
 
-def test_misaligned_payload_is_compatible_and_shard_is_never_rewritten(tmp_path):
+def test_misaligned_payload_is_atomically_realigned_once(tmp_path):
     root = tmp_path / "model"
     root.mkdir()
     _config(root)
@@ -61,11 +61,17 @@ def test_misaligned_payload_is_compatible_and_shard_is_never_rewritten(tmp_path)
     second = check_model_bundle(root, cache_dir=cache)
 
     assert first["status"] == "ok"
-    assert first["misaligned_tensors"] == 1
-    assert first["alignment_contract"] == "compatible_copy_on_load"
+    assert first["misaligned_tensors"] == 0
+    assert first["detected_misaligned_tensors"] == 1
+    assert first["alignment_contract"] == "atomic_realign"
+    assert first["repairs"] == ["model.safetensors"]
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
-    assert hashlib.sha256(shard.read_bytes()).hexdigest() == before
+    assert hashlib.sha256(shard.read_bytes()).hexdigest() != before
+    from safetensors import safe_open
+    with safe_open(str(shard), framework="numpy") as loaded:
+        assert loaded.get_tensor("misaligned").tolist() == [1.25, -2.5]
+        assert loaded.get_tensor("pad").tolist() == [7]
 
 
 def test_standard_shard_index_is_regenerated_atomically_once(tmp_path):

@@ -857,7 +857,7 @@ def _preflight_local_model_bundle(model: str) -> dict | None:
         print(
             "Model bundle integrity: OK "
             f"({report['shards']} shards, {report['tensors']} tensors, "
-            f"{report['misaligned_tensors']} compatible legacy-alignment tensors)"
+            f"{report['misaligned_tensors']} remaining misaligned tensors)"
         )
     for repaired in report.get("repairs", []):
         print(f"Model bundle integrity: atomically repaired {repaired}")

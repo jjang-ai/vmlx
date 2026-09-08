@@ -12,7 +12,7 @@ export interface BundleIntegrityReport {
   shards: number
   tensors: number
   misaligned_tensors: number
-  alignment_contract: 'compatible_copy_on_load'
+  alignment_contract: 'atomic_realign'
   repairs: string[]
   warnings: string[]
   cache_hit: boolean
@@ -70,7 +70,7 @@ export function parseBundleIntegrityReport(output: string): BundleIntegrityRepor
     !Number.isInteger(report.shards) ||
     !Number.isInteger(report.tensors) ||
     !Number.isInteger(report.misaligned_tensors) ||
-    report.alignment_contract !== 'compatible_copy_on_load' ||
+    report.alignment_contract !== 'atomic_realign' ||
     !Array.isArray(report.repairs) ||
     !Array.isArray(report.warnings) ||
     typeof report.cache_hit !== 'boolean'
@@ -83,17 +83,20 @@ export function parseBundleIntegrityReport(output: string): BundleIntegrityRepor
 export function runModelBundleIntegrityPreflight(
   engine: BundleIntegrityEnginePath,
   modelPath: string,
+  onProgress?: (line: string) => void,
 ): Promise<BundleIntegrityReport> {
   const invocation = buildBundleIntegrityInvocation(engine, modelPath)
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       invocation.command,
       invocation.args,
       {
         encoding: 'utf8',
         env: invocation.env,
         maxBuffer: 4 * 1024 * 1024,
-        timeout: 180_000,
+        // A one-time streaming shard repair can exceed three minutes on USB
+        // storage. Progress is surfaced below; original shards stay intact.
+        timeout: 3_600_000,
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -128,5 +131,14 @@ export function runModelBundleIntegrityPreflight(
         }
       },
     )
+    let pending = ''
+    child.stderr?.on('data', (chunk: string | Buffer) => {
+      pending += String(chunk)
+      const lines = pending.split('\n')
+      pending = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.startsWith('[BUNDLE-ALIGNMENT] ')) onProgress?.(line)
+      }
+    })
   })
 }

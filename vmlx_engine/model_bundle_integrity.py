@@ -1,14 +1,11 @@
 """Header-only, cross-family model-bundle integrity preflight.
 
-The checker never loads tensor payloads and never rewrites weight shards.  A
-valid safetensors payload may begin at an address that is not naturally aligned
-for its dtype; MLX materializes loader output into allocator-owned storage, so
-that layout is compatible and is reported rather than "repaired".
+The scan reads headers only. Valid but dtype-misaligned shards are realigned
+with bounded streaming copies and byte validation before atomic replacement.
+Tensor values, dtype and quantization are never changed.
 
-The only automatic bundle mutation is regeneration of an unambiguous standard
-``name-00001-of-000NN.safetensors`` index.  The replacement is fsync'd and
-published with ``os.replace``.  Everything else either validates or fails
-closed so the app can request a source-backed re-download.
+Unambiguous standard indexes can also be reconstructed. Corrupt weights and
+unknown metadata contracts fail closed; they cannot be repaired by guessing.
 """
 
 from __future__ import annotations
@@ -242,6 +239,8 @@ def _read_safetensors_header(path: Path) -> dict[str, Any]:
         )
     return {
         "relative_path": path.name,
+        "container": header,
+        "data_start": data_start,
         "tensors": tensors,
         "misaligned": misaligned,
     }
@@ -345,9 +344,21 @@ def _repair_standard_indexes(
             warnings.append(f"{relative}: standard shard index is missing")
             continue
         try:
+            # Preserve valid bundle-specific index metadata; reconstruct only
+            # the shard mapping and payload byte total we can prove.
+            try:
+                replacement = _read_json_object(index_path, str(index_path)) if index_path.exists() else {}
+            except BundleIntegrityError:
+                replacement = {}
+            metadata = replacement.get("metadata")
+            replacement["metadata"] = {
+                **(metadata if isinstance(metadata, dict) else {}),
+                "total_size": total_size,
+            }
+            replacement["weight_map"] = expected
             _atomic_json_write(
                 index_path,
-                {"metadata": {"total_size": total_size}, "weight_map": expected},
+                replacement,
             )
         except OSError as exc:
             raise BundleIntegrityError(
@@ -424,6 +435,26 @@ def _scan_bundle(root: Path, *, repair: bool) -> dict[str, Any]:
     )
     _validate_indexes(root, headers)
 
+    detected_misaligned = sum(len(h["misaligned"]) for h in headers.values())
+    if repair and (detected_misaligned or (root / ".vmlx-alignment-transaction.json").exists()):
+        from .bundle_alignment import repair_shard_alignment, recover_alignment_transaction
+
+        # A bundle-local lock coordinates callers even with different stamp
+        # directories. Never follow a planted lock symlink. A crash releases
+        # flock; each already-published shard is independently valid on retry.
+        lock_fd = os.open(root / ".vmlx-alignment.lock",
+                          os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(lock_fd, "a+") as alignment_lock:
+            fcntl.flock(alignment_lock.fileno(), fcntl.LOCK_EX)
+            recover_alignment_transaction(root)
+            for path in shard_paths:
+                current = _read_safetensors_header(path)
+                if current["misaligned"]:
+                    headers[path] = repair_shard_alignment(root, path, current)
+                    repairs.append(path.relative_to(root).as_posix())
+                else:
+                    headers[path] = current
+
     misaligned_examples: list[dict[str, Any]] = []
     misaligned_count = 0
     tensor_count = 0
@@ -441,8 +472,9 @@ def _scan_bundle(root: Path, *, repair: bool) -> dict[str, Any]:
         "shards": len(shard_paths),
         "tensors": tensor_count,
         "misaligned_tensors": misaligned_count,
+        "detected_misaligned_tensors": detected_misaligned,
         "misaligned_examples": misaligned_examples,
-        "alignment_contract": "compatible_copy_on_load",
+        "alignment_contract": "atomic_realign" if repair else "inspection_only",
         "repairs": repairs,
         "warnings": warnings,
     }
@@ -482,6 +514,9 @@ def check_model_bundle(
                 and cached.get("bundle") == str(root)
                 and cached.get("fingerprint") == fingerprint
                 and cached.get("status") == "ok"
+                and cached.get("alignment_contract") == "atomic_realign"
+                and cached.get("misaligned_tensors") == 0
+                and not (root / ".vmlx-alignment-transaction.json").exists()
             ):
                 historical_repairs = list(cached.get("repairs") or [])
                 return {
@@ -491,7 +526,10 @@ def check_model_bundle(
                     "historical_repairs": historical_repairs,
                 }
 
-        result = _scan_bundle(root, repair=repair)
+        try:
+            result = _scan_bundle(root, repair=repair)
+        except OSError as exc:
+            raise BundleIntegrityError(f"{root}: bundle preflight/repair failed: {exc}") from exc
         result.update(
             {
                 "schema": SCHEMA,

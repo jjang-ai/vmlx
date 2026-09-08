@@ -34,10 +34,10 @@ def bundle_check_command(args) -> None:
     print(f"Bundle integrity: OK ({source})")
     print(
         f"  shards={result['shards']} tensors={result['tensors']} "
-        f"compatible_misaligned={result['misaligned_tensors']}"
+        f"remaining_misaligned={result['misaligned_tensors']}"
     )
     for repaired in result["repairs"]:
-        print(f"  atomically repaired index: {repaired}")
+        print(f"  atomically repaired: {repaired}")
     for warning in result["warnings"]:
         print(f"  warning: {warning}")
 

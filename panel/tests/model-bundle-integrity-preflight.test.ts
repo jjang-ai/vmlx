@@ -11,7 +11,7 @@ const okReport = {
   shards: 2,
   tensors: 91,
   misaligned_tensors: 7,
-  alignment_contract: 'compatible_copy_on_load',
+  alignment_contract: 'atomic_realign',
   repairs: [],
   warnings: [],
   cache_hit: true,

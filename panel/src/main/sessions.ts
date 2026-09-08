@@ -2364,12 +2364,14 @@ export class SessionManager extends EventEmitter {
     }
     this.validateLocalSessionTarget(sessionId, session, config)
     if (existsSync(config.modelPath)) {
-      const report = await runModelBundleIntegrityPreflight(engine, config.modelPath)
+      const report = await runModelBundleIntegrityPreflight(
+        engine, config.modelPath, line => this.pushLog(sessionId, line),
+      )
       const source = report.cache_hit ? 'one-time stamp' : 'fresh header scan'
       console.log(
         `[SESSIONS] bundle integrity OK for ${sessionId}: ${source}, ` +
         `${report.shards} shards, ${report.tensors} tensors, ` +
-        `${report.misaligned_tensors} compatible legacy-alignment tensors`,
+        `${report.misaligned_tensors} remaining misaligned tensors`,
       )
       for (const repaired of report.repairs) {
         console.log(`[SESSIONS] bundle integrity atomically repaired ${repaired}`)
