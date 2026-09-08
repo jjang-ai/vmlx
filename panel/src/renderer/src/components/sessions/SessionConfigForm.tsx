@@ -241,29 +241,6 @@ export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
 
 
 
-// Expert = current defaults (backwards compatible, full control)
-export const EXPERT_CONFIG = { ...DEFAULT_CONFIG }
-
-// Casual: safest optimized defaults for low-compute machines.
-// Keep cache codec on Auto so model architecture decides: calibrated TQ-KV for
-// compatible plain KV rows, native typed cache for hybrid/DSV4/ZAYA rows.
-// Resource ceilings lowered to prevent OOM on 32-48GB machines with large models.
-export const CASUAL_CONFIG: SessionConfig = {
-  ...DEFAULT_CONFIG,
-  host: '127.0.0.1',         // Local-only (safer for beginners)
-  maxNumSeqs: 1,              // Single user (saves memory from batch overhead)
-  prefillBatchSize: 8,        // Low-memory default (override DEFAULT_CONFIG's 512)
-  completionBatchSize: 32,    // Low-memory default (override DEFAULT_CONFIG's 512)
-  cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
-  maxCacheBlocks: 500,        // Fewer paged blocks (half)
-  prefixCacheSize: 50,        // Fewer cached prefixes
-  // Auto omits the CLI flag. The engine's production default preserves each
-  // architecture's native cache objects and imposes no generic TQ codec.
-  kvCacheQuantization: 'auto',
-  maxTokens: 0,               // Bundle/engine-owned output cap. Users can set an explicit cap per server/chat/API request.
-  enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
-}
-
 interface LiveMcpServer {
   name: string
   state?: string

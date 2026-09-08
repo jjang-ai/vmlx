@@ -1019,18 +1019,15 @@ describe('KV Cache Quantization', () => {
         expect(help).not.toContain("others don't")
     })
 
-    it('casual mode keeps cache codec on auto', () => {
+    it('canonical defaults keep cache codec on auto without obsolete presets', () => {
         const fs = require('fs')
         const source = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
-        const casualStart = source.indexOf('export const CASUAL_CONFIG')
-        const casualEnd = source.indexOf('interface SessionConfigFormProps', casualStart)
-        const casualBlock = source.slice(casualStart, casualEnd)
-
-        expect(casualBlock).toContain("kvCacheQuantization: 'auto'")
-        expect(casualBlock).not.toContain("kvCacheQuantization: 'q4'")
+        expect(DEFAULT_CONFIG.kvCacheQuantization).toBe('auto')
+        expect(source).not.toContain('export const CASUAL_CONFIG')
+        expect(source).not.toContain('export const EXPERT_CONFIG')
     })
 
     it('cache panels surface native cache and TQ-KV status separately', () => {
@@ -1320,16 +1317,10 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('4096')
     })
 
-    it('casual preset leaves maxTokens model-owned instead of forcing a hidden output cap', () => {
+    it('canonical defaults leave maxTokens model-owned without a casual override', () => {
         const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
-        const casualStart = formSource.indexOf('export const CASUAL_CONFIG')
-        const casualEnd = formSource.indexOf('\n}\n', casualStart)
-        const casualBlock = formSource.slice(casualStart, casualEnd)
-
         expect(DEFAULT_CONFIG.maxTokens).toBe(0)
-        expect(casualBlock).toContain('maxTokens: 0')
-        expect(casualBlock).not.toContain('maxContextLength')
-        expect(formSource).toContain('Bundle/engine-owned output cap')
+        expect(formSource).not.toContain('CASUAL_CONFIG')
         expect(formSource).not.toContain('prevents huge KV allocation')
     })
 

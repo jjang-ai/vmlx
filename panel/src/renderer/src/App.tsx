@@ -205,7 +205,7 @@ function App() {
         <MtpComponentUpdatePrompt />
         <DownloadStatusBar />
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
           <ConsoleSidebar onChatSelect={handleChatSelect} onNewChat={handleNewChat} />
 
           {/* Main content area */}
@@ -292,7 +292,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, sessionStatus, activeS
         onSessionChange={onSessionChange}
         onOverridesChanged={() => setOverridesVersion(v => v + 1)}
       />
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         <ChatInterface
           chatId={activeChatId}
           onNewChat={onNewChat}
@@ -310,7 +310,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, sessionStatus, activeS
 function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
   const { t } = useTranslation()
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center px-8 overflow-auto" data-mlx-studio="jinhojang">
+    <div className="flex flex-col items-center h-full min-h-0 text-center px-4 py-8 overflow-auto [&>*]:shrink-0" data-mlx-studio="jinhojang">
       <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 flex-shrink-0">
         <MessageSquare className="h-8 w-8 text-primary" />
       </div>

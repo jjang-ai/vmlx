@@ -328,13 +328,9 @@ describe('i18n locale consistency', () => {
     }
   })
 
-  it('chat history, inference mode, message actions, voice, and API keys use the locale catalog', () => {
+  it('chat history, message actions, voice, and API keys use the locale catalog', () => {
     const chatHistorySrc = readFileSync(
       resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'layout', 'ChatHistory.tsx'),
-      'utf-8',
-    )
-    const inferenceModeSrc = readFileSync(
-      resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'layout', 'InferenceMode.tsx'),
       'utf-8',
     )
     const messageBubbleSrc = readFileSync(
@@ -356,14 +352,6 @@ describe('i18n locale consistency', () => {
       'layout.chatHistory.chatCountHint',
     ]) {
       expect(chatHistorySrc).toContain(`t('${key}'`)
-    }
-    for (const key of [
-      'layout.inferenceMode.casual',
-      'layout.inferenceMode.expert',
-      'layout.inferenceMode.casualTitle',
-      'layout.inferenceMode.expertTitle',
-    ]) {
-      expect(inferenceModeSrc).toContain(`t('${key}')`)
     }
     for (const key of [
       'chat.bubble.editTitle',

@@ -588,7 +588,7 @@ export function ImageTab() {
   const serverLive = serverStatus === 'running' || serverStatus === 'starting'
   if (showModelPicker && (!selectedModel || serverLive)) {
     return (
-      <div className="h-full flex flex-col">
+      <div className="h-full min-h-0 min-w-0 flex flex-col">
         <ImageModelPicker
           onSelect={handleModelSelect}
           currentModel={selectedModel && serverLive ? (selectedModelDisplayName || selectedModel) : null}
@@ -599,7 +599,7 @@ export function ImageTab() {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="h-full min-h-0 min-w-0 flex">
       {/* History Sidebar */}
       {!sidebarCollapsed && (
         <ImageHistory
@@ -613,7 +613,7 @@ export function ImageTab() {
       )}
 
       {/* Main Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <ImageTopBar
           model={selectedModel}
           displayModelName={selectedModelDisplayName}
@@ -682,7 +682,7 @@ export function ImageTab() {
           </div>
         )}
 
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
           <ImageGallery
             generations={generations}
             generating={generating}

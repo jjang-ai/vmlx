@@ -27,6 +27,11 @@ describe('Console settings and responsive layout contract', () => {
     expect(existsSync(resolve(__dirname, '../src/renderer/src/components/ui/theme-toggle.tsx'))).toBe(false)
     expect(read('renderer/index.html')).toContain('name="color-scheme" content="dark"')
   })
+  it('has no experience-mode gate or alternate default preset', () => {
+    expect(read('renderer/src/components/layout/Sidebar.tsx')).not.toContain('InferenceMode')
+    expect(read('main/index.ts')).not.toContain("getSetting('inference_mode')")
+    expect(existsSync(resolve(__dirname, '../src/renderer/src/components/layout/InferenceMode.tsx'))).toBe(false)
+  })
   it('keeps tall image pickers top-aligned and card actions wrappable', () => {
     const picker = read('renderer/src/components/image/ImageModelPicker.tsx')
     expect(picker).not.toContain('h-full flex items-center justify-center')
