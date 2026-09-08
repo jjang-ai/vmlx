@@ -99,7 +99,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
                 "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default|"
                 "deepseek-v4 uses native SSD-only composite reuse without generic cache codecs|"
                 "DSV4 additional args cannot reenable native MTP or deterministic sampling policy|"
-                "defaults native-MTP bundles to adaptive sampler-compatible Auto mode"
+                "defaults native-MTP bundles to adaptive Auto with greedy startup defaults"
             ),
         ],
     ),
@@ -278,7 +278,7 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default",
         "deepseek-v4 uses native SSD-only composite reuse without generic cache codecs",
         "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
-        "defaults native-MTP bundles to adaptive sampler-compatible Auto mode",
+        "defaults native-MTP bundles to adaptive Auto with greedy startup defaults",
     ),
     "decode_speed_large_external_jangtq_mxfp_gptoss_rows": (
         "test_decode_speed_gate_has_large_external_mistral_gptoss_rows",

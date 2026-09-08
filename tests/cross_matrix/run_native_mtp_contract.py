@@ -72,7 +72,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "test_partial_indexed_layers_flagged",
     # Panel launch controls. These are display/CLI-wiring contracts, not hidden
     # generation defaults.
-    "defaults native-MTP bundles to adaptive sampler-compatible Auto mode",
+    "defaults native-MTP bundles to adaptive Auto with greedy startup defaults",
     "lets users disable native MTP without leaving deterministic sampling overrides behind",
     "keeps non-MTP models on bundle-owned generation defaults",
     "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
@@ -170,7 +170,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_native_mtp_depth_defaults_to_three" not in missing_markers
             and "test_mllm_generator_runs_depth3_native_mtp_verify_cycle" not in missing_markers
-            and "defaults native-MTP bundles to adaptive sampler-compatible Auto mode"
+            and "defaults native-MTP bundles to adaptive Auto with greedy startup defaults"
             not in missing_markers
         ),
         "model_tuning_depth_policy": (
