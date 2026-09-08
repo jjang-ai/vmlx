@@ -75,6 +75,87 @@ def test_large_tokenizer_metadata_is_bounded_and_not_a_hash_manifest(tmp_path):
     assert tensor_bytes(shard) == before
 
 
+@pytest.mark.parametrize("weight_format,bits,group_size", [
+    ("mxtq", 2, 64), ("mxtq", 4, 32), ("affine", 3, 32),
+    ("affine", 6, 128), ("affine", 8, 64),
+])
+def test_quantized_and_nested_media_bytes_and_configs_preserved(
+    tmp_path, weight_format, bits, group_size,
+):
+    """Container repair must not reinterpret codebooks or quantization policy.
+
+    A deliberately unaligned, structurally valid miniature bundle exercises the
+    actual packed-word/norm/codebook dtypes, not a fabricated model inference.
+    """
+    root = tmp_path / "bundle"
+    root.mkdir()
+    configs = {
+        "config.json": {"model_type": "fixture", "quantization": {
+            "bits": bits, "group_size": group_size}, "vision_config": {"width": 32}},
+        "jang_config.json": {"weight_format": weight_format, "mxtq_seed": 42,
+            "mxtq_bits": {"routed_expert": bits, "attention": 8, "norms_router": 16}},
+        "generation_config.json": {"eos_token_id": [1, 2], "temperature": 0.7},
+        "processor_config.json": {"min_pixels": 1024, "max_pixels": 65536},
+        "vision/config.json": {"dtype": "bfloat16"},
+        "audio/config.json": {"sample_rate": 24000},
+        "mtp/config.json": {"num_hidden_layers": 1},
+    }
+    for name, config in configs.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config, indent=2) + "\n")
+
+    groups = {
+        "model-00001-of-00001.safetensors": [
+            ("expert.tq_packed", "U32", bytes.fromhex("ffffffff01234567")),
+            ("expert.tq_indices", "I32", struct.pack("<ii", -1, 17)),
+            ("expert.tq_norms", "F16", bytes.fromhex("007c017e")),
+            ("attention.scales", "BF16", bytes.fromhex("803f807f")),
+        ],
+        "jangtq_runtime.safetensors": [
+            ("codebook.32.2", "F32", struct.pack("<ff", -0.125, 0.375)),
+            ("signs.32.42", "F32", struct.pack("<ff", -1, 1)),
+        ],
+        "vision/encoder.safetensors": [("vision.weight", "BF16", bytes.fromhex("803f8000"))],
+        "audio/encoder.safetensors": [("audio.weight", "F32", struct.pack("<ff", -0.0, 1.5))],
+        "mtp/head.safetensors": [("mtp.weight", "U32", bytes.fromhex("89abcdef01234567"))],
+    }
+    widths = {"U8": 1, "F16": 2, "BF16": 2, "I32": 4, "U32": 4, "F32": 4}
+    original = {}
+    for name, rows in groups.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = {"__metadata__": {"format": "mlx", "weight_format": weight_format}}
+        data = b""
+        for key, dtype, raw in [("alignment_byte", "U8", b"x"), *rows]:
+            header[key] = {"dtype": dtype, "shape": [len(raw) // widths[dtype]],
+                           "data_offsets": [len(data), len(data) + len(raw)]}
+            data += raw
+        encoded = json.dumps(header).encode()
+        encoded += b" " * (-len(encoded) % 8)
+        path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + data)
+        assert _read_safetensors_header(path)["misaligned"]
+        original[name] = tensor_bytes(path)
+
+    index_path = root / "model.safetensors.index.json"
+    index_path.write_text(json.dumps({"metadata": {"custom": "preserve"},
+        "weight_map": {k: "model-00001-of-00001.safetensors"
+                       for k in original["model-00001-of-00001.safetensors"]}}))
+    metadata_before = {p.relative_to(root).as_posix(): p.read_bytes()
+                       for p in root.rglob("*.json")}
+    report = check_model_bundle(root, cache_dir=tmp_path / "stamps")
+    assert set(report["repairs"]) == set(groups)
+    assert report["misaligned_tensors"] == 0
+    for name, expected in original.items():
+        assert tensor_bytes(root / name) == expected
+        assert _read_safetensors_header(root / name)["container"]["__metadata__"] == {
+            "format": "mlx", "weight_format": weight_format}
+    assert {name: (root / name).read_bytes() for name in metadata_before} == metadata_before
+    before = {name: repair._identity(root / name) for name in groups}
+    assert check_model_bundle(root, cache_dir=tmp_path / "stamps")["cache_hit"]
+    assert {name: repair._identity(root / name) for name in groups} == before
+
+
 def test_large_hash_manifest_is_refused_without_replacing_shard(tmp_path):
     root = tmp_path / "model"
     shard = fixture(root)
