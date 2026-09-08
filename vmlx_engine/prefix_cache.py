@@ -8982,6 +8982,60 @@ class BlockAwarePrefixCache:
         self._last_fetch_telemetry = None
         self.paged_cache.reset_stats()
 
+    def retire_missing_disk_hints(self) -> int:
+        """Retire stale lookup metadata after an explicit SSD pool clear.
+
+        Run only on the idle clear path, never per token or ordinary fetch.
+        Preserve resident payloads, referenced blocks and pending writes. A
+        missing longer entry must not mask a shorter newly durable prefix.
+        """
+        manager = self.paged_cache
+        store = getattr(manager, "_disk_store", None)
+        if store is None:
+            return 0
+
+        def eligible(block: Any) -> bool:
+            return (
+                not block.is_null
+                and block.block_hash is not None
+                and block.cache_data is None
+                and block.ref_count == 0
+                and not block.durability_write_pending
+                and not block.keep_resident
+            )
+
+        with manager._lock:
+            candidates = [
+                (block.block_hash, block)
+                for block in manager.allocated_blocks.values()
+                if eligible(block)
+            ]
+        # Avoid filesystem/SQLite work under the paged lock, and check a shared
+        # hash only once even when several numeric blocks represent it.
+        readable = {
+            block_hash: store.has_block_record(block_hash)
+            for block_hash in dict.fromkeys(key for key, _ in candidates)
+        }
+        retired: set[int] = set()
+        with manager._lock:
+            for block_hash, block in candidates:
+                if (
+                    not readable[block_hash]
+                    and manager.allocated_blocks.get(block.block_id) is block
+                    and block.block_hash == block_hash
+                    and eligible(block)
+                ):
+                    retired.update(manager.discard_nondurable_cache_blocks(
+                        {block_hash: block}
+                    ))
+            if retired:
+                for key, entry in list(self._prefix_index.items()):
+                    if any(block_id in retired for block_id in entry[1]):
+                        del self._prefix_index[key]
+        if retired:
+            logger.info("SSD clear retired %d missing disk-only lookup hints; resident KV preserved", len(retired))
+        return len(retired)
+
     def clear(self, force: bool = False) -> bool:
         """Clear all cached data.
 

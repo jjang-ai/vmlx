@@ -15718,6 +15718,11 @@ async def clear_cache(
         except (OSError, sqlite3.Error) as exc:
             logger.exception("SSD pool clear could not finish")
             raise HTTPException(status_code=503, detail="SSD clear did not finish; refresh cache status before retrying") from exc
+        block_cache = getattr(scheduler, "block_aware_cache", None)
+        retired_hints = (
+            block_cache.retire_missing_disk_hints()
+            if block_cache is not None else 0
+        )
         return {
             "status": "eligible_cleared", "cache_type": cache_type,
             "root": str(budget.root), "freed_bytes": result.evicted_bytes,
@@ -15727,6 +15732,7 @@ async def clear_cache(
             "protected_temp_files": result.protected_temp_files,
             "protected_recent_orphans": result.protected_recent_orphans,
             "resident_cache_preserved": True,
+            "retired_disk_hints": retired_hints,
         }
 
     cleared = []

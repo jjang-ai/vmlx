@@ -18,6 +18,7 @@ def context(monkeypatch):
                              max_size_bytes=1000, protected_temp_files=0, protected_recent_orphans=0)
     budget = SimpleNamespace(root="/isolated/cache", clear_eligible=Mock(return_value=result))
     scheduler = SimpleNamespace(get_stats=lambda: scheduler_stats,
+        block_aware_cache=SimpleNamespace(retire_missing_disk_hints=Mock(return_value=3)),
         paged_cache_manager=SimpleNamespace(_disk_store=SimpleNamespace(global_budget=budget)))
     monkeypatch.setattr(server, "_engine", SimpleNamespace(get_stats=lambda: engine_stats))
     monkeypatch.setattr(server, "_get_scheduler", lambda: scheduler)
@@ -51,6 +52,8 @@ def test_clear_reports_actual_bytes_not_empty_directory(context):
     assert response["remaining_bytes"] == 50
     assert response["effective_cap_bytes"] == 1000
     assert response["resident_cache_preserved"] is True
+    assert response["retired_disk_hints"] == 3
+    server._get_scheduler().block_aware_cache.retire_missing_disk_hints.assert_called_once_with()
 
 
 def test_other_engine_refusal_is_typed_and_not_success(context):
