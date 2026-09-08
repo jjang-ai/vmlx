@@ -34,8 +34,9 @@ def test_preserves_packed_parameters_and_separates_disk_namespace(tmp_path):
     assert prepare_minicpm5_qkv(model, tmp_path)
     new = model.layers[0].self_attn
     assert type(new) is FusedMiniCPM5Attention
-    assert bool(mx.array_equal(new.weight, mx.concatenate(packed)))
-    assert new.weight.dtype == mx.uint32 and new.scales.dtype == mx.bfloat16
+    assert bool(mx.array_equal(new.qkv_proj.weight, mx.concatenate(packed)))
+    assert new.qkv_proj.weight.dtype == mx.uint32 and new.qkv_proj.scales.dtype == mx.bfloat16
+    assert (new.qkv_proj.bits, new.qkv_proj.group_size, new.qkv_proj.mode) == (8, 64, "affine")
     assert new.rope is old.rope and new.o_proj is old.o_proj
     assert compute_model_cache_key(model, str(tmp_path)) != key
     assert namespace() != old_namespace

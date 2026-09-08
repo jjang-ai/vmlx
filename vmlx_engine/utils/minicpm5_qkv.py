@@ -10,6 +10,11 @@ import mlx.nn as nn
 from mlx_lm.models.base import scaled_dot_product_attention
 from mlx_lm.models.llama import Attention, Model
 
+from ..metal.quantized_projection_group import (
+    QuantizedProjectionGroup,
+    quantized_projection_group_reason,
+)
+
 logger = logging.getLogger(__name__)
 LAYOUT = "minicpm5_affine_qkv_v1"
 
@@ -19,6 +24,8 @@ def _compatible(attention):
         return False
     projs = [attention.q_proj, attention.k_proj, attention.v_proj]
     if any(type(p) is not nn.QuantizedLinear for p in projs):
+        return False
+    if quantized_projection_group_reason(projs, activation_dtype=mx.bfloat16) is not None:
         return False
     first = projs[0]
     # Deliberately qualify only the measured affine8/BF16 bundle layout.
@@ -55,20 +62,12 @@ class FusedMiniCPM5Attention(nn.Module):
         self.scale = attention.scale
         self.rope = attention.rope
         self.o_proj = attention.o_proj
-        self.weight = mx.concatenate([p.weight for p in projs], axis=0)
-        self.scales = mx.concatenate([p.scales for p in projs], axis=0)
-        self.biases = mx.concatenate([p.biases for p in projs], axis=0)
+        self.qkv_proj = QuantizedProjectionGroup(projs)
         self.freeze()
 
     def __call__(self, x, mask=None, cache=None):
         batch, length, _ = x.shape
-        projected = mx.quantized_matmul(
-            x, self.weight, scales=self.scales, biases=self.biases,
-            transpose=True, group_size=64, bits=8, mode="affine",
-        )
-        q_width = self.n_heads * self.head_dim
-        kv_width = self.n_kv_heads * self.head_dim
-        q, k, v = mx.split(projected, [q_width, q_width + kv_width], axis=-1)
+        q, k, v = self.qkv_proj(x)
         q = q.reshape(batch, length, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
         k = k.reshape(batch, length, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(batch, length, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
@@ -101,7 +100,7 @@ def prepare_minicpm5_qkv(model, model_path):
     # on the loading worker so lazy dependencies cannot retain duplicate weights.
     for layer in layers:
         fused = FusedMiniCPM5Attention(layer.self_attn)
-        mx.eval(fused.weight, fused.scales, fused.biases)
+        mx.eval(fused.qkv_proj.weight, fused.qkv_proj.scales, fused.qkv_proj.biases)
         layer.self_attn = fused
     model._vmlx_attention_projection_layout = LAYOUT
     logger.info("MiniCPM5 packed QKV fusion active: %d layers, affine8/64 BF16, cache layout=%s", len(layers), LAYOUT)
