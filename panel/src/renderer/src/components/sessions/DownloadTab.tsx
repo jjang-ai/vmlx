@@ -100,6 +100,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [loadingReadme, setLoadingReadme] = useState(false)
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const readmeRequestRef = useRef(0)
   const onDownloadCompleteRef = useRef(onDownloadComplete)
   onDownloadCompleteRef.current = onDownloadComplete
 
@@ -552,7 +553,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               <button
                 data-vmlx-action="feed-uncensored"
                 onClick={() => handleCollectionTabChange('uncensored')}
-                className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'uncensored' ? 'bg-red-500/15 text-red-400 font-medium' : 'text-muted-foreground hover:bg-accent'}`}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'uncensored' ? 'bg-primary/15 text-primary font-medium' : 'text-muted-foreground hover:bg-accent'}`}
               >
                 {t('sessions.download.uncensored')}
               </button>
@@ -601,13 +602,16 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
             ) : (
               displayModels.map(model => (
                 <div key={model.id} onClick={() => {
+                  const request = ++readmeRequestRef.current
                   setSelectedModel(model)
                   setSelectedReadme(null)
                   setLoadingReadme(true)
                   window.api.models.fetchReadme(model.id).then(text => {
+                    if (request !== readmeRequestRef.current) return
                     setSelectedReadme(text || t('sessions.download.noReadme'))
                     setLoadingReadme(false)
                   }).catch(() => {
+                    if (request !== readmeRequestRef.current) return
                     setSelectedReadme(t('sessions.download.readmeLoadFailed'))
                     setLoadingReadme(false)
                   })

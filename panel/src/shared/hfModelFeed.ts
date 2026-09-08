@@ -16,6 +16,8 @@ export function validateHfModelFeed(value: unknown, author: string): Record<stri
   return value.filter(model => {
     const id = model?.id || model?.modelId
     if (typeof id !== 'string' || !id.toLowerCase().startsWith(`${author.toLowerCase()}/`) || seen.has(id)) return false
+    // HF exposes the account's profile README as a model-list repository.
+    if (id.toLowerCase() === `${author.toLowerCase()}/profile`) return false
     seen.add(id)
     return true
   })
