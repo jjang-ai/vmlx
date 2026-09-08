@@ -4,6 +4,7 @@ import {
   SessionConfigForm,
   SessionConfig,
   DEFAULT_CONFIG,
+  RESET_CONFIG,
   DSV4_MAX_CACHE_BLOCKS,
   DSV4_PAGED_CACHE_BLOCK_SIZE,
 } from './SessionConfigForm'
@@ -223,7 +224,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
 
   const handleReset = async () => {
     const requestId = ++modelDefaultsRequestRef.current
-    const base = { ...DEFAULT_CONFIG, port: config.port }
+    const base = { ...RESET_CONFIG, port: config.port }
     // Re-run model detection to get proper defaults for this model
     if (selectedModel) {
       try {

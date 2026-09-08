@@ -5,6 +5,7 @@ import {
   SessionConfigForm,
   SessionConfig,
   DEFAULT_CONFIG,
+  RESET_CONFIG,
   DSV4_MAX_CACHE_BLOCKS,
   DSV4_PAGED_CACHE_BLOCK_SIZE,
   commitActiveSettingsInput,
@@ -723,7 +724,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
       sessionIdRef.current === resetSessionId
       && resetRequestRef.current === resetRequest
     )
-    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port }
+    const base = { ...RESET_CONFIG, host: config.host, port: config.port }
     // Re-run model detection to get proper defaults for this model
     if (session?.modelPath) {
       try {

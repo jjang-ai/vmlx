@@ -217,6 +217,29 @@ export const DEFAULT_CONFIG: SessionConfig = {
   videoMaxFrames: 8,
 }
 
+// Save is a partial update: omitted keys retain their stored values. Explicit
+// Reset must instead send undefined for optional overrides so IPC clears them.
+// In particular, resetting the disk root must not keep an old hidden GB ceiling
+// and apply it to the new/default shared cache pool. Ordinary defaults and Save
+// remain unchanged; only the user's Reset action uses this complete payload.
+export const RESET_CONFIG = {
+  ...DEFAULT_CONFIG,
+  blockDiskCacheMaxGb: undefined,
+  enableAutoToolChoice: undefined,
+  modelFamily: undefined,
+  idleTimeoutSoftMin: undefined,
+  idleTimeoutHardMin: undefined,
+  autoSleepEnabled: undefined,
+  chatTemplate: undefined,
+  imageTokenBudget: undefined,
+  videoMaxPixels: undefined,
+  videoTokenBudget: undefined,
+  distributedEnabled: undefined,
+  distributedMode: undefined,
+  distributedSecret: undefined,
+  distributedNodes: undefined,
+} satisfies Record<keyof SessionConfig, unknown>
+
 export const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 export const DSV4_MAX_CACHE_BLOCKS = 4097
 
