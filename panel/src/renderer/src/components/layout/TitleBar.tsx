@@ -1,16 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
-  MessageSquare,
-  Server,
   PanelLeftClose,
   PanelLeft,
   Info,
-  HardDrive,
 } from "lucide-react";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { useAppState } from "../../contexts/AppStateContext";
-import { consolePageForMode } from '../../lib/consoleNavigation';
 import {
   useTranslation,
   LOCALES,
@@ -20,9 +16,8 @@ import {
 } from "../../i18n";
 
 export function TitleBar() {
-  const { state, setMode, dispatch } = useAppState();
+  const { state, dispatch } = useAppState();
   const { t, locale, setLocale } = useTranslation();
-  const page = consolePageForMode(state.mode);
 
   return (
     <div
@@ -34,7 +29,7 @@ export function TitleBar() {
         className="flex w-[102px] shrink-0 items-center gap-1 pl-[72px] pr-2"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        {state.mode === "chat" && (
+        {(
           <button
             onClick={() => dispatch({ type: "TOGGLE_SIDEBAR" })}
             className="p-1 translate-y-[3px] text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors focus:outline-none focus-visible:outline-none"
@@ -53,38 +48,8 @@ export function TitleBar() {
         )}
       </div>
 
-      {/* Center: mode toggle */}
-      <div className="flex-1 min-w-0 flex justify-center">
-        <div
-          className="flex items-center gap-1"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        >
-          <ModeButton
-            mode="chat"
-            active={page === "chat"}
-            onClick={() => setMode("chat")}
-            icon={<MessageSquare className="h-3 w-3" />}
-            label={t("console.chatImages")}
-          />
-          <ModeButton
-            mode="server"
-            active={page === "server"}
-            onClick={() => {
-              setMode("server");
-              if (state.serverPanel === "about")
-                dispatch({ type: "SET_SERVER_PANEL", panel: "dashboard" });
-            }}
-            icon={<Server className="h-3 w-3" />}
-            label={t("console.serversApi")}
-          />
-          <ModeButton
-            mode="models"
-            active={page === "models"}
-            onClick={() => setMode("tools")}
-            icon={<HardDrive className="h-3 w-3" />}
-            label={t("console.models")}
-          />
-        </div>
+      <div className="flex-1 min-w-0 text-center text-[11px] tracking-[0.14em] text-muted-foreground truncate">
+        vmlx / Console
       </div>
 
       {/* Right: language picker + about + theme toggle */}
@@ -200,39 +165,5 @@ function LanguagePicker({
           document.body,
         )}
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  icon,
-  label,
-  mode,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  /** Stable, untranslated identity for automation and theming: data-vmlx-control="mode-<mode>". */
-  mode: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={label}
-      data-vmlx-control={`mode-${mode}`}
-      data-vmlx-state={active ? "active" : "inactive"}
-      title={label}
-      aria-current={active ? 'page' : undefined}
-      className={`flex items-center gap-1.5 max-[720px]:gap-0 px-3 max-[720px]:px-2 py-1.5 text-xs font-medium border-l-2 transition-colors ${
-        active
-          ? "bg-accent text-foreground border-primary"
-          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-card"
-      }`}
-    >
-      {icon}
-      <span className="max-[720px]:sr-only">{label}</span>
-    </button>
   );
 }

@@ -32,11 +32,11 @@ describe('stable control contract (data-vmlx-*)', () => {
     })
   }
   it('mode tabs carry mode-<id> and an active state, independent of their translated labels', () => {
-    const src = R('layout/TitleBar.tsx')
+    const src = R('layout/ConsoleSidebar.tsx')
     expect(src).toContain('data-vmlx-control={`mode-${mode}`}')
-    expect(src).toContain('data-vmlx-state={active ? "active" : "inactive"}')
-    for (const m of ['chat', 'server', 'models']) expect(src).toContain(`mode="${m}"`)
-    expect(src).not.toContain('mode="code"')
+    expect(src).toContain("data-vmlx-state={active ? 'active' : 'inactive'}")
+    for (const m of ['chat', 'server', 'models']) expect(src).toContain(`['${m}', `)
+    expect(src).not.toContain("['code', ")
     const sections = R('layout/ConsoleSubnavigation.tsx')
     expect(sections).toContain('data-vmlx-control={`section-${mode}`}')
     for (const m of ['chat', 'image', 'server', 'api', 'tools', 'models']) {

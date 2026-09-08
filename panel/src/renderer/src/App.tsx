@@ -3,7 +3,7 @@ import { MessageSquare, ArrowLeft, Terminal } from 'lucide-react'
 import { TitleBar } from './components/layout/TitleBar'
 import { ConsoleSubnavigation } from './components/layout/ConsoleSubnavigation'
 import { DownloadTab } from './components/sessions/DownloadTab'
-import { Sidebar } from './components/layout/Sidebar'
+import { ConsoleSidebar } from './components/layout/ConsoleSidebar'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
 import { CreateSession } from './components/sessions/CreateSession'
 import { SessionView } from './components/sessions/SessionView'
@@ -204,21 +204,14 @@ function App() {
         <UpdateBanner />
         <MtpComponentUpdatePrompt />
         <DownloadStatusBar />
-        <ConsoleSubnavigation />
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Sidebar — chat mode only */}
-          {state.mode === 'chat' && (
-            <Sidebar
-              collapsed={state.sidebarCollapsed}
-              currentChatId={state.activeChatId}
-              onChatSelect={handleChatSelect}
-              onNewChat={handleNewChat}
-            />
-          )}
+          <ConsoleSidebar onChatSelect={handleChatSelect} onNewChat={handleNewChat} />
 
           {/* Main content area */}
-          <main className="flex-1 overflow-hidden">
+          <main className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
+            <ConsoleSubnavigation />
+            <div className="flex-1 min-h-0 overflow-hidden">
             {state.mode === 'code' && (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
@@ -267,6 +260,7 @@ function App() {
             {state.mode === 'api' && (
               <ApiDashboard />
             )}
+            </div>
           </main>
         </div>
       </div>
