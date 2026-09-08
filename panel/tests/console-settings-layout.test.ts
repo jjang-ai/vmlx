@@ -4,6 +4,16 @@ import { resolve } from 'node:path'
 
 const read = (path: string) => readFileSync(resolve(__dirname, '../src', path), 'utf8')
 describe('Console settings and responsive layout contract', () => {
+  it('uses dark on-accent Markdown without recoloring assistant prose or code surfaces', () => {
+    expect(read('renderer/src/components/chat/MessageBubble.tsx')).toContain('prose-on-accent bg-primary text-primary-foreground')
+    const css = read('renderer/src/index.css')
+    const rule = css.split('.dark .prose-on-accent .prose {')[1].split('}')[0]
+    for (const token of ['body', 'headings', 'links', 'bold', 'counters', 'bullets', 'quotes', 'code']) {
+      expect(rule).toContain(`--tw-prose-${token}: var(--text-on-accent)`)
+    }
+    expect(rule).not.toContain('--tw-prose-pre-')
+    expect(css).toContain('.dark .prose-on-accent .prose blockquote')
+  })
   it('keeps connection fields plus six supported server groups', () => {
     const form = read('renderer/src/components/sessions/SessionConfigForm.tsx')
     const groups = [...form.matchAll(/<Section [^\n]*sectionKey="([^"]+)"/g)].map(m => m[1])

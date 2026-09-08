@@ -182,6 +182,30 @@ button, input, select, textarea, a {
   --tw-prose-td-borders: #1e2330;
 }
 
+/* Filled amber surfaces need dark Markdown, not the assistant's light prose.
+   Keep fenced code on its own dark surface; never recolor syntax spans/media. */
+.dark .prose-on-accent .prose {
+  --tw-prose-body: var(--text-on-accent);
+  --tw-prose-headings: var(--text-on-accent);
+  --tw-prose-lead: var(--text-on-accent);
+  --tw-prose-links: var(--text-on-accent);
+  --tw-prose-bold: var(--text-on-accent);
+  --tw-prose-counters: var(--text-on-accent);
+  --tw-prose-bullets: var(--text-on-accent);
+  --tw-prose-quotes: var(--text-on-accent);
+  --tw-prose-captions: var(--text-on-accent);
+  --tw-prose-code: var(--text-on-accent);
+  --tw-prose-hr: rgb(var(--text-on-accent-rgb) / .35);
+  --tw-prose-quote-borders: rgb(var(--text-on-accent-rgb) / .45);
+  --tw-prose-th-borders: rgb(var(--text-on-accent-rgb) / .35);
+  --tw-prose-td-borders: rgb(var(--text-on-accent-rgb) / .25);
+}
+
+.dark .prose-on-accent .prose blockquote {
+  color: var(--text-on-accent);
+  border-color: var(--tw-prose-quote-borders);
+}
+
 /* Light prose overrides */
 .light .prose {
   --tw-prose-body: #0f1116;
@@ -261,6 +285,10 @@ button, input, select, textarea, a {
   padding: 0.15em 0.4em;
   border-radius: 4px;
   font-size: 0.875em;
+}
+
+.dark .prose-on-accent .prose :not(pre) > code {
+  background: rgb(var(--text-on-accent-rgb) / .10);
 }
 
 /* KaTeX rendering for model Markdown. API and SQLite content stay byte-faithful;

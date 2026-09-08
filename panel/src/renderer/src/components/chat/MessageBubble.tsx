@@ -479,7 +479,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           </div>
         )}
         <div className="flex flex-col items-end max-w-full">
-          <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
+          <div className="prose-on-accent bg-primary text-primary-foreground rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
             {renderUserContent()}
           </div>
           <span className="text-[10px] text-muted-foreground/50 mt-1 mr-1">
