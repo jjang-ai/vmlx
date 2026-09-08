@@ -41,8 +41,22 @@ def test_explicit_clear_refuses_another_process_before_deletion(tmp_path, monkey
     payload = _indexed_block(tmp_path / "aaaaaaaaaaaa", "aa-old", size=100, accessed=time.time() - 1000)
     budget = GlobalDiskCacheBudget(tmp_path, 1_000_000)
     try:
-        monkeypatch.setattr(budget, "_active_lease_ids_locked", lambda: {"987654-abcd"})
+        lease = budget._lease_dir() / "987654-abcd.json"
+        lease.write_text(json.dumps({"pid": 987654}))
+        monkeypatch.setattr(budget, "_pid_is_alive", lambda pid: True)
         with pytest.raises(BlockingIOError):
+            budget.clear_eligible()
+        assert payload.exists()
+    finally:
+        budget.close()
+
+
+def test_explicit_clear_refuses_unreadable_owner_record(tmp_path):
+    payload = _indexed_block(tmp_path / "aaaaaaaaaaaa", "aa-old", size=100, accessed=time.time() - 1000)
+    budget = GlobalDiskCacheBudget(tmp_path, 1_000_000)
+    try:
+        (budget._lease_dir() / "unknown.json").write_text("broken")
+        with pytest.raises(OSError, match="owner record"):
             budget.clear_eligible()
         assert payload.exists()
     finally:

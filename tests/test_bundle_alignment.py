@@ -65,6 +65,27 @@ def test_mixed_nested_configless_roundtrip_and_noop(tmp_path, capsys):
     assert events == ["MISALIGNED_DETECTED", "COPYING", "VALIDATED", "TRANSACTION_COMMITTED", "REPAIRED_ON_DISK"]
 
 
+def test_large_tokenizer_metadata_is_bounded_and_not_a_hash_manifest(tmp_path):
+    root = tmp_path / "model"
+    shard = fixture(root)
+    before = tensor_bytes(shard)
+    tokenizer = root / "tokenizer.json"
+    tokenizer.write_text(json.dumps({"vocab": "x" * (17 * 1024 * 1024)}))
+    assert check_model_bundle(root, cache_dir=tmp_path / "stamps")["misaligned_tensors"] == 0
+    assert tensor_bytes(shard) == before
+
+
+def test_large_hash_manifest_is_refused_without_replacing_shard(tmp_path):
+    root = tmp_path / "model"
+    shard = fixture(root)
+    before = shard.read_bytes()
+    (root / "hashes.json").write_text(json.dumps({"padding": "x" * (17 * 1024 * 1024),
+        "model.safetensors": {"sha256": "unknown"}}))
+    with pytest.raises(BundleIntegrityError, match="oversized file-hash manifest"):
+        check_model_bundle(root, cache_dir=tmp_path / "stamps")
+    assert shard.read_bytes() == before
+
+
 def test_inspection_never_rewrites_or_bypasses_later_repair(tmp_path):
     root = tmp_path / "model"
     path = fixture(root)

@@ -1681,9 +1681,20 @@ class GlobalDiskCacheBudget:
         with self._exclusive_guard():
             if self._closed:
                 raise OSError("SSD cache coordinator is closed")
-            if any(not lease.startswith(f"{os.getpid()}-")
-                   for lease in self._active_lease_ids_locked()):
-                raise BlockingIOError("Stop other engines using this SSD pool before clearing it")
+            # Explicit deletion is stricter than background cleanup: an
+            # unreadable/unknown owner record is not evidence of an idle pool.
+            for lease in self._lease_dir().glob("*.json"):
+                if lease.is_symlink():
+                    raise OSError("SSD pool owner record is a symlink")
+                try:
+                    owner = json.loads(lease.read_text())
+                    pid = owner["pid"]
+                    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                        raise ValueError("invalid owner PID")
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    raise OSError("SSD pool owner record cannot be validated") from exc
+                if pid != os.getpid() and self._pid_is_alive(pid):
+                    raise BlockingIOError("Stop other engines using this SSD pool before clearing it")
             result = self._enforce_locked(clear_eligible=True)
             logger.info(
                 "SSD cache clear: root=%s removed_entries=%d freed_bytes=%d "

@@ -135,7 +135,22 @@ def _digest_bound_stamp(root: Path, path: Path) -> dict | None:
         if metadata.name.startswith("._") or metadata.name == JOURNAL or metadata.name.endswith(".safetensors.index.json"):
             continue
         if metadata.stat().st_size > 16 * 1024 * 1024:
-            raise BundleIntegrityError(f"{metadata}: too large to audit file-hash references")
+            # Tokenizer vocabularies can be large without referring to weight
+            # hashes. Scan bounded text chunks first; never reject those solely
+            # because of their size, or load an unbounded manifest into RAM.
+            filename_seen = hash_seen = False
+            tail = ""
+            overlap = max(len(relative), len(path.name), 16)
+            with metadata.open(encoding="utf-8") as stream:
+                while chunk := stream.read(64 * 1024):
+                    text = tail + chunk
+                    filename_seen |= relative in text or path.name in text
+                    hash_seen |= any(word in text.lower() for word in (
+                        "sha256", "sha512", '"checksum"', '"signature"'))
+                    if filename_seen and hash_seen:
+                        raise BundleIntegrityError(f"{metadata}: oversized file-hash manifest requires explicit migration")
+                    tail = text[-overlap:]
+            continue
         raw = metadata.read_text(encoding="utf-8")
         if (relative in raw or path.name in raw) and any(
             word in raw.lower() for word in ("sha256", "sha512", '"checksum"', '"signature"')
