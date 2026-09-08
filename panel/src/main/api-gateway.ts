@@ -2302,6 +2302,30 @@ export class ApiGateway extends EventEmitter {
 
         let buffer = "";
         let streamDone = false;
+        let doneReason: string | null = null;
+        let usage: { completion_tokens?: number; prompt_tokens?: number } | null = null;
+        // finish_reason may precede the choices-empty usage event. Finish the
+        // downstream stream only after consuming the upstream terminal marker.
+        const emitTerminal = (): void => {
+          if (streamDone || !this.responseWritable(res)) return;
+          streamDone = true;
+          const terminal: any = {
+            model: modelForResponse,
+            created_at: new Date().toISOString(),
+            response: "",
+            done: true,
+            done_reason: doneReason || "stop",
+          };
+          if (usage) {
+            terminal.eval_count = usage.completion_tokens;
+            terminal.prompt_eval_count = usage.prompt_tokens;
+          }
+          if (!this.writeJsonLine(res, terminal)) {
+            proxyRes.destroy();
+            return;
+          }
+          this.endResponse(res);
+        };
         proxyRes.on("data", (chunk: Buffer) => {
           if (streamDone) return;
           buffer += chunk.toString();
@@ -2314,20 +2338,7 @@ export class ApiGateway extends EventEmitter {
             const payload = trimmed.slice(6);
 
             if (payload === "[DONE]") {
-              streamDone = true;
-              if (
-                !this.writeJsonLine(res, {
-                  model: modelForResponse,
-                  created_at: new Date().toISOString(),
-                  response: "",
-                  done: true,
-                  done_reason: "stop",
-                })
-              ) {
-                proxyRes.destroy();
-                return;
-              }
-              this.endResponse(res);
+              emitTerminal();
               return;
             }
 
@@ -2351,31 +2362,24 @@ export class ApiGateway extends EventEmitter {
                 ? ""
                 : choice?.delta?.reasoning_content || choice?.delta?.reasoning || "";
               const finishReason = choice?.finish_reason;
-              const done = finishReason != null;
-              if (!text && !thinking && !done) continue;
+              if (finishReason != null) doneReason = finishReason;
+              if (chunk.usage) {
+                usage = {
+                  completion_tokens: chunk.usage.completion_tokens,
+                  prompt_tokens: chunk.usage.prompt_tokens,
+                };
+              }
+              if (!text && !thinking) continue;
 
               const ollamaChunk: any = {
                 model: modelForResponse,
                 created_at: new Date().toISOString(),
                 response: text,
                 ...(thinking ? { thinking } : {}),
-                done,
+                done: false,
               };
-              if (done) {
-                ollamaChunk.done_reason = finishReason || "stop";
-                if (chunk.usage) {
-                  ollamaChunk.eval_count = chunk.usage.completion_tokens || 0;
-                  ollamaChunk.prompt_eval_count =
-                    chunk.usage.prompt_tokens || 0;
-                }
-              }
               if (!this.writeJsonLine(res, ollamaChunk)) {
                 proxyRes.destroy();
-                return;
-              }
-              if (done) {
-                streamDone = true;
-                this.endResponse(res);
                 return;
               }
             } catch (_) {
@@ -2384,22 +2388,7 @@ export class ApiGateway extends EventEmitter {
           }
         });
 
-        proxyRes.on("end", () => {
-          if (!streamDone && this.responseWritable(res)) {
-            streamDone = true;
-            if (
-              !this.writeJsonLine(res, {
-                model: modelForResponse,
-                created_at: new Date().toISOString(),
-                response: "",
-                done: true,
-                done_reason: "stop",
-              })
-            )
-              return;
-            this.endResponse(res);
-          }
-        });
+        proxyRes.on("end", emitTerminal);
       }
     });
 

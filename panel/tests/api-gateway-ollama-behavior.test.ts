@@ -134,7 +134,7 @@ async function startStreamingChatBackend(): Promise<BackendHandle> {
   return { server, port: await listen(server), bodies, paths };
 }
 
-async function startStreamingThinkingBackend(): Promise<BackendHandle> {
+async function startStreamingThinkingBackend(rawCompletion = false): Promise<BackendHandle> {
   const bodies: any[] = [];
   const paths: string[] = [];
   const server = createServer((req, res) => {
@@ -148,14 +148,17 @@ async function startStreamingThinkingBackend(): Promise<BackendHandle> {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
       });
-      res.write(
-        'data: {"choices":[{"delta":{"reasoning_content":"plan "},"finish_reason":null}]}\n\n',
-      );
-      res.write(
-        'data: {"choices":[{"delta":{"reasoning_content":"then act"},"finish_reason":null}]}\n\n',
-      );
-      res.write(
-        'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":null}]}\n\n',
+      if (!rawCompletion) {
+        res.write(
+          'data: {"choices":[{"delta":{"reasoning_content":"plan "},"finish_reason":null}]}\n\n',
+        );
+        res.write(
+          'data: {"choices":[{"delta":{"reasoning_content":"then act"},"finish_reason":null}]}\n\n',
+        );
+      }
+      res.write(rawCompletion
+        ? 'data: {"choices":[{"text":"answer","finish_reason":null}]}\n\n'
+        : 'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":null}]}\n\n',
       );
       res.write(
         'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
@@ -1089,6 +1092,28 @@ describe("Ollama gateway request translation behavior", () => {
     expect(chunks[2].done_reason).toBe("stop");
     expect(chunks[2].eval_count).toBe(2);
     expect(chunks[2].prompt_eval_count).toBe(2);
+  });
+
+  it.each([false, true])("generate waits for usage after finish_reason (raw=%s)", async (raw) => {
+    backend = await startStreamingThinkingBackend(raw);
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const response = await fetch(`http://127.0.0.1:${started.port}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "hy3-model", stream: true, raw, prompt: "hi" }),
+    });
+    const chunks = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    expect(response.status).toBe(200);
+    expect(backend.paths).toEqual([raw ? "/v1/completions" : "/v1/chat/completions"]);
+    expect(chunks.map(chunk => chunk.response || "").join("")).toBe("answer");
+    expect(chunks.map(chunk => chunk.thinking || "").join("")).toBe(raw ? "" : "plan then act");
+    expect(chunks.filter(chunk => chunk.done)).toHaveLength(1);
+    expect(chunks.at(-1)).toMatchObject({
+      response: "", done: true, done_reason: "stop",
+      eval_count: 4, prompt_eval_count: 3,
+    });
+    expect(chunks.at(-1)).not.toHaveProperty("thinking");
   });
 
   it("streams thinking exactly once and leaves the terminal message empty", async () => {
