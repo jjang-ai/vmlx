@@ -232,6 +232,8 @@ vmlx_engine = [
     "chat_templates/*.jinja",
     "config/*.yaml",
     "metal/*.metal",
+    "metal/third_party/*/LICENSE",
+    "metal/third_party/*/NOTICE",
     "native_mtp_examples/*.md",
     "tests/*.py",
     "vendor/transformers_modules/nvidia/C_hyphen_RADIOv2_hyphen_H/*.py",

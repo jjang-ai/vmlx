@@ -31,7 +31,7 @@ def test_native_mtp_contract_pins_named_policy_and_panel_edges():
     assert "test_native_mtp_adaptive_depth_lowers_d3_after_poor_third_position" in required
     assert "test_native_mtp_stats_snapshot_exposes_acceptance_depth_and_timings" in required
     assert "test_partial_indexed_layers_flagged" in required
-    assert "defaults native-MTP bundles to adaptive sampler-compatible Auto mode" in required
+    assert "defaults native-MTP bundles to adaptive Auto with greedy startup defaults" in required
     assert "lets users disable native MTP without leaving deterministic sampling overrides behind" in required
     assert "keeps non-MTP models on bundle-owned generation defaults" in required
     assert "real session launcher and settings form expose native MTP controls" in required

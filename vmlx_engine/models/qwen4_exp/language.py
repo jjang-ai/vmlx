@@ -26,7 +26,10 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 from mlx_lm.models.cache import ArraysCache
-from mlx_lm.models.gated_delta import gated_delta_update
+from vmlx_engine.metal.qwen4_verify_sdpa import qwen4_verify_sdpa
+from vmlx_engine.metal.qwen4_gdn_blocked_prefill import (
+    qwen4_blocked_gated_delta_update as gated_delta_update,
+)
 from mlx_lm.models.qwen3_5 import GatedDeltaNet as _Qwen35GatedDeltaNet
 from mlx_lm.models.qwen3_5 import TextModelArgs as _Qwen35TextArgs
 from mlx_lm.models.switch_layers import SwitchGLU
@@ -1086,10 +1089,11 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
         mask: Optional[mx.array] = None,
         cache: Optional[Any] = None,
         n_confirmed: int = 0,
+        prefill_checkpoint_steps: tuple[int, ...] = (),
     ) -> mx.array:
         batch_size, seq_len, _ = inputs.shape
         if self.sharding_group is not None:
-            if n_confirmed:
+            if n_confirmed or prefill_checkpoint_steps:
                 raise NotImplementedError(
                     "qwen4_exp MTP rollback is not implemented for sharded GDN"
                 )
@@ -1123,7 +1127,30 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
             else:
                 qkv = mx.where(mask[..., None], qkv, 0)
 
-        if 0 < n_confirmed < seq_len:
+        if prefill_checkpoint_steps:
+            if cache is None or n_confirmed or not (
+                tuple(sorted(set(prefill_checkpoint_steps))) == prefill_checkpoint_steps
+                and 0 < prefill_checkpoint_steps[0]
+                and prefill_checkpoint_steps[-1] < seq_len
+            ):
+                raise ValueError("invalid Qwen4 prefill checkpoint positions")
+            pieces = []
+            checkpoints = {}
+            start = 0
+            conv_f, ssm_f = conv_state, ssm_state
+            for end in (*prefill_checkpoint_steps, seq_len):
+                piece, conv_f, ssm_f = self._process_chunk(
+                    qkv[:, start:end], a[:, start:end], b[:, start:end],
+                    conv_f, ssm_f,
+                    mask[:, start:end] if mask is not None else None,
+                )
+                pieces.append(piece)
+                if end in prefill_checkpoint_steps:
+                    checkpoints[end] = (conv_f, ssm_f)
+                start = end
+            cache.prefill_checkpoint_states = checkpoints
+            out = mx.concatenate(pieces, axis=1)
+        elif 0 < n_confirmed < seq_len:
             confirmed_mask = mask[:, :n_confirmed] if mask is not None else None
             draft_mask = mask[:, n_confirmed:] if mask is not None else None
             out_c, conv_c, ssm_c = self._process_chunk(
@@ -1358,8 +1385,9 @@ class QSAIndexer(nn.Module):
         *,
         offset: Optional[int] = None,
         position_ids: Optional[mx.array] = None,
-    ) -> Optional[mx.array]:
-        """Return an additive float mask [B, 1, S, T], or ``None``.
+        return_blocks: bool = False,
+    ) -> Optional[mx.array | tuple[mx.array, mx.array]]:
+        """Return selected blocks, an additive [B, 1, S, T] mask, or None.
 
         At or below ``block_topk`` complete micro-blocks, every block is in the
         native QSA budget. Persist the raw index lane, then bypass pooling,
@@ -1444,6 +1472,11 @@ class QSAIndexer(nn.Module):
         top_idx = mx.argpartition(-masked_scores, kth=k_sel - 1, axis=-1)[
             ..., :k_sel
         ]  # [B,S,k]
+        if return_blocks:
+            # The direct native consumer reads a valid chronological prefix.
+            # Sorting preserves selection and puts incomplete blocks last.
+            selected = mx.sort(top_idx[0], axis=-1).astype(mx.int32)
+            return selected, selected < ncb_mx[:, None]
         keep_blocks = mx.zeros((B, S, num_blocks), dtype=mx.bool_)
         keep_blocks = mx.put_along_axis(keep_blocks, top_idx, mx.array(True), axis=-1)
         # queries with fewer complete blocks than k_sel picked -inf entries; drop those
@@ -1625,12 +1658,51 @@ class QSAAttention(nn.Module):
         # Append K/V before the raw indexer lane. The shared sparse transport
         # validates and slices both at the post-append logical offset; pass the
         # saved pre-append offset for this query chunk's absolute positions.
+        direct_prefill = False
+        if (
+            os.environ.get("VMLX_QWEN4_PREFILL_DIRECT", "0") == "1"
+            and S >= 256
+            and B == 1
+            and not self.training
+            and self.indexer.compress_ratio == 4
+            and self.indexer.block_topk == 512
+            # Materialized sparse QK wins from 8K on the qualified host.
+            # Shorter contexts retain stock attention to avoid a regression.
+            and T >= 8192
+        ):
+            from vmlx_engine.metal.qwen4_prefill_direct import (
+                qsa_prefill_direct,
+                qsa_prefill_direct_supported,
+                qsa_prefill_direct_ready,
+            )
+            # Shape-only placeholders: no selector or cache mutation until
+            # every static consumer guard and the native pipeline is ready.
+            block_shape = mx.zeros((S, 512), dtype=mx.int32)
+            direct_prefill = qsa_prefill_direct_supported(
+                queries, keys, values, block_shape, block_shape == 0,
+                pos_start=offset, total_tokens=T, scale=self.scale,
+            ) and qsa_prefill_direct_ready()
         index_mask = self.indexer(
             x,
             cache,
             offset=offset,
             position_ids=position_ids,
+            return_blocks=direct_prefill,
         )
+        if direct_prefill:
+            selected, valid = index_mask
+            out = qsa_prefill_direct(
+                queries, keys, values, selected, valid,
+                pos_start=offset, total_tokens=T, scale=self.scale,
+            )
+            if not getattr(self, "_direct_prefill_logged", False):
+                logger.info(
+                    "Powered by MTPLX/oMLX: direct sparse QSA prefill enabled "
+                    "https://github.com/youssofal/mtplx"
+                )
+                self._direct_prefill_logged = True
+            out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)
+            return self.o_proj(out * mx.sigmoid(gate))
         if index_mask is not None and index_mask.dtype != queries.dtype:
             # The indexer scores/selects in F32 for numerical stability, but
             # MLX requires an additive SDPA mask that promotes to the Q/K/V
@@ -1649,13 +1721,31 @@ class QSAAttention(nn.Module):
             causal = causal[None, None]
             full_mask = causal if index_mask is None else causal + index_mask
 
-        out = mx.fast.scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            scale=self.scale,
-            mask=full_mask,
+        out = qwen4_verify_sdpa(
+            queries, keys, values, full_mask, scale=self.scale,
+            selected_token_bound=(
+                self.indexer.block_topk * self.indexer.compress_ratio
+                + self.indexer.compress_ratio - 1
+                if type(self.indexer) is QSAIndexer
+                and T // self.indexer.compress_ratio > self.indexer.block_topk
+                else None
+            ),
+            selected_four_token_block_bound=(
+                self.indexer.block_topk + 1
+                if type(self.indexer) is QSAIndexer
+                and self.indexer.compress_ratio == 4
+                and T // self.indexer.compress_ratio > self.indexer.block_topk
+                else None
+            ),
         )
+        if out is None:
+            out = mx.fast.scaled_dot_product_attention(
+                queries,
+                keys,
+                values,
+                scale=self.scale,
+                mask=full_mask,
+            )
         out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)
         return self.o_proj(out * mx.sigmoid(gate))
 
@@ -1843,10 +1933,27 @@ class DecoderLayer(nn.Module):
         position_ids=None,
         profile_layer: Optional[int] = None,
         n_confirmed: int = 0,
+        prefill_checkpoint_steps: tuple[int, ...] = (),
+        last_token_only: bool = False,
     ):
         phase_ms: Dict[str, float] = {}
         if self.ple is not None:
-            if cache is not None and 0 < n_confirmed < h.shape[1]:
+            if cache is not None and prefill_checkpoint_steps:
+                pieces = []
+                checkpoints = {}
+                start = 0
+                for end in (*prefill_checkpoint_steps, h.shape[1]):
+                    piece = h[:, start:end]
+                    pieces.append(piece + self.ple(
+                        piece, input_ids[:, start:end], cache,
+                        profile=profile_layer is not None,
+                    ))
+                    if end in prefill_checkpoint_steps:
+                        checkpoints[end] = (cache[2], cache[3])
+                    start = end
+                cache.prefill_checkpoint_aux_states = checkpoints
+                h = mx.concatenate(pieces, axis=1)
+            elif cache is not None and 0 < n_confirmed < h.shape[1]:
                 confirmed_h = h[:, :n_confirmed]
                 draft_h = h[:, n_confirmed:]
                 confirmed_ids = input_ids[:, :n_confirmed]
@@ -1899,7 +2006,8 @@ class DecoderLayer(nn.Module):
             phase_ms["attn_hc"] = _profile_eval(x)
         if self.is_linear:
             r = self.linear_attn(
-                x, mask=mask, cache=cache, n_confirmed=n_confirmed
+                x, mask=mask, cache=cache, n_confirmed=n_confirmed,
+                prefill_checkpoint_steps=prefill_checkpoint_steps,
             )
         else:
             r = self.self_attn(
@@ -1914,6 +2022,11 @@ class DecoderLayer(nn.Module):
         if profile_layer is not None:
             phase_ms["attn_combine"] = _profile_eval(h)
 
+        # Attention/recurrent cache updates are complete for every token.
+        # At the final layer only the last output is needed for next-token
+        # logits; all remaining operations are independent per token.
+        if last_token_only:
+            h = h[:, -1:, :]
         x, hyper, inject = self.mlp_hyper_connection(h)
         if profile_layer is not None:
             phase_ms["mlp_hc"] = _profile_eval(x)
@@ -1951,10 +2064,27 @@ class Qwen4ExpTextModel(nn.Module):
         position_ids=None,
         return_expanded: bool = False,
         n_confirmed: int = 0,
+        prefill_checkpoint_steps: tuple[int, ...] = (),
+        last_token_only: bool = False,
         **_kwargs,
     ):
         h = inputs_embeds if inputs_embeds is not None else self.embed_tokens(inputs)
         h = mx.tile(h, (1, 1, self.args.hc_count))
+        if prefill_checkpoint_steps:
+            if (
+                n_confirmed
+                or cache is None
+                or tuple(sorted(set(prefill_checkpoint_steps))) != prefill_checkpoint_steps
+                or not 0 < prefill_checkpoint_steps[0]
+                or prefill_checkpoint_steps[-1] >= inputs.shape[1]
+            ):
+                raise ValueError("Invalid Qwen4 prefill checkpoint request")
+            h = self._checkpointed_layers(
+                h, inputs, cache, position_ids, prefill_checkpoint_steps,
+                last_token_only,
+            )
+            mixed = self.hyper_connection_mixer(h)
+            return (mixed, h) if return_expanded else mixed
         profile = _layer_profile_enabled(inputs)
         if profile:
             logger.info(
@@ -1980,6 +2110,8 @@ class Qwen4ExpTextModel(nn.Module):
                 position_ids=position_ids,
                 profile_layer=layer_index if profile else None,
                 n_confirmed=n_confirmed,
+                prefill_checkpoint_steps=prefill_checkpoint_steps,
+                last_token_only=last_token_only and layer_index == len(self.layers) - 1,
             )
             if _layer_fp:
                 _log_layer_fingerprint(layer_index, h, c)
@@ -1990,6 +2122,48 @@ class Qwen4ExpTextModel(nn.Module):
             mixer_ms = _profile_eval(mixed)
             logger.info("QWEN4_LAYER_PROFILE final_mixer_ms=%.3f", mixer_ms)
         return (mixed, h) if return_expanded else mixed
+
+    def _checkpointed_layers(
+        self, hidden, inputs, cache, position_ids, boundaries, last_token_only
+    ):
+        """Keep stock matrix shapes while scheduling all segments per layer.
+
+        Changing projection or attention row counts changes low-precision
+        reduction order. Retaining the original segments keeps recurrent and
+        PLE checkpoints exact while sharing one lazy model graph.
+        """
+        total = inputs.shape[1]
+        for index, (layer, current) in enumerate(zip(self.layers, cache)):
+            pieces, states, aux_states = [], {}, {}
+            start = 0
+            final_layer = index == len(self.layers) - 1
+            for end in (*boundaries, total):
+                piece = layer(
+                    hidden[:, start:end],
+                    cache=current,
+                    input_ids=inputs[:, start:end],
+                    position_ids=(
+                        position_ids[..., start:end] if position_ids is not None else None
+                    ),
+                    # Earlier final-layer pointwise outputs do not affect
+                    # caches or the requested final segment's logits.
+                    last_token_only=bool(final_layer and last_token_only and end != total),
+                )
+                pieces.append(piece)
+                if end in boundaries and type(current).__name__ == "ArraysCache":
+                    states[end] = tuple(current.cache[:2])
+                    if len(current.cache) == 4:
+                        aux_states[end] = tuple(current.cache[2:4])
+                start = end
+            if states:
+                current.prefill_checkpoint_states = states
+                if aux_states:
+                    current.prefill_checkpoint_aux_states = aux_states
+            hidden = (
+                pieces[-1] if final_layer and last_token_only
+                else mx.concatenate(pieces, axis=1)
+            )
+        return hidden
 
 
 _LAYER_FP_STEPS = {"n": 0}
@@ -2364,6 +2538,11 @@ class LanguageModel(nn.Module):
             position_ids=position_ids,
             return_expanded=True,
             n_confirmed=int(kwargs.get("n_confirmed", 0) or 0),
+            prefill_checkpoint_steps=tuple(kwargs.get("prefill_checkpoint_steps", ())),
+            last_token_only=(
+                bool(kwargs.get("prefill_last_logits_only", False))
+                and not return_hidden and not capture_requested(self)
+            ),
         )
         # Prompt-history priming is armed by the scheduler only for an active
         # native-MTP request.  Capture normal prompt forwards, never the
@@ -2376,10 +2555,15 @@ class LanguageModel(nn.Module):
             capture_prefill(self, inputs, expanded_hidden, cache)
         if not return_logits:
             return (hidden, expanded_hidden) if return_hidden else hidden
+        logit_hidden = (
+            hidden[:, -1:, :]
+            if kwargs.get("prefill_last_logits_only", False) and not return_hidden
+            else hidden
+        )
         if self.args.tie_word_embeddings:
-            logits = self.model.embed_tokens.as_linear(hidden)
+            logits = self.model.embed_tokens.as_linear(logit_hidden)
         else:
-            logits = self.lm_head(hidden)
+            logits = self.lm_head(logit_hidden)
         if return_hidden:
             return logits, expanded_hidden
         return LanguageModelOutput(logits=logits)
