@@ -3,9 +3,8 @@
 // the models were re-uploaded with an MTP fix, and users who downloaded
 // before that date must REDOWNLOAD THE ENTIRE MODEL to get it.
 //
-// This is deliberately the dumbest possible mechanism: no network requests,
-// no version detection, no file inspection, and ZERO interaction with how
-// MTP is detected, loaded, or used. When such a model is loaded, the
+// Uses read-only local bundle checks, no network requests or runtime mutation.
+// When an affected model is loaded, the
 // renderer shows the warning once; any interaction persists the dismissal
 // for this fix date, so it never reappears. Bumping MTP_FIX_DATE for a
 // future fix shows the warning once more.
@@ -85,6 +84,18 @@ function bundleHasFixedMtpComponent(modelPath: string): boolean {
   }
 }
 
+function bundleExplicitlyOmitsMtp(modelPath: string): boolean {
+  try {
+    const config = JSON.parse(readFileSync(join(modelPath, 'config.json'), 'utf8'))
+    const index = JSON.parse(readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf8'))
+    // Some intentionally stripped artifacts explicitly declare this contract.
+    // Never infer it from JANG tier/name, or hide real indexed MTP components.
+    return config.jang_config?.mtp?.mtp_mode === 'none'
+      && index.weight_map != null && typeof index.weight_map === 'object'
+      && !Object.keys(index.weight_map).some(k => k.startsWith('mtp.'))
+  } catch { return false }
+}
+
 /**
  * Fire-and-forget: when the user loads a Flash-Next JANG model whose bundle
  * is an older/broken MTP layout (missing the fixed component), show the
@@ -100,6 +111,7 @@ export function checkMtpComponentUpdateOnLoad(
   void (async () => {
     try {
       if (!modelPath || !isFlashNextQwen4Exp(modelPath)) return
+      if (bundleExplicitlyOmitsMtp(modelPath)) return
       if (bundleHasFixedMtpComponent(modelPath)) return
       const repoId = repoIdFromModelPath(modelPath)
       if (!repoId) return
@@ -143,4 +155,4 @@ export function dismissMtpComponentUpdate(
 }
 
 // Exposed for tests.
-export const __test = { repoIdFromModelPath, bundleHasFixedMtpComponent }
+export const __test = { repoIdFromModelPath, bundleHasFixedMtpComponent, bundleExplicitlyOmitsMtp }

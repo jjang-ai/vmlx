@@ -1,5 +1,5 @@
 // One-time dated MTP redownload warning: shown once per model per fix date,
-// dismissal persisted, zero network / zero file inspection, and a failure
+// dismissal persisted, zero network / local file inspection, and a failure
 // can never affect a model load.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -162,6 +162,26 @@ describe("bundleHasFixedMtpComponent (conformance gate)", () => {
     checkMtpComponentUpdateOnLoad(() => win as never, dir);
     await flush();
     expect(sent).toHaveLength(0);
+  });
+
+  it("does not ask an explicitly no-MTP artifact to redownload for MTP", async () => {
+    const dir = bundle({ mtpKeys: false });
+    writeFileSync(j(dir, "config.json"), JSON.stringify({ jang_config: { mtp: { mtp_mode: "none" } } }));
+    expect(__test.bundleExplicitlyOmitsMtp(dir)).toBe(true);
+    const { win, sent } = fakeWindow();
+    checkMtpComponentUpdateOnLoad(() => win as never, dir);
+    await flush();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does not suppress broken indexed MTP from a conflicting none stamp", async () => {
+    const dir = bundle({ mtpKeys: true });
+    writeFileSync(j(dir, "config.json"), JSON.stringify({ jang_config: { mtp: { mtp_mode: "none" } } }));
+    expect(__test.bundleExplicitlyOmitsMtp(dir)).toBe(false);
+    const { win, sent } = fakeWindow();
+    checkMtpComponentUpdateOnLoad(() => win as never, dir);
+    await flush();
+    expect(sent).toHaveLength(1);
   });
 
   it("older/broken layouts warn: missing sidecar, missing stamp, no indexed mtp keys", async () => {
