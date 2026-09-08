@@ -4,7 +4,12 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
-## [1.6.56] - 2026-09-07
+## [1.6.56] - 2026-09-08
+
+- **Console Amber desktop layout.** Chat and image use, Servers and API, and model management have dedicated navigation. General Preferences groups language and the one-model loading preference. Retired cache controls are removed from the form without deleting saved settings or changing the canonical inference defaults. Explicit Reset clears optional overrides as well as visible values and waits for model defaults before allowing Launch.
+- **Existing session settings remain authoritative.** New profiles start in single-model mode; existing profiles keep their prior choice. Selecting an already active model again no longer overwrites its advertised port and settings while the original engine is running; use Save & Restart for active configuration changes.
+- **Ollama generation streams retain terminal usage.** The gateway waits for the upstream usage event before emitting its single completion record, without duplicating content or reasoning.
+- **Model discovery and release notifications.** The curated JANG feeds exclude repository names without JANG. Release notifications wrap their controls in narrow windows, and dismissing one version does not suppress a later update notification.
 
 - **Misaligned safetensors are repaired on disk during local-model preflight.** A bounded sibling-file copy preserves tensor names, shapes, dtypes and payload bytes, validates the replacement, then atomically replaces each affected shard. Nested media and draft shards are included. Repairs are resumable across interruptions and unchanged bundles are not rewritten. Unknown signed/file-hash contracts and unsafe paths are refused rather than silently invalidated; the supported local MTP proposal-head digest is updated transactionally. This is container realignment, not re-quantization or conversion of codebooks to another dtype.
 - **Same-name model folders remain distinct.** Selecting an external or alternate local bundle no longer reuses an unrelated session merely because its directory has the same basename. Real filesystem aliases still resolve to the same model.
