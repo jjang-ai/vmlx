@@ -99,6 +99,9 @@ export function getDevelopmentProjectVenv(
       pythonPath,
       ['-B', '-s', '-c', 'import vmlx_engine; print(vmlx_engine.__version__)'],
       {
+        // Match the source-root cwd used by development session startup.
+        // A shared venv can also contain an older installed engine package.
+        cwd: sourceRoot,
         encoding: 'utf-8',
         timeout: 10000,
         env: {

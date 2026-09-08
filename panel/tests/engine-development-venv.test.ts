@@ -32,6 +32,13 @@ afterEach(() => {
 })
 
 describe('development project venv detection', () => {
+  it('probes from the owning checkout rather than the panel or installed package directory', () => {
+    const { root, pythonPath } = makeProjectPython(
+      '#!/bin/sh\n[ -f .source-check ] || exit 1\nprintf "1.6.56\\n"\n',
+    )
+    writeFileSync(join(root, '.source-check'), 'owned checkout')
+    expect(getDevelopmentProjectVenv(root)).toEqual({ pythonPath, version: '1.6.56' })
+  })
   it('returns the same isolated Python and imported engine version used by session startup', () => {
     const { root, pythonPath } = makeProjectPython(
       '#!/bin/sh\nprintf "1.6.16\\n"\n',
