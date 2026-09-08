@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
+import { resolveEffectiveToolParser } from '../src/shared/toolParserAliases'
+import { buildToolLaunchArgs } from '../src/shared/toolLaunchArgs'
 
 const createdDirs: string[] = []
 
@@ -17,6 +19,13 @@ describe('MiniCPM5 declared XML dialect', () => {
     expect(config.supportsThinking).toBe(dialect === 'minicpm5_xml_function')
     expect(config.defaultEnableThinking).toBeUndefined()
     expect(config.isMultimodal).toBe(false)
+    if (dialect === 'minicpm5_xml_function') {
+      for (const configuredParser of ['auto', 'minicpm5', 'minicpm5_xml_function']) {
+        const toolParser = resolveEffectiveToolParser({ configuredParser, detectedParser: config.toolParser })
+        expect(buildToolLaunchArgs({ toolParser, enableAutoToolChoice: true }))
+          .toEqual(['--tool-call-parser', 'minicpm5', '--enable-auto-tool-choice'])
+      }
+    }
   })
 })
 

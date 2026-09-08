@@ -5,6 +5,7 @@ const TOOL_PARSER_CANONICAL_ALIASES: Record<string, string> = {
   // (atem_tool_parser.py: register_module(["atem", "muse_glimmer", "muse"])).
   muse: 'atem',
   muse_glimmer: 'atem',
+  minicpm5_xml_function: 'minicpm5',
   // Zaya likewise registers "zaya"/"zyphra" alongside "zaya_xml".
   zaya: 'zaya_xml',
   zyphra: 'zaya_xml',
@@ -32,6 +33,7 @@ export const TOOL_PARSERS_FOR_CLI = new Set([
   'deepseek',
   'kimi',
   'lfm2',
+  'minicpm5',
   'granite',
   'nemotron',
   'minimax',
