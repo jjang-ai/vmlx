@@ -107,11 +107,14 @@ class OpenPanguLikeTokenizer:
 
 
 def _qwen_prompt() -> str:
-    return """<|im_start|>system
+    # The native Qwen template renders each requested tool with `tool | tojson`
+    # — the full schema, not a name-only stub. The gate compares parameter
+    # contracts, so the fixture renders what the template renders.
+    entries = "\n".join(json.dumps(t, separators=(",", ":")) for t in _qwen_test_tools())
+    return f"""<|im_start|>system
 # Tools
 <tools>
-{"type":"function","function":{"name":"run_command"}}
-{"type":"function","function":{"name":"read_file"}}
+{entries}
 </tools>
 <tool_call>
 <function=example_function_name>
