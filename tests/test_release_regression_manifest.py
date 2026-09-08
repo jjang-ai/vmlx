@@ -9219,6 +9219,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "status": "pass",
         "checks": {name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS},
         "missing_markers": [],
+        "open_proof_gaps": [],
         "failed_checks": [],
         "missing_expected_checks": [],
     }
@@ -14741,6 +14742,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "status": "pass",
             "checks": {name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS},
             "missing_markers": [],
+            "open_proof_gaps": [],
             "failed_checks": [],
             "missing_expected_checks": [],
         },

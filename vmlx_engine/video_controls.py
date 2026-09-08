@@ -258,9 +258,30 @@ def plan_fallback_frames(
     budget = int(controls.token_budget) if controls.token_budget is not None else None
     if cap == 0:
         return FallbackFramePlan(0, explicit, None, None, budget, int(frame_cap), "no frames")
-    if total is None or explicit is not None:
-        reason = "explicit max_pixels" if explicit is not None else "no budget"
-        return FallbackFramePlan(cap, explicit, None, None, budget, int(frame_cap), reason)
+    if total is None:
+        return FallbackFramePlan(cap, explicit, None, None, budget, int(frame_cap), "no budget")
+    if explicit is not None and budget is None:
+        return FallbackFramePlan(cap, explicit, None, None, budget, int(frame_cap), "explicit max_pixels")
+    if explicit is not None:
+        # BOTH an explicit per-frame pixel bound and a token budget: the bound
+        # fixes each frame's size, the budget decides how many frames fit.
+        # Live 2026-09-07 (27B fallback, strict): this branch used to return
+        # "explicit max_pixels" with no token estimate, so a budget of 2 was
+        # accepted with 8 full frames and strict mode had nothing to reject.
+        if frame_height is None or frame_width is None or frame_height <= 0 or frame_width <= 0:
+            return FallbackFramePlan(cap, explicit, None, None, budget, int(frame_cap), "explicit max_pixels; frame size unknown")
+        tokens = fallback_frame_tokens(
+            frame_height, frame_width, per_frame_max_pixels=explicit, token_pixels=token_pixels,
+            pixel_floor=pixel_floor, pixel_ceiling=pixel_ceiling,
+        )
+        n = min(cap, max(0, int(budget) // max(1, tokens)))
+        if n < 1:
+            return FallbackFramePlan(
+                1, explicit, tokens, tokens, budget, int(frame_cap),
+                f"budget below one frame at the explicit max_pixels ({explicit} px -> {tokens} tokens/frame); one frame kept",
+            )
+        reason = "budget met at the explicit max_pixels" if n == cap else f"frames reduced {cap}->{n} to fit the budget at the explicit max_pixels"
+        return FallbackFramePlan(n, explicit, tokens, n * tokens, budget, int(frame_cap), reason)
     # a video budget was spent in units of the VIDEO processor's pixels per
     # token (temporal pairs); each fallback frame is a single image
     video_token_px = int(controls.token_pixels or DEFAULT_VIDEO_TOKEN_PIXELS)

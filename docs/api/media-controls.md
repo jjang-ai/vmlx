@@ -20,6 +20,7 @@ bytes with different controls never share cached tensors or tokens.
 | `video_resized_height` / `video_resized_width` | explicit frame size (both or neither) |
 
 Precedence per frame: explicit size > per-frame `max_pixels` > the clip
+When an explicit per-frame `max_pixels` and a `video_token_budget` are both set on the frame-fallback path, the explicit size is kept per frame and the budget bounds the number of frames kept; a budget below one frame at that size is unmeetable (strict mode rejects it; best effort keeps one frame and reports it).
 budget (`video_token_budget` or `video_total_pixels`, which wins over
 `video_min_pixels` when they conflict) > the engine defaults.
 

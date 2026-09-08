@@ -141,6 +141,31 @@ KEY CLASSES
 """
 
 from .persistence_outcome import LEDGER as _PERSIST, format_outcome as _format_persistence_outcome
+
+
+def _record_last_durability(stats, request_id, wait_ms, waited, outcome):
+    """Retain the terminal durability fence of the last completed generation
+    on the batch stats (published as ``last_durability`` in /health): the
+    request id, the wait the client saw, and the persistence ledger's outcome
+    (stored / already_durable / skipped / refused / failed / unknown) with its
+    retained token count and detail."""
+    if stats is None:
+        return
+    entry = outcome if isinstance(outcome, dict) else {}
+    record = {
+        "request_id": str(request_id),
+        "wait_ms": round(float(wait_ms), 3),
+        "waited": bool(waited),
+        "cache_outcome": str(entry.get("outcome") or "unknown"),
+        "detail": str(entry.get("detail") or "")[:200],
+        "retained_tokens": entry.get("retained_tokens"),
+        "durable": entry.get("durable"),
+        "at": time.time(),
+    }
+    try:
+        stats.last_durability = record
+    except Exception:
+        pass
 from .video_controls import video_controls_from_kwargs as _video_controls_from_kwargs
 import asyncio
 import hashlib
@@ -2529,6 +2554,23 @@ class MLLMScheduler:
                             pass
             except Exception:
                 pass
+            # The bundle's own declared stop set (generation_config eos list /
+            # jang_config chat.stop_token_ids). The text lane has always
+            # honoured it; this lane only read the tokenizer and the registry
+            # strings, so Gemma-4's declared <|tool_response> (id 50) never
+            # stopped a tool-call turn here and every call ran to max_tokens.
+            try:
+                from .utils.multi_eos import bundle_declared_stop_ids
+                declared = bundle_declared_stop_ids(model_name)
+                added = [tid for tid in declared if tid not in stop_tokens]
+                stop_tokens.update(declared)
+                if added:
+                    logger.info(
+                        f"MLLM stop tokens: bundle-declared ids {added} added "
+                        f"(tokenizer/registry set {sorted(stop_tokens - set(added))})"
+                    )
+            except Exception:
+                pass
 
         return stop_tokens
 
@@ -2714,7 +2756,7 @@ class MLLMScheduler:
                     raise PromptTooLongError(
                         len(token_ids),
                         _max_prompt_tokens,
-                        source="tokenized VLM text prompt",
+                        source="text prompt (tokenized)",
                         request_id=request_id,
                     )
         # Mark multi-turn requests for cache skip heuristic.
@@ -4424,13 +4466,29 @@ class MLLMScheduler:
                                                     "VLM Scheduler stored paged Prefix Cache "
                                                     "for %s: %d layers, retained_tokens=%s, "
                                                     "block_table_blocks=%s, "
-                                                    "requested_cache_key_tokens=%d%s",
+                                                    "requested_cache_key_tokens=%d%s prefix_key=%s%s",
                                                     request_id,
                                                     len(cache_states),
                                                     retained_tokens,
                                                     block_table_blocks,
                                                     len(truncated_tokens),
                                                     side_key_suffix,
+                                                    getattr(
+                                                        self.block_aware_cache,
+                                                        "prefix_key_for_block_ids",
+                                                        lambda _ids: None,
+                                                    )(block_table_ids),
+                                                    (
+                                                        f" block_keys={_bk}"
+                                                        if (
+                                                            _bk := getattr(
+                                                                self.block_aware_cache,
+                                                                "block_keys_for_block_ids",
+                                                                lambda _ids: None,
+                                                            )(block_table_ids)
+                                                        )
+                                                        else ""
+                                                    ),
                                                 )
                                             _PERSIST.record(
                                                 request_id, "stored",
@@ -5502,13 +5560,28 @@ class MLLMScheduler:
                     )
                     await self._terminal_cleanup_complete.wait()
                     _outcome = _PERSIST.take(request_id)
+                    _durability_wait_ms = (
+                        time.perf_counter() - _durability_wait_started
+                    ) * 1000.0
                     logger.info(
                         "Terminal durability barrier: request=%s wait_ms=%.3f "
                         "waited=%s %s",
                         request_id,
-                        (time.perf_counter() - _durability_wait_started) * 1000.0,
+                        _durability_wait_ms,
                         "true" if _durability_was_pending else "false",
                         _format_persistence_outcome(_outcome),
+                    )
+                    # Keep the fence as DATA for /health (Cache panel "last
+                    # generation durability"): request-exact, so a tool step's
+                    # save/fence is visible without reading the log.
+                    _record_last_durability(
+                        getattr(
+                            getattr(self, "batch_generator", None), "_stats", None
+                        ),
+                        request_id,
+                        _durability_wait_ms,
+                        _durability_was_pending,
+                        _outcome,
                     )
                 yield output
         finally:

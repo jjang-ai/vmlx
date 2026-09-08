@@ -4726,16 +4726,21 @@ describe('Settings → CLI Round-Trip Completeness', () => {
 
     it('video sampling controls are gated to runtime video-capable families', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        const allowlistStart = source.indexOf('const detectedRuntimeVideoCapable = [')
-        const allowlistEnd = source.indexOf('].includes(normalizedDetectedFamily)', allowlistStart)
-        const allowlist = source.slice(allowlistStart, allowlistEnd)
+        // S21: the list moved to the shared helper so the form can also honour the bundle's declared modalities
+        const shared = readFileSync('src/shared/videoCapableFamilies.ts', 'utf8')
+        const allowlistStart = shared.indexOf('export const RUNTIME_VIDEO_CAPABLE_FAMILIES')
+        const allowlistEnd = shared.indexOf('])', allowlistStart)
+        const allowlist = shared.slice(allowlistStart, allowlistEnd)
 
         expect(allowlist).toContain("'qwen3-vl'")
         expect(allowlist).toContain("'qwen3.5'")
         expect(allowlist).toContain("'gemma4'")
         expect(allowlist).toContain("'nemotron-h'")
+        expect(allowlist).toContain("'muse-glimmer'")
         expect(allowlist).not.toContain("'mimo_v2'")
         expect(allowlist).not.toContain("'step-3.7-flash'")
+        expect(source).toContain('const detectedRuntimeVideoCapable = isRuntimeVideoCapable({')
+        expect(source).toContain('runtimeModalities: detectedRuntimeModalities')
         expect(source).toContain('detectedRuntimeVideoCapable ||')
         expect(source).toContain('!detectedForceTextOnly && multimodalActive')
     })

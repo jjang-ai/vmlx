@@ -54,6 +54,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
+  const [detectedRuntimeModalities, setDetectedRuntimeModalities] = useState<string[] | undefined>(undefined)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [detectedNativeMtp, setDetectedNativeMtp] = useState<any>(undefined)
   const [launching, setLaunching] = useState(false)
@@ -130,6 +131,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     setDetectedIsTurboQuant(!!detected?.isTurboQuant)
     setDetectedIsMultimodal(!!detected?.isMultimodal)
     setDetectedForceTextOnly(!!detected?.forceTextOnly)
+    setDetectedRuntimeModalities(Array.isArray(detected?.runtimeModalities) ? detected.runtimeModalities : undefined)
     setDetectedNativeMtp(detected?.nativeMtp)
     if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
   }
@@ -944,7 +946,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </p>
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedUsePagedCache={detectedUsePagedCache} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedArchitectureHints={detectedArchitectureHints} detectedToolParser={detectedToolParser} detectedReasoningParser={detectedReasoningParser} detectedEnableAutoToolChoice={detectedEnableAutoToolChoice} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelIdentity={selectedModel} />
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedUsePagedCache={detectedUsePagedCache} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedArchitectureHints={detectedArchitectureHints} detectedToolParser={detectedToolParser} detectedReasoningParser={detectedReasoningParser} detectedEnableAutoToolChoice={detectedEnableAutoToolChoice} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedRuntimeModalities={detectedRuntimeModalities} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelIdentity={selectedModel} />
         )}
 
         {/* Launch */}

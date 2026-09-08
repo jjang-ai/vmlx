@@ -1061,7 +1061,10 @@ class TestIssueGuards:
 
         # The auto-chunk branch must log at INFO level (not WARNING).
         guard_block_start = rve_body.index("VMLX_DISABLE_HYBRID_AUTO_CHUNK")
-        guard_block = rve_body[guard_block_start : guard_block_start + 2000]
+        # the branch grew an explanatory comment block; read through to the
+        # path-visibility log line that closes it
+        guard_block_end = rve_body.index("Hybrid prefill path=%s", guard_block_start)
+        guard_block = rve_body[guard_block_start:guard_block_end]
         assert "logger.info(" in guard_block, (
             "v1.3.84 regression: auto-chunk trigger must logger.info — "
             "chunking is intended behavior, not a crash warning."
@@ -5866,7 +5869,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
         assert "HF_ENDPOINT: undefined" in src, (
             "Stale shell HF_ENDPOINT must be cleared so it cannot poison GUI downloads"
         )
-        assert "job.repoId, job.modelDir, hfEndpoint" in src, (
+        assert "job.repoId, downloadDir, hfEndpoint" in src, (
             "Normalized HF endpoint must be passed explicitly to the download worker"
         )
         assert 'db.getSetting("hf_endpoint")' in src

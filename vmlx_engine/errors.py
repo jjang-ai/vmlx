@@ -69,3 +69,18 @@ class MediaControlsUnmeetableError(ValueError):
         self.detail = str(detail)
         self.request_id = request_id
         super().__init__(self.detail)
+
+
+class MediaInputError(ValueError):
+    """Raised when a media part of the request cannot be used: a media-typed
+    content part with no source under an accepted key, or an image/video
+    source the loader cannot open. Never silently dropped into a text-only
+    answer (live: a Responses ``input_video`` under the key ``video`` ran
+    text-only with a 200)."""
+
+    code = "media_input_invalid"
+
+    def __init__(self, detail: str, *, request_id: str | None = None):
+        self.detail = str(detail)
+        self.request_id = request_id
+        super().__init__(self.detail)

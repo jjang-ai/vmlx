@@ -213,3 +213,15 @@ def test_plain_text_is_not_a_tool_call(parser):
     result = parser.extract_tool_calls(out, request=WEATHER_REQUEST)
     assert not result.tools_called
     assert result.content == out
+
+
+def test_type_list_keeps_strings_verbatim_and_decodes_null_when_allowed():
+    """JSON-Schema type lists are declarations: ["string","null"] keeps "123" as text."""
+    from vmlx_engine.tool_parsers.dots_tool_parser import DotsToolParser
+
+    coerce = DotsToolParser._coerce_value
+    assert coerce("123", {"type": ["string", "null"]}) == "123"
+    assert coerce("null", {"type": ["string", "null"]}) is None
+    assert coerce("null", {"type": "string"}) == "null"
+    assert coerce("3", {"type": ["integer", "null"]}) == 3
+    assert coerce("{\"a\": 1}", {"type": ["object", "null"]}) == {"a": 1}

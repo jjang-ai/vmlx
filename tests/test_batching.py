@@ -523,13 +523,13 @@ class TestSchedulerBasic:
         with pytest.raises(PromptTooLongError) as exc_info:
             generator._raise_if_prompt_over_limit(
                 request,
-                source="tokenized VLM media prompt",
+                source="prompt with media (tokenized, media tokens included)",
             )
 
         exc = exc_info.value
         assert exc.prompt_tokens == 4
         assert exc.max_prompt_tokens == 3
-        assert exc.source == "tokenized VLM media prompt"
+        assert exc.source == "prompt with media (tokenized, media tokens included)"
 
     def test_mllm_media_prompt_limit_runs_before_pixel_and_prefix_cache(self):
         """Rejecting a VLM media prompt must not create pixel/prefix cache entries."""
@@ -539,10 +539,10 @@ class TestSchedulerBasic:
         process_src = inspect.getsource(MLLMBatchGenerator._process_prompts)
 
         assert preprocess_src.index(
-            'source="cached tokenized VLM media prompt"'
+            'source="prompt with media (tokenized from the pixel cache, media tokens included)"'
         ) < preprocess_src.index("Pixel cache HIT")
         assert preprocess_src.index(
-            'source="tokenized VLM media prompt"'
+            'source="prompt with media (tokenized, media tokens included)"'
         ) < preprocess_src.index("self.vision_cache.set_pixel_cache")
         assert process_src.index("except PromptTooLongError") < process_src.index(
             "req._cache_extra_keys = _merge_mllm_cache_extra_keys"

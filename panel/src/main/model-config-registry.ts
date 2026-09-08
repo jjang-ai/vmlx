@@ -197,6 +197,8 @@ export interface DetectedConfig {
   enableAutoToolChoice: boolean
   isMultimodal: boolean
   forceTextOnly?: boolean
+  /** Bundle-declared `capabilities.modalities` (lower-cased) when the sidecar carries one. */
+  runtimeModalities?: string[]
   // MiniMax-M3 VL routing: M3 vision is handled in-engine by SingleBatchGenerator
   // gated behind env VMLX_M3_VL=1 (NOT via mlx_vlm --is-mllm). When set, the panel
   // emits NEITHER --is-mllm NOR --text-only and threads VMLX_M3_VL=1 into the engine
@@ -1681,6 +1683,7 @@ function applyJangCapabilities(
     item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
   )
   const capsRuntimeTextOnly = runtimeModalities.length > 0 && !capsRuntimeHasMedia
+  if (runtimeModalities.length > 0) next.runtimeModalities = runtimeModalities
   const capsHasUnwiredMedia = unwiredModalities.some((item: string) =>
     item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
   )

@@ -139,6 +139,7 @@ from .errors import (
     PromptTooLongError,
     UnsupportedMediaModalityError,
     MediaControlsUnmeetableError,
+    MediaInputError,
     VLMImagePrefillBudgetError,
 )
 from .utils.prefill_admission import PrefillAdmissionError
@@ -1199,6 +1200,21 @@ def _media_controls_unmeetable_response_from_error(exc: MediaControlsUnmeetableE
                 "type": "invalid_request_error",
                 "code": MediaControlsUnmeetableError.code,
                 "param": "media_controls_strict",
+            }
+        },
+    )
+
+
+def _media_input_error_response_from_error(exc: MediaInputError):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "message": str(exc),
+                "type": "invalid_request_error",
+                "code": MediaInputError.code,
             }
         },
     )
@@ -6197,6 +6213,12 @@ async def _prompt_too_long_handler(request, exc):
     return _prompt_too_long_response_from_error(exc)
 
 
+@app.exception_handler(MediaInputError)
+async def _media_input_error_handler(request, exc):
+    """A media part the request cannot use is a 400 on every JSON door."""
+    return _media_input_error_response_from_error(exc)
+
+
 @app.exception_handler(MediaControlsUnmeetableError)
 async def _media_controls_unmeetable_handler(request, exc):
     """A strict media-control rejection is a 400 on every JSON door, however
@@ -7722,6 +7744,27 @@ def _parse_tool_calls_with_parser(
                     safe_content = safe_content_fn(output_text) or ""
             return safe_content, None
         result = parser_instance.extract_tool_calls(output_text, request=parser_request)
+        # Raw model tool syntax -> parsed call is otherwise invisible: log a
+        # bounded head/tail of the raw text whenever the parser saw a native
+        # tool block (Muse ATEM multi-parameter values arrived mangled and
+        # nothing showed what the model had written, 2026-09-07).
+        try:
+            _native_markers = tuple(getattr(parser_instance, "NATIVE_MARKERS", ()) or ())
+            if result.tools_called or any(m in output_text for m in _native_markers):
+                from .request_diagnostics import CURRENT_REQUEST_ID as _CUR_RID
+
+                logger.info(
+                    "Tool-call raw for %s (%s): tools_called=%s calls=%d len=%d head=%r tail=%r",
+                    _CUR_RID.get() or "-",
+                    type(parser_instance).__name__,
+                    bool(result.tools_called),
+                    len(result.tool_calls or []),
+                    len(output_text),
+                    output_text[:400],
+                    output_text[-200:] if len(output_text) > 400 else "",
+                )
+        except Exception:  # noqa: BLE001 - telemetry must never change parsing
+            pass
         if result.tools_called:
             tool_calls = [
                 ToolCall(
@@ -7777,7 +7820,9 @@ def _parse_tool_calls_with_parser(
             # (handles Nemotron, Llama, raw JSON, etc.)
             return _generic_parse_filtered(output_text)
     except Exception as e:
-        logger.warning(f"Tool parser error: {e}")
+        # A parser exception is a parser DEFECT, never a model shape: log it
+        # with the traceback so it cannot hide behind a one-line warning.
+        logger.warning(f"Tool parser error: {e}", exc_info=True)
         if bool(getattr(locals().get("parser_cls", None), "STRICT_NATIVE_TOOL_FORMAT", False)):
             if _has_tool_marker_or_partial_suffix(output_text) or (
                 _is_pending_required_tool_choice(request)
@@ -7798,6 +7843,30 @@ def _parse_tool_calls_with_parser(
                 )
                 return safe_content or "", None
             return output_text, None
+        # The generic repair understands Hermes / JSON / <function=...> shapes
+        # only. Handing it a NATIVE block after the native parser crashed
+        # fabricated arguments: the ATEM parser raised on a nullable type list
+        # and the generic attribute regex returned every value as the raw
+        # markup between quotes (Muse-Glimmer-30B, agentic-eval-074524; the
+        # tool then executed with '>magic</atem:parameter>\n<atem:parameter
+        # name=' as its pattern). When the output carries this parser's own
+        # native markers, the call is dropped with a visible diagnostic and
+        # only the visible prefix survives; outputs without native markers
+        # keep the generic repair (that is the path it exists for).
+        _native_markers = tuple(
+            getattr(locals().get("parser_cls", None), "NATIVE_MARKERS", ()) or ()
+        )
+        _native_present = any(m in output_text for m in _native_markers) or any(
+            _tool_marker_partial_suffix_length(output_text, m, minimum=4)
+            for m in _native_markers
+        )
+        if _native_present:
+            _record_tool_call_drop(
+                f"The '{active_parser}' native tool parser failed ({type(e).__name__}: "
+                f"{str(e)[:160]}); the native tool block was dropped instead of being "
+                "repaired by the generic parser, which cannot decode this format."
+            )
+            return _visible_prefix_before_unparsed_tool_markup(output_text), None
         return _generic_parse_filtered(output_text)
 
 
@@ -13070,6 +13139,7 @@ def _live_batch_generator_request_records(
     records: dict[str, dict[str, Any] | None] = {}
     for attr in (
         "last_cache_execution",
+        "last_durability",
         "last_native_mtp",
         "last_native_mtp_skip",
     ):
@@ -19120,6 +19190,8 @@ async def create_completion(request: CompletionRequest):
             return _prefill_admission_declined_response(e)
         except VLMImagePrefillBudgetError as e:
             return _vlm_image_prefill_budget_response_from_error(e)
+        except MediaInputError as e:
+            return _media_input_error_response_from_error(e)
         except MediaControlsUnmeetableError as e:
             return _media_controls_unmeetable_response_from_error(e)
         except UnsupportedMediaModalityError as e:
@@ -19969,6 +20041,8 @@ async def create_chat_completion(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaInputError as e:
+        return _media_input_error_response_from_error(e)
     except MediaControlsUnmeetableError as e:
         return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
@@ -21498,8 +21572,6 @@ def _responses_input_to_messages(
                     t = p.get("type")
                     if t == "input_image":
                         # `input_image: {image_url: "data:image/...;base64,..."}`
-                        # OR `input_image: {file_id: "..."}` (not supported,
-                        # left as-is for clear downstream error).
                         url = p.get("image_url")
                         if isinstance(url, dict):
                             url = url.get("url")
@@ -21507,16 +21579,27 @@ def _responses_input_to_messages(
                             normalized.append({"type": "image_url",
                                                "image_url": _drop_none_fields({"url": url})})
                         else:
-                            normalized.append(p)
+                            # a media-typed part with no readable source used
+                            # to pass through and be ignored downstream (the
+                            # request then succeeded text-only)
+                            raise MediaInputError(
+                                "input_image part has no readable source: expected "
+                                "'image_url' (a URL, data: URL or local path); "
+                                f"got keys {sorted(k for k in p if k != 'type')}"
+                            )
                     elif t == "input_video":
-                        url = p.get("video_url") or p.get("file_id")
+                        url = p.get("video_url")
                         if isinstance(url, dict):
                             url = url.get("url")
                         if url:
                             normalized.append({"type": "video_url",
                                                "video_url": _drop_none_fields({"url": url})})
                         else:
-                            normalized.append(p)
+                            raise MediaInputError(
+                                "input_video part has no readable source: expected "
+                                "'video_url' (a URL, data: URL or local path); "
+                                f"got keys {sorted(k for k in p if k != 'type')}"
+                            )
                     elif t == "input_text":
                         # OpenAI Responses uses input_text; chat completions
                         # uses just `text`. Re-tag for consistency.
@@ -23311,6 +23394,8 @@ async def create_response(
         return _prefill_admission_declined_response(e)
     except VLMImagePrefillBudgetError as e:
         return _vlm_image_prefill_budget_response_from_error(e)
+    except MediaInputError as e:
+        return _media_input_error_response_from_error(e)
     except MediaControlsUnmeetableError as e:
         return _media_controls_unmeetable_response_from_error(e)
     except UnsupportedMediaModalityError as e:
@@ -24171,7 +24256,7 @@ async def stream_completions_multi(
         # PrefillAdmissionError rides along: same class of client error (the
         # device cannot serve this context), and the body below uses only
         # str(e), so it needs no PromptTooLongError-specific fields.
-        except MediaControlsUnmeetableError as e:
+        except (MediaControlsUnmeetableError, MediaInputError) as e:
             if hasattr(engine, "abort_request"):
                 await engine.abort_request(prompt_request_id)
             error_data = {
@@ -24180,7 +24265,7 @@ async def stream_completions_multi(
                 "error": {
                     "message": str(e),
                     "type": "invalid_request_error",
-                    "code": MediaControlsUnmeetableError.code,
+                    "code": type(e).code,
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
@@ -24207,20 +24292,6 @@ async def stream_completions_multi(
                     "message": str(e),
                     "type": "invalid_request_error",
                     "code": VLMImagePrefillBudgetError.code,
-                },
-            }
-            yield f"data: {json.dumps(error_data)}\n\n"
-        except MediaControlsUnmeetableError as e:
-            if hasattr(engine, "abort_request"):
-                await engine.abort_request(prompt_request_id)
-            error_data = {
-                "id": response_id,
-                "object": "text_completion",
-                "error": {
-                    "message": str(e),
-                    "type": "invalid_request_error",
-                    "code": MediaControlsUnmeetableError.code,
-                    "param": "media_controls_strict",
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
@@ -25707,7 +25778,7 @@ async def stream_chat_completion(
     # PrefillAdmissionError rides along: same class of client error (the
     # device cannot serve this context), and the body below uses only
     # str(e), so it needs no PromptTooLongError-specific fields.
-    except MediaControlsUnmeetableError as e:
+    except (MediaControlsUnmeetableError, MediaInputError) as e:
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
         error_data = {
@@ -25716,7 +25787,7 @@ async def stream_chat_completion(
             "error": {
                 "message": str(e),
                 "type": "invalid_request_error",
-                "code": MediaControlsUnmeetableError.code,
+                "code": type(e).code,
             },
         }
         yield f"data: {json.dumps(error_data)}\n\n"
@@ -27945,6 +28016,7 @@ async def stream_responses_api(
     # str(e), so it needs no PromptTooLongError-specific fields.
     except (
         MediaControlsUnmeetableError,
+        MediaInputError,
         PromptTooLongError,
         PrefillAdmissionError,
         VLMImagePrefillBudgetError,

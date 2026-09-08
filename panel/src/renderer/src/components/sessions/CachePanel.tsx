@@ -268,6 +268,11 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const lastCacheExecution =
     schedulerStats?.last_cache_execution ??
     schedulerStats?.batch_generator?.last_cache_execution
+  // the last completed generation's terminal fence (request-exact; engine field last_durability)
+  const lastDurability = (schedulerStats?.batch_generator?.last_durability ?? schedulerStats?.last_durability) as
+    | { request_id?: string; wait_ms?: number; waited?: boolean; cache_outcome?: string; retained_tokens?: number | null; detail?: string; at?: number }
+    | null
+    | undefined
   const lastCacheSelection =
     lastCacheExecution?.selection ??
     schedulerStats?.last_cache_selection
@@ -726,12 +731,36 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
         </div>
       )}
 
+      {lastDurability && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            {t('sessions.cachePanel.lastDurability')}
+          </h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <StatCard label={t('sessions.cache.requestId')} value={String(lastDurability.request_id || '—').slice(-12)} />
+            <StatCard label={t('sessions.cache.durabilityWait')} value={typeof lastDurability.wait_ms === 'number' ? `${lastDurability.wait_ms.toFixed(1)} ms${lastDurability.waited ? '' : ` (${t('sessions.cache.durabilityAlreadyDurable')})`}` : '—'} />
+            {lastDurability.cache_outcome && (
+              <StatCard label={t('sessions.cache.durabilityOutcome')} value={String(lastDurability.cache_outcome)} />
+            )}
+            {lastDurability.retained_tokens != null && (
+              <StatCard label={t('sessions.cache.durabilityRetained')} value={Number(lastDurability.retained_tokens).toLocaleString()} />
+            )}
+            {lastDurability.detail && (
+              <StatCard label={t('sessions.cache.durabilityDetail')} value={String(lastDurability.detail)} />
+            )}
+          </div>
+        </div>
+      )}
+
       {lastCacheExecution && (
         <div>
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             {t('sessions.cachePanel.lastCacheExecution')}
           </h4>
           <div className="grid grid-cols-2 gap-2 text-sm">
+            {lastCacheExecution.request_id && (
+              <StatCard label={t('sessions.cache.requestId')} value={String(lastCacheExecution.request_id).slice(-12)} />
+            )}
             {lastCacheExecution.cache_detail && (
               <StatCard label={t('sessions.cache.cacheDetail')} value={String(lastCacheExecution.cache_detail)} />
             )}

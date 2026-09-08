@@ -2807,6 +2807,49 @@ class BlockAwarePrefixCache:
                 return "disk_l2"
         return "memory_l1"
 
+    @classmethod
+    def prefix_key_for_blocks(cls, blocks: Optional[List[Any]]) -> Optional[str]:
+        """Short identity of a block chain: the terminal block's chained
+        content hash (12 hex chars), or None when the chain has no hash."""
+        key = cls._fetch_telemetry_cache_key(blocks)
+        return key[:12] if key else None
+
+    def prefix_key_for_block_ids(self, block_ids: Optional[Any]) -> Optional[str]:
+        """Same identity, from a stored block table's physical block ids."""
+        if not isinstance(block_ids, (list, tuple)) or not block_ids:
+            return None
+        try:
+            block = self.paged_cache.blocks[int(block_ids[-1])]
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return None
+        return self.prefix_key_for_blocks([block])
+
+    # A later request that shares only a PREFIX of a stored chain hits an
+    # interior block, so its terminal key is not the chain's terminal key.
+    # The store line lists every block key for chains up to this many
+    # blocks (4k tokens at 64) so such a partial restore can still be bound
+    # to its publication by identity; longer chains log the terminal key only.
+    BLOCK_KEYS_LOG_MAX_BLOCKS = 64
+
+    def block_keys_for_block_ids(self, block_ids: Optional[Any]) -> Optional[str]:
+        """Comma-joined short keys of every block in a stored chain, or None
+        when the chain is longer than ``BLOCK_KEYS_LOG_MAX_BLOCKS``."""
+        if not isinstance(block_ids, (list, tuple)) or not block_ids:
+            return None
+        if len(block_ids) > self.BLOCK_KEYS_LOG_MAX_BLOCKS:
+            return None
+        keys = []
+        for bid in block_ids:
+            try:
+                block = self.paged_cache.blocks[int(bid)]
+            except (AttributeError, IndexError, TypeError, ValueError):
+                return None
+            key = self.prefix_key_for_blocks([block])
+            if key is None:
+                return None
+            keys.append(key)
+        return ",".join(keys)
+
     @staticmethod
     def _fetch_telemetry_cache_key(blocks: Optional[List[Any]]) -> Optional[str]:
         if not blocks:
@@ -3574,8 +3617,12 @@ class BlockAwarePrefixCache:
             self._hits += 1
             self._tokens_saved += block_table.num_tokens
             self._hit_credits[request_id] = block_table.num_tokens
+            # prefix_key = the terminal block's chained content hash: the same
+            # value the store line logs for the publication this hit came
+            # from, so a restore can be bound to its publisher by identity,
+            # not by token count (S5 audit: length is eligibility only).
             logger.info(
-                "Paged cache hit for %s: %d blocks, checkpoint_tokens=%d%s",
+                "Paged cache hit for %s: %d blocks, checkpoint_tokens=%d%s prefix_key=%s",
                 request_id,
                 len(cached_blocks),
                 block_table.num_tokens,
@@ -3585,6 +3632,7 @@ class BlockAwarePrefixCache:
                     if dsv4_matched_tokens is not None
                     else ""
                 ),
+                self.prefix_key_for_blocks(cached_blocks),
             )
             # fetch_cache() owns one request ref for every returned block.  The
             # scheduler releases completed hits through _request_tables before

@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "Tokens generated so far",
       "tokensTitleDone": "Completion tokens",
       "tpsTitle": "Decode speed after first token; includes reasoning and tool-loop completion tokens",
-      "ppsTitle": "Prompt processing speed",
-      "ppsTailLabel": "{speed} tail pp/s",
-      "ppsTailTitle": "Prompt processing speed for the uncached tail only; cached tokens were restored separately",
+      "ppsTitle": "Uncached prompt tokens divided by time to first token. That window includes queueing, media processing, cache restore and first-token compute, so it is not isolated prefill throughput.",
+      "ppsTailLabel": "{speed} pp/s to first token (uncached input)",
+      "ppsTailTitle": "Uncached-input rate to first token after a cache hit: only the uncached tail was processed; cached tokens were restored separately.",
       "promptLabel": "{n} prompt",
       "cachedSuffix": " ({cached} cached)",
       "promptTitleCache": "Prompt tokens — cache: {detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "Time to first token",
       "elapsedTitle": "Elapsed time",
       "totalLabel": "{v}s total",
-      "totalTitle": "Total request time"
+      "totalTitle": "Total request time",
+      "ppsLabel": "{speed} pp/s to first token"
     },
     "message": {
       "tokenCount": "{n} tokens"
@@ -1403,7 +1404,13 @@
       "warmCache": "Warm Cache",
       "warming": "Warming...",
       "clearRamTitle": "Clear resident/indexed cache state while preserving disk-backed L2",
-      "clearPrefixTitle": "Clear prefix cache from RAM and disk-backed L2"
+      "clearPrefixTitle": "Clear prefix cache from RAM and disk-backed L2",
+      "requestId": "Request",
+      "durabilityWait": "Fence wait",
+      "durabilityAlreadyDurable": "already durable",
+      "durabilityOutcome": "Save outcome",
+      "durabilityRetained": "Committed tokens",
+      "durabilityDetail": "Publication"
     },
     "logs": {
       "filterPlaceholder": "Filter logs...",
@@ -1531,7 +1538,8 @@
       "clearPrefixL2": "Clear Prefix + L2",
       "clearAll": "Clear All",
       "reuseExplainer": "Reuse matches the longest continuous causal token prefix from token 0. Only the unmatched tail is prefilled; arbitrary suffix or interior sequences are never reused. On path-dependent families (DeepSeek V4, ZAYA CCA, and rotating-KV models such as Gemma 4 and Muse) a prompt SHORTER than the cached chain may reuse nothing and prefill in full.",
-      "clearSkipped": "Some cache tiers were not cleared: {{skipped}}. They are still in use by a running request — try again once the session is idle."
+      "clearSkipped": "Some cache tiers were not cleared: {{skipped}}. They are still in use by a running request — try again once the session is idle.",
+      "lastDurability": "Last Generation Durability (terminal fence)"
     },
     "embeddings": {
       "sessionMustBeRunning": "Session must be running to generate embeddings.",
@@ -1575,7 +1583,7 @@
       "weightsPresentRuntimeUnwired": "weights present; runtime unwired",
       "mtpDepth": "MTP Depth",
       "mtpDepthDefaultValue": "D{depth} default",
-      "mtpScope": "MTP Scope",
+      "mtpScope": "MTP Scope (request · state · depth)",
       "scopeOnlyValue": "{scope} only",
       "mtpPolicy": "MTP Policy",
       "deterministicDefaults": "deterministic defaults",
@@ -1619,7 +1627,9 @@
       "ssmL2": "SSM L2",
       "ssmResidentMemory": "SSM Resident Memory",
       "memActive": "Active",
-      "memPeak": "Peak"
+      "memPeak": "Peak",
+      "notReported": "not reported",
+      "mtpRuntimeScope": "MTP Runtime Scope"
     },
     "context": {
       "startTimedOut": "Session start timed out",

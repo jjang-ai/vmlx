@@ -380,11 +380,13 @@ describe('Metrics Display Items', () => {
   it('includes pp/s when available', () => {
     const items = getMetricsItems({ ...baseMetrics, ppSpeed: '120.0' }, false, t)
     const ppItem = items.find(i => i.label.includes('pp/s'))
-    expect(ppItem?.label).toBe('120.0 pp/s')
-    expect(ppItem?.title).toBe('Prompt processing speed')
+    // the footer's prefill rate is uncached input over time-to-first-token (queue, media, restore and first-token
+    // compute included), so the label says so instead of posing as isolated prefill compute (CACHE-PERF-DISPLAY-AUDIT)
+    expect(ppItem?.label).toBe('120.0 pp/s to first token')
+    expect(ppItem?.title).toBe(en.chat.metrics.ppsTitle)
   })
 
-  it('labels cache-hit pp/s as uncached-tail speed', () => {
+  it('labels cache-hit pp/s as uncached-input speed to first token', () => {
     const items = getMetricsItems({
       ...baseMetrics,
       promptTokens: 7753,
@@ -392,10 +394,8 @@ describe('Metrics Display Items', () => {
       ppSpeed: '11.1',
     }, false, t)
     const ppItem = items.find(i => i.label.includes('pp/s'))
-    expect(ppItem?.label).toBe('11.1 tail pp/s')
-    expect(ppItem?.title).toBe(
-      'Prompt processing speed for the uncached tail only; cached tokens were restored separately',
-    )
+    expect(ppItem?.label).toBe('11.1 pp/s to first token (uncached input)')
+    expect(ppItem?.title).toBe(en.chat.metrics.ppsTailTitle)
   })
 
   it('includes prompt tokens when available', () => {

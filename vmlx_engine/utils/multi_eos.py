@@ -46,6 +46,55 @@ def _resolve_token_to_id(
     return tid
 
 
+def bundle_declared_stop_ids(model_name: str) -> list[int]:
+    """Stop token ids the BUNDLE itself declares, in declaration order.
+
+    Two spellings carry the same contract: ``generation_config.json``
+    ``eos_token_id`` (int or list) and ``jang_config.json`` ``chat.stop_token_ids``.
+    Every shipped bundle so far duplicates the jang set into
+    generation_config.json, but the key is part of the stamp contract — a
+    bundle carrying ONLY the jang spelling (all 2026-08 Nemotron stamps declare
+    it) must still stop at its turn boundary instead of running on.
+
+    Both lanes must read this. The text lane always did (through
+    ``collect_multi_eos_ids``); the MLLM scheduler built its stop set from the
+    tokenizer plus the registry strings only, so a Gemma-4 bundle whose
+    generation_config lists ``<|tool_response>`` (id 50) — the tool-role opener
+    the assistant must never produce — kept generating after
+    ``<tool_call|>`` until max_tokens (measured: 400 tokens of repeated
+    ``<|tool_response>`` after every tool call, rendered as nothing).
+    """
+    model_path = Path(model_name)
+    declared: list[int] = []
+    try:
+        gen_cfg_path = model_path / "generation_config.json"
+        if gen_cfg_path.is_file():
+            gen_cfg = json.loads(gen_cfg_path.read_text())
+            gen_eos = gen_cfg.get("eos_token_id")
+            if isinstance(gen_eos, int) and not isinstance(gen_eos, bool):
+                declared.append(gen_eos)
+            elif isinstance(gen_eos, list):
+                for tid in gen_eos:
+                    if isinstance(tid, int) and not isinstance(tid, bool) and tid not in declared:
+                        declared.append(tid)
+    except Exception:
+        pass
+    try:
+        jang_cfg_path = model_path / "jang_config.json"
+        if jang_cfg_path.is_file():
+            jang_chat = json.loads(jang_cfg_path.read_text()).get("chat")
+            jang_stops = (
+                jang_chat.get("stop_token_ids") if isinstance(jang_chat, dict) else None
+            )
+            if isinstance(jang_stops, list):
+                for tid in jang_stops:
+                    if isinstance(tid, int) and not isinstance(tid, bool) and tid >= 0 and tid not in declared:
+                        declared.append(tid)
+    except Exception:
+        pass
+    return declared
+
+
 def collect_multi_eos_ids(
     tokenizer: Any,
     model_name: str,
@@ -70,39 +119,9 @@ def collect_multi_eos_ids(
 
     model_path = Path(model_name)
 
-    try:
-        gen_cfg_path = model_path / "generation_config.json"
-        if gen_cfg_path.is_file():
-            gen_cfg = json.loads(gen_cfg_path.read_text())
-            gen_eos = gen_cfg.get("eos_token_id")
-            if isinstance(gen_eos, int):
-                if gen_eos not in resolved:
-                    resolved.append(gen_eos)
-            elif isinstance(gen_eos, list):
-                for tid in gen_eos:
-                    if isinstance(tid, int) and tid not in resolved:
-                        resolved.append(tid)
-    except Exception:
-        pass
-
-    # jang_config.chat.stop_token_ids is the bundle's own declared stop set.
-    # Every shipped bundle so far duplicates it into generation_config.json,
-    # but the key is part of the stamp contract — a bundle carrying ONLY this
-    # spelling (all 2026-08 Nemotron stamps declare it) must still stop at
-    # its turn boundary instead of running on.
-    try:
-        jang_cfg_path = model_path / "jang_config.json"
-        if jang_cfg_path.is_file():
-            jang_chat = json.loads(jang_cfg_path.read_text()).get("chat")
-            jang_stops = (
-                jang_chat.get("stop_token_ids") if isinstance(jang_chat, dict) else None
-            )
-            if isinstance(jang_stops, list):
-                for tid in jang_stops:
-                    if isinstance(tid, int) and not isinstance(tid, bool) and tid >= 0 and tid not in resolved:
-                        resolved.append(tid)
-    except Exception:
-        pass
+    for tid in bundle_declared_stop_ids(model_name):
+        if tid not in resolved:
+            resolved.append(tid)
 
     rust_tok = None
     if use_rust_tokenizer:

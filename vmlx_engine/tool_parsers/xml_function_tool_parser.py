@@ -53,8 +53,14 @@ class XMLFunctionToolParser(ToolParser):
         r"<function=([^>]+)>\s*(.*?)\s*</function>",
         re.DOTALL,
     )
+    # The value is captured RAW. The template frames a value with one newline
+    # on each side (``<parameter=K>\nV\n</parameter>``); only that frame is
+    # removed, in ``_unframe``. A ``\s*`` on both ends here ate a string
+    # argument's own leading indentation and trailing newlines — a file whose
+    # first line is indented, or that ends in blank lines, was written wrong
+    # (LOSSLESS-API-TOOL-HISTORY-CONTRACT: escaping and whitespace are data).
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>(.*?)</parameter>",
         re.DOTALL,
     )
     # Ornith-1.0 (qwen3.5 + Gemma vocab frankenmerge) emits a malformed
@@ -89,16 +95,34 @@ class XMLFunctionToolParser(ToolParser):
         re.DOTALL,
     )
 
+    @staticmethod
+    def _unframe(value: str) -> str:
+        """Drop the template's one-newline frame on each side, nothing more."""
+        if value.startswith("\r\n"):
+            value = value[2:]
+        elif value.startswith("\n"):
+            value = value[1:]
+        if value.endswith("\r\n"):
+            value = value[:-2]
+        elif value.endswith("\n"):
+            value = value[:-1]
+        return value
+
     @classmethod
     def _coerce_value(cls, value: str) -> Any:
-        value = value.strip()
-        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
+        # Strip only to TEST for a JSON shape (and the <value> wrapper); the
+        # string result keeps its own bytes — indentation, trailing newlines,
+        # literal backslash sequences — exactly as the model wrote them.
+        raw = cls._unframe(value)
+        candidate = raw.strip()
+        wrapped = cls.VALUE_WRAPPER_PATTERN.match(candidate)
         if wrapped:
-            value = wrapped.group(1).strip()
+            raw = wrapped.group(1)
+            candidate = raw.strip()
         try:
-            return json.loads(value)
+            return json.loads(candidate)
         except (json.JSONDecodeError, ValueError):
-            return value
+            return raw
 
     # _request_tool_names and the doubled-wrapper recovery live on ToolParser:
     # the malformed shape arrives on both the qwen and xml_function routes.
@@ -278,7 +302,7 @@ class XMLFunctionToolParser(ToolParser):
         if tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=True,
-                tool_calls=tool_calls,
+                tool_calls=self._coerce_nullable_arguments(tool_calls, request),
                 content=cleaned_text if cleaned_text else None,
             )
         return ExtractedToolCallInformation(
@@ -286,6 +310,69 @@ class XMLFunctionToolParser(ToolParser):
             tool_calls=[],
             content=model_output,
         )
+
+    # XML parameter values are text: a model writes ``None``/``null`` for a
+    # parameter the schema declares nullable, and json.loads keeps ``None`` as
+    # the STRING "None" (live 2026-09-07, Qwen3.8-27B: search(path="None")
+    # searched a directory literally named None). Only a schema that allows
+    # null turns those spellings into JSON null; a plain string field keeps
+    # the text the model wrote.
+    _NULL_SPELLINGS = frozenset({"none", "null", "nil"})
+
+    @classmethod
+    def _schema_allows_null(cls, prop: Any) -> bool:
+        if not isinstance(prop, dict):
+            return False
+        if prop.get("nullable") is True:
+            return True
+        typ = prop.get("type")
+        if typ == "null":
+            return True
+        if isinstance(typ, (list, tuple)) and "null" in typ:
+            return True
+        for key in ("anyOf", "oneOf"):
+            options = prop.get(key)
+            if isinstance(options, list) and any(
+                isinstance(o, dict) and o.get("type") == "null" for o in options
+            ):
+                return True
+        return False
+
+    def _coerce_nullable_arguments(
+        self, tool_calls: list[dict[str, Any]], request: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        if not request:
+            return tool_calls
+        out: list[dict[str, Any]] = []
+        for call in tool_calls:
+            schema = self._function_schema_for_tool(request, str(call.get("name") or ""))
+            props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+            raw = call.get("arguments")
+            if not isinstance(props, dict) or not isinstance(raw, str):
+                out.append(call)
+                continue
+            try:
+                args = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                out.append(call)
+                continue
+            if not isinstance(args, dict):
+                out.append(call)
+                continue
+            changed = False
+            for key, value in list(args.items()):
+                if (
+                    isinstance(value, str)
+                    and value.strip().lower() in self._NULL_SPELLINGS
+                    and self._schema_allows_null(props.get(key))
+                ):
+                    args[key] = None
+                    changed = True
+            if changed:
+                call = dict(call)
+                call["arguments"] = json.dumps(args, ensure_ascii=False)
+            out.append(call)
+        return out
 
     def extract_tool_calls_streaming(
         self,

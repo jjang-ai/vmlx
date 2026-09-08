@@ -1587,6 +1587,17 @@ def serve_command(args):
 
     _validate_lora_args_for_model_type(args, is_image=_is_image)
 
+    # Tool-parser plugins load BEFORE the parser is resolved so a plugin may
+    # replace a registered name (controlled fault injection in live proofs,
+    # or a site-local dialect) without touching the engine tree.
+    for _plugin in getattr(args, "tool_parser_plugin", None) or []:
+        from .tool_parsers import ToolParserManager as _TPM
+
+        _registered = _TPM.load_plugin(_plugin)
+        logging.getLogger(__name__).info(
+            "Tool parser plugin %s loaded: registered %s", _plugin, _registered
+        )
+
     # Configure tool calling
     _user_disabled_tool_parser = getattr(args, "tool_call_parser", None) == "none"
     server._tool_call_parser_disabled_explicitly = _user_disabled_tool_parser
@@ -4116,6 +4127,15 @@ Examples:
     # but kept first so the two control values lead the help text.
     from .tool_parsers import ToolParserManager
 
+    serve_parser.add_argument(
+        "--tool-parser-plugin",
+        action="append",
+        default=None,
+        metavar="MODULE_OR_FILE",
+        help="Import a tool-parser plugin (a .py file or dotted module) before the parser is "
+             "resolved. The plugin registers parsers through ToolParserManager.register_module and "
+             "may replace a registered name. Repeatable.",
+    )
     serve_parser.add_argument(
         "--tool-call-parser",
         type=str,

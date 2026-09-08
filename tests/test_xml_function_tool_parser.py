@@ -267,3 +267,58 @@ Done.
         assert out.tools_called is False
         assert out.tool_calls == []
         assert out.content == "<tool_call>"
+
+
+def test_nullable_schema_field_turns_none_spelling_into_json_null(parser):
+    """Live 2026-09-07 (Qwen3.8-27B, xml_function): the model wrote <parameter name="path">None</parameter> for a
+    nullable field and the STRING "None" reached the tool. Only a schema that allows null coerces it; a plain
+    string field keeps the text."""
+    output = (
+        "<tool_call>\n<function=search>\n<parameter=pattern>magic</parameter>\n<parameter=path>None</parameter>\n"
+        "<parameter=label>None</parameter>\n</function>\n</tool_call>"
+    )
+    request = {"tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object", "properties": {
+        "pattern": {"type": "string"},
+        "path": {"type": ["string", "null"]},
+        "label": {"type": "string"},
+    }}}}]}
+    info = parser.extract_tool_calls(output, request)
+    assert info.tools_called and len(info.tool_calls) == 1
+    args = json.loads(info.tool_calls[0]["arguments"])
+    assert args["path"] is None            # nullable: None spelling -> JSON null
+    assert args["label"] == "None"         # plain string: the model's text is kept
+    assert args["pattern"] == "magic"
+    # without a request/schema nothing is coerced
+    info2 = parser.extract_tool_calls(output, None)
+    assert json.loads(info2.tool_calls[0]["arguments"])["path"] == "None"
+    # anyOf / nullable:true spellings also count as allowing null
+    request2 = {"tools": [{"type": "function", "name": "search", "parameters": {"type": "object", "properties": {"path": {"anyOf": [{"type": "string"}, {"type": "null"}]}}}}]}
+    assert json.loads(parser.extract_tool_calls(output, request2).tool_calls[0]["arguments"])["path"] is None
+
+
+class TestEscapingIsData:
+    """Newline U+000A, the two characters backslash+n, slash+n, CRLF, tab, quotes, backslashes and
+    XML entities are distinct data. A string parameter's bytes must survive parse -> JSON arguments
+    -> JSON decode unchanged (LOSSLESS-API-TOOL-HISTORY-CONTRACT). The live 27B-4D escaping case
+    (probe-27b-replay-164849) diverged at GENERATION: the model wrote a real newline for the
+    prompt's literal backslash+n, and the parser preserved that byte-for-byte."""
+
+    REQUEST = {"tools": [{"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}}]}
+
+    @pytest.mark.parametrize("payload", [
+        'He said "hi\\n" — 日本語 🚀 \\ path\\to\\file\nsecond line',  # literal backslash+n AND a real newline
+        "line/none\r\nwindows\tTab",  # slash+n, CRLF, tab
+        "a &amp; b &lt;c&gt; 'q' \"dq\"",  # XML entities and quotes stay literal
+        "\\\\double \\n\\t single-escapes stay two chars",
+        "    indented first line\n\n\ntrailing blank lines\n\n",
+    ])
+    def test_string_parameter_round_trips_byte_for_byte(self, parser, payload):
+        block = (
+            "<tool_call>\n<function=write_file>\n<parameter=path>\nout/x.txt\n</parameter>\n"
+            f"<parameter=content>\n{payload}\n</parameter>\n</function>\n</tool_call>"
+        )
+        out = parser.extract_tool_calls(block, self.REQUEST)
+        assert out.tools_called
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args["content"] == payload
+        assert args["path"] == "out/x.txt"

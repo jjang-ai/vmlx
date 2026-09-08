@@ -606,9 +606,9 @@
       "tokensTitleStreaming": "これまでに生成されたトークン",
       "tokensTitleDone": "補完トークン",
       "tpsTitle": "最初のトークン以降のデコード速度。推論およびツールループの補完トークンを含みます",
-      "ppsTitle": "プロンプト処理速度",
+      "ppsTitle": "未キャッシュのプロンプトトークン数を最初のトークンまでの時間で割った値です。この時間にはキュー待ち、メディア処理、キャッシュ復元、最初のトークンの計算が含まれるため、プリフィル単体のスループットではありません。",
       "ppsTailLabel": "{speed} 未キャッシュ末尾 pp/s",
-      "ppsTailTitle": "未キャッシュの末尾だけのプロンプト処理速度。キャッシュ済みトークンは別途復元されました",
+      "ppsTailTitle": "キャッシュヒット後の最初のトークンまでの未キャッシュ入力レート：未キャッシュ末尾のみ処理され、キャッシュ済みトークンは別途復元されました。",
       "promptLabel": "プロンプト {n}",
       "cachedSuffix": "（{cached} キャッシュ済み）",
       "promptTitleCache": "プロンプトトークン — キャッシュ: {detail}",
@@ -616,7 +616,8 @@
       "ttftTitle": "最初のトークンまでの時間",
       "elapsedTitle": "経過時間",
       "totalLabel": "合計 {v}秒",
-      "totalTitle": "リクエストの合計時間"
+      "totalTitle": "リクエストの合計時間",
+      "ppsLabel": "{speed} pp/s（最初のトークンまで）"
     },
     "message": {
       "tokenCount": "{n} トークン"
@@ -1403,7 +1404,13 @@
       "warmCache": "キャッシュをウォームアップ",
       "warming": "ウォームアップ中...",
       "clearRamTitle": "ディスク上の L2 を保持したまま、常駐/インデックス済みキャッシュ状態をクリアします",
-      "clearPrefixTitle": "RAM とディスク上の L2 からプレフィックスキャッシュをクリアします"
+      "clearPrefixTitle": "RAM とディスク上の L2 からプレフィックスキャッシュをクリアします",
+      "requestId": "リクエスト",
+      "durabilityWait": "フェンス待機",
+      "durabilityAlreadyDurable": "既に永続化済み",
+      "durabilityOutcome": "保存結果",
+      "durabilityRetained": "確定トークン",
+      "durabilityDetail": "公開"
     },
     "logs": {
       "filterPlaceholder": "ログを絞り込み...",
@@ -1531,7 +1538,8 @@
       "clearPrefixL2": "プレフィックス + L2 をクリア",
       "clearAll": "すべてクリア",
       "reuseExplainer": "再利用はトークン0から連続する最長の因果プレフィックスに一致します。一致しない末尾のみがプリフィルされ、任意の後方部分や中間の並びが再利用されることはありません。経路依存の系列（DeepSeek V4、ZAYA CCA、および Gemma 4 や Muse などの回転KVモデル）では、キャッシュ済みの連鎖より短いプロンプトは何も再利用されず、全体がプリフィルされる場合があります。",
-      "clearSkipped": "一部のキャッシュ層は消去されませんでした: {{skipped}}。実行中のリクエストが使用中です。セッションがアイドルになってから再試行してください。"
+      "clearSkipped": "一部のキャッシュ層は消去されませんでした: {{skipped}}。実行中のリクエストが使用中です。セッションがアイドルになってから再試行してください。",
+      "lastDurability": "最後の生成の永続性（終端フェンス）"
     },
     "embeddings": {
       "sessionMustBeRunning": "埋め込みを生成するにはセッションが実行中である必要があります。",
@@ -1619,7 +1627,9 @@
       "ssmL2": "SSM L2",
       "ssmResidentMemory": "SSM 常駐メモリ",
       "memActive": "アクティブ",
-      "memPeak": "ピーク"
+      "memPeak": "ピーク",
+      "notReported": "未報告",
+      "mtpRuntimeScope": "MTP ランタイム範囲"
     },
     "context": {
       "startTimedOut": "セッションの起動がタイムアウトしました",

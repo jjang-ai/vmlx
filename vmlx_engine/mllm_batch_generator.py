@@ -130,6 +130,7 @@ from .errors import (
     UnsupportedMediaModalityError,
     VLMImagePrefillBudgetError,
     MediaControlsUnmeetableError,
+    MediaInputError,
 )
 from .vision_embedding_cache import VisionEmbeddingCache
 from .cache_key import CACHE_EXTRA_SCOPES_KEY, scope_cache_extra_key
@@ -4441,6 +4442,8 @@ class MLLMNativeMTPStats:
 
         return {
             "request_id": request_id,
+            "policy": self.depth_policy or None,
+            "configured_depth": int(self.configured_depth) if self.configured_depth else None,
             "finish_reason": finish_reason,
             "final_depth": int(final_depth or 1),
             "cycles": int(self.cycles),
@@ -7424,6 +7427,9 @@ class MLLMBatchStats:
         self.hybrid_kv_without_ssm_tokens: int = 0
         self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
         self.last_cache_execution: Optional[Dict[str, Any]] = None
+        # the last completed generation's terminal durability fence
+        # (request id, wait, ledger outcome) — set by the scheduler's barrier
+        self.last_durability: Optional[Dict[str, Any]] = None
         self.last_native_mtp: Optional[Dict[str, Any]] = None
         self.last_native_mtp_skip: Optional[Dict[str, Any]] = None
         self.last_prefill_trace: Optional[Dict[str, Any]] = None
@@ -7472,6 +7478,7 @@ class MLLMBatchStats:
             "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
             "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
             "last_cache_execution": self.last_cache_execution,
+            "last_durability": self.last_durability,
             "last_native_mtp": self.last_native_mtp,
             "last_native_mtp_skip": self.last_native_mtp_skip,
             "last_prefill_trace": self.last_prefill_trace,
@@ -7799,6 +7806,33 @@ def _offset_proxy_needed_for_model_type(model_type: str) -> bool:
     # array offsets; a family that needs the int proxy should be added
     # explicitly above.
     return False
+
+
+# Failures that mean the REQUEST's media cannot be used: an unreadable or
+# undecodable source (the loaders raise ValueError for an unusable input and
+# OSError for a file/URL that cannot be read; PIL's UnidentifiedImageError,
+# urllib's URLError and binascii.Error are subclasses). Anything else raised
+# inside media preprocessing is an INTERNAL failure (TypeError, MemoryError,
+# a processor bug) and must keep its own class — reporting it as the client's
+# invalid input (400) would hide a product defect behind a user-facing message.
+_MEDIA_INPUT_FAILURES = (OSError, ValueError)
+
+
+@contextmanager
+def _media_input_failure_scope(kind: str, request_id):
+    """Turn an input-class failure of ``kind`` ("image"/"video") preprocessing
+    into ``MediaInputError``; let typed rejections and internal failures
+    propagate untouched."""
+    try:
+        yield
+    except (MediaControlsUnmeetableError, MediaInputError):
+        raise
+    except _MEDIA_INPUT_FAILURES as e:
+        # never a silent drop into a text-only answer
+        logger.warning(f"Failed to process {kind} for {request_id}: {e}")
+        raise MediaInputError(
+            f"{kind} input cannot be used: {e}", request_id=request_id
+        ) from e
 
 
 class MLLMBatchGenerator:
@@ -8479,7 +8513,7 @@ class MLLMBatchGenerator:
                 request.extra_kwargs = dict(preserved_private_kwargs)
                 self._raise_if_prompt_over_limit(
                     request,
-                    source="tokenized VLM text prompt",
+                    source="text prompt (tokenized)",
                 )
                 processing_time = time.perf_counter() - tic
                 logger.debug(
@@ -8509,15 +8543,11 @@ class MLLMBatchGenerator:
             if _image_controls is not None and getattr(_image_controls, "is_unset", True):
                 _image_controls = None
             for img in request.images:
-                try:
+                with _media_input_failure_scope("image", request.request_id):
                     path = process_image_input(img)
                     if _image_controls is not None:
                         path = self._apply_image_controls(request, path, _image_controls, strict=_strict)
                     all_images.append(path)
-                except MediaControlsUnmeetableError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"Failed to process image: {e}")
             if request.images and getattr(request, "image_token_budget", None) is not None:
                 from .image_controls import image_token_budget_support
                 from .request_diagnostics import record_for
@@ -8543,7 +8573,7 @@ class MLLMBatchGenerator:
             max_frames = _controls.effective_max_frames()
 
             for video in request.videos:
-                try:
+                with _media_input_failure_scope("video", request.request_id):
                     video_path = process_video_input(video)
                     video_cache_sources.append(video_path)
                     video_input, sample_fps = _fetch_video_for_processor(
@@ -8576,10 +8606,6 @@ class MLLMBatchGenerator:
                         _format_timestamps(_timestamps),
                         _controls.cache_key_fragment(),
                     )
-                except MediaControlsUnmeetableError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"Failed to process video: {e}")
             if request.videos and not video_inputs:
                 raise ValueError("All video inputs failed to process")
 
@@ -8657,7 +8683,7 @@ class MLLMBatchGenerator:
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
             self._raise_if_prompt_over_limit(
                 request,
-                source="cached tokenized VLM media prompt",
+                source="prompt with media (tokenized from the pixel cache, media tokens included)",
             )
 
             logger.debug(
@@ -8881,7 +8907,7 @@ class MLLMBatchGenerator:
 
         self._raise_if_prompt_over_limit(
             request,
-            source="tokenized VLM media prompt",
+            source="prompt with media (tokenized, media tokens included)",
         )
 
         processing_time = time.perf_counter() - tic
@@ -13102,7 +13128,7 @@ class MLLMBatchGenerator:
                 trace.start("preprocess")
                 self._preprocess_request(req)
                 trace.stop("preprocess")
-            except MediaControlsUnmeetableError as strict_err:
+            except (MediaControlsUnmeetableError, MediaInputError) as strict_err:
                 trace.stop("preprocess")
                 logger.info(
                     "Rejected VLM prompt for %s before cache lookup/store: %s",
@@ -13117,7 +13143,7 @@ class MLLMBatchGenerator:
                         logprobs=mx.zeros((1,)),
                         finish_reason="error",
                         error=str(strict_err),
-                        error_code=MediaControlsUnmeetableError.code,
+                        error_code=type(strict_err).code,
                     )
                 )
                 continue
@@ -15657,6 +15683,8 @@ class MLLMBatchGenerator:
                     _err_code = UnsupportedMediaModalityError.code
                 elif isinstance(prefill_err, MediaControlsUnmeetableError):
                     _err_code = MediaControlsUnmeetableError.code
+                elif isinstance(prefill_err, MediaInputError):
+                    _err_code = MediaInputError.code
                 elif isinstance(prefill_err, PromptTooLongError):
                     _err_code = "prompt_too_long"
                 elif isinstance(prefill_err, PrefillAdmissionError):
@@ -15676,6 +15704,7 @@ class MLLMBatchGenerator:
                     VLMImagePrefillBudgetError.code,
                     UnsupportedMediaModalityError.code,
                     MediaControlsUnmeetableError.code,
+                    MediaInputError.code,
                     "prompt_too_long",
                     "prefill_admission_declined",
                 }:

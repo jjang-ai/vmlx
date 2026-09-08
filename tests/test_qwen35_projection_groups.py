@@ -268,6 +268,14 @@ def test_qwen35_text_mtp_wrapper_consumes_exact_decode_conv_candidate():
     assert "lengths is None" in gdn_source
 
 
+def _write_stub_shard(root, name="model.safetensors"):
+    """A minimal valid safetensors file so bundle integrity (which now requires a
+    weight shard) accepts a test bundle that never loads weights."""
+    import json as _json, struct as _struct
+    header = _json.dumps({"__metadata__": {"format": "pt"}}).encode()
+    (root / name).write_bytes(_struct.pack("<Q", len(header)) + header)
+
+
 def test_generic_loader_prepares_acceleration_after_weight_hydration(
     monkeypatch, tmp_path
 ):
@@ -279,6 +287,7 @@ def test_generic_loader_prepares_acceleration_after_weight_hydration(
     from vmlx_engine.utils import jang_loader, nanbeige_runtime, tokenizer
 
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "test_model"}))
+    _write_stub_shard(tmp_path)
     events = []
 
     class PreparedModel:
