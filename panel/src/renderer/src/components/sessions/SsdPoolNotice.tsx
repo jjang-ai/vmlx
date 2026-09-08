@@ -27,8 +27,8 @@ export function SsdPoolNotice({ sessionId, host, port, pid }: { sessionId: strin
           setSnapshot(value)
           if (value) {
             const kind = ssdPoolNoticeKind(value, previous.current)
-            if (kind) setNotice({ kind, key: `${value.root}:${value.cap}:${value.evicted}:${kind}` })
-            else if (previous.current?.root !== value.root) setNotice(null)
+            if (kind) setNotice({ kind, key: `${value.root}:${value.cap}:${value.capacityEvicted}:${kind}` })
+            else if (previous.current?.root !== value.root || previous.current?.cap !== value.cap) setNotice(null)
             previous.current = value
           } else setNotice(null)
         }
@@ -48,10 +48,10 @@ export function SsdPoolNotice({ sessionId, host, port, pid }: { sessionId: strin
           || !Number.isFinite(result.freed_bytes) || !Number.isFinite(result.remaining_bytes)) {
         throw new Error(t('ssdPool.unknownResult'))
       }
-      setMessage(t('ssdPool.result', {
-        freed: formatCacheStorageBytes(result.freed_bytes),
-        remaining: formatCacheStorageBytes(result.remaining_bytes),
-      }))
+      // Clearing resolves the notice. Do not leave a historical "N remains"
+      // result beside live usage that increases as the next request writes.
+      setMessage('')
+      setNotice(null)
       setConfirm(false)
       setSnapshot(s => s ? { ...s, used: result.remaining_bytes } : s)
     } catch (error) {

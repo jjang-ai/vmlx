@@ -32,7 +32,59 @@ def test_explicit_clear_uses_managed_pool_and_preserves_cap(tmp_path):
         assert not a.exists() and not b.exists()
         assert unrelated.read_bytes() == b"not a managed namespace"
         assert result.max_size_bytes == 1_000_000
+        assert result.capacity_evicted_entries_total == 0
         assert budget.refresh_health().max_size_bytes == 1_000_000
+    finally:
+        budget.close()
+
+
+def test_capacity_counter_excludes_manual_clear_and_survives_health_and_restart(tmp_path):
+    budget = GlobalDiskCacheBudget(tmp_path, 450_000)
+    try:
+        budget.enforce(force=True)
+        _indexed_block(tmp_path / "aaaaaaaaaaaa", "aa-old", size=300_000,
+                       accessed=time.time() - 2000)
+        _indexed_block(tmp_path / "aaaaaaaaaaaa", "bb-new", size=300_000,
+                       accessed=time.time() - 1000)
+        result = budget.enforce(force=True)
+        count = result.capacity_evicted_entries_total
+        assert count > 0
+        assert result.bytes_after < result.max_size_bytes
+        assert budget.refresh_health().capacity_evicted_entries_total == count
+        with budget.exclusive_mutation_guard():
+            fast = budget.account_finalized_write_locked(0)
+        assert fast.capacity_evicted_entries_total == count
+        # Legacy rows without ancestry are evicted as one indivisible set.
+        # Add a fresh under-budget entry so explicit clear actually removes data.
+        _indexed_block(tmp_path / "aaaaaaaaaaaa", "cc-clear", size=1000,
+                       accessed=time.time() - 1000)
+        cleared = budget.clear_eligible()
+        assert cleared.evicted_entries > 0
+        assert cleared.capacity_evicted_entries_total == count
+    finally:
+        budget.close()
+    restarted = GlobalDiskCacheBudget(tmp_path, 450_000)
+    try:
+        assert restarted.refresh_health().capacity_evicted_entries_total == count
+    finally:
+        restarted.close()
+
+
+def test_routine_garbage_collection_is_not_capacity_eviction(tmp_path):
+    namespace = tmp_path / "aaaaaaaaaaaa"
+    ensure_managed_block_cache_namespace(namespace)
+    payload = namespace / "blocks" / "orphan.safetensors"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"unreferenced")
+    old = time.time() - 1000
+    os.utime(payload, (old, old))
+    budget = GlobalDiskCacheBudget(tmp_path, 1_000_000)
+    try:
+        result = budget.enforce(force=True)
+        assert not payload.exists()
+        assert result.evicted_entries_total > 0
+        assert result.capacity_evicted_entries_total == 0
+        assert budget.refresh_health().capacity_evicted_entries_total == 0
     finally:
         budget.close()
 

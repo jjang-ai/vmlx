@@ -1352,6 +1352,7 @@ class SSMCompanionDiskStore:
                     "compliant": global_health.compliant,
                     "accounted": global_health.accounted,
                     "evicted_entries": global_health.evicted_entries,
+                    "capacity_evicted_entries_total": global_health.capacity_evicted_entries_total,
                     "accounting_generation": global_health.accounting_generation,
                     "reconciliation_generation": (
                         global_health.reconciliation_generation

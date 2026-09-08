@@ -92,6 +92,22 @@ def _write_request(
     return _wait_for_fence(store, fence_id)
 
 
+def test_stats_forward_capacity_evictions_separately_from_cleanup(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    store = BlockDiskStore(str(tmp_path), max_size_gb=0)
+    try:
+        health = store.global_budget.refresh_health()
+        monkeypatch.setattr(store.global_budget, "refresh_health", lambda: replace(
+            health, evicted_entries_total=269, capacity_evicted_entries_total=3,
+        ))
+        stats = store.get_stats()["global_budget"]
+        assert stats["evicted_entries_total"] == 269
+        assert stats["capacity_evicted_entries_total"] == 3
+    finally:
+        store.shutdown()
+
+
 def test_write_fence_correlates_request_without_exposing_hashes(tmp_path):
     store = BlockDiskStore(str(tmp_path), max_size_gb=0)
     try:

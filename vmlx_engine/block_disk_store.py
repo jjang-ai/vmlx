@@ -3824,6 +3824,7 @@ class BlockDiskStore:
             "evicted_entries": global_health.evicted_entries,
             # cumulative across every writer/process on this root (ledger)
             "evicted_entries_total": global_health.evicted_entries_total,
+            "capacity_evicted_entries_total": global_health.capacity_evicted_entries_total,
             "evicted_bytes_total": global_health.evicted_bytes_total,
             "protected_recent_orphans": global_health.protected_recent_orphans,
             "protected_temp_files": global_health.protected_temp_files,

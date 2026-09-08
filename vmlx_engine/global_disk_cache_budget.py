@@ -235,6 +235,9 @@ class GlobalBudgetResult:
     # scan (a kill inside a write leaves such files; the idle pass owes them a
     # later look)
     protected_temp_files: int = 0
+    # Capacity-driven LRU removals only. Manual clears and routine orphan/temp
+    # cleanup must never be presented as a user-configured capacity warning.
+    capacity_evicted_entries_total: int = 0
 
 
 class GlobalDiskCacheBudget:
@@ -636,6 +639,9 @@ class GlobalDiskCacheBudget:
                 "evicted_bytes_total": max(
                     0, int(state.get("evicted_bytes_total") or 0)
                 ),
+                "capacity_evicted_entries_total": max(
+                    0, int(state.get("capacity_evicted_entries_total") or 0)
+                ),
             }
         except (TypeError, ValueError, KeyError) as exc:
             raise OSError(f"invalid global cache accounting values: {exc}") from exc
@@ -779,6 +785,9 @@ class GlobalDiskCacheBudget:
             accounted=True,
             accounting_generation=generation,
             reconciliation_generation=state["reconciliation_generation"],
+            evicted_entries_total=int(state.get("evicted_entries_total") or 0),
+            evicted_bytes_total=int(state.get("evicted_bytes_total") or 0),
+            capacity_evicted_entries_total=int(state.get("capacity_evicted_entries_total") or 0),
         )
         self._last_result = result
         return result
@@ -1644,6 +1653,7 @@ class GlobalDiskCacheBudget:
                     reconciliation_generation=reconciliation_generation,
                     evicted_entries_total=int(state.get("evicted_entries_total") or 0),
                     evicted_bytes_total=int(state.get("evicted_bytes_total") or 0),
+                    capacity_evicted_entries_total=int(state.get("capacity_evicted_entries_total") or 0),
                     protected_temp_files=(
                         previous.protected_temp_files if previous is not None else 0
                     ),
@@ -2038,6 +2048,10 @@ class GlobalDiskCacheBudget:
         evicted_bytes_total = (
             int(accounting.get("evicted_bytes_total") or 0) + evicted_bytes
         )
+        capacity_evicted_entries_total = int(
+            accounting.get("capacity_evicted_entries_total") or 0
+        ) + (max(0, evicted_entries - garbage_entries)
+             if not clear_eligible and max_size_bytes > 0 else 0)
         self._write_accounting_locked(
             {
                 "bytes_estimate": after,
@@ -2046,6 +2060,7 @@ class GlobalDiskCacheBudget:
                 "reconciled_at_ns": reconciled_at_ns,
                 "evicted_entries_total": evicted_entries_total,
                 "evicted_bytes_total": evicted_bytes_total,
+                "capacity_evicted_entries_total": capacity_evicted_entries_total,
             }
         )
         result = GlobalBudgetResult(
@@ -2063,6 +2078,7 @@ class GlobalDiskCacheBudget:
             reconciliation_generation=reconciliation_generation,
             evicted_entries_total=evicted_entries_total,
             evicted_bytes_total=evicted_bytes_total,
+            capacity_evicted_entries_total=capacity_evicted_entries_total,
             protected_temp_files=protected_temp_files,
         )
         self._last_result = result
