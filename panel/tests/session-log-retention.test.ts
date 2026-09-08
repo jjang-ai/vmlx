@@ -40,18 +40,18 @@ describe('session log retention across stop', () => {
   })
 })
 
-describe('session create dedupes by model identity', () => {
+describe('session create dedupes only actual bundle paths', () => {
   const source = readFileSync(
     new URL('../src/main/sessions.ts', import.meta.url),
     'utf8',
   )
 
-  it('create-path existing lookup falls back to identity matching', () => {
+  it('create-path existing lookup uses filesystem identity, not basename', () => {
     expect(source).toContain(
       "db.getSessionByModelPath(modelPath) ||",
     )
     expect(source).toContain(
-      "s => s.type !== 'remote' && sessionMatchesModelPath(s.modelPath, modelPath)",
+      "s => s.type !== 'remote' && sameLocalBundlePath(s.modelPath, modelPath)",
     )
   })
 })

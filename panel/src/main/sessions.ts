@@ -76,6 +76,7 @@ import {
 } from './backend-stderr'
 import { validateJangBundleMetadataForLaunch } from './model-bundle-validation'
 import { runModelBundleIntegrityPreflight } from './model-bundle-integrity'
+import { sameLocalBundlePath } from './local-bundle-identity'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -2234,16 +2235,13 @@ export class SessionManager extends EventEmitter {
     normalizeCacheStackMutualExclusion(config)
     markCacheStackStartupDefaultsCurrent(config, modelPath)
 
-    // Check if session already exists for this model path. Raw-path lookup
-    // first; fall back to model IDENTITY so path-prefix twins (~/models
-    // symlink vs /Volumes real dir, HF id vs resolved dir) reuse the
-    // existing session instead of spawning duplicate rows — duplicate twins
-    // caused the stopped-pin/not-running-banner class (see
-    // CHAT-SESSION-MODELPATH-IDENTITY-MISMATCH).
+    // Reuse only the same actual directory (including genuine symlink aliases).
+    // A basename is not a load identity: another drive may hold a different
+    // quantization or a repaired/test copy with the exact same folder name.
     const existing =
       db.getSessionByModelPath(modelPath) ||
       db.getSessions().find(
-        s => s.type !== 'remote' && sessionMatchesModelPath(s.modelPath, modelPath)
+        s => s.type !== 'remote' && sameLocalBundlePath(s.modelPath, modelPath)
       )
     if (existing) {
       // Merge new config into existing (don't overwrite unspecified fields)
