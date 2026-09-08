@@ -215,21 +215,39 @@ def test_terminal_visible_stream_suffix_never_rewrites_nonmonotonic_text():
     ) == ""
 
 
+@pytest.mark.parametrize("suffix", ["`", "<", "[", "``", "\n`"])
+def test_terminal_tools_enabled_preserves_ordinary_ambiguous_suffix(suffix):
+    text = "ordinary answer" + suffix
+    assert _terminal_visible_stream_suffix(
+        text, "ordinary answer", tools_active=True,
+    ) == suffix
+
+
+@pytest.mark.parametrize("suffix", ["<tool_call>", "<tool_call", "```tool_code"])
+def test_terminal_tools_enabled_still_hides_native_control_suffix(suffix):
+    assert _terminal_visible_stream_suffix(
+        "ordinary answer" + suffix, "ordinary answer", tools_active=True,
+    ) == ""
+
+
 class _TerminalVisibleSuffixEngine:
     tokenizer = SimpleNamespace(has_thinking=False)
+
+    def __init__(self, text="assert value == []"):
+        self.text = text
 
     async def stream_chat(self, *, messages, **kwargs):
         del messages, kwargs
         yield GenerationOutput(
-            text="assert value == [",
-            new_text="assert value == [",
+            text=self.text[:-1],
+            new_text=self.text[:-1],
             prompt_tokens=3,
             completion_tokens=4,
             finished=False,
             finish_reason=None,
         )
         yield GenerationOutput(
-            text="assert value == []",
+            text=self.text,
             new_text="",
             prompt_tokens=3,
             completion_tokens=5,
@@ -250,18 +268,21 @@ def _configure_terminal_suffix_server(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_emits_terminal_visible_suffix(monkeypatch):
+@pytest.mark.parametrize("tools_enabled", [False, True])
+@pytest.mark.parametrize("text", ["assert value == []", "The word is `PELICAN-7731`", "comparison <"])
+async def test_chat_stream_emits_terminal_visible_suffix(monkeypatch, tools_enabled, text):
     server = _configure_terminal_suffix_server(monkeypatch)
     request = ChatCompletionRequest(
         model="qwen4-terminal-suffix",
         messages=[Message(role="user", content="return code")],
         stream=True,
         enable_thinking=False,
+        tools=[{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}}}] if tools_enabled else None,
     )
 
     chunks = []
     async for line in server.stream_chat_completion(
-        _TerminalVisibleSuffixEngine(),
+        _TerminalVisibleSuffixEngine(text),
         [message.model_dump(exclude_none=True) for message in request.messages],
         request,
     ):
@@ -272,7 +293,7 @@ async def test_chat_stream_emits_terminal_visible_suffix(monkeypatch):
         chunk["choices"][0]["delta"].get("content") or ""
         for chunk in chunks
         if chunk.get("choices")
-    ) == "assert value == []"
+    ) == text
     assert any(
         chunk["choices"][0].get("finish_reason") == "stop"
         for chunk in chunks
@@ -281,18 +302,21 @@ async def test_chat_stream_emits_terminal_visible_suffix(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_responses_stream_emits_terminal_visible_suffix(monkeypatch):
+@pytest.mark.parametrize("tools_enabled", [False, True])
+@pytest.mark.parametrize("text", ["assert value == []", "The word is `PELICAN-7731`", "comparison <"])
+async def test_responses_stream_emits_terminal_visible_suffix(monkeypatch, tools_enabled, text):
     server = _configure_terminal_suffix_server(monkeypatch)
     request = ResponsesRequest(
         model="qwen4-terminal-suffix",
         input="return code",
         stream=True,
         enable_thinking=False,
+        tools=[{"type": "function", "name": "read_file", "parameters": {"type": "object", "properties": {}}}] if tools_enabled else None,
     )
 
     events = []
     async for chunk in server.stream_responses_api(
-        _TerminalVisibleSuffixEngine(),
+        _TerminalVisibleSuffixEngine(text),
         [{"role": "user", "content": "return code"}],
         request,
     ):
@@ -312,5 +336,5 @@ async def test_responses_stream_emits_terminal_visible_suffix(monkeypatch):
         for event in events
         if event.get("type") == "response.output_text.done"
     ]
-    assert deltas == "assert value == []"
-    assert done == ["assert value == []"]
+    assert deltas == text
+    assert done == [text]

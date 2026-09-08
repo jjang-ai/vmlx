@@ -1739,10 +1739,12 @@ def _unwrap_single_markdown_code_fence(text: str) -> str:
     return body.strip()
 
 
-def _finalize_visible_text_for_request(text: str, request: Any) -> str:
+def _finalize_visible_text_for_request(
+    text: str, request: Any, *, minimum_partial: int = 1,
+) -> str:
     if not text:
         return ""
-    text = _strip_visual_grounding_markup_for_display(text)
+    text = _strip_visual_grounding_markup_for_display(text, minimum_partial=minimum_partial)
     if not text:
         return ""
     if _strict_exact_no_markdown_requested(request):
@@ -5382,18 +5384,20 @@ _VISUAL_GROUNDING_SPAN_RE = re.compile(
 _VISUAL_GROUNDING_END_RE = re.compile(r"<\|(?:point|box)_end\|>")
 
 
-def _strip_partial_visual_grounding_suffix(text: str) -> str:
+def _strip_partial_visual_grounding_suffix(text: str, *, minimum_partial: int = 1) -> str:
     if not text:
         return text
     for marker in _VISUAL_GROUNDING_MARKERS:
         max_prefix = min(len(marker) - 1, len(text))
-        for n in range(max_prefix, 0, -1):
+        for n in range(max_prefix, minimum_partial - 1, -1):
             if text.endswith(marker[:n]):
                 return text[:-n]
     return text
 
 
-def _strip_visual_grounding_markup_for_display(text: str) -> str:
+def _strip_visual_grounding_markup_for_display(
+    text: str, *, minimum_partial: int = 1,
+) -> str:
     """Hide VL point/box control *tokens* from user-visible assistant text.
 
     Issue #196: the special-token markers are always removed, but a span's
@@ -5414,7 +5418,7 @@ def _strip_visual_grounding_markup_for_display(text: str) -> str:
     # Remove any stray/unpaired markers left after coordinate spans.
     for _marker in _VISUAL_GROUNDING_MARKERS:
         cleaned = cleaned.replace(_marker, "")
-    return _strip_partial_visual_grounding_suffix(cleaned)
+    return _strip_partial_visual_grounding_suffix(cleaned, minimum_partial=minimum_partial)
 
 
 def _visual_grounding_display_delta(
@@ -5448,7 +5452,9 @@ def _strip_tool_markup_residue_for_display(text: str) -> str:
     return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned).strip()
 
 
-def _visible_prefix_before_unparsed_tool_markup(text: str) -> str:
+def _visible_prefix_before_unparsed_tool_markup(
+    text: str, *, minimum_partial: int = 1,
+) -> str:
     """Return only text that safely preceded a buffered but invalid tool call.
 
     Streaming stops exposing content as soon as a native tool marker begins. If
@@ -5479,7 +5485,7 @@ def _visible_prefix_before_unparsed_tool_markup(text: str) -> str:
     partial_len = 0
     for marker in _TOOL_CALL_MARKERS:
         max_prefix = min(len(marker) - 1, len(text))
-        for n in range(max_prefix, 0, -1):
+        for n in range(max_prefix, minimum_partial - 1, -1):
             if text.endswith(marker[:n]):
                 partial_len = max(partial_len, n)
                 break
@@ -8339,10 +8345,15 @@ def _terminal_visible_stream_suffix(
         _reasoning, content = parser.extract_reasoning(final_text)
         final_text = content or ""
     if tools_active and final_text:
-        final_text = _visible_prefix_before_unparsed_tool_markup(final_text)
+        # Unlike an activated tool buffer, terminal reconciliation also sees
+        # ordinary prose. Release ambiguous punctuation withheld mid-stream;
+        # only a distinguishing marker prefix warrants dropping a final tail.
+        final_text = _visible_prefix_before_unparsed_tool_markup(
+            final_text, minimum_partial=4,
+        )
     if suppress_markup and final_text:
         final_text = _clean_suppressed_tool_markup_for_display(final_text, request)
-    final_text = _finalize_visible_text_for_request(final_text, request)
+    final_text = _finalize_visible_text_for_request(final_text, request, minimum_partial=4)
     if final_text.startswith(streamed_text):
         return final_text[len(streamed_text) :]
     return ""
@@ -20550,7 +20561,7 @@ async def create_chat_completion(
     )
     response_content = clean_output_text(cleaned_text) if cleaned_text else None
     if response_content:
-        response_content = _finalize_visible_text_for_request(response_content, request)
+        response_content = _finalize_visible_text_for_request(response_content, request, minimum_partial=4)
     response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
     response_warnings = _merge_responses_warnings(
         _chat_completion_warnings_for_reasoning_only(
@@ -23950,7 +23961,7 @@ async def create_response(
         suppress_tools=_suppress_tools,
     )
     if final_text:
-        final_text = _finalize_visible_text_for_request(final_text, request)
+        final_text = _finalize_visible_text_for_request(final_text, request, minimum_partial=4)
     final_text = _drop_tool_visible_channel_marker(final_text, tool_calls) or ""
     if final_text:
         output_items.append(
@@ -28373,7 +28384,7 @@ async def stream_responses_api(
 
         # Finalize the text message with whatever content was before the tool call
         final_text = (cleaned_text or "").strip()
-        final_text = _finalize_visible_text_for_request(final_text, request)
+        final_text = _finalize_visible_text_for_request(final_text, request, minimum_partial=4)
         if final_text or message_item_started:
             _message_was_started = message_item_started
             for _event in _start_message_item_events():
@@ -28876,7 +28887,7 @@ async def stream_responses_api(
                 request,
             )
         if display_text:
-            display_text = _finalize_visible_text_for_request(display_text, request)
+            display_text = _finalize_visible_text_for_request(display_text, request, minimum_partial=4)
 
         if display_text or message_item_started or _final_reasoning_item is None:
             _message_was_started = message_item_started
