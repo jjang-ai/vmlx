@@ -16,8 +16,9 @@ export function ConsoleSidebar({ onChatSelect, onNewChat }: ConsoleSidebarProps)
   return (
     <aside data-vmlx-section="console-sidebar"
       className={`shrink-0 border-r border-border bg-background flex flex-col min-h-0 ${collapsed ? 'w-14' : 'w-[244px] max-[900px]:w-[200px]'}`}>
-      <div className={`py-6 ${collapsed ? 'px-3' : 'px-6'}`} aria-label="vMLX">
-        <span className="font-mono text-2xl tracking-tighter"><span className="text-primary">v</span>{collapsed ? '_' : 'mlx_'}</span>
+      <div className={`py-6 flex items-center gap-3 ${collapsed ? 'px-3' : 'px-6'}`} aria-label="vMLX">
+        <img src="./app-icon-64.png" width={32} height={32} alt="vMLX" data-vmlx-control="app-logo" className="shrink-0" />
+        {!collapsed && <span className="font-mono text-2xl tracking-tighter"><span className="text-primary">v</span>mlx_</span>}
       </div>
       <nav aria-label={t('console.pages')} className="px-2 pb-5 border-b border-border">
         {([

@@ -416,6 +416,10 @@ function createWindow(): void {
 
 // App ready
 app.whenReady().then(async () => {
+  // Electron's development executable otherwise retains its generic Dock icon.
+  if (is.dev && process.platform === 'darwin') {
+    app.dock?.setIcon(join(app.getAppPath(), 'resources/icon.png'))
+  }
   electronApp.setAppUserModelId('net.vmlx.app')
 
   // Main-process i18n: load all 5 locale JSONs. The active locale is

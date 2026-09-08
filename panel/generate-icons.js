@@ -1,42 +1,30 @@
 #!/usr/bin/env node
 
 /**
- * Generate app icons from SVG logo
- * Creates icon.png (1024x1024) for electron-builder
+ * Derive renderer icons from the supplied macOS app icon.
+ * resources/icon.png is the canonical 1024px source used by electron-builder.
  */
 
 const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 
-const logoSvg = fs.readFileSync(path.join(__dirname, 'resources/logo.svg'));
+const appIcon = fs.readFileSync(path.join(__dirname, 'resources/icon.png'));
 
 async function generateIcons() {
-  console.log('🎨 Generating app icons from logo.svg...');
+  console.log('Generating renderer icons from resources/icon.png...');
 
   try {
-    // Generate 1024x1024 icon.png for electron-builder
-    await sharp(logoSvg)
-      .resize(1024, 1024)
-      .png()
-      .toFile(path.join(__dirname, 'resources/icon.png'));
-
-    console.log('✅ Created resources/icon.png (1024x1024)');
-
-    // Generate favicon sizes
-    await sharp(logoSvg)
-      .resize(32, 32)
-      .png()
-      .toFile(path.join(__dirname, 'public/favicon-32.png'));
-
-    console.log('✅ Created public/favicon-32.png');
-
-    await sharp(logoSvg)
-      .resize(16, 16)
-      .png()
-      .toFile(path.join(__dirname, 'public/favicon-16.png'));
-
-    console.log('✅ Created public/favicon-16.png');
+    const metadata = await sharp(appIcon).metadata();
+    if (metadata.width !== 1024 || metadata.height !== 1024) {
+      throw new Error('resources/icon.png must be the 1024x1024 macOS source icon');
+    }
+    const output = path.join(__dirname, 'src/renderer/public');
+    fs.mkdirSync(output, { recursive: true });
+    for (const [size, name] of [[16, 'favicon-16.png'], [32, 'favicon-32.png'], [64, 'app-icon-64.png']]) {
+      await sharp(appIcon).resize(size, size).png().toFile(path.join(output, name));
+      console.log(`Created ${name}`);
+    }
 
     console.log('\n🎉 All icons generated successfully!');
   } catch (error) {
