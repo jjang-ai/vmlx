@@ -1,4 +1,5 @@
 {
+  "console": {"chatImages":"チャットと画像","serversApi":"サーバーとAPI","models":"モデル","libraryTools":"ライブラリとツール","findDownload":"検索とダウンロード","sections":"ページ内のセクション"},
   "ssdPool": {
     "capacity": "SSDキャッシュが有効な共有上限に達しました: {used} / {cap}。古い再利用可能な項目が自動削除される場合があります。",
     "evicted": "SSDキャッシュが上限に達し、古い項目が自動削除されました。現在の使用量: {used} / {cap}。",

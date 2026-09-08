@@ -1,4 +1,5 @@
 {
+  "console": {"chatImages":"Chat & Images","serversApi":"Servers & API","models":"Models","libraryTools":"Library & tools","findDownload":"Find & download","sections":"Page sections"},
   "ssdPool": {
     "capacity": "SSD cache has reached its effective pool limit: {used} / {cap}. Automatic eviction may remove older reusable entries.",
     "evicted": "SSD cache reached its limit and older entries were automatically evicted. Current pool usage: {used} / {cap}.",

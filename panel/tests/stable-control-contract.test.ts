@@ -35,7 +35,13 @@ describe('stable control contract (data-vmlx-*)', () => {
     const src = R('layout/TitleBar.tsx')
     expect(src).toContain('data-vmlx-control={`mode-${mode}`}')
     expect(src).toContain('data-vmlx-state={active ? "active" : "inactive"}')
-    for (const m of ['code', 'chat', 'server', 'tools', 'image', 'api']) expect(src).toContain(`mode="${m}"`)
+    for (const m of ['chat', 'server', 'models']) expect(src).toContain(`mode="${m}"`)
+    expect(src).not.toContain('mode="code"')
+    const sections = R('layout/ConsoleSubnavigation.tsx')
+    expect(sections).toContain('data-vmlx-control={`section-${mode}`}')
+    for (const m of ['chat', 'image', 'server', 'api', 'tools', 'models']) {
+      expect(sections).toContain(`['${m}', t(`)
+    }
   })
   it('selected state is an attribute, not a class, on the thinking and effort groups', () => {
     const src = R('chat/ChatSettings.tsx')

@@ -1,5 +1,6 @@
 import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import type { AppState, AppAction, AppMode } from '../types/app-state'
+import { restoreAppMode } from '../lib/consoleNavigation'
 
 const initialState: AppState = {
   mode: 'chat',
@@ -67,7 +68,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         dispatch({
           type: 'RESTORE_STATE',
           state: {
-            mode: (mode as AppMode) || 'chat',
+            mode: restoreAppMode(mode),
             sidebarCollapsed: sidebar === 'true',
             activeChatId: lastChat || null,
             activeSessionId: lastSession || null,

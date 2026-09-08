@@ -3,16 +3,14 @@ import { createPortal } from "react-dom";
 import {
   MessageSquare,
   Server,
-  Wrench,
-  Code2,
-  ImageIcon,
   PanelLeftClose,
   PanelLeft,
   Info,
-  Terminal,
+  HardDrive,
 } from "lucide-react";
 import { ThemeToggle } from "../ui/theme-toggle";
 import { useAppState } from "../../contexts/AppStateContext";
+import { consolePageForMode } from '../../lib/consoleNavigation';
 import {
   useTranslation,
   LOCALES,
@@ -24,10 +22,11 @@ import {
 export function TitleBar() {
   const { state, setMode, dispatch } = useAppState();
   const { t, locale, setLocale } = useTranslation();
+  const page = consolePageForMode(state.mode);
 
   return (
     <div
-      className="flex items-center h-10 min-w-0 overflow-hidden bg-card border-b border-border flex-shrink-0"
+      className="flex items-center h-[38px] min-w-0 overflow-hidden bg-background border-b border-border flex-shrink-0"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
       {/* macOS traffic light spacer + sidebar toggle */}
@@ -57,54 +56,33 @@ export function TitleBar() {
       {/* Center: mode toggle */}
       <div className="flex-1 min-w-0 flex justify-center">
         <div
-          className="flex items-center bg-muted/80 rounded-lg p-0.5 gap-0.5 border border-border/30 shadow-sm"
+          className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <ModeButton
-            mode="code"
-            active={state.mode === "code"}
-            onClick={() => setMode("code")}
-            icon={<Terminal className="h-3 w-3" />}
-            label={t("app.mode.code")}
-          />
-          <ModeButton
             mode="chat"
-            active={state.mode === "chat"}
+            active={page === "chat"}
             onClick={() => setMode("chat")}
             icon={<MessageSquare className="h-3 w-3" />}
-            label={t("app.mode.chat")}
+            label={t("console.chatImages")}
           />
           <ModeButton
             mode="server"
-            active={state.mode === "server"}
+            active={page === "server"}
             onClick={() => {
               setMode("server");
               if (state.serverPanel === "about")
                 dispatch({ type: "SET_SERVER_PANEL", panel: "dashboard" });
             }}
             icon={<Server className="h-3 w-3" />}
-            label={t("app.mode.server")}
+            label={t("console.serversApi")}
           />
           <ModeButton
-            mode="tools"
-            active={state.mode === "tools"}
+            mode="models"
+            active={page === "models"}
             onClick={() => setMode("tools")}
-            icon={<Wrench className="h-3 w-3" />}
-            label={t("app.mode.tools")}
-          />
-          <ModeButton
-            mode="image"
-            active={state.mode === "image"}
-            onClick={() => setMode("image")}
-            icon={<ImageIcon className="h-3 w-3" />}
-            label={t("app.mode.image")}
-          />
-          <ModeButton
-            mode="api"
-            active={state.mode === "api"}
-            onClick={() => setMode("api")}
-            icon={<Code2 className="h-3 w-3" />}
-            label={t("app.mode.api")}
+            icon={<HardDrive className="h-3 w-3" />}
+            label={t("console.models")}
           />
         </div>
       </div>
@@ -246,10 +224,11 @@ function ModeButton({
       data-vmlx-control={`mode-${mode}`}
       data-vmlx-state={active ? "active" : "inactive"}
       title={label}
-      className={`flex items-center gap-1.5 max-[720px]:gap-0 px-3 max-[720px]:px-2 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+      aria-current={active ? 'page' : undefined}
+      className={`flex items-center gap-1.5 max-[720px]:gap-0 px-3 max-[720px]:px-2 py-1.5 text-xs font-medium border-l-2 transition-colors ${
         active
-          ? "bg-background text-foreground shadow-md shadow-primary/10"
-          : "text-muted-foreground/70 hover:text-foreground hover:bg-background/50"
+          ? "bg-accent text-foreground border-primary"
+          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-card"
       }`}
     >
       {icon}

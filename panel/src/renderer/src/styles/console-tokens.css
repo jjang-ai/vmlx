@@ -1,0 +1,153 @@
+/* ============================================================================
+   vMLX — Console Amber
+   Drop-in design tokens. Single source of truth for the websites and the app.
+   Spec: retheme/THEME.md
+   ----------------------------------------------------------------------------
+   Two forms of every colour are provided:
+     --x        hex, for plain CSS
+     --x-rgb    space-separated triplet, for Tailwind's `/ <alpha-value>` syntax
+   Use the -rgb form anywhere you need opacity: rgb(var(--acc-rgb) / .4)
+   ============================================================================ */
+
+:root {
+  /* ---- surfaces (warm-neutral charcoal; never pure black) ---------------- */
+  --well:            #151718;  --well-rgb:            21 23 24;
+  --bg:              #1A1C1D;  --bg-rgb:              26 28 29;
+  --bg-2:            #212426;  --bg-2-rgb:            33 36 38;
+  --bg-3:            #282B2E;  --bg-3-rgb:            40 43 46;
+  --bg-4:            #31353A;  --bg-4-rgb:            49 53 58;
+
+  /* ---- lines ------------------------------------------------------------ */
+  --line-subtle:     #26292C;  --line-subtle-rgb:     38 41 44;
+  --line:            #31353A;  --line-rgb:            49 53 58;
+  --line-2:          #3F444A;  --line-2-rgb:          63 68 74;
+
+  /* ---- text ------------------------------------------------------------- */
+  --text:            #EDEEEF;  --text-rgb:            237 238 239;
+  --text-dim:        #8B9197;  --text-dim-rgb:        139 145 151;
+  --text-faint:      #666C72;  --text-faint-rgb:      102 108 114;
+  --text-on-accent:  #17191A;  --text-on-accent-rgb:  23 25 26;
+  --text-on-light:   #17191A;  --text-on-light-rgb:   23 25 26;
+
+  /* ---- the accent: amber. scarce by design. ----------------------------- */
+  --acc:             #F2A93B;  --acc-rgb:             242 169 59;
+  --acc-hi:          #FFC061;  --acc-hi-rgb:          255 192 97;
+  --acc-dim:         #7A6435;  --acc-dim-rgb:         122 100 53;
+  --acc-wash:        #2A2317;  --acc-wash-rgb:        42 35 23;
+  --acc-line:        #4D3F1E;  --acc-line-rgb:        77 63 30;
+
+  /* ---- semantic state (never interchangeable with the accent) ----------- */
+  --ok:              #5FBF7C;  --ok-rgb:              95 191 124;
+  --ok-wash:         #17251B;  --ok-line:             #2C4A34;
+  --warn:            #F0762A;  --warn-rgb:            240 118 42;
+  --warn-wash:       #2C1C13;  --warn-line:           #5A3620;
+  --err:             #E04A4F;  --err-rgb:             224 74 79;
+  --err-wash:        #2A1618;  --err-line:            #57262A;
+  --info:            #6FA8CC;  --info-rgb:            111 168 204;
+  --info-wash:       #161F26;  --info-line:           #2C4152;
+  --idle:            #666C72;  --idle-rgb:            102 108 114;
+
+  /* ---- type ------------------------------------------------------------- */
+  --font-mono:  "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+                Consolas, monospace;
+  --font-prose: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+                "Segoe UI", sans-serif;
+
+  --fs-display:  clamp(2rem, 4.6vw, 3.15rem);
+  --fs-h2:       clamp(1.4rem, 3vw, 1.95rem);
+  --fs-h3:       1.15rem;
+  --fs-stat:     1.75rem;
+  --fs-body:     0.875rem;    /* 14px */
+  --fs-body-sm:  0.8125rem;   /* 13px */
+  --fs-code:     0.78rem;     /* 12.5px */
+  --fs-label:    0.656rem;    /* 10.5px */
+  --fs-caption:  0.719rem;    /* 11.5px */
+
+  --lh-tight:    1.08;
+  --lh-heading:  1.15;
+  --lh-body:     1.7;
+  --lh-relaxed:  1.8;
+  --lh-code:     1.85;
+
+  --tr-display: -0.035em;
+  --tr-h2:      -0.03em;
+  --tr-label:    0.14em;   /* uppercase labels — the signature texture */
+
+  /* ---- shape ------------------------------------------------------------ */
+  --radius:      0;      /* panels, sections, tables, wells */
+  --radius-ctl:  2px;    /* buttons, inputs, chips */
+  --radius-dot:  50%;    /* status dots only */
+
+  /* ---- depth ------------------------------------------------------------ */
+  --elev-plate: inset 0 1px 0 #3E4247;             /* milled faceplate */
+  --elev-float: 0 16px 40px rgba(0, 0, 0, .45);    /* popovers, dialogs only */
+  --glow-acc:   0 0 8px rgba(242, 169, 59, .4);    /* meter fill, live LED */
+
+  /* ---- motion ----------------------------------------------------------- */
+  --dur:  140ms;
+  --ease: cubic-bezier(.2, .6, .35, 1);
+
+  /* ---- layout ----------------------------------------------------------- */
+  --maxw:      1120px;
+  --gutter:    28px;
+  --section-y: 72px;
+
+  --sp-1:  4px;  --sp-2:  8px;  --sp-3: 12px;  --sp-4: 16px;
+  --sp-5: 20px;  --sp-6: 24px;  --sp-8: 32px;  --sp-10: 40px;
+  --sp-12: 48px; --sp-16: 64px; --sp-18: 72px;
+
+  /* ---- app chrome ------------------------------------------------------- */
+  --titlebar-h:  38px;
+  --sidebar-w:   244px;
+  --sidebar-min: 56px;
+  --row-h:       32px;
+  --control-h:   32px;
+
+  /* ---- z ---------------------------------------------------------------- */
+  --z-base: 0; --z-sticky: 60; --z-dropdown: 100; --z-modal: 200; --z-toast: 300;
+}
+
+/* ---------------------------------------------------------------------------
+   Committed dark. The system has no light mode — it is a terminal.
+   Declared explicitly so the page never borrows a host theme's ground.
+   --------------------------------------------------------------------------- */
+html { color-scheme: dark; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every digit column lines up. */
+.tabular, table td, table th, .stat, .metric { font-variant-numeric: tabular-nums; }
+
+/* The signature label texture. */
+.label {
+  font-size: var(--fs-label);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Focus is never removed. */
+:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+
+::selection { background: rgb(var(--acc-rgb) / .28); color: var(--text); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line) var(--bg); }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: var(--bg); }
+*::-webkit-scrollbar-thumb { background: var(--line); border: 2px solid var(--bg); }
+*::-webkit-scrollbar-thumb:hover { background: var(--line-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* The only two ambient animations in the system. */
+@keyframes vmlx-blink { 0%, 50% { opacity: 1 } 50.01%, 100% { opacity: 0 } }
+@keyframes vmlx-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }

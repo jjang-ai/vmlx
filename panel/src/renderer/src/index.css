@@ -1,40 +1,42 @@
 @import 'katex/dist/katex.min.css';
+@import './styles/console-tokens.css';
+@import './styles/console-fonts.css';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  /* Midnight Steel — dark theme (default, matches vmlx.net/theme.md exactly) */
+  /* Console Amber. Existing semantic utility names remain stable. */
   :root,
   .dark {
-    --background: 10 12 16;          /* #0a0c10 */
-    --foreground: 226 228 234;       /* #e2e4ea */
-    --card: 17 20 25;               /* #111419 */
-    --card-foreground: 226 228 234;
-    --popover: 24 28 36;            /* #181c24 */
-    --popover-foreground: 226 228 234;
-    --primary: 59 130 246;          /* #3b82f6 */
-    --primary-foreground: 255 255 255;
-    --secondary: 24 28 36;          /* #181c24 */
-    --secondary-foreground: 226 228 234;
-    --muted: 30 35 48;              /* #1e2330 */
-    --muted-foreground: 139 144 160; /* #8b90a0 */
-    --accent: 37 44 59;             /* #252c3b */
-    --accent-foreground: 255 255 255;
-    --destructive: 239 68 68;       /* #ef4444 */
+    --background: var(--bg-rgb);
+    --foreground: var(--text-rgb);
+    --card: var(--bg-2-rgb);
+    --card-foreground: var(--text-rgb);
+    --popover: var(--bg-4-rgb);
+    --popover-foreground: var(--text-rgb);
+    --primary: var(--acc-rgb);
+    --primary-foreground: var(--text-on-accent-rgb);
+    --secondary: var(--bg-2-rgb);
+    --secondary-foreground: var(--text-rgb);
+    --muted: var(--bg-4-rgb);
+    --muted-foreground: var(--text-dim-rgb);
+    --accent: var(--bg-3-rgb);
+    --accent-foreground: var(--text-rgb);
+    --destructive: var(--err-rgb);
     --destructive-foreground: 255 255 255;
-    --border: 30 35 48;             /* #1e2330 */
-    --input: 37 44 59;              /* #252c3b */
-    --ring: 59 130 246;             /* #3b82f6 */
-    --warning: 245 158 11;          /* #f59e0b */
-    --warning-foreground: 255 255 255;
-    --success: 34 197 94;           /* #22c55e — green-500 */
-    --success-foreground: 255 255 255;
-    --sidebar: 13 16 22;            /* slightly darker than background */
-    --sidebar-foreground: 226 228 234;
-    --sidebar-border: 22 27 38;
-    --radius: 10px;
+    --border: var(--line-rgb);
+    --input: var(--well-rgb);
+    --ring: var(--acc-rgb);
+    --warning: var(--warn-rgb);
+    --warning-foreground: var(--text-on-accent-rgb);
+    --success: var(--ok-rgb);
+    --success-foreground: var(--text-on-accent-rgb);
+    --sidebar: var(--bg-rgb);
+    --sidebar-foreground: var(--text-rgb);
+    --sidebar-border: var(--line-rgb);
+    --radius: 0px;
   }
 
   /* Studio Light theme */
@@ -73,15 +75,14 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+    font-family: var(--font-mono);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   button, a, input, select, textarea, [role="button"] {
-    transition: background-color 0.15s ease, border-color 0.15s ease,
-                box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease,
-                transform 0.1s ease;
+    transition: background-color var(--dur) var(--ease),
+                border-color var(--dur) var(--ease), color var(--dur) var(--ease);
   }
 
   input::placeholder, textarea::placeholder {
@@ -89,8 +90,8 @@
   }
 
   :focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px rgb(var(--background)), 0 0 0 4px rgb(var(--ring) / 0.5);
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 3px;
   }
 }
 
@@ -158,22 +159,25 @@ button, input, select, textarea, a {
   -webkit-app-region: no-drag;
 }
 
-/* Dark prose overrides for Midnight Steel (requires @tailwindcss/typography) */
+/* Model output is prose; UI chrome and code remain monospace. */
+.prose { font-family: var(--font-prose); }
+.prose pre, .prose code { font-family: var(--font-mono); }
+/* Dark prose overrides (requires @tailwindcss/typography) */
 .dark .prose {
-  --tw-prose-body: #e2e4ea;
+  --tw-prose-body: #EDEEEF;
   --tw-prose-headings: #ffffff;
   --tw-prose-lead: #8b90a0;
-  --tw-prose-links: #60a5fa;
+  --tw-prose-links: #F2A93B;
   --tw-prose-bold: #ffffff;
   --tw-prose-counters: #8b90a0;
   --tw-prose-bullets: #8b90a0;
   --tw-prose-hr: #1e2330;
   --tw-prose-quotes: #e2e4ea;
-  --tw-prose-quote-borders: #3b82f6;
+  --tw-prose-quote-borders: #3F444A;
   --tw-prose-captions: #8b90a0;
-  --tw-prose-code: #60a5fa;
+  --tw-prose-code: #F2A93B;
   --tw-prose-pre-code: #e2e4ea;
-  --tw-prose-pre-bg: #0a0c10;
+  --tw-prose-pre-bg: #151718;
   --tw-prose-th-borders: #1e2330;
   --tw-prose-td-borders: #1e2330;
 }

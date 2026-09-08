@@ -1,4 +1,5 @@
 {
+  "console": {"chatImages":"Chat e imágenes","serversApi":"Servidores y API","models":"Modelos","libraryTools":"Biblioteca y herramientas","findDownload":"Buscar y descargar","sections":"Secciones de la página"},
   "ssdPool": {
     "capacity": "La caché SSD ha alcanzado el límite efectivo del conjunto: {used} / {cap}. La expulsión automática puede eliminar entradas reutilizables antiguas.",
     "evicted": "La caché SSD alcanzó su límite y se expulsaron automáticamente entradas antiguas. Uso actual: {used} / {cap}.",

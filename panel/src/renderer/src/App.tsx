@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MessageSquare, ArrowLeft, Terminal } from 'lucide-react'
 import { TitleBar } from './components/layout/TitleBar'
+import { ConsoleSubnavigation } from './components/layout/ConsoleSubnavigation'
+import { DownloadTab } from './components/sessions/DownloadTab'
 import { Sidebar } from './components/layout/Sidebar'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
 import { CreateSession } from './components/sessions/CreateSession'
@@ -202,6 +204,7 @@ function App() {
         <UpdateBanner />
         <MtpComponentUpdatePrompt />
         <DownloadStatusBar />
+        <ConsoleSubnavigation />
 
         <div className="flex flex-1 overflow-hidden">
           {/* Sidebar — chat mode only */}
@@ -248,6 +251,15 @@ function App() {
 
             {state.mode === 'tools' && (
               <ToolsModeContent />
+            )}
+            {state.mode === 'models' && (
+              <div className="h-full overflow-auto p-4">
+                <DownloadTab onDownloadComplete={() => {
+                  // Downloads remain main-process jobs. No automatic load or
+                  // route switch when a background transfer finishes.
+                  window.dispatchEvent(new CustomEvent('vmlx:models-changed'))
+                }} />
+              </div>
             )}
             {state.mode === 'image' && (
               <ImageTab />
