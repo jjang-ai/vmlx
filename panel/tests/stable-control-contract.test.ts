@@ -68,11 +68,12 @@ describe('stable control contract (data-vmlx-*)', () => {
     expect(src).toContain('data-vmlx-section={sectionKey}')
     expect(src).toContain("data-vmlx-state={expanded ? 'open' : 'closed'}")
     for (const k of ['videoFps', 'videoMaxFrames', 'videoMaxPixels', 'videoTokenBudget', 'isMultimodal']) expect(src).toContain(`settingKey="${k}"`)
-    // the multimodal/video controls live in their own, default-open section, not under Tool Integration & MCP
-    expect(src).toContain('sectionKey="multimodal"')
-    expect(src).toContain('multimodal: true,')
-    expect(src.indexOf('sectionKey="tools"')).toBeLessThan(src.indexOf('sectionKey="multimodal"'))
-    expect(src.indexOf("t('sessions.config.multimodalSupport')")).toBeGreaterThan(src.indexOf('sectionKey="multimodal"'))
+    // Media controls retain their identity within Performance & Generation,
+    // not the unrelated MCP group. The six-group redesign changes navigation.
+    expect(src).toContain('data-vmlx-section="multimodal"')
+    expect(src.indexOf('sectionKey="performance"')).toBeLessThan(src.indexOf('data-vmlx-section="multimodal"'))
+    expect(src.indexOf('data-vmlx-section="multimodal"')).toBeLessThan(src.indexOf('sectionKey="tools"'))
+    expect(src.indexOf("t('sessions.config.multimodalSupport')")).toBeGreaterThan(src.indexOf('data-vmlx-section="multimodal"'))
   })
 })
 
@@ -91,7 +92,7 @@ describe('every collapsible settings section carries its contract key', () => {
     const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'sessions', 'SessionConfigForm.tsx'), 'utf8')
     // one Section opening per line; arrow functions inside the tag contain '>' so match by line, not by tag
     const sections = src.split('\n').filter(l => l.includes('<Section ') && l.includes('expandedSections.'))
-    expect(sections.length).toBeGreaterThan(10)
+    expect(sections.length).toBe(7) // Connection fields plus the six Console groups.
     for (const sec of sections) {
       const key = sec.match(/expandedSections\.([a-zA-Z]+)/)![1]
       expect(sec, `section ${key}`).toContain(`sectionKey="${key}"`)

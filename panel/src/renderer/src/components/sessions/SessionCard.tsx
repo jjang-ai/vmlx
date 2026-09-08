@@ -145,7 +145,7 @@ export function SessionCard({
   }, [session.modelPath, isRemote]);
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
+    <div data-vmlx-section="session-card" className="min-w-0 bg-card border border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
       {/* Header */}
       <div className="flex min-w-0 items-start justify-between gap-2 mb-3">
         <div className="flex-1 min-w-0 overflow-hidden">
@@ -264,7 +264,7 @@ export function SessionCard({
       )}
 
       {/* Info */}
-      <div className="flex gap-4 text-xs text-muted-foreground mb-3">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 break-all text-xs text-muted-foreground mb-3">
         {isRemote ? (
           <span>
             {session.remoteUrl ? new URL(session.remoteUrl).host : session.host}
@@ -278,7 +278,7 @@ export function SessionCard({
       </div>
 
       {/* Actions */}
-      <div className="flex gap-2">
+      <div data-vmlx-section="session-card-actions" className="flex flex-wrap gap-2 [&>button]:max-w-full [&>button]:whitespace-normal [&>button]:break-words">
         {session.modelPathMissing ? (
           <>
             {(session.status === "running" || session.status === "loading" || session.status === "standby") && (

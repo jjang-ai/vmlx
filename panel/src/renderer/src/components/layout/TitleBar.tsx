@@ -5,7 +5,6 @@ import {
   PanelLeft,
   Info,
 } from "lucide-react";
-import { ThemeToggle } from "../ui/theme-toggle";
 import { useAppState } from "../../contexts/AppStateContext";
 import {
   useTranslation,
@@ -52,12 +51,11 @@ export function TitleBar() {
         vmlx / Console
       </div>
 
-      {/* Right: language picker + about + theme toggle */}
+      {/* Right: language picker + preferences. Console is the only theme. */}
       <div
         className="flex items-center gap-1 px-3"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <ThemeToggle />
         <LanguagePicker locale={locale} setLocale={setLocale} />
         <button
           onClick={() => {

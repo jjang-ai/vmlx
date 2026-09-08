@@ -671,6 +671,7 @@
       "lazyResidentNote": " — expert weights stream from SSD; resident RAM stays below bundle size"
     },
     "config": {
+      "retiredDistributedNote": "This saved session has retired experimental distributed mode enabled. Turn it off here to return to local serving. New sessions do not offer this mode.",
       "serverSettings": "Server Settings",
       "apiKeyPlaceholder": "Leave empty for no auth",
       "servedModelNamePlaceholder": "Auto (from model path)",

@@ -345,14 +345,6 @@ function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
         </div>
 
         <div>
-          <p className="font-medium text-foreground">{t('chat.quickStart.smeltTitle')}</p>
-          <p>{t('chat.quickStart.smeltBody')}</p>
-          <p className="text-muted-foreground/70 mt-0.5">
-            {t('chat.quickStart.smeltNote')}
-          </p>
-        </div>
-
-        <div>
           <p className="font-medium text-foreground">{t('chat.quickStart.tipsTitle')}</p>
           <ul className="list-disc list-inside space-y-0.5 text-muted-foreground/80">
             <li>{t('chat.quickStart.tipLooping')}</li>

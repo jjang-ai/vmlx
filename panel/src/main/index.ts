@@ -173,6 +173,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    backgroundColor: '#1A1C1D',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

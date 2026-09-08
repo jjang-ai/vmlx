@@ -671,6 +671,7 @@
       "lazyResidentNote": " — 전문가 가중치는 SSD에서 스트리밍되며 상주 RAM은 번들 크기 이하로 유지됩니다"
     },
     "config": {
+      "retiredDistributedNote": "이 저장된 세션에는 중단된 실험용 분산 모드가 켜져 있습니다. 로컬 실행으로 돌아가려면 여기서 끄세요. 새 세션에서는 이 모드를 제공하지 않습니다.",
       "serverSettings": "서버 설정",
       "apiKeyPlaceholder": "인증 없음은 비워두세요",
       "servedModelNamePlaceholder": "자동 (모델 경로에서)",

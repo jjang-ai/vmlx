@@ -257,8 +257,8 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
     : undefined
 
   return (
-    <div className="h-full flex items-center justify-center p-8 overflow-auto">
-      <div className="max-w-3xl w-full space-y-6">
+    <div data-vmlx-section="image-model-picker" className="h-full min-h-0 min-w-0 overflow-auto p-4 sm:p-8">
+      <div className="max-w-3xl w-full mx-auto space-y-6">
         {/* Header */}
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-2">{t('image.picker.startImageServer')}</h2>

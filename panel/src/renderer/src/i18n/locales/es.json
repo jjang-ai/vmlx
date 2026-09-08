@@ -671,6 +671,7 @@
       "lazyResidentNote": " — los pesos de expertos se transmiten desde el SSD; la RAM residente se mantiene por debajo del tamaño del paquete"
     },
     "config": {
+      "retiredDistributedNote": "Esta sesión guardada tiene activado el modo distribuido experimental retirado. Desactívalo aquí para volver a la ejecución local. Las sesiones nuevas no ofrecen este modo.",
       "serverSettings": "Configuración del servidor",
       "apiKeyPlaceholder": "Deje vacío para no usar autenticación",
       "servedModelNamePlaceholder": "Auto (desde la ruta del modelo)",

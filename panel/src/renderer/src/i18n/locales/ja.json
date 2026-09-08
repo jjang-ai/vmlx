@@ -671,6 +671,7 @@
       "lazyResidentNote": " — エキスパート重みはSSDからストリーミングされ、常駐RAMはバンドルサイズを下回ります"
     },
     "config": {
+      "retiredDistributedNote": "この保存済みセッションでは廃止された実験的な分散モードが有効です。ローカル実行に戻すにはここで無効にしてください。新規セッションにはこのモードはありません。",
       "serverSettings": "サーバー設定",
       "apiKeyPlaceholder": "空のままで認証なし",
       "servedModelNamePlaceholder": "自動(モデルパスから)",

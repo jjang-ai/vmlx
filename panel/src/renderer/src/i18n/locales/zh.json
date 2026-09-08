@@ -671,6 +671,7 @@
       "lazyResidentNote": " — 专家权重从 SSD 流式加载；常驻内存保持在包体大小以下"
     },
     "config": {
+      "retiredDistributedNote": "此已保存的会话启用了已停用的实验性分布式模式。在此关闭可恢复本地运行。新会话不再提供此模式。",
       "serverSettings": "服务器设置",
       "apiKeyPlaceholder": "留空则不启用认证",
       "servedModelNamePlaceholder": "自动 (根据模型路径)",

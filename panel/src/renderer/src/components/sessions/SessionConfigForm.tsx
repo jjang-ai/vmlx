@@ -1,12 +1,10 @@
 import { DEFAULT_BLOCK_DISK_CACHE_PERCENT } from '../../../../shared/cacheDefaults'
 import { useEffect, useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
-import { DistributedNodeList } from './DistributedNodeList'
 import { useTranslation } from '../../i18n'
 import {
   cacheControlUpdatesForBlockDiskToggle,
   cacheControlUpdatesForDiskToggle,
-  cacheControlUpdatesForPagedToggle,
   resolveCacheControlPolicy,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
@@ -328,7 +326,7 @@ interface SessionConfigFormProps {
   modelType?: 'text' | 'image'
   /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
   imageMode?: string
-  /** Session ID for components that need to query the running backend (e.g. DistributedNodeList). Omit for the CreateSession form where the session doesn't exist yet. */
+  /** Session ID for backend status and scoped SSD clearing. Omit before creation. */
   sessionId?: string
   /** Model path/name used only for artifact-specific policy labels (for example Bonsai's q8 exception). */
   modelIdentity?: string
@@ -341,17 +339,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
-    distributed: false,
     prefixCache: false,
-    pagedCache: false,
-    kvCacheQuant: false,
-    diskCache: false,
     power: false,
     performance: false,
     tools: false,
-    multimodal: true,
     specDecode: false,
-    nativeMtp: true,
   })
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
@@ -499,7 +491,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const cachePolicy = resolveCacheControlPolicy(cacheControlState)
   const effectiveUsePagedCache = cachePolicy.effectiveUsePagedCache
   const blockDiskOnly = cachePolicy.blockDiskCacheChecked && !effectiveUsePagedCache
-  const genericPagedCacheToggleDisabled = cachePolicy.pagedCacheDisabled || exactTypedPromptDiskCache
   const effectivePagedCacheBlockSize = dsv4Active ? DSV4_PAGED_CACHE_BLOCK_SIZE : config.pagedCacheBlockSize
   const pagedCacheUiState = pagedCacheControlsState(effectiveUsePagedCache, blockDiskOnly)
   // The shared module still owns the ARITHMETIC (and its English sentence, which
@@ -513,12 +504,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     defaultBlockSize: DEFAULT_CONFIG.pagedCacheBlockSize,
     defaultMaxBlocks: DEFAULT_CONFIG.maxCacheBlocks,
   })
-  const effectivePagedCapacityText = t('sessions.config.pagedCacheCapacity', {
-    blockSize: pagedCapacity.blockSize,
-    usableBlocks: pagedCapacity.usableBlocks,
-    maxBlocks: pagedCapacity.maxBlocks,
-    tokens: pagedCapacity.capacityTokens.toLocaleString(),
-  })
   // A SEPARATE key, not string surgery on the localized sentence. The previous
   // version took the paged text above and swapped the English phrase naming
   // in-memory capacity for one naming the SSD block index. That is a no-op in
@@ -530,7 +515,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     maxBlocks: pagedCapacity.maxBlocks,
     tokens: pagedCapacity.capacityTokens.toLocaleString(),
   })
-  const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')
   // One production representation: preserve the loaded architecture's native
   // cache state and add no generic stored codec. Persisted stale values are
   // migrated by the main process; the renderer never echoes them as effective.
@@ -957,16 +941,31 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text={t('sessions.config.batchingOffDisablesNote')} />
         )}
         <InfoNote text={t('sessions.config.metalWiredLimitHelp', { command: metalWiredLimitCommand })} />
+        {distributedActive && <div data-vmlx-section="retired-distributed">
+          <InfoNote text={t('sessions.config.retiredDistributedNote')} />
+          <CheckField label={t('sessions.config.enableDistributed')}
+            checked={distributedActive} onChange={() => onChange('distributedEnabled', false)} />
+        </div>}
       </Section>
 
-      {/* Prefix Cache */}
+      {showCachingHelp && <Modal title={t('sessions.config.cachingHelpHeader')} onClose={() => setShowCachingHelp(false)} className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div className="space-y-4 text-sm text-muted-foreground">
+          <p>{t('sessions.config.cachingHelpBatchBody')}</p>
+          <p>{t('sessions.config.blockDiskPureSsdNote')}</p>
+          <p>{t('sessions.config.blockCacheSharedBudgetNote')}</p>
+          <p>{t('sessions.config.blockCacheArchitecturePoolNote')}</p>
+          {exactTypedPromptDiskCache && <p>{t('sessions.config.openPanguTypedCacheNote')}</p>}
+        </div>
+      </Modal>}
+
+      {/* Prefix Cache — SSD blocks and architecture-native stored representation. */}
       <Section title={t('sessions.config.prefixCache')} sectionKey="prefixCache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.prefixCacheHint')} />}
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}
         {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguTypedCacheNote')} />}
         {batchingOff && <IncompatWarning text={t('sessions.config.prefixCacheRequiresBatching')} />}
         <CheckField label={t('sessions.config.enablePrefixCache')} tooltip={t('sessions.config.enablePrefixCacheTooltip')} checked={effectivePrefixCacheEnabled} onChange={v => onChange('enablePrefixCache', v)} />
-        {!dsv4Active && effectivePrefixCacheEnabled && (
+        {!dsv4Active && !blockDiskOnly && effectivePrefixCacheEnabled && (
           <>
             {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguMemoryAwareNote')} />}
             <CheckField label={t('sessions.config.legacyEntryCountCache')} tooltip={t('sessions.config.legacyEntryCountCacheTooltip')} checked={exactTypedPromptDiskCache ? false : config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} disabled={exactTypedPromptDiskCache} />
@@ -1049,62 +1048,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               </>
             )}
 
-            {/* Caching Help Modal */}
-            {!dsv4Active && showCachingHelp && (
-              <Modal title={t('sessions.config.cachingHelpHeader')} onClose={() => setShowCachingHelp(false)} className="max-w-2xl max-h-[85vh] overflow-y-auto">
-                <div className="space-y-6 text-sm">
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-2">{t('sessions.config.continuousBatchingEngine')}</h3>
-                    <p className="text-muted-foreground leading-relaxed">
-                      <strong>{t('sessions.config.continuousBatching')}</strong> {t('sessions.config.cachingHelpBatchBody')}
-                    </p>
-                  </div>
 
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-2">{t('sessions.config.prefixCachingModes')}</h3>
-                    <p className="text-muted-foreground leading-relaxed mb-2">
-                      {t('sessions.config.cachingHelpPrefixBody')}
-                    </p>
-                    <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
-                      <li><strong>{t('sessions.config.memoryAwareDefault')}</strong> {t('sessions.config.memoryAwareDefaultBody')}</li>
-                      <li><strong>{t('sessions.config.legacyEntryCount')}</strong> {t('sessions.config.legacyEntryCountBody')}</li>
-                    </ul>
-                  </div>
-
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-2">{t('sessions.config.mambaHybridCompat')}</h3>
-                    <p className="text-muted-foreground leading-relaxed mb-2">
-                      {t('sessions.config.cachingHelpMambaBody')}
-                    </p>
-                    <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
-                      <li><strong>{t('sessions.config.kvQuantizationLabel')}</strong> {t('sessions.config.kvQuantizationBody')}</li>
-                      <li><strong>{t('sessions.config.inMemoryPagedCache')}</strong> {t('sessions.config.inMemoryPagedCacheBody')}</li>
-                    </ul>
-                  </div>
-
-                  <div>
-                    <h3 className="text-base font-semibold text-foreground mb-2">{t('sessions.config.kvCacheQuantization')}</h3>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {t('sessions.config.kvQuantHelpBody1')} <strong>{t('sessions.config.onlyCompressesSavedPrefixes')}</strong>. {t('sessions.config.kvQuantHelpBody2')}
-                    </p>
-                  </div>
-
-                  <div>
-                    <h3 className="text-base font-semibold tracking-tight text-foreground mb-2">{t('sessions.config.visionLanguageModels')}</h3>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {t('sessions.config.coreEngineHandlesVision')} <strong>{t('sessions.config.prefixCachingWorksForImages')}</strong> {t('sessions.config.vlHelpBody')}
-                    </p>
-                  </div>
-                </div>
-              </Modal>
-            )}
           </>
         )}
-      </Section>
-
-      {/* In-memory paged cache (RAM) */}
-      <Section title={pagedCacheSectionTitle} sectionKey="pagedCache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
-        <PerformanceHint text={t('sessions.config.pagedCacheHint')} />
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4PagedNote')} />}
         {zayaSsdReuseUnavailable && <IncompatWarning text={t('sessions.config.zayaTypedCacheNote')} />}
         {dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={blockDiskOnly
@@ -1119,12 +1065,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           ? t('sessions.config.m3SsdOnlyNote')
           : t('sessions.config.m3NativeMsaNote')} />}
         {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguNoPagedNote')} />}
-        <CheckField label={t('sessions.config.pagedKVCache')} tooltip={t('sessions.config.pagedKVCacheTooltip')} checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={genericPagedCacheToggleDisabled} />
         {(effectiveUsePagedCache || cachePolicy.blockDiskCacheChecked) && (
           <>
-            <InfoNote text={blockDiskOnly
-              ? effectiveBlockDiskCapacityText
-              : effectivePagedCapacityText} />
+            <InfoNote text={effectiveBlockDiskCapacityText} />
             <SliderField settingKey="pagedCacheBlockSize"
               label={t('sessions.config.blockSizeTokens')}
               tooltip={dsv4Active
@@ -1220,14 +1163,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </div>
           </>
         )}
-      </Section>
-
-      {/* Cache representation. Auto intentionally omits the CLI flag and the
-          engine preserves model.make_cache() exactly: full KV, rotating/SWA,
-          recurrent, sparse, or native compressed/typed composite state. q4/q8
-          remain explicit diagnostic stored codecs where the architecture
-          allows them; they are never silently selected by Auto. */}
-      <Section title={t('sessions.config.kvCacheQuantization')} sectionKey="kvCacheQuant" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
         {batchingOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
         {!batchingOff && prefixOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresPrefix')} />}
         {!effectivelyNoBatching && !prefixOff && mixedSwaCacheActive && <PerformanceHint text={t('sessions.config.mixedSwaAutoHint')} />}
@@ -1289,16 +1224,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <option value="auto">{dsv4Active ? t('sessions.config.storedQuantNativeTyped') : t('sessions.config.storedQuantAuto')}</option>
           </select>
         </div>
-      </Section>
-
-      {/* Disk Cache (L2 Persistent) */}
-      <Section title={t('sessions.config.diskCachePersistent')} sectionKey="diskCache" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
+        {(exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked) && <div data-vmlx-section="typed-disk-cache">
         {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.diskCacheHint')} />}
-        {dsv4Active ? (
-          <InfoNote text={t('sessions.config.dsv4LegacyDiskNote')} />
-        ) : (
-          <InfoNote text={t('sessions.config.legacyDiskNote')} />
-        )}
         {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguDiskNote')} />}
         {batchingOff && <IncompatWarning text={t('sessions.config.diskCacheRequiresBatching')} />}
         {!effectivelyNoBatching && cachePolicy.legacyDiskCacheUnavailableReason === 'paged-cache-active' && <IncompatWarning text={t('sessions.config.legacyDiskPagedConflict')} />}
@@ -1341,7 +1268,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </div>
           </>
         )}
+        </div>}
       </Section>
+
+
+
+
+
+
 
       {/* Power Management — visible for ALL model types (text + image) */}
       <Section title={t('sessions.config.powerManagement')} sectionKey="power" expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
@@ -1481,6 +1415,120 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel={detectedMaxContext && detectedMaxContext > 0 ? t('sessions.config.autoModelContext', { n: detectedMaxContext }) : t('sessions.config.autoMemorySafe')}
         />
         <InfoNote text={generationDefaultsSummary ? t('sessions.config.generationDefaultsNoteWithValues', { values: generationDefaultsSummary }) : t('sessions.config.generationDefaultsNote')} />
+        <div data-vmlx-section="multimodal">
+        <SelectField
+          settingKey="isMultimodal"
+          label={t('sessions.config.multimodalSupport')}
+          tooltip={t('sessions.config.multimodalSupportTooltip')}
+          value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
+          onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
+          options={[
+            { value: 'auto', label: t('sessions.config.autoDetectFromModel') },
+            { value: 'on', label: t('sessions.config.forceOn') },
+            { value: 'off', label: t('sessions.config.forceOff') },
+          ]}
+          disabled={dsv4Active || smeltActive || detectedForceTextOnly}
+        />
+        {dsv4Active && (
+          <InfoNote text={t('sessions.config.dsv4TextRuntimeNote')} />
+        )}
+        {smeltActive && (
+          <IncompatWarning text={t('sessions.config.vlmDisabledSmelt')} />
+        )}
+        {detectedForceTextOnly && (
+          <IncompatWarning text={t('sessions.config.forceTextOnlyNote')} />
+        )}
+        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
+          <InfoNote text={t('sessions.config.vlmActiveNote')} />
+        )}
+        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
+          <InfoNote text={t('sessions.config.vlmOffNote')} />
+        )}
+        {omniBackendVisible && (
+          <SelectField settingKey="omniBackend"
+            label={t('sessions.config.omniBackend')}
+            tooltip={t('sessions.config.omniBackendTooltip')}
+            value={config.omniBackend || 'stage1'}
+            onChange={v => onChange('omniBackend', v as 'stage1' | 'stage2')}
+            options={[
+              { value: 'stage1', label: t('sessions.config.omniStage1') },
+              { value: 'stage2', label: t('sessions.config.omniStage2') },
+            ]}
+          />
+        )}
+        {normalizedDetectedFamily === 'gemma4' && multimodalActive && (
+          <SelectField settingKey="imageTokenBudget"
+            label={t('sessions.config.imageTokenBudget')}
+            tooltip={t('sessions.config.imageTokenBudgetTooltip')}
+            value={String(config.imageTokenBudget ?? 280)}
+            onChange={v => onChange('imageTokenBudget', Number(v))}
+            options={[
+              { value: '70', label: t('sessions.config.imageBudget70') },
+              { value: '140', label: t('sessions.config.imageBudget140') },
+              { value: '280', label: t('sessions.config.imageBudget280') },
+              { value: '560', label: t('sessions.config.imageBudget560') },
+              { value: '1120', label: t('sessions.config.imageBudget1120') },
+            ]}
+          />
+        )}
+        {/* Video sampling — only relevant for VL models that accept video_url.
+            Qwen 3.6 / Qwen3.5-VL both have native video understanding via
+            temporal position embeddings, so 2 fps × 8 frames is typical. */}
+        {showVideoControls && (
+          <>
+            <SliderField
+              settingKey="videoFps"
+              label={t('sessions.config.videoFps')}
+              tooltip={t('sessions.config.videoFpsTooltip')}
+              value={config.videoFps ?? 2}
+              onChange={v => onChange('videoFps', v)}
+              min={1}
+              max={8}
+              step={1}
+              defaultValue={2}
+            />
+            <SliderField
+              settingKey="videoMaxFrames"
+              label={t('sessions.config.maxVideoFrames')}
+              tooltip={t('sessions.config.maxVideoFramesTooltip')}
+              value={config.videoMaxFrames ?? 8}
+              onChange={v => onChange('videoMaxFrames', v)}
+              min={2}
+              max={64}
+              step={2}
+              defaultValue={8}
+            />
+            <Field settingKey="videoMaxPixels" label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
+              <select
+                className="cfg-input"
+                data-vmlx-setting="videoMaxPixels"
+                value={config.videoMaxPixels ? String(config.videoMaxPixels) : ''}
+                onChange={e => onChange('videoMaxPixels', e.target.value ? Number(e.target.value) : undefined)}
+              >
+                <option value="">{t('sessions.config.videoMaxPixelsDefault')}</option>
+                <option value="100352">128 px² · 100k ({t('sessions.config.videoMaxPixelsFastest')})</option>
+                <option value="200704">256 px² · 200k</option>
+                <option value="301056">301k</option>
+                <option value="401408">401k</option>
+                <option value="602112">602k ({t('sessions.config.videoMaxPixelsMax')})</option>
+              </select>
+            </Field>
+            <Field settingKey="videoTokenBudget" label={t('sessions.config.videoTokenBudget')} tooltip={t('sessions.config.videoTokenBudgetTooltip')}>
+              <select
+                className="cfg-input"
+                data-vmlx-setting="videoTokenBudget"
+                value={config.videoTokenBudget ? String(config.videoTokenBudget) : ''}
+                onChange={e => onChange('videoTokenBudget', e.target.value ? Number(e.target.value) : undefined)}
+              >
+                <option value="">{t('sessions.config.videoMaxPixelsDefault')}</option>
+                {[256, 512, 1024, 2048, 4096, 8192, 16384].map(n => (
+                  <option key={n} value={String(n)}>{n}</option>
+                ))}
+              </select>
+            </Field>
+          </>
+        )}
+        </div>
       </Section>
 
       {/* Tool Integration */}
@@ -1638,123 +1686,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Multimodal & video: vision on/off, image token budget, video sampling
           and pixel/token budgets. Own section (was nested under Tool
           Integration & MCP, collapsed by default, where nobody looks for it). */}
-      <Section title={t('sessions.config.multimodalSection')} expanded={expandedSections.multimodal} onToggle={() => toggleSection('multimodal')} hidden={isImage} sectionKey="multimodal">
-        <SelectField
-          settingKey="isMultimodal"
-          label={t('sessions.config.multimodalSupport')}
-          tooltip={t('sessions.config.multimodalSupportTooltip')}
-          value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
-          onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
-          options={[
-            { value: 'auto', label: t('sessions.config.autoDetectFromModel') },
-            { value: 'on', label: t('sessions.config.forceOn') },
-            { value: 'off', label: t('sessions.config.forceOff') },
-          ]}
-          disabled={dsv4Active || smeltActive || detectedForceTextOnly}
-        />
-        {dsv4Active && (
-          <InfoNote text={t('sessions.config.dsv4TextRuntimeNote')} />
-        )}
-        {smeltActive && (
-          <IncompatWarning text={t('sessions.config.vlmDisabledSmelt')} />
-        )}
-        {detectedForceTextOnly && (
-          <IncompatWarning text={t('sessions.config.forceTextOnlyNote')} />
-        )}
-        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
-          <InfoNote text={t('sessions.config.vlmActiveNote')} />
-        )}
-        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
-          <InfoNote text={t('sessions.config.vlmOffNote')} />
-        )}
-        {omniBackendVisible && (
-          <SelectField settingKey="omniBackend"
-            label={t('sessions.config.omniBackend')}
-            tooltip={t('sessions.config.omniBackendTooltip')}
-            value={config.omniBackend || 'stage1'}
-            onChange={v => onChange('omniBackend', v as 'stage1' | 'stage2')}
-            options={[
-              { value: 'stage1', label: t('sessions.config.omniStage1') },
-              { value: 'stage2', label: t('sessions.config.omniStage2') },
-            ]}
-          />
-        )}
-        {normalizedDetectedFamily === 'gemma4' && multimodalActive && (
-          <SelectField settingKey="imageTokenBudget"
-            label={t('sessions.config.imageTokenBudget')}
-            tooltip={t('sessions.config.imageTokenBudgetTooltip')}
-            value={String(config.imageTokenBudget ?? 280)}
-            onChange={v => onChange('imageTokenBudget', Number(v))}
-            options={[
-              { value: '70', label: t('sessions.config.imageBudget70') },
-              { value: '140', label: t('sessions.config.imageBudget140') },
-              { value: '280', label: t('sessions.config.imageBudget280') },
-              { value: '560', label: t('sessions.config.imageBudget560') },
-              { value: '1120', label: t('sessions.config.imageBudget1120') },
-            ]}
-          />
-        )}
-        {/* Video sampling — only relevant for VL models that accept video_url.
-            Qwen 3.6 / Qwen3.5-VL both have native video understanding via
-            temporal position embeddings, so 2 fps × 8 frames is typical. */}
-        {showVideoControls && (
-          <>
-            <SliderField
-              settingKey="videoFps"
-              label={t('sessions.config.videoFps')}
-              tooltip={t('sessions.config.videoFpsTooltip')}
-              value={config.videoFps ?? 2}
-              onChange={v => onChange('videoFps', v)}
-              min={1}
-              max={8}
-              step={1}
-              defaultValue={2}
-            />
-            <SliderField
-              settingKey="videoMaxFrames"
-              label={t('sessions.config.maxVideoFrames')}
-              tooltip={t('sessions.config.maxVideoFramesTooltip')}
-              value={config.videoMaxFrames ?? 8}
-              onChange={v => onChange('videoMaxFrames', v)}
-              min={2}
-              max={64}
-              step={2}
-              defaultValue={8}
-            />
-            <Field settingKey="videoMaxPixels" label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
-              <select
-                className="cfg-input"
-                data-vmlx-setting="videoMaxPixels"
-                value={config.videoMaxPixels ? String(config.videoMaxPixels) : ''}
-                onChange={e => onChange('videoMaxPixels', e.target.value ? Number(e.target.value) : undefined)}
-              >
-                <option value="">{t('sessions.config.videoMaxPixelsDefault')}</option>
-                <option value="100352">128 px² · 100k ({t('sessions.config.videoMaxPixelsFastest')})</option>
-                <option value="200704">256 px² · 200k</option>
-                <option value="301056">301k</option>
-                <option value="401408">401k</option>
-                <option value="602112">602k ({t('sessions.config.videoMaxPixelsMax')})</option>
-              </select>
-            </Field>
-            <Field settingKey="videoTokenBudget" label={t('sessions.config.videoTokenBudget')} tooltip={t('sessions.config.videoTokenBudgetTooltip')}>
-              <select
-                className="cfg-input"
-                data-vmlx-setting="videoTokenBudget"
-                value={config.videoTokenBudget ? String(config.videoTokenBudget) : ''}
-                onChange={e => onChange('videoTokenBudget', e.target.value ? Number(e.target.value) : undefined)}
-              >
-                <option value="">{t('sessions.config.videoMaxPixelsDefault')}</option>
-                {[256, 512, 1024, 2048, 4096, 8192, 16384].map(n => (
-                  <option key={n} value={String(n)}>{n}</option>
-                ))}
-              </select>
-            </Field>
-          </>
-        )}
-      </Section>
+
 
       {/* Native in-model MTP */}
-      <Section title={t('sessions.config.nativeMtp')} expanded={expandedSections.nativeMtp} onToggle={() => toggleSection('nativeMtp')} sectionKey="nativeMtp" hidden={isImage || dsv4Active || !nativeMtpDetected}>
+      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
+        {nativeMtpDetected && <div data-vmlx-section="nativeMtp">
         {!nativeMtpSupported && (
           <IncompatWarning text={detectedNativeMtp?.blockedReason || t('sessions.config.nativeMtpBlockedFallback')} />
         )}
@@ -1817,10 +1753,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <InfoNote text={t('sessions.config.nativeMtpDetectedNote', { scope: detectedNativeMtp?.runtimeScope || 'text', cache: detectedNativeMtp?.nativeCacheType || detectedCacheSubtype || detectedCacheType || 'unknown', depthSource: detectedNativeMtp?.depthSource || 'default' })} />
           </>
         )}
-      </Section>
-
-      {/* Speculative Decoding */}
-      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
+        </div>}
         <PerformanceHint text={t('sessions.config.specDecodeHint')} />
         {config.continuousBatching && !dflash2Speculative && !multimodalActive && <IncompatWarning text={t('sessions.config.specDecodeIncompatBatching')} />}
         {multimodalActive && config.speculativeModel && !dflash2Speculative && <IncompatWarning text={t('sessions.config.specDecodeIncompatVlm')} />}
@@ -1842,75 +1775,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
       </Section>
 
-      {/* Distributed Compute */}
-      <Section title={t('sessions.config.distributed')} sectionKey="distributed" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage || dsv4Active}>
-        <div className="mx-4 mt-3 mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-3 py-3 text-xs text-amber-800 dark:text-amber-100">
-          <div className="font-bold uppercase tracking-wide text-[11px] mb-1.5 text-amber-900 dark:text-amber-50">
-            {t('sessions.config.preAlphaHeader')}
-          </div>
-          <div className="leading-relaxed text-amber-900/90 dark:text-amber-100/90 space-y-1.5">
-            <p>
-              <strong>{t('sessions.config.preAlphaWarnBody1')}</strong>
-            </p>
-            <p>{t('sessions.config.preAlphaWarnBody2')}</p>
-            <p>{t('sessions.config.preAlphaUsage')}</p>
-          </div>
-        </div>
-        <PerformanceHint text={t('sessions.config.distributedHint')} />
-        <CheckField
-          label={t('sessions.config.enableDistributed')}
-          tooltip={t('sessions.config.enableDistributedTooltip')}
-          checked={!!config.distributedEnabled}
-          onChange={v => {
-            onChange('distributedEnabled', v)
-            // Mutual exclusion: disable Flash MoE and JIT if enabling distributed
-            if (v && flashMoeActive) onChange('flashMoe', false)
-            if (v && config.enableJit) onChange('enableJit', false)
-          }}
-          disabled={flashMoeActive}
-        />
-        {flashMoeActive && (
-          <IncompatWarning text={t('sessions.config.distributedDisabledFlashMoe')} />
-        )}
-        {config.distributedEnabled && (
-          <>
-            <SelectField settingKey="distributedMode"
-              label={t('sessions.config.parallelismMode')}
-              tooltip={t('sessions.config.parallelismModeTooltip')}
-              value={config.distributedMode || 'pipeline'}
-              onChange={v => onChange('distributedMode', v as 'pipeline' | 'tensor')}
-              options={[
-                { value: 'pipeline', label: t('sessions.config.pipelineParallelism') },
-                { value: 'tensor', label: t('sessions.config.tensorParallelism') },
-              ]}
-            />
-            {config.distributedMode === 'tensor' && (
-              <IncompatWarning text={t('sessions.config.tensorNotImplemented')} />
-            )}
-            <Field label={t('sessions.config.clusterSecret')} tooltip={t('sessions.config.clusterSecretTooltip')}>
-              <input
-                type="password"
-                value={config.distributedSecret || ''}
-                onChange={e => onChange('distributedSecret', e.target.value)}
-                placeholder={t('sessions.config.clusterSecretPlaceholder')}
-                className="cfg-input"
-              />
-            </Field>
-            <InfoNote text={t('sessions.config.workerNodesNote')} />
-            <DistributedNodeList enabled={!!config.distributedEnabled} sessionId={sessionId} />
-            <div className="px-4 py-3 space-y-2">
-              <div className="text-xs font-medium text-foreground">{t('sessions.config.setupGuide')}</div>
-              <div className="text-xs text-muted-foreground space-y-1">
-                <p>{t('sessions.config.setupStep1')}</p>
-                <p>{t('sessions.config.setupStep2')} <code className="bg-muted px-1 rounded">pip install vmlx && vmlx-worker --secret YOUR_SECRET</code></p>
-                <p>{t('sessions.config.setupStep3')}</p>
-                <p>{t('sessions.config.setupStep4')}</p>
-                <p className="text-muted-foreground/70 pt-1">{t('sessions.config.setupNetworkNote')}</p>
-              </div>
-            </div>
-          </>
-        )}
-      </Section>
+      {/* Speculative Decoding */}
+
+
+
 
       {/* Embedding Model */}
       {!isImage && (

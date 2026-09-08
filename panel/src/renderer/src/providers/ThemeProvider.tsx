@@ -1,71 +1,15 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useLayoutEffect, type ReactNode } from 'react'
 
-type Theme = 'dark' | 'light' | 'system'
-type ResolvedTheme = 'dark' | 'light'
-
-interface ThemeContextValue {
-  theme: Theme
-  resolvedTheme: ResolvedTheme
-  setTheme: (theme: Theme) => void
-}
-
-const ThemeContext = createContext<ThemeContextValue>({
-  theme: 'dark',
-  resolvedTheme: 'dark',
-  setTheme: () => {},
-})
-
-export function useTheme() {
-  return useContext(ThemeContext)
-}
-
-function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'dark'
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-function resolveTheme(theme: Theme): ResolvedTheme {
-  return theme === 'system' ? getSystemTheme() : theme
-}
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    const stored = localStorage.getItem('vmlx-theme') as Theme | null
-    return stored || 'dark'
-  })
-
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(theme))
-
-  const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme)
-    localStorage.setItem('vmlx-theme', newTheme)
-  }
-
-  useEffect(() => {
-    const resolved = resolveTheme(theme)
-    setResolvedTheme(resolved)
-
+// Console Amber is the only theme. The dark utility variant remains for
+// existing component tokens; OS appearance changes do not select another theme.
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  useLayoutEffect(() => {
     const root = document.documentElement
-    root.classList.remove('dark', 'light')
-    root.classList.add(resolved)
-
-    if (theme === 'system') {
-      const mql = window.matchMedia('(prefers-color-scheme: dark)')
-      const handler = () => {
-        const newResolved = getSystemTheme()
-        setResolvedTheme(newResolved)
-        root.classList.remove('dark', 'light')
-        root.classList.add(newResolved)
-      }
-      mql.addEventListener('change', handler)
-      return () => mql.removeEventListener('change', handler)
-    }
-    return undefined
-  }, [theme])
-
-  return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  )
+    root.classList.remove('light')
+    root.classList.add('dark')
+    root.dataset.theme = 'console-amber'
+    // Migrate only the old appearance preference, never the user profile.
+    try { localStorage.setItem('vmlx-theme', 'console-amber') } catch { /* restricted storage */ }
+  }, [])
+  return <>{children}</>
 }

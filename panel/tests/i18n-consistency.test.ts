@@ -405,19 +405,12 @@ describe('i18n locale consistency', () => {
     }
   })
 
-  it('theme and voice icon controls expose localized accessible names', () => {
-    const themeToggleSrc = readFileSync(
-      resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'ui', 'theme-toggle.tsx'),
-      'utf-8',
-    )
+  it('voice icon controls expose localized accessible names', () => {
     const voiceChatSrc = readFileSync(
       resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'chat', 'VoiceChat.tsx'),
       'utf-8',
     )
 
-    expect(themeToggleSrc).toContain('title={t(`common.theme.${theme}`)}')
-    expect(themeToggleSrc).toContain('aria-label={t(`common.theme.${theme}`)}')
-    expect(themeToggleSrc).not.toContain('title={`Theme: ${theme}`}')
     expect(voiceChatSrc).toContain('title={buttonLabel}')
     expect(voiceChatSrc).toContain('aria-label={buttonLabel}')
   })
