@@ -31,6 +31,8 @@ function App() {
   const { t } = useTranslation()
   const [setupDone, setSetupDone] = useState(false)
   const [checkingSetup, setCheckingSetup] = useState(true)
+  const [creatingChatSession, setCreatingChatSession] = useState(false)
+  const [chatCreationError, setChatCreationError] = useState<string | null>(null)
   const { state, dispatch, setMode, openChat } = useAppState()
   const { sessions: allSessions } = useSessionsContext()
 
@@ -56,6 +58,11 @@ function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
+      if (detail?.mode === 'chat' && detail?.panel === 'create') {
+        setMode('chat')
+        setCreatingChatSession(true)
+        return
+      }
       if (detail?.mode) setMode(detail.mode)
       if (detail?.panel) {
         if (detail.mode === 'tools') {
@@ -100,6 +107,7 @@ function App() {
     : undefined
 
   const handleChatSelect = useCallback((chatId: string, modelPath: string) => {
+    setCreatingChatSession(false)
     // Empty chatId means deselect (e.g. after deleting the active chat)
     if (!chatId) {
       dispatch({ type: 'CLOSE_CHAT' })
@@ -134,6 +142,7 @@ function App() {
   }, [sessions, openChat, dispatch])
 
   const handleNewChat = useCallback(async () => {
+    setCreatingChatSession(false)
     // mlxstudio #60: when the user has explicitly switched to session A in
     // the sidebar, "+ New Chat" must create a chat against session A — not
     // whichever running session happens to be first in the array. Earlier
@@ -154,9 +163,8 @@ function App() {
     const target = (explicitUsable ? explicit : null) || running || explicit || sessions[0]
 
     if (!target) {
-      // No sessions — switch to server mode to create one
-      setMode('server')
-      dispatch({ type: 'SET_SERVER_PANEL', panel: 'create' })
+      setMode('chat')
+      setCreatingChatSession(true)
       return
     }
 
@@ -171,6 +179,24 @@ function App() {
       openChat(result.id, target.id)
     }
   }, [sessions, state.activeSessionId, setMode, dispatch, openChat, t])
+
+  const handleChatSessionCreated = async (sessionId: string) => {
+    setCreatingChatSession(false)
+    setChatCreationError(null)
+    try {
+      const session = await window.api.sessions.get(sessionId)
+      if (!session) throw new Error(t('sessions.context.createFailed'))
+      const result = await window.api.chat.create(
+        t('chat.quickStart.chatWithModel', { model: session.modelName || session.modelPath.split('/').pop() }),
+        session.modelPath, undefined, session.modelPath,
+      )
+      if (!result?.id) throw new Error(t('sessions.context.createFailed'))
+      openChat(result.id, sessionId)
+    } catch (error) {
+      // The session already exists: do not re-launch it if chat creation fails.
+      setChatCreationError(String(error))
+    }
+  }
 
   const handleSessionChange = useCallback(async (sessionId: string) => {
     if (!state.activeChatId) return
@@ -213,6 +239,12 @@ function App() {
           <main className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col">
             <ConsoleSubnavigation />
             <div className="flex-1 min-h-0 overflow-hidden">
+            {state.mode === 'chat' && chatCreationError && (
+              <div role="alert" className="p-3 text-sm text-destructive break-words">
+                {chatCreationError}
+                <button className="ml-3 underline" onClick={() => setChatCreationError(null)}>{t('common.dismiss')}</button>
+              </div>
+            )}
             {state.mode === 'code' && (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
@@ -228,7 +260,11 @@ function App() {
               </div>
             )}
 
-            {state.mode === 'chat' && (
+            {state.mode === 'chat' && creatingChatSession && (
+              <CreateSession defaultsOnly filterType="text"
+                onBack={() => setCreatingChatSession(false)} onCreated={handleChatSessionCreated} />
+            )}
+            {state.mode === 'chat' && !creatingChatSession && (
               <ChatModeContent
                 activeChatId={state.activeChatId}
                 sessionEndpoint={sessionEndpoint}

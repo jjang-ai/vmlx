@@ -1,5 +1,5 @@
 {
-  "console": {"chatImages":"Chat e imágenes","serversApi":"Servidores y API","models":"Modelos","libraryTools":"Biblioteca y herramientas","findDownload":"Buscar y descargar","sections":"Secciones de la página","pages":"Páginas principales","preferences":"Preferencias","oneModelLoaded":"Mantener solo un modelo cargado"},
+  "console": {"chatImages":"Chat e imágenes","serversApi":"Servidores y API","models":"Modelos","libraryTools":"Biblioteca y herramientas","findDownload":"Buscar y descargar","sections":"Secciones de la página","pages":"Páginas principales","preferences":"Preferencias","oneModelLoaded":"Mantener solo un modelo cargado","chatDefaults":"Este modelo se iniciará con los valores predeterminados detectados. Las opciones avanzadas siguen disponibles en Servidores y API."},
   "ssdPool": {
     "capacity": "La caché SSD ha alcanzado el límite efectivo del conjunto: {used} / {cap}. La expulsión automática puede eliminar entradas reutilizables antiguas.",
     "evicted": "La caché SSD alcanzó su límite y se expulsaron automáticamente entradas antiguas. Uso actual: {used} / {cap}.",

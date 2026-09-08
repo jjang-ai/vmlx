@@ -190,7 +190,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
           <span className="text-xs text-muted-foreground">{t('layout.chatToolbar.noModels')}</span>
           <button
             onClick={() => {
-              const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create', modelPath: null } })
+              const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'chat', panel: 'create', modelPath: null } })
               window.dispatchEvent(event)
             }}
             className="text-xs text-primary hover:text-primary/80 font-medium"
@@ -313,7 +313,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
               <button
                 onClick={() => {
                   setShowModelPicker(false)
-                  const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create', modelPath: null } })
+                  const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'chat', panel: 'create', modelPath: null } })
                   window.dispatchEvent(event)
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"

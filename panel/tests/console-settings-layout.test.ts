@@ -4,6 +4,19 @@ import { resolve } from 'node:path'
 
 const read = (path: string) => readFileSync(resolve(__dirname, '../src', path), 'utf8')
 describe('Console settings and responsive layout contract', () => {
+  it('creates Chat sessions from canonical defaults without hiding imported overrides', () => {
+    const app = read('renderer/src/App.tsx')
+    const create = read('renderer/src/components/sessions/CreateSession.tsx')
+    expect(app).toContain('<CreateSession defaultsOnly filterType="text"')
+    expect(app).toContain('onCreated={handleChatSessionCreated}')
+    expect(create).toContain('defaultsOnly ? { ...DEFAULT_CONFIG, port: current.port } : current')
+    const selection = create.split('setSelectedModel(model.path)')[1]
+    expect(selection.indexOf('if (defaultsOnly)')).toBeLessThan(selection.indexOf('window.api.sessions.list()'))
+    expect(selection).toContain('if (!await applyModelDefaults(model.path)) return')
+    expect(create).toContain('data-vmlx-section="chat-session-defaults"')
+    expect(create).toContain('disabled={launching || defaultsPending || !selectedModel}')
+    expect(read('renderer/src/components/layout/ChatModeToolbar.tsx')).not.toContain("mode: 'server', panel: 'create'")
+  })
   it('puts global preferences on the existing gateway and language owners', () => {
     const app = read('renderer/src/App.tsx')
     expect(app).toContain('data-vmlx-surface="general-preferences"')

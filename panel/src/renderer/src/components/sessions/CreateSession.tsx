@@ -26,6 +26,8 @@ interface ModelInfo {
 }
 
 interface CreateSessionProps {
+  /** Chat uses the canonical model defaults, never a previous server's overrides. */
+  defaultsOnly?: boolean
   initialModelPath?: string | null
   onBack: () => void
   onCreated: (sessionId: string) => void
@@ -33,7 +35,7 @@ interface CreateSessionProps {
   filterType?: 'text' | 'image'
 }
 
-export function CreateSession({ initialModelPath, onBack, onCreated, filterType: filterTypeProp }: CreateSessionProps) {
+export function CreateSession({ initialModelPath, onBack, onCreated, filterType: filterTypeProp, defaultsOnly = false }: CreateSessionProps) {
   const { t } = useTranslation()
   const { loadProgress } = useSessionsContext()
   const [sessionType, setSessionType] = useState<'local' | 'remote' | 'download'>('local')
@@ -58,6 +60,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [detectedNativeMtp, setDetectedNativeMtp] = useState<any>(undefined)
   const [launching, setLaunching] = useState(false)
+  const [defaultsPending, setDefaultsPending] = useState(!!initialModelPath)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [scanLoading, setScanLoading] = useState(true)
@@ -80,12 +83,14 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
 
   const applyModelDefaults = async (modelPath: string) => {
     const requestId = ++modelDefaultsRequestRef.current
+    setDefaultsPending(true)
     const [detected, gen] = await Promise.all([
       window.api.models.detectConfig(modelPath).catch(() => null),
       window.api.models.getGenerationDefaults(modelPath).catch(() => null),
     ]) as [any, any]
-    if (!mountedRef.current || modelDefaultsRequestRef.current !== requestId) return
-    setConfig(prev => {
+    if (!mountedRef.current || modelDefaultsRequestRef.current !== requestId) return false
+    setConfig(current => {
+      const prev = defaultsOnly ? { ...DEFAULT_CONFIG, port: current.port } : current
       const next: SessionConfig = {
         ...prev,
         // Auto remains undefined; detection is displayed separately and launch
@@ -133,7 +138,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     setDetectedForceTextOnly(!!detected?.forceTextOnly)
     setDetectedRuntimeModalities(Array.isArray(detected?.runtimeModalities) ? detected.runtimeModalities : undefined)
     setDetectedNativeMtp(detected?.nativeMtp)
-    if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
+    setDetectedMaxContext(detected?.maxContextLength)
+    setDefaultsPending(false)
+    return true
   }
 
   // Auto-detect image model type on mount when initialModelPath is provided
@@ -323,7 +330,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   }, [logs])
 
   const handleLaunch = async () => {
-    if (!selectedModel) return
+    if (!selectedModel || defaultsPending || launching) return
 
     setLaunchError(null)
 
@@ -643,6 +650,14 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                           modelDefaultsRequestRef.current === selectionRequestId
                         )
                         setSelectedModel(model.path)
+                        if (defaultsOnly) {
+                          // A new Chat session must not inherit hidden custom
+                          // flags from a previously configured Server session.
+                          if (!await applyModelDefaults(model.path)) return
+                          setAutoDetectedType('text')
+                          setStep(2)
+                          return
+                        }
                         // Pre-populate from existing session config if this model was launched before
                         try {
                           const sessions = await window.api.sessions.list()
@@ -897,7 +912,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         </div>
 
         {/* Config Form — image models get simplified settings */}
-        {(autoDetectedType || filterTypeProp) === 'image' ? (
+        {defaultsOnly ? (
+          <p data-vmlx-section="chat-session-defaults" className="border border-border p-4 text-sm text-muted-foreground">
+            {defaultsPending ? t('common.loading') : t('console.chatDefaults')}
+          </p>
+        ) : (autoDetectedType || filterTypeProp) === 'image' ? (
           <div className="space-y-4 border border-border rounded p-4">
             <h3 className="text-sm font-medium">{t('sessions.create.imageServerSettings')}</h3>
             <div className="grid grid-cols-2 gap-3 text-sm">
@@ -955,8 +974,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             {t('common.back')}
           </button>
           <button
+            data-vmlx-control="create-session-launch"
             onClick={handleLaunch}
-            disabled={launching || !selectedModel}
+            disabled={launching || defaultsPending || !selectedModel}
             className="px-6 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {t('sessions.create.launchSession')}
