@@ -87,6 +87,11 @@ declare global {
           }>
         >;
         fetchReadme: (repoId: string) => Promise<string | null>;
+        getRecentModels: (author: string, sort: 'createdAt' | 'lastModified') => Promise<Array<{
+          id: string; author: string; downloads: number; likes: number;
+          createdAt: string; lastModified: string; tags: string[];
+          pipelineTag?: string; size?: string;
+        }>>;
         getRecommendedModels: () => Promise<
           Array<{
             id: string;

@@ -1446,6 +1446,13 @@
       "loading": "상태 데이터를 불러오는 중..."
     },
     "download": {
+      "newestCreated": "최근 생성순",
+      "refreshFeed": "새로고침",
+      "authorFeedNote": "{author}의 최신 100개 · 표시 중 5분마다 갱신됩니다. 형식이 다양하므로 다운로드 전에 호환성을 확인하세요.",
+      "feedLoadFailed": "모델 피드를 불러오지 못했습니다.",
+      "noFeedModels": "이 피드에 모델이 없습니다.",
+      "createdDate": "생성: {date}",
+      "updatedDate": "업데이트: {date}",
       "downloadTo": "저장 위치:",
       "hfToken": "HF 토큰:",
       "hfTokenPlaceholder": "hf_...",

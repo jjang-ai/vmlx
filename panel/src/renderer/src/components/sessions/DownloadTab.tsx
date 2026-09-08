@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useToast } from '../Toast'
 import { normalizeHfEndpointSetting } from '../../../../shared/hfSettings'
+import { HF_MODEL_FEED_AUTHORS, type HfModelFeedSort } from '../../../../shared/hfModelFeed'
 import { useTranslation } from '../../i18n'
 
 interface HFModel {
@@ -9,6 +10,7 @@ interface HFModel {
   downloads: number
   likes: number
   lastModified: string
+  createdAt?: string
   tags: string[]
   pipelineTag?: string
   size?: string
@@ -56,6 +58,8 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   // Collection tabs (JANG / Uncensored)
   const [collectionTab, setCollectionTab] = useState<CollectionTab>('jang')
+  const [feedSort, setFeedSort] = useState<HfModelFeedSort>('createdAt')
+  const [feedRefresh, setFeedRefresh] = useState(0)
   const [collectionModels, setCollectionModels] = useState<Record<string, HFModel[]>>({})
   const [loadingCollectionTabs, setLoadingCollectionTabs] = useState<Record<string, boolean>>({})
   // ms#68: distinguish a genuinely empty HF collection from a fetch
@@ -123,22 +127,6 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       }
       setLocalModelIds(ids)
     }).catch((err) => console.error('Failed to scan models:', err))
-    // Fetch default collection (JANG)
-    setLoadingCollectionTabs(prev => ({ ...prev, jang: true }))
-    setCollectionErrors(prev => { const next = { ...prev }; delete next.jang; return next })
-    window.api.models.getCollectionModels(COLLECTION_SLUGS.jang)
-      .then(models => setCollectionModels(prev => ({ ...prev, jang: models })))
-      .catch(err => {
-        // ms#68: record the error so the UI can show "Failed to load —
-        // click to retry" instead of the ambiguous empty-state text.
-        console.error('Failed to load JANG collection:', err)
-        setCollectionErrors(prev => ({
-          ...prev,
-          jang: (err instanceof Error ? err.message : String(err)) || t('sessions.download.fetchFailed'),
-        }))
-      })
-      .finally(() => setLoadingCollectionTabs(prev => ({ ...prev, jang: false })))
-
     // Check for any in-progress downloads (activeAll covers concurrent downloads)
     window.api.models.getDownloadStatus().then((status: any) => {
       const repos = new Set<string>()
@@ -153,6 +141,35 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
     }
   }, [])
+
+  // Refresh only the visible discovery feed. Ignore replies from a previous
+  // author/sort/type or unmounted page; never overwrite a newer selection.
+  useEffect(() => {
+    if (searchQuery.trim()) return
+    let cancelled = false
+    let inFlight = false
+    const tab = collectionTab
+    const refresh = async () => {
+      if (inFlight) return
+      inFlight = true
+      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
+      setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
+      try {
+        const models = modelType === 'text'
+          ? await window.api.models.getRecentModels(HF_MODEL_FEED_AUTHORS[tab], feedSort)
+          : await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
+        if (!cancelled) setCollectionModels(prev => ({ ...prev, [tab]: models }))
+      } catch (err) {
+        if (!cancelled) setCollectionErrors(prev => ({ ...prev, [tab]: String(err instanceof Error ? err.message : err) }))
+      } finally {
+        inFlight = false
+        if (!cancelled) setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
+      }
+    }
+    void refresh()
+    const timer = setInterval(() => { if (!document.hidden) void refresh() }, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [collectionTab, modelType, feedSort, feedRefresh, searchQuery])
 
   // Listen for download events
   useEffect(() => {
@@ -290,6 +307,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       }
       setHfToken(token.trim())
       setHasSavedHfToken(!!token.trim())
+      setFeedRefresh(value => value + 1)
       showToast('success', token.trim() ? t('sessions.download.toast.tokenSaved') : t('sessions.download.toast.tokenRemoved'))
     } catch (err) {
       showToast('error', t('sessions.download.toast.tokenSaveFailed'), (err as Error).message)
@@ -317,6 +335,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         await window.api.settings.delete('hf_endpoint')
       }
       setHfEndpoint(trimmed)
+      setFeedRefresh(value => value + 1)
       showToast('success', trimmed
         ? t('sessions.download.toast.mirrorSet', { url: trimmed })
         : t('sessions.download.toast.mirrorCleared'))
@@ -327,47 +346,8 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
-  const handleCollectionTabChange = useCallback(async (tab: CollectionTab) => {
-    setCollectionTab(tab)
-    // ms#68: refetch on tab click when we have no cached result AND no
-    // prior error. If there's an error, let the user click the retry
-    // button (below) to opt-in to another network roundtrip.
-    if (!collectionModels[tab] && !collectionErrors[tab]) {
-      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
-      setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
-      try {
-        const models = await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
-        setCollectionModels(prev => ({ ...prev, [tab]: models }))
-      } catch (err) {
-        console.error(`Failed to load ${tab} collection:`, err)
-        setCollectionErrors(prev => ({
-          ...prev,
-          [tab]: (err instanceof Error ? err.message : String(err)) || t('sessions.download.fetchFailed'),
-        }))
-      } finally {
-        setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
-      }
-    }
-  }, [collectionModels, collectionErrors])
-
-  // ms#68: explicit retry — clears the error and refetches. Wired to the
-  // "click to retry" button shown when a collection fetch has failed.
-  const retryCollectionFetch = useCallback(async (tab: CollectionTab) => {
-    setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
-    setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
-    try {
-      const models = await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
-      setCollectionModels(prev => ({ ...prev, [tab]: models }))
-    } catch (err) {
-      console.error(`Retry failed for ${tab} collection:`, err)
-      setCollectionErrors(prev => ({
-        ...prev,
-        [tab]: (err instanceof Error ? err.message : String(err)) || t('sessions.download.fetchFailed'),
-      }))
-    } finally {
-      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
-    }
-  }, [])
+  const handleCollectionTabChange = (tab: CollectionTab) => setCollectionTab(tab)
+  const retryCollectionFetch = () => setFeedRefresh(value => value + 1)
 
   const handleBrowseDownloadDir = async () => {
     const result = await window.api.models.browseDownloadDir()
@@ -561,19 +541,36 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           {searchQuery.trim() ? (
             <span className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t('sessions.download.searchResults')}</span>
           ) : (
-            <div className="flex items-center gap-1 mb-2">
+            <div className="flex items-center gap-1 mb-2 flex-wrap">
               <button
+                data-vmlx-action="feed-jang"
                 onClick={() => handleCollectionTabChange('jang')}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'jang' ? 'bg-primary/15 text-primary font-medium' : 'text-muted-foreground hover:bg-accent'}`}
               >
                 {t('sessions.download.jangModels')}
               </button>
               <button
+                data-vmlx-action="feed-uncensored"
                 onClick={() => handleCollectionTabChange('uncensored')}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'uncensored' ? 'bg-red-500/15 text-red-400 font-medium' : 'text-muted-foreground hover:bg-accent'}`}
               >
                 {t('sessions.download.uncensored')}
               </button>
+              {modelType === 'text' && <>
+                <select data-vmlx-setting="modelFeedSort" aria-label={t('sessions.download.sortTitle')}
+                  className="cfg-input text-xs w-auto" value={feedSort}
+                  onChange={event => setFeedSort(event.target.value as HfModelFeedSort)}>
+                  <option value="createdAt">{t('sessions.download.newestCreated')}</option>
+                  <option value="lastModified">{t('sessions.download.recentlyUpdated')}</option>
+                </select>
+                <button data-vmlx-action="feed-refresh" onClick={retryCollectionFetch}
+                  disabled={isCollectionLoading} className="text-xs px-2 py-1 border border-border disabled:opacity-50">
+                  {t('sessions.download.refreshFeed')}
+                </button>
+                <p className="w-full text-xs text-muted-foreground" data-vmlx-status="model-feed-source">
+                  {t('sessions.download.authorFeedNote', { author: HF_MODEL_FEED_AUTHORS[collectionTab] })}
+                </p>
+              </>}
             </div>
           )}
           <div className="flex-1 overflow-y-auto space-y-1 pr-1">
@@ -585,13 +582,13 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               // staring at "No models" wondering if the network died.
               <div className="text-sm py-4 text-center space-y-2">
                 <p className="text-muted-foreground">
-                  {t('sessions.download.collectionLoadFailed', { name: collectionTab === 'jang' ? 'JANG' : t('sessions.download.uncensored') })}
+                  {modelType === 'text' ? t('sessions.download.feedLoadFailed') : t('sessions.download.collectionLoadFailed', { name: collectionTab === 'jang' ? 'JANG' : t('sessions.download.uncensored') })}
                 </p>
                 <p className="text-xs text-muted-foreground/70 max-w-md mx-auto break-words">
                   {collectionErrors[collectionTab]}
                 </p>
                 <button
-                  onClick={() => retryCollectionFetch(collectionTab)}
+                  onClick={retryCollectionFetch}
                   className="px-3 py-1 text-xs rounded border border-border hover:bg-accent"
                 >
                   {t('common.retry')}
@@ -599,7 +596,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               </div>
             ) : displayModels.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                {searchQuery.trim() ? (modelType === 'image' ? t('sessions.download.noImageModels') : t('sessions.download.noMlxModels')) : t('sessions.download.noCollectionModels')}
+                {searchQuery.trim() ? (modelType === 'image' ? t('sessions.download.noImageModels') : t('sessions.download.noMlxModels')) : modelType === 'text' ? t('sessions.download.noFeedModels') : t('sessions.download.noCollectionModels')}
               </p>
             ) : (
               displayModels.map(model => (
@@ -617,6 +614,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
                 }} className={`cursor-pointer ${selectedModel?.id === model.id ? 'ring-1 ring-primary rounded' : ''}`}>
                   <ModelCard
                     model={model}
+                    dateField={!searchQuery.trim() && modelType === 'text' ? feedSort : undefined}
                     isDownloading={downloadingRepos.has(model.id)}
                     isDownloaded={localModelIds.has(model.id)}
                     onDownload={() => handleDownload(model.id)}
@@ -707,8 +705,9 @@ function ReadmeContent({ markdown }: { markdown: string }) {
   )
 }
 
-function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
+function ModelCard({ model, isDownloading, isDownloaded, onDownload, dateField }: {
   model: HFModel
+  dateField?: HfModelFeedSort
   isDownloading: boolean
   isDownloaded: boolean
   onDownload: () => void
@@ -729,7 +728,11 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
               {model.size && <span title={t('sessions.download.modelSizeTitle')} className="font-semibold text-foreground">{model.size}</span>}
               <span title={t('sessions.download.sortDownloads')}>{t('sessions.download.downloadsLabel', { n: formatNumber(model.downloads) })}</span>
               <span title={t('sessions.download.sortLikes')}>{t('sessions.download.likesLabel', { n: model.likes })}</span>
-              {timeAgo(model.lastModified, t) && <span>{timeAgo(model.lastModified, t)}</span>}
+              {timeAgo(dateField === 'createdAt' ? model.createdAt : model.lastModified, t) && <span title={dateField === 'createdAt' ? model.createdAt : model.lastModified}>
+                {dateField ? t(dateField === 'createdAt' ? 'sessions.download.createdDate' : 'sessions.download.updatedDate', {
+                  date: timeAgo(dateField === 'createdAt' ? model.createdAt : model.lastModified, t),
+                }) : timeAgo(model.lastModified, t)}
+              </span>}
             </div>
             {model.note && (
               <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">{model.note}</p>

@@ -18,6 +18,7 @@ const api = {
     searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => ipcRenderer.invoke('models:searchHF', query, sortBy, sortDir, modelType),
     fetchReadme: (repoId: string) => ipcRenderer.invoke('models:fetchReadme', repoId),
     getRecommendedModels: () => ipcRenderer.invoke('models:getRecommendedModels'),
+    getRecentModels: (author: string, sort: 'createdAt' | 'lastModified') => ipcRenderer.invoke('models:getRecentModels', author, sort),
     getCollectionModels: (slug: string) => ipcRenderer.invoke('models:getCollectionModels', slug),
     downloadModel: (repoId: string) => ipcRenderer.invoke('models:downloadModel', repoId),
     startDownload: (repoId: string) => ipcRenderer.invoke('models:startDownload', repoId),

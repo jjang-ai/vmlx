@@ -1446,6 +1446,13 @@
       "loading": "Cargando datos de salud..."
     },
     "download": {
+      "newestCreated": "Más recientes por creación",
+      "refreshFeed": "Actualizar",
+      "authorFeedNote": "Los últimos 100 de {author} · se actualiza cada 5 minutos mientras está visible. Los formatos varían; comprueba la compatibilidad antes de descargar.",
+      "feedLoadFailed": "No se pudo cargar la lista de modelos.",
+      "noFeedModels": "No hay modelos en esta lista.",
+      "createdDate": "Creado {date}",
+      "updatedDate": "Actualizado {date}",
       "downloadTo": "Descargar en:",
       "hfToken": "Token de HF:",
       "hfTokenPlaceholder": "hf_...",

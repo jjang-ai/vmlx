@@ -1,4 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
+import { hfModelFeedPath, validateHfModelFeed, type HfModelFeedSort } from "../../shared/hfModelFeed";
 import {
   readdir,
   stat,
@@ -2295,6 +2296,21 @@ export function registerModelHandlers(): void {
     } catch {
       return null;
     }
+  });
+
+  // Author feeds are fetched afresh, through the same mirror/auth path as search.
+  ipcMain.handle("models:getRecentModels", async (_, author: string, sort: HfModelFeedSort = 'createdAt') => {
+    const path = hfModelFeedPath(author, sort);
+    const { response } = await fetchHfPath(path, {
+      headers: buildHfAuthHeaders(getConfiguredHfToken()),
+    });
+    if (!response.ok) throw new Error(`HuggingFace model feed error: ${response.status}`);
+    return validateHfModelFeed(await response.json(), author).map(model => ({
+      ...mapHFModel(model),
+      // Never substitute a creation timestamp for an update timestamp in this feed.
+      lastModified: model.lastModified || '',
+      createdAt: model.createdAt || '',
+    }));
   });
 
   // Get recommended models from JANGQ-AI
