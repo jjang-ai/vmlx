@@ -238,7 +238,7 @@ export const RESET_CONFIG = {
   distributedMode: undefined,
   distributedSecret: undefined,
   distributedNodes: undefined,
-} satisfies Record<keyof SessionConfig, unknown>
+} satisfies SessionConfig
 
 export const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 export const DSV4_MAX_CACHE_BLOCKS = 4097
