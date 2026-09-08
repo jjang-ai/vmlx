@@ -31,10 +31,10 @@ describe('MTP temperature disclosure', () => {
     ).toEqual({ kind: 'active', temperature: 0.01 })
   })
 
-  it('reports the pinned greedy startup default in Auto mode', () => {
+  it('distinguishes the overridable Auto default from forced Deterministic mode', () => {
     expect(
       resolveMtpTemperatureNotice({ nativeMtpSupported: true, mode: 'auto', temperature: 0 }),
-    ).toEqual({ kind: 'pinned' })
+    ).toEqual({ kind: 'default' })
   })
 
   it('flags a stale nonzero temperature in deterministic mode', () => {
@@ -72,6 +72,7 @@ describe('MTP temperature disclosure', () => {
     expect(source).toContain('const displayedMinP = mtpGreedyEnforced')
     // all three states have copy wired
     expect(source).toContain('chat.settings.mtpTempPinned')
+    expect(source).toContain('chat.settings.mtpTempDefault')
         expect(source).toContain('chat.settings.mtpTempInactive')
     // it must sit with the temperature control, not in some unrelated section
     const tempAt = source.indexOf("t('chat.settings.temperature')")
@@ -91,5 +92,17 @@ describe('MTP temperature disclosure', () => {
     expect(settings.mtpTempPinned).toMatch(/greedy/i)
     expect(settings.mtpTempPinned).toMatch(/Auto/)
     expect(settings.mtpTempActive).toMatch(/stochastic/i)
+  })
+
+  it('discloses Auto startup defaults without promising to preserve bundle sampling', () => {
+    const en = JSON.parse(readFileSync(
+      resolve(__dirname, '../src/renderer/src/i18n/locales/en.json'), 'utf8',
+    ))
+    for (const text of [en.sessions.config.nativeMtpAutoNote, en.sessions.config.nativeMtpModeTooltip]) {
+      expect(text).toMatch(/greedy.*default/i)
+      expect(text).toMatch(/explicit/i)
+      expect(text).not.toMatch(/preserves.*bundle sampling/i)
+    }
+    expect(en.sessions.config.nativeMtpHint).not.toContain('falling back to depth 1')
   })
 })

@@ -1,17 +1,18 @@
 /**
  * Explain how the selected native-MTP mode affects sampling.
  *
- * Auto preserves the bundle/request distribution and uses exact stochastic
- * speculative verification. Deterministic intentionally pins greedy values.
+ * Auto uses greedy startup defaults but honors explicit request sampling.
+ * Deterministic intentionally pins greedy values for every request.
  * Off preserves sampling too, but disables native MTP entirely.
  *
- * Three states worth surfacing, all keyed on the model ACTUALLY having MTP:
+ * States worth surfacing, all keyed on the model ACTUALLY having MTP:
+ *  - `default`  Auto currently shows greedy, without enforcing it.
  *  - `pinned`   Deterministic mode forces greedy sampling.
  *  - `active`   Auto mode is using the displayed sampling temperature.
  *  - `inactive` a stale nonzero value contradicts Deterministic mode.
  */
 
-export type MtpTemperatureNoticeKind = 'pinned' | 'active' | 'inactive'
+export type MtpTemperatureNoticeKind = 'default' | 'pinned' | 'active' | 'inactive'
 
 export interface MtpTemperatureNotice {
   kind: MtpTemperatureNoticeKind
@@ -69,5 +70,5 @@ export function resolveMtpTemperatureNotice(
   // DEFAULT is pinned to greedy, but an explicit nonzero temperature the
   // user set is still honored by the engine (API kwargs win).
   if (temperature > 0) return { kind: 'active', temperature }
-  return { kind: 'pinned' }
+  return { kind: 'default' }
 }

@@ -795,7 +795,9 @@ function statusToneClass(status: string): string {
                     : 'mt-1 text-xs text-neutral-500'
                 }
               >
-                {mtpTemperatureNotice.kind === 'pinned'
+                {mtpTemperatureNotice.kind === 'default'
+                  ? t('chat.settings.mtpTempDefault')
+                  : mtpTemperatureNotice.kind === 'pinned'
                   ? t('chat.settings.mtpTempPinned')
                   : mtpTemperatureNotice.kind === 'active'
                     ? t('chat.settings.mtpTempActive', {
