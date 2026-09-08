@@ -19,6 +19,8 @@ def test_live_batch_generator_records_are_copied_without_get_stats():
         "last_cache_execution": {"request_id": "r1"},
         "last_native_mtp": {"request_id": "r1", "accepted_tokens": 3},
         "last_native_mtp_skip": None,
+        # the terminal durability fence record (request-exact Cache panel, 50331002)
+        "last_durability": {"request_id": "r1", "wait_ms": 12.5, "cache_outcome": "stored"},
     }
     stats = SimpleNamespace(**records)
     scheduler = SimpleNamespace(
@@ -27,6 +29,7 @@ def test_live_batch_generator_records_are_copied_without_get_stats():
     observed = _live_batch_generator_request_records(scheduler)
     assert observed == records
     assert observed["last_native_mtp"] is not stats.last_native_mtp
+    assert observed["last_durability"] is not stats.last_durability
     assert _live_batch_generator_request_records(None) is None
 
 
