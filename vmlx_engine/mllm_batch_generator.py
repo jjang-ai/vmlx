@@ -8513,7 +8513,7 @@ class MLLMBatchGenerator:
                 request.extra_kwargs = dict(preserved_private_kwargs)
                 self._raise_if_prompt_over_limit(
                     request,
-                    source="tokenized VLM text prompt",
+                    source="text prompt (tokenized)",
                 )
                 processing_time = time.perf_counter() - tic
                 logger.debug(
@@ -8683,7 +8683,7 @@ class MLLMBatchGenerator:
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
             self._raise_if_prompt_over_limit(
                 request,
-                source="cached tokenized VLM media prompt",
+                source="prompt with media (tokenized from the pixel cache, media tokens included)",
             )
 
             logger.debug(
@@ -8907,7 +8907,7 @@ class MLLMBatchGenerator:
 
         self._raise_if_prompt_over_limit(
             request,
-            source="tokenized VLM media prompt",
+            source="prompt with media (tokenized, media tokens included)",
         )
 
         processing_time = time.perf_counter() - tic

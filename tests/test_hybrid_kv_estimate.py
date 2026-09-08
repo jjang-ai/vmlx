@@ -96,3 +96,22 @@ def test_dots3_note_special_case_still_wins():
 def test_garbage_config_does_not_crash():
     assert est({"text_config": {"model_type": "qwen3_5", "full_attention_interval": "nope"}}) >= 0
     assert est({}) >= 0
+
+
+def test_prompt_too_long_sources_name_the_prompt_not_the_engine_lane():
+    """The typed 413 says what was measured. "VLM text prompt" read as a video/image
+    budget error to a reader of the app's rejection bubble (Codex review 2026-09-07);
+    the MLLM lane now names the text prompt and, for media, says the media tokens
+    are included — no engine-lane jargon in a user-facing message."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "vmlx_engine"
+    sources = [
+        s for s in re.findall(r'source="([^"]+)"', (root / "mllm_scheduler.py").read_text() + (root / "mllm_batch_generator.py").read_text())
+        if "prompt" in s
+    ]
+    assert sources, "the MLLM lane raises PromptTooLongError with a named source"
+    assert all("VLM" not in s for s in sources), sources
+    assert "text prompt (tokenized)" in sources
+    assert any("media tokens included" in s for s in sources)

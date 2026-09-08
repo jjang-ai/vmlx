@@ -2756,7 +2756,7 @@ class MLLMScheduler:
                     raise PromptTooLongError(
                         len(token_ids),
                         _max_prompt_tokens,
-                        source="tokenized VLM text prompt",
+                        source="text prompt (tokenized)",
                         request_id=request_id,
                     )
         # Mark multi-turn requests for cache skip heuristic.
