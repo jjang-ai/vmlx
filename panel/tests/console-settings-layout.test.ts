@@ -29,6 +29,8 @@ describe('Console settings and responsive layout contract', () => {
   })
   it('has no experience-mode gate or alternate default preset', () => {
     expect(read('renderer/src/components/layout/Sidebar.tsx')).not.toContain('InferenceMode')
+    expect(read('renderer/src/components/sessions/ServerSettingsDrawer.tsx')).not.toContain('InferenceMode')
+    expect(read('renderer/src/components/sessions/ServerSettingsDrawer.tsx')).toContain('useState<SessionConfig>(DEFAULT_CONFIG)')
     expect(read('main/index.ts')).not.toContain("getSetting('inference_mode')")
     expect(existsSync(resolve(__dirname, '../src/renderer/src/components/layout/InferenceMode.tsx'))).toBe(false)
   })

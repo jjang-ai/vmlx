@@ -9,7 +9,6 @@ import {
   DSV4_PAGED_CACHE_BLOCK_SIZE,
   commitActiveSettingsInput,
 } from './SessionConfigForm'
-import { useInferenceMode } from '../layout/InferenceMode'
 import { useTranslation } from '../../i18n'
 import {
   applyBundleDsv4PoolQuantToSessionConfig,
@@ -36,9 +35,8 @@ interface ServerSettingsDrawerProps {
 }
 
 export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpdate }: ServerSettingsDrawerProps) {
-  const { defaultConfig } = useInferenceMode()
   const { t } = useTranslation()
-  const [config, setConfig] = useState<SessionConfig>(defaultConfig)
+  const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [restarting, setRestarting] = useState(false)
