@@ -93,8 +93,18 @@ maximum row KL <= 0.05, and logit RMS <= 0.1. Top-1 agreement is also recorded.
 The commands return a nonzero exit code on failed checks. Inspect every
 recorded result as well as the exit code.
 
-Run the relevant Qwen4, native-MTP, hybrid-prefix/SSM, batch-generator and disk
-cache regression tests with Metal available and the optional extension built.
+Run the recorded Qwen4, native-MTP, hybrid-prefix/SSM, batch-generator and disk
+cache regression suite with Metal available and the optional extension built.
+The manifest is the exact file selection used for the 1,078-test qualification:
+
+```sh
+xargs .venv/bin/python -m pytest -q --maxfail=10 \
+  --junitxml=qwen4-regression-tests.xml < bench/qwen4-regression-tests.txt
+```
+
+Run this after releasing the full serving model, as in the recorded campaign.
+Test counts may change when upstream adds cases; inspect the JUnit report for
+failures, errors, and skips rather than treating the historical count as a gate.
 Check cold/warm cache reuse, reuse after restart, cancellation followed by a
 new request, incompatible native ABI fallback, and clean installed-wheel
 execution. Record any skipped tests and untested device/OS combinations.
