@@ -1,4 +1,14 @@
 {
+  "ssdPool": {
+    "capacity": "SSD cache is near its effective pool limit: {used} / {cap}. Automatic eviction may remove older reusable entries.",
+    "evicted": "SSD cache entries were evicted or cleaned up. Reported pool usage: {used} / {cap}.",
+    "clear": "Clear SSD cache",
+    "confirm": "Clear eligible SSD cache entries across this pool? Model weights and chat history are not deleted. Resident caches are preserved. Protected or in-flight files and metadata may remain, and subsequent requests can write new entries. Disk-cache misses may require prefill again. Stop other engines using this pool first.",
+    "clearing": "Clearing…",
+    "result": "Freed {freed}; {remaining} remains (including metadata and protected files).",
+    "failed": "Clear did not complete: {detail}. Refresh status before retrying.",
+    "unknownResult": "The engine did not return a confirmed SSD-clear result."
+  },
   "common": {
     "back": "Back",
     "cancel": "Cancel",

@@ -273,6 +273,7 @@ declare global {
           cacheType: string,
           endpoint?: { host: string; port: number },
           sessionId?: string,
+          expected?: { root: string; pid?: number },
         ) => Promise<any>;
       };
       audio: {

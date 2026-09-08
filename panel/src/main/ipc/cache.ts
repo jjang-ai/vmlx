@@ -56,7 +56,11 @@ async function fetchCacheJson(label: string, url: string, init: RequestInit): Pr
     }
     throw err
   }
-  if (!res.ok) throw new Error(`${label} failed: ${res.status}`)
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    const detail = typeof body?.detail === 'string' ? `: ${body.detail}` : ''
+    throw new Error(`${label} failed: ${res.status}${detail}`)
+  }
   return await res.json()
 }
 
@@ -90,13 +94,20 @@ export function registerCacheHandlers(): void {
     })
   })
 
-  ipcMain.handle('cache:clear', async (_, cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string) => {
+  ipcMain.handle('cache:clear', async (_, cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string, expected?: { root: string; pid?: number }) => {
     const baseUrl = await resolveBaseUrl(endpoint)
     const authHeaders = getAuthHeaders(sessionId)
-    return await fetchCacheJson('Cache clear', `${baseUrl}/v1/cache?type=${encodeURIComponent(cacheType)}`, {
+    const query = new URLSearchParams({ type: cacheType })
+    if (expected) {
+      query.set('expected_root', expected.root)
+      if (expected.pid != null) query.set('expected_pid', String(expected.pid))
+    }
+    return await fetchCacheJson('Cache clear', `${baseUrl}/v1/cache?${query}`, {
       method: 'DELETE',
       headers: authHeaders,
-      signal: AbortSignal.timeout(10000)
+      // A large managed pool can take longer to scan. A timeout is not proof
+      // of cancellation or completion; the renderer keeps it as an error.
+      signal: AbortSignal.timeout(cacheType === 'ssd_pool' ? 120000 : 10000)
     })
   })
 }

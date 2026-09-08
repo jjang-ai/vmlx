@@ -5,6 +5,7 @@ import { ChatList } from '../chat/ChatList'
 import { ChatSettings } from '../chat/ChatSettings'
 import { ServerSettingsDrawer } from './ServerSettingsDrawer'
 import { CachePanel } from './CachePanel'
+import { SsdPoolNotice } from './SsdPoolNotice'
 import { BenchmarkPanel } from './BenchmarkPanel'
 import { EmbeddingsPanel } from './EmbeddingsPanel'
 import { PerformancePanel } from './PerformancePanel'
@@ -475,6 +476,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
+      )}
+
+      {session.status === 'running' && session.type !== 'remote' && !isImage && (
+        <SsdPoolNotice key={`${session.id}:${session.pid}:${session.host}:${session.port}`}
+          sessionId={session.id} host={session.host} port={session.port} pid={session.pid} />
       )}
 
       {/* Chat List Overlay */}

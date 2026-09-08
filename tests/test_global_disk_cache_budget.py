@@ -18,6 +18,54 @@ from vmlx_engine.global_disk_cache_budget import (
 from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
 
 
+def test_explicit_clear_uses_managed_pool_and_preserves_cap(tmp_path):
+    root = tmp_path / "pool"
+    now = time.time()
+    a = _indexed_block(root / "aaaaaaaaaaaa", "aa-old", size=100, accessed=now - 1000)
+    b = _indexed_block(root / "bbbbbbbbbbbb", "bb-new", size=200, accessed=now - 1000)
+    unrelated = root / "model.safetensors"
+    unrelated.write_bytes(b"not a managed namespace")
+    budget = GlobalDiskCacheBudget(root, 1_000_000)
+    try:
+        result = budget.clear_eligible()
+        assert result.evicted_bytes == 300
+        assert not a.exists() and not b.exists()
+        assert unrelated.read_bytes() == b"not a managed namespace"
+        assert result.max_size_bytes == 1_000_000
+        assert budget.refresh_health().max_size_bytes == 1_000_000
+    finally:
+        budget.close()
+
+
+def test_explicit_clear_refuses_another_process_before_deletion(tmp_path, monkeypatch):
+    payload = _indexed_block(tmp_path / "aaaaaaaaaaaa", "aa-old", size=100, accessed=time.time() - 1000)
+    budget = GlobalDiskCacheBudget(tmp_path, 1_000_000)
+    try:
+        monkeypatch.setattr(budget, "_active_lease_ids_locked", lambda: {"987654-abcd"})
+        with pytest.raises(BlockingIOError):
+            budget.clear_eligible()
+        assert payload.exists()
+    finally:
+        budget.close()
+
+
+def test_explicit_clear_keeps_recent_orphan_and_live_writer_temp(tmp_path):
+    namespace = tmp_path / "aaaaaaaaaaaa"
+    _indexed_block(namespace, "aa-old", size=100, accessed=time.time() - 1000)
+    budget = GlobalDiskCacheBudget(tmp_path, 0)
+    try:
+        orphan = namespace / "blocks" / "recent.safetensors"
+        orphan.write_bytes(b"recent orphan")
+        temp = namespace / "blocks" / f"cache.{budget.lease_id}.tmp"
+        temp.write_bytes(b"live write")
+        result = budget.clear_eligible()
+        assert orphan.exists() and temp.exists()
+        assert result.max_size_bytes == 0
+        assert result.bytes_after >= len(b"recent orphanlive write")
+    finally:
+        budget.close()
+
+
 def _indexed_block(
     namespace: Path,
     name: str,

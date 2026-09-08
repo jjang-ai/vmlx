@@ -1669,6 +1669,30 @@ class GlobalDiskCacheBudget:
             self._last_result = result
             return result
 
+    def clear_eligible(self) -> GlobalBudgetResult:
+        """Remove eligible managed SSD payloads, never arbitrary root contents.
+
+        This explicit user action uses the same ancestry, publication-pin and
+        orphan protections as eviction. Refuse other process owners: their
+        request lifecycle cannot be established by this server's idle gate.
+        Metadata and protected payloads can remain; the result reports bytes,
+        not a promise that the directory is empty. The configured cap is intact.
+        """
+        with self._exclusive_guard():
+            if self._closed:
+                raise OSError("SSD cache coordinator is closed")
+            if any(not lease.startswith(f"{os.getpid()}-")
+                   for lease in self._active_lease_ids_locked()):
+                raise BlockingIOError("Stop other engines using this SSD pool before clearing it")
+            result = self._enforce_locked(clear_eligible=True)
+            logger.info(
+                "SSD cache clear: root=%s removed_entries=%d freed_bytes=%d "
+                "remaining_bytes=%d effective_cap_bytes=%d protected_temp_files=%d",
+                self.root, result.evicted_entries, result.evicted_bytes,
+                result.bytes_after, result.max_size_bytes, result.protected_temp_files,
+            )
+            return result
+
     def enforce(self, *, force: bool = False) -> GlobalBudgetResult:
         """Trim aggregate finalized payload bytes to the configured ceiling.
 
@@ -1735,6 +1759,7 @@ class GlobalDiskCacheBudget:
         *,
         protected_blocks: set[tuple[Path, str]] | None = None,
         lock_wait_s: float = 0.0,
+        clear_eligible: bool = False,
     ) -> GlobalBudgetResult:
         """Reconcile and trim while the root-exclusive lock is held.
 
@@ -1799,11 +1824,12 @@ class GlobalDiskCacheBudget:
                 garbage_entries,
                 garbage_bytes / 1024**3,
             )
-        if max_size_bytes > 0:
+        if clear_eligible or max_size_bytes > 0:
             trim_target = (
-                max(0, int(max_size_bytes * 0.9))
-                if total > max_size_bytes
-                else max_size_bytes
+                0 if clear_eligible else (
+                    max(0, int(max_size_bytes * 0.9))
+                    if total > max_size_bytes else max_size_bytes
+                )
             )
 
             # Legacy rows and declared-known rows whose ancestry does not reach

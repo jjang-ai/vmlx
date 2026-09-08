@@ -205,8 +205,8 @@ const api = {
       ipcRenderer.invoke('cache:entries', endpoint, sessionId),
     warm: (prompts: string[], endpoint?: { host: string; port: number }, sessionId?: string) =>
       ipcRenderer.invoke('cache:warm', prompts, endpoint, sessionId),
-    clear: (cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string) =>
-      ipcRenderer.invoke('cache:clear', cacheType, endpoint, sessionId)
+    clear: (cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string, expected?: { root: string; pid?: number }) =>
+      ipcRenderer.invoke('cache:clear', cacheType, endpoint, sessionId, expected)
   },
 
   // Audio: STT and TTS

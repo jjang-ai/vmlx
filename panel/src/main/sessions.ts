@@ -4350,7 +4350,11 @@ export class SessionManager extends EventEmitter {
               status: modelReady ? 'ok' : 'loading',
               modelName: data.model_name,
               port: session.port,
-              memory: data.memory  // { active_mb, peak_mb, cache_mb } from /health
+              memory: data.memory,  // { active_mb, peak_mb, cache_mb } from /health
+              // Reuse the existing idle-cached health snapshot. A separate
+              // cache-stats poll here would contend with active GPU decoding.
+              enginePid: data.runtime_provenance?.pid,
+              ssdPool: data.cache?.block_disk_cache?.global_budget,
             })
           } else {
             await this.incrementFailAndCheck(session.id)

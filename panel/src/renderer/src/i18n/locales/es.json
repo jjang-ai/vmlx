@@ -1,4 +1,14 @@
 {
+  "ssdPool": {
+    "capacity": "La caché SSD está cerca del límite efectivo del conjunto: {used} / {cap}. La expulsión automática puede eliminar entradas reutilizables antiguas.",
+    "evicted": "Se expulsaron o limpiaron entradas de la caché SSD. Uso indicado: {used} / {cap}.",
+    "clear": "Vaciar caché SSD",
+    "confirm": "¿Eliminar las entradas SSD elegibles de este conjunto? No se borran los pesos de los modelos ni el historial. Se conservan las cachés residentes. Pueden quedar archivos protegidos, en curso y metadatos; las solicitudes posteriores pueden escribir nuevas entradas. Los fallos de caché pueden requerir repetir el prefill. Detén primero los otros motores que usan este conjunto.",
+    "clearing": "Vaciando…",
+    "result": "Liberados {freed}; quedan {remaining}, incluidos metadatos y archivos protegidos.",
+    "failed": "El vaciado no se completó: {detail}. Actualiza el estado antes de reintentar.",
+    "unknownResult": "El motor no devolvió un resultado confirmado del vaciado SSD."
+  },
   "common": {
     "back": "Atrás",
     "cancel": "Cancelar",

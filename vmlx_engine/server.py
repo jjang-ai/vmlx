@@ -15673,18 +15673,62 @@ async def cache_token_contract(request: dict):
 
 
 @app.delete("/v1/cache", dependencies=[Depends(verify_api_key)])
-async def clear_cache(cache_type: str = Query("all", alias="type")):
+async def clear_cache(
+    cache_type: str = Query("all", alias="type"),
+    expected_root: str | None = None,
+    expected_pid: int | None = None,
+):
     """
     Clear caches.
 
     Query params:
-        type: "ram" | "prefix" | "multimodal" | "all" (default: "all")
+        type: "ram" | "prefix" | "multimodal" | "all" | "ssd_pool"
 
         ``ram`` drops only resident/indexed prefix state and preserves every
         disk-backed L2 store. ``prefix`` clears both RAM prefix state and its
         prompt/block/SSM disk companions. Keeping these operations distinct is
         important for validating and operating restart/L2 restore paths.
     """
+    if cache_type == "ssd_pool":
+        import sqlite3
+
+        # Do not use cached /health data as an idle assertion. This synchronous
+        # handler does not yield to new ASGI admissions before the operation.
+        scheduler = _get_scheduler()
+        if _engine is None or scheduler is None:
+            raise HTTPException(status_code=409, detail="SSD cache engine is unavailable")
+        lifecycle = _request_lifecycle_health_snapshot(
+            _engine.get_stats(), scheduler.get_stats()
+        )
+        if (lifecycle.get("available") is not True
+                or lifecycle.get("active_request_count") != 0
+                or lifecycle.get("terminal_cleanup_pending") is not False):
+            raise HTTPException(status_code=409, detail="Wait for requests and cache persistence to finish before clearing SSD cache")
+        manager = getattr(scheduler, "paged_cache_manager", None)
+        store = getattr(manager, "_disk_store", None)
+        budget = getattr(store, "global_budget", None)
+        if budget is None:
+            raise HTTPException(status_code=409, detail="No managed SSD pool is available")
+        if expected_pid != os.getpid() or expected_root != str(budget.root):
+            raise HTTPException(status_code=409, detail="SSD pool or engine identity changed; refresh before clearing")
+        try:
+            result = budget.clear_eligible()
+        except BlockingIOError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, sqlite3.Error) as exc:
+            logger.exception("SSD pool clear could not finish")
+            raise HTTPException(status_code=503, detail="SSD clear did not finish; refresh cache status before retrying") from exc
+        return {
+            "status": "eligible_cleared", "cache_type": cache_type,
+            "root": str(budget.root), "freed_bytes": result.evicted_bytes,
+            "removed_entries": result.evicted_entries,
+            "remaining_bytes": result.bytes_after,
+            "effective_cap_bytes": result.max_size_bytes,
+            "protected_temp_files": result.protected_temp_files,
+            "protected_recent_orphans": result.protected_recent_orphans,
+            "resident_cache_preserved": True,
+        }
+
     cleared = []
     # Tiers that were deliberately NOT cleared, so the caller can tell "nothing
     # to do" apart from "refused because it was busy" instead of being told the
