@@ -2244,6 +2244,17 @@ export class SessionManager extends EventEmitter {
         s => s.type !== 'remote' && sameLocalBundlePath(s.modelPath, modelPath)
       )
     if (existing) {
+      // Creation reuses a bundle's session. Never rewrite a live session's
+      // endpoint/config before startSession rejects its existing process: the
+      // UI/gateway would advertise new settings while the old engine keeps
+      // running. Active settings changes belong to Save & Restart instead.
+      const managed = this.processes.get(existing.id)
+      if (['running', 'loading', 'standby'].includes(existing.status) ||
+          managed?.process || managed?.adoptedPid) {
+        throw new Error(
+          'This model already has an active session. Use its Server Settings and Save & Restart, or stop it before creating it again.'
+        )
+      }
       // Merge new config into existing (don't overwrite unspecified fields)
       let existingConfig: Record<string, any> = {}
       try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) { }
