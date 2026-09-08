@@ -1449,7 +1449,7 @@
     "download": {
       "newestCreated": "最新创建",
       "refreshFeed": "刷新",
-      "authorFeedNote": "来自 {author} 的最新100个模型 · 显示时每5分钟刷新。格式各异，下载前请确认兼容性。",
+      "authorFeedNote": "{author} 的最新 JANG 模型 · 显示时每5分钟刷新。下载前请检查兼容性。",
       "feedLoadFailed": "无法加载模型动态。",
       "noFeedModels": "此动态中没有模型。",
       "createdDate": "创建于 {date}",

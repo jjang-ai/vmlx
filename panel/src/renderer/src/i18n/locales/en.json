@@ -1449,7 +1449,7 @@
     "download": {
       "newestCreated": "Newest Created",
       "refreshFeed": "Refresh",
-      "authorFeedNote": "Latest 100 from {author} · refreshes every 5 minutes while visible. Formats vary; check compatibility before downloading.",
+      "authorFeedNote": "Recent JANG models from {author} · refreshes every 5 minutes while visible. Check compatibility before downloading.",
       "feedLoadFailed": "Failed to load model feed.",
       "noFeedModels": "No models in this feed.",
       "createdDate": "Created {date}",

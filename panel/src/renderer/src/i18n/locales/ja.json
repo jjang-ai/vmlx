@@ -1449,7 +1449,7 @@
     "download": {
       "newestCreated": "作成日時が新しい順",
       "refreshFeed": "更新",
-      "authorFeedNote": "{author} の最新100件 · 表示中は5分ごとに更新。形式はさまざまです。ダウンロード前に互換性を確認してください。",
+      "authorFeedNote": "{author} の新着JANGモデル · 表示中は5分ごとに更新します。ダウンロード前に互換性を確認してください。",
       "feedLoadFailed": "モデルフィードを読み込めませんでした。",
       "noFeedModels": "このフィードにモデルはありません。",
       "createdDate": "作成: {date}",

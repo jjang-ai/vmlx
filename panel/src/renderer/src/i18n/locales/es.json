@@ -1449,7 +1449,7 @@
     "download": {
       "newestCreated": "Más recientes por creación",
       "refreshFeed": "Actualizar",
-      "authorFeedNote": "Los últimos 100 de {author} · se actualiza cada 5 minutos mientras está visible. Los formatos varían; comprueba la compatibilidad antes de descargar.",
+      "authorFeedNote": "Modelos JANG recientes de {author} · se actualizan cada 5 minutos mientras son visibles. Comprueba la compatibilidad antes de descargar.",
       "feedLoadFailed": "No se pudo cargar la lista de modelos.",
       "noFeedModels": "No hay modelos en esta lista.",
       "createdDate": "Creado {date}",

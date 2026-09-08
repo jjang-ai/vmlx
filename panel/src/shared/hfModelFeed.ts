@@ -18,6 +18,10 @@ export function validateHfModelFeed(value: unknown, author: string): Record<stri
     if (typeof id !== 'string' || !id.toLowerCase().startsWith(`${author.toLowerCase()}/`) || seen.has(id)) return false
     // HF exposes the account's profile README as a model-list repository.
     if (id.toLowerCase() === `${author.toLowerCase()}/profile`) return false
+    // Match the repository name, not its owner (JANGQ-AI would match every
+    // upload, including unrelated NVFP4/EXL3 bundles).
+    const name = id.slice(author.length + 1)
+    if (!name.toUpperCase().includes('JANG')) return false
     seen.add(id)
     return true
   })
