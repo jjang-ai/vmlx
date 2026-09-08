@@ -1312,6 +1312,35 @@ function runR20ReleasePythonAction(args, options = {}) {
   return runPinnedReleasePythonAction(args, options);
 }
 
+function normalizeAsarOutputPermissions(outputRoot) {
+  const root = resolve(outputRoot);
+  if (realpathSync(root) !== root || !lstatSync(root).isDirectory()) {
+    throw new Error("ASAR output must be a real directory");
+  }
+  // ASAR stores only the owner-executable flag. Its extractor creates ordinary
+  // files with 0666 & umask and executable files with 0755. Vite public-file
+  // copies retain source modes, unlike freshly generated JS/CSS. Normalize the
+  // generated tree before packing so strict staged/mounted parity remains exact.
+  const regularMode = 0o666 & ~process.umask();
+  function walk(directory) {
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const metadata = lstatSync(path);
+      if (metadata.isSymbolicLink()) throw new Error("ASAR output contains a symlink");
+      if (metadata.isDirectory()) { walk(path); continue; }
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const current = fstatSync(fd);
+        if (!current.isFile() || current.nlink !== 1) {
+          throw new Error("ASAR output must contain single-link regular files");
+        }
+        fchmodSync(fd, current.mode & 0o100 ? 0o755 : regularMode);
+      } finally { closeSync(fd); }
+    }
+  }
+  walk(root);
+}
+
 async function beforePack(context) {
   const isElectronBuilderPack = !!(
     context &&
@@ -1358,9 +1387,11 @@ async function beforePack(context) {
       panelDir,
     );
   }
+  normalizeAsarOutputPermissions(join(panelDir, "out"));
 }
 
 module.exports = beforePack;
+module.exports.normalizeAsarOutputPermissions = normalizeAsarOutputPermissions;
 module.exports.assertExactResolvedPathSet = assertExactResolvedPathSet;
 module.exports.canonicalGitHubRepo = canonicalGitHubRepo;
 module.exports.verifyExactDmgDirectory = verifyExactDmgDirectory;
