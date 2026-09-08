@@ -224,6 +224,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
 
   const handleReset = async () => {
     const requestId = ++modelDefaultsRequestRef.current
+    // Reset supersedes selection detection and owns the same launch gate.
+    // Otherwise Launch can use old values, or remain disabled by the stale owner.
+    setDefaultsPending(true)
     const base = { ...RESET_CONFIG, port: config.port }
     // Re-run model detection to get proper defaults for this model
     if (selectedModel) {
@@ -299,7 +302,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         setDetectedNativeMtp(undefined)
       }
     }
+    if (!mountedRef.current || modelDefaultsRequestRef.current !== requestId) return
     setConfig(base)
+    setDefaultsPending(false)
   }
 
   // Clean up log listener when launching state changes or component unmounts
