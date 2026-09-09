@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
-import { Settings, Square, RefreshCw, PanelLeftOpen, ChevronDown, Download, Loader2, ScrollText } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Settings, Square, RefreshCw, PanelLeftOpen, FolderOpen, ScrollText } from 'lucide-react'
 
 function formatElapsed(secs: number): string {
   if (secs < 60) return `${secs}s`
@@ -8,25 +8,9 @@ function formatElapsed(secs: number): string {
   return `${m}m ${s}s`
 }
 
-import { IMAGE_MODELS } from '../../../../shared/imageModels'
 import { useTranslation } from '../../i18n'
 
 type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
-
-interface ImageModel {
-  id: string
-  name: string
-  category: 'generate' | 'edit'
-  quantizeOptions: number[]
-}
-
-// Derive AVAILABLE_MODELS from the shared registry
-const AVAILABLE_MODELS: ImageModel[] = IMAGE_MODELS.map(m => ({
-  id: m.id,
-  name: m.name,
-  category: m.category,
-  quantizeOptions: m.quantizeOptions,
-}))
 
 interface ImageTopBarProps {
   model: string | null
@@ -40,7 +24,6 @@ interface ImageTopBarProps {
   onLogs: () => void
   onStop: () => void
   onChangeModel: () => void
-  onSelectModel: (modelId: string, quantize: number | undefined, category: 'generate' | 'edit') => void
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
 }
@@ -57,13 +40,11 @@ export function ImageTopBar({
   onLogs,
   onStop,
   onChangeModel,
-  onSelectModel,
   sidebarCollapsed,
   onToggleSidebar
 }: ImageTopBarProps) {
   const { t } = useTranslation()
   const quantizeLabel = quantize === 0 ? t('image.topbar.quantFull') : `${quantize}-bit`
-  const [showPicker, setShowPicker] = useState(false)
   const [loadingElapsed, setLoadingElapsed] = useState(0)
 
   // Elapsed time counter when model is loading
@@ -77,54 +58,8 @@ export function ImageTopBar({
     }, 1000)
     return () => clearInterval(interval)
   }, [status])
-  const [availability, setAvailability] = useState<Record<string, boolean>>({})
-  const [checkingAvail, setCheckingAvail] = useState(false)
-  const pickerRef = useRef<HTMLDivElement>(null)
-
-  // Close dropdown on click outside
-  useEffect(() => {
-    if (!showPicker) return
-    const handleClick = (e: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
-        setShowPicker(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [showPicker])
-
-  // Check model availability when dropdown opens — check ALL quantize options per model
-  useEffect(() => {
-    if (!showPicker) return
-    setCheckingAvail(true)
-    const checks = AVAILABLE_MODELS.map(async (m) => {
-      // Check all quantize options, report available if ANY is downloaded
-      const results = await Promise.all(
-        m.quantizeOptions.map(async (q) => {
-          try {
-            const result = await window.api.models.checkImageModel(m.id, q)
-            return result.available
-          } catch { return false }
-        })
-      )
-      return { id: m.id, available: results.some(Boolean) }
-    })
-    Promise.all(checks).then(results => {
-      const avail: Record<string, boolean> = {}
-      results.forEach(r => { avail[r.id] = r.available })
-      setAvailability(avail)
-      setCheckingAvail(false)
-    })
-  }, [showPicker])
-
   const displaySource = displayModelName || model
   const displayName = displaySource ? (displaySource.includes('/') ? displaySource.split('/').pop() : displaySource) : t('image.topbar.noModelSelected')
-
-  const genModels = AVAILABLE_MODELS.filter(m => m.category === 'generate')
-  const editModels = AVAILABLE_MODELS.filter(m => m.category === 'edit')
-
-  const isActive = (id: string) => model === id
-  const isDownloaded = (id: string) => availability[id] === true
 
   return (
     <div className="h-11 border-b border-border flex items-center justify-between px-3 bg-background flex-shrink-0">
@@ -140,68 +75,17 @@ export function ImageTopBar({
           </button>
         )}
 
-        {/* Model selector dropdown */}
-        <div className="relative" ref={pickerRef}>
-          <button
-            onClick={() => !generating && setShowPicker(!showPicker)}
-            data-vmlx-control="image-switch-model"
-            disabled={generating}
-            className={`flex items-center gap-1 text-sm font-medium transition-colors ${generating ? 'opacity-50 cursor-not-allowed' : 'hover:text-primary'}`}
-            title={generating ? t('image.topbar.cannotSwitchTitle') : t('image.topbar.switchModelTitle')}
-          >
-            <span className="truncate max-w-[200px]">{displayName}</span>
-            <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform flex-shrink-0 ${showPicker ? 'rotate-180' : ''}`} />
-          </button>
-
-          {showPicker && (
-            <div className="absolute top-full left-0 mt-1 w-72 bg-card border border-border rounded-lg shadow-lg z-50 py-1 max-h-96 overflow-auto">
-              {/* Generation models */}
-              <div className="px-3 py-1.5">
-                <span className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">{t('image.topBar.imageGeneration')}</span>
-              </div>
-              {genModels.map(m => (
-                <ModelRow
-                  key={m.id}
-                  model={m}
-                  active={isActive(m.id)}
-                  downloaded={isDownloaded(m.id)}
-                  checking={checkingAvail}
-                  running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, undefined, m.category) }}
-                />
-              ))}
-
-              <div className="border-t border-border my-1" />
-
-              {/* Edit models */}
-              <div className="px-3 py-1.5">
-                <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">{t('image.topBar.imageEditing')}</span>
-              </div>
-              {editModels.map(m => (
-                <ModelRow
-                  key={m.id}
-                  model={m}
-                  active={isActive(m.id)}
-                  downloaded={isDownloaded(m.id)}
-                  checking={checkingAvail}
-                  running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, undefined, m.category) }}
-                />
-              ))}
-
-              <div className="border-t border-border my-1" />
-
-              {/* Custom / Browse */}
-              <button
-                onClick={() => { setShowPicker(false); onChangeModel() }}
-                data-vmlx-control="image-browse-custom"
-                className="w-full text-left px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-              >
-                {t('image.topBar.browseCustomModel')}
-              </button>
-            </div>
-          )}
-        </div>
+        {/* Selecting a model opens inspection; it never starts a preset. */}
+        <button
+          onClick={onChangeModel}
+          data-vmlx-control="image-switch-model"
+          disabled={generating || status === 'starting'}
+          className="min-w-0 flex items-center gap-2 text-sm font-medium hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          title={generating ? t('image.topbar.cannotSwitchTitle') : t('image.picker.chooseFolderTitle')}
+        >
+          <span className="truncate max-w-[200px]">{displayName}</span>
+          <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
+        </button>
 
         {/* Mode badge */}
         {model && mode === 'edit' && (
@@ -273,59 +157,5 @@ export function ImageTopBar({
         )}
       </div>
     </div>
-  )
-}
-
-function ModelRow({ model, active, downloaded, checking, running, onSelect }: {
-  model: ImageModel
-  active: boolean
-  downloaded: boolean
-  checking: boolean
-  running: boolean
-  onSelect: () => void
-}) {
-  const { t } = useTranslation()
-  const isEdit = model.category === 'edit'
-  const dotColor = isEdit ? 'bg-violet-500' : 'bg-blue-500'
-
-  return (
-    <button
-      onClick={onSelect}
-      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex items-center gap-2 ${
-        active ? (isEdit ? 'bg-violet-500/5' : 'bg-blue-500/5') : ''
-      }`}
-    >
-      {/* Status dot */}
-      {running ? (
-        <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
-      ) : (
-        <span className={`w-2 h-2 rounded-full ${dotColor} opacity-30 flex-shrink-0`} />
-      )}
-
-      {/* Model name */}
-      <span className={active ? (isEdit ? 'text-violet-400 font-medium' : 'text-blue-400 font-medium') : 'text-foreground'}>
-        {model.name}
-      </span>
-
-      {/* Right side: status badges */}
-      <div className="ml-auto flex items-center gap-1.5">
-        {running && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/15 text-green-500">{t('image.topBar.statusRunning')}</span>
-        )}
-        {!running && active && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-yellow-500/15 text-yellow-500">{t('image.topBar.statusLoading')}</span>
-        )}
-        {checking ? (
-          <Loader2 className="h-3 w-3 text-muted-foreground animate-spin" />
-        ) : downloaded ? (
-          <span className="text-[9px] text-green-500">{t('image.topBar.statusReady')}</span>
-        ) : (
-          <span className="text-[9px] text-muted-foreground flex items-center gap-0.5">
-            <Download className="h-2.5 w-2.5" />
-            download
-          </span>
-        )}
-      </div>
-    </button>
   )
 }

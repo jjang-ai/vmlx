@@ -1696,6 +1696,13 @@
       "deleteFailedPlain": "No se pudo eliminar la imagen"
     },
     "picker": {
+      "chooseFolderTitle": "Elegir un modelo de imagen",
+      "folderFirstIntro": "Selecciona una carpeta local. Revisa el tipo y la precisión detectados y luego cárgala. Elegir una carpeta no detiene el modelo actual ni descarga pesos.",
+      "folderTab": "Carpeta local",
+      "modelCatalog": "Descargar modelos",
+      "adapterOverride": "Configuración avanzada del adaptador",
+      "overrideHelp": "Modifica estos valores solo si la detección es incompleta. Para una carpeta desconocida, selecciona la arquitectura y la tarea. Al cambiar de carpeta se restablecen estos valores.",
+      "loadFolder": "Cargar carpeta seleccionada",
       "automatic": "Automático (desde la carpeta)",
       "inspectingFolder": "Inspeccionando la carpeta del modelo…",
       "unknownArchitecture": "Arquitectura no identificada. Selecciónala antes de iniciar.",

@@ -647,10 +647,6 @@ export function ImageTab() {
           onLogs={() => setShowLogs(!showLogs)}
           onStop={handleStop}
           onChangeModel={handleChangeModel}
-          onSelectModel={(modelId, modelQuantize, category) => {
-            // Quick switch: stop current, start new model with correct quantize
-            handleModelSelect(modelId, modelQuantize, category)
-          }}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         />

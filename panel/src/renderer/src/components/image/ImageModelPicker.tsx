@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Zap, Sparkles, Gauge, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
+import { canLaunchInspectedImageFolder } from '../../../../shared/imageFolderLaunch'
 import { IMAGE_MODELS } from '../../../../shared/imageModels'
 import type { inspectLocalImageModel } from '../../../../shared/imageLocalModel'
 import { useTranslation } from '../../i18n'
@@ -70,7 +71,24 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const [customMfluxClass, setCustomMfluxClass] = useState('')
   const [localPreview, setLocalPreview] = useState<ReturnType<typeof inspectLocalImageModel> | null>(null)
   const [inspecting, setInspecting] = useState(false)
-  const [showCustom, setShowCustom] = useState(false)
+  const [showCustom, setShowCustom] = useState(true)
+  const [previewInput, setPreviewInput] = useState('')
+
+  const chooseCustomPath = (path: string) => {
+    setCustomPath(path)
+    setLocalPreview(null)
+    setPreviewInput('')
+    setInspecting(!!path.trim())
+    // Overrides describe one folder, never the next selection.
+    setCustomCategory('')
+    setCustomMfluxClass('')
+  }
+  const canLoadFolder = canLaunchInspectedImageFolder({
+    input: customPath, inspectedInput: previewInput, inspecting,
+    success: !!localPreview?.success,
+    detected: !!(localPreview?.success && localPreview.model),
+    explicitClass: customMfluxClass, explicitTask: customCategory,
+  })
 
   useEffect(() => {
     setLocalPreview(null)
@@ -79,7 +97,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
     setInspecting(true)
     const timer = setTimeout(() => {
       window.api.image.inspectLocalModel(customPath.trim()).then(result => {
-        if (!cancelled) setLocalPreview(result)
+        if (!cancelled) { setLocalPreview(result); setPreviewInput(customPath.trim()) }
       }).catch(error => {
         if (!cancelled) setLocalPreview({ success: false, error: String(error) })
       }).finally(() => { if (!cancelled) setInspecting(false) })
@@ -247,7 +265,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const handleStart = () => {
     const settings: ImageServerSettings = { host: serverHost, port: serverPort, apiKey: serverApiKey, logLevel: serverLogLevel }
     if (showCustom && customPath.trim()) {
-      if (inspecting || !localPreview?.success) return
+      if (!canLoadFolder || !localPreview?.success) return
       onSelect(localPreview.path, localPreview.quantize, customCategory || localPreview.model?.category, { ...settings, mfluxClass: customMfluxClass || undefined })
     } else if (selectedModel) {
       const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
@@ -258,7 +276,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const handleBrowse = async () => {
     try {
       const result = await window.api.models.browseDirectory()
-      if (result?.path) setCustomPath(result.path)
+      if (result?.path) chooseCustomPath(result.path)
     } catch {}
   }
 
@@ -280,10 +298,10 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
       <div className="max-w-3xl w-full mx-auto space-y-6">
         {/* Header */}
         <div className="text-center">
-          <h2 className="text-2xl font-bold mb-2">{t('image.picker.startImageServer')}</h2>
+          <h2 className="text-2xl font-bold mb-2">{t('image.picker.chooseFolderTitle')}</h2>
           <p className="text-sm text-muted-foreground">
-            {t('image.picker.chooseModelBelow')}
-            {!hasHfToken && (
+            {showCustom ? t('image.picker.folderFirstIntro') : t('image.picker.chooseModelBelow')}
+            {!showCustom && !hasHfToken && (
               <span className="text-warning"> {t('image.picker.noHfTokenWarning')}</span>
             )}
           </p>
@@ -297,13 +315,23 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
               {t('image.picker.keepCurrent', { model: currentModel })}
             </button>
           )}
-          <p className="text-xs text-muted-foreground mt-2">
-            <strong>{t('image.picker.genStrong')}</strong> {t('image.picker.genHintBody')}
-            <br />
-            <strong>{t('image.picker.editStrong')}</strong> {t('image.picker.editHintBody')}
-          </p>
+
         </div>
 
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('image.picker.chooseFolderTitle')}>
+          <button type="button" data-vmlx-control="image-source-folder" aria-pressed={showCustom}
+            onClick={() => { setShowCustom(true); setSelectedModel(null); setDownloadError(null) }}
+            className={`px-3 py-2 border text-sm ${showCustom ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
+            <FolderOpen className="inline h-4 w-4 mr-2" />{t('image.picker.folderTab')}
+          </button>
+          <button type="button" data-vmlx-control="image-source-catalog" aria-pressed={!showCustom}
+            onClick={() => { setShowCustom(false); setDownloadError(null) }}
+            className={`px-3 py-2 border text-sm ${!showCustom ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
+            <Download className="inline h-4 w-4 mr-2" />{t('image.picker.modelCatalog')}
+          </button>
+        </div>
+
+        {!showCustom && (<>
         {/* Generation Models */}
         <div>
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">{t('image.picker.imageGeneration')}</h3>
@@ -399,36 +427,36 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
           </div>
         </div>
 
+
+        </>)}
+
         {/* Custom Model */}
-        <div className="border border-border rounded-lg p-4">
-          <button
-            onClick={() => { setShowCustom(!showCustom); setSelectedModel(null); setDownloadState('idle'); setDownloadError(null) }}
-            className={`flex items-center gap-2 text-sm font-medium ${
-              showCustom ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <FolderOpen className="h-4 w-4" />
-            {t('image.picker.useCustomModel')}
-          </button>
+        {showCustom && <div className="border border-border p-4 min-w-0" data-vmlx-section="image-folder-selection">
+          <h3 className="text-sm font-medium">{t('image.picker.folderTab')}</h3>
           {showCustom && (
             <div className="mt-3 space-y-2">
               <div className="flex gap-2">
                 <input
                   type="text"
                   value={customPath}
-                  onChange={e => setCustomPath(e.target.value)}
+                  onChange={e => chooseCustomPath(e.target.value)}
+                  data-vmlx-control="image-folder-path"
                   placeholder={t('image.picker.customPathPlaceholder')}
-                  className="flex-1 px-3 py-2 text-sm bg-background border border-input rounded"
+                  className="min-w-0 flex-1 px-3 py-2 text-sm bg-background border border-input"
                 />
                 <button
                   onClick={handleBrowse}
+                  data-vmlx-control="image-browse-folder"
                   className="px-3 py-2 text-sm border border-input rounded hover:bg-accent"
                   title={t('image.picker.browseTitle')}
                 >
                   <FolderOpen className="h-4 w-4" />
                 </button>
               </div>
-              <div className="flex items-center gap-4">
+              <details className="border-t border-border pt-3">
+                <summary className="cursor-pointer text-xs text-muted-foreground">{t('image.picker.adapterOverride')}</summary>
+                <p className="text-xs text-muted-foreground my-2">{t('image.picker.overrideHelp')}</p>
+              <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-muted-foreground">{t('image.picker.modeLabel')}</label>
                   <select
@@ -462,6 +490,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                   </select>
                 </div>
               </div>
+              </details>
               <div role="status" data-vmlx-control="image-folder-detection" className="text-xs text-muted-foreground break-words">
                 {inspecting ? t('image.picker.inspectingFolder') : localPreview?.success ? (
                   <>
@@ -472,7 +501,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
               </div>
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Download Progress / Error */}
         {downloadState === 'downloading' && downloadProgress && (
@@ -554,7 +583,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
 
         {/* Quantize + Action Buttons */}
         {(selectedModel || (showCustom && customPath.trim())) && (
-          <div className="flex items-center gap-4 p-4 bg-card border border-border rounded-lg">
+          <div className="flex flex-wrap items-end gap-4 p-4 bg-card border border-border">
             <div className="flex-1">
               <label className="text-xs text-muted-foreground block mb-1.5">{t('image.picker.quantization')}</label>
               <div className="flex gap-1.5">
@@ -611,11 +640,12 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
             {showCustom ? (
               <button
                 onClick={handleStart}
-                disabled={inspecting || !localPreview?.success || (!localPreview.model && !customMfluxClass)}
+                disabled={!canLoadFolder}
+                data-vmlx-control="image-load-folder"
                 className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 flex items-center gap-2 font-medium text-sm"
               >
                 <Play className="h-4 w-4" />
-                {t('image.picker.startServer')}
+                {t('image.picker.loadFolder')}
               </button>
             ) : isModelAvailable || downloadState === 'ready' ? (
               <button

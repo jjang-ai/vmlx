@@ -1696,6 +1696,13 @@
       "deleteFailedPlain": "删除图片失败"
     },
     "picker": {
+      "chooseFolderTitle": "选择图像模型",
+      "folderFirstIntro": "选择本地模型文件夹，检查检测到的类型和存储精度，然后加载。选择文件夹不会停止当前模型或下载权重。",
+      "folderTab": "本地文件夹",
+      "modelCatalog": "模型下载",
+      "adapterOverride": "高级适配器设置",
+      "overrideHelp": "仅在检测不完整时覆盖。对于未知文件夹，请同时选择架构和任务。更换文件夹将清除这些覆盖设置。",
+      "loadFolder": "加载所选文件夹",
       "automatic": "自动（从文件夹识别）",
       "inspectingFolder": "正在检查模型文件夹…",
       "unknownArchitecture": "无法识别架构。请在启动前选择。",

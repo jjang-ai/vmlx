@@ -1696,6 +1696,13 @@
       "deleteFailedPlain": "Failed to delete image"
     },
     "picker": {
+      "chooseFolderTitle": "Choose an image model",
+      "folderFirstIntro": "Select a local model folder. Review its detected type and stored precision, then load it. Choosing a folder does not stop the current model or download weights.",
+      "folderTab": "Local folder",
+      "modelCatalog": "Model downloads",
+      "adapterOverride": "Advanced adapter override",
+      "overrideHelp": "Only override when detection is incomplete. For an unknown folder, select both the architecture and task. Changing folders clears these overrides.",
+      "loadFolder": "Load selected folder",
       "automatic": "Automatic (from folder)",
       "inspectingFolder": "Inspecting model folder…",
       "unknownArchitecture": "Architecture not identified. Choose it explicitly before starting.",
