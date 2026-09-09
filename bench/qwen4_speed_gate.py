@@ -160,37 +160,75 @@ def request_stream(
     chunks = 0
     chars = 0
     fragments = []
+    reasoning_fragments = []
+    raw_sse_lines = []
+    protocol_errors = []
+    done_events = 0
+    finish_events = 0
     finish_reason = None
     with urllib.request.urlopen(req, timeout=timeout) as response:
         for raw in response:
-            line = raw.decode("utf-8", "replace").strip()
+            raw_sse_lines.append(raw.decode("utf-8", "replace"))
+            try:
+                line = raw.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                protocol_errors.append("invalid UTF-8")
+                continue
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
             if payload == "[DONE]":
+                done_events += 1
                 continue
+            if done_events:
+                protocol_errors.append("data event after DONE")
             try:
                 event = json.loads(payload)
             except json.JSONDecodeError:
+                protocol_errors.append("malformed JSON data event")
                 continue
-            request_id = event.get("id") or request_id
+            if not isinstance(event, dict):
+                protocol_errors.append("non-object data event")
+                continue
+            if event.get("error") or event.get("type") == "error":
+                protocol_errors.append("server error: " + json.dumps(event))
+            event_id = event.get("id")
+            if event_id:
+                if request_id and request_id != event_id:
+                    protocol_errors.append("request ID changed")
+                request_id = request_id or event_id
             if isinstance(event.get("usage"), dict):
                 usage = event["usage"]
             for key in ("mtplx_stats", "vmlx_stats", "stats"):
                 if isinstance(event.get(key), dict):
                     server_stats.update(event[key])
             choices = event.get("choices") or []
+            if not isinstance(choices, list) or len(choices) > 1:
+                protocol_errors.append("unexpected choices shape")
+                continue
             if choices:
                 choice = choices[0]
+                if not isinstance(choice, dict):
+                    protocol_errors.append("non-object choice")
+                    continue
+                if choice.get("finish_reason"):
+                    finish_events += 1
                 finish_reason = choice.get("finish_reason") or finish_reason
                 delta = choice.get("delta") or {}
-                fragment = str(
-                    delta.get("content") or delta.get("reasoning_content") or ""
-                )
+                if not isinstance(delta, dict):
+                    protocol_errors.append("non-object delta")
+                    continue
+                content = delta.get("content") or ""
+                reasoning = delta.get("reasoning_content") or ""
+                if not isinstance(content, str) or not isinstance(reasoning, str):
+                    protocol_errors.append("non-string content or reasoning")
+                    continue
+                fragments.append(content)
+                reasoning_fragments.append(reasoning)
+                fragment = content + reasoning
                 if fragment:
                     chunks += 1
                     chars += len(fragment)
-                    fragments.append(fragment)
                     if first is None:
                         first = time.monotonic()
     ended = time.monotonic()
@@ -203,7 +241,25 @@ def request_stream(
         usage.get("completion_tokens") or server_stats.get("generated_tokens") or 0
     )
     decode_elapsed = None if ttft is None else max(0.0, total - ttft)
+    if done_events != 1:
+        protocol_errors.append(f"expected one DONE, got {done_events}")
+    if finish_events != 1:
+        protocol_errors.append(f"expected one finish, got {finish_events}")
+    if not request_id:
+        protocol_errors.append("missing request ID")
+    if any(type(usage.get(key)) is not int or usage[key] <= 0
+           for key in ("prompt_tokens", "completion_tokens")):
+        protocol_errors.append("missing positive raw token usage")
+    if finish_reason not in ("stop", "length"):
+        protocol_errors.append("unexpected finish reason for prose speed task")
+    if not "".join(fragments).strip():
+        protocol_errors.append("empty visible answer")
     return {
+        "protocol_valid": not protocol_errors,
+        "protocol_errors": protocol_errors,
+        "raw_sse_lines": raw_sse_lines,
+        "done_events": done_events,
+        "finish_events": finish_events,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cached_tokens": usage.get(
@@ -216,6 +272,8 @@ def request_stream(
         "sampling_seed": sampling_seed,
         "raw_usage": usage,
         "output_text": "".join(fragments),
+        "reasoning_text": "".join(reasoning_fragments),
+        "request": body,
         "ttft_s": ttft,
         "total_s": total,
         "client_prefill_tok_s": (
@@ -225,6 +283,11 @@ def request_stream(
             completion_tokens / decode_elapsed
             if decode_elapsed and completion_tokens
             else None
+        ),
+        "client_decode_metric_scope": (
+            "legacy client estimate: all completion tokens divided by time after "
+            "first received text; first-burst tokens are not subtracted and "
+            "terminal durability/transport time is included; not engine decode TPS"
         ),
         "client_end_to_end_tok_s": completion_tokens / total if total else None,
         "sse_nonempty_chunks": chunks,
@@ -374,6 +437,10 @@ def main() -> int:
         depth=args.depth,
         timeout=args.timeout,
     )
+    if not result["warmup"]["protocol_valid"]:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2) + "\n")
+        raise RuntimeError("Invalid warmup stream; raw events retained in output")
     for context in contexts:
         for trial in range(1, args.trials + 1):
             rejected_short_attempts = []
@@ -395,6 +462,11 @@ def main() -> int:
                     depth=args.depth,
                     timeout=args.timeout,
                 )
+                if not candidate["protocol_valid"]:
+                    result.setdefault("invalid_attempts", []).append(candidate)
+                    args.output.parent.mkdir(parents=True, exist_ok=True)
+                    args.output.write_text(json.dumps(result, indent=2) + "\n")
+                    raise RuntimeError("Invalid measured stream; raw events retained in output")
                 if args.exact_contexts and candidate["prompt_tokens"] != context:
                     raise RuntimeError(
                         f"API prompt count {candidate['prompt_tokens']} differs from requested {context}; template overhead differs"
