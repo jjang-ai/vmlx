@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { imageVariationPreservesSource } from '../src/shared/imageCapabilities'
 
 const R = (p: string) => readFileSync(join(__dirname, '..', 'src', p), 'utf8')
 
 describe('image controls follow the loaded model\'s real capabilities (/health.image)', () => {
+  it('describes native source preservation only for qualified loaded adapters', () => {
+    for (const mflux_class of ['Flux1', 'ZImage']) {
+      expect(imageVariationPreservesSource({ loaded: true, mflux_class, variation_strength: true })).toBe(true)
+      expect(imageVariationPreservesSource({ loaded: false, mflux_class, variation_strength: true })).toBe(false)
+      expect(imageVariationPreservesSource({ loaded: true, mflux_class, variation_strength: false })).toBe(false)
+    }
+    expect(imageVariationPreservesSource(null)).toBe(false)
+    expect(imageVariationPreservesSource({ loaded: true, mflux_class: 'Unknown', variation_strength: true })).toBe(false)
+    const bar = R('renderer/src/components/image/ImagePromptBar.tsx')
+    expect(bar).toContain('imageVariationPreservesSource(capabilities)')
+    expect(bar).toContain("'image.prompt.sourcePreservationTip'")
+    for (const loc of ['en', 'es', 'ja', 'ko', 'zh']) {
+      const strings = JSON.parse(R(`renderer/src/i18n/locales/${loc}.json`)).image.prompt
+      expect(strings.sourcePreservation).toBeTruthy()
+      expect(strings.sourcePreservationTip).toBeTruthy()
+    }
+  })
   it('the tab reads capabilities when the server runs and forgets them when it stops', () => {
     const tab = R('renderer/src/components/image/ImageTab.tsx')
     expect(tab).toContain("imageRuntimeSnapshot(await resp.json())")

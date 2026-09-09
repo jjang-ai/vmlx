@@ -24,6 +24,14 @@ export interface ImageCapabilities {
 
 export type ImageServerStatus = 'stopped' | 'starting' | 'running' | 'standby' | 'error'
 
+/** Native mflux Config.init_time_step skips more denoising at higher values.
+ * Scope this wording to the adapters whose source-preservation contract is
+ * established; other adapters must not inherit an assumed direction. */
+export function imageVariationPreservesSource(capabilities?: ImageCapabilities | null): boolean {
+  return capabilities?.loaded === true && capabilities.variation_strength === true &&
+    (capabilities.mflux_class === 'Flux1' || capabilities.mflux_class === 'ZImage')
+}
+
 /** HTTP liveness is not proof that diffusion weights are ready. */
 export function imageRuntimeSnapshot(body: unknown): { status: ImageServerStatus; capabilities: ImageCapabilities | null } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 'error', capabilities: null }

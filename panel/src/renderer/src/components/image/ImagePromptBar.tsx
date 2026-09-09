@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, Cli
 import { Send, ImagePlus, X, Pencil, RefreshCw, HelpCircle, Paintbrush } from 'lucide-react'
 import { MaskPainter } from './MaskPainter'
 import { useTranslation } from '../../i18n'
-import type { ImageCapabilities } from '../../../../shared/imageCapabilities'
+import { imageVariationPreservesSource, type ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 /** Inline help icon with tooltip */
 function Help({ tip }: { tip: string }) {
@@ -68,6 +68,7 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
   const isEdit = mode === 'edit'
   // Variation mode: gen model with source image from Iterate button
   const isVariation = !isEdit && !!(iteratePrompt && sourceImage)
+  const preservesSource = isVariation && imageVariationPreservesSource(capabilities)
 
   // Auto-open mask painter when Fill model gets a source image (any method)
   useEffect(() => {
@@ -258,8 +259,8 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
         {/* Strength: edit mode / variation mode, and only when the loaded model takes it */}
         {((isEdit && capabilities?.edit_strength !== false) || (isVariation && capabilities?.variation_strength !== false)) && (
           <div className="flex items-center gap-1">
-            <label className="text-muted-foreground">{t('image.prompt.strength')}</label>
-            <Help tip={isEdit
+            <label className="text-muted-foreground">{t(preservesSource ? 'image.prompt.sourcePreservation' : 'image.prompt.strength')}</label>
+            <Help tip={preservesSource ? t('image.prompt.sourcePreservationTip') : isEdit
               ? t('image.prompt.strengthEditTip')
               : t('image.prompt.strengthVariationTip')
             } />
