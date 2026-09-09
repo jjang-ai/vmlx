@@ -340,6 +340,29 @@ def test_ollama_chat_omits_non_positive_num_predict_sentinels():
         assert "max_tokens" not in req
 
 
+def test_ollama_output_limits_reach_shared_validation_without_truncation():
+    from pydantic import ValidationError
+    import pytest
+    from vmlx_engine.api.models import ChatCompletionRequest, CompletionRequest
+    from vmlx_engine.api.ollama_adapter import (
+        ollama_chat_to_openai, ollama_generate_to_openai, ollama_generate_to_openai_chat,
+    )
+    for convert, request_model in (
+        (ollama_chat_to_openai, ChatCompletionRequest),
+        (ollama_generate_to_openai, CompletionRequest),
+        (ollama_generate_to_openai_chat, ChatCompletionRequest),
+    ):
+        for value in ("not-a-number", "Infinity", "", 12.9, -0.5, [], {}):
+            result = convert({
+                "model": "diagnostic", "prompt": "hi",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"num_predict": value},
+            })
+            assert result["max_tokens"] == value
+            with pytest.raises(ValidationError):
+                request_model.model_validate(result)
+
+
 def test_ollama_generate_omits_non_positive_num_predict_sentinels():
     from vmlx_engine.api.ollama_adapter import (
         ollama_generate_to_openai,

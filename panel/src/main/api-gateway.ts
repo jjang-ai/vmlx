@@ -1733,10 +1733,14 @@ export class ApiGateway extends EventEmitter {
   private applyOllamaNumPredict(opts: any, openaiBody: any): void {
     const value = opts?.num_predict;
     if (value === undefined || value === null) return;
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      openaiBody.max_tokens = Math.floor(parsed);
-    }
+    // Match the direct engine adapter's non-positive integer sentinels.
+    // Forward every other value unchanged for backend validation, rather
+    // than replacing a malformed explicit cap with the model's default.
+    const numeric = typeof value === "number" || typeof value === "boolean";
+    const integerString = typeof value === "string" && /^[+-]?\d+$/.test(value.trim());
+    const parsed = numeric || integerString ? Number(value) : NaN;
+    if (Number.isInteger(parsed) && parsed <= 0) return;
+    openaiBody.max_tokens = value;
   }
 
   private openAIToolCallsToOllama(

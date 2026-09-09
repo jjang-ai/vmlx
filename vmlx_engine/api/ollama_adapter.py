@@ -121,11 +121,15 @@ def _apply_ollama_num_predict(opts: dict, req: dict[str, Any]) -> None:
         return
     try:
         max_tokens = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         req["max_tokens"] = value
         return
-    if max_tokens > 0:
-        req["max_tokens"] = max_tokens
+    # Preserve the existing non-positive integer sentinels. All active caps
+    # and malformed values belong to the shared request validator: truncating
+    # floats or silently dropping bad input would activate a different budget.
+    if max_tokens <= 0 and (not isinstance(value, float) or value.is_integer()):
+        return
+    req["max_tokens"] = value
 
 
 def _apply_ollama_seed(body: dict, opts: dict, req: dict[str, Any]) -> None:

@@ -737,7 +737,7 @@ describe("Ollama gateway request translation behavior", () => {
     expect(JSON.stringify(backend.bodies[0].messages)).not.toContain('"thinking"');
   });
 
-  it("omits malformed Ollama num_predict values instead of poisoning max_tokens", async () => {
+  it("preserves malformed Ollama num_predict for backend validation instead of silently changing budgets", async () => {
     backend = await startCaptureBackend();
     const started = await startGateway(backend.port);
     gateway = started.gateway;
@@ -761,9 +761,9 @@ describe("Ollama gateway request translation behavior", () => {
       options: { num_predict: 12.9 },
     });
 
-    expect(backend.bodies[0]).not.toHaveProperty("max_tokens");
-    expect(backend.bodies[1]).not.toHaveProperty("max_tokens");
-    expect(backend.bodies[2].max_tokens).toBe(12);
+    expect(backend.bodies[0].max_tokens).toBe("not-a-number");
+    expect(backend.bodies[1].max_tokens).toBe("Infinity");
+    expect(backend.bodies[2].max_tokens).toBe(12.9);
   });
 
   it("omits malformed Ollama context values instead of poisoning max_prompt_tokens", async () => {
