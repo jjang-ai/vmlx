@@ -6,6 +6,7 @@ and thermal, never concurrency), for BOTH fixed and adaptive depth.
 """
 
 import time
+import pytest
 
 from vmlx_engine.native_mtp_ar_safety import (
     ArSafetyState,
@@ -356,6 +357,68 @@ def test_settled_reentry_that_trips_again_backs_off(monkeypatch):
     state2.ar_safety.ring = [(301 + i, 301 + i, base_t + i * 0.040) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state2) is True
     assert tier.backoff == 0 and tier.next_probe_tokens == 16 and tier.fallbacks == 3
+
+
+
+
+@pytest.mark.parametrize("adaptive", ["0", "1"])
+@pytest.mark.parametrize("ceiling", [2, 3])
+def test_pending_d1_confirmation_cannot_be_preempted_by_promotion(monkeypatch, adaptive, ceiling):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", adaptive)
+    monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
+    state = _vlm_state(m, depth=1)
+    state.depth_ceiling = state.ladder_depth = ceiling
+    state.ar_tier = m.NativeMTPArTier(depth=ceiling)
+    _ar_steps(state.ar_tier, 8, ms=10.0)
+    state.stats.cycles = 115
+    state.ar_trip_pending_cycle = 108
+    state.promote_at_cycle = 115
+    state.ar_safety.ring = [(c, c, 100.0 - (115 - c) * .020) for c in range(109, 115)]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: 100.0)
+
+    assert m._native_mtp_maybe_ar_safety_fallback("pending-confirmation", state) is False
+    assert state.depth == 1 and not state.promote_probe
+    assert state.promotions == 0 and state.promote_at_cycle == 115
+    assert state.ar_trip_pending_cycle == 108
+    assert len(state.ar_safety.ring) == 7  # keep observing; no reset by promotion
+
+
+@pytest.mark.parametrize("adaptive", ["0", "1"])
+@pytest.mark.parametrize("ceiling", [2, 3])
+@pytest.mark.parametrize("recovers", [False, True])
+def test_pending_d1_confirmation_resolves_before_overdue_promotion(monkeypatch, adaptive, ceiling, recovers):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", adaptive)
+    monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
+    state = _vlm_state(m, depth=1)
+    state.depth_ceiling = state.ladder_depth = ceiling
+    state.ar_tier = m.NativeMTPArTier(depth=ceiling)
+    _ar_steps(state.ar_tier, 8, ms=10.0)
+    state.stats.cycles = 117
+    tokens_per_cycle = 3 if recovers else 1
+    state.stats.accepted_tokens = 117 * (tokens_per_cycle - 1)
+    state.ar_trip_pending_cycle = 108
+    state.promote_at_cycle = 115
+    state.ar_safety.ring = [
+        (c, c * tokens_per_cycle, 100.0 - (117 - c) * .020) for c in range(109, 117)
+    ]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: 100.0)
+
+    assert m._native_mtp_maybe_ar_safety_fallback("resolve-confirmation", state) is (not recovers)
+    assert state.ar_trip_pending_cycle == 0
+    assert state.depth == 1 and not state.promote_probe and state.promotions == 0
+    assert state.ar_fallback_pending is (not recovers)
+    if recovers:
+        # No permanent promotion suppression: after a winning confirmation,
+        # the next decision may spend the still-pending scheduled probe.
+        state.stats.cycles = 118
+        state.stats.accepted_tokens = 118 * (tokens_per_cycle - 1)
+        monkeypatch.setattr(m.time, "perf_counter", lambda: 100.020)
+        assert m._native_mtp_maybe_ar_safety_fallback("after-recovery", state) is False
+        assert state.promote_probe and state.depth == ceiling and state.promotions == 1
 
 
 def test_promotion_probe_wins_and_loses(monkeypatch):

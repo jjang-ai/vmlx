@@ -6513,6 +6513,10 @@ def _native_mtp_maybe_ar_safety_fallback(
         not probing
         and not promoting
         and depth_now == 1
+        # Finish a pending AR-safety confirmation before spending a promotion
+        # probe. Promotion resets the timing ring and otherwise postpones the
+        # second losing window while D1 is already slower than measured AR.
+        and state.ar_trip_pending_cycle <= 0
         and state.ladder_depth > 1
         and state.promote_at_cycle > 0
         and cycles >= state.promote_at_cycle
