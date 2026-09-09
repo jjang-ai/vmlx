@@ -1696,6 +1696,11 @@
       "deleteFailedPlain": "画像を削除できませんでした"
     },
     "picker": {
+      "automatic": "自動（フォルダーから）",
+      "inspectingFolder": "モデルフォルダーを確認中…",
+      "unknownArchitecture": "アーキテクチャを識別できません。起動前に選択してください。",
+      "folderPrecision": "フォルダーに保存された精度を使用",
+      "notDeclared": "未指定",
       "title": "画像サーバーを開始",
       "genHint": "生成: Schnell が最速 (4 ステップ)、Dev が最高品質です。4-bit は約 6GB、フル精度は約 24GB を使用します。",
       "editHint": "編集: テストしたバンドルでは 4 ビット以下の編集バリアントは使用に耐えない出力になりました。8 ビットまたはフル精度を使ってください。",

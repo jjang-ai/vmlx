@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSyn
 import { sessionManager } from '../sessions'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
-import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory } from '../../shared/imageLocalModel'
+import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
 import {
   beginImageGeneration,
   classifyImageGenerationError,
@@ -593,6 +593,8 @@ export function registerImageHandlers(): void {
 
   // ─── Server Lifecycle ────────────────────────────────────────────────
 
+  ipcMain.handle('image:inspectLocalModel', async (_, path: string) => inspectLocalImageModel(path))
+
   ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string; mfluxClass?: string }) => {
     // Serialize concurrent startServer calls to prevent race conditions.
     // Each call chains onto the previous one so only one stop+create+start
@@ -664,6 +666,19 @@ export function registerImageHandlers(): void {
             }
           }
 
+          // Resolve the adapter and its defaults BEFORE stopping a working
+          // engine. Auto selection must not send a stale Flux1/generate pair.
+          const modelDef = (localDir?.kind === 'model' ? resolveImageModelForLocalDirectory(modelPath) : undefined) || resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
+          const mfluxName = modelDef?.mfluxName || modelName
+          const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
+          const mode = imageMode || modelDef?.category || 'generate'
+          if (!mfluxClass) {
+            return { success: false, error: 'Could not identify this image model. Select its architecture explicitly or use a folder with supported model metadata.', serverKept: true }
+          }
+          if (modelDef && (mfluxClass !== modelDef.mfluxClass || mode !== modelDef.category)) {
+            return { success: false, error: `The selected folder resolves to ${modelDef.name} (${modelDef.mfluxClass}, ${modelDef.category}), but the selected architecture or mode conflicts. Use automatic detection or select a matching folder.`, serverKept: true }
+          }
+
           // Stop any existing image server only now that the replacement is
           // known to exist.
           if (activeImageSessionId) {
@@ -686,7 +701,6 @@ export function registerImageHandlers(): void {
           // Create a session config for image serving
           // imageMode, imageQuantize, and servedModelName are stored in config fields
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
-          const mode = imageMode || 'generate'
           // Look up model definition.
           // mlxstudio#82: use fuzzy resolver (directory basenames like
           // "FLUX.2-klein-9B" or "FLUX.1-dev-mflux-8bit" need more than
@@ -695,9 +709,6 @@ export function registerImageHandlers(): void {
           // A local folder resolves through its own name and, for a precision
           // variant ("q8"), its bundle root: the mflux class must not depend
           // on the caller passing it (the warning's "Use q8" action did not).
-          const modelDef = (localDir?.kind === 'model' ? resolveImageModelForLocalDirectory(modelPath) : undefined) || resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
-          const mfluxName = modelDef?.mfluxName || modelName
-          const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           if (modelDef && modelDef.id !== modelName) {
             console.log(`[IMAGE] mlxstudio#82: resolved '${modelName}' -> modelDef id=${modelDef.id}, mfluxClass=${modelDef.mfluxClass}, mfluxName=${modelDef.mfluxName}`)
           }
@@ -739,7 +750,7 @@ export function registerImageHandlers(): void {
 
           // The precision actually configured (the bundle's own level for a local
           // folder), so the renderer shows what runs rather than what was picked.
-          return { success: true, sessionId: session.id, port: session.port, quantize: effectiveQuantize, warningCode, warningParams }
+          return { success: true, sessionId: session.id, port: session.port, quantize: effectiveQuantize, modelId: modelDef?.id, imageMode: mode, warningCode, warningParams }
         } catch (error) {
           console.error('[IMAGE] Failed to start server:', error)
           return { success: false, error: (error as Error).message }

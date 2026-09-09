@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Zap, Sparkles, Gauge, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
 import { IMAGE_MODELS } from '../../../../shared/imageModels'
+import type { inspectLocalImageModel } from '../../../../shared/imageLocalModel'
 import { useTranslation } from '../../i18n'
 import {
   isImageDownloadEventForActive,
@@ -65,9 +66,26 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
   const [customPath, setCustomPath] = useState('')
-  const [customCategory, setCustomCategory] = useState<'generate' | 'edit'>('generate')
-  const [customMfluxClass, setCustomMfluxClass] = useState('Flux1')
+  const [customCategory, setCustomCategory] = useState<'' | 'generate' | 'edit'>('')
+  const [customMfluxClass, setCustomMfluxClass] = useState('')
+  const [localPreview, setLocalPreview] = useState<ReturnType<typeof inspectLocalImageModel> | null>(null)
+  const [inspecting, setInspecting] = useState(false)
   const [showCustom, setShowCustom] = useState(false)
+
+  useEffect(() => {
+    setLocalPreview(null)
+    if (!showCustom || !customPath.trim()) { setInspecting(false); return }
+    let cancelled = false
+    setInspecting(true)
+    const timer = setTimeout(() => {
+      window.api.image.inspectLocalModel(customPath.trim()).then(result => {
+        if (!cancelled) setLocalPreview(result)
+      }).catch(error => {
+        if (!cancelled) setLocalPreview({ success: false, error: String(error) })
+      }).finally(() => { if (!cancelled) setInspecting(false) })
+    }, 250)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [showCustom, customPath])
 
   // Server settings (same as Server tab CreateSession simplified config)
   const [serverHost, setServerHost] = useState('127.0.0.1')
@@ -229,7 +247,8 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const handleStart = () => {
     const settings: ImageServerSettings = { host: serverHost, port: serverPort, apiKey: serverApiKey, logLevel: serverLogLevel }
     if (showCustom && customPath.trim()) {
-      onSelect(customPath.trim(), selectedQuantize, customCategory, { ...settings, mfluxClass: customMfluxClass })
+      if (inspecting || !localPreview?.success) return
+      onSelect(localPreview.path, localPreview.quantize, customCategory || localPreview.model?.category, { ...settings, mfluxClass: customMfluxClass || undefined })
     } else if (selectedModel) {
       const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
       onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate', settings)
@@ -414,9 +433,10 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                   <label className="text-xs text-muted-foreground">{t('image.picker.modeLabel')}</label>
                   <select
                     value={customCategory}
-                    onChange={e => setCustomCategory(e.target.value as 'generate' | 'edit')}
+                    onChange={e => setCustomCategory(e.target.value as '' | 'generate' | 'edit')}
                     className="px-2 py-1 text-xs bg-background border border-input rounded"
                   >
+                    <option value="">{t('image.picker.automatic')}</option>
                     <option value="generate">{t('image.picker.imageGeneration')}</option>
                     <option value="edit">{t('image.picker.imageEditing')}</option>
                   </select>
@@ -428,6 +448,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                     onChange={e => setCustomMfluxClass(e.target.value)}
                     className="px-2 py-1 text-xs bg-background border border-input rounded"
                   >
+                    <option value="">{t('image.picker.automatic')}</option>
                     <option value="Flux1">{t('image.picker.classFlux1')}</option>
                     <option value="ZImage">{t('image.picker.classZImage')}</option>
                     <option value="Flux2Klein">{t('image.picker.classFlux2Klein')}</option>
@@ -440,6 +461,14 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                     <option value="SeedVR2">{t('image.picker.classSeedVR2')}</option>
                   </select>
                 </div>
+              </div>
+              <div role="status" data-vmlx-control="image-folder-detection" className="text-xs text-muted-foreground break-words">
+                {inspecting ? t('image.picker.inspectingFolder') : localPreview?.success ? (
+                  <>
+                    <p>{localPreview.model ? `${localPreview.model.name} · ${localPreview.model.category} · ${localPreview.model.mfluxClass}` : t('image.picker.unknownArchitecture')}</p>
+                    <p>{t('image.picker.folderPrecision')}: {localPreview.quantize ? `${localPreview.quantize}-bit` : t('image.topbar.quantFull')} ({localPreview.quantizeSource || t('image.picker.notDeclared')})</p>
+                  </>
+                ) : localPreview?.error}
               </div>
             </div>
           )}
@@ -529,7 +558,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
             <div className="flex-1">
               <label className="text-xs text-muted-foreground block mb-1.5">{t('image.picker.quantization')}</label>
               <div className="flex gap-1.5">
-                {filteredQuantizeOptions.map(opt => (
+                {showCustom ? <p className="text-xs text-muted-foreground">{t('image.picker.folderPrecision')}</p> : filteredQuantizeOptions.map(opt => (
                   <button
                     key={opt.value}
                 onClick={() => { setSelectedQuantize(opt.value); setDownloadState('idle'); setDownloadError(null) }}
@@ -582,6 +611,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
             {showCustom ? (
               <button
                 onClick={handleStart}
+                disabled={inspecting || !localPreview?.success || (!localPreview.model && !customMfluxClass)}
                 className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 flex items-center gap-2 font-medium text-sm"
               >
                 <Play className="h-4 w-4" />

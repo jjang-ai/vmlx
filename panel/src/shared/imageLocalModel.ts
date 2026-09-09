@@ -22,7 +22,7 @@
 import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { basename, dirname, isAbsolute, join, resolve } from 'path'
-import { resolveImageModelFromDirectoryName, type ImageModelDef } from './imageModels'
+import { getImageModel, resolveImageModelFromDirectoryName, type ImageModelDef } from './imageModels'
 
 export interface LocalImageModelFs {
   existsSync: (p: string) => boolean
@@ -251,11 +251,43 @@ export function editPrecisionAlternative(res: Extract<LocalImageModelResolution,
  * engine refused with "Cannot determine mflux class".
  */
 export function resolveImageModelForLocalDirectory(path: string): ImageModelDef | undefined {
+  // A declared pipeline takes precedence over a directory label. Do not infer
+  // an ambiguous Flux variant from the pipeline class alone.
+  const index = defaultFs.readJson(join(path, 'model_index.json')) as { _class_name?: string } | null
+  const pipelines: Record<string, string> = {
+    QwenImagePipeline: 'qwen-image',
+    QwenImageEditPipeline: 'qwen-image-edit',
+    ZImageTurboPipeline: 'z-image-turbo',
+    FluxKontextPipeline: 'kontext',
+    FluxFillPipeline: 'fill',
+  }
+  if (index?._class_name && pipelines[index._class_name]) {
+    return getImageModel(pipelines[index._class_name])
+  }
   const base = basename(path)
   const direct = resolveImageModelFromDirectoryName(base)
   if (direct) return direct
   if (isVariantFolderName(base)) return resolveImageModelFromDirectoryName(basename(dirname(path)))
   return undefined
+}
+
+/** Shared by folder preview and launch; unknown architecture is not Flux1. */
+export function inspectLocalImageModel(input: string, requestedQuantize = 0) {
+  const resolution = resolveLocalImageModelDirectory(input, requestedQuantize)
+  if (!resolution) return { success: false as const, error: 'Select a local model folder.' }
+  if (resolution.kind !== 'model') {
+    const error = localImageModelError(resolution)
+    return { success: false as const, error: error.message, errorCode: error.code }
+  }
+  const model = resolveImageModelForLocalDirectory(resolution.path)
+  return {
+    success: true as const,
+    path: resolution.path,
+    quantize: resolution.quantize ?? 0,
+    quantizeSource: resolution.quantizeSource,
+    mfluxVersion: resolution.mfluxVersion,
+    model,
+  }
 }
 
 /** "q8", "8bit", "8-bit", "4_bit", "int4": a precision name, not a model name. */

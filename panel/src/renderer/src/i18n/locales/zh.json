@@ -1696,6 +1696,11 @@
       "deleteFailedPlain": "删除图片失败"
     },
     "picker": {
+      "automatic": "自动（从文件夹识别）",
+      "inspectingFolder": "正在检查模型文件夹…",
+      "unknownArchitecture": "无法识别架构。请在启动前选择。",
+      "folderPrecision": "使用文件夹中存储的精度",
+      "notDeclared": "未声明",
       "title": "启动图像服务器",
       "genHint": "生成:Schnell 最快 (4 步),Dev 质量最高。4-bit 约占用 6GB,全精度约 24GB。",
       "editHint": "编辑：在测试的模型包中，4 位及以下的编辑变体输出无法使用；请使用 8 位或全精度。",

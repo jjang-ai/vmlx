@@ -377,8 +377,18 @@ export function ImageTab() {
     // Auto-start server, passing imageMode so it's stored in session config
     setServerStatus('starting')
     try {
-      const result = await window.api.image.startServer(modelId, q, mode, serverSettings)
+      const result = await window.api.image.startServer(modelId, modelQuantize ?? 0, category, serverSettings)
       if (result.success) {
+        // The launch resolver owns local-folder identity (including q8-style
+        // subfolders). Use its defaults, not a second basename-only guess.
+        if (result.imageMode) setSessionMode(result.imageMode)
+        if (result.modelId) {
+          const launchedModelId = result.modelId
+          setSettings(prev => ({ ...prev,
+            steps: getDefaultSteps(launchedModelId),
+            guidance: getDefaultGuidance(launchedModelId),
+          }))
+        }
         serverSettingsRef.current = serverSettings
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)

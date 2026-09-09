@@ -1696,6 +1696,11 @@
       "deleteFailedPlain": "이미지를 삭제하지 못했습니다"
     },
     "picker": {
+      "automatic": "자동 (폴더에서 감지)",
+      "inspectingFolder": "모델 폴더 확인 중…",
+      "unknownArchitecture": "아키텍처를 식별하지 못했습니다. 시작 전에 선택하세요.",
+      "folderPrecision": "폴더에 저장된 정밀도 사용",
+      "notDeclared": "지정되지 않음",
       "title": "이미지 서버 시작",
       "genHint": "생성: Schnell이 가장 빠르고 (4단계), Dev가 최고 품질입니다. 4비트는 ~6GB, 전체 정밀도는 ~24GB를 사용합니다.",
       "editHint": "편집: 테스트한 번들에서 4비트 이하 편집 변형은 사용할 수 없는 결과를 냈습니다. 8비트 또는 전체 정밀도를 사용하세요.",

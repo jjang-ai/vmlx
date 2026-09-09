@@ -1696,6 +1696,11 @@
       "deleteFailedPlain": "No se pudo eliminar la imagen"
     },
     "picker": {
+      "automatic": "Automático (desde la carpeta)",
+      "inspectingFolder": "Inspeccionando la carpeta del modelo…",
+      "unknownArchitecture": "Arquitectura no identificada. Selecciónala antes de iniciar.",
+      "folderPrecision": "Usar la precisión almacenada en la carpeta",
+      "notDeclared": "No declarado",
       "title": "Iniciar servidor de imágenes",
       "genHint": "Generación: Schnell es el más rápido (4 pasos), Dev ofrece la mejor calidad. 4 bits usa ~6GB, precisión completa ~24GB.",
       "editHint": "Edición: las variantes de edición de 4 bits o menos produjeron resultados inutilizables en los paquetes probados; usa 8 bits o precisión completa.",

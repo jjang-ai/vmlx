@@ -1696,6 +1696,11 @@
       "deleteFailedPlain": "Failed to delete image"
     },
     "picker": {
+      "automatic": "Automatic (from folder)",
+      "inspectingFolder": "Inspecting model folder…",
+      "unknownArchitecture": "Architecture not identified. Choose it explicitly before starting.",
+      "folderPrecision": "Use the folder’s stored precision",
+      "notDeclared": "Not declared",
       "title": "Start Image Server",
       "genHint": "Generation: Schnell is fastest (4 steps), Dev is highest quality. 4-bit uses ~6GB, Full ~24GB.",
       "editHint": "Editing: 4-bit and lower edit variants produced unusable output on tested bundles; use 8-bit or full precision.",

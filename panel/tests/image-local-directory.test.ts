@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   inferImageQuantizeFromName,
+  inspectLocalImageModel,
   looksLikeLocalPath,
   readBundleQuantization,
   readSafetensorsHeaderMetadata,
@@ -42,6 +43,34 @@ function mfluxBundle(root: string, name: string, stored: number | null, mfluxVer
 const tmp = () => mkdtempSync(join(tmpdir(), 'vmlx-img-'))
 
 describe('local image model directories (external drive bundles)', () => {
+  it('previews a q8 edit subfolder with its own adapter, task and defaults', () => {
+    const parent = join(tmp(), 'Qwen-Image-Edit-mflux')
+    mkdirSync(parent)
+    const folder = mfluxBundle(parent, 'q8', 8, '0.17.4')
+    expect(inspectLocalImageModel(folder)).toMatchObject({
+      success: true, path: folder, quantize: 8, quantizeSource: 'metadata',
+      model: { id: 'qwen-image-edit', category: 'edit', mfluxClass: 'QwenImageEdit', steps: 28, guidance: 4 },
+    })
+  })
+
+  it('does not silently select q4 from a variant root in automatic mode', () => {
+    const parent = join(tmp(), 'Qwen-Image-Edit-mflux')
+    mkdirSync(parent)
+    mfluxBundle(parent, 'q4', 4)
+    mfluxBundle(parent, 'q8', 8)
+    expect(inspectLocalImageModel(parent)).toMatchObject({ success: false, errorCode: 'variants' })
+  })
+
+  it('uses declared pipeline metadata ahead of a misleading folder name', () => {
+    const folder = mfluxBundle(tmp(), 'FLUX.1-schnell', 8)
+    writeFileSync(join(folder, 'model_index.json'), JSON.stringify({ _class_name: 'QwenImageEditPipeline' }))
+    expect(inspectLocalImageModel(folder)).toMatchObject({ success: true, model: { mfluxClass: 'QwenImageEdit', category: 'edit' } })
+  })
+
+  it('leaves unknown architecture unresolved rather than defaulting to Flux1', () => {
+    const folder = mfluxBundle(tmp(), 'unknown-export', 6)
+    expect(inspectLocalImageModel(folder)).toMatchObject({ success: true, quantize: 6, model: undefined })
+  })
   it('reads the safetensors header metadata the way mflux writes it', () => {
     const root = tmp()
     const f = join(root, 'a.safetensors')

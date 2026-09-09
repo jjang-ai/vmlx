@@ -339,6 +339,7 @@ const api = {
 
   // Image generation
   image: {
+    inspectLocalModel: (path: string) => ipcRenderer.invoke('image:inspectLocalModel', path),
     createSession: (modelName: string, sessionType?: 'generate' | 'edit') => ipcRenderer.invoke('image:createSession', modelName, sessionType),
     getSessions: () => ipcRenderer.invoke('image:getSessions'),
     getSession: (id: string) => ipcRenderer.invoke('image:getSession', id),

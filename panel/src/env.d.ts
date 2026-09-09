@@ -460,6 +460,7 @@ declare global {
         ) => () => void;
       };
       image: {
+        inspectLocalModel: (path: string) => Promise<ReturnType<typeof import('./shared/imageLocalModel').inspectLocalImageModel>>;
         createSession: (
           modelName: string,
           sessionType?: "generate" | "edit",
@@ -528,6 +529,8 @@ declare global {
           error?: string;
           /** Precision the server was configured with (a local bundle's own level wins over the request). */
           quantize?: number;
+          modelId?: string;
+          imageMode?: "generate" | "edit";
           /** Non-fatal advisory the renderer translates (image.server.warnings.<code>), e.g. a low-precision edit variant. */
           warningCode?: string;
           warningParams?: Record<string, string>;
