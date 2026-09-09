@@ -44,7 +44,7 @@ def test_unquantized_projection_falls_back(monkeypatch):
 def test_expert_boundaries_match_stock_exactly(dtype, rows, k, n, distribution):
     kernel = aligned._kernel()
     if kernel is None:
-        pytest.skip("requires qualified MLX 0.32.2 Metal headers")
+        pytest.skip("requires qualified MLX 0.32.2 SIMD backend and Metal headers")
     mx.random.seed(rows + k)
     x = (mx.random.normal((rows, 1, k)) * 0.1).astype(dtype)
     w = mx.random.randint(0, 2**31, (512, n, k // 8), dtype=mx.uint32)
@@ -129,7 +129,30 @@ def test_modified_headers_fall_back(monkeypatch):
     aligned._kernel.cache_clear()
     try:
         with monkeypatch.context() as m:
+            # Exercise the header check even on a host where dispatch would
+            # ordinarily retain stock NAX before reaching it.
+            m.setattr(aligned, "_simd_backend_eligible", lambda: True)
             m.setattr(aligned, "_HEADER_HASHES", {})
             assert aligned._kernel() is None
+    finally:
+        aligned._kernel.cache_clear()
+
+
+@pytest.mark.parametrize("architecture,eligible", [
+    ("applegpu_g16s", True), ("applegpu_g17s", False),
+    ("applegpu_g17p", True), ("applegpu_g18p", False),
+    ("applegpu_g18s", False), ("unknown", False), (None, False),
+])
+def test_simd_kernel_does_not_override_nax_backend(architecture, eligible, monkeypatch):
+    monkeypatch.setattr(mx, "device_info", lambda: {"architecture": architecture})
+    assert aligned._simd_backend_eligible() is eligible
+
+
+def test_nax_hardware_never_compiles_simd_kernel(monkeypatch):
+    aligned._kernel.cache_clear()
+    try:
+        monkeypatch.setattr(mx, "device_info", lambda: {"architecture": "applegpu_g17s"})
+        monkeypatch.setattr(mx.fast, "metal_kernel", lambda **kw: pytest.fail("SIMD compile on NAX hardware"))
+        assert aligned._kernel() is None
     finally:
         aligned._kernel.cache_clear()

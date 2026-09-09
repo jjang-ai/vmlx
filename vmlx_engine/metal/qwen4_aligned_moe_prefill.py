@@ -23,7 +23,7 @@ from mlx_lm.models.switch_layers import (
 
 logger = logging.getLogger(__name__)
 DISPATCH_COUNT = 0
-MATH_ABI = "mlx0322-expert-aligned-bm16-v1"
+MATH_ABI = "mlx0322-expert-aligned-bm16-simd-only-v2"
 
 _HEADER_HASHES = {
     "mlx/backend/metal/kernels/steel/gemm/gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
@@ -54,9 +54,30 @@ expert_aligned_impl<T,64,4,true,BM,32,32>(w+size_t(expert)*N*K/8,scales+size_t(e
 """
 
 
+def _simd_backend_eligible():
+    """Do not replace stock NAX arithmetic with this older SIMD kernel.
+
+    MLX 0.32.2 selects NAX on generation 17+ (18+ for the 'p' variant).
+    Matching the wheel/header hashes does not match that dispatch choice.
+    The SIMD specialization differs numerically and was slower on M5 Max.
+    Conservatively retain stock on NAX-capable or unknown architectures,
+    including older OS builds where NAX may not yet be enabled.
+    """
+    try:
+        architecture = mx.device_info().get("architecture", "")
+        match = re.fullmatch(r"applegpu_g(\d+)([a-z])", architecture)
+        if match is None:
+            return False
+        generation, variant = int(match[1]), match[2]
+        return generation < (18 if variant == "p" else 17)
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 @lru_cache(maxsize=1)
 def _kernel():
-    if mx.__version__ != "0.32.2" or not mx.metal.is_available():
+    if (mx.__version__ != "0.32.2" or not mx.metal.is_available()
+            or not _simd_backend_eligible()):
         return None
     try:
         inc = Path(mx.__file__).parent / "include"
@@ -127,6 +148,7 @@ def aligned_switchglu(switch, x, indices):
     if (
         type(switch) is not SwitchGLU
         or switch.training
+        or mx.default_device() != mx.gpu
         or x.ndim not in (2, 3)
         or x.shape[-1] != 2560
         or indices.shape != (*x.shape[:-1], 10)
