@@ -2003,7 +2003,6 @@ export class SessionManager extends EventEmitter {
 
   /** Append log data to the per-session ring buffer */
   pushLog(sessionId: string, data: string): void {
-    recordImageGenerationLog(sessionId, data)
     let buffer = this.logBuffers.get(sessionId)
     if (!buffer) {
       buffer = []
@@ -3434,11 +3433,14 @@ export class SessionManager extends EventEmitter {
 
     proc.stdout?.on('data', (data) => {
       const text = data.toString()
+      recordImageGenerationLog(sessionId, text, 'stdout')
       this.pushLog(sessionId, text)
       this.emit('session:log', { sessionId, data: text })
     })
     proc.stderr?.on('data', (data) => {
       const text = data.toString()
+      // Consume original chunks before the display normalizer strips newlines.
+      recordImageGenerationLog(sessionId, text, 'stderr')
       const managed = this.processes.get(sessionId)
       const normalized = normalizeBackendStderrChunk(
         managed?.backendStderrPending || '',

@@ -7,7 +7,7 @@ type ActiveGeneration = {
   startTime: number
   serverSessionId?: string | null
   progress?: ImageJobProgress
-  logTail?: string
+  logTails?: Record<string, string>
 }
 
 let activeGeneration: ActiveGeneration | null = null
@@ -35,14 +35,15 @@ export function bindImageGenerationRequest(controller: AbortController, serverSe
   if (activeGeneration?.controller !== controller) return
   activeGeneration.serverSessionId = serverSessionId
   activeGeneration.progress = { requestId, phase: 'waiting' }
-  activeGeneration.logTail = ''
+  activeGeneration.logTails = {}
 }
 
-export function recordImageGenerationLog(serverSessionId: string, data: string): void {
+export function recordImageGenerationLog(serverSessionId: string, data: string, stream: 'stdout' | 'stderr' | 'client' = 'client'): void {
   const active = activeGeneration
   if (!active?.progress || active.serverSessionId !== serverSessionId) return
-  const lines = ((active.logTail || '') + data).split('\n')
-  active.logTail = lines.pop()!.slice(-65536)
+  const tails = active.logTails ??= {}
+  const lines = ((tails[stream] || '') + data).split('\n')
+  tails[stream] = lines.pop()!.slice(-65536)
   for (const line of lines) {
     const match = line.match(/\b(IMAGEJOB|IMAGECLIENT) (\{.*\})\s*$/)
     if (!match) continue

@@ -13,6 +13,7 @@ import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume,
 import {
   beginImageGeneration,
   bindImageGenerationRequest,
+  recordImageGenerationLog,
   classifyImageGenerationError,
   clearImageGenerationAfterLocalAbort,
   clearImageGenerationSessionHistory,
@@ -53,6 +54,7 @@ let startServerChain: Promise<any> = Promise.resolve()
 function logImageClientJob(serverSessionId: string | null, fields: Record<string, unknown>): void {
   if (!serverSessionId) return
   const data = 'IMAGECLIENT ' + JSON.stringify(fields) + '\n'
+  recordImageGenerationLog(serverSessionId, data, 'client')
   try {
     sessionManager.pushLog(serverSessionId, data)
     sessionManager.emit('session:log', { sessionId: serverSessionId, data })
