@@ -342,7 +342,7 @@ def _lane_unavailable_reason() -> str | None:
 
     if _PIPELINE_STATE == _PIPELINE_FAILED:
         return (
-            "the direct lane was disabled after a failed Metal pipeline "
+            "the direct lane was disabled after a failed native compatibility "
             "proof in this process"
         )
     if not qsa_prefill_direct_module_ready():
@@ -750,7 +750,9 @@ def _prove_first_dispatch(out: mx.array, *, dtype: mx.Dtype) -> mx.array:
                 _dtype_key(dtype),
             )
             raise
-        _record_pipeline_success(dtype)
+        # Execution alone does not establish stock arithmetic. Only the
+        # numerical preflight may bank dtype readiness; publishing it here
+        # could let another thread dispatch before that comparison finishes.
     return out
 
 
@@ -806,14 +808,21 @@ def _prove_pipeline_locked(dtype: mx.Dtype) -> bool:
         return False
     if _dtype_proven(dtype):
         return True
-    rows = 16
-    # Smallest shape that still crosses the dense/sparse boundary the
-    # production gate requires (total // 4 > 512).
-    total = 2064
+    rows = 256
+    # Exercise a real prefill width beyond the sparse boundary. Zero inputs
+    # only prove executability: different reduction trees also return zeros.
+    # Explicit PRNG keys leave the user's sampling RNG untouched.
+    total = 2048 + rows
     pos_start = total - rows
-    queries = mx.zeros((_BATCH, _Q_HEADS, rows, _HEAD_DIM), dtype=dtype)
-    keys = mx.zeros((_BATCH, _KV_HEADS, total, _HEAD_DIM), dtype=dtype)
-    values = mx.zeros((_BATCH, _KV_HEADS, total, _HEAD_DIM), dtype=dtype)
+    queries = mx.random.normal(
+        (_BATCH, _Q_HEADS, rows, _HEAD_DIM), key=mx.random.key(3701)
+    ).astype(dtype)
+    keys = mx.random.normal(
+        (_BATCH, _KV_HEADS, total, _HEAD_DIM), key=mx.random.key(3702)
+    ).astype(dtype)
+    values = mx.random.normal(
+        (_BATCH, _KV_HEADS, total, _HEAD_DIM), key=mx.random.key(3703)
+    ).astype(dtype)
     ids = mx.broadcast_to(
         mx.arange(_TOP_K_BLOCKS, dtype=mx.int32)[None, :], (rows, _TOP_K_BLOCKS)
     )
@@ -831,6 +840,20 @@ def _prove_pipeline_locked(dtype: mx.Dtype) -> bool:
             scale=_EXPECTED_SCALE,
         )
         mx.eval(out)
+        query_positions = mx.arange(pos_start, total)
+        key_positions = mx.arange(total)
+        complete = (query_positions + 1) // _COMPRESS_RATIO
+        keep = (
+            (key_positions[None] < _TOP_K_BLOCKS * _COMPRESS_RATIO)
+            | (key_positions[None] >= complete[:, None] * _COMPRESS_RATIO)
+        ) & (key_positions[None] <= query_positions[:, None])
+        mask = mx.where(keep, 0, -mx.inf).astype(dtype)[None, None]
+        reference = mx.fast.scaled_dot_product_attention(
+            queries, keys, values, scale=_EXPECTED_SCALE, mask=mask
+        )
+        mx.eval(reference)
+        if not bool(mx.array_equal(out, reference)):
+            raise RuntimeError("native QSA arithmetic differs from stock SDPA on this runtime")
     except Exception as exc:
         _record_pipeline_failure()
         logger.warning(

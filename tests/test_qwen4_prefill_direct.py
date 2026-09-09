@@ -17,6 +17,50 @@ def test_missing_extension_falls_back(monkeypatch):
     assert not direct.qsa_prefill_direct_ready()
 
 
+def test_preflight_rejects_executable_but_wrong_math(monkeypatch):
+    from vmlx_engine.metal import qwen4_prefill_direct as direct
+
+    monkeypatch.setattr(direct, "_PIPELINE_STATE", direct._PIPELINE_UNPROVEN)
+    monkeypatch.setattr(direct, "_PIPELINE_PROVEN_DTYPES", frozenset())
+    monkeypatch.setattr(direct, "qsa_prefill_direct", lambda q, *a, **kw: mx.ones(q.shape, dtype=q.dtype))
+    assert not direct._prove_pipeline_locked(mx.bfloat16)
+    assert direct._PIPELINE_STATE == direct._PIPELINE_FAILED
+    assert not direct._PIPELINE_PROVEN_DTYPES
+
+
+def test_dispatch_execution_does_not_publish_numeric_readiness(monkeypatch):
+    from vmlx_engine.metal import qwen4_prefill_direct as direct
+
+    monkeypatch.setattr(direct, "_PIPELINE_STATE", direct._PIPELINE_UNPROVEN)
+    monkeypatch.setattr(direct, "_PIPELINE_PROVEN_DTYPES", frozenset())
+    direct._prove_first_dispatch(mx.zeros((1,), mx.bfloat16), dtype=mx.bfloat16)
+    assert direct._PIPELINE_STATE == direct._PIPELINE_UNPROVEN
+    assert not direct._PIPELINE_PROVEN_DTYPES
+
+
+def test_preflight_accepts_stock_math_without_changing_sampling_rng(monkeypatch):
+    from vmlx_engine.metal import qwen4_prefill_direct as direct
+
+    monkeypatch.setattr(direct, "_PIPELINE_STATE", direct._PIPELINE_UNPROVEN)
+    monkeypatch.setattr(direct, "_PIPELINE_PROVEN_DTYPES", frozenset())
+
+    def stock(q, k, v, ids, valid, *, pos_start, total_tokens, scale, **kw):
+        positions = mx.arange(pos_start, total_tokens)
+        keys = mx.arange(total_tokens)
+        keep = ((keys[None] < 2048) | (keys[None] >= ((positions + 1) // 4)[:, None] * 4))
+        keep &= keys[None] <= positions[:, None]
+        return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale,
+            mask=mx.where(keep, 0, -mx.inf).astype(q.dtype)[None, None])
+
+    monkeypatch.setattr(direct, "qsa_prefill_direct", stock)
+    previous_rng = list(mx.random.state)
+    assert direct._prove_pipeline_locked(mx.bfloat16)
+    actual_rng = list(mx.random.state)
+    assert len(actual_rng) == len(previous_rng)
+    assert all(bool(mx.array_equal(a, b)) for a, b in zip(actual_rng, previous_rng))
+    assert direct._dtype_proven(mx.bfloat16)
+
+
 def test_incompatible_nanobind_disables_extension():
     from types import SimpleNamespace
 
