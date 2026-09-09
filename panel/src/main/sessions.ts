@@ -2364,7 +2364,7 @@ export class SessionManager extends EventEmitter {
    * `_startSessionInner` repeats the same shared validation immediately before
    * spawn so filesystem changes between preflight and launch still fail closed.
    */
-  async preflightImageModelPath(modelPath: string): Promise<void> {
+  async preflightImageModelPath(modelPath: string, onProgress?: (line: string) => void): Promise<void> {
     // The Image picker replaces its previous session before createSession.
     // Validate the checkpoint before that replacement boundary, not only in
     // startSession after the previous healthy engine has already been stopped.
@@ -2372,7 +2372,10 @@ export class SessionManager extends EventEmitter {
     if (!engine) throw new Error('vmlx-engine not found. Please install it first.')
     console.log(`[IMAGE] Checking bundle integrity before replacement: ${modelPath}`)
     const report = await runModelBundleIntegrityPreflight(
-      engine, modelPath, line => console.log(`[IMAGE] Bundle preflight: ${line}`),
+      engine, modelPath, line => {
+        console.log(`[IMAGE] Bundle preflight: ${line}`)
+        onProgress?.(line)
+      },
     )
     console.log(
       `[IMAGE] Bundle integrity OK before replacement: ${modelPath}; ` +

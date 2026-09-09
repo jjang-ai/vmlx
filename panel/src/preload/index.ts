@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import { withImageServerStartProgress, type ImageServerStartProgress } from '../shared/imageServerStartProgress'
+
+let imageStartSequence = 0
 
 // Custom APIs for renderer
 const api = {
@@ -351,7 +354,14 @@ const api = {
     deleteGeneration: (generationId: string) => ipcRenderer.invoke('image:deleteGeneration', generationId),
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
     edit: (params: any) => ipcRenderer.invoke('image:edit', params),
-    startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: any) => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode, serverSettings),
+    startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: any, onProgress?: (event: ImageServerStartProgress) => void) => {
+      const requestId = `${Date.now()}-${++imageStartSequence}-${Math.random()}`
+      return withImageServerStartProgress(requestId, accept => {
+        const listener = (_event: unknown, data: ImageServerStartProgress) => accept(data)
+        ipcRenderer.on('image:serverStartProgress', listener)
+        return () => ipcRenderer.removeListener('image:serverStartProgress', listener)
+      }, () => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode, serverSettings, requestId), onProgress)
+    },
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
     cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
     isGenerating: () => ipcRenderer.invoke('image:isGenerating') as Promise<{ generating: boolean; cancelling: boolean; startTime: number | null; sessionId: string | null; progress: import('../shared/imageJobProgress').ImageJobProgress | null }>,

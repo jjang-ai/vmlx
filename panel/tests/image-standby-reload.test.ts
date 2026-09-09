@@ -73,7 +73,7 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.stop).toHaveBeenCalledWith('image-owned')
     expect(state.stop.mock.invocationCallOrder[0]).toBeLessThan(state.create.mock.invocationCallOrder[0])
     expect(state.start).toHaveBeenCalledWith('image-owned')
-    expect(state.preflight).toHaveBeenCalledWith('/models/edit/q8')
+    expect(state.preflight).toHaveBeenCalledWith('/models/edit/q8', expect.any(Function))
     expect(state.preflight.mock.invocationCallOrder[0]).toBeLessThan(state.stop.mock.invocationCallOrder[0])
   })
 
@@ -85,6 +85,19 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.create).not.toHaveBeenCalled()
     expect(state.start).not.toHaveBeenCalled()
     expect(state.registerPath).not.toHaveBeenCalled()
+  })
+
+  it('sends real repair progress to the requesting window before replacement', async () => {
+    const send = vi.fn()
+    state.preflight.mockImplementation(async (_path, progress) => {
+      progress('[BUNDLE-ALIGNMENT] {"stage":"COPYING","shard":"transformer/0.safetensors","copied_bytes":1048576,"payload_bytes":2097152}')
+      expect(state.stop).not.toHaveBeenCalled()
+    })
+    await state.handlers.get('image:startServer')!({sender:{send,isDestroyed:()=>false}}, '/models/edit/q8', 8, 'edit', undefined, 'own-load')
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenLastCalledWith('image:serverStartProgress', expect.objectContaining({
+      requestId:'own-load', notice:false, label:expect.stringContaining('1.0 / 2.0 MiB'),
+    }))
   })
 
   it('rediscovers a standby image session for the page without claiming it is running', async () => {

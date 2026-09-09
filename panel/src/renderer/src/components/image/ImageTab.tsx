@@ -15,6 +15,7 @@ import { defaultImageRuntimeSettings } from '../../../../shared/imageRuntimeSett
 import { ImageDraftStore } from '../../../../shared/imageDrafts'
 import type { ImageServerSettings } from './ImageModelPicker'
 import type { ImageJobProgress } from '../../../../shared/imageJobProgress'
+import type { ImageServerStartProgress } from '../../../../shared/imageServerStartProgress'
 
 export interface ImageSessionInfo {
   id: string
@@ -92,6 +93,8 @@ export function ImageTab() {
   }
   const [showSettings, setShowSettings] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
+  const [loadProgress, setLoadProgress] = useState<ImageServerStartProgress | null>(null)
+  const [repairNotice, setRepairNotice] = useState<ImageServerStartProgress | null>(null)
   const [showModelPicker, setShowModelPicker] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [jobProgress, setJobProgress] = useState<ImageJobProgress | null>(null)
@@ -417,8 +420,14 @@ export function ImageTab() {
 
     // Auto-start server, passing imageMode so it's stored in session config
     setServerStatus('starting')
+    setLoadProgress(null)
+    setRepairNotice(null)
     try {
-      const result = await window.api.image.startServer(modelId, modelQuantize ?? 0, category, serverSettings)
+      const result = await window.api.image.startServer(modelId, modelQuantize ?? 0, category, serverSettings, progress => {
+        if (revision !== settingsRevision.current) return
+        if (progress.notice) setRepairNotice(progress)
+        else setLoadProgress(progress)
+      })
       if (result.success) {
         if (!result.sessionId) throw new Error('Image server started without a session identity')
         // The launch resolver owns local-folder identity (including q8-style
@@ -478,6 +487,11 @@ export function ImageTab() {
     } catch (err) {
       setServerStatus('error')
       setError((err as Error).message)
+    } finally {
+      if (revision === settingsRevision.current) {
+        setLoadProgress(null)
+        setRepairNotice(null)
+      }
     }
   }, [serverStatus, selectedModel, selectedModelDisplayName, quantize, sessionMode, settings, settingsOwner, hydrateSettings, describeStartError, t])
 
@@ -703,6 +717,13 @@ export function ImageTab() {
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
+
+        {(repairNotice || loadProgress) && (
+          <div role="status" data-vmlx-control="image-load-progress" className="mx-4 mt-2 px-3 py-2 border border-border bg-muted text-sm text-foreground">
+            {repairNotice && <p>{t(repairNotice.labelKey, { ...repairNotice.labelParams, defaultValue: repairNotice.label })}</p>}
+            {loadProgress && <p className="mt-1 font-mono text-xs">{t(loadProgress.labelKey, { ...loadProgress.labelParams, defaultValue: loadProgress.label })}</p>}
+          </div>
+        )}
 
         {showSettings && settingsOwner && (
           <ImageSettings

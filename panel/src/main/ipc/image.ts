@@ -10,6 +10,7 @@ import { sameLocalBundlePath } from '../local-bundle-identity'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
 import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
+import { createBundleRepairProgressReporter } from '../bundle-repair-progress'
 import {
   beginImageGeneration,
   bindImageGenerationRequest,
@@ -679,7 +680,7 @@ export function registerImageHandlers(): void {
 
   ipcMain.handle('image:inspectLocalModel', async (_, path: string) => inspectLocalImageModel(path))
 
-  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string; mfluxClass?: string }) => {
+  ipcMain.handle('image:startServer', async (event, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string; mfluxClass?: string }, progressRequestId?: string) => {
     // Serialize concurrent startServer calls to prevent race conditions.
     // Each call chains onto the previous one so only one stop+create+start
     // sequence runs at a time.
@@ -782,7 +783,11 @@ export function registerImageHandlers(): void {
           // the same engine integrity gate used by session starts BEFORE the
           // old image request or process is touched (including same-path reload).
           try {
-            await sessionManager.preflightImageModelPath(modelPath)
+            const reportProgress = createBundleRepairProgressReporter((message, notice) => {
+              if (typeof progressRequestId !== 'string' || progressRequestId.length > 128 || event.sender?.isDestroyed()) return
+              event.sender?.send('image:serverStartProgress', { ...message, notice, requestId: progressRequestId })
+            })
+            await sessionManager.preflightImageModelPath(modelPath, reportProgress)
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             console.warn(`[IMAGE] Bundle preflight rejected ${modelPath}; current server kept: ${message}`)
