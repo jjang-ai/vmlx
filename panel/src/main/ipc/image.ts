@@ -21,6 +21,17 @@ import {
 } from './imageGenerationState'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
+import { loadImageRuntimeSettings, saveImageRuntimeSettings } from '../../shared/imageRuntimeSettings'
+
+function imageSettingsOwner(sessionId: string) {
+  const session = sessionManager.getSession(sessionId)
+  if (!session || session.type === 'remote') throw new Error('Local image session not found')
+  const config = JSON.parse(session.config || '{}')
+  if (config.modelType !== 'image') throw new Error('Session is not an image model')
+  const model = resolveImageModelForLocalDirectory(session.modelPath)
+    || getImageModel(config.servedModelName) || resolveImageModelFromDirectoryName(config.servedModelName || '')
+  return { sessionId, modelId: model?.id || config.servedModelName || '', quantize: config.imageQuantize ?? 0 }
+}
 
 let handlersRegistered = false
 
@@ -174,6 +185,11 @@ function requestImageServerCancel(): void {
 export function registerImageHandlers(): void {
   if (handlersRegistered) return
   handlersRegistered = true
+
+  ipcMain.handle('image:getRuntimeSettings', (_, sessionId: string, adoptLegacy = false) =>
+    loadImageRuntimeSettings(db, imageSettingsOwner(sessionId), adoptLegacy === true))
+  ipcMain.handle('image:saveRuntimeSettings', (_, sessionId: string, settings: unknown) =>
+    saveImageRuntimeSettings(db, imageSettingsOwner(sessionId), settings))
 
   // ─── Image Session CRUD ──────────────────────────────────────────────
 

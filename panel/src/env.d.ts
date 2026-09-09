@@ -460,6 +460,8 @@ declare global {
         ) => () => void;
       };
       image: {
+        getRuntimeSettings: (sessionId: string, adoptLegacy?: boolean) => Promise<import('./shared/imageRuntimeSettings').ImageRuntimeSettings>;
+        saveRuntimeSettings: (sessionId: string, settings: unknown) => Promise<void>;
         inspectLocalModel: (path: string) => Promise<ReturnType<typeof import('./shared/imageLocalModel').inspectLocalImageModel>>;
         createSession: (
           modelName: string,

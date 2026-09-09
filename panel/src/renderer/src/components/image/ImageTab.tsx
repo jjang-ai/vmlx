@@ -10,6 +10,7 @@ import { LogsPanel } from '../sessions/LogsPanel'
 import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
 import { imageRuntimeSnapshot, type ImageCapabilities, type ImageServerStatus } from '../../../../shared/imageCapabilities'
 import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
+import { defaultImageRuntimeSettings } from '../../../../shared/imageRuntimeSettings'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -95,44 +96,30 @@ export function ImageTab() {
   const [iterateCounter, setIterateCounter] = useState(0)
 
   // Image generation settings (quick settings + full settings)
-  const [settings, setSettings] = useState<ImageSettings>({
-    steps: 4,
-    width: 1024,
-    height: 1024,
-    guidance: 3.5,
-    negativePrompt: '',
-    seed: undefined,
-    count: 1,
-    quantize: 4,
-    strength: 0.8
-  })
-
-  // Load saved image settings on mount
-  useEffect(() => {
-    window.api.settings.get('image_settings').then((saved: string | null) => {
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved)
-          setSettings(prev => ({ ...prev, ...parsed, seed: undefined })) // Never restore seed
-        } catch {}
-      }
-    })
+  const [settings, setSettings] = useState<ImageSettings>(() => defaultImageRuntimeSettings('', 0))
+  const [settingsOwner, setSettingsOwner] = useState<string | null>(null)
+  const settingsRevision = useRef(0)
+  const settingsEdited = useRef(false)
+  const hydrateSettings = useCallback(async (id: string, adoptLegacy: boolean, revision: number) => {
+    const restored = await window.api.image.getRuntimeSettings(id, adoptLegacy)
+    if (settingsRevision.current !== revision) return
+    setSettings(restored)
+    settingsEdited.current = false
+    setSettingsOwner(id)
   }, [])
 
-  // Save settings when they change (debounced via the settings object reference)
-  const settingsRef = useRef(settings)
   // The server settings (host, port, api key, log level, mflux class) the
   // current server was started with; a sibling variant offered by the
   // low-precision warning starts with the same ones.
   const serverSettingsRef = useRef<ImageServerSettings | undefined>(undefined)
-  settingsRef.current = settings
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const { seed, quantize, ...toSave } = settingsRef.current // Don't persist seed or quantize
-      window.api.settings.set('image_settings', JSON.stringify(toSave)).catch(() => {})
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [settings.steps, settings.width, settings.height, settings.guidance, settings.negativePrompt, settings.count, settings.strength])
+    if (!settingsOwner || !settingsEdited.current) return
+    // Capture the owner and values together; a later model switch must not
+    // save old controls into a new model's session.
+    // Do not defer this behind a timer cancelled by page navigation. Main
+    // serializes the small per-session record update synchronously.
+    window.api.image.saveRuntimeSettings(settingsOwner, settings).catch(error => setError((error as Error).message))
+  }, [settings, settingsOwner])
 
   // Load image sessions on mount
   useEffect(() => {
@@ -141,7 +128,9 @@ export function ImageTab() {
 
   // Check if an image server is already running
   useEffect(() => {
-    window.api.image.getRunningServer().then((server: any) => {
+    const revision = ++settingsRevision.current
+    window.api.image.getRunningServer().then(async (server: any) => {
+      if (revision !== settingsRevision.current) return
       if (server) {
         const name = server.modelName
         const canonical = server.canonicalModelId || resolveImageModelFromDirectoryName(name)?.id || name
@@ -161,20 +150,10 @@ export function ImageTab() {
         const q = server.quantize ?? 0
         setQuantize(q)
 
-        // Restore proper default steps + guidance for this model when the
-        // saved settings don't already carry values (generation_config-like
-        // recommendations from `shared/imageModels.ts`). User-saved values
-        // always win via the `prev` spread below.
-        const defaultSteps = getDefaultSteps(name)
-        const defaultGuidance = getDefaultGuidance(name)
-        setSettings(prev => ({
-          ...prev,
-          steps: prev.steps || defaultSteps,
-          guidance: prev.guidance ?? defaultGuidance,
-          quantize: q,
-        }))
+        await hydrateSettings(server.sessionId, true, revision)
       }
-    }).catch(() => {})
+    }).catch(error => { if (revision === settingsRevision.current) setError((error as Error).message) })
+    return () => { if (revision === settingsRevision.current) settingsRevision.current++ }
   }, [])
 
   // Check if image generation is in-flight (persists across tab switches)
@@ -364,8 +343,17 @@ export function ImageTab() {
       quantize,
       mode: sessionMode,
       settings,
+      settingsOwner,
     }
     const serverWasLive = serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'standby'
+    const revision = ++settingsRevision.current
+    if (settingsOwner && settingsEdited.current) {
+      try { await window.api.image.saveRuntimeSettings(settingsOwner, settings) }
+      catch (error) { setError((error as Error).message); return }
+      if (revision !== settingsRevision.current) return
+    }
+    settingsEdited.current = false
+    setSettingsOwner(null)
 
     setSelectedModel(modelId)
     setSelectedModelDisplayName(null)
@@ -410,19 +398,16 @@ export function ImageTab() {
     try {
       const result = await window.api.image.startServer(modelId, modelQuantize ?? 0, category, serverSettings)
       if (result.success) {
+        if (!result.sessionId) throw new Error('Image server started without a session identity')
         // The launch resolver owns local-folder identity (including q8-style
         // subfolders). Use its defaults, not a second basename-only guess.
         if (result.imageMode) setSessionMode(result.imageMode)
-        if (result.modelId) {
-          const launchedModelId = result.modelId
-          setSettings(prev => ({ ...prev,
-            steps: getDefaultSteps(launchedModelId),
-            guidance: getDefaultGuidance(launchedModelId),
-          }))
-        }
+        if (revision !== settingsRevision.current) return
         serverSettingsRef.current = serverSettings
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
+        await hydrateSettings(result.sessionId, false, revision)
+        if (revision !== settingsRevision.current) return
         // Switching over a live server: the previous session's stopped event
         // arrived while this tab still tracked that session and left the
         // status at 'stopped', and the new session's ready event fired before
@@ -461,6 +446,7 @@ export function ImageTab() {
           setQuantize(previous.quantize)
           setSessionMode(previous.mode)
           setSettings(previous.settings)
+          setSettingsOwner(previous.settingsOwner)
           setShowModelPicker(false)
         } else {
           setServerStatus('error')
@@ -471,10 +457,10 @@ export function ImageTab() {
       setServerStatus('error')
       setError((err as Error).message)
     }
-  }, [serverStatus])
+  }, [serverStatus, selectedModel, selectedModelDisplayName, quantize, sessionMode, settings, settingsOwner, hydrateSettings, describeStartError, t])
 
   const handleSubmit = useCallback(async (prompt: string, overrideSettings?: Partial<ImageSettings>) => {
-    if (!serverPort || serverStatus !== 'running' || !selectedModel) return
+    if (!serverPort || serverStatus !== 'running' || !selectedModel || !settingsOwner) return
 
     // Merge override settings (used by reiteration to bypass React batching)
     const s = overrideSettings ? { ...settings, ...overrideSettings } : settings
@@ -557,7 +543,7 @@ export function ImageTab() {
     } finally {
       if (submissionGuard.current.finish(owner)) setGenerating(false)
     }
-  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, sessionMode, sourceImage, maskBase64, loadSessions])
+  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, settingsOwner, sessionMode, sourceImage, maskBase64, loadSessions])
 
   const handleStop = useCallback(async () => {
     try {
@@ -647,6 +633,7 @@ export function ImageTab() {
   }, [currentSessionId, handleSourceImageChange, loadSessions])
 
   const handleSettingsChange = useCallback((newSettings: ImageSettings) => {
+    settingsEdited.current = true
     setSettings(newSettings)
   }, [])
 
@@ -697,7 +684,7 @@ export function ImageTab() {
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
 
-        {showSettings && (
+        {showSettings && settingsOwner && (
           <ImageSettings
             settings={settings}
             onChange={handleSettingsChange}
@@ -761,6 +748,7 @@ export function ImageTab() {
                 }
                 handleSourceImageChange({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
                 // Restore settings from this generation
+                settingsEdited.current = true
                 setSettings(prev => ({
                   ...prev,
                   steps: gen.steps,
@@ -801,7 +789,7 @@ export function ImageTab() {
 
         <ImagePromptBar
           onGenerate={handleSubmit}
-          disabled={serverStatus !== 'running'}
+          disabled={serverStatus !== 'running' || !settingsOwner}
           generating={generating}
           settings={settings}
           onSettingsChange={handleSettingsChange}

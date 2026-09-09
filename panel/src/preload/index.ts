@@ -339,6 +339,8 @@ const api = {
 
   // Image generation
   image: {
+    getRuntimeSettings: (sessionId: string, adoptLegacy = false) => ipcRenderer.invoke('image:getRuntimeSettings', sessionId, adoptLegacy),
+    saveRuntimeSettings: (sessionId: string, settings: unknown) => ipcRenderer.invoke('image:saveRuntimeSettings', sessionId, settings),
     inspectLocalModel: (path: string) => ipcRenderer.invoke('image:inspectLocalModel', path),
     createSession: (modelName: string, sessionType?: 'generate' | 'edit') => ipcRenderer.invoke('image:createSession', modelName, sessionType),
     getSessions: () => ipcRenderer.invoke('image:getSessions'),
