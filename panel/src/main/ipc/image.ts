@@ -5,6 +5,7 @@ import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
+import { sameLocalBundlePath } from '../local-bundle-identity'
 import { db } from '../database'
 import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
 import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
@@ -706,9 +707,24 @@ export function registerImageHandlers(): void {
             return { success: false, error: `The selected folder resolves to ${modelDef.name} (${modelDef.mfluxClass}, ${modelDef.category}), but the selected architecture or mode conflicts. Use automatic detection or select a matching folder.`, serverKept: true }
           }
 
-          // Stop any existing image server only now that the replacement is
-          // known to exist.
-          if (activeImageSessionId) {
+          // Discovery intentionally presents running/loading image engines.
+          // Its active pointer can therefore be empty after deep standby or
+          // renderer navigation. Explicit Load still owns replacement of the
+          // same actual folder: stop that session before createSession's
+          // active-session guard, never bypass or weaken the guard itself.
+          // Only exact/canonical directory identity is eligible, not basename.
+          const replacingSessionIds = new Set<string>()
+          if (activeImageSessionId) replacingSessionIds.add(activeImageSessionId)
+          for (const existing of db.getSessions()) {
+            if (existing.type === 'remote' || !sameLocalBundlePath(existing.modelPath, modelPath)) continue
+            try {
+              if (JSON.parse(existing.config || '{}').modelType === 'image') {
+                replacingSessionIds.add(existing.id)
+              }
+            } catch { /* Malformed unrelated config is not authority to stop. */ }
+          }
+          // All replacement validation above must finish before this boundary.
+          if (replacingSessionIds.size > 0) {
             const controller = getActiveImageGenerationController()
             if (controller) {
               markImageGenerationAbort(controller, "cancel")
@@ -717,10 +733,10 @@ export function registerImageHandlers(): void {
             }
             clearImageGenerationAfterLocalAbort(controller)
             clearImageGenerationSessionHistory()
-            try {
-              await sessionManager.stopSession(activeImageSessionId)
-            } catch (e) {
-              console.error('[IMAGE] Failed to stop previous image server:', e)
+            for (const sessionId of replacingSessionIds) {
+              // A failed stop must not proceed to create/start or overwrite
+              // advertised endpoint/config while its process still owns them.
+              await sessionManager.stopSession(sessionId)
             }
             activeImageSessionId = null
           }
