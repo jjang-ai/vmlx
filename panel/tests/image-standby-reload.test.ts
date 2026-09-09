@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   stop: vi.fn(),
   create: vi.fn(),
   start: vi.fn(),
+  preflight: vi.fn(),
 }))
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: Function) => state.handlers.set(name, fn) } }))
 vi.mock('../src/main/sessions', () => ({ sessionManager: {
@@ -17,6 +18,7 @@ vi.mock('../src/main/sessions', () => ({ sessionManager: {
   stopSession: (...args: any[]) => state.stop(...args),
   createSession: (...args: any[]) => state.create(...args),
   startSession: (...args: any[]) => state.start(...args),
+  preflightImageModelPath: (...args: any[]) => state.preflight(...args),
 } }))
 vi.mock('../src/main/database', () => ({ db: {
   getSessions: () => state.rows,
@@ -56,6 +58,7 @@ describe('explicit folder load replaces its own untracked standby session', () =
       state.rows.find(row => row.id === id).status = 'stopped'
     })
     state.start.mockReset().mockResolvedValue(undefined)
+    state.preflight.mockReset().mockResolvedValue(undefined)
     state.create.mockReset().mockImplementation(async (path: string) => {
       const existing = state.rows.find(row => row.modelPath === path)
       if (existing && ['standby', 'running', 'loading'].includes(existing.status))
@@ -70,6 +73,18 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.stop).toHaveBeenCalledWith('image-owned')
     expect(state.stop.mock.invocationCallOrder[0]).toBeLessThan(state.create.mock.invocationCallOrder[0])
     expect(state.start).toHaveBeenCalledWith('image-owned')
+    expect(state.preflight).toHaveBeenCalledWith('/models/edit/q8')
+    expect(state.preflight.mock.invocationCallOrder[0]).toBeLessThan(state.stop.mock.invocationCallOrder[0])
+  })
+
+  it('rejects a broken checkpoint before cancelling, stopping, registering or creating a replacement', async () => {
+    state.preflight.mockRejectedValue(new Error('referenced shard missing.safetensors is missing'))
+    const result = await state.handlers.get('image:startServer')!({}, '/models/edit/q8', 8, 'edit')
+    expect(result).toMatchObject({ success: false, serverKept: true, error: expect.stringContaining('missing.safetensors') })
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.create).not.toHaveBeenCalled()
+    expect(state.start).not.toHaveBeenCalled()
+    expect(state.registerPath).not.toHaveBeenCalled()
   })
 
   it('rediscovers a standby image session for the page without claiming it is running', async () => {

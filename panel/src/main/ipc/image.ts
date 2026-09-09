@@ -778,6 +778,17 @@ export function registerImageHandlers(): void {
             return { success: false, error: `The selected folder resolves to ${modelDef.name} (${modelDef.mfluxClass}, ${modelDef.category}), but the selected architecture or mode conflicts. Use automatic detection or select a matching folder.`, serverKept: true }
           }
 
+          // Descriptor/format inspection is not a complete shard check. Run
+          // the same engine integrity gate used by session starts BEFORE the
+          // old image request or process is touched (including same-path reload).
+          try {
+            await sessionManager.preflightImageModelPath(modelPath)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.warn(`[IMAGE] Bundle preflight rejected ${modelPath}; current server kept: ${message}`)
+            return { success: false, error: message, serverKept: true }
+          }
+
           if (localDir?.kind === 'model' && modelDef) {
             try { db.setImageModelPath(modelDef.id, effectiveQuantize, modelPath, discoveredRepoId) } catch (e) { console.warn('[IMAGE] Could not register validated local model directory:', e) }
           }
