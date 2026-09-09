@@ -4,6 +4,8 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, Function>(),
   rows: [] as any[],
   invalid: false,
+  unknownArchitecture: false,
+  registerPath: vi.fn(),
   stop: vi.fn(),
   create: vi.fn(),
   start: vi.fn(),
@@ -17,7 +19,7 @@ vi.mock('../src/main/sessions', () => ({ sessionManager: {
 } }))
 vi.mock('../src/main/database', () => ({ db: {
   getSessions: () => state.rows,
-  setImageModelPath: vi.fn(),
+  setImageModelPath: (...args: any[]) => state.registerPath(...args),
 } }))
 vi.mock('../src/shared/imageLocalModel', async original => ({
   ...await original<object>(),
@@ -25,7 +27,7 @@ vi.mock('../src/shared/imageLocalModel', async original => ({
     ? { kind: 'missing', path }
     : { kind: 'model', path, quantize: 8, quantizeSource: 'header' },
   localImageModelError: () => ({ code: 'missing', message: 'Missing folder' }),
-  resolveImageModelForLocalDirectory: () => ({
+  resolveImageModelForLocalDirectory: () => state.unknownArchitecture ? undefined : ({
     id: 'qwen-image-edit', name: 'Qwen Image Edit',
     mfluxClass: 'QwenImageEdit', mfluxName: 'qwen-image-edit', category: 'edit',
   }),
@@ -40,6 +42,8 @@ describe('explicit folder load replaces its own untracked standby session', () =
     // Reset activeImageSessionId through the real discovery handler.
     await state.handlers.get('image:getRunningServer')!({})
     state.invalid = false
+    state.unknownArchitecture = false
+    state.registerPath.mockReset()
     state.rows = [{
       id: 'image-owned', type: 'local', status: 'standby', port: 8000,
       modelPath: '/models/edit/q8',
@@ -89,6 +93,15 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(result).toMatchObject({ success: false, serverKept: true })
     expect(state.stop).not.toHaveBeenCalled()
     expect(state.create).not.toHaveBeenCalled()
+  })
+
+  it('does not revive an unresolved local architecture from a familiar folder name', async () => {
+    state.unknownArchitecture = true
+    const result = await state.handlers.get('image:startServer')!({}, '/models/FLUX.1-schnell-mflux-4bit', 4)
+    expect(result).toMatchObject({ success: false, serverKept: true })
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.create).not.toHaveBeenCalled()
+    expect(state.registerPath).not.toHaveBeenCalled()
   })
 
   it('does not create or relaunch if the owning stop fails', async () => {

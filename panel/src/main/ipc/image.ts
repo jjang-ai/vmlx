@@ -1,7 +1,7 @@
 // MLX Studio Image System — mlx.studio — Jinho Jang
 import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
-import { basename, join, resolve } from 'path'
+import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
@@ -669,12 +669,6 @@ export function registerImageHandlers(): void {
             modelPath = localDir.path
             if (localDir.quantize !== null) effectiveQuantize = localDir.quantize
             console.log(`[IMAGE] Using local model directory: ${modelPath} (quantize=${effectiveQuantize || 'full'}, source=${localDir.quantizeSource || 'none'}${localDir.mfluxVersion ? `, mflux ${localDir.mfluxVersion}` : ''})`)
-            // Register it under its resolved registry id so the preset card and
-            // the availability check find this folder next time.
-            const resolvedDef = resolveImageModelFromDirectoryName(basename(modelPath))
-            if (resolvedDef) {
-              try { db.setImageModelPath(resolvedDef.id, effectiveQuantize, modelPath, undefined) } catch (e) { console.warn('[IMAGE] Could not register local model directory:', e) }
-            }
           }
           // Look up model path from DB — no directory scanning needed.
           const storedPath = localDir?.kind === 'model' ? null : db.getImageModelPath(modelName, effectiveQuantize)
@@ -712,15 +706,24 @@ export function registerImageHandlers(): void {
 
           // Resolve the adapter and its defaults BEFORE stopping a working
           // engine. Auto selection must not send a stale Flux1/generate pair.
-          const modelDef = (localDir?.kind === 'model' ? resolveImageModelForLocalDirectory(modelPath) : undefined) || resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
+          // A local inspection's unresolved result is meaningful. Do not
+          // resurrect a rejected/unknown declaration from its folder name.
+          const modelDef = localDir?.kind === 'model'
+            ? resolveImageModelForLocalDirectory(modelPath)
+            : resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
           const mfluxName = modelDef?.mfluxName || modelName
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           const mode = imageMode || modelDef?.category || 'generate'
           if (!mfluxClass) {
+            console.warn(`[IMAGE] Adapter unresolved for ${modelPath}; current server kept`)
             return { success: false, error: 'Could not identify this image model. Select its architecture explicitly or use a folder with supported model metadata.', serverKept: true }
           }
           if (modelDef && (mfluxClass !== modelDef.mfluxClass || mode !== modelDef.category)) {
             return { success: false, error: `The selected folder resolves to ${modelDef.name} (${modelDef.mfluxClass}, ${modelDef.category}), but the selected architecture or mode conflicts. Use automatic detection or select a matching folder.`, serverKept: true }
+          }
+
+          if (localDir?.kind === 'model' && modelDef) {
+            try { db.setImageModelPath(modelDef.id, effectiveQuantize, modelPath, undefined) } catch (e) { console.warn('[IMAGE] Could not register validated local model directory:', e) }
           }
 
           // Discovery intentionally presents running/loading image engines.
