@@ -64,12 +64,14 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [defaultsPending, setDefaultsPending] = useState(!!initialModelPath)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
+  const [bundleRepairNotice, setBundleRepairNotice] = useState<string | null>(null)
   const [scanLoading, setScanLoading] = useState(true)
   const [showDirManager, setShowDirManager] = useState(false)
   const [userDirs, setUserDirs] = useState<string[]>([])
   const [builtinDirs, setBuiltinDirs] = useState<string[]>([])
   const [dirError, setDirError] = useState<string | null>(null)
-  const logEndRef = useRef<HTMLDivElement>(null)
+  const logPanelRef = useRef<HTMLDivElement>(null)
+  const launchPanelRef = useRef<HTMLDivElement>(null)
   const launchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const launchSessionIdRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
@@ -314,7 +316,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     const unsubLog = window.api.sessions.onLog((data: any) => {
       // Only show logs for the session being launched (not other running sessions)
       if (launchSessionIdRef.current && data.sessionId !== launchSessionIdRef.current) return
-      setLogs(prev => [...prev.slice(-200), data.data])
+      const text = data.labelKey
+        ? t(data.labelKey, { defaultValue: data.data, ...(data.labelParams || {}) })
+        : data.data
+      if (data.bundleRepairNotice === true) setBundleRepairNotice(text)
+      setLogs(prev => [...prev.slice(-200), text])
     })
 
     // Also listen for errors during launch
@@ -328,11 +334,18 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
       unsubLog()
       unsubError()
     }
-  }, [launching])
+  }, [launching, t])
 
   // Auto-scroll logs
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // The configure form was scrolled to Launch. React can reuse that outer
+    // scroller: reset it once, not on each log update or user scroll.
+    if (launching) launchPanelRef.current?.scrollTo({ top: 0 })
+  }, [launching])
+
+  useEffect(() => {
+    const panel = logPanelRef.current
+    panel?.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' })
   }, [logs])
 
   const handleLaunch = async () => {
@@ -358,6 +371,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     }
 
     setLaunching(true)
+    setBundleRepairNotice(null)
     setLogs([t('sessions.create.creatingSession')])
 
     try {
@@ -814,12 +828,19 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     const progress = launchSessionId ? loadProgress.get(launchSessionId) : undefined
     const residentLoad = formatResidentLoad(progress)
     return (
-      <div className="p-6 overflow-auto h-full">
+      <div ref={launchPanelRef} className="p-6 overflow-auto h-full">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold mb-2">{t('sessions.create.loadingModel')}</h1>
           <p className="text-muted-foreground text-sm mb-4">
             {selectedModel.split('/').pop()}
           </p>
+
+          {bundleRepairNotice && (
+            <p role="status" data-vmlx-control="bundle-repair-notice"
+              className="mb-4 border border-warning/40 bg-warning/10 p-3 text-sm text-foreground">
+              {bundleRepairNotice}
+            </p>
+          )}
 
           {progress && (
             <div className="mb-4" data-vmlx-create-load-session-id={launchSessionId || ''}>
@@ -830,7 +851,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                   role="progressbar"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={progress.progress}
+                  aria-valuenow={progress.indeterminate === false ? progress.progress : undefined}
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-1">
@@ -851,12 +872,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </div>
           )}
 
-          <div className="bg-background/80 text-primary font-mono text-xs p-4 rounded-lg max-h-[60vh] overflow-auto border border-border">
+          <div ref={logPanelRef} className="bg-background/80 text-primary font-mono text-xs p-4 rounded-lg max-h-[60vh] overflow-auto border border-border">
             {logs.map((line, i) => (
               <div key={i} className={`whitespace-pre-wrap ${line.startsWith('ERROR') ? 'text-destructive font-bold' : ''}`}>{line}</div>
             ))}
             {!launchError && <div className="animate-pulse">▌</div>}
-            <div ref={logEndRef} />
           </div>
 
           {launchError && (

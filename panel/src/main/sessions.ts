@@ -76,6 +76,7 @@ import {
 } from './backend-stderr'
 import { validateJangBundleMetadataForLaunch } from './model-bundle-validation'
 import { runModelBundleIntegrityPreflight } from './model-bundle-integrity'
+import { createBundleRepairProgressReporter } from './bundle-repair-progress'
 import { sameLocalBundlePath } from './local-bundle-identity'
 
 export type { ServerConfig, DetectedProcess } from './server'
@@ -1503,6 +1504,8 @@ export class SessionManager extends EventEmitter {
   private lastHealthyAt = new Map<string, number>()
   /** Per-session ring buffer for log lines (capped at LOG_BUFFER_MAX_LINES) */
   private logBuffers = new Map<string, string[]>()
+  /** Successful preflight records awaiting this bundle's engine start. */
+  private pendingBundlePreflightLogs = new Map<string, { modelPath: string; lines: string[] }>()
   private static readonly LOG_BUFFER_MAX_LINES = 2000
   // Allow up to 60 consecutive health check failures (5s * 60 = 5 min)
   // before marking session as down. Long prefill operations (e.g. 44k+
@@ -2374,9 +2377,37 @@ export class SessionManager extends EventEmitter {
     }
     this.validateLocalSessionTarget(sessionId, session, config)
     if (existsSync(config.modelPath)) {
+      const preflightLines: string[] = []
+      const retainPreflightLine = (line: string) => {
+        this.pushLog(sessionId, line)
+        const stamped = this.logBuffers.get(sessionId)?.at(-1)
+        if (stamped) preflightLines.push(stamped)
+        if (preflightLines.length > SessionManager.LOG_BUFFER_MAX_LINES) preflightLines.shift()
+      }
+      const publishRepair = createBundleRepairProgressReporter((message, isNotice) => {
+        retainPreflightLine(message.label)
+        this.emit('session:log', {
+          sessionId, data: message.label, labelKey: message.labelKey, labelParams: message.labelParams,
+          bundleRepairNotice: isNotice,
+        })
+        if (!isNotice) this.emitLoadProgress({
+          sessionId, ...message, progress: 0, indeterminate: true, phase: 'bundle_repair',
+        })
+      })
       const report = await runModelBundleIntegrityPreflight(
-        engine, config.modelPath, line => this.pushLog(sessionId, line),
-      )
+        engine, config.modelPath, line => {
+          retainPreflightLine(line)
+          publishRepair(line)
+        },
+      ).catch(error => {
+        this.pendingBundlePreflightLogs.delete(sessionId)
+        throw error
+      })
+      // Gateway/manual start may check the same stamped bundle twice. A
+      // second no-op check must not erase the first check's repair receipt.
+      if (preflightLines.length) this.pendingBundlePreflightLogs.set(sessionId, {
+        modelPath: config.modelPath, lines: preflightLines,
+      })
       const source = report.cache_hit ? 'one-time stamp' : 'fresh header scan'
       console.log(
         `[SESSIONS] bundle integrity OK for ${sessionId}: ${source}, ` +
@@ -2722,8 +2753,13 @@ export class SessionManager extends EventEmitter {
     const session = db.getSession(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
     // Fresh log buffer per run — stop retains the previous buffer for
-    // postmortems; a new start must not blend runs together.
+    // postmortems; preserve only the pending preflight for this exact bundle.
     this.logBuffers.delete(sessionId)
+    const preflightLogs = this.pendingBundlePreflightLogs.get(sessionId)
+    this.pendingBundlePreflightLogs.delete(sessionId)
+    if (preflightLogs?.modelPath === session.modelPath) {
+      this.logBuffers.set(sessionId, preflightLogs.lines)
+    }
 
     const managed = this.processes.get(sessionId)
     if (managed?.process || managed?.adoptedPid) {
@@ -3683,6 +3719,7 @@ export class SessionManager extends EventEmitter {
       this.processes.delete(sessionId)
       this.failCounts.delete(sessionId)
       this.logBuffers.delete(sessionId)
+      this.pendingBundlePreflightLogs.delete(sessionId)
       db.deleteSession(sessionId)
       this.emit('session:deleted', { sessionId })
     })

@@ -37,6 +37,17 @@ describe('session log retention across stop', () => {
       source.indexOf('async deleteSession(') + 1200,
     )
     expect(delBlock).toContain('this.logBuffers.delete(sessionId)')
+    expect(delBlock).toContain('this.pendingBundlePreflightLogs.delete(sessionId)')
+  })
+
+  it('restores only the pending exact-bundle preflight after the fresh-run reset', () => {
+    const start = source.slice(source.indexOf('private async _startSessionInner('),
+      source.indexOf('private async _startSessionInner(') + 1400)
+    expect(start).toContain('preflightLogs?.modelPath === session.modelPath')
+    expect(start).toContain('this.logBuffers.set(sessionId, preflightLogs.lines)')
+    expect(start.indexOf('this.logBuffers.delete(sessionId)')).toBeLessThan(
+      start.indexOf('this.logBuffers.set(sessionId, preflightLogs.lines)'))
+    expect(source).toContain('if (preflightLines.length) this.pendingBundlePreflightLogs.set')
   })
 })
 
@@ -53,5 +64,18 @@ describe('session create dedupes only actual bundle paths', () => {
     expect(source).toContain(
       "s => s.type !== 'remote' && sameLocalBundlePath(s.modelPath, modelPath)",
     )
+  })
+})
+
+describe('startup repair notice wiring', () => {
+  it('translates the repair log event and scrolls only the log pane', () => {
+    const source = readFileSync(new URL('../src/renderer/src/components/sessions/CreateSession.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('data.bundleRepairNotice === true')
+    expect(source).toContain('data-vmlx-control="bundle-repair-notice"')
+    expect(source).toContain('ref={logPanelRef}')
+    expect(source).toContain('panel?.scrollTo({ top: panel.scrollHeight')
+    expect(source).toContain('if (launching) launchPanelRef.current?.scrollTo({ top: 0 })')
+    expect(source.slice(source.indexOf('// Launching state'))).toContain('ref={launchPanelRef}')
+    expect(source).not.toContain('logEndRef')
   })
 })
