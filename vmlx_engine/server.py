@@ -7071,18 +7071,11 @@ async def check_metal_working_set_pressure(request: Request):
     except Exception:
         pass
 
-    try:
-        get_cache_memory = getattr(mx, "get_cache_memory", None)
-        if get_cache_memory is None and hasattr(mx, "metal"):
-            get_cache_memory = getattr(mx.metal, "get_cache_memory", None)
-        cache_bytes = int(get_cache_memory() if get_cache_memory is not None else 0)
-    except Exception:
-        cache_bytes = 0
-    if cache_bytes > 0:
-        non_cache_active = max(0, active - cache_bytes)
-        non_cache_pct = (non_cache_active / max_ws) * 100.0
-        if non_cache_pct < threshold_pct:
-            return
+    # MLX active memory already EXCLUDES unused allocator cache buffers.
+    # Only the measured active_after above can establish reclaimed headroom.
+    # Subtracting get_cache_memory() here would double-discount the free-list
+    # and allow a truly over-budget request when clear_cache fails or another
+    # operation repopulates the allocator cache before this check.
 
     # If a huge model is already loaded, raw active/max includes persistent
     # model weights. Use the post-load baseline to decide whether the current

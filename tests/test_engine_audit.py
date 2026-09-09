@@ -10022,9 +10022,8 @@ class TestStartupCompatibilityGuards:
 
         assert "mx.clear_cache()" in block
         assert "active_after, max_ws_after = get_effective_metal_working_set_bytes(mx)" in block
-        assert 'getattr(mx, "get_cache_memory", None)' in block
-        assert "non_cache_active = max(0, active - cache_bytes)" in block
-        assert "non_cache_pct = (non_cache_active / max_ws) * 100.0" in block
+        assert "active - cache_bytes" not in block
+        assert "measured active_after" in block
         assert "_metal_ws_model_baseline_bytes" in block
         assert "transient_bytes = max(0, active - int(baseline))" in block
         assert "allowed_transient_pct = max(0.5, 100.0 - threshold_pct)" in block
