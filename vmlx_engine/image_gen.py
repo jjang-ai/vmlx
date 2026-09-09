@@ -626,6 +626,18 @@ class ImageGenEngine:
 
             self._model.text_encoder, _ = restore_packed_encoder(
                 self._model.text_encoder, load_stored_encoder)
+            # The same legacy exporter nested modulation projections under
+            # *_norm1. Current mflux stores them directly on each block.
+            # Its permissive update otherwise leaves random native projections.
+            from .image_qwen_legacy import restore_legacy_modulation
+            from mflux.models.common.weights.loading.weight_loader import WeightLoader
+            from mflux.models.qwen.weights.qwen_weight_definition import QwenWeightDefinition
+            component = next(c for c in QwenWeightDefinition.get_components()
+                             if c.name == "transformer")
+            stored_transformer = WeightLoader.load_single_local(
+                component=component, root_path=Path(model_path)
+            ).components["transformer"]
+            restore_legacy_modulation(self._model.transformer, stored_transformer)
 
         # Fix quantized embeddings with non-uint32 weights (mflux bug)
         if quantize and self._model is not None:
