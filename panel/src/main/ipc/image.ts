@@ -412,16 +412,18 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
-      finishImageGeneration(generationController)
       return { success: true, generations }
     } catch (error) {
       console.error('[IMAGE] Generation failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
-      finishImageGeneration(generationController)
       return {
         success: false,
         error: errorMessage
       }
+    } finally {
+      // Includes early HTTP rejection returns, not just success/throw paths.
+      // A failure before begin must not clear another request's active job.
+      if (generationController) finishImageGeneration(generationController)
     }
   })
 
@@ -572,16 +574,16 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
-      finishImageGeneration(generationController)
       return { success: true, generations }
     } catch (error) {
       console.error('[IMAGE] Edit failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
-      finishImageGeneration(generationController)
       return {
         success: false,
         error: errorMessage
       }
+    } finally {
+      if (generationController) finishImageGeneration(generationController)
     }
   })
 
