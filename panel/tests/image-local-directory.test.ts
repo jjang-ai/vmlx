@@ -281,6 +281,18 @@ describe('local image model directories (external drive bundles)', () => {
 })
 
 describe('low-precision edit variants: warn and offer the better sibling', () => {
+  it('does not recommend another model from a shared image folder', async () => {
+    const { editPrecisionAlternative } = await import('../src/shared/imageLocalModel')
+    const parent = mkdtempSync(join(tmpdir(), 'vmlx-img-alternatives-'))
+    mfluxBundle(parent, 'flux-1-dev-fill-mflux-q4', 4, '0.19.1')
+    mfluxBundle(parent, 'FLUX.1-schnell-mflux-8bit', 8, '0.19.1')
+    const first = resolveLocalImageModelDirectory(join(parent, 'flux-1-dev-fill-mflux-q4'), 4)
+    expect(first?.kind === 'model' && editPrecisionAlternative(first)).toBeNull()
+    mfluxBundle(parent, 'flux-1-dev-fill-mflux-q8', 8, '0.19.1')
+    const withVariant = resolveLocalImageModelDirectory(join(parent, 'flux-1-dev-fill-mflux-q4'), 4)
+    expect(withVariant?.kind === 'model' && editPrecisionAlternative(withVariant)?.name)
+      .toBe('flux-1-dev-fill-mflux-q8')
+  })
   it('reports sibling variants and picks a >= 8-bit alternative for a 4-bit edit model', async () => {
     const { editPrecisionAlternative } = await import('../src/shared/imageLocalModel')
     const parent = join(mkdtempSync(join(tmpdir(), 'vmlx-img-')), 'Qwen-Image-Edit-mflux'); mkdirSync(parent)

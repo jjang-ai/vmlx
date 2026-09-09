@@ -281,7 +281,13 @@ function withSiblings(res: Extract<LocalImageModelResolution, { kind: 'model' }>
 export const EDIT_LOW_PRECISION_MAX_BITS = 4
 export function editPrecisionAlternative(res: Extract<LocalImageModelResolution, { kind: 'model' }>): LocalImageModelVariant | null {
   if (res.quantize === null || res.quantize > EDIT_LOW_PRECISION_MAX_BITS) return null
-  const better = (res.siblings || []).filter((v) => v.quantize === null || v.quantize >= 8).sort((a, b) => (a.quantize ?? 99) - (b.quantize ?? 99))
+  const model = resolveImageModelForLocalDirectory(res.path)
+  if (!model) return null
+  const better = (res.siblings || []).filter((v) =>
+    (v.quantize === null || v.quantize >= 8) &&
+    resolveImageModelForLocalDirectory(v.path)?.id === model.id &&
+    !unsupportedImageFormat(v.path, defaultFs)
+  ).sort((a, b) => (a.quantize ?? 99) - (b.quantize ?? 99))
   return better[0] || null
 }
 
