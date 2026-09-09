@@ -177,7 +177,7 @@
     "anthropicMessagesEndpoint": "Anthropic Messages API",
     "listModelsEndpoint": "ロード済みモデル一覧",
     "generateImagesEndpoint": "テキストプロンプトから画像を生成 (OpenAI 形式)",
-    "editImagesEndpoint": "テキスト指示で画像を編集 (Qwen-Image-Edit)",
+    "editImagesEndpoint": "テキスト指示で画像を編集（編集アダプターが必要。Fillにはマスクが必要）",
     "embeddingsEndpoint": "テキストエンベディングを生成",
     "rerankEndpoint": "関連度でドキュメントを再ランク",
     "transcriptionsEndpoint": "音声を文字起こし (Whisper STT)",

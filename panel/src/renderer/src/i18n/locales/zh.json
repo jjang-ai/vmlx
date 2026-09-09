@@ -177,7 +177,7 @@
     "anthropicMessagesEndpoint": "Anthropic Messages API",
     "listModelsEndpoint": "列出已加载的模型",
     "generateImagesEndpoint": "根据文本提示词生成图像 (OpenAI 格式)",
-    "editImagesEndpoint": "使用文本指令编辑图像 (Qwen-Image-Edit)",
+    "editImagesEndpoint": "使用文本指令编辑图像（需要编辑适配器；Fill 需要蒙版）",
     "embeddingsEndpoint": "生成文本嵌入",
     "rerankEndpoint": "按相关性对文档进行重排",
     "transcriptionsEndpoint": "音频转写 (Whisper STT)",

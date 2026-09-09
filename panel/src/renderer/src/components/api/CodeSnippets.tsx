@@ -118,8 +118,6 @@ curl ${baseUrl}/v1/images/edits \\
     \\"image\\": \\"$IMAGE_B64\\",
     \\"mask\\": \\"$MASK_B64\\",
     \\"size\\": \\"1024x1024\\",
-    \\"steps\\": 20,
-    \\"guidance\\": 4.0,
     \\"response_format\\": \\"b64_json\\"
   }"`
   }
@@ -151,8 +149,6 @@ payload = {
     "prompt": "Replace the selected area with polished metal",
     "image": image_b64,
     "size": "1024x1024",
-    "steps": 20,
-    "guidance": 4.0,
     "response_format": "b64_json",
 }
 
@@ -199,8 +195,6 @@ const body = {
   prompt: "Replace the selected area with polished metal",
   image,
   size: "1024x1024",
-  steps: 20,
-  guidance: 4.0,
   response_format: "b64_json",
 };
 
