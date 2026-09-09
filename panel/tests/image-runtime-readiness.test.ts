@@ -13,10 +13,16 @@ describe('image model readiness, not merely HTTP liveness', () => {
     expect(imageRuntimeSnapshot({ status: 'no_model' }).status).toBe('starting')
     expect(imageRuntimeSnapshot({ status: 'standby_deep', wake_in_progress: true }).status).toBe('starting')
   })
-  it('shows both sleep depths without advertising ready capabilities', () => {
+  it('preserves observed loaded capabilities while keeping both sleep depths non-ready', () => {
     for (const status of ['standby_soft', 'standby_deep']) {
-      expect(imageRuntimeSnapshot({ status, model_loaded: true, image: { loaded: true } }))
-        .toEqual({ status: 'standby', capabilities: null })
+      const image = { loaded: true, edit_strength: false, mask: 'none' }
+      expect(imageRuntimeSnapshot({ status, model_loaded: true, image }))
+        .toEqual({ status: 'standby', capabilities: image })
+      for (const body of [
+        { status, model_loaded: false, image },
+        { status, model_loaded: true, image: { loaded: false } },
+        { status },
+      ]) expect(imageRuntimeSnapshot(body)).toEqual({ status: 'standby', capabilities: null })
     }
   })
   it('does not promote malformed, failed, or contradictory payloads', () => {
@@ -29,4 +35,3 @@ describe('image model readiness, not merely HTTP liveness', () => {
       .toEqual({ status: 'running', capabilities: null })
   })
 })
-

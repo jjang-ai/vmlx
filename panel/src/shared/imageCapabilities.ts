@@ -47,11 +47,15 @@ export function imageRuntimeSnapshot(body: unknown): { status: ImageServerStatus
   if (health.wake_in_progress === true || health.status === 'no_model' || health.status === 'loading') {
     return { status: 'starting', capabilities: null }
   }
-  if (health.status === 'standby_soft' || health.status === 'standby_deep') return { status: 'standby', capabilities: null }
   const image = health.image && typeof health.image === 'object' && !Array.isArray(health.image)
     ? health.image as ImageCapabilities : null
   const loaded = image ? image.loaded === true && health.model_loaded !== false
     : health.model_type === 'image' && health.model_loaded === true
+  // Sleeping is not request-ready, but a still-loaded adapter retains its
+  // capabilities. Dropping these made unsupported edit controls reappear.
+  if (health.status === 'standby_soft' || health.status === 'standby_deep') {
+    return { status: 'standby', capabilities: loaded ? image : null }
+  }
   return health.status === 'healthy' && loaded
     ? { status: 'running', capabilities: image }
     : { status: 'error', capabilities: null }
