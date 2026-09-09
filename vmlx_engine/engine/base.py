@@ -40,6 +40,8 @@ class GenerationOutput:
     # assistant text; API adapters map it to their native error surface.
     error: str | None = None
     error_code: str | None = None
+    # Optional scheduler production timestamp; preserve across terminal fences.
+    generated_at: float | None = None
 
 
 class BaseEngine(ABC):

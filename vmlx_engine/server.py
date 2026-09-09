@@ -9505,25 +9505,43 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
     )
 
 
+def _decode_output_timestamp(output) -> float:
+    """Observe production before terminal SSD fences and buffered delivery.
+
+    Engines lacking the optional timestamp retain delivery timing. This is
+    not a GPU-kernel timer and does not alter publication ordering.
+    """
+    timestamp = getattr(output, "generated_at", None)
+    if (
+        isinstance(timestamp, (int, float))
+        and not isinstance(timestamp, bool)
+        and math.isfinite(timestamp)
+        and timestamp > 0
+    ):
+        return float(timestamp)
+    return time.perf_counter()
+
+
 def _decode_usage_snapshot(
     *,
     completion_tokens: int,
     first_token_ts: float | None,
     last_token_ts: float,
+    first_token_count: int = 1,
 ) -> dict[str, float | int] | None:
-    """Return exact server-side inter-token decode timing for local UI telemetry.
+    """Return producer-observed decode timing for local UI telemetry.
 
     This receipt is attached only to the explicitly negotiated private
     ``response.usage`` event. Standard Responses terminal usage stays
-    OpenAI-compatible. ``N`` output tokens contain ``N - 1`` measurable
-    inter-token intervals between the first and last engine output.
+    OpenAI-compatible. Initial speculative/coalesced tokens have only one
+    observation, so do not invent inter-token timing inside that first burst.
     """
-    if completion_tokens <= 1 or first_token_ts is None:
+    if completion_tokens <= first_token_count or first_token_ts is None:
         return None
     seconds = float(last_token_ts) - float(first_token_ts)
     if not math.isfinite(seconds) or seconds <= 0:
         return None
-    tokens = int(completion_tokens) - 1
+    tokens = int(completion_tokens) - int(first_token_count)
     return {
         "tokens": tokens,
         "seconds": seconds,
@@ -25235,6 +25253,7 @@ async def stream_chat_completion(
     last_output = None
     stream_logprob_offset = 0
     _decode_first_ts: float | None = None
+    _decode_first_count = 1
     _decode_last_ts = 0.0
     _decode_last_count = 0
 
@@ -25292,9 +25311,10 @@ async def stream_chat_completion(
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
             if completion_tokens > _decode_last_count:
-                _decode_last_ts = time.perf_counter()
+                _decode_last_ts = _decode_output_timestamp(output)
                 if _decode_first_ts is None:
                     _decode_first_ts = _decode_last_ts
+                    _decode_first_count = completion_tokens
                 _decode_last_count = completion_tokens
             if hasattr(output, "cached_tokens") and output.cached_tokens:
                 cached_tokens = output.cached_tokens
@@ -26469,7 +26489,7 @@ async def stream_chat_completion(
                 # Keep the decode-window timestamps live through the answer
                 # pass; otherwise the final decode tok/s line divides BOTH
                 # passes' tokens by only the first pass's span and overreports.
-                _decode_last_ts = time.perf_counter()
+                _decode_last_ts = _decode_output_timestamp(answer_output)
                 if _decode_first_ts is None:
                     _decode_first_ts = _decode_last_ts
                 _ans_ct = (
@@ -26977,7 +26997,7 @@ async def stream_chat_completion(
         logger.info(
             f"Chat completion (stream): {completion_tokens} tokens in "
             f"{_decode_elapsed:.2f}s "
-            f"({(completion_tokens - 1) / _decode_elapsed:.1f} tok/s decode) "
+            f"({(completion_tokens - _decode_first_count) / _decode_elapsed:.1f} tok/s decode) "
             f"therm={thermal_state_name()}"
         )
 
@@ -27355,6 +27375,7 @@ async def stream_responses_api(
     _cached = 0
     _cache_detail: str | None = None
     _decode_first_ts: float | None = None
+    _decode_first_count = 1
     _decode_last_ts = 0.0
     _decode_last_count = 0
     last_output = (
@@ -27658,9 +27679,10 @@ async def stream_responses_api(
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
             if completion_tokens > _decode_last_count:
-                _decode_last_ts = time.perf_counter()
+                _decode_last_ts = _decode_output_timestamp(output)
                 if _decode_first_ts is None:
                     _decode_first_ts = _decode_last_ts
+                    _decode_first_count = completion_tokens
                 _decode_last_count = completion_tokens
             _chunk_cached = int(getattr(output, "cached_tokens", 0) or 0)
             if _chunk_cached > 0:
@@ -28106,6 +28128,7 @@ async def stream_responses_api(
                     completion_tokens=completion_tokens,
                     first_token_ts=_decode_first_ts,
                     last_token_ts=_decode_last_ts,
+                    first_token_count=_decode_first_count,
                 )
                 if _decode_usage is not None:
                     usage_obj["vmlx_decode"] = _decode_usage
@@ -28719,7 +28742,7 @@ async def stream_responses_api(
                     # pass; otherwise the final decode tok/s line divides BOTH
                     # passes' tokens by only the first pass's span and
                     # overreports.
-                    _decode_last_ts = time.perf_counter()
+                    _decode_last_ts = _decode_output_timestamp(answer_output)
                     if _decode_first_ts is None:
                         _decode_first_ts = _decode_last_ts
                     _ans_ct = (
@@ -28743,6 +28766,7 @@ async def stream_responses_api(
                             completion_tokens=completion_tokens + _ans_ct,
                             first_token_ts=_decode_first_ts,
                             last_token_ts=_decode_last_ts,
+                            first_token_count=_decode_first_count,
                         )
                         if _answer_decode_usage is not None:
                             _answer_usage["vmlx_decode"] = _answer_decode_usage
@@ -29234,7 +29258,7 @@ async def stream_responses_api(
         logger.info(
             f"Response (stream): {completion_tokens} tokens in "
             f"{_decode_elapsed:.2f}s "
-            f"({(completion_tokens - 1) / _decode_elapsed:.1f} tok/s decode) "
+            f"({(completion_tokens - _decode_first_count) / _decode_elapsed:.1f} tok/s decode) "
             f"therm={thermal_state_name()}"
         )
     # Parser branches can ``continue`` after token tracking (reasoning and
@@ -29250,6 +29274,7 @@ async def stream_responses_api(
             completion_tokens=completion_tokens,
             first_token_ts=_decode_first_ts,
             last_token_ts=_decode_last_ts,
+            first_token_count=_decode_first_count,
         )
         if _terminal_decode_usage is not None:
             _terminal_private_usage["vmlx_decode"] = _terminal_decode_usage

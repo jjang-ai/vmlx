@@ -2762,6 +2762,7 @@ class BatchedEngine(BaseEngine):
                 yield GenerationOutput(
                     text=clean_output_text(output.output_text),
                     new_text=new_text,
+                    generated_at=getattr(output, "generated_at", None),
                     prompt_tokens=output.prompt_tokens,
                     completion_tokens=output.completion_tokens,
                     cached_tokens=getattr(output, "cached_tokens", 0),
@@ -2836,6 +2837,7 @@ class BatchedEngine(BaseEngine):
             yield GenerationOutput(
                 text=text,
                 logprobs=getattr(output, "logprobs", None),
+                generated_at=getattr(output, "generated_at", None),
                 new_text=output.new_text,
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
