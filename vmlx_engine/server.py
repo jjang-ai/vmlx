@@ -858,6 +858,13 @@ def _refresh_loaded_max_prompt_tokens(reason: str) -> int:
 
     global _max_prompt_tokens
 
+    # Metadata belongs to this loaded-model generation, not the lifetime of
+    # the Python process. A repaired/replaced folder can keep its path across
+    # deep sleep and wake. Drop both metadata snapshots only at load refresh;
+    # ordinary requests must not rewrite defaults underneath active work.
+    _jang_sampling_defaults_cache.clear()
+    _generation_defaults_cache.clear()
+
     # Record the loaded bundle's declared positional ceiling so both
     # schedulers can clamp output budgets to (context − prompt) with a
     # logged context-exhaustion notice — max OUTPUT and max CONTEXT are
@@ -1023,6 +1030,7 @@ def _apply_projected_output_guard(
     explicit: bool,
     model_name: str = "",
     source: str = "implicit",
+    emit_warning: bool = True,
 ) -> int:
     try:
         requested = int(candidate)
@@ -1044,6 +1052,11 @@ def _apply_projected_output_guard(
                 "kernel-panic risk."
             ),
         )
+    if not emit_warning:
+        # /health and capabilities describe a hypothetical omitted request.
+        # They must not masquerade as an actual inference admission warning
+        # or consume its warning-dedup key. The computed cap is unchanged.
+        return max(1, int(cap))
     resolved_model = model_name or _model_path or _model_name or ""
     # Dedup on the basename: boot resolves with the filesystem path while
     # requests resolve with the API model name, and both describe the same
@@ -2656,7 +2669,9 @@ def _set_resolved_min_p(
         target.pop("min_p", None)
 
 
-def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
+def _resolve_max_tokens(
+    request_value: int | None, model_name: str = "", *, emit_warning: bool = True
+) -> int:
     """Resolve max output tokens.
 
     Precedence is request > explicit CLI/session override > bundle
@@ -2669,6 +2684,7 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
             int(request_value),
             explicit=True,
             model_name=model_name,
+            emit_warning=emit_warning,
         )
     if _default_max_tokens_explicit:
         # A session-level --max-tokens default above the projected cap must
@@ -2681,6 +2697,7 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
             explicit=False,
             model_name=model_name,
             source="session-default (--max-tokens)",
+            emit_warning=emit_warning,
         )
     v = _bundle_sampling_default(model_name, "max_new_tokens")
     if v is not None and v > 0:
@@ -2689,11 +2706,13 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
             explicit=False,
             model_name=model_name,
             source="bundle-default",
+            emit_warning=emit_warning,
         )
     return _apply_projected_output_guard(
         _effective_fallback_max_tokens(),
         explicit=False,
         model_name=model_name,
+        emit_warning=emit_warning,
     )
 
 
@@ -3532,7 +3551,7 @@ def _model_effective_defaults_status(model_name: str = "") -> dict[str, Any]:
         "top_p": _resolve_top_p(None, bundle_key),
         "top_k": _resolve_top_k(None, bundle_key),
         "min_p": _resolve_min_p(None, bundle_key),
-        "max_output_tokens": _resolve_max_tokens(None, bundle_key),
+        "max_output_tokens": _resolve_max_tokens(None, bundle_key, emit_warning=False),
     }
     repetition_penalty = _resolve_repetition_penalty(
         None,
