@@ -6299,6 +6299,12 @@ _NATIVE_MTP_CALIBRATION_MIN_SPACING_TOKENS = 512
 _NATIVE_MTP_CALIBRATION_RECHECK_TOKENS = 256
 _NATIVE_MTP_CALIBRATION_JUMP = 1.5
 _NATIVE_MTP_CALIBRATION_TOKENS = 8
+# A synchronized post-prefill seed is still only one cold measurement.6S
+# measured83.8ms at seed versus31ms in AR; the ordinary768-token interval
+# left this inflated threshold in force for most of the first answer.
+# Refresh once after a warm window and128 emitted tokens using the existing
+# state-preserving AR tier. Subsequent measured baselines keep normal spacing.
+_NATIVE_MTP_SEED_REFRESH_TOKENS = 128
 
 
 def _native_mtp_calibration_enabled() -> bool:
@@ -6537,7 +6543,13 @@ def _native_mtp_maybe_ar_safety_fallback(
         _interval = int(state.calibration_interval_tokens or _NATIVE_MTP_CALIBRATION_INTERVAL_TOKENS)
         _stale = _since >= _interval
         _spaced = _since >= _NATIVE_MTP_CALIBRATION_MIN_SPACING_TOKENS
-        if _stale or (_spaced and abs(_drift) >= _NATIVE_MTP_CALIBRATION_DRIFT):
+        _seed_refresh = (
+            measured_ar <= 0.0
+            and state.calibrations == 0
+            and _since >= _NATIVE_MTP_SEED_REFRESH_TOKENS
+            and len(state.ar_safety.ring) > ar_safety_window_cycles()
+        )
+        if _seed_refresh or _stale or (_spaced and abs(_drift) >= _NATIVE_MTP_CALIBRATION_DRIFT):
             tier = state.ar_tier or NativeMTPArTier(depth=max(1, int(state.ladder_depth or depth_now)))
             tier.calibration = True
             tier.reenter_depth = depth_now
@@ -6550,7 +6562,7 @@ def _native_mtp_maybe_ar_safety_fallback(
             state.calibrations += 1
             state.ar_fallback_pending = True
             state.ar_fallback_reason = (
-                f"ar_calibration drift={_drift:+.2f} stale={_stale} "
+                f"ar_calibration drift={_drift:+.2f} stale={_stale} seed_refresh={_seed_refresh} "
                 f"emitted={_emitted} window_ms_per_tok={_native_mtp_recent_ms_per_tok(state):.1f}"
             )
             logger.info(

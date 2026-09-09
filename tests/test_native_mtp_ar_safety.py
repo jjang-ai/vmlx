@@ -363,6 +363,9 @@ def test_promotion_probe_wins_and_loses(monkeypatch):
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
     state = _vlm_state(m)
+    # This row tests promotion against a known AR cost, not seed refresh.
+    state.ar_tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(state.ar_tier, 8, ms=10.0)
     state.depth = 1
     state.ladder_depth = 3
     state.promote_at_cycle = 40
@@ -647,6 +650,41 @@ def test_calibration_triggers_on_cycle_wall_drift_and_reenters_at_same_depth(mon
     assert tier.next_probe_tokens == m._NATIVE_MTP_CALIBRATION_TOKENS
     assert tier.backoff == 0 and state.calibrations == 1
     monkeypatch.delenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH")
+
+
+def test_unmeasured_seed_gets_early_calibration_at_each_depth(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+    for depth in (1, 2, 3):
+        state = _running_state(m, depth=depth, cycles=64, emitted_per_cycle=2)
+        # Observed6S cold seed83.8ms versus measured AR31ms. A cheap-looking
+        # MTP window cannot validate that seed; measure AR instead of guessing.
+        state.ar_step_ms = 83.8
+        assert m._native_mtp_maybe_ar_safety_fallback("seed-refresh", state)
+        assert "seed_refresh=True" in state.ar_fallback_reason
+        assert state.ar_tier.calibration
+        assert state.ar_tier.reenter_depth == depth
+        assert state.ar_tier.next_probe_tokens == m._NATIVE_MTP_CALIBRATION_TOKENS
+
+
+def test_seed_refresh_does_not_override_measured_baseline_or_short_turn(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+    short = _running_state(m, cycles=63, emitted_per_cycle=2)
+    short.ar_step_ms = 83.8
+    assert not m._native_mtp_maybe_ar_safety_fallback("short", short)
+    measured = _running_state(m, cycles=64, emitted_per_cycle=2)
+    measured.ar_step_ms = 83.8
+    measured.ar_tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(measured.ar_tier, 8, ms=31.0)
+    assert not m._native_mtp_maybe_ar_safety_fallback("measured", measured)
+    assert not measured.ar_fallback_pending
+    off = _running_state(m, cycles=64, emitted_per_cycle=2)
+    off.ar_step_ms = 83.8
+    monkeypatch.setenv("VMLX_NATIVE_MTP_AR_CALIBRATION", "0")
+    assert not m._native_mtp_maybe_ar_safety_fallback("disabled", off)
 
 
 def test_calibration_triggers_on_stale_interval_not_on_steady_short_runs(monkeypatch):
@@ -966,6 +1004,9 @@ def test_d1_single_losing_window_recovers_without_fallback(monkeypatch):
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
     monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
     state = _vlm_state(m, depth=1); state.depth_ceiling = 3; state.ladder_depth = 3
+    # Confirmation hysteresis presumes the baseline has been measured.
+    state.ar_tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(state.ar_tier, 8, ms=10.0)
     base_t = time.perf_counter() - 1.0
     state.stats.cycles = 40; state.stats.accepted_tokens = 0
     state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]  # 20 ms/tok vs AR 10
