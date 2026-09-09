@@ -18639,10 +18639,9 @@ async def create_image_edit(request: Request):
             )
 
         # Decode and save mask if provided — also convert via PIL.
-        # vmlx#97: paint-tool masks arriving as RGBA with the painted
-        # region only in the alpha channel previously lost all signal
-        # on `.convert("L")` (grayscale drops alpha). Now we detect RGBA
-        # and use max(RGB, alpha) so both channel forms work. Also
+        # vmlx#97: support both opaque grayscale canvases and alpha-painted
+        # masks. Combining luminance with constant opaque alpha expands a
+        # partially painted canvas to a full-image mask. Also
         # reject all-zero masks with a clear error so users know the
         # mask never registered, instead of feeding an empty mask into
         # Flux Fill and getting confusing downstream output.
@@ -18661,28 +18660,8 @@ async def create_image_edit(request: Request):
                 except Exception:
                     pass
 
-                # vmlx#97: paint-tool output is typically RGBA with the
-                # painted strokes in the alpha channel (transparent bg +
-                # opaque strokes). Simple .convert("L") drops alpha,
-                # which collapses the mask to the underlying RGB —
-                # usually solid black or the canvas fill. Blend alpha
-                # into the grayscale so either encoding works:
-                #   - RGBA → L: pixel = max(RGB→L, alpha)
-                #   - RGB  → L: pixel = standard L conversion
-                #   - LA   → L: pixel = max(L, alpha)
-                if mask_img.mode == "RGBA":
-                    rgb_l = mask_img.convert("RGB").convert("L")
-                    alpha = mask_img.split()[-1]
-                    # Element-wise max(rgb_l, alpha) via ImageChops
-                    from PIL import ImageChops as _ImageChops
-                    mask_img = _ImageChops.lighter(rgb_l, alpha)
-                elif mask_img.mode == "LA":
-                    l = mask_img.convert("L")
-                    alpha = mask_img.split()[-1]
-                    from PIL import ImageChops as _ImageChops
-                    mask_img = _ImageChops.lighter(l, alpha)
-                elif mask_img.mode != "L":
-                    mask_img = mask_img.convert("L")
+                from .image_masks import normalize_paint_mask
+                mask_img = normalize_paint_mask(mask_img)
 
                 # Reject all-zero masks — far more actionable than the
                 # downstream "requires mask_path for inpainting" error.

@@ -2835,33 +2835,30 @@ class TestVmlx97PaintedMaskInpainting:
     channel. `img.convert("L")` drops alpha → all-zero grayscale → mask
     file is saved but all-black → downstream treats as no-mask.
 
-    Fix: when the mask is RGBA or LA, blend alpha into the L channel
-    (`ImageChops.lighter(rgb_l, alpha)`) so painted strokes survive
-    the grayscale conversion. Also rejects all-zero masks with a
-    clear error that tells the user the mask didn't register.
+    Transparent paint uses alpha; an opaque canvas uses luminance.
+    Combining the two by max makes every opaque canvas a full-image mask.
+    These tests exercise the production helper, not a copied conversion.
     """
 
     def test_rgba_paint_mask_preserved_through_conversion(self):
         """RGBA with painted alpha strokes → L-mode preserves the strokes."""
-        from PIL import Image, ImageChops
+        from PIL import Image
+        from vmlx_engine.image_masks import normalize_paint_mask
         rgba = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
         for x in range(5):
             for y in range(5):
                 rgba.putpixel((x, y), (255, 255, 255, 255))
-        rgb_l = rgba.convert("RGB").convert("L")
-        alpha = rgba.split()[-1]
-        merged = ImageChops.lighter(rgb_l, alpha)
+        merged = normalize_paint_mask(rgba)
         assert merged.getextrema()[1] == 255, (
             "RGBA paint-tool mask must preserve strokes after alpha blend"
         )
 
     def test_all_transparent_rgba_detected_as_empty(self):
         """Fully transparent RGBA → still all zero after blend → rejected."""
-        from PIL import Image, ImageChops
+        from PIL import Image
+        from vmlx_engine.image_masks import normalize_paint_mask
         empty = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
-        rgb_l = empty.convert("RGB").convert("L")
-        alpha = empty.split()[-1]
-        merged = ImageChops.lighter(rgb_l, alpha)
+        merged = normalize_paint_mask(empty)
         assert merged.getextrema() == (0, 0), (
             "all-transparent RGBA should produce empty mask that the server rejects"
         )
@@ -2882,9 +2879,9 @@ class TestVmlx97PaintedMaskInpainting:
         src = (REPO_ROOT / "vmlx_engine/server.py").read_text()
         # The anchor must be in the server
         assert "vmlx#97" in src, "server must carry vmlx#97 anchor"
-        # RGBA alpha-blend handling
-        assert 'mask_img.mode == "RGBA"' in src
-        assert "ImageChops.lighter" in src or "ImageChops import" not in src
+        # Production normalization has its own pixel-exact and real endpoint
+        # tests; opaque alpha must never expand a black/white canvas mask.
+        assert "mask_img = normalize_paint_mask(mask_img)" in src
         # Empty-mask guard
         assert "Mask is all black" in src, (
             "server must give a clear error when mask has no painted region"
@@ -2892,14 +2889,13 @@ class TestVmlx97PaintedMaskInpainting:
 
     def test_server_handles_la_mode_mask(self):
         """LA (grayscale + alpha) is another common paint output."""
-        from PIL import Image, ImageChops
+        from PIL import Image
+        from vmlx_engine.image_masks import normalize_paint_mask
         la = Image.new("LA", (16, 16), (0, 0))
         for x in range(5):
             for y in range(5):
                 la.putpixel((x, y), (200, 255))  # gray stroke, opaque
-        l = la.convert("L")
-        alpha = la.split()[-1]
-        merged = ImageChops.lighter(l, alpha)
+        merged = normalize_paint_mask(la)
         # alpha is 0 outside stroke, 255 inside → result has signal
         assert merged.getextrema()[1] == 255
 

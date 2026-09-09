@@ -73,6 +73,48 @@ class TestBase64Import:
         assert "import base64" in source
 
 
+class TestImagePaintMaskTransport:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "LA"])
+    @pytest.mark.parametrize("painted", [True, False])
+    async def test_mask_selection_reaches_adapter_without_alpha_expansion(self, client, monkeypatch, mode, painted):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        observed = []
+        def edit(**kwargs):
+            with Image.open(kwargs["mask_path"]) as image:
+                observed.append(image.copy())
+            return SimpleNamespace(b64_json="AAAA", seed=42)
+        engine = SimpleNamespace(is_loaded=True, model_name="dev-fill",
+                                 _model_path="/test/fill", _mflux_class="Flux1Fill",
+                                 edit=MagicMock(side_effect=edit))
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_path", "/test/fill")
+        monkeypatch.setattr(srv, "_model_name", "dev-fill")
+        monkeypatch.setattr(srv, "_served_model_name", "dev-fill")
+        def encode(image):
+            out = io.BytesIO()
+            image.save(out, format="PNG")
+            return base64.b64encode(out.getvalue()).decode()
+        mask = Image.new("L", (64, 64), 0)
+        if painted:
+            mask.putpixel((20, 30), 255)
+        response = await client.post("/v1/images/edits", json=dict(
+            model="dev-fill", prompt="test", size="64x64", steps=1,
+            image=encode(Image.new("RGB", (64, 64))),
+            mask=encode(mask.convert(mode))))
+        if painted:
+            assert response.status_code == 200, response.text
+            assert len(observed) == 1
+            assert observed[0].tobytes() == mask.tobytes()
+        else:
+            assert response.status_code == 400, response.text
+            engine.edit.assert_not_called()
+
+
 class TestImageSessionIdentity:
     @pytest.mark.anyio
     @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "dev")])
