@@ -32,6 +32,7 @@ export interface Session {
   pid?: number;
   status: "running" | "stopped" | "error" | "loading" | "standby";
   config: string; // JSON blob of ServerConfig
+  pendingConfig?: string | null; // Explicitly saved next-start config; never used to route live requests.
   createdAt: number;
   updatedAt: number;
   lastStartedAt?: number;
@@ -1236,6 +1237,12 @@ class DatabaseManager {
         );
       }
 
+      // Added after the legacy status-table rebuild so old profiles retain this column.
+      const pendingColumns = this.db.pragma("table_info(sessions)") as { name: string }[];
+      if (!pendingColumns.some(c => c.name === "pending_config")) {
+        this.db.exec("ALTER TABLE sessions ADD COLUMN pending_config TEXT");
+      }
+
       // Image model paths table — tracks where downloaded image models live on disk
       this.db.exec(`
       CREATE TABLE IF NOT EXISTS image_model_paths (
@@ -2018,6 +2025,10 @@ class DatabaseManager {
       fields.push("config = ?");
       values.push(updates.config);
     }
+    if ("pendingConfig" in updates) {
+      fields.push("pending_config = ?");
+      values.push(updates.pendingConfig ?? null);
+    }
     if ("lastStartedAt" in updates) {
       fields.push("last_started_at = ?");
       values.push(updates.lastStartedAt ?? null);
@@ -2113,6 +2124,25 @@ class DatabaseManager {
     stmt.run(id);
   }
 
+  /** Called only after SessionManager establishes there is no managed live process. */
+  applyPendingSessionConfig(id: string): Session | undefined {
+    this.ensureOpen();
+    return this.db.transaction(() => {
+      const session = this.getSession(id);
+      if (!session?.pendingConfig) return session;
+      const config = JSON.parse(session.pendingConfig);
+      if (!config || typeof config !== "object" || Array.isArray(config) ||
+          typeof config.host !== "string" || !Number.isInteger(config.port) ||
+          config.port < 1024 || config.port > 65535) {
+        throw new Error("Saved next-start session configuration is invalid; it has been retained.");
+      }
+      this.updateSession(id, {
+        config: session.pendingConfig, pendingConfig: null, host: config.host, port: config.port,
+      });
+      return this.getSession(id);
+    })();
+  }
+
   private mapSessionRow(row: any): Session {
     return {
       id: row.id,
@@ -2123,6 +2153,7 @@ class DatabaseManager {
       pid: row.pid,
       status: row.status,
       config: row.config,
+      pendingConfig: row.pending_config ?? null,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       lastStartedAt: row.last_started_at,

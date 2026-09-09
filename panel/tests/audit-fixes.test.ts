@@ -5,6 +5,7 @@
  * process exit handling, tray icon generation, audio validation.
  */
 import { describe, it, expect } from 'vitest'
+import { planSessionConfigSave } from '../src/shared/sessionConfigLifecycle'
 import {
   buildChatSettingsResetOverrides,
   type ChatSettingsResetOverrides,
@@ -709,10 +710,10 @@ describe('session restart-required detection', () => {
     current: Record<string, unknown>,
     isRunning: boolean
   ): { restartRequired: boolean; changedKeys: string[] } {
-    const changedKeys = Object.keys(changes).filter(k =>
-      RESTART_REQUIRED_KEYS.has(k) && changes[k] !== current[k]
+    return planSessionConfigSave(
+      { status: isRunning ? 'running' : 'stopped' },
+      current, { ...current, ...changes }, RESTART_REQUIRED_KEYS,
     )
-    return { restartRequired: isRunning && changedKeys.length > 0, changedKeys }
   }
 
   it('port change on running session requires restart', () => {

@@ -241,8 +241,6 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
       </button>
       {showServer && (
         <div className="pl-4 border-l border-border text-xs text-muted-foreground space-y-1">
-          <p>{t('image.settings.hostLocalhost')}</p>
-          <p>{t('image.settings.portAutoAssigned')}</p>
           <p>{t('image.settings.modelLine', { model: model || 'none' })}</p>
           {capabilities && (
             <div data-vmlx-image-cap="summary" className="mt-1 space-y-0.5">

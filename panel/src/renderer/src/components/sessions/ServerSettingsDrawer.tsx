@@ -16,6 +16,7 @@ import {
   applyBundleGenerationDefaultsToSessionConfig,
 } from '../../../../shared/sessionGenerationDefaults'
 import { usesExactTypedPromptDiskCache } from '../../../../shared/detectedFamilyNames'
+import { hasLiveLocalSession } from '../../../../shared/sessionConfigLifecycle'
 
 interface Session {
   id: string
@@ -26,6 +27,7 @@ interface Session {
   pid?: number
   status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string
+  pendingConfig?: string | null
 }
 
 interface ServerSettingsDrawerProps {
@@ -86,9 +88,11 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     const load = async () => {
       let base: SessionConfig
       try {
-        const stored = JSON.parse(session.config)
-        // Always use DB columns as canonical source for host/port to prevent mismatch
-        base = { ...DEFAULT_CONFIG, ...stored, host: session.host, port: session.port }
+        const stored = JSON.parse(session.pendingConfig || session.config)
+        // Pending values belong to this editor, not the live socket shown on the card.
+        base = { ...DEFAULT_CONFIG, ...stored,
+          host: session.pendingConfig ? stored.host : session.host,
+          port: session.pendingConfig ? stored.port : session.port }
       } catch {
         base = { ...DEFAULT_CONFIG, host: session.host, port: session.port }
       }
@@ -141,7 +145,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     }
     load()
     return () => { active = false }
-  }, [session.id, session.config, session.host, session.port, session.modelPath])
+  }, [session.id, session.config, session.pendingConfig, session.host, session.port, session.modelPath])
 
   useEffect(() => {
     window.api.gateway?.getStatus?.()
@@ -337,7 +341,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     }
   }
 
-  const isRunning = session.status === 'running' || session.status === 'loading'
+  const isRunning = hasLiveLocalSession({ ...session, type: isRemote ? 'remote' : 'local' })
 
   // Keyboard parity with the modal: Escape closes the drawer while it is
   // mounted, wherever focus sits. After a keyboard save the Save button

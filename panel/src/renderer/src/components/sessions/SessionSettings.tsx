@@ -11,6 +11,7 @@ import {
   commitActiveSettingsInput,
 } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
+import { hasLiveLocalSession } from '../../../../shared/sessionConfigLifecycle'
 import { buildCacheLaunchArgs } from '../../../../shared/cacheLaunchArgs'
 import {
   DISABLE_JANG_AFFINE_JIT_DEFAULT_ENV,
@@ -583,7 +584,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
       if (s && active) {
         // Parse stored config JSON, merge with defaults
         try {
-          const stored = JSON.parse(s.config)
+          const stored = JSON.parse(s.pendingConfig || s.config)
           const base = { ...DEFAULT_CONFIG, ...stored }
           // Do not expose DEFAULT_CONFIG while the bundle lookup is pending,
           // and merge only bundle-owned default* metadata into any edit made
@@ -793,7 +794,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   }
 
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
-  const isRunning = session.status === 'running' || session.status === 'loading'
+  const isRunning = hasLiveLocalSession(session)
 
   return (
     <div className="p-6 overflow-auto h-full" data-vmlx-surface="session-settings" data-vmlx-session-id={sessionId}>

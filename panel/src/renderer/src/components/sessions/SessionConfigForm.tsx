@@ -715,7 +715,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Product-wide cache contract: the retained paged-RAM tier is locked off
           and SSD is authoritative. Keep this visible outside the collapsed
           section so users can confirm the launched memory policy at a glance. */}
-      <InfoNote text={t('sessions.config.ramCacheTradeoffNotice')} />
+      {!isImage && <InfoNote text={t('sessions.config.ramCacheTradeoffNotice')} />}
 
       {/* Server Settings */}
       <Section title={t('sessions.config.serverSettings')} sectionKey="server" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>

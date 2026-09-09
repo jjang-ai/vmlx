@@ -108,6 +108,7 @@ import {
   finitePositiveInteger,
 } from '../shared/launchArgValues'
 import { buildNativeMtpLaunchArgs } from '../shared/nativeMtpLaunchArgs'
+import { planSessionConfigSave } from '../shared/sessionConfigLifecycle'
 
 /** Result of findEnginePath: packaged Python, a source-bound dev venv, or a system binary. */
 type EnginePath =
@@ -2766,6 +2767,10 @@ export class SessionManager extends EventEmitter {
       throw new Error('Session is already running')
     }
 
+    // Ordinary Save must never redirect an existing process to a future port/key.
+    // Promote the saved config only here, under the start/restart lifecycle lock.
+    const pendingApplied = db.applyPendingSessionConfig(sessionId)
+    if (pendingApplied) Object.assign(session, pendingApplied)
     const config: ServerConfig = JSON.parse(session.config)
     // Detection may materialize an effective multimodal value for this launch,
     // but it must not turn an absent (Auto) setting into a persisted Force On
@@ -3793,12 +3798,17 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    let currentConfig: Record<string, unknown> = {}
+    let effectiveConfig: Record<string, unknown> = {}
     try {
-      currentConfig = JSON.parse(session.config)
+      effectiveConfig = JSON.parse(session.config)
     } catch {
       // Corrupted config in DB — start fresh
     }
+    // Subsequent edits start from previously saved next-start settings, while
+    // live transports continue reading session.config/host/port.
+    const currentConfig: Record<string, unknown> = session.pendingConfig
+      ? JSON.parse(session.pendingConfig)
+      : effectiveConfig
     // IPC preserves own properties whose value is undefined. In the settings
     // UI that value means "Auto" for tri-state controls, so it must DELETE a
     // persisted override rather than be silently ignored. Omitted properties
@@ -3840,29 +3850,20 @@ export class SessionManager extends EventEmitter {
       console.log(`[SLEEP] Config saved for ${sessionId.slice(0, 8)}: soft=${merged.idleTimeoutSoftMin}min, hard=${merged.idleTimeoutHardMin}min, enabled=${merged.autoSleepEnabled}`)
     }
 
-    // Always keep host/port in sync between JSON blob and DB columns
-    // Extract from merged to ensure JSON blob and DB columns always agree
-    const host = (merged.host as string) || session.host
-    const port = (merged.port as number) || session.port
+    const savePlan = planSessionConfigSave(session, effectiveConfig, merged, SessionManager.RESTART_REQUIRED_KEYS)
+    // Canonical live DB columns and config stay in sync; settings forms read
+    // pendingConfig explicitly, never accidentally as an active endpoint.
+    const host = (savePlan.config.host as string) || session.host
+    const port = (savePlan.config.port as number) || session.port
 
     db.updateSession(sessionId, {
-      config: JSON.stringify(merged),
+      config: JSON.stringify(savePlan.config),
+      pendingConfig: savePlan.pendingConfig ? JSON.stringify(savePlan.pendingConfig) : null,
       host,
       port
     })
 
-    // H6: Determine if changed keys require a restart
-    const isRunning = session.status === 'running' || session.status === 'loading'
-    const changedKeys = [
-      ...Object.keys(cleanConfig).filter(k =>
-        SessionManager.RESTART_REQUIRED_KEYS.has(k) &&
-        (cleanConfig as Record<string, unknown>)[k] !== currentConfig[k]
-      ),
-      ...Array.from(explicitlyClearedKeys).filter(k =>
-        SessionManager.RESTART_REQUIRED_KEYS.has(k) &&
-        Object.prototype.hasOwnProperty.call(currentConfig, k)
-      ),
-    ]
+    const changedKeys = savePlan.changedKeys
     const updatedSession = db.getSession(sessionId)
     if (updatedSession) {
       this.emit('session:updated', {
@@ -3872,7 +3873,7 @@ export class SessionManager extends EventEmitter {
       })
     }
     return {
-      restartRequired: isRunning && changedKeys.length > 0,
+      restartRequired: savePlan.restartRequired,
       changedKeys,
     }
   }
