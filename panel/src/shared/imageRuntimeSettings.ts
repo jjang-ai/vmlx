@@ -52,16 +52,18 @@ export function loadImageRuntimeSettings(storage: SettingsStorage, owner: ImageS
   const store = readStore(storage)
   const saved = store.sessions[owner.sessionId]
   let values = saved?.modelId === owner.modelId ? preferences(saved.values) : {}
-  if (!saved && adoptLegacy && !store.legacyOwner) {
-    let legacy: unknown
-    try { legacy = JSON.parse(storage.getSetting('image_settings') || 'null') } catch { legacy = null }
-    values = preferences(legacy)
-    if (Object.keys(values).length) {
-      store.legacyOwner = owner.sessionId
-      store.sessions[owner.sessionId] = { modelId: owner.modelId, values }
-      // Do not delete or rewrite the old global record.
-      storage.setSetting(IMAGE_SETTINGS_KEY, JSON.stringify(store))
+  if (!saved) {
+    if (adoptLegacy && !store.legacyOwner) {
+      let legacy: unknown
+      try { legacy = JSON.parse(storage.getSetting('image_settings') || 'null') } catch { legacy = null }
+      values = preferences(legacy)
+      if (Object.keys(values).length) store.legacyOwner = owner.sessionId
     }
+    // Explicit selection claims even an empty override set, so a later page
+    // remount cannot import a different model's old global preferences.
+    store.sessions[owner.sessionId] = { modelId: owner.modelId, values }
+    // Do not delete or rewrite the old global record.
+    storage.setSetting(IMAGE_SETTINGS_KEY, JSON.stringify(store))
   }
   return { ...defaultImageRuntimeSettings(owner.modelId, owner.quantize), ...values }
 }
@@ -71,4 +73,3 @@ export function saveImageRuntimeSettings(storage: SettingsStorage, owner: ImageS
   store.sessions[owner.sessionId] = { modelId: owner.modelId, values: preferences(value) }
   storage.setSetting(IMAGE_SETTINGS_KEY, JSON.stringify(store))
 }
-

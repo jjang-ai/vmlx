@@ -33,6 +33,13 @@ describe('image runtime settings ownership', () => {
   it('does not apply ambiguous global preferences to a newly selected model', () => {
     expect(loadImageRuntimeSettings(storage({ image_settings: '{"steps":80}' }), qwen).steps).toBe(28)
   })
+
+  it('does not import legacy preferences on remount after explicit selection with no edits', () => {
+    const db = storage({ image_settings: '{"steps":80,"guidance":19}' })
+    loadImageRuntimeSettings(db, qwen, false)
+    expect(loadImageRuntimeSettings(db, qwen, true).steps).toBe(28)
+    expect(loadImageRuntimeSettings(db, qwen, true).guidance).toBe(4)
+  })
   it('ignores malformed legacy fields instead of spreading arbitrary keys into settings', () => {
     const db = storage({ image_settings: '{"steps":-1,"guidance":0,"width":"bad","quantize":3,"seed":99}' })
     expect(loadImageRuntimeSettings(db, qwen, true)).toEqual({ ...defaultImageRuntimeSettings(qwen.modelId, 8), guidance: 0 })
@@ -53,4 +60,3 @@ describe('image runtime settings ownership', () => {
     expect(writes).toEqual([IMAGE_SETTINGS_KEY])
   })
 })
-
