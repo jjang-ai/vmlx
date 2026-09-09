@@ -31,6 +31,30 @@ def _run(coro):
 class TestHealthEndpoint:
     """Tests for the health() async handler."""
 
+    def test_image_health_does_not_advertise_text_cache_or_sampling(self, monkeypatch, tmp_path):
+        from vmlx_engine import server
+        monkeypatch.setattr(server, "_model_type", "image")
+        monkeypatch.setattr(server, "_engine", None)
+        monkeypatch.setattr(server, "_standby_state", None)
+        monkeypatch.setattr(server, "_model_name", "z-image-turbo")
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_served_model_name", "z-image-turbo")
+        monkeypatch.setattr(server, "_image_gen", SimpleNamespace(
+            is_loaded=True, capabilities=lambda: {
+                "loaded": True, "mflux_class": "ZImage", "quantize": 4,
+            },
+        ))
+        monkeypatch.setattr(server, "_health_snapshot_cache", {})
+        result = _run(server.health())
+        assert result["image"]["quantize"] == 4
+        assert result["engine_type"] == "mflux"
+        assert result["model_loaded"] is True
+        assert "runtime_provenance" in result
+        for key in ("sampling_defaults", "effective_defaults", "quantization", "acceleration",
+                    "mtp", "speculative_decoding", "active_parsers", "kv_cache_quantization",
+                    "cache_storage_runtime_telemetry"):
+            assert key not in result, f"Image health inherited text-only field {key}"
+
     def test_engine_core_stats_expose_collector_and_cleanup_lifecycle(self):
         """Engine stats distinguish request collectors from cache tables."""
         from vmlx_engine.engine_core import EngineCore

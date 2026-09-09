@@ -2485,7 +2485,9 @@ def serve_command(args):
             != DEFAULT_MAX_OUTPUT_TOKENS,
         )
     )
-    if max_tokens_explicit:
+    if _is_image:
+        print("Image output is controlled by resolution and diffusion settings, not text token limits.")
+    elif max_tokens_explicit:
         print(f"Default max tokens override: {args.max_tokens}")
     else:
         print(
@@ -2494,7 +2496,7 @@ def serve_command(args):
             "(bundle max_new_tokens wins when present; projected Metal guard "
             "may lower the effective per-request cap)"
         )
-    if getattr(args, 'max_prompt_tokens', None):
+    if not _is_image and getattr(args, 'max_prompt_tokens', None):
         print(f"Max prompt/context tokens: {args.max_prompt_tokens}")
 
     # Store MCP config path for FastAPI startup
@@ -2623,11 +2625,15 @@ def serve_command(args):
             )
             args.max_num_seqs = 1
 
-    _apply_paged_block_disk_default(args, logger)
+    if not _is_image:
+        _apply_paged_block_disk_default(args, logger)
 
-    # Build scheduler config for batched mode
+    # Diffusion does not instantiate the LLM scheduler or its KV/SSD cache.
     scheduler_config = None
-    if args.continuous_batching:
+    if _is_image:
+        print("Mode: Image generation/editing (mflux)")
+        print("LLM continuous batching and KV/SSD prefix caching do not apply to this image session.")
+    elif args.continuous_batching:
         # Handle prefix cache flags
         enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
 

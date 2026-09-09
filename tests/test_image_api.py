@@ -972,6 +972,34 @@ class TestImageGenWorkerExecutor:
         assert "server._run_image_gen_call_sync(" in source
         assert "server._image_gen.load" in source
 
+    def test_cli_image_mode_skips_text_scheduler_and_token_announcements(self, capsys):
+        import ast
+        import vmlx_engine.cli as cli
+
+        tree = ast.parse(inspect.getsource(cli.serve_command))
+        # Execute the production branches themselves, without invoking model
+        # loading or uvicorn. Deliberately omit text scheduler args: the image
+        # branch must not inspect them or instantiate a text scheduler.
+        branches = [
+            node for node in tree.body[0].body
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name) and node.test.id == "_is_image"
+            and ("Mode: Image generation/editing" in ast.unparse(node)
+                 or "Image output is controlled" in ast.unparse(node))
+        ]
+        assert len(branches) == 2
+        scheduler = MagicMock(side_effect=AssertionError("image built text scheduler"))
+        namespace = {"_is_image": True, "SchedulerConfig": scheduler}
+        for branch in branches:
+            module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
+            exec(compile(module, "<image-cli-branch>", "exec"), namespace)
+        scheduler.assert_not_called()
+        output = capsys.readouterr().out
+        assert "Mode: Image generation/editing (mflux)" in output
+        assert "KV/SSD prefix caching do not apply" in output
+        assert "Max output fallback:" not in output
+        assert "Block Disk Cache (SSD / L2), disk-only mode:" not in output
+
     def test_cli_startup_image_load_wires_lora_flags(self):
         import vmlx_engine.cli as cli
 

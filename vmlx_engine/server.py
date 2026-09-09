@@ -13515,13 +13515,14 @@ async def health():
         result["error"] = sanitized
     if memory_info:
         result["memory"] = memory_info
-    if kv_quant_info:
+    if kv_quant_info and _model_type != "image":
         result["kv_cache_quantization"] = kv_quant_info
-    if spec_info:
+    if spec_info and _model_type != "image":
         result["speculative_decoding"] = spec_info.get(
             "speculative_decoding", spec_info
         )
-    result["active_parsers"] = _active_parser_health_status()
+    if _model_type != "image":
+        result["active_parsers"] = _active_parser_health_status()
     scheduler_stats: dict[str, Any] = {}
     if scheduler:
         try:
@@ -13612,9 +13613,11 @@ async def health():
         result["flash_moe"] = _flash_moe_loader.stats()
 
     # JANG format: report cached quantization metadata (populated at load time)
-    if _jang_metadata:
+    if _jang_metadata and _model_type != "image":
         result["quantization_format"] = _jang_metadata
-    if _model_path or _model_name:
+    # Diffusion adapters publish their own loaded capabilities above. Text
+    # defaults/codec heuristics cannot infer diffusion precision or KV reuse.
+    if _model_type != "image" and (_model_path or _model_name):
         bundle_key = _model_path or _model_name
         result["quantization"] = _model_quantization_status(bundle_key)
         result["acceleration"] = _model_acceleration_status(bundle_key)
@@ -13626,7 +13629,7 @@ async def health():
         if routing_status:
             result["routing"] = routing_status
 
-    if _max_prompt_tokens > 0:
+    if _model_type != "image" and _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
 
     # Nemotron-3-Nano-Omni multimodal: surface bundle status + active backend.
@@ -13636,7 +13639,7 @@ async def health():
             OmniMultimodalDispatcher,
             omni_multimodal_component_status,
         )
-        _omni_path = _model_path or _model_name
+        _omni_path = (_model_path or _model_name) if _model_type != "image" else None
         _omni_status = (
             omni_multimodal_component_status(_omni_path) if _omni_path else {}
         )
@@ -13676,9 +13679,10 @@ async def health():
 
     # Volatile codec counters must not participate in the stable cache-topology
     # fingerprint. Keep them as a separate runtime observation surface.
-    result["cache_storage_runtime_telemetry"] = (
-        _cache_storage_runtime_telemetry()
-    )
+    if _model_type != "image":
+        result["cache_storage_runtime_telemetry"] = (
+            _cache_storage_runtime_telemetry()
+        )
     result["wake_in_progress"] = _wake_in_progress
     result["load_progress"] = _lifecycle_progress.snapshot()
 
