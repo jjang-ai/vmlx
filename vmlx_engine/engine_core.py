@@ -643,6 +643,24 @@ class EngineCore:
         if request is None or not RequestStatus.is_finished(request.status):
             self.scheduler.abort_request(request_id)
 
+    async def _wait_for_terminal_persistence(self, request_id: str) -> None:
+        """Public JSON and streaming results share the same completion fence.
+
+        Completion of this fence means cleanup settled, not that a store
+        succeeded. Keep the actual stored/skipped/failed outcome in the log.
+        """
+        started = time.perf_counter()
+        was_pending = not self._terminal_cleanup_complete.is_set()
+        await self._terminal_cleanup_complete.wait()
+        outcome = _PERSIST.take(request_id)
+        logger.info(
+            "Terminal durability barrier: request=%s wait_ms=%.3f waited=%s %s",
+            request_id,
+            (time.perf_counter() - started) * 1000.0,
+            "true" if was_pending else "false",
+            _format_persistence_outcome(outcome),
+        )
+
     async def stream_outputs(
         self,
         request_id: str,
@@ -690,20 +708,7 @@ class EngineCore:
                         # existing cleanup fence is durable: clients commonly
                         # execute a parsed tool as soon as finish_reason or
                         # response.completed arrives.
-                        _durability_wait_started = time.perf_counter()
-                        _durability_was_pending = (
-                            not self._terminal_cleanup_complete.is_set()
-                        )
-                        await self._terminal_cleanup_complete.wait()
-                        _outcome = _PERSIST.take(request_id)
-                        logger.info(
-                            "Terminal durability barrier: request=%s wait_ms=%.3f "
-                            "waited=%s %s",
-                            request_id,
-                            (time.perf_counter() - _durability_wait_started) * 1000.0,
-                            "true" if _durability_was_pending else "false",
-                            _format_persistence_outcome(_outcome),
-                        )
+                        await self._wait_for_terminal_persistence(request_id)
 
                     yield output
 
@@ -771,6 +776,11 @@ class EngineCore:
             if final_output is None:
                 raise RuntimeError(f"No output for request {request_id}")
 
+            # The finished event is internal dispatch, before deferred SSD/KV
+            # cleanup. A JSON tool response is just as actionable as a streamed
+            # terminal; never publish it or remove its collector ahead of the
+            # same fence used by stream_outputs.
+            await self._wait_for_terminal_persistence(request_id)
             return final_output
         finally:
             # Always clean up request state to prevent permanent leaks
