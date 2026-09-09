@@ -153,6 +153,31 @@ class TestImageSessionIdentity:
 # ---------------------------------------------------------------------------
 
 class TestImageGenRequestValidation:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("supported", [True, False])
+    async def test_negative_prompt_unsupported_is_reported(self, client, monkeypatch, supported):
+        import vmlx_engine.server as srv
+
+        engine = MagicMock()
+        engine.is_loaded = True
+        engine.model_name = "dev"
+        engine.capabilities.return_value = {"negative_prompt": supported}
+        engine.generate.return_value = SimpleNamespace(b64_json="AAAA", seed=17, job_id="test")
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_image_request_matches_current_model", lambda *a: True)
+        response = await client.post("/v1/images/generations", json={
+            "model": "dev", "prompt": "a cup", "negative_prompt": "letters", "seed": 17,
+        })
+        assert response.status_code == 200
+        if supported:
+            assert "warnings" not in response.json()
+        else:
+            assert response.json()["warnings"][0]["code"] == "image_parameter_unsupported"
+            assert response.json()["warnings"][0]["parameter"] == "negative_prompt"
+        assert response.json()["data"][0]["seed"] == 17
+
     """Test /v1/images/generations request body validation."""
 
     @pytest.mark.anyio

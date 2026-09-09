@@ -143,13 +143,28 @@ class TestImageCapabilities:
         return eng
 
     def test_generation_model_with_negative_prompt_and_img2img(self):
-        caps = self._engine("Flux1", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance", "image_path", "image_strength", "negative_prompt"]).capabilities()
+        caps = self._engine("QwenImage", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance", "image_path", "image_strength", "negative_prompt"]).capabilities()
         assert caps["mode"] == "generate" and caps["negative_prompt"] is True and caps["variation_strength"] is True
         assert caps["edit_strength"] is None and caps["mask"] == "none" and caps["count"] is True and caps["quantize"] == 8
 
     def test_klein_has_no_negative_prompt(self):
         caps = self._engine("Flux2Klein", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance"]).capabilities()
         assert caps["negative_prompt"] is False and caps["variation_strength"] is False
+
+    def test_flux_signature_does_not_claim_unused_negative_prompt(self):
+        caps = self._engine("Flux1", ["seed", "prompt", "negative_prompt", "image_path", "image_strength"]).capabilities()
+        assert caps["negative_prompt"] is False
+        assert caps["variation_strength"] is True
+
+    def test_installed_flux_negative_parameter_has_no_runtime_reads(self):
+        # Qualification pin: reassess the explicit adapter contract if upstream
+        # starts using the argument. A signature alone is not behavior proof.
+        import dis
+        flux = pytest.importorskip("mflux.models.flux.variants.txt2img.flux")
+        fn = flux.Flux1.generate_image
+        assert "negative_prompt" in fn.__code__.co_varnames
+        assert not any(i.opname.startswith("LOAD_") and i.argval == "negative_prompt"
+                       for i in dis.get_instructions(fn))
 
     def test_edit_classes_never_take_strength_and_fill_needs_a_mask(self):
         for mclass in ("QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"):

@@ -18420,6 +18420,15 @@ async def create_image(request: Request):
                     status_code=500, detail=f"Failed to load image model '{model}': {e}"
                 )
 
+        image_warnings = []
+        if (negative_prompt
+                and _image_gen.capabilities().get("negative_prompt") is False):
+            image_warnings.append({
+                "code": "image_parameter_unsupported",
+                "parameter": "negative_prompt",
+                "message": "negative_prompt is not used by the loaded image adapter.",
+            })
+
         # If source image provided (img2img), save to temp file for mflux
         source_image_path = None
         images = []
@@ -18482,6 +18491,7 @@ async def create_image(request: Request):
     return {
         "created": int(time.time()),
         "data": images,
+        **({"warnings": image_warnings} if image_warnings else {}),
         "usage": {
             "prompt_tokens": 0,
             "completion_tokens": 0,

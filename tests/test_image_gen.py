@@ -550,6 +550,15 @@ class TestGenerateParameters:
         call_kwargs = engine._model.generate_image.call_args
         assert call_kwargs.kwargs["negative_prompt"] == "ugly"
 
+    def test_flux_negative_prompt_is_not_logged_as_applied(self, caplog):
+        engine = self._setup_engine()
+        engine._mflux_class = "Flux1"
+        engine._get_generate_params = lambda: {"negative_prompt"}
+        with caplog.at_level("INFO"):
+            engine.generate("test", negative_prompt="ugly", seed=42)
+        assert "negative_prompt" not in engine._model.generate_image.call_args.kwargs
+        assert "negative_prompt=unsupported" in caplog.text
+
     def test_prompt_passed_through(self):
         engine = self._setup_engine()
         result = engine.generate("a cat in space", seed=42)

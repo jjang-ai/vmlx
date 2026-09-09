@@ -703,7 +703,7 @@ class ImageGenEngine:
         # model takes it (applied), the caller sent none (omitted), or the
         # model's generate signature has no such parameter (unsupported), in
         # which case it is dropped rather than silently "used".
-        negative_supported = 'negative_prompt' in self._get_generate_params()
+        negative_supported = self._supports_negative_prompt()
         negative_disposition = (
             "omitted" if not negative_prompt else ("applied" if negative_supported else "unsupported")
         )
@@ -918,8 +918,8 @@ class ImageGenEngine:
         generate signature. The UI and the API pages follow this instead of
         presenting every control as effective:
 
-        - negative_prompt: the model's generate_image takes one (Flux1,
-          QwenImage, QwenImageEdit do; Klein does not).
+        - negative_prompt: accepted and implemented by the adapter; Flux1's
+          compatibility argument is unused, unlike QwenImage/QwenImageEdit.
         - variation_strength: img2img strength on a generation model (the
           gallery's "Iterate"), i.e. generate_image takes image_strength.
         - edit_strength: strength on an edit model. False for every edit class
@@ -936,12 +936,20 @@ class ImageGenEngine:
             "mflux_class": mclass,
             "quantize": self._quantize,
             "mode": "edit" if is_edit else "generate",
-            "negative_prompt": "negative_prompt" in params,
+            "negative_prompt": self._supports_negative_prompt(),
             "variation_strength": (not is_edit) and "image_strength" in params,
             "edit_strength": False if is_edit else None,
             "mask": "required" if mclass == "Flux1Fill" else "none",
             "count": not is_edit,
         }
+
+    def _supports_negative_prompt(self) -> bool:
+        # mflux Flux1 (Dev and Schnell) exposes the parameter for interface
+        # compatibility but never reads it in its denoising/prompt path.
+        # Keep the semantic adapter contract explicit, qualified by a dependency
+        # test, rather than falsely advertising support from the signature.
+        return (self._mflux_class != "Flux1"
+                and "negative_prompt" in self._get_generate_params())
 
     def _get_generate_params(self) -> set[str]:
         """Get the parameter names of the model's generate_image method."""
