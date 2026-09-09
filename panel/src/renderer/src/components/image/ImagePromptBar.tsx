@@ -184,6 +184,7 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
           {showMaskPainter && sourceImage ? (
             <MaskPainter
               imageDataUrl={sourceImage.dataUrl}
+              initialMaskDataUrl={maskBase64}
               onConfirm={(mask) => { onMaskChange?.(mask); setShowMaskPainter(false) }}
               onCancel={() => setShowMaskPainter(false)}
             />

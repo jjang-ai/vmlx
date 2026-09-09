@@ -10,10 +10,13 @@ import {
   Square,
 } from "lucide-react";
 import { useTranslation } from "../../i18n";
+import { loadMaskPainterImages } from "../../../../shared/imageMaskDraft";
 
 interface MaskPainterProps {
   /** Source image as data URL */
   imageDataUrl: string;
+  /** Previously applied mask for this source; opening the editor must not discard it. */
+  initialMaskDataUrl?: string | null;
   /** Called when user confirms the mask. Returns mask as base64 PNG (white = edit area, black = keep) */
   onConfirm: (maskBase64: string) => void;
   /** Called when user cancels mask painting */
@@ -34,6 +37,7 @@ export function maskHasPaintedPixels(data: Uint8ClampedArray): boolean {
  */
 export function MaskPainter({
   imageDataUrl,
+  initialMaskDataUrl,
   onConfirm,
   onCancel,
 }: MaskPainterProps) {
@@ -48,45 +52,6 @@ export function MaskPainter({
   const [imageLoaded, setImageLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const lastPos = useRef<{ x: number; y: number } | null>(null);
-
-  // Load the source image
-  useEffect(() => {
-    const img = new Image();
-    img.onload = () => {
-      imgRef.current = img;
-      setImageLoaded(true);
-    };
-    img.src = imageDataUrl;
-  }, [imageDataUrl]);
-
-  // Initialize canvases when image loads
-  useEffect(() => {
-    if (!imageLoaded || !imgRef.current) return;
-    const canvas = canvasRef.current;
-    const maskCanvas = maskCanvasRef.current;
-    if (!canvas || !maskCanvas) return;
-
-    const img = imgRef.current;
-    // Scale to fit container while maintaining aspect ratio
-    const maxW = 640;
-    const maxH = 640;
-    const scale = Math.min(maxW / img.width, maxH / img.height, 1);
-    const w = Math.round(img.width * scale);
-    const h = Math.round(img.height * scale);
-
-    canvas.width = w;
-    canvas.height = h;
-    maskCanvas.width = img.width; // Full resolution for mask output
-    maskCanvas.height = img.height;
-
-    // Initialize mask canvas to black (keep everything)
-    const maskCtx = maskCanvas.getContext("2d")!;
-    maskCtx.fillStyle = "#000000";
-    maskCtx.fillRect(0, 0, img.width, img.height);
-    setMaskError(null);
-
-    redraw();
-  }, [imageLoaded]);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -143,6 +108,29 @@ export function MaskPainter({
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     ctx.globalCompositeOperation = "source-over";
   }, []);
+
+  useEffect(() => {
+    setImageLoaded(false);
+    setMaskError(null);
+    setDrawing(false);
+    return loadMaskPainterImages(imageDataUrl, initialMaskDataUrl, (img, mask) => {
+      const canvas = canvasRef.current;
+      const maskCanvas = maskCanvasRef.current;
+      if (!canvas || !maskCanvas) return;
+      imgRef.current = img;
+      const scale = Math.min(640 / img.width, 640 / img.height, 1);
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      maskCanvas.width = img.width;
+      maskCanvas.height = img.height;
+      const ctx = maskCanvas.getContext("2d")!;
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, img.width, img.height);
+      if (mask) ctx.drawImage(mask, 0, 0);
+      setImageLoaded(true);
+      redraw();
+    }, () => setMaskError("image.mask.loadError"));
+  }, [imageDataUrl, initialMaskDataUrl, redraw]);
 
   const getCanvasPos = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -230,6 +218,7 @@ export function MaskPainter({
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (!imageLoaded) return;
       setDrawing(true);
       const pos = getCanvasPos(e);
       lastPos.current = pos;
@@ -239,7 +228,7 @@ export function MaskPainter({
         paintAt(pos.x, pos.y);
       }
     },
-    [getCanvasPos, paintAt, tool],
+    [getCanvasPos, paintAt, tool, imageLoaded],
   );
 
   const handleMouseMove = useCallback(
@@ -285,6 +274,7 @@ export function MaskPainter({
   );
 
   const handleClear = useCallback(() => {
+    if (!imageLoaded) return;
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
     const ctx = maskCanvas.getContext("2d")!;
@@ -292,25 +282,26 @@ export function MaskPainter({
     ctx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
     setMaskError(null);
     redraw();
-  }, [redraw]);
+  }, [redraw, imageLoaded]);
 
   const handleConfirm = useCallback(() => {
+    if (!imageLoaded) return;
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
     const maskCtx = maskCanvas.getContext("2d");
     if (!maskCtx) return;
     const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
     if (!maskHasPaintedPixels(maskData.data)) {
-      setMaskError(t("image.mask.emptyError"));
+      setMaskError("image.mask.emptyError");
       return;
     }
     // Export mask as PNG base64
     const dataUrl = maskCanvas.toDataURL("image/png");
     onConfirm(dataUrl);
-  }, [onConfirm, t]);
+  }, [onConfirm, imageLoaded]);
 
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-3" data-vmlx-mask-state={imageLoaded ? "ready" : maskError ? "error" : "loading"}>
       {/* Toolbar */}
       <div className="flex items-center gap-2 bg-muted rounded-lg px-3 py-1.5">
         <button
@@ -373,6 +364,8 @@ export function MaskPainter({
 
         <button
           onClick={handleConfirm}
+          disabled={!imageLoaded}
+          data-vmlx-control="image-mask-apply"
           className="px-3 py-1 bg-primary text-primary-foreground rounded text-xs font-medium flex items-center gap-1"
           title={t('image.mask.applyTitle')}
         >
@@ -380,6 +373,7 @@ export function MaskPainter({
         </button>
         <button
           onClick={onCancel}
+          data-vmlx-control="image-mask-cancel"
           className="px-2 py-1 text-muted-foreground hover:text-destructive rounded text-xs"
           title={t('image.mask.cancelTitle')}
         >
@@ -392,7 +386,7 @@ export function MaskPainter({
         {t('image.mask.helpText')}
       </p>
       {maskError && (
-        <p className="text-[10px] text-destructive">{maskError}</p>
+        <p className="text-[10px] text-destructive">{t(maskError)}</p>
       )}
 
       {/* Canvas */}

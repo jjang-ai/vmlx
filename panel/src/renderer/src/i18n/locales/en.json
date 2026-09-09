@@ -1937,6 +1937,7 @@
       "applyTitle": "Apply mask and edit",
       "cancelTitle": "Cancel mask painting",
       "emptyError": "Paint or draw a mask area before applying.",
+      "loadError": "The source image or saved mask could not be restored. Cancel and select the source again; the saved mask has not been changed.",
       "apply": "Apply",
       "helpText": "Paint over areas you want to edit (shown in red). The model will fill/replace only the painted areas."
     },

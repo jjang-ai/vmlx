@@ -1937,6 +1937,7 @@
       "applyTitle": "Aplicar máscara y editar",
       "cancelTitle": "Cancelar el pintado de la máscara",
       "emptyError": "Pinte o dibuje un área de máscara antes de aplicar.",
+      "loadError": "No se pudo restaurar la imagen de origen o la máscara guardada. Cancele y seleccione el origen de nuevo; la máscara guardada no se ha modificado.",
       "apply": "Aplicar",
       "helpText": "Pinta sobre las áreas que quieras editar (se muestran en rojo). El modelo solo rellenará/reemplazará las áreas pintadas."
     },

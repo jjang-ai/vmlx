@@ -183,7 +183,7 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(maskHasPaintedPixels(empty)).toBe(false);
     expect(maskHasPaintedPixels(painted)).toBe(true);
     expect(src).toContain("maskHasPaintedPixels(maskData.data)");
-    expect(src).toContain('t("image.mask.emptyError")');
-    expect(src).toContain("}, [onConfirm, t])");
+    expect(src).toContain('setMaskError("image.mask.emptyError")');
+    expect(src).toContain("}, [onConfirm, imageLoaded])");
   });
 });
