@@ -1,50 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Zap, Sparkles, Gauge, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
+import { FolderOpen, Play, Download } from 'lucide-react'
 import { canLaunchInspectedImageFolder } from '../../../../shared/imageFolderLaunch'
-import { IMAGE_MODELS } from '../../../../shared/imageModels'
 import type { inspectLocalImageModel } from '../../../../shared/imageLocalModel'
+import { IMAGE_MODEL_DISCOVERY_NAVIGATION } from '../../../../shared/modelDiscoveryNavigation'
 import { useTranslation } from '../../i18n'
-import {
-  isImageDownloadEventForActive,
-  type ActiveImageDownload,
-  type ImageDownloadState,
-} from './imageDownloadEvents'
-
-// Map model IDs to icons (icons are React components, can't live in the shared registry)
-const MODEL_ICONS: Record<string, typeof Zap> = {
-  'schnell': Zap,
-  'z-image-turbo': Gauge,
-  'dev': Sparkles,
-  'qwen-image-edit': Pencil,
-}
-
-// Build NAMED_MODELS from the shared registry + icons
-// Renderer-side i18n for the shared image-model registry. The registry in
-// src/shared/imageModels.ts stays English (it feeds non-localized main-process
-// surfaces); the picker resolves a per-model key and falls back to the shared
-// desc so an unmapped model still renders.
-const MODEL_DESC_KEYS: Record<string, string> = {
-  'schnell': 'image.picker.descSchnell',
-  'z-image-turbo': 'image.picker.descZImageTurbo',
-  'dev': 'image.picker.descDev',
-  'klein-4b': 'image.picker.descKlein4b',
-  'klein-9b': 'image.picker.descKlein9b',
-  'qwen-image': 'image.picker.descQwenImage',
-  'qwen-image-edit': 'image.picker.descQwenImageEdit',
-  'kontext': 'image.picker.descKontext',
-  'fill': 'image.picker.descFill',
-}
-
-const NAMED_MODELS = IMAGE_MODELS.map(m => ({
-  ...m,
-  icon: MODEL_ICONS[m.id] || Zap,
-}))
-
-const QUANTIZE_OPTIONS = [
-  { value: 4, label: '4-bit', descKey: 'image.picker.quant4Desc' },
-  { value: 8, label: '8-bit', descKey: 'image.picker.quant8Desc' },
-  { value: 0, labelKey: 'image.topbar.quantFull', descKey: 'image.picker.quantFullDesc' },
-]
 
 export interface ImageServerSettings {
   host: string
@@ -64,14 +23,11 @@ interface ImageModelPickerProps {
 
 export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: ImageModelPickerProps) {
   const { t } = useTranslation()
-  const [selectedModel, setSelectedModel] = useState<string | null>(null)
-  const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
   const [customPath, setCustomPath] = useState('')
   const [customCategory, setCustomCategory] = useState<'' | 'generate' | 'edit'>('')
   const [customMfluxClass, setCustomMfluxClass] = useState('')
   const [localPreview, setLocalPreview] = useState<ReturnType<typeof inspectLocalImageModel> | null>(null)
   const [inspecting, setInspecting] = useState(false)
-  const [showCustom, setShowCustom] = useState(true)
   const [previewInput, setPreviewInput] = useState('')
 
   const chooseCustomPath = (path: string) => {
@@ -92,7 +48,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
 
   useEffect(() => {
     setLocalPreview(null)
-    if (!showCustom || !customPath.trim()) { setInspecting(false); return }
+    if (!customPath.trim()) { setInspecting(false); return }
     let cancelled = false
     setInspecting(true)
     const timer = setTimeout(() => {
@@ -103,7 +59,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
       }).finally(() => { if (!cancelled) setInspecting(false) })
     }, 250)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [showCustom, customPath])
+  }, [customPath])
 
   // Server settings (same as Server tab CreateSession simplified config)
   const [serverHost, setServerHost] = useState('127.0.0.1')
@@ -111,166 +67,14 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
   const [serverApiKey, setServerApiKey] = useState('')
   const [serverLogLevel, setServerLogLevel] = useState('INFO')
 
-  // Download state
-  const [downloadState, setDownloadState] = useState<ImageDownloadState>('idle')
-  const [downloadProgress, setDownloadProgress] = useState<any>(null)
-  const [downloadError, setDownloadError] = useState<string | null>(null)
-  const [modelAvailability, setModelAvailability] = useState<Record<string, boolean>>({})
-  const [modelMissing, setModelMissing] = useState<Record<string, string[]>>({})
-  const [hasHfToken, setHasHfToken] = useState(false)
-  const [activeDownload, setActiveDownload] = useState<ActiveImageDownload | null>(null)
-
-  // Check HF token and in-progress downloads on mount
-  useEffect(() => {
-    window.api.settings.has('hf_api_key').then((exists: boolean) => {
-      setHasHfToken(exists)
-    })
-    // Recover state if a download is already in progress (e.g., user navigated away and back)
-    window.api.models.getDownloadStatus().then((status: any) => {
-      if (status.active) {
-        setDownloadState('downloading')
-        if (status.active.jobId && status.active.imageModelName != null) {
-          setActiveDownload({
-            jobId: status.active.jobId,
-            model: status.active.imageModelName,
-            quantize: Number(status.active.imageQuantize ?? selectedQuantize),
-          })
-        }
-        if (status.active.progress) setDownloadProgress(status.active.progress)
-      }
-    }).catch(() => {})
-  }, [])
-
-  // Check model availability when selection or quantize changes
-  useEffect(() => {
-    if (!selectedModel || showCustom) return
-    const key = `${selectedModel}-${selectedQuantize}`
-    if (modelAvailability[key] !== undefined) return
-
-    setDownloadState('checking')
-    window.api.models.checkImageModel(selectedModel, selectedQuantize)
-      .then((result: any) => {
-        setModelAvailability(prev => ({ ...prev, [key]: result.available }))
-        if (result.missing && result.missing.length > 0) {
-          setModelMissing(prev => ({ ...prev, [key]: result.missing }))
-        }
-        setDownloadState(result.available ? 'ready' : 'idle')
-      })
-      .catch(() => {
-        setDownloadState('idle')
-      })
-  }, [selectedModel, selectedQuantize, showCustom])
-
-  // Listen for download progress
-  useEffect(() => {
-    const isActiveDownloadEvent = (data: any) =>
-      isImageDownloadEventForActive(data, activeDownload, downloadState)
-    const activeModel = activeDownload?.model ?? selectedModel
-    const activeQuantize = activeDownload?.quantize ?? selectedQuantize
-    const unsubProgress = window.api.models.onDownloadProgress((data: any) => {
-      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
-        setDownloadProgress(data.progress)
-      }
-    })
-    const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
-      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
-        if (data.status === 'complete') {
-          const finish = async () => {
-            setDownloadProgress(null)
-            if (!activeModel) {
-              setDownloadState('ready')
-              setActiveDownload(null)
-              return
-            }
-            const key = `${activeModel}-${activeQuantize}`
-            const result = await window.api.models.checkImageModel(activeModel, activeQuantize)
-            setModelAvailability(prev => ({ ...prev, [key]: !!result.available }))
-            const missing = Array.isArray(result.missing) ? result.missing as string[] : []
-            if (missing.length > 0) {
-              setModelMissing(prev => ({ ...prev, [key]: missing }))
-              setDownloadError(t('image.picker.incompleteAfterDownload', { missing: missing.join(', ') }))
-              setDownloadState('error')
-              return
-            }
-            setModelMissing(prev => {
-              return Object.fromEntries(
-                Object.entries(prev).filter(([k]) => k !== key),
-              ) as Record<string, string[]>
-            })
-            setDownloadState(result.available ? 'ready' : 'idle')
-            setActiveDownload(null)
-          }
-          finish().catch((err) => {
-            setDownloadError((err as Error).message)
-            setDownloadState('error')
-            setDownloadProgress(null)
-            setActiveDownload(null)
-          })
-        } else if (data.status === 'cancelled') {
-          setDownloadProgress(null)
-          setDownloadState('idle')
-          setActiveDownload(null)
-        }
-      }
-    })
-    const unsubError = window.api.models.onDownloadError((data: any) => {
-      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
-        const errMsg = data.error || t('image.picker.downloadFailed')
-        const isGated = data.gated
-        if (isGated) {
-          setDownloadError(t('image.picker.gatedTokenRequired'))
-        } else {
-          setDownloadError(errMsg)
-        }
-        setDownloadState('error')
-        setDownloadProgress(null)
-        setActiveDownload(null)
-      }
-    })
-    return () => {
-      unsubProgress()
-      unsubComplete()
-      unsubError()
-    }
-  }, [activeDownload, downloadState, selectedModel, selectedQuantize])
-
-  const handleDownload = async () => {
-    if (!selectedModel) return
-    setDownloadState('downloading')
-    setDownloadError(null)
-    setDownloadProgress(null)
-
-    try {
-      const result = await window.api.models.downloadImageModel(selectedModel, selectedQuantize)
-      if (result.jobId) {
-        setActiveDownload({
-          jobId: result.jobId,
-          model: selectedModel,
-          quantize: selectedQuantize,
-        })
-      }
-      if (result.status === 'already_downloaded') {
-        setDownloadState('ready')
-        setActiveDownload(null)
-        const key = `${selectedModel}-${selectedQuantize}`
-        setModelAvailability(prev => ({ ...prev, [key]: true }))
-      }
-      // Otherwise, download events will update state
-    } catch (err) {
-      setDownloadError((err as Error).message)
-      setDownloadState('error')
-    }
-  }
 
   const handleStart = () => {
-    const settings: ImageServerSettings = { host: serverHost, port: serverPort, apiKey: serverApiKey, logLevel: serverLogLevel }
-    if (showCustom && customPath.trim()) {
-      if (!canLoadFolder || !localPreview?.success) return
-      onSelect(localPreview.path, localPreview.quantize, customCategory || localPreview.model?.category, { ...settings, mfluxClass: customMfluxClass || undefined })
-    } else if (selectedModel) {
-      const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
-      onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate', settings)
+    if (!canLoadFolder || !localPreview?.success) return
+    const settings: ImageServerSettings = {
+      host: serverHost, port: serverPort, apiKey: serverApiKey,
+      logLevel: serverLogLevel, mfluxClass: customMfluxClass || undefined,
     }
+    onSelect(localPreview.path, localPreview.quantize, customCategory || localPreview.model?.category, settings)
   }
 
   const handleBrowse = async () => {
@@ -280,164 +84,33 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
     } catch {}
   }
 
-  // Get allowed quantize options for the selected model
-  const selectedModelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
-  const allowedQuantize = selectedModelInfo?.quantizeOptions || [4, 8, 0]
-  const filteredQuantizeOptions = QUANTIZE_OPTIONS.filter(opt => allowedQuantize.includes(opt.value))
-
-  const isModelAvailable = selectedModel
-    ? modelAvailability[`${selectedModel}-${selectedQuantize}`]
-    : false
-
-  const missingComponents = selectedModel
-    ? modelMissing[`${selectedModel}-${selectedQuantize}`]
-    : undefined
-
   return (
     <div data-vmlx-section="image-model-picker" className="h-full min-h-0 min-w-0 overflow-auto p-4 sm:p-8">
       <div className="max-w-3xl w-full mx-auto space-y-6">
-        {/* Header */}
         <div className="text-center">
           <h2 className="text-2xl font-bold mb-2">{t('image.picker.chooseFolderTitle')}</h2>
-          <p className="text-sm text-muted-foreground">
-            {showCustom ? t('image.picker.folderFirstIntro') : t('image.picker.chooseModelBelow')}
-            {!showCustom && !hasHfToken && (
-              <span className="text-warning"> {t('image.picker.noHfTokenWarning')}</span>
-            )}
-          </p>
+          <p className="text-sm text-muted-foreground">{t('image.picker.folderFirstIntro')}</p>
           {currentModel && onKeepCurrent && (
-            <button
-              type="button"
-              onClick={onKeepCurrent}
-              data-vmlx-control="image-keep-current-model"
-              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-sm hover:bg-accent transition-colors"
-            >
+            <button type="button" onClick={onKeepCurrent} data-vmlx-control="image-keep-current-model"
+              className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 border border-border text-sm hover:bg-accent">
               {t('image.picker.keepCurrent', { model: currentModel })}
             </button>
           )}
-
           <p data-vmlx-status="mflux-compatibility" className="mt-3 text-xs text-muted-foreground">
             {t('image.picker.mfluxCompatibility')}
           </p>
-
         </div>
-
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t('image.picker.chooseFolderTitle')}>
-          <button type="button" data-vmlx-control="image-source-folder" aria-pressed={showCustom}
-            onClick={() => { setShowCustom(true); setSelectedModel(null); setDownloadError(null) }}
-            className={`px-3 py-2 border text-sm ${showCustom ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
-            <FolderOpen className="inline h-4 w-4 mr-2" />{t('image.picker.folderTab')}
-          </button>
-          <button type="button" data-vmlx-control="image-source-catalog" aria-pressed={!showCustom}
-            onClick={() => { setShowCustom(false); setDownloadError(null) }}
-            className={`px-3 py-2 border text-sm ${!showCustom ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
-            <Download className="inline h-4 w-4 mr-2" />{t('image.picker.modelCatalog')}
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-border p-4">
+          <p className="text-sm text-muted-foreground">{t('image.picker.findMfluxHelp')}</p>
+          <button type="button" data-vmlx-control="image-source-catalog"
+            onClick={() => window.dispatchEvent(new CustomEvent('vmlx:navigate', { detail: IMAGE_MODEL_DISCOVERY_NAVIGATION }))}
+            className="inline-flex shrink-0 items-center gap-2 px-3 py-2 border border-border text-sm hover:bg-accent">
+            <Download className="h-4 w-4" />{t('image.picker.findMfluxModels')}
           </button>
         </div>
-
-        {!showCustom && (<>
-        {/* Generation Models */}
-        <div>
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">{t('image.picker.imageGeneration')}</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {NAMED_MODELS.filter(m => m.category === 'generate').map((model) => {
-            const Icon = model.icon
-            const isSelected = selectedModel === model.id && !showCustom
-            const key = `${model.id}-${selectedQuantize}`
-            const available = modelAvailability[key]
-            return (
-              <button
-                key={model.id}
-                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null); if (!model.quantizeOptions.includes(selectedQuantize)) setSelectedQuantize(model.quantizeOptions[0]) }}
-                className={`text-left p-4 border rounded-lg transition-all ${
-                  isSelected
-                    ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
-                    : 'border-border hover:border-primary/40 hover:bg-accent/30'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    isSelected ? 'bg-primary/20' : 'bg-muted'
-                  }`}>
-                    <Icon className={`h-4 w-4 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <h3 className="font-semibold text-sm">{model.name}</h3>
-                      {available === true && (
-                        <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">{MODEL_DESC_KEYS[model.id] ? t(MODEL_DESC_KEYS[model.id]) : model.desc}</p>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
-                      <span>{model.steps} steps</span>
-                      <span>·</span>
-                      <span>{model.size}</span>
-                      {available === true && <span className="text-green-500">· Downloaded</span>}
-                    </div>
-                  </div>
-                </div>
-              </button>
-            )
-          })}
-          </div>
-        </div>
-
-        {/* Image Editing Models */}
-        <div>
-          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">{t('image.picker.imageEditing')}</h3>
-          <p className="text-[11px] text-muted-foreground mb-2">{t('image.picker.editModelsIntro')}</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {NAMED_MODELS.filter(m => m.category === 'edit').map((model) => {
-            const Icon = model.icon
-            const isSelected = selectedModel === model.id && !showCustom
-            const key = `${model.id}-${selectedQuantize}`
-            const available = modelAvailability[key]
-            return (
-              <button
-                key={model.id}
-                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null); if (!model.quantizeOptions.includes(selectedQuantize)) setSelectedQuantize(model.quantizeOptions[0]) }}
-                className={`text-left p-4 border rounded-lg transition-all ${
-                  isSelected
-                    ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
-                    : 'border-border hover:border-violet-500/40 hover:bg-accent/30'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    isSelected ? 'bg-violet-500/20' : 'bg-muted'
-                  }`}>
-                    <Icon className={`h-4 w-4 ${isSelected ? 'text-violet-400' : 'text-muted-foreground'}`} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <h3 className="font-semibold text-sm">{model.name}</h3>
-                      {available === true && (
-                        <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-0.5">{MODEL_DESC_KEYS[model.id] ? t(MODEL_DESC_KEYS[model.id]) : model.desc}</p>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
-                      <span>{model.steps} steps</span>
-                      <span>·</span>
-                      <span>{model.size}</span>
-                      {available === true && <span className="text-green-500">· Downloaded</span>}
-                    </div>
-                  </div>
-                </div>
-              </button>
-            )
-          })}
-          </div>
-        </div>
-
-
-        </>)}
-
         {/* Custom Model */}
-        {showCustom && <div className="border border-border p-4 min-w-0" data-vmlx-section="image-folder-selection">
+        <div className="border border-border p-4 min-w-0" data-vmlx-section="image-folder-selection">
           <h3 className="text-sm font-medium">{t('image.picker.folderTab')}</h3>
-          {showCustom && (
             <div className="mt-3 space-y-2">
               <div className="flex gap-2">
                 <input
@@ -504,110 +177,11 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                 ) : localPreview?.error}
               </div>
             </div>
-          )}
-        </div>}
+        </div>
 
-        {/* Download Progress / Error */}
-        {downloadState === 'downloading' && downloadProgress && (
-          <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
-            <div className="flex items-center gap-2 text-sm">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span className="font-medium">{t('image.picker.downloadingModel')}</span>
-              {downloadProgress.percent != null && (
-                <span className="text-muted-foreground">{downloadProgress.percent}%</span>
-              )}
-              {downloadProgress.speed && (
-                <span className="text-muted-foreground">{downloadProgress.speed}</span>
-              )}
-              {downloadProgress.eta && (
-                <span className="text-muted-foreground">ETA {downloadProgress.eta}</span>
-              )}
-            </div>
-            {downloadProgress.percent != null && (
-              <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min(downloadProgress.percent, 100)}%` }}
-                />
-              </div>
-            )}
-            {downloadProgress.currentFile && (
-              <p className="text-[10px] text-muted-foreground mt-1 truncate">{downloadProgress.currentFile}</p>
-            )}
-          </div>
-        )}
 
-        {downloadState === 'downloading' && !downloadProgress && (
-          <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg flex items-center gap-2 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            <span>{t('image.picker.startingDownload')}</span>
-          </div>
-        )}
-
-        {downloadError && (
-          <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
-            <div className="flex items-start gap-2 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium">{t('image.picker.downloadFailed')}</p>
-                <p className="text-xs mt-1">{downloadError}</p>
-                {!hasHfToken && (
-                  <p className="text-xs mt-2">
-                    {t('image.picker.addHfToken')} <strong>{t('image.picker.serverTabDownloadStrong')}</strong> {t('image.picker.sectionSuffix')}{' '}
-                    <a
-                      href="https://huggingface.co/settings/tokens"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline"
-                    >
-                      {t('image.picker.getTokenHere')}
-                    </a>
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Incomplete model warning — model has some weights but is missing required components */}
-        {!isModelAvailable && missingComponents && missingComponents.length > 0 && downloadState !== 'downloading' && (
-          <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-            <div className="flex items-start gap-2 text-sm text-yellow-600 dark:text-yellow-400">
-              <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium">{t('image.picker.incompleteDownload')}</p>
-                <p className="text-xs mt-1">
-                  {t('image.picker.missingComponents')} <strong>{missingComponents.join(', ')}</strong>.
-                  {' '}{t('image.picker.redownloadHint')}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Quantize + Action Buttons */}
-        {(selectedModel || (showCustom && customPath.trim())) && (
+        {customPath.trim() && (
           <div className="flex flex-wrap items-end gap-4 p-4 bg-card border border-border">
-            <div className="flex-1">
-              <label className="text-xs text-muted-foreground block mb-1.5">{t('image.picker.quantization')}</label>
-              <div className="flex gap-1.5">
-                {showCustom ? <p className="text-xs text-muted-foreground">{t('image.picker.folderPrecision')}</p> : filteredQuantizeOptions.map(opt => (
-                  <button
-                    key={opt.value}
-                onClick={() => { setSelectedQuantize(opt.value); setDownloadState('idle'); setDownloadError(null) }}
-                    className={`flex-1 px-3 py-1.5 text-xs rounded transition-colors ${
-                      selectedQuantize === opt.value
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                    }`}
-                  >
-                    <span className="font-medium">{'labelKey' in opt && opt.labelKey ? t(opt.labelKey) : opt.label}</span>
-                    <span className="block text-[10px] opacity-75 mt-0.5">{t(opt.descKey)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Server Settings */}
             <div className="flex-1 min-w-[200px]">
               <label className="text-xs text-muted-foreground block mb-1.5">{t('image.picker.serverSettings')}</label>
@@ -640,73 +214,13 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
               </div>
             </div>
 
-            {/* Show Download or Start button based on availability */}
-            {showCustom ? (
-              <button
-                onClick={handleStart}
-                disabled={!canLoadFolder}
-                data-vmlx-control="image-load-folder"
-                className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 flex items-center gap-2 font-medium text-sm"
-              >
-                <Play className="h-4 w-4" />
-                {t('image.picker.loadFolder')}
-              </button>
-            ) : isModelAvailable || downloadState === 'ready' ? (
-              <button
-                onClick={handleStart}
-                className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 flex items-center gap-2 font-medium text-sm"
-              >
-                <Play className="h-4 w-4" />
-                {t('image.picker.startServer')}
-              </button>
-            ) : downloadState === 'downloading' ? (
-              <button
-                disabled
-                className="px-6 py-3 bg-muted text-muted-foreground rounded-lg flex items-center gap-2 font-medium text-sm opacity-60"
-              >
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Downloading...
-              </button>
-            ) : downloadState === 'checking' ? (
-              <button
-                disabled
-                className="px-6 py-3 bg-muted text-muted-foreground rounded-lg flex items-center gap-2 font-medium text-sm opacity-60"
-              >
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {t('image.picker.checkingButton')}
-              </button>
-            ) : (
-              <button
-                onClick={handleDownload}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 font-medium text-sm"
-              >
-                <Download className="h-4 w-4" />
-                {t('sessions.create.download')}
-              </button>
-            )}
+
+            <button onClick={handleStart} disabled={!canLoadFolder} data-vmlx-control="image-load-folder"
+              className="px-6 py-3 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2 font-medium text-sm disabled:opacity-50">
+              <Play className="h-4 w-4" />{t('image.picker.loadFolder')}
+            </button>
           </div>
         )}
-
-        {/* View Downloads + Info */}
-        {!showCustom && (<>
-        <div className="flex justify-center mb-2">
-          <button
-            onClick={() => window.dispatchEvent(new Event('open-download-popup'))}
-            className="text-[11px] px-2 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-          >
-            {t('image.picker.viewDownloads')}
-          </button>
-        </div>
-        <p className="text-[11px] text-muted-foreground text-center">
-          {t('image.picker.downloadNote')}
-          {!hasHfToken && (
-            <span>
-              {' '}{t('image.picker.youMayNeedTo')} <a href="https://huggingface.co/settings/tokens" className="underline" target="_blank" rel="noopener">{t('image.picker.setHfTokenLink')}</a> {t('image.picker.andAcceptThe')}{' '}
-              <a href="https://huggingface.co/black-forest-labs/FLUX.1-schnell" className="underline" target="_blank" rel="noopener">{t('image.picker.fluxLicense')}</a>.
-            </span>
-          )}
-        </p>
-        </>)}
       </div>
     </div>
   )

@@ -25,6 +25,7 @@ import { ModelConverter } from './components/tools/ModelConverter'
 import { ApiDashboard } from './components/api/ApiDashboard'
 import { ImageTab } from './components/image/ImageTab'
 import { isImageSession, sessionMatchesModelPath } from '../../shared/sessionUtils'
+import { resolveDownloadModelType, type DownloadModelType } from '../../shared/modelDiscoveryNavigation'
 import { useTranslation, LOCALES, LOCALE_NAMES, LOCALE_FLAGS } from './i18n'
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
   const [setupDone, setSetupDone] = useState(false)
   const [checkingSetup, setCheckingSetup] = useState(true)
   const [creatingChatSession, setCreatingChatSession] = useState(false)
+  const [downloadModelType, setDownloadModelType] = useState<DownloadModelType>('text')
   const [chatCreationError, setChatCreationError] = useState<string | null>(null)
   const { state, dispatch, setMode, openChat } = useAppState()
   const { sessions: allSessions } = useSessionsContext()
@@ -58,6 +60,9 @@ function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
+      if (detail?.mode === 'models') {
+        setDownloadModelType(resolveDownloadModelType(detail.downloadModelType))
+      }
       if (detail?.mode === 'chat' && detail?.panel === 'create') {
         setMode('chat')
         setCreatingChatSession(true)
@@ -284,7 +289,7 @@ function App() {
             )}
             {state.mode === 'models' && (
               <div className="h-full overflow-auto p-4">
-                <DownloadTab onDownloadComplete={() => {
+                <DownloadTab initialModelType={downloadModelType} onDownloadComplete={() => {
                   // Downloads remain main-process jobs. No automatic load or
                   // route switch when a background transfer finishes.
                   window.dispatchEvent(new CustomEvent('vmlx:models-changed'))

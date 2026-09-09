@@ -3,6 +3,7 @@ import { useToast } from '../Toast'
 import { normalizeHfEndpointSetting } from '../../../../shared/hfSettings'
 import { HF_MODEL_FEED_AUTHORS, type HfModelFeedSort } from '../../../../shared/hfModelFeed'
 import { useTranslation } from '../../i18n'
+import type { DownloadModelType } from '../../../../shared/modelDiscoveryNavigation'
 
 interface HFModel {
   id: string
@@ -19,6 +20,7 @@ interface HFModel {
 
 interface DownloadTabProps {
   onDownloadComplete: () => void
+  initialModelType?: DownloadModelType
 }
 
 function formatNumber(n: number): string {
@@ -41,11 +43,11 @@ function timeAgo(dateStr: string | null | undefined, t: (key: string, params?: R
 
 type CollectionTab = 'jang' | 'uncensored'
 
-export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
+export function DownloadTab({ onDownloadComplete, initialModelType = 'text' }: DownloadTabProps) {
   const { t } = useTranslation()
   const { showToast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
-  const [modelType, setModelType] = useState<'text' | 'image'>('text')
+  const [modelType, setModelType] = useState<DownloadModelType>(initialModelType)
   const [sortBy, setSortBy] = useState<string>('downloads')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [searchResults, setSearchResults] = useState<HFModel[]>([])

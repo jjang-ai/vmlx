@@ -1,20 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { isImageDownloadEventForActive } from "../src/renderer/src/components/image/imageDownloadEvents";
 
 const MODELS_TS = join(__dirname, "..", "src", "main", "ipc", "models.ts");
 const IMAGE_TS = join(__dirname, "..", "src", "main", "ipc", "image.ts");
-const IMAGE_DOWNLOAD_EVENTS_TS = join(
-  __dirname,
-  "..",
-  "src",
-  "renderer",
-  "src",
-  "components",
-  "image",
-  "imageDownloadEvents.ts",
-);
 const CODE_SNIPPETS_TSX = join(
   __dirname,
   "..",
@@ -64,54 +53,12 @@ describe("image model autodetection path", () => {
     expect(src).toContain("imageQuantize: quantize");
   });
 
-  it("image picker ignores completion events for a different download job", () => {
-    const src = readFileSync(
-      join(
-        __dirname,
-        "..",
-        "src",
-        "renderer",
-        "src",
-        "components",
-        "image",
-        "ImageModelPicker.tsx",
-      ),
-      "utf-8",
-    );
-    const eventSrc = readFileSync(IMAGE_DOWNLOAD_EVENTS_TS, "utf-8");
-    expect(src).toContain("activeDownload");
-    expect(src).toContain("isActiveDownloadEvent");
-    expect(eventSrc).toContain("data.jobId !== activeDownload.jobId");
-    expect(eventSrc).toContain("data.imageModelName !== activeDownload.model");
-    expect(eventSrc).toContain("Number(data.imageQuantize) !== activeDownload.quantize");
-    expect(src).toContain("setActiveDownload(null)");
-  });
-
-  it("image download event matching is scoped to the active job identity", () => {
-    const active = { jobId: "job-a", model: "schnell", quantize: 4 };
-
-    expect(
-      isImageDownloadEventForActive(
-        { jobId: "job-a", imageModelName: "schnell", imageQuantize: 4 },
-        active,
-        "downloading",
-      ),
-    ).toBe(true);
-    expect(
-      isImageDownloadEventForActive(
-        { jobId: "job-b", imageModelName: "schnell", imageQuantize: 4 },
-        active,
-        "downloading",
-      ),
-    ).toBe(false);
-    expect(
-      isImageDownloadEventForActive(
-        { jobId: "job-a", imageModelName: "z-image-turbo", imageQuantize: 4 },
-        active,
-        "downloading",
-      ),
-    ).toBe(false);
-    expect(isImageDownloadEventForActive({ jobId: "job-a" }, null, "idle")).toBe(false);
+  it("image picker delegates download jobs to Models instead of maintaining a second download lifecycle", () => {
+    const src = readFileSync(join(__dirname, "../src/renderer/src/components/image/ImageModelPicker.tsx"), "utf-8");
+    expect(src).toContain("IMAGE_MODEL_DISCOVERY_NAVIGATION");
+    expect(src).not.toContain("onDownloadComplete(");
+    expect(src).not.toContain("onDownloadProgress(");
+    expect(src).not.toContain("downloadImageModel(");
   });
 
   it("download availability check registers manually downloaded registry repos from disk", () => {
