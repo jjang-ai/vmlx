@@ -75,6 +75,34 @@ class TestBase64Import:
 
 class TestImageSessionIdentity:
     @pytest.mark.anyio
+    @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "dev")])
+    @pytest.mark.parametrize("guidance", [None, 0.0, 4.25])
+    async def test_guidance_omission_is_resolved_after_model_selection(self, client, monkeypatch, lane, canonical, guidance):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        output = SimpleNamespace(b64_json="AAAA", seed=42)
+        engine = SimpleNamespace(is_loaded=True, model_name=canonical,
+                                 _model_path="/test/image", _mflux_class="QwenImageEdit" if lane == "edits" else "Flux1",
+                                 edit=MagicMock(return_value=output), generate=MagicMock(return_value=output))
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_path", "/test/image")
+        monkeypatch.setattr(srv, "_model_name", canonical)
+        monkeypatch.setattr(srv, "_served_model_name", canonical)
+        source = io.BytesIO()
+        Image.new("RGB", (64, 64)).save(source, format="PNG")
+        body = dict(model=canonical, prompt="test", size="64x64", steps=1,
+                    image=base64.b64encode(source.getvalue()).decode())
+        if guidance is not None:
+            body["guidance"] = guidance
+        response = await client.post(f"/v1/images/{lane}", json=body)
+        assert response.status_code == 200, response.text
+        fn = engine.edit if lane == "edits" else engine.generate
+        assert fn.call_args.kwargs["guidance"] == guidance
+
+    @pytest.mark.anyio
     @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "schnell")])
     @pytest.mark.parametrize("alias", ["canonical", "folder", "served", "basename"])
     @pytest.mark.parametrize("loaded", [True, False])

@@ -252,7 +252,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
 
 /** Look up a model definition by its canonical ID */
 export function getImageModel(id: string): ImageModelDef | undefined {
-  return IMAGE_MODELS.find(m => m.id === id)
+  return IMAGE_MODELS.find(m => m.id === id || m.mfluxName === id)
 }
 
 /**

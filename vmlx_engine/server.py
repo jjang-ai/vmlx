@@ -18337,8 +18337,9 @@ async def create_image(request: Request):
     negative_prompt = body.get("negative_prompt")
     model_path = body.get("model_path")  # Custom local model path
 
-    # Guidance scale
-    guidance = body.get("guidance", 3.5)
+    # Omitted guidance is resolved by the loaded image adapter's canonical
+    # product preset, not a universal Flux-like value. Explicit zero survives.
+    guidance = body.get("guidance")
 
     # img2img: optional source image + strength for iterative generation
     source_image_b64 = body.get("image")
@@ -18528,7 +18529,7 @@ async def create_image_edit(request: Request):
         size: Output size (e.g., "1024x1024")
         n: Number of images to generate (default 1)
         strength: Edit strength 0.0-1.0 (default 0.75)
-        guidance: Guidance scale (default 3.5)
+        guidance: Guidance scale (omitted = loaded model's product preset)
         steps: Inference steps (optional)
         seed: Random seed (optional)
     """
@@ -18546,7 +18547,7 @@ async def create_image_edit(request: Request):
     size = body.get("size", "1024x1024")
     n = min(body.get("n", 1), 4)
     strength = body.get("strength", 0.75)
-    guidance = body.get("guidance", 3.5)
+    guidance = body.get("guidance")
     steps = body.get("steps")
     seed = body.get("seed")
 

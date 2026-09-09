@@ -68,6 +68,22 @@ DEFAULT_STEPS: dict[str, int] = {
     "seedvr2-7b": 1,
 }
 
+# Established vMLX product presets, matching panel/shared/imageModels.ts.
+# These are not claims about upstream function-signature defaults. A parity
+# test checks the two language surfaces. Resolve by loaded canonical identity,
+# never by a caller's alias or quant-folder basename. Explicit values win.
+DEFAULT_GUIDANCE: dict[str, float] = {
+    "schnell": 0.0,
+    "dev": 3.5,
+    "z-image-turbo": 1.0,
+    "flux2-klein-4b": 3.5,
+    "flux2-klein-9b": 3.5,
+    "qwen-image": 4.0,
+    "qwen-image-edit": 4.0,
+    "dev-kontext": 2.5,
+    "dev-fill": 30.0,
+}
+
 # Legacy name aliases (kept for backward compat with CLI and stored configs)
 SUPPORTED_MODELS: dict[str, str] = {
     "schnell": "schnell",
@@ -643,7 +659,7 @@ class ImageGenEngine:
         width: int = 1024,
         height: int = 1024,
         steps: int | None = None,
-        guidance: float = 3.5,
+        guidance: float | None = None,
         seed: int | None = None,
         negative_prompt: str | None = None,
         image_path: str | None = None,
@@ -679,6 +695,8 @@ class ImageGenEngine:
 
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
+        if guidance is None:
+            guidance = DEFAULT_GUIDANCE.get(self._model_name, 3.5)
         if seed is None:
             import random
             seed = random.randint(0, 2**32 - 1)
@@ -762,7 +780,7 @@ class ImageGenEngine:
         width: int = 1024,
         height: int = 1024,
         steps: int | None = None,
-        guidance: float = 3.5,
+        guidance: float | None = None,
         seed: int | None = None,
         strength: float = 0.75,
         negative_prompt: str | None = None,
@@ -770,15 +788,16 @@ class ImageGenEngine:
     ) -> ImageGenResult:
         """Edit an image using a loaded editing model.
 
-        For instruction-based editing (QwenImageEdit), the prompt describes
-        what to change. For Kontext/Fill, the source image is blended with
-        the prompt at the given strength.
+        The prompt describes the change. Edit adapters condition on the source;
+        Fill also requires a mask. Variation strength is not forwarded here.
         """
         if not self.is_loaded:
             raise RuntimeError("No edit model loaded. Call load() first.")
 
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
+        if guidance is None:
+            guidance = DEFAULT_GUIDANCE.get(self._model_name, 3.5)
         if seed is None:
             import random
             seed = random.randint(0, 2**32 - 1)

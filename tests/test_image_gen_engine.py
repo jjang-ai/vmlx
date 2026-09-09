@@ -4,6 +4,46 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
+class TestImageGuidanceDefaults:
+    @pytest.mark.parametrize("model,mclass,expected", [
+        ("dev", "Flux1", 3.5), ("qwen-image-edit", "QwenImageEdit", 4.0),
+        ("dev-kontext", "Flux1Kontext", 2.5), ("dev-fill", "Flux1Fill", 30.0),
+        ("z-image-turbo", "ZImage", 1.0), ("schnell", "Flux1", 0.0),
+    ])
+    @pytest.mark.parametrize("supplied", [None, 0.0, 7.25])
+    def test_adapter_receives_model_default_or_explicit_value(self, model, mclass, expected, supplied):
+        from PIL import Image
+        from types import SimpleNamespace
+        from vmlx_engine.image_gen import ImageGenEngine
+        eng = ImageGenEngine()
+        eng._model = MagicMock()
+        eng._loaded = True
+        eng._model_name = model
+        eng._mflux_class = mclass
+        eng._generate_with_trace = MagicMock(return_value=(
+            SimpleNamespace(image=Image.new("RGB", (64, 64))), MagicMock(job_id="test-job")))
+        kwargs = dict(prompt="test", width=64, height=64, steps=1, seed=1)
+        if supplied is not None:
+            kwargs["guidance"] = supplied
+        if mclass in eng._EDIT_CLASSES:
+            eng.edit(image_path="source.png", mask_path="mask.png", **kwargs)
+        else:
+            eng.generate(**kwargs)
+        assert eng._generate_with_trace.call_args.kwargs["guidance"] == (
+            expected if supplied is None else supplied)
+
+    def test_product_default_tables_match_panel_registry(self):
+        import re
+        import vmlx_engine.image_gen as mod
+        source = (Path(mod.__file__).resolve().parents[1] /
+                  "panel/src/shared/imageModels.ts").read_text()
+        rows = re.findall(r"steps: ([\d.]+),\s+guidance: ([\d.]+),[\s\S]*?mfluxName: '([^']+)'", source)
+        assert len(rows) == 9
+        for steps, guidance, name in rows:
+            assert mod.DEFAULT_STEPS[name] == int(steps)
+            assert mod.DEFAULT_GUIDANCE[name] == float(guidance)
+
+
 class TestImageGenEngineLoading:
     """Verify unified load() loads locally and never downloads."""
 

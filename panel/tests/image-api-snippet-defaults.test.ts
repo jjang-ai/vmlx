@@ -5,6 +5,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 vi.mock('../src/renderer/src/i18n', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 import { buildImageCurl, buildImagePython, buildImageJavaScript } from '../src/renderer/src/components/api/CodeSnippets'
+import { getDefaultGuidance, getDefaultSteps } from '../src/shared/imageModels'
+
+it('canonical edit names retain their established UI defaults', () => {
+  expect(getDefaultGuidance('dev-kontext')).toBe(2.5)
+  expect(getDefaultSteps('dev-kontext')).toBe(24)
+  expect(getDefaultGuidance('dev-fill')).toBe(30)
+  expect(getDefaultSteps('dev-fill')).toBe(20)
+  expect(getDefaultGuidance('qwen-image-edit')).toBe(4)
+})
 
 describe('image generation snippets preserve engine defaults', () => {
   for (const model of ['dev', 'schnell', 'z-image-turbo', 'my-local-image-alias']) {
