@@ -5,6 +5,10 @@ const restart = new Set(['host', 'port', 'apiKey', 'logLevel', 'maxTokens', 'mcp
 const effective = { host: '127.0.0.1', port: 8013, apiKey: 'old-fixture', logLevel: 'INFO', maxTokens: 4096, autoSleepEnabled: true }
 const desired = { ...effective, port: 8014, apiKey: 'new-fixture', logLevel: 'DEBUG', autoSleepEnabled: false }
 describe('saved next-start configuration is not a live endpoint', () => {
+  it('labels the effective endpoint separately from edited future fields', () => {
+    const src = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+    expect(src).toContain('data-vmlx-control="session-effective-endpoint">{session.host}:{session.port}')
+  })
   it.each(['running', 'loading', 'standby'])('stages launch changes for %s without changing the active socket/key', status => {
     const x = planSessionConfigSave({ status, type: 'local' }, effective, desired, restart)
     expect(x.restartRequired).toBe(true)

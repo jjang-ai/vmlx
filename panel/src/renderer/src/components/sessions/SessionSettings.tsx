@@ -820,7 +820,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
                 <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary' : 'bg-muted-foreground'}`} />
                 {restarting ? t('status.restarting') : session.status}
               </span>
-              <p className="text-xs text-muted-foreground">{config.host}:{config.port}</p>
+              <p className="text-xs text-muted-foreground" data-vmlx-control="session-effective-endpoint">{session.host}:{session.port}</p>
             </div>
           </div>
         </div>
