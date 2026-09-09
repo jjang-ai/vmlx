@@ -307,6 +307,24 @@ public:
     concatenate(kernel_name, "qwen4_qsa_sparse_scores_", type_to_name(q), "_bk",
                 key_tile_, "_dc", dimension_tile_, "_gqa", gqa, "_hp", hpad,
                 "_d", dim, "_wm", wm);
+    bool use_nax = false;
+#if defined(MTPLX_QSA_HAS_NAX)
+    // MLX's is_nax_available is not exported by the wheel. This build already
+    // requires macOS 26.2; mirror its architecture predicate conservatively.
+    // Numerical preflight still checks the installed wheel's actual math.
+    const auto architecture = device.get_architecture();
+    const std::string prefix = "applegpu_g";
+    if (architecture.rfind(prefix, 0) == 0 && architecture.size() > prefix.size() + 1) {
+      const auto generation = architecture.substr(prefix.size(),
+          architecture.size() - prefix.size() - 1);
+      if (generation.find_first_not_of("0123456789") == std::string::npos)
+        use_nax = std::stoi(generation) >= (architecture.back() == 'p' ? 18 : 17);
+    }
+    if (use_nax) {
+      kernel_name.clear();
+      concatenate(kernel_name, "qwen4_sparse_scores_nax_", type_to_name(q));
+    }
+#endif
 
     auto library = device.get_library(kMetalLibrary, current_binary_dir());
     auto kernel = device.get_kernel(kernel_name, library);
@@ -327,8 +345,9 @@ public:
     encoder.set_input_array(selected, 3);
     encoder.set_output_array(out, 4);
     encoder.set_bytes(params, 5);
-    encoder.dispatch_threadgroups(MTL::Size(q.shape(2), k.shape(1), (2051 + 63) / 64),
-                                  MTL::Size(32, wm, 1));
+    encoder.dispatch_threadgroups(
+        MTL::Size(q.shape(2), k.shape(1), use_nax ? (2051 + 31) / 32 : (2051 + 63) / 64),
+        MTL::Size(32, use_nax ? 1 : wm, 1));
   }
 
   DEFINE_NAME(MTPLXQwen4QSASparseScores)

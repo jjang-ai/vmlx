@@ -30,6 +30,30 @@ Build products are local and ignored by Git. Rebuild after changing MLX or
 Python. The adapter checks build receipts and the nanobind ABI, and proves
 both packaged Metal dtype pipelines before enabling the path.
 
+### SIMD and NAX arithmetic
+
+The materialized-score primitive has distinct SIMD and NAX implementations.
+NAX-capable targets must not reuse the older SIMD accumulation order: matching
+the MLX version and successfully launching a kernel do not establish identical
+arithmetic. The adapter's nonzero numerical preflight compares with stock SDPA
+before marking a dtype ready; an arithmetic mismatch disables this optional
+path for the process.
+
+For a macOS 26.2-or-newer deployment build, explicitly pass
+`CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=26.2"` to the build command above.
+This includes the NAX score kernel, which is selected only on the architecture
+generations supported by MLX 0.32.2's NAX gate. Other devices retain the SIMD
+kernel and still require numerical preflight. The original fused-attention
+export is unchanged; vMLX uses the materialized-score export.
+
+The Metal compile now receives the same minimum OS as C++. A target below
+26.2 does not compile or reference the NAX kernel. Use a serving MLX wheel
+whose own dylib minimum OS is compatible with that target. Inspect actual
+Mach-O load commands and wheel platform tags before redistribution: an in-place
+build or its setuptools output directory is not evidence of portable packaging.
+Full-model quality, cache restoration and performance acceptance remain
+separate from component numerical tests.
+
 To run the isolated component speed comparison from the repository root:
 
 ```sh
