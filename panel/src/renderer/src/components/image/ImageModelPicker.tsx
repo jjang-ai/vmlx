@@ -684,6 +684,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
         )}
 
         {/* View Downloads + Info */}
+        {!showCustom && (<>
         <div className="flex justify-center mb-2">
           <button
             onClick={() => window.dispatchEvent(new Event('open-download-popup'))}
@@ -701,6 +702,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
             </span>
           )}
         </p>
+        </>)}
       </div>
     </div>
   )
