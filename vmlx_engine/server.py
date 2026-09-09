@@ -18204,18 +18204,32 @@ def _image_request_matches_current_model(engine, model, resolved, model_path=Non
     request to reinterpret that folder as a new architecture. Explicitly
     selecting a different artifact must still reload, even with the same name.
     """
+    def identity(value):
+        # Bundle integrity canonicalizes local folders before loading. Preserve
+        # that identity across selected symlinks without treating HF IDs or
+        # served names as filesystem paths.
+        if isinstance(value, str) and value:
+            path = Path(value).expanduser()
+            if path.is_absolute():
+                try:
+                    return str(path.resolve())
+                except (OSError, RuntimeError, ValueError):
+                    pass
+        return value
+
     current_name = getattr(engine, "model_name", None)
-    current_path = getattr(engine, "_model_path", None)
-    if model_path and model_path != (current_path or _model_path):
+    current_path = identity(getattr(engine, "_model_path", None))
+    startup_path = identity(_model_path)
+    if model_path and identity(model_path) != (current_path or startup_path):
         return False
     names = {value for value in (current_name, current_path) if isinstance(value, str) and value}
     same_startup_artifact = (
-        current_path == _model_path if current_path else
+        current_path == startup_path if current_path else
         current_name is not None and current_name in (_model_name, _served_model_name)
     )
     if same_startup_artifact:
-        names.update(value for value in (_model_name, _served_model_name, _model_path) if value)
-    return bool(current_name) and (not model or model in names or resolved in names)
+        names.update(value for value in (_model_name, _served_model_name, startup_path) if value)
+    return bool(current_name) and (not model or identity(model) in names or identity(resolved) in names)
 
 
 @app.post(

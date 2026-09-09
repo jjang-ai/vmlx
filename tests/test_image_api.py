@@ -78,15 +78,21 @@ class TestImageSessionIdentity:
     @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "schnell")])
     @pytest.mark.parametrize("alias", ["canonical", "folder", "served", "basename"])
     @pytest.mark.parametrize("loaded", [True, False])
-    async def test_session_alias_reuses_adapter(self, client, monkeypatch, tmp_path, lane, canonical, alias, loaded):
+    @pytest.mark.parametrize("symlink", [False, True])
+    async def test_session_alias_reuses_adapter(self, client, monkeypatch, tmp_path, lane, canonical, alias, loaded, symlink):
         import io
         from PIL import Image
         import vmlx_engine.server as srv
 
         folder = str(tmp_path / "q8")
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        if symlink:
+            (tmp_path / "q8").symlink_to(artifact, target_is_directory=True)
+        loaded_path = str(artifact.resolve()) if symlink else folder
         mclass = "QwenImageEdit" if lane == "edits" else "Flux1"
         engine = SimpleNamespace(is_loaded=loaded, model_name=canonical,
-                                 _model_path=folder, _mflux_class=mclass)
+                                 _model_path=loaded_path, _mflux_class=mclass)
         engine.unload = MagicMock()
         engine.load = MagicMock()
         output = SimpleNamespace(b64_json="AAAA", seed=42)
@@ -123,6 +129,23 @@ class TestImageSessionIdentity:
         engine = SimpleNamespace(model_name="qwen-image-edit", _model_path="/models/second")
         assert not srv._image_request_matches_current_model(engine, "custom", "custom")
         assert not srv._image_request_matches_current_model(engine, "qwen-image-edit", "qwen-image-edit", "/models/third")
+
+    def test_explicit_symlink_path_preserves_artifact_identity(self, monkeypatch, tmp_path):
+        import vmlx_engine.server as srv
+        artifact = tmp_path / "artifact"
+        artifact.mkdir()
+        selected = tmp_path / "renamed-export"
+        selected.symlink_to(artifact, target_is_directory=True)
+        other = tmp_path / "other-artifact"
+        other.mkdir()
+        monkeypatch.setattr(srv, "_model_path", str(selected))
+        monkeypatch.setattr(srv, "_model_name", "schnell")
+        monkeypatch.setattr(srv, "_served_model_name", "custom")
+        engine = SimpleNamespace(model_name="schnell", _model_path=str(artifact.resolve()))
+        assert srv._image_request_matches_current_model(engine, "custom", "custom", str(selected))
+        assert srv._image_request_matches_current_model(engine, str(artifact), str(artifact))
+        assert not srv._image_request_matches_current_model(engine, "custom", "custom", str(other))
+        assert not srv._image_request_matches_current_model(engine, "creator/schnell", "creator/schnell")
 
 
 # ---------------------------------------------------------------------------
