@@ -1297,7 +1297,8 @@ describe('Performance & Generation', () => {
     it('persists bundle/default migration so stale 32768 sessions do not keep relaunching huge output caps', () => {
         const source = readFileSync(resolve(__dirname, '../src/main/sessions.ts'), 'utf8')
         const helper = readFileSync(resolve(__dirname, '../src/shared/sessionConfigMigrations.ts'), 'utf8')
-        expect(source).toContain('function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean')
+        expect(source).toContain('function applyBundleStartupDefaults(')
+        expect(source).toContain('migrateLegacyOutput && (oldHiddenMaxTokens || oldGenericMaxTokens)')
         expect(source).toContain('const bundleDefaultsChanged = applyBundleStartupDefaults(config, config.modelPath)')
         expect(source).toContain(
             'bundleDefaultsChanged || cacheDefaultsFilled || migrated || familyDefaultsChanged || normalized || markedCurrent'
@@ -2904,8 +2905,10 @@ describe('Default IP and New Settings', () => {
         expect(source).not.toContain('MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS = 900')
         expect(source).not.toContain('MINIMAX_M3_DEFAULT_MAX_OUTPUT_TOKENS')
         expect(familyBlock).toContain('config.timeout = MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS')
-        expect(familyBlock).toContain('config.maxTokens = 0')
-        expect(familyBlock).toContain('LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))')
+        // Per-launch defaults must not clear a fresh explicit output cap.
+        // session-output-cap-intent.test.ts executes creation and save paths.
+        expect(familyBlock).not.toContain('config.maxTokens = 0')
+        expect(familyBlock).not.toContain('LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))')
         // Adoption used to hand-roll a two-family timeout ternary here, so an
         // adopted openpangu_v2 / qwen3.5 / qwen3-next / nemotron-h session
         // persisted 300 while the same model created normally persisted 900.

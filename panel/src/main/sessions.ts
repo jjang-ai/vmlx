@@ -396,13 +396,8 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.timeout = MINIMAX_M3_DEFAULT_TIMEOUT_SECONDS
         changed = true
       }
-      // Keep MiniMax-M3 output length model-owned by default. Do not silently
-      // force a larger --max-tokens cap; explicit user values are preserved and
-      // legacy generic caps are scrubbed back to model-owned below.
-      if (config.maxTokens != null && LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))) {
-        config.maxTokens = 0
-        changed = true
-      }
+      // Output-cap migration belongs to applyBundleStartupDefaults on the
+      // stored baseline, never this per-launch family-default pass.
       // Defaults are applied only when a control has never been saved. M3's
       // typed MSA block records (K/V/idx_keys/offsets) support SSD-only L2,
       // so an explicit In-Memory Paged Cache=Off must survive restart while
@@ -469,10 +464,8 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.timeout = OPENPANGU_V2_DEFAULT_TIMEOUT_SECONDS
         changed = true
       }
-      if (config.maxTokens != null && LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))) {
-        config.maxTokens = 0
-        changed = true
-      }
+      // Preserve explicit output caps; shared stored-baseline migration owns
+      // historical generic defaults before current user edits are applied.
       if (config.enablePrefixCache !== true) {
         config.enablePrefixCache = true
         changed = true
@@ -734,7 +727,11 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   }
 }
 
-function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean {
+function applyBundleStartupDefaults(
+  config: Partial<ServerConfig>,
+  modelPath?: string,
+  migrateLegacyOutput = true,
+): boolean {
   const defs = readBundleStartupDefaults(modelPath)
   const mutable = config as Record<string, any>
   let changed = false
@@ -758,7 +755,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
     const oldHiddenMaxTokens =
       defs.maxTokens != null && Number(config.maxTokens) === Number(defs.maxTokens)
     const oldGenericMaxTokens = LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))
-    if (oldHiddenMaxTokens || oldGenericMaxTokens) {
+    if (migrateLegacyOutput && (oldHiddenMaxTokens || oldGenericMaxTokens)) {
       changed = setConfigValue(mutable, 'maxTokens', 0) || changed
     }
     changed = setConfigValue(mutable, migrationKey, GENERATION_STARTUP_DEFAULTS_VERSION) || changed
@@ -2228,7 +2225,10 @@ export class SessionManager extends EventEmitter {
   private async _createSessionInner(modelPath: string, config: Partial<ServerConfig>): Promise<Session> {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
-    applyBundleStartupDefaults(config, modelPath)
+    // Incoming creation values are current user intent, not a persisted legacy
+    // row. In particular, explicit4096 must not be mistaken for an old generic
+    // default merely because it has the same numeric value.
+    applyBundleStartupDefaults(config, modelPath, false)
     applyMissingCacheStackStartupDefaults(config, modelPath)
     applyFamilyStartupDefaults(config, modelPath)
     liftStaleFlatCacheIndex(config, modelPath)
@@ -2260,6 +2260,7 @@ export class SessionManager extends EventEmitter {
       try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) { }
       const host = (config.host as string) || existing.host
       const port = (config.port as number) || existing.port
+      applyBundleStartupDefaults(existingConfig, modelPath)
       applyCacheStackStartupDefaultMigration(existingConfig, modelPath)
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
@@ -3787,6 +3788,9 @@ export class SessionManager extends EventEmitter {
     // --max-tokens. A settings-save still can't stamp an un-migrated config as
     // current, because the baseline is migrated here before the merge.
     const migratedBaseline: Record<string, unknown> = { ...currentConfig }
+    // Complete generation migration on the old baseline BEFORE merging an
+    // explicit settings edit. Otherwise the next start clears that new value.
+    applyBundleStartupDefaults(migratedBaseline as Partial<ServerConfig>, session.modelPath)
     applyCacheStackStartupDefaultMigration(migratedBaseline as Partial<ServerConfig>, (migratedBaseline.modelPath as string) || undefined)
     markCacheStackStartupDefaultsCurrent(migratedBaseline as Partial<ServerConfig>, session.modelPath)
     for (const key of explicitlyClearedKeys) delete migratedBaseline[key]
