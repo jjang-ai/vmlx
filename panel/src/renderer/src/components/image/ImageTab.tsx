@@ -10,6 +10,7 @@ import { LogsPanel } from '../sessions/LogsPanel'
 import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
 import { imageRuntimeSnapshot, type ImageCapabilities, type ImageServerStatus } from '../../../../shared/imageCapabilities'
 import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
+import { observeImageServerDiscovery } from '../../../../shared/imageServerDiscovery'
 import { defaultImageRuntimeSettings } from '../../../../shared/imageRuntimeSettings'
 import { ImageDraftStore } from '../../../../shared/imageDrafts'
 import type { ImageServerSettings } from './ImageModelPicker'
@@ -144,9 +145,11 @@ export function ImageTab() {
   // Check if an image server is already running
   useEffect(() => {
     const revision = ++settingsRevision.current
-    window.api.image.getRunningServer().then(async (server: any) => {
-      if (revision !== settingsRevision.current) return
-      if (server) {
+    const stopDiscovery = observeImageServerDiscovery({
+      read: () => window.api.image.getRunningServer(),
+      onReady: callback => window.api.sessions.onReady(callback),
+      isCurrent: () => revision === settingsRevision.current,
+      accept: async (server: any) => {
         const name = server.modelName
         const canonical = server.canonicalModelId || resolveImageModelFromDirectoryName(name)?.id || name
         setSelectedModel(canonical)
@@ -166,9 +169,10 @@ export function ImageTab() {
         setQuantize(q)
 
         await hydrateSettings(server.sessionId, true, revision)
-      }
-    }).catch(error => { if (revision === settingsRevision.current) setError((error as Error).message) })
-    return () => { if (revision === settingsRevision.current) settingsRevision.current++ }
+      },
+      onError: error => setError((error as Error).message),
+    })
+    return () => { stopDiscovery(); if (revision === settingsRevision.current) settingsRevision.current++ }
   }, [])
 
   // Check if image generation is in-flight (persists across tab switches)
