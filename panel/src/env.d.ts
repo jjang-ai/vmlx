@@ -572,6 +572,7 @@ declare global {
         cancelGeneration: () => Promise<{ success: boolean; error?: string }>;
         isGenerating: () => Promise<{
           generating: boolean;
+          cancelling: boolean;
           startTime: number | null;
           sessionId: string | null;
         }>;

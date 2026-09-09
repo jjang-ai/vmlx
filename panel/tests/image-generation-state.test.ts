@@ -45,6 +45,15 @@ const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
 
 describe("image generation in-flight state survives tab switches", () => {
+  it("keeps cancellation busy until the original request finishes", () => {
+    resetImageGenerationStateForTests();
+    const controller = beginImageGeneration("cancel-owner");
+    markImageGenerationAbort(controller, "cancel");
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true });
+    expect(controller.signal.aborted).toBe(false);
+    finishImageGeneration(controller);
+    expect(getImageGenerationStatus()).toMatchObject({ generating: false, cancelling: false });
+  });
   it("classifies cancel per request without clearing a newer generation", () => {
     resetImageGenerationStateForTests();
 
@@ -145,7 +154,12 @@ describe("image generation in-flight state survives tab switches", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
     const stateSrc = readFileSync(IMAGE_GENERATION_STATE_TS, "utf-8");
     expect(src).toContain('markImageGenerationAbort(controller, "cancel")');
-    expect(src).toContain("requestImageServerCancel()");
+    expect(src).toContain("await requestImageServerCancel(controller)");
+    const cancelHandler = src.slice(src.indexOf("ipcMain.handle('image:cancelGeneration'"), src.indexOf("ipcMain.handle('image:getRunningServer'"));
+    expect(cancelHandler).not.toContain("controller.abort()");
+    expect(cancelHandler).not.toContain("clearImageGenerationAfterLocalAbort(controller)");
+    expect(src).toContain("body.request_id = clientJobId");
+    expect(src).toContain("request_id: owner.requestId");
     expect(src).toContain("/v1/images/cancel");
     expect(stateSrc).toContain("Image generation cancelled.");
     expect(src).toContain("clearImageGenerationAfterLocalAbort");

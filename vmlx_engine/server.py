@@ -63,6 +63,7 @@ from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from .image_requests import image_request_scope, cancel_image_request, current_image_request, ImageRequestCancelled
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -18113,27 +18114,24 @@ async def ollama_copy():
 
 
 @app.post("/v1/images/cancel", dependencies=[Depends(verify_api_key)])
-async def image_generation_cancel():
-    """Cancel the in-flight or next image generation request.
+async def image_generation_cancel(request: Request):
+    """Signal one registered image request, never a future request.
 
-    Cooperative — interrupts the engine at the next boundary it owns
-    (between images in a batch, or before the next generate() call).
-    The currently-running denoise step inside mflux still completes;
-    this prevents subsequent steps and aborts the request flow.
-
-    Tracks vmlx#100 / mlxstudio#100. Without this, cancelled jobs in
-    the panel kept running and could OOM the machine.
-
-    Returns 200 with `cancelled: true` even if no job is active —
-    setting the flag is idempotent and harmless on idle.
+    Send request_id to cancel an active or queued owner. Legacy empty requests
+    target only the active owner. Acknowledgement means cancelling, not worker
+    completion; the original endpoint terminates after its cooperative boundary.
     """
-    global _image_gen
-    if _image_gen is not None:
-        try:
-            _image_gen.cancel()
-        except Exception:
-            pass
-    return {"cancelled": True}
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw else {}
+    except Exception:
+        raise HTTPException(400, detail="Invalid cancellation JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(400, detail="Cancellation body must be an object")
+    request_id = body.get("request_id")
+    if request_id is not None and not isinstance(request_id, str):
+        raise HTTPException(400, detail="request_id must be a string")
+    return cancel_image_request(request_id)
 
 
 @app.post("/api/create", dependencies=[Depends(verify_api_key)])
@@ -18173,7 +18171,24 @@ async def _run_image_gen_call(fn, /, *args, **kwargs):
     """Run an ImageGenEngine method on the dedicated image MLX thread."""
     loop = asyncio.get_running_loop()
     call = functools.partial(fn, *args, **kwargs)
-    return await loop.run_in_executor(_get_image_gen_executor(), call)
+    context = contextvars.copy_context()
+    future = loop.run_in_executor(_get_image_gen_executor(), context.run, call)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        # Do not release the request lock or remove callbacks while Metal work
+        # still owns the executor. Drain the worker before propagating shutdown.
+        state = current_image_request.get()
+        if state is not None:
+            state.cancelled.set()
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        raise
 
 
 def _run_image_gen_call_sync(fn, /, *args, **kwargs):
@@ -18269,25 +18284,6 @@ async def create_image(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
 
-    # vmlx#100 / mlxstudio#100 — disconnect watchdog. If the client closes
-    # the HTTP connection (panel "Stop" button, browser reload, network
-    # cut), cancel the in-flight generation cooperatively. Mflux's denoise
-    # step is uncancellable mid-step, so this aborts at the next boundary
-    # we own (between images in a batch, or before the next generate()).
-    async def _watch_disconnect():
-        try:
-            while True:
-                await asyncio.sleep(0.5)
-                if await request.is_disconnected():
-                    if _image_gen is not None:
-                        try:
-                            _image_gen.cancel()
-                        except Exception:
-                            pass
-                    return
-        except asyncio.CancelledError:
-            return
-
     prompt = body.get("prompt", "")
     model = body.get("model", "schnell")
     n = min(body.get("n", 1), 4)  # Cap at 4 images per request
@@ -18350,7 +18346,7 @@ async def create_image(request: Request):
     global _image_gen_lock
     if _image_gen_lock is None:
         _image_gen_lock = asyncio.Lock()
-    async with _image_gen_lock:
+    async with image_request_scope(request, body, _image_gen_lock):
         # If in standby (deep/soft sleep), wake first to avoid split-brain
         # where _standby_state='deep' but we're about to load a model
         if _standby_state is not None:
@@ -18433,7 +18429,7 @@ async def create_image(request: Request):
         # If source image provided (img2img), save to temp file for mflux
         source_image_path = None
         images = []
-        _disconnect_watch = asyncio.create_task(_watch_disconnect())
+        _disconnect_watch = None  # Request-owned scope watches both queued and active requests.
         try:
             if source_image_b64 and image_strength is not None:
                 import tempfile
@@ -18466,6 +18462,8 @@ async def create_image(request: Request):
                         image_path=source_image_path,
                         image_strength=image_strength if source_image_path else None,
                     )
+                except ImageRequestCancelled:
+                    raise
                 except Exception as e:
                     logger.exception("Image generation failed")
                     raise HTTPException(
@@ -18696,7 +18694,7 @@ async def create_image_edit(request: Request):
         global _image_gen_lock
         if _image_gen_lock is None:
             _image_gen_lock = asyncio.Lock()
-        async with _image_gen_lock:
+        async with image_request_scope(request, body, _image_gen_lock):
             # Wake from standby if needed (prevents split-brain state)
             if _standby_state is not None:
                 await admin_wake()
@@ -18801,7 +18799,7 @@ async def create_image_edit(request: Request):
                         negative_prompt=body.get("negative_prompt"),
                         mask_path=str(mask_path) if mask_path else None,
                     )
-                except HTTPException:
+                except (HTTPException, ImageRequestCancelled):
                     raise
                 except Exception as e:
                     logger.exception("Image editing failed")

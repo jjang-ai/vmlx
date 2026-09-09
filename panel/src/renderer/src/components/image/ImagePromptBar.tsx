@@ -36,6 +36,7 @@ interface ImagePromptBarProps {
   onGenerate: (prompt: string) => void
   disabled: boolean
   generating: boolean
+  cancelling?: boolean
   settings: ImagePromptBarSettings
   onSettingsChange: (settings: ImagePromptBarSettings) => void
   mode: 'generate' | 'edit'
@@ -56,10 +57,12 @@ interface ImagePromptBarProps {
   capabilities?: ImageCapabilities | null
 }
 
-export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
+export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, cancelling, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
   const [dragOver, setDragOver] = useState(false)
   const [showMaskPainter, setShowMaskPainter] = useState(false)
+  const [cancelRequested, setCancelRequested] = useState(false)
+  useEffect(() => { if (!generating) setCancelRequested(false) }, [generating])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // The loaded adapter owns the mask contract. Local folders and served
@@ -293,9 +296,12 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
         {generating ? (
-          <button onClick={() => window.api.image.cancelGeneration()} data-vmlx-control="image-cancel"
+          <button disabled={cancelling || cancelRequested} onClick={async () => {
+            setCancelRequested(true)
+            try { await window.api.image.cancelGeneration() } catch { setCancelRequested(false) }
+          }} data-vmlx-control="image-cancel" data-vmlx-state={cancelling || cancelRequested ? 'cancelling' : 'running'}
             className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center gap-2 self-end">
-            <X className="h-4 w-4" /><span className="text-sm">{t('image.prompt.cancel')}</span>
+            <X className="h-4 w-4" /><span className="text-sm">{t(cancelling || cancelRequested ? 'image.prompt.cancelling' : 'image.prompt.cancel')}</span>
           </button>
         ) : (
           <button onClick={handleSubmit} disabled={!canSubmit} data-vmlx-control="image-generate"

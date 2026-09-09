@@ -1795,6 +1795,7 @@
       "guidance": "Guía",
       "strength": "Intensidad",
       "cancel": "Cancelar",
+      "cancelling": "Cancelando…",
       "promptLabel": "Prompt:",
       "variationOfLabel": "Variación de:",
       "variationNewSeed": "(semilla nueva)",

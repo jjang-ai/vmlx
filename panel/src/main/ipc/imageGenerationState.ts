@@ -34,6 +34,10 @@ export function markImageGenerationAbort(
   abortReasons.set(controller, reason)
 }
 
+export function clearImageGenerationAbortReason(controller: AbortController): void {
+  abortReasons.delete(controller)
+}
+
 export function classifyImageGenerationError(
   error: unknown,
   controller?: AbortController | null,
@@ -88,11 +92,13 @@ export function clearImageGenerationSessionHistory(): void {
 
 export function getImageGenerationStatus(): {
   generating: boolean
+  cancelling: boolean
   startTime: number | null
   sessionId: string | null
 } {
   return {
     generating: activeGeneration != null,
+    cancelling: !!activeGeneration && abortReasons.get(activeGeneration.controller) === 'cancel',
     startTime: activeGeneration?.startTime ?? null,
     sessionId: activeGeneration?.sessionId || lastGenerationSessionId,
   }

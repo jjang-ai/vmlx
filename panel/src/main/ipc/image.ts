@@ -18,6 +18,7 @@ import {
   getActiveImageGenerationController,
   getImageGenerationStatus,
   markImageGenerationAbort,
+  clearImageGenerationAbortReason,
 } from './imageGenerationState'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
@@ -37,6 +38,8 @@ let handlersRegistered = false
 
 // Track the current image server session ID (only one at a time)
 let activeImageSessionId: string | null = null
+// Freeze request ownership at submission; later session switches cannot retarget Cancel.
+const imageRequestOwners = new WeakMap<AbortController, { port: number; requestId: string; headers: Record<string, string> }>()
 
 // Serialize startServer calls to prevent race conditions when the user
 // rapidly switches models (e.g., clicks model A then immediately model B).
@@ -157,29 +160,26 @@ function imageServerDisconnectedError(): Error {
   return error
 }
 
-function requestImageServerCancel(): void {
-  if (!activeImageSessionId) return
-  const session = db.getSession(activeImageSessionId)
-  const port = session?.port
-  if (!port) return
-  try {
+function requestImageServerCancel(controller: AbortController): Promise<void> {
+  const owner = imageRequestOwners.get(controller)
+  if (!owner) return Promise.resolve()
+  return new Promise((resolve, reject) => {
     const http = require('http')
-    const bodyStr = '{}'
-    const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
-    const req = http.request(`http://127.0.0.1:${port}/v1/images/cancel`, {
+    const bodyStr = JSON.stringify({ request_id: owner.requestId })
+    const headers = { ...owner.headers, 'Content-Length': Buffer.byteLength(bodyStr) }
+    const req = http.request(`http://127.0.0.1:${owner.port}/v1/images/cancel`, {
       method: 'POST',
       headers,
       agent: false,
       timeout: 5000,
     }, (res: any) => {
       res.resume()
+      res.on('end', () => res.statusCode === 200 ? resolve() : reject(new Error(`Image cancel HTTP ${res.statusCode}`)))
     })
-    req.on('error', () => {})
-    req.on('timeout', () => req.destroy())
+    req.on('error', reject)
+    req.on('timeout', () => req.destroy(new Error('Image cancel request timed out')))
     writeAndEndImageServerRequest(req, bodyStr)
-  } catch {
-    // Best-effort cancel; local abort still clears the UI immediately.
-  }
+  })
 }
 
 export function registerImageHandlers(): void {
@@ -345,12 +345,14 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      body.request_id = clientJobId
+      imageRequestOwners.set(controller, { port: serverPort, requestId: clientJobId, headers: getImageFetchHeaders() })
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'generations', model, width, height, steps, guidance, seed, history_session_id: sessionId })
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => {
         markImageGenerationAbort(controller, 'timeout')
-        requestImageServerCancel()
+        void requestImageServerCancel(controller).catch(error => console.warn('[IMAGE] Cancel request failed:', error))
         controller.abort()
       }, 30 * 60 * 1000)
       // Periodically touch session during long image generations (Qwen edits can take 10+ min)
@@ -517,6 +519,8 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      body.request_id = clientJobId
+      imageRequestOwners.set(controller, { port: serverPort, requestId: clientJobId, headers: getImageFetchHeaders() })
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'edits', model, width, height, steps, guidance, seed, history_session_id: sessionId })
       // 30-minute timeout for image edits (Qwen full precision can take 10+ minutes)
       // Use Node.js http.request instead of Electron fetch — Chromium's net stack
@@ -524,7 +528,7 @@ export function registerImageHandlers(): void {
       // "fetch failed" errors on long image edits.
       const timeoutId = setTimeout(() => {
         markImageGenerationAbort(controller, 'timeout')
-        requestImageServerCancel()
+        void requestImageServerCancel(controller).catch(error => console.warn('[IMAGE] Cancel request failed:', error))
         controller.abort()
       }, 30 * 60 * 1000)
       // Periodically touch session during long image edits (Qwen can take 10+ min)
@@ -763,7 +767,7 @@ export function registerImageHandlers(): void {
             const controller = getActiveImageGenerationController()
             if (controller) {
               markImageGenerationAbort(controller, "cancel")
-              requestImageServerCancel()
+              void requestImageServerCancel(controller).catch(error => console.warn('[IMAGE] Cancel request failed:', error))
               controller.abort()
             }
             clearImageGenerationAfterLocalAbort(controller)
@@ -844,7 +848,7 @@ export function registerImageHandlers(): void {
         const controller = getActiveImageGenerationController()
         if (controller) {
           markImageGenerationAbort(controller, "cancel")
-          requestImageServerCancel()
+          void requestImageServerCancel(controller).catch(error => console.warn('[IMAGE] Cancel request failed:', error))
           controller.abort()
         }
         clearImageGenerationAfterLocalAbort(controller)
@@ -862,10 +866,14 @@ export function registerImageHandlers(): void {
     const controller = getActiveImageGenerationController()
     if (controller) {
       markImageGenerationAbort(controller, "cancel")
-      requestImageServerCancel()
-      controller.abort()
-      clearImageGenerationAfterLocalAbort(controller)
-      clearImageGenerationSessionHistory()
+      // Keep the original request and UI busy until the server releases its
+      // worker. A cancellation acknowledgement is not GPU completion.
+      try {
+        await requestImageServerCancel(controller)
+      } catch (error) {
+        clearImageGenerationAbortReason(controller)
+        throw error
+      }
       return { success: true }
     }
     return { success: false, error: 'No active generation' }

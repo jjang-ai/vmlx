@@ -56,6 +56,7 @@ interface ImageSettings {
 
 interface ImageGenerationStatus {
   generating: boolean
+  cancelling?: boolean
   startTime: number | null
   sessionId: string | null
 }
@@ -90,6 +91,8 @@ export function ImageTab() {
   const [showLogs, setShowLogs] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  useEffect(() => { if (!generating) setCancelling(false) }, [generating])
   const submissionGuard = useRef(new ImageSubmissionGuard())
   const [generations, setGenerations] = useState<ImageGenerationInfo[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -171,6 +174,7 @@ export function ImageTab() {
       if (!submissionGuard.current.canApply(snapshot)) return
       if (status.generating) {
         setGenerating(true)
+        setCancelling(status.cancelling === true)
       } else if (status.sessionId || currentSessionId) {
         // Generation may have completed while we were away — reload gallery
         const sessionIdToRefresh = currentSessionId || status.sessionId!
@@ -299,6 +303,7 @@ export function ImageTab() {
     if (!submissionGuard.current.canApply(snapshot)) return
     if (status.generating) {
       setGenerating(true)
+      setCancelling(status.cancelling === true)
       return
     }
 
@@ -791,6 +796,7 @@ export function ImageTab() {
         </div>
 
         <ImagePromptBar
+          cancelling={cancelling}
           key={`${draftSnapshot.owner}:${currentSessionId}:${draftSnapshot.epoch}`}
           prompt={prompt}
           onPromptChange={setPrompt}

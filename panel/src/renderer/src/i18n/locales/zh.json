@@ -1795,6 +1795,7 @@
       "guidance": "引导强度",
       "strength": "强度",
       "cancel": "取消",
+      "cancelling": "正在取消…",
       "promptLabel": "提示词:",
       "variationOfLabel": "变体来自:",
       "variationNewSeed": "(新种子)",

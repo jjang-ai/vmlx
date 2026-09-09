@@ -1795,6 +1795,7 @@
       "guidance": "가이던스",
       "strength": "강도",
       "cancel": "취소",
+      "cancelling": "취소 중…",
       "promptLabel": "프롬프트:",
       "variationOfLabel": "다음의 변형:",
       "variationNewSeed": "(새 시드)",

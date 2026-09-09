@@ -1795,6 +1795,7 @@
       "guidance": "ガイダンス",
       "strength": "強度",
       "cancel": "キャンセル",
+      "cancelling": "キャンセル中…",
       "promptLabel": "プロンプト:",
       "variationOfLabel": "バリエーション元:",
       "variationNewSeed": "(新しいシード)",
