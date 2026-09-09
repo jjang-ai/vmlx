@@ -1,4 +1,5 @@
 import { adoptNativeMtpConfig } from '../shared/nativeMtpAdoption'
+import { recordImageGenerationLog } from './ipc/imageGenerationState'
 import { GATEWAY_SINGLE_MODEL_MODE_KEY, isGatewaySettingEnabled } from '../shared/gatewaySettingsKeys'
 import {
   healthFailureToleranceCount,
@@ -2002,6 +2003,7 @@ export class SessionManager extends EventEmitter {
 
   /** Append log data to the per-session ring buffer */
   pushLog(sessionId: string, data: string): void {
+    recordImageGenerationLog(sessionId, data)
     let buffer = this.logBuffers.get(sessionId)
     if (!buffer) {
       buffer = []

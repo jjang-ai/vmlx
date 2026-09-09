@@ -1885,6 +1885,17 @@
       "stopServerTitle": "Detener el servidor",
       "quantFull": "Completa"
     },
+    "jobProgress": {
+      "waiting": "Esperando el estado del motor",
+      "preparing": "Preparando imagen",
+      "denoising": "Eliminando ruido",
+      "rendering": "Renderizando imagen",
+      "encoding": "Codificando imagen",
+      "saving": "Guardando imagen e historial",
+      "cancelling": "Cancelando…",
+      "checkpoint": "Punto de control {step} / {total}",
+      "checkpointHint": "Un punto de control del modelo, no la confirmación de que la GPU haya terminado."
+    },
     "gallery": {
       "deleteConfirm": "¿Eliminar esta imagen? El archivo se borrará permanentemente.",
       "editedAlt": "Editada",

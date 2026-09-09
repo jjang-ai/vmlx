@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Download,
   Copy,
@@ -11,10 +11,14 @@ import {
 } from "lucide-react";
 import type { ImageGenerationInfo } from "./ImageTab";
 import { useTranslation } from "../../i18n";
+import type { ImageJobProgress } from '../../../../shared/imageJobProgress';
 
 interface ImageGalleryProps {
   generations: ImageGenerationInfo[];
   generating: boolean;
+  progress?: ImageJobProgress | null;
+  startTime?: number | null;
+  cancelling?: boolean;
   mode?: "generate" | "edit";
   onRegenerate?: (gen: ImageGenerationInfo) => void;
   // ms#61: per-image delete so users can prune the gallery without
@@ -26,11 +30,18 @@ interface ImageGalleryProps {
 export function ImageGallery({
   generations,
   generating,
+  progress,
+  startTime,
+  cancelling,
   mode,
   onRegenerate,
   onDelete,
 }: ImageGalleryProps) {
   const { t } = useTranslation();
+  const progressRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (generating) progressRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [generating]);
   if (generations.length === 0 && !generating) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-8">
@@ -81,7 +92,7 @@ export function ImageGallery({
         ))}
 
         {/* Loading skeleton while generating */}
-        {generating && <GeneratingSkeleton mode={mode} />}
+        {generating && <div ref={progressRef}><GeneratingSkeleton progress={progress} startTime={startTime} cancelling={cancelling} /></div>}
       </div>
     </div>
   );
@@ -345,37 +356,36 @@ function ImageCard({
   );
 }
 
-function GeneratingSkeleton({ mode }: { mode?: "generate" | "edit" }) {
+function GeneratingSkeleton({ progress, startTime, cancelling }: { progress?: ImageJobProgress | null; startTime?: number | null; cancelling?: boolean }) {
   const { t } = useTranslation();
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    const interval = setInterval(() => setElapsed((prev) => prev + 1), 1000);
+    const anchor = startTime ?? Date.now();
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - anchor) / 1000)));
+    update();
+    const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [startTime]);
 
   const formatTime = (s: number) =>
     s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-  const label = mode === "edit" ? t('image.gallery.editing') : t('image.gallery.generating');
-  const color = mode === "edit" ? "text-violet-400" : "text-primary";
+  const phase = cancelling ? 'cancelling' : progress?.phase ?? 'waiting';
+  const checkpoint = phase === 'denoising' && progress?.stepIndex != null && progress.totalSteps;
+  const label = checkpoint
+    ? t('image.jobProgress.checkpoint', { step: progress!.stepIndex! + 1, total: progress!.totalSteps! })
+    : t('image.jobProgress.' + phase);
 
   return (
-    <div className="border border-border rounded-lg overflow-hidden">
+    <div role="status" aria-live="polite" data-vmlx-control="image-job-progress" data-vmlx-phase={phase} data-vmlx-request-id={progress?.requestId} data-vmlx-job-id={progress?.jobId} className="border border-border rounded-lg overflow-hidden">
       <div className="aspect-square bg-muted flex flex-col items-center justify-center gap-3">
-        <Loader2 className={`h-10 w-10 ${color} animate-spin`} />
+        <span aria-hidden="true" className="h-3 w-3 bg-primary motion-safe:animate-pulse" />
         <div className="text-center">
-          <p className={`text-sm font-medium ${color}`}>{label}...</p>
+          <p className="text-sm font-medium text-primary">{label}</p>
           <p className="text-xs text-muted-foreground mt-1">
             {formatTime(elapsed)}
           </p>
-        </div>
-      </div>
-      <div className="p-3">
-        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full animate-pulse ${mode === "edit" ? "bg-violet-500/50" : "bg-primary/50"}`}
-            style={{ width: "100%" }}
-          />
+          {checkpoint && <p className="text-xs text-muted-foreground mt-2 px-4">{t('image.jobProgress.checkpointHint')}</p>}
         </div>
       </div>
     </div>

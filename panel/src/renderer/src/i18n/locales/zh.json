@@ -1885,6 +1885,17 @@
       "stopServerTitle": "停止服务器",
       "quantFull": "完整"
     },
+    "jobProgress": {
+      "waiting": "等待引擎状态",
+      "preparing": "正在准备图像",
+      "denoising": "正在去噪",
+      "rendering": "正在渲染图像",
+      "encoding": "正在编码图像",
+      "saving": "正在保存图像和历史记录",
+      "cancelling": "正在取消…",
+      "checkpoint": "步骤检查点 {step} / {total}",
+      "checkpointHint": "模型检查点，不代表 GPU 已完成计算。"
+    },
     "gallery": {
       "deleteConfirm": "删除此图像?该文件将被永久移除。",
       "editedAlt": "已编辑",

@@ -1,9 +1,13 @@
+import type { ImageJobProgress } from '../../shared/imageJobProgress'
 export type ImageGenerationAbortReason = 'cancel' | 'timeout'
 
 type ActiveGeneration = {
   controller: AbortController
   sessionId: string
   startTime: number
+  serverSessionId?: string | null
+  progress?: ImageJobProgress
+  logTail?: string
 }
 
 let activeGeneration: ActiveGeneration | null = null
@@ -25,6 +29,44 @@ export function beginImageGeneration(
 
 export function getActiveImageGenerationController(): AbortController | null {
   return activeGeneration?.controller || null
+}
+
+export function bindImageGenerationRequest(controller: AbortController, serverSessionId: string | null, requestId: string): void {
+  if (activeGeneration?.controller !== controller) return
+  activeGeneration.serverSessionId = serverSessionId
+  activeGeneration.progress = { requestId, phase: 'waiting' }
+  activeGeneration.logTail = ''
+}
+
+export function recordImageGenerationLog(serverSessionId: string, data: string): void {
+  const active = activeGeneration
+  if (!active?.progress || active.serverSessionId !== serverSessionId) return
+  const lines = ((active.logTail || '') + data).split('\n')
+  active.logTail = lines.pop()!.slice(-65536)
+  for (const line of lines) {
+    const match = line.match(/\b(IMAGEJOB|IMAGECLIENT) (\{.*\})\s*$/)
+    if (!match) continue
+    let event: any
+    try { event = JSON.parse(match[2]) } catch { continue }
+    const requestId = match[1] === 'IMAGEJOB' ? event.request_id : event.client_job_id
+    if (requestId !== active.progress.requestId) continue
+    if (match[1] === 'IMAGECLIENT') {
+      if (event.phase === 'saving_outputs') active.progress = { requestId, phase: 'saving' }
+      continue
+    }
+    if (typeof event.job_id !== 'string' || !event.job_id) continue
+    const phases: Record<string, ImageJobProgress['phase']> = {
+      model_call_started: 'preparing', before_denoise_loop: 'preparing',
+      denoise_checkpoint: 'denoising', after_denoise_loop: 'rendering',
+      model_call_returned: 'rendering', encoding_png: 'encoding',
+    }
+    const phase = phases[event.phase]
+    if (!phase) continue
+    const progress: ImageJobProgress = { requestId, jobId: event.job_id, phase }
+    if (Number.isInteger(event.requested_steps) && event.requested_steps > 0) progress.totalSteps = event.requested_steps
+    if (phase === 'denoising' && Number.isInteger(event.step_index) && event.step_index >= 0 && progress.totalSteps && event.step_index < progress.totalSteps) progress.stepIndex = event.step_index
+    active.progress = progress
+  }
 }
 
 export function markImageGenerationAbort(
@@ -95,12 +137,14 @@ export function getImageGenerationStatus(): {
   cancelling: boolean
   startTime: number | null
   sessionId: string | null
+  progress: ImageJobProgress | null
 } {
   return {
     generating: activeGeneration != null,
     cancelling: !!activeGeneration && abortReasons.get(activeGeneration.controller) === 'cancel',
     startTime: activeGeneration?.startTime ?? null,
     sessionId: activeGeneration?.sessionId || lastGenerationSessionId,
+    progress: activeGeneration?.progress ? { ...activeGeneration.progress } : null,
   }
 }
 

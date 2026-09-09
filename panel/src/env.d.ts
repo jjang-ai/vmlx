@@ -571,6 +571,7 @@ declare global {
         ) => Promise<{ success: boolean; path?: string; error?: string }>;
         cancelGeneration: () => Promise<{ success: boolean; error?: string }>;
         isGenerating: () => Promise<{
+          progress: import('./shared/imageJobProgress').ImageJobProgress | null;
           generating: boolean;
           cancelling: boolean;
           startTime: number | null;

@@ -1885,6 +1885,17 @@
       "stopServerTitle": "Stop server",
       "quantFull": "Full"
     },
+    "jobProgress": {
+      "waiting": "Waiting for engine status",
+      "preparing": "Preparing image",
+      "denoising": "Denoising",
+      "rendering": "Rendering image",
+      "encoding": "Encoding image",
+      "saving": "Saving image and history",
+      "cancelling": "Cancelling…",
+      "checkpoint": "Step checkpoint {step} / {total}",
+      "checkpointHint": "A model checkpoint, not confirmed GPU completion."
+    },
     "gallery": {
       "deleteConfirm": "Delete this image? The file will be removed permanently.",
       "editedAlt": "Edited",

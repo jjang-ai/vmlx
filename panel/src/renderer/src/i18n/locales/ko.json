@@ -1885,6 +1885,17 @@
       "stopServerTitle": "서버 중지",
       "quantFull": "전체"
     },
+    "jobProgress": {
+      "waiting": "엔진 상태 기다리는 중",
+      "preparing": "이미지 준비 중",
+      "denoising": "노이즈 제거 중",
+      "rendering": "이미지 렌더링 중",
+      "encoding": "이미지 인코딩 중",
+      "saving": "이미지와 기록 저장 중",
+      "cancelling": "취소 중…",
+      "checkpoint": "단계 체크포인트 {step} / {total}",
+      "checkpointHint": "모델 체크포인트이며 GPU 계산 완료를 의미하지 않습니다."
+    },
     "gallery": {
       "deleteConfirm": "이 이미지를 삭제하시겠습니까? 파일이 영구적으로 제거됩니다.",
       "editedAlt": "편집됨",

@@ -13,6 +13,7 @@ import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
 import { defaultImageRuntimeSettings } from '../../../../shared/imageRuntimeSettings'
 import { ImageDraftStore } from '../../../../shared/imageDrafts'
 import type { ImageServerSettings } from './ImageModelPicker'
+import type { ImageJobProgress } from '../../../../shared/imageJobProgress'
 
 export interface ImageSessionInfo {
   id: string
@@ -55,6 +56,7 @@ interface ImageSettings {
 }
 
 interface ImageGenerationStatus {
+  progress?: ImageJobProgress | null
   generating: boolean
   cancelling?: boolean
   startTime: number | null
@@ -91,6 +93,9 @@ export function ImageTab() {
   const [showLogs, setShowLogs] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [jobProgress, setJobProgress] = useState<ImageJobProgress | null>(null)
+  const [jobStartTime, setJobStartTime] = useState<number | null>(null)
+  useEffect(() => { if (!generating) { setJobProgress(null); setJobStartTime(null) } }, [generating])
   const [cancelling, setCancelling] = useState(false)
   useEffect(() => { if (!generating) setCancelling(false) }, [generating])
   const submissionGuard = useRef(new ImageSubmissionGuard())
@@ -175,6 +180,8 @@ export function ImageTab() {
       if (status.generating) {
         setGenerating(true)
         setCancelling(status.cancelling === true)
+        setJobProgress(status.progress ?? null)
+        setJobStartTime(status.startTime)
       } else if (status.sessionId || currentSessionId) {
         // Generation may have completed while we were away — reload gallery
         const sessionIdToRefresh = currentSessionId || status.sessionId!
@@ -304,6 +311,8 @@ export function ImageTab() {
     if (status.generating) {
       setGenerating(true)
       setCancelling(status.cancelling === true)
+      setJobProgress(status.progress ?? null)
+      setJobStartTime(status.startTime)
       return
     }
 
@@ -740,6 +749,9 @@ export function ImageTab() {
           <ImageGallery
             generations={generations}
             generating={generating}
+            progress={jobProgress}
+            startTime={jobStartTime}
+            cancelling={cancelling}
             mode={sessionMode}
             onRegenerate={async (gen) => {
               // Iterate: set the output image as source for img2img

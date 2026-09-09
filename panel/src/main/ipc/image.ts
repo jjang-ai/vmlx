@@ -12,6 +12,7 @@ import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirector
 import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
 import {
   beginImageGeneration,
+  bindImageGenerationRequest,
   classifyImageGenerationError,
   clearImageGenerationAfterLocalAbort,
   clearImageGenerationSessionHistory,
@@ -346,6 +347,7 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      bindImageGenerationRequest(controller, logOwner, clientJobId)
       body.request_id = clientJobId
       imageRequestOwners.set(controller, { port: serverPort, requestId: clientJobId, headers: getImageFetchHeaders() })
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'generations', model, width, height, steps, guidance, seed, history_session_id: sessionId })
@@ -522,6 +524,7 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      bindImageGenerationRequest(controller, logOwner, clientJobId)
       body.request_id = clientJobId
       imageRequestOwners.set(controller, { port: serverPort, requestId: clientJobId, headers: getImageFetchHeaders() })
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'edits', model, width, height, steps, guidance, seed, history_session_id: sessionId })

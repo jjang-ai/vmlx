@@ -1885,6 +1885,17 @@
       "stopServerTitle": "サーバーを停止",
       "quantFull": "フル"
     },
+    "jobProgress": {
+      "waiting": "エンジンの状態を待機中",
+      "preparing": "画像を準備中",
+      "denoising": "ノイズ除去中",
+      "rendering": "画像を描画中",
+      "encoding": "画像をエンコード中",
+      "saving": "画像と履歴を保存中",
+      "cancelling": "キャンセル中…",
+      "checkpoint": "ステップチェックポイント {step} / {total}",
+      "checkpointHint": "モデルのチェックポイントであり、GPU の処理完了を示すものではありません。"
+    },
     "gallery": {
       "deleteConfirm": "この画像を削除しますか?ファイルは完全に削除されます。",
       "editedAlt": "編集済み",
