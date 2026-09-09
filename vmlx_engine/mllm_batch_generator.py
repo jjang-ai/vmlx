@@ -6161,6 +6161,47 @@ _NATIVE_MTP_REENTRY_SETTLE_TOKENS = 256
 _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS = 3
 
 
+@dataclass(frozen=True)
+class NativeMTPCalibrationSchedule:
+    """Keep ladder scheduling across a baseline measurement, not cost samples.
+
+    Verify-cycle counters restart on re-seed, so deadlines are remaining
+    cycles rather than old absolute counters. No model/cache tensors survive
+    through this record. A real loss/re-entry still starts a new phase.
+    """
+
+    promote_backoff: int
+    promotions: int
+    promote_delay: int
+    depth_probe_backoff: int
+    depth_probes: int
+    depth_probe_delay: int
+
+    @classmethod
+    def capture(cls, state: MLLMNativeMTPState) -> "NativeMTPCalibrationSchedule":
+        cycles = int(state.stats.cycles)
+
+        def delay(deadline: int) -> int:
+            return max(1, int(deadline) - cycles) if deadline > 0 else 0
+
+        return cls(
+            state.promote_backoff, state.promotions, delay(state.promote_at_cycle),
+            state.depth_probe_backoff, state.depth_probes,
+            delay(state.depth_probe_at_cycle),
+        )
+
+    def restore(self, state: MLLMNativeMTPState) -> None:
+        cycles = int(state.stats.cycles)
+        state.promote_backoff = self.promote_backoff
+        state.promotions = self.promotions
+        state.promote_at_cycle = cycles + self.promote_delay if self.promote_delay else 0
+        state.depth_probe_backoff = self.depth_probe_backoff
+        state.depth_probes = self.depth_probes
+        state.depth_probe_at_cycle = (
+            cycles + self.depth_probe_delay if self.depth_probe_delay else 0
+        )
+
+
 @dataclass
 class NativeMTPArTier:
     """Per-request AR tier after an AR-safety demotion (multimodal lane).
@@ -6194,6 +6235,7 @@ class NativeMTPArTier:
     calibrations: int = 0
     total_ar_ms: float = 0.0
     prev_measured_ar_ms: float = 0.0
+    calibration_schedule: Optional[NativeMTPCalibrationSchedule] = None
 
     def record_step(self, now: float) -> None:
         if self.last_step_t > 0.0:
@@ -6553,6 +6595,7 @@ def _native_mtp_maybe_ar_safety_fallback(
             tier = state.ar_tier or NativeMTPArTier(depth=max(1, int(state.ladder_depth or depth_now)))
             tier.calibration = True
             tier.reenter_depth = depth_now
+            tier.calibration_schedule = NativeMTPCalibrationSchedule.capture(state)
             tier.next_probe_tokens = _NATIVE_MTP_CALIBRATION_TOKENS
             tier.tokens_since_fallback = 0
             tier.step_walls_ms = []
@@ -17269,16 +17312,24 @@ class MLLMBatchGenerator:
             state.probe = False
             state.depth = _intended_depth
             tier.calibration = False
-            if state.depth == 1 and state.ladder_depth > 1:
+            schedule = tier.calibration_schedule
+            tier.calibration_schedule = None
+            if schedule is not None:
+                schedule.restore(state)
+            elif state.depth == 1 and state.ladder_depth > 1:
                 state.promote_at_cycle = int(state.stats.cycles) + _NATIVE_MTP_PROMOTE_FIRST_CYCLES
             logger.info(
                 "MLLM MTP[%s] calibration re-entry at D%d after %d AR tokens "
-                "(measured AR %.1fms/tok, seed wall=%.1fms)",
+                "(measured AR %.1fms/tok, seed wall=%.1fms) "
+                "promotion_backoff=%d promotion_attempts=%d promotion_in_cycles=%d",
                 req.request_id,
                 int(state.depth or 1),
                 tier.tokens_since_fallback,
                 measured,
                 (time.perf_counter() - _seed_t0) * 1000.0,
+                state.promote_backoff,
+                state.promotions,
+                max(0, state.promote_at_cycle - int(state.stats.cycles)),
             )
             return True
         state.probe = True

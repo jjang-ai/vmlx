@@ -857,6 +857,61 @@ def test_loss_reentry_probe_alternates_depth_and_spends_the_budget(monkeypatch):
     assert gen.seeds == [1, 3]
 
 
+def test_calibration_preserves_ladder_schedule_and_attempts(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.delenv("VMLX_NATIVE_MTP_AR_REENTRY", raising=False)
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: True)
+    tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(tier, 8)
+    state = _calibrated_running_state(m, tier, tok_per_cycle=1, cycles=900)
+    state.depth = 1
+    state.promote_backoff = 4
+    state.promotions = 2
+    state.promote_at_cycle = 1300
+    state.depth_probe_backoff = 3
+    state.depth_probes = 1
+    state.depth_probe_at_cycle = 1500
+    state.last_ar_measure_emitted = 0
+    assert m._native_mtp_maybe_ar_safety_fallback("cal-schedule", state)
+    assert tier.calibration
+    _ar_steps(tier, 8)
+    ok, resumed = _reseed(m, _FakeGen(m), tier)
+    assert ok and resumed.depth == 1 and not resumed.probe
+    assert resumed.promote_backoff == 4
+    assert resumed.promotions == 2
+    assert resumed.promote_at_cycle - resumed.stats.cycles == 400
+    assert resumed.depth_probe_backoff == 3
+    assert resumed.depth_probes == 1
+    assert resumed.depth_probe_at_cycle - resumed.stats.cycles == 600
+    assert tier.calibration_schedule is None
+    # Scheduling survives, but cost samples belong to the new measured phase.
+    assert resumed.ar_safety.ring == []
+    assert resumed.d1_ms_per_tok == 0
+
+
+def test_calibration_schedule_preserves_exhaustion_and_inactive_deadlines():
+    from vmlx_engine import mllm_batch_generator as m
+
+    prior = _vlm_state(m, depth=1)
+    prior.stats.cycles = 100
+    prior.promotions = m._NATIVE_MTP_MAX_PROMOTIONS
+    prior.promote_backoff = 5
+    prior.promote_at_cycle = 0
+    prior.depth_probes = m._NATIVE_MTP_MAX_DEPTH_PROBES
+    prior.depth_probe_at_cycle = 99
+    schedule = m.NativeMTPCalibrationSchedule.capture(prior)
+    resumed = _vlm_state(m, depth=1)
+    resumed.stats.cycles = 7
+    schedule.restore(resumed)
+    assert resumed.promotions == m._NATIVE_MTP_MAX_PROMOTIONS
+    assert resumed.promote_backoff == 5
+    assert resumed.promote_at_cycle == 0
+    assert resumed.depth_probes == m._NATIVE_MTP_MAX_DEPTH_PROBES
+    # A due deadline remains due on the next verify cycle, not zero/disabled.
+    assert resumed.depth_probe_at_cycle == 8
+
+
 def _calibrated_running_state(m, tier, *, tok_per_cycle, cycle_ms=45.0, cycles=40):
     """A resumed (calibration-returned) D3 run with a full judged window."""
     state = _vlm_state(m, depth=3)
