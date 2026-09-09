@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .mlx_memory import clear_mlx_memory_cache
+from .image_progress import observed_image_call
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,7 @@ class ImageGenResult:
     seed: int
     steps: int
     elapsed_seconds: float
+    job_id: str | None = None
 
     @property
     def b64_json(self) -> str:
@@ -727,9 +729,10 @@ class ImageGenEngine:
             kwargs["image_path"] = image_path
             kwargs["image_strength"] = image_strength
 
-        generated_image = self._model.generate_image(**kwargs)
+        generated_image, trace = self._generate_with_trace(**kwargs)
 
         elapsed = time.perf_counter() - start
+        trace.event("encoding_png")
         pil_image = generated_image.image
         buffer = io.BytesIO()
         pil_image.save(buffer, format="PNG")
@@ -740,6 +743,7 @@ class ImageGenEngine:
             f"{len(image_bytes) / 1024:.0f} KB"
         )
 
+        trace.event("encoded_png", bytes=len(image_bytes))
         return ImageGenResult(
             image_bytes=image_bytes,
             width=width,
@@ -748,6 +752,7 @@ class ImageGenEngine:
             seed=seed,
             steps=steps,
             elapsed_seconds=elapsed,
+            job_id=trace.job_id,
         )
 
     def edit(
@@ -823,12 +828,12 @@ class ImageGenEngine:
             )
             if negative_prompt and 'negative_prompt' in self._get_generate_params():
                 qwen_kwargs["negative_prompt"] = negative_prompt
-            generated_image = self._model.generate_image(**qwen_kwargs)
+            generated_image, trace = self._generate_with_trace(**qwen_kwargs)
         elif mclass == "Flux1Kontext":
             # Kontext uses reference image for subject conditioning
             # image_strength=None (default) = full denoising with reference conditioning
             # Passing a strength value skips denoising steps, causing noisy output
-            generated_image = self._model.generate_image(
+            generated_image, trace = self._generate_with_trace(
                 seed=seed,
                 prompt=prompt,
                 image_path=image_path,
@@ -842,7 +847,7 @@ class ImageGenEngine:
                 raise ValueError("Flux Fill requires a mask_path for inpainting")
             # Fill uses the mask to define regions — do NOT pass image_strength
             # (defaults to None = full denoising in masked area, which is correct)
-            generated_image = self._model.generate_image(
+            generated_image, trace = self._generate_with_trace(
                 seed=seed,
                 prompt=prompt,
                 image_path=image_path,
@@ -854,7 +859,7 @@ class ImageGenEngine:
             )
         elif mclass == "Flux2KleinEdit":
             # Klein Edit uses image_paths for reference — no image_strength
-            generated_image = self._model.generate_image(
+            generated_image, trace = self._generate_with_trace(
                 seed=seed,
                 prompt=prompt,
                 image_paths=[image_path],
@@ -865,7 +870,7 @@ class ImageGenEngine:
             )
         else:
             # Generic img2img fallback (works for Flux1, ZImage, etc.)
-            generated_image = self._model.generate_image(
+            generated_image, trace = self._generate_with_trace(
                 seed=seed,
                 prompt=prompt,
                 image_path=image_path,
@@ -877,6 +882,7 @@ class ImageGenEngine:
             )
 
         elapsed = time.perf_counter() - start
+        trace.event("encoding_png")
         pil_image = generated_image.image
         buffer = io.BytesIO()
         pil_image.save(buffer, format="PNG")
@@ -884,6 +890,7 @@ class ImageGenEngine:
 
         logger.info(f"Image edited in {elapsed:.1f}s: {width}x{height}")
 
+        trace.event("encoded_png", bytes=len(image_bytes))
         return ImageGenResult(
             image_bytes=image_bytes,
             width=width,
@@ -892,6 +899,13 @@ class ImageGenEngine:
             seed=seed,
             steps=steps,
             elapsed_seconds=elapsed,
+            job_id=trace.job_id,
+        )
+
+    def _generate_with_trace(self, **kwargs):
+        return observed_image_call(
+            self._model, model_name=self._model_name,
+            model_class=self._mflux_class, **kwargs,
         )
 
     # Explicit edit classes handled by edit(); each has its own branch and none

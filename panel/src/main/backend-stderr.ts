@@ -19,10 +19,14 @@ export function normalizeBackendStderrChunk(
   const events: BackendStderrEvent[] = [];
 
   while (true) {
-    const newlineIndex = remaining.indexOf("\n");
+    // Terminal progress writers use carriage returns without newlines.
+    // Preserve those records instead of buffering an entire denoising run.
+    const newlineIndex = remaining.search(/[\r\n]/);
     if (newlineIndex < 0) break;
-    const line = remaining.slice(0, newlineIndex + 1);
-    remaining = remaining.slice(newlineIndex + 1);
+    const line = remaining.slice(0, newlineIndex) + "\n";
+    const separatorLength = remaining.slice(newlineIndex, newlineIndex + 2) === "\r\n" ? 2 : 1;
+    remaining = remaining.slice(newlineIndex + separatorLength);
+    if (line === "\n") continue;
     if (isExpectedBackendStderrDisconnectLine(line)) {
       events.push({
         type: "disconnect",

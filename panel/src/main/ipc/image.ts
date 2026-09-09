@@ -33,6 +33,17 @@ let activeImageSessionId: string | null = null
 // orphaned server process that nobody tracks.
 let startServerChain: Promise<any> = Promise.resolve()
 
+function logImageClientJob(serverSessionId: string | null, fields: Record<string, unknown>): void {
+  if (!serverSessionId) return
+  const data = 'IMAGECLIENT ' + JSON.stringify(fields) + '\n'
+  try {
+    sessionManager.pushLog(serverSessionId, data)
+    sessionManager.emit('session:log', { sessionId: serverSessionId, data })
+  } catch (error) {
+    console.warn('[IMAGE] Could not publish job log:', error)
+  }
+}
+
 function findDownloadedImageModelPath(modelName: string, quantize: number): { localPath: string; modelId: string; repoId?: string } | null {
   const modelDef = resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
   const modelId = modelDef?.id || modelName
@@ -280,6 +291,8 @@ export function registerImageHandlers(): void {
     strength?: number       // img2img strength (0-1, optional)
   }) => {
     let generationController: AbortController | null = null
+    const logOwner = activeImageSessionId
+    const clientJobId = uuidv4()
     try {
       const { sessionId, prompt, negativePrompt, model, width, height, steps, guidance, seed, count, serverPort } = params
       const baseUrl = `http://127.0.0.1:${serverPort}`
@@ -315,6 +328,7 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'generations', model, width, height, steps, guidance, seed, history_session_id: sessionId })
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => {
@@ -364,10 +378,12 @@ export function registerImageHandlers(): void {
       }
 
       if (!resp.ok) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'http_rejected', status: resp.status })
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
 
-      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
+      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number; image_job_id?: string }> }
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'saving_outputs', image_job_ids: result.data.map(item => item.image_job_id).filter(Boolean) })
       const elapsed = (Date.now() - startTime) / 1000
 
       // If img2img, save source image to disk for gallery display
@@ -412,10 +428,12 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
     } catch (error) {
       console.error('[IMAGE] Generation failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'failed', error: errorMessage })
       return {
         success: false,
         error: errorMessage
@@ -445,6 +463,8 @@ export function registerImageHandlers(): void {
     serverPort: number
   }) => {
     let generationController: AbortController | null = null
+    const logOwner = activeImageSessionId
+    const clientJobId = uuidv4()
     try {
       const { sessionId, prompt, model, imageBase64, maskBase64, width, height, steps, guidance, strength, seed, serverPort } = params
       const baseUrl = `http://127.0.0.1:${serverPort}`
@@ -480,6 +500,7 @@ export function registerImageHandlers(): void {
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'request_submitted', endpoint: 'edits', model, width, height, steps, guidance, seed, history_session_id: sessionId })
       // 30-minute timeout for image edits (Qwen full precision can take 10+ minutes)
       // Use Node.js http.request instead of Electron fetch — Chromium's net stack
       // has its own socket timeout (~5 min) that ignores keepalive, causing
@@ -530,10 +551,12 @@ export function registerImageHandlers(): void {
       }
 
       if (!resp.ok) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'http_rejected', status: resp.status })
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
 
-      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
+      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number; image_job_id?: string }> }
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'saving_outputs', image_job_ids: result.data.map(item => item.image_job_id).filter(Boolean) })
       const elapsed = (Date.now() - startTime) / 1000
 
       // Save source image to disk for gallery display
@@ -574,10 +597,12 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
     } catch (error) {
       console.error('[IMAGE] Edit failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
+      logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'failed', error: errorMessage })
       return {
         success: false,
         error: errorMessage

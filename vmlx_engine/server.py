@@ -18393,7 +18393,7 @@ async def create_image(request: Request):
                         image_strength=image_strength if source_image_path else None,
                     )
                 except Exception as e:
-                    logger.error(f"Image generation failed: {e}")
+                    logger.exception("Image generation failed")
                     raise HTTPException(
                         status_code=500, detail=f"Image generation failed: {e}"
                     )
@@ -18403,6 +18403,7 @@ async def create_image(request: Request):
                         "b64_json": result.b64_json,
                         "revised_prompt": prompt,
                         "seed": result.seed,
+                        "image_job_id": getattr(result, "job_id", None),
                     }
                 )
         finally:
@@ -18749,7 +18750,7 @@ async def create_image_edit(request: Request):
                 except HTTPException:
                     raise
                 except Exception as e:
-                    logger.error(f"Image editing failed: {e}")
+                    logger.exception("Image editing failed")
                     raise HTTPException(
                         status_code=500, detail=f"Image editing failed: {e}"
                     )
@@ -18759,6 +18760,7 @@ async def create_image_edit(request: Request):
                         "b64_json": result.b64_json,
                         "revised_prompt": prompt,
                         "seed": result.seed,
+                        "image_job_id": getattr(result, "job_id", None),
                     }
                 )
 
