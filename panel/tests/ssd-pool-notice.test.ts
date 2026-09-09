@@ -3,6 +3,16 @@ import { readSsdPoolSnapshot, ssdPoolNoticeKind } from '../src/renderer/src/comp
 
 const snapshot = { root: '/cache', used: 950, cap: 1000, capacityEvicted: 0 }
 describe('SSD pool capacity notice', () => {
+  it('does not turn a stale maintenance-time snapshot into a new capacity warning', () => {
+    const budget = {
+      root: '/cache', bytes_after: 2000, max_size_bytes: 1000,
+      capacity_evicted_entries_total: 99, accounted: true, telemetry_stale: true,
+    }
+    expect(readSsdPoolSnapshot({ block_disk_cache: { global_budget: budget } })).toBeNull()
+    expect(readSsdPoolSnapshot({ block_disk_cache: { global_budget: {
+      ...budget, telemetry_stale: false,
+    } } })).not.toBeNull()
+  })
   it('uses actual effective bytes at arbitrary GB or percent-derived caps', () => {
     for (const cap of [1073741824, 399625232056, 7654321]) {
       expect(ssdPoolNoticeKind({ ...snapshot, cap, used: cap }, null)).toBe('capacity')

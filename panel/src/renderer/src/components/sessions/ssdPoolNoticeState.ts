@@ -8,7 +8,7 @@ export interface SsdPoolSnapshot {
 export function readSsdPoolSnapshot(stats: any): SsdPoolSnapshot | null {
   const b = stats?.block_disk_cache?.global_budget
   const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
-  if (!b || b.accounted !== true || typeof b.root !== 'string' || !b.root
+  if (!b || b.accounted !== true || b.telemetry_stale === true || typeof b.root !== 'string' || !b.root
     || !finite(b.bytes_after) || !finite(b.max_size_bytes)) return null
   // Older engines have only a combined removal counter. Never reinterpret it
   // as capacity pressure: it includes manual clear and ordinary janitor work.

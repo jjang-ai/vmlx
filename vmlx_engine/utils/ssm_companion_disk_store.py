@@ -1351,6 +1351,7 @@ class SSMCompanionDiskStore:
                     "bytes_after": global_health.bytes_after,
                     "compliant": global_health.compliant,
                     "accounted": global_health.accounted,
+                    "telemetry_stale": global_health.telemetry_stale,
                     "evicted_entries": global_health.evicted_entries,
                     "capacity_evicted_entries_total": global_health.capacity_evicted_entries_total,
                     "accounting_generation": global_health.accounting_generation,

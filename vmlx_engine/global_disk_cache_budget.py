@@ -37,7 +37,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -238,6 +238,9 @@ class GlobalBudgetResult:
     # Capacity-driven LRU removals only. Manual clears and routine orphan/temp
     # cleanup must never be presented as a user-configured capacity warning.
     capacity_evicted_entries_total: int = 0
+    # A health poll may reuse the last immutable snapshot while publication or
+    # maintenance owns the root. This is NOT a fresh accounting observation.
+    telemetry_stale: bool = False
 
 
 class GlobalDiskCacheBudget:
@@ -377,17 +380,22 @@ class GlobalDiskCacheBudget:
                     os.close(fd)
 
     @contextmanager
-    def _exclusive_guard(self) -> Iterator[None]:
-        with self._thread_lock:
+    def _exclusive_guard(self, *, blocking: bool = True) -> Iterator[None]:
+        if not self._thread_lock.acquire(blocking=blocking):
+            raise BlockingIOError("SSD budget telemetry deferred: root is busy")
+        try:
             fd = self._open_lock()
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+                fcntl.flock(fd, flags)
                 yield
             finally:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 finally:
                     os.close(fd)
+        finally:
+            self._thread_lock.release()
 
     @contextmanager
     def exclusive_mutation_guard(self) -> Iterator[bool]:
@@ -825,13 +833,25 @@ class GlobalDiskCacheBudget:
     def janitor_status(self) -> dict[str, Any]:
         """Source constants and the observed scan age, for /health."""
 
-        with self._thread_lock:
+        constants = {
+            "reconcile_interval_s": self._reconcile_interval_ns / 1e9,
+            "orphan_grace_s": self._orphan_grace_ns / 1e9,
+            "idle_rescan_interval_s": self._idle_rescan_interval_ns / 1e9,
+        }
+        if not self._thread_lock.acquire(blocking=False):
+            return {
+                **constants,
+                "seconds_since_physical_scan": None,
+                "last_result_scan_performed": None,
+                "idle_reconcile_due": None,
+                "telemetry_stale": True,
+            }
+        try:
             last = self._last_result
             since_scan_ns = time.monotonic_ns() - self._last_reconcile_monotonic_ns
             return {
-                "reconcile_interval_s": self._reconcile_interval_ns / 1e9,
-                "orphan_grace_s": self._orphan_grace_ns / 1e9,
-                "idle_rescan_interval_s": self._idle_rescan_interval_ns / 1e9,
+                **constants,
+                "telemetry_stale": False,
                 "seconds_since_physical_scan": (
                     round(since_scan_ns / 1e9, 3) if last is not None else None
                 ),
@@ -840,6 +860,8 @@ class GlobalDiskCacheBudget:
                 ),
                 "idle_reconcile_due": self._idle_reconcile_due_locked(),
             }
+        finally:
+            self._thread_lock.release()
 
     def _idle_reconcile_due_locked(self) -> bool:
         last = self._last_result
@@ -1601,12 +1623,15 @@ class GlobalDiskCacheBudget:
         one accounting file.  Reading only ``last_result`` can therefore stay
         stale forever in an idle process while another process advances or
         repairs the root.  This refresh reads the shared cap leases and ledger
-        under the short root lock; it never claims a physical scan occurred.
+        under a nonblocking root lock; it never claims a physical scan occurred.
+        Health runs on the API event loop. Waiting behind a writer/scan here
+        would stall unrelated requests. Mutation and durability paths retain
+        their blocking locks; only telemetry may reuse a marked stale result.
         """
 
         previous = self._last_result
         try:
-            with self._exclusive_guard():
+            with self._exclusive_guard(blocking=False):
                 maximum = self._effective_max_size_bytes_locked()
                 state = self._read_accounting_locked()
                 if state is None:
@@ -1660,6 +1685,27 @@ class GlobalDiskCacheBudget:
                 )
                 self._last_result = result
                 return result
+        except BlockingIOError:
+            # Do not replace the coordinator's authoritative last result with
+            # a telemetry fallback: maintenance scheduling also consumes it.
+            if previous is not None:
+                return replace(previous, telemetry_stale=True)
+            return GlobalBudgetResult(
+                max_size_bytes=self._requested_max_size_bytes,
+                bytes_before=0,
+                bytes_after=0,
+                evicted_entries=0,
+                evicted_bytes=0,
+                protected_recent_orphans=0,
+                compliant=False,
+                scan_performed=False,
+                reconciled_at_ns=0,
+                accounted=False,
+                accounting_generation=0,
+                reconciliation_generation=0,
+                error="SSD budget telemetry deferred: root is busy",
+                telemetry_stale=True,
+            )
         except (OSError, sqlite3.Error, KeyError, TypeError, ValueError) as exc:
             result = GlobalBudgetResult(
                 max_size_bytes=self._requested_max_size_bytes,

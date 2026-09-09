@@ -3820,6 +3820,7 @@ class BlockDiskStore:
             "bytes_after": global_health.bytes_after,
             "compliant": global_health.compliant,
             "accounted": global_health.accounted,
+            "telemetry_stale": global_health.telemetry_stale,
             "scan_performed": global_health.scan_performed,
             "evicted_entries": global_health.evicted_entries,
             # cumulative across every writer/process on this root (ledger)
