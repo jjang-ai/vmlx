@@ -8,6 +8,8 @@ type ActiveGeneration = {
   serverSessionId?: string | null
   progress?: ImageJobProgress
   logTails?: Record<string, string>
+  cancelServer?: () => Promise<void>
+  serverCancelPending?: Promise<void>
 }
 
 let activeGeneration: ActiveGeneration | null = null
@@ -31,11 +33,12 @@ export function getActiveImageGenerationController(): AbortController | null {
   return activeGeneration?.controller || null
 }
 
-export function bindImageGenerationRequest(controller: AbortController, serverSessionId: string | null, requestId: string): void {
+export function bindImageGenerationRequest(controller: AbortController, serverSessionId: string | null, requestId: string, cancelServer?: () => Promise<void>): void {
   if (activeGeneration?.controller !== controller) return
   activeGeneration.serverSessionId = serverSessionId
   activeGeneration.progress = { requestId, phase: 'waiting' }
   activeGeneration.logTails = {}
+  activeGeneration.cancelServer = cancelServer
 }
 
 export function recordImageGenerationLog(serverSessionId: string, data: string, stream: 'stdout' | 'stderr' | 'client' = 'client'): void {
@@ -93,6 +96,18 @@ export function markImageGenerationServerStopping(serverSessionId: string): bool
 
 export function wasImageGenerationCancelled(controller?: AbortController | null): boolean {
   return !!controller && abortReasons.get(controller) === 'cancel'
+}
+
+/** Ask the frozen request owner to stop cooperatively before process termination.
+ * The transport supplies its bounded timeout; a rejection must not prevent Stop.
+ */
+export async function requestImageGenerationServerStop(serverSessionId: string): Promise<void> {
+  const active = activeGeneration
+  if (!active || active.serverSessionId !== serverSessionId) return
+  markImageGenerationAbort(active.controller, 'cancel')
+  if (!active.cancelServer) return
+  active.serverCancelPending ??= Promise.resolve().then(active.cancelServer)
+  await active.serverCancelPending
 }
 
 export function classifyImageGenerationError(

@@ -1,5 +1,5 @@
 import { adoptNativeMtpConfig } from '../shared/nativeMtpAdoption'
-import { markImageGenerationServerStopping, recordImageGenerationLog } from './ipc/imageGenerationState'
+import { markImageGenerationServerStopping, recordImageGenerationLog, requestImageGenerationServerStop } from './ipc/imageGenerationState'
 import { GATEWAY_SINGLE_MODEL_MODE_KEY, isGatewaySettingEnabled } from '../shared/gatewaySettingsKeys'
 import {
   healthFailureToleranceCount,
@@ -2693,7 +2693,12 @@ export class SessionManager extends EventEmitter {
       s.type !== 'remote' &&
       (normalizePath(s.modelPath) === livePath || s.port === proc.port || s.pid === proc.pid)
     )
-    if (owner) markImageGenerationServerStopping(owner.id)
+    if (owner) {
+      markImageGenerationServerStopping(owner.id)
+      try { await requestImageGenerationServerStop(owner.id) } catch (error) {
+        this.pushLog(owner.id, `[WARNING] Image job cancel before Stop failed; terminating the server: ${error}`)
+      }
+    }
     this.killPid(proc.pid)
     await new Promise(r => setTimeout(r, 1500))
     try {
@@ -3672,6 +3677,9 @@ export class SessionManager extends EventEmitter {
 
       // Mark intentional stop on managed process to prevent crash misreport
       if (managed) managed.intentionalStop = true
+      try { await requestImageGenerationServerStop(sessionId) } catch (error) {
+        this.pushLog(sessionId, `[WARNING] Image job cancel before Stop failed; terminating the server: ${error}`)
+      }
 
       if (managed?.process) {
         await this.killChildProcess(managed.process)

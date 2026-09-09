@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -6,6 +6,7 @@ import {
   bindImageGenerationRequest,
   markImageGenerationServerStopping,
   wasImageGenerationCancelled,
+  requestImageGenerationServerStop,
   classifyImageGenerationError,
   isImageRequestCancellationResponse,
   clearImageGenerationAfterLocalAbort,
@@ -49,6 +50,18 @@ const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
 
 describe("image generation in-flight state survives tab switches", () => {
+  it('cancels only the frozen server request once and leaves cleanup to its HTTP completion', async () => {
+    resetImageGenerationStateForTests()
+    const controller = beginImageGeneration('history')
+    const cancel = vi.fn(async () => {})
+    bindImageGenerationRequest(controller, 'server', 'request', cancel)
+    await requestImageGenerationServerStop('other-server')
+    expect(cancel).not.toHaveBeenCalled()
+    await Promise.all([requestImageGenerationServerStop('server'), requestImageGenerationServerStop('server')])
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true })
+    finishImageGeneration(controller)
+  })
   it('marks only the stopped server and retains busy state until its request settles', () => {
     resetImageGenerationStateForTests()
     expect(markImageGenerationServerStopping('old-server')).toBe(false)

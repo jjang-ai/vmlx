@@ -65,6 +65,21 @@ afterEach(() => {
 })
 
 describe('explicit Stop cancels a queued start', () => {
+  it.each([false, true])('requests cooperative image cancellation before Stop even if cancel fails=%s', async (rejectCancel) => {
+    const manager = new SessionManager()
+    state.sessions = [{ id: 'image-owner', type: 'local', modelPath: modelBundle(), status: 'running', config: '{}' }]
+    const calls: string[] = []
+    const controller = beginImageGeneration('history')
+    bindImageGenerationRequest(controller, 'image-owner', 'request', async () => {
+      calls.push('cancel')
+      if (rejectCancel) throw new Error('cancel endpoint unavailable')
+    })
+    ;(manager as any).processes.set('image-owner', { process: { pid: 987654321 } })
+    vi.spyOn(manager as any, 'killChildProcess').mockImplementation(async () => { calls.push('kill') })
+    await manager.stopSession('image-owner')
+    expect(calls).toEqual(['cancel', 'kill'])
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true })
+  })
   it('marks the owning image request before manual stop without releasing it prematurely', async () => {
     const manager = new SessionManager()
     state.sessions = [{ id: 'image-owner', type: 'local', modelPath: modelBundle(), status: 'stopped', config: '{}' }]
@@ -88,6 +103,7 @@ describe('explicit Stop cancels a queued start', () => {
     })
     vi.spyOn(process, 'kill').mockImplementation(() => true)
     const stop = (manager as any).terminateDetectedLocalEngine({ modelPath, port: 8013, pid: 987654321 })
+    await vi.advanceTimersByTimeAsync(0)
     expect(kill).toHaveBeenCalledWith(987654321)
     await vi.advanceTimersByTimeAsync(1500)
     await stop
