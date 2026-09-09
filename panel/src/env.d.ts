@@ -526,6 +526,7 @@ declare global {
             apiKey?: string;
             logLevel?: string;
           },
+          onProgress?: (event: import("./shared/imageServerStartProgress").ImageServerStartProgress) => void,
         ) => Promise<{
           success: boolean;
           sessionId?: string;
