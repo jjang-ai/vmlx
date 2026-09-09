@@ -3,7 +3,7 @@ import json
 import logging
 import time
 import uuid
-from .image_requests import current_image_request
+from .image_requests import current_image_request, ImageRequestCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,9 @@ def observed_image_call(model, *, model_name, model_class, **kwargs):
         trace.check_cancelled()
         trace.event("model_call_returned")
         return result, trace
+    except ImageRequestCancelled:
+        trace.event("model_call_cancelled")
+        raise
     except BaseException:
         # Record cancellation/interrupt too, without converting its semantics.
         logger.exception("IMAGEJOB %s", json.dumps(dict(trace.fields, job_id=trace.job_id,

@@ -46,8 +46,9 @@ def test_queued_cancel_cannot_cancel_active_owner():
             await asyncio.sleep(0)
             assert cancel_image_request("second")["cancelled"] is True
             assert not first.cancelled.is_set()
-        with pytest.raises(HTTPException) as caught: await task
-        assert caught.value.detail["request_id"]=="second"
+            with pytest.raises(HTTPException) as caught: await asyncio.wait_for(task, .2)
+            assert caught.value.detail["request_id"]=="second"
+            assert lock.locked() and not first.cancelled.is_set()
         assert not lock.locked()
     asyncio.run(run())
 
