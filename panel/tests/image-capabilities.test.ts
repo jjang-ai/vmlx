@@ -7,8 +7,9 @@ const R = (p: string) => readFileSync(join(__dirname, '..', 'src', p), 'utf8')
 describe('image controls follow the loaded model\'s real capabilities (/health.image)', () => {
   it('the tab reads capabilities when the server runs and forgets them when it stops', () => {
     const tab = R('renderer/src/components/image/ImageTab.tsx')
-    expect(tab).toContain("fetchImageCapabilities(serverPort)")
-    expect(tab).toContain("if (serverStatus === 'stopped' || serverStatus === 'error') setCapabilities(null)")
+    expect(tab).toContain("imageRuntimeSnapshot(await resp.json())")
+    expect(tab).toContain("setCapabilities(snapshot.capabilities)")
+    expect(tab).toContain("setCapabilities(null)")
     expect(tab).toContain('capabilities={capabilities}')
   })
   it('settings hide edit strength and disable the negative prompt only when the model says so', () => {

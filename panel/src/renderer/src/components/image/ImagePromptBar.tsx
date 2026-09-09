@@ -31,6 +31,8 @@ const SIZE_PRESETS = [
 ]
 
 interface ImagePromptBarProps {
+  prompt: string
+  onPromptChange: (prompt: string) => void
   onGenerate: (prompt: string) => void
   disabled: boolean
   generating: boolean
@@ -54,9 +56,8 @@ interface ImagePromptBarProps {
   capabilities?: ImageCapabilities | null
 }
 
-export function ImagePromptBar({ capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, modelName, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
+export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, modelName, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
-  const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [showMaskPainter, setShowMaskPainter] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -78,9 +79,10 @@ export function ImagePromptBar({ capabilities, onGenerate, disabled, generating,
   // When Iterate button is clicked, focus the input
   useEffect(() => {
     if (iteratePrompt != null) {
-      setPrompt('')
-      setTimeout(() => textareaRef.current?.focus(), 100)
+      const timer = setTimeout(() => textareaRef.current?.focus(), 100)
+      return () => clearTimeout(timer)
     }
+    return undefined
   }, [iteratePrompt, iterateCounter])
 
   // Build the actual prompt sent to the engine

@@ -162,7 +162,7 @@ describe("image generation in-flight state survives tab switches", () => {
   it("fill/edit mask state is part of submit wiring and clears when source changes", () => {
     const src = readFileSync(IMAGE_TAB_TSX, "utf-8");
     expect(src).toContain("const handleSourceImageChange = useCallback");
-    expect(src).toContain("setMaskBase64(null)");
+    expect(src).toContain("imageDrafts.update(draftSnapshot, { sourceImage: img, maskBase64: null })");
     expect(src).toContain("onSourceImageChange={handleSourceImageChange}");
     expect(src).toMatch(
       /}\s*,\s*\[[^\]]*maskBase64[^\]]*\]\s*\)/s,

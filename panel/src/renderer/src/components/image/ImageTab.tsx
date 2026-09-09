@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from '../../i18n'
 import { ImageModelPicker } from './ImageModelPicker'
 import { ImagePromptBar } from './ImagePromptBar'
@@ -11,6 +11,7 @@ import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFr
 import { imageRuntimeSnapshot, type ImageCapabilities, type ImageServerStatus } from '../../../../shared/imageCapabilities'
 import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
 import { defaultImageRuntimeSettings } from '../../../../shared/imageRuntimeSettings'
+import { ImageDraftStore } from '../../../../shared/imageDrafts'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -59,9 +60,16 @@ interface ImageGenerationStatus {
   sessionId: string | null
 }
 
+// Survives page unmount, not application restart. Media stays out of preferences.
+const imageDrafts = new ImageDraftStore()
+
 export function ImageTab() {
   const { t } = useTranslation()
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const draftSnapshot = useSyncExternalStore(imageDrafts.subscribe, imageDrafts.getSnapshot)
+  const { currentSessionId, draft } = draftSnapshot
+  const { prompt, sourceImage, maskBase64, iteratePrompt, iterateCounter } = draft
+  const setPrompt = (prompt: string) => { imageDrafts.update(draftSnapshot, { prompt }) }
+  const setMaskBase64 = (maskBase64: string | null) => { imageDrafts.update(draftSnapshot, { maskBase64 }) }
   const [sessions, setSessions] = useState<ImageSessionInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [selectedModelDisplayName, setSelectedModelDisplayName] = useState<string | null>(null)
@@ -73,7 +81,11 @@ export function ImageTab() {
   const serverSessionIdRef = useRef<string | null>(null)
   const healthRevision = useRef(0)
   const wakePending = useRef(false)
-  const setServerSessionId = (id: string | null) => { serverSessionIdRef.current = id; _setServerSessionId(id) }
+  const setServerSessionId = (id: string | null) => {
+    serverSessionIdRef.current = id
+    _setServerSessionId(id)
+    if (id) imageDrafts.activate(id)
+  }
   const [showSettings, setShowSettings] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(true)
@@ -89,11 +101,6 @@ export function ImageTab() {
 
   // Edit mode state
   const [sessionMode, setSessionMode] = useState<'generate' | 'edit'>('generate')
-  const [sourceImage, setSourceImage] = useState<{ dataUrl: string; name: string } | null>(null)
-  const [maskBase64, setMaskBase64] = useState<string | null>(null)
-  // Iterate: pre-fill prompt in the prompt bar (counter forces re-trigger for same prompt)
-  const [iteratePrompt, setIteratePrompt] = useState<string | null>(null)
-  const [iterateCounter, setIterateCounter] = useState(0)
 
   // Image generation settings (quick settings + full settings)
   const [settings, setSettings] = useState<ImageSettings>(() => defaultImageRuntimeSettings('', 0))
@@ -164,11 +171,9 @@ export function ImageTab() {
       if (!submissionGuard.current.canApply(snapshot)) return
       if (status.generating) {
         setGenerating(true)
-        if (status.sessionId) setCurrentSessionId(status.sessionId)
       } else if (status.sessionId || currentSessionId) {
         // Generation may have completed while we were away — reload gallery
-        const sessionIdToRefresh = status.sessionId || currentSessionId!
-        setCurrentSessionId(sessionIdToRefresh)
+        const sessionIdToRefresh = currentSessionId || status.sessionId!
         loadGenerations(sessionIdToRefresh)
         loadSessions()
       }
@@ -274,7 +279,7 @@ export function ImageTab() {
     } else {
       setGenerations([])
     }
-  }, [currentSessionId])
+  }, [currentSessionId, draftSnapshot.owner, draftSnapshot.epoch])
 
   const loadSessions = useCallback(async () => {
     const result = await window.api.image.getSessions()
@@ -282,8 +287,9 @@ export function ImageTab() {
   }, [])
 
   const loadGenerations = useCallback(async (sessionId: string) => {
+    const token = imageDrafts.getSnapshot()
     const result = await window.api.image.getGenerations(sessionId)
-    setGenerations(result || [])
+    if (imageDrafts.isCurrent(token) && token.currentSessionId === sessionId) setGenerations(result || [])
   }, [])
 
   const syncGenerationStatus = useCallback(async () => {
@@ -293,16 +299,12 @@ export function ImageTab() {
     if (!submissionGuard.current.canApply(snapshot)) return
     if (status.generating) {
       setGenerating(true)
-      if (status.sessionId && status.sessionId !== currentSessionId) {
-        setCurrentSessionId(status.sessionId)
-      }
       return
     }
 
     setGenerating(false)
-    const sessionIdToRefresh = status.sessionId || currentSessionId
+    const sessionIdToRefresh = currentSessionId
     if (sessionIdToRefresh) {
-      setCurrentSessionId(sessionIdToRefresh)
       await loadGenerations(sessionIdToRefresh)
       await loadSessions()
     }
@@ -316,9 +318,8 @@ export function ImageTab() {
   }, [generating, syncGenerationStatus])
 
   const handleSourceImageChange = useCallback((img: { dataUrl: string; name: string } | null) => {
-    setSourceImage(img)
-    setMaskBase64(null)
-  }, [])
+    imageDrafts.update(draftSnapshot, { sourceImage: img, maskBase64: null })
+  }, [draftSnapshot])
 
   // Main-process start failures carry a stable code plus parameters; translate
   // those here and fall back to the English message the process sent.
@@ -369,8 +370,8 @@ export function ImageTab() {
 
     // Use the explicit category from model picker — no guessing
     setSessionMode(mode)
-    setSourceImage(null)
-    setMaskBase64(null)
+    // Keep the current draft until validation succeeds and a new server owner
+    // is activated. A rejected folder must not consume an unsent edit.
 
     // Reset ALL settings to defaults for the new model (not just steps/quantize).
     // Without this, guidance, strength, width, height, count, seed, negativePrompt
@@ -477,6 +478,7 @@ export function ImageTab() {
     if (owner === null) return
     setGenerating(true)
     setError(null)
+    const draftToken = imageDrafts.getSnapshot()
 
     try {
       // Create image session if we don't have one
@@ -485,7 +487,7 @@ export function ImageTab() {
         const result = await window.api.image.createSession(selectedModel, sessionMode)
         if (result.success && result.session) {
           sessionId = result.session.id
-          setCurrentSessionId(sessionId)
+          imageDrafts.promote(draftToken, sessionId!)
           await loadSessions()
         } else {
           throw new Error(t('image.tab.createSessionFailed'))
@@ -533,7 +535,7 @@ export function ImageTab() {
       }
 
       if (result.success && result.generations) {
-        setGenerations(prev => [...prev, ...result.generations])
+        await loadGenerations(sessionId!)
         await loadSessions() // Refresh session list (updatedAt changed)
       } else {
         setError(result.error || (sessionMode === 'edit' ? t('image.tab.editFailed') : t('image.tab.generationFailed')))
@@ -543,7 +545,7 @@ export function ImageTab() {
     } finally {
       if (submissionGuard.current.finish(owner)) setGenerating(false)
     }
-  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, settingsOwner, sessionMode, sourceImage, maskBase64, loadSessions])
+  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, settingsOwner, sessionMode, sourceImage, maskBase64, loadSessions, loadGenerations])
 
   const handleStop = useCallback(async () => {
     try {
@@ -595,12 +597,9 @@ export function ImageTab() {
   }, [serverStatus, t])
 
   const handleNewSession = useCallback(() => {
-    setCurrentSessionId(null)
+    imageDrafts.newConversation()
     setGenerations([])
-    setSourceImage(null)
-    setMaskBase64(null)
     setError(null)
-    setIteratePrompt(null)
     // Reset mode to match the currently running model's category
     if (selectedModel) {
       const modelDef = getImageModel(selectedModel) || resolveImageModelFromDirectoryName(selectedModel.split('/').filter(Boolean).pop() || selectedModel)
@@ -609,11 +608,8 @@ export function ImageTab() {
   }, [selectedModel])
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
-    setCurrentSessionId(sessionId)
-    setSourceImage(null)
-    setMaskBase64(null)
+    imageDrafts.select(sessionId)
     setError(null)
-    setIteratePrompt(null)
     // Restore sessionMode from the selected session's type
     const session = sessions.find(s => s.id === sessionId)
     if (session?.sessionType) {
@@ -622,15 +618,18 @@ export function ImageTab() {
   }, [sessions])
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
-    await window.api.image.deleteSession(sessionId)
+    const result = await window.api.image.deleteSession(sessionId)
+    if (!result.success) {
+      setError(result.error || t('image.tab.deleteFailedPlain'))
+      return
+    }
+    imageDrafts.remove(sessionId)
     if (currentSessionId === sessionId) {
-      setCurrentSessionId(null)
       setGenerations([])
-      handleSourceImageChange(null)
       setError(null)
     }
     await loadSessions()
-  }, [currentSessionId, handleSourceImageChange, loadSessions])
+  }, [currentSessionId, loadSessions, t])
 
   const handleSettingsChange = useCallback((newSettings: ImageSettings) => {
     settingsEdited.current = true
@@ -741,12 +740,18 @@ export function ImageTab() {
               // Iterate: set the output image as source for img2img
               // Read the generated image and set as source
               try {
+                const token = imageDrafts.getSnapshot()
                 const dataUrl = await window.api.image.readFile(gen.imagePath)
+                if (!imageDrafts.isCurrent(token)) return
                 if (!dataUrl) {
                   setError(t('image.tab.iterateLoadFailedDeleted'))
                   return
                 }
-                handleSourceImageChange({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
+                imageDrafts.update(token, {
+                  sourceImage: { dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` },
+                  maskBase64: null, prompt: '', iteratePrompt: gen.prompt,
+                  iterateCounter: token.draft.iterateCounter + 1,
+                })
                 // Restore settings from this generation
                 settingsEdited.current = true
                 setSettings(prev => ({
@@ -760,8 +765,6 @@ export function ImageTab() {
                   seed: undefined,
                 }))
                 // Pre-fill the prompt bar with the original prompt so user can modify
-                setIteratePrompt(gen.prompt)
-                setIterateCounter(c => c + 1) // force re-trigger even if same prompt
               } catch (err) {
                 console.error('Failed to load image for iteration:', err)
                 setError(t('image.tab.iterateLoadFailed'))
@@ -788,6 +791,9 @@ export function ImageTab() {
         </div>
 
         <ImagePromptBar
+          key={`${draftSnapshot.owner}:${currentSessionId}:${draftSnapshot.epoch}`}
+          prompt={prompt}
+          onPromptChange={setPrompt}
           onGenerate={handleSubmit}
           disabled={serverStatus !== 'running' || !settingsOwner}
           generating={generating}
@@ -802,7 +808,7 @@ export function ImageTab() {
           onMaskChange={setMaskBase64}
           iteratePrompt={iteratePrompt}
           iterateCounter={iterateCounter}
-          onClearIterate={() => { setIteratePrompt(null); handleSourceImageChange(null) }}
+          onClearIterate={() => { imageDrafts.update(draftSnapshot, { iteratePrompt: null, sourceImage: null, maskBase64: null }) }}
         />
       </div>
     </div>
