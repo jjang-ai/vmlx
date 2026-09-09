@@ -325,7 +325,7 @@ def _qwen4_native_artifact_digest(files: tuple) -> str:
 
 _QWEN4_GDN_MATH_ABI = "stock-lanes32-v2"
 _QWEN4_CHECKPOINT_MATH_ABI = "stock-segments-v2"
-_QWEN4_VERIFY_MATH_ABI = "stock-order-sparse-qk-tail-pv-v4"
+_QWEN4_VERIFY_MATH_ABI = "stock-order-sparse-qk-absolute16-pv-v5"
 
 
 def _qwen4_native_artifact_identity() -> str:

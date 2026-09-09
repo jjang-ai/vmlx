@@ -150,6 +150,35 @@ def test_certified_block_pv_preserves_every_mma_tail(rows, dtype, context, monke
     assert bool(mx.array_equal(got, ref))
 
 
+def test_compact_pv_preserves_absolute_reduction_groups(monkeypatch):
+    """Exactness must exercise compaction, not silently use the full PV path."""
+    monkeypatch.setenv("VMLX_QWEN4_VERIFY_SDPA", "1")
+    q, k, v, mask = tensors(4, 32771)
+    real_take = mx.take
+    selected = []
+
+    def observe(array, indices, axis=None, **kwargs):
+        if array is v and axis == 2:
+            selected.append(indices)
+        return real_take(array, indices, axis=axis, **kwargs)
+
+    monkeypatch.setattr(mx, "take", observe)
+    got = qwen4_verify_sdpa(
+        q, k, v, mask, scale=0.0625,
+        selected_token_bound=2051, selected_four_token_block_bound=513,
+    )
+    ref = mx.fast.scaled_dot_product_attention(q, k, v, mask=mask, scale=0.0625)
+    mx.eval(got, ref)
+    assert bool(mx.array_equal(got, ref))
+    assert len(selected) == 1
+    indices = selected[0]
+    assert indices.shape == (4, 513 * 16 + 3)
+    groups = indices[:, :-3].reshape(4, 513, 16)
+    assert bool(mx.all(groups[:, :, :1] % 16 == 0))
+    assert bool(mx.all(groups == groups[:, :, :1] + mx.arange(16)))
+    assert bool(mx.all(indices[:, -3:] == mx.arange(32768, 32771)))
+
+
 @pytest.mark.parametrize("block_bound", [None, 0, -1, True, 0.5, 4096])
 def test_uncertified_or_dense_block_pv_retains_exact_fallback(block_bound, monkeypatch):
     monkeypatch.setenv("VMLX_QWEN4_VERIFY_SDPA", "1")

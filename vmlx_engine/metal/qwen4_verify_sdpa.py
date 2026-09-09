@@ -91,8 +91,8 @@ def qwen4_verify_sdpa(
             scores,
             axis=-1,
         )
-        # Softmax must retain absolute positions. PV can compact certified
-        # four-token blocks only with the stock 16-token tail alignment.
+        # Softmax must retain absolute positions. PV must retain complete
+        # absolute 16-token reduction groups, not just the final K % 16.
         probabilities = mx.softmax(
             dense_scores + mask[0, 0][None, None, :, None, :],
             axis=-1,
@@ -104,17 +104,19 @@ def qwen4_verify_sdpa(
         ):
             total = k.shape[2]
             bulk = total // 16 * 16
-            # The stock MMA reduction visits groups of 16 K positions.
-            # Pad selected four-token blocks to a multiple of 16 tokens,
-            # then append the original partial tail. Keeping K % 16 and
-            # the tail's absolute contents preserves its dispatch/rounding.
+            # Repacking four-token blocks into different groups changes the
+            # reduction tree on M5 even when the compacted K has the same
+            # remainder. Keep every lane of each selected absolute group,
+            # including its masked zeros, and append the original tail.
+            # At most one 16-token group is needed per selected four-token
+            # block, so the caller's bound remains a conservative capacity.
             block_count = min(
-                ((selected_four_token_block_bound + 3) // 4) * 4,
-                bulk // 4,
+                selected_four_token_block_bound,
+                bulk // 16,
             )
-            if block_count * 4 < bulk:
+            if block_count * 16 < bulk:
                 keep = mx.any(
-                    mx.isfinite(mask[0, 0, :, :bulk]).reshape(rows, bulk // 4, 4),
+                    mx.isfinite(mask[0, 0, :, :bulk]).reshape(rows, bulk // 16, 16),
                     axis=-1,
                 )
                 blocks = mx.sort(
@@ -123,7 +125,7 @@ def qwen4_verify_sdpa(
                     )[:, :block_count],
                     axis=-1,
                 )
-                pv_indices = (blocks[:, :, None] * 4 + mx.arange(4)).reshape(rows, -1)
+                pv_indices = (blocks[:, :, None] * 16 + mx.arange(16)).reshape(rows, -1)
                 if bulk < total:
                     tail = mx.broadcast_to(
                         mx.arange(bulk, total)[None], (rows, total - bulk)
