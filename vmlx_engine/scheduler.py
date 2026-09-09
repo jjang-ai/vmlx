@@ -4667,6 +4667,71 @@ class Scheduler:
             boundary,
         )
 
+    def _persist_hybrid_ssd_companion(
+        self, request: Request, store_tokens: List[int], block_table: Any
+    ) -> None:
+        """Publish the native half of a text-hybrid SSD prefix before its fence.
+
+        RAM capacity zero must not disable SSD write-through. Deferring the
+        companion until idle (or deriving it on the next hit) leaves a durable
+        KV-only prefix behind the tool-call publication barrier. Work here is
+        request-owned and aligned to the prefix the block store actually kept.
+        Other typed/native cache contracts retain their own publication paths.
+        """
+        companion = getattr(self, "_ssm_state_cache", None)
+        if (
+            not getattr(self, "_is_hybrid", False)
+            or getattr(self, "_uses_dsv4_cache", False)
+            or getattr(self, "_uses_zaya_cache", False)
+            or getattr(self, "_mixed_attention_cache_model", False)
+            or companion is None
+            or not companion.disk_enabled
+        ):
+            return
+        boundary = int(getattr(block_table, "num_tokens", 0) or 0)
+        if boundary <= 0 or boundary > len(store_tokens):
+            raise RuntimeError("hybrid SSD companion has no valid retained KV boundary")
+        # This text-only rederive cannot reproduce media embeddings. Do not
+        # publish a complete-state claim under a media-salted KV identity.
+        if getattr(request, "_cache_extra_keys", None):
+            raise RuntimeError("hybrid SSD companion requires its media-aware owner")
+        tokens = list(store_tokens[:boundary])
+        started = time.perf_counter()
+        seed_len = 0
+        if not companion.has_complete(tokens, boundary):
+            reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
+            if reconstructed is not None and getattr(self, "_kv_cache_bits", 0):
+                reconstructed = self._dequantize_cache_for_use(reconstructed)
+            seed, seed_len = self._seed_cache_from_ssm_checkpoint(
+                request, reconstructed=reconstructed or [],
+                ssm_tokens=tokens, fetch_num=boundary,
+            )
+            clean = self._prefill_for_prompt_only_cache(
+                tokens, base_cache=seed, base_token_count=seed_len,
+            )
+            if clean is None or len(clean) != self._hybrid_num_layers:
+                raise RuntimeError("hybrid SSD companion clean boundary unavailable")
+            kv_positions = set(self._hybrid_kv_positions or [])
+            states = [layer for i, layer in enumerate(clean) if i not in kv_positions]
+            if not states:
+                raise RuntimeError("hybrid SSD companion native layers unavailable")
+            # store() detaches and materializes each native layer; never donate
+            # mutable post-generation state or retain an unbounded RAM mirror.
+            companion.store(tokens, boundary, states)
+        key = companion._key(tokens, boundary)
+        if not companion._disk.wait_for_write(key, timeout=30.0):
+            raise RuntimeError("hybrid SSD companion write failed or timed out")
+        self._ssm_rederive_queue = [
+            item for item in getattr(self, "_ssm_rederive_queue", [])
+            if not (len(item) >= 3 and item[2] == request.request_id)
+        ]
+        logger.info(
+            "Hybrid SSD companion terminal: request=%s tokens=%d seed_tokens=%d "
+            "hash=%s durable=true elapsed_ms=%.3f",
+            request.request_id, boundary, seed_len, key[:12],
+            (time.perf_counter() - started) * 1000.0,
+        )
+
     def _cache_reuse_contract(self) -> str:
         """Name the active prompt-cache state contract for telemetry/policy."""
         if self._uses_dsv4_cache:
@@ -11119,6 +11184,9 @@ class Scheduler:
                                     request_id,
                                     store_tokens,
                                     _stored_block_table,
+                                )
+                                self._persist_hybrid_ssd_companion(
+                                    request, store_tokens, _stored_block_table,
                                 )
                                 self._dsv4_trace_timing(
                                     "store_cache",
