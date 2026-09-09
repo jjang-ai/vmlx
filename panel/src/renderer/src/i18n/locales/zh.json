@@ -1049,6 +1049,7 @@
       "blockDiskCapacity": "有效 SSD 块索引容量：{{blockSize}} 个 token/块 x {{usableBlocks}} 个可用块（配置 {{maxBlocks}} 个，保留 1 个）= {{tokens}} 个 token",
       "ramCacheTradeoffNotice": "纯 SSD 缓存策略：所有模型的内存分页缓存和媒体预处理 RAM 缓存均已锁定关闭。可复用提示会持久化到 SSD，缓存负载仅瞬时恢复；图像、视频和音频处理张量会在每次请求后释放。",
       "blockCacheMaxPercent": "SSD 缓存大小（磁盘百分比）",
+      "blockCacheSavedGbOverride": "已保存的显式限制：{gb} GB。在更改百分比之前，此限制优先于上方的百分比。更改百分比将替换已保存的 GB 限制。",
       "blockCacheMaxPercentTooltip": "受管理的块缓存根目录可使用的最大磁盘空间，以该卷的百分比表示。用百分比而不是固定的 GB 数，可以让缓存大小与机器相称。该容量由模型/配置命名空间和类型化伴随状态共享：大小上限适用于此根目录下所有受管理的子目录和类型化伴随数据；当多个运行中的会话各自提供百分比时，将采用最小的有限上限。仅当没有任何运行中的会话提供有限上限时，设为 0（无限制）才会生效。",
       "blockCacheSharedBudgetNote": "该容量由所有会话共享：应用只使用一个缓存文件夹，占满时会跨所有模型删除最旧的提示，包括你当前没有在用的模型。",
       "clearSsdCache": "清除此会话的 SSD 缓存",

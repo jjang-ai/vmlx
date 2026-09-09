@@ -1111,7 +1111,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               label={t('sessions.config.blockCacheMaxPercent')}
               tooltip={t('sessions.config.blockCacheMaxPercentTooltip')}
               value={config.blockDiskCacheMaxPercent}
-              onChange={v => onChange('blockDiskCacheMaxPercent', v)}
+              onChange={v => {
+                // An explicit edit switches away from a saved GB override.
+                // Keep the own undefined property: IPC uses it to delete the
+                // old value; merely omitting it would merge the GB cap back in.
+                onChange('blockDiskCacheMaxGb', undefined)
+                onChange('blockDiskCacheMaxPercent', v)
+              }}
               min={0}
               max={90}
               step={1}
@@ -1120,6 +1126,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel={t('sessions.cache.unlimited')}
             />
+            {Number.isFinite(config.blockDiskCacheMaxGb) && (config.blockDiskCacheMaxGb ?? 0) > 0 && (
+              <InfoNote text={t('sessions.config.blockCacheSavedGbOverride', { gb: config.blockDiskCacheMaxGb! })} />
+            )}
             {/* The engine trims ONE cache root shared by every session, so this
                 budget is a total rather than a per-session allowance. Saying so
                 here keeps the control honest: two sessions set to different
