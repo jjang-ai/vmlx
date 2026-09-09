@@ -120,6 +120,22 @@ describe('session generation-default hydration', () => {
       .toBe(32768)
   })
 
+  it.each([4096, 3072, 16113])('does not present effective engine cap %d as a bundle declaration', cap => {
+    const result = applyBundleGenerationDefaultsToSessionConfig(
+      { maxTokens: 4096, defaultMaxNewTokens: 12000, unrelated: true },
+      { maxNewTokens: cap, maxNewTokensFromEngine: true, temperature: 0.6 },
+    )
+    expect(result).toMatchObject({
+      maxTokens: 4096, defaultMaxNewTokens: 0, defaultTemperature: 60, unrelated: true,
+    })
+  })
+
+  it('keeps default inheritance rather than promoting an observed engine limit', () => {
+    expect(applyBundleGenerationDefaultsToSessionConfig(
+      { maxTokens: 0 }, { maxNewTokens: 4096, maxNewTokensFromEngine: true },
+    )).toMatchObject({ maxTokens: 0, defaultMaxNewTokens: 0 })
+  })
+
   it('resets absent bundle defaults to neutral inheritance sentinels', () => {
     expect(applyBundleGenerationDefaultsToSessionConfig({ unrelated: true }, null)).toEqual({
       unrelated: true,

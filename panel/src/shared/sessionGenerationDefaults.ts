@@ -6,6 +6,8 @@ export interface BundleGenerationDefaults {
   minP?: number
   repeatPenalty?: number
   maxNewTokens?: number
+  /** Effective running-server cap, not a declaration in the model bundle. */
+  maxNewTokensFromEngine?: boolean
   source?: 'generation_config' | 'jang_config'
 }
 
@@ -140,7 +142,10 @@ export function applyBundleGenerationDefaultsToSessionConfig<T extends object>(
     defaultRepetitionPenalty: defaults?.repeatPenalty != null
       ? Math.round(defaults.repeatPenalty * 100)
       : 0,
-    defaultMaxNewTokens: defaults?.maxNewTokens != null
+    // Health can include an explicit CLI override or a transient headroom cap.
+    // Neither is a bundle default that should be advertised by Reset/Auto.
+    // Keep config.maxTokens untouched; it owns the explicit server limit.
+    defaultMaxNewTokens: defaults?.maxNewTokens != null && !defaults.maxNewTokensFromEngine
       ? Math.max(0, Math.round(defaults.maxNewTokens))
       : 0,
     defaultDoSample: typeof defaults?.doSample === 'boolean' ? defaults.doSample : undefined,
