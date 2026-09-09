@@ -9,7 +9,7 @@ export interface ImageCapabilities {
   mflux_class?: string
   quantize?: number | null
   mode?: 'generate' | 'edit'
-  /** generate_image takes a negative prompt (Flux1, QwenImage, QwenImageEdit do; Klein does not). */
+  /** Adapter actually uses negative conditioning; a signature alone is insufficient (Flux1 accepts but ignores it). */
   negative_prompt?: boolean
   /** img2img strength on a generation model (the gallery's Iterate). */
   variation_strength?: boolean
@@ -23,6 +23,14 @@ export interface ImageCapabilities {
 }
 
 export type ImageServerStatus = 'stopped' | 'starting' | 'running' | 'standby' | 'error'
+
+/** Keep non-negative finite user guidance. There is no universal upper bound:
+ * the established Fill preset itself is 30. Empty/invalid input retains the
+ * existing zero behavior rather than substituting an unrelated model default. */
+export function imageGuidanceFromInput(raw: string): number {
+  const value = Number.parseFloat(raw)
+  return Number.isFinite(value) ? Math.max(0, value) : 0
+}
 
 /** Native mflux Config.init_time_step skips more denoising at higher values.
  * Scope this wording to the adapters whose source-preservation contract is

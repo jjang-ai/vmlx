@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, HelpCircle } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import type { ImageCapabilities } from '../../../../shared/imageCapabilities'
+import { imageGuidanceFromInput, type ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 interface ImageSettingsData {
   steps: number
@@ -94,10 +94,10 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
           <input
             type="number"
             value={settings.guidance}
-            onChange={(e) => update('guidance', Math.max(0, Math.min(20, parseFloat(e.target.value) || 0)))}
+            data-vmlx-control="image-guidance-settings"
+            onChange={(e) => update('guidance', imageGuidanceFromInput(e.target.value))}
             className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
             min={0}
-            max={20}
             step={0.5}
           />
         </div>

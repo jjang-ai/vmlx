@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, Cli
 import { Send, ImagePlus, X, Pencil, RefreshCw, HelpCircle, Paintbrush } from 'lucide-react'
 import { MaskPainter } from './MaskPainter'
 import { useTranslation } from '../../i18n'
-import { imageVariationPreservesSource, type ImageCapabilities } from '../../../../shared/imageCapabilities'
+import { imageGuidanceFromInput, imageVariationPreservesSource, type ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 /** Inline help icon with tooltip */
 function Help({ tip }: { tip: string }) {
@@ -56,14 +56,15 @@ interface ImagePromptBarProps {
   capabilities?: ImageCapabilities | null
 }
 
-export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, modelName, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
+export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
   const [dragOver, setDragOver] = useState(false)
   const [showMaskPainter, setShowMaskPainter] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Fill model can appear as 'fill' (registry ID), 'dev-fill' (mflux name), or contain 'fill' in path
-  const isFillModel = modelName === 'fill' || modelName === 'dev-fill' || modelName?.toLowerCase().includes('fill') === true
+  // The loaded adapter owns the mask contract. Local folders and served
+  // aliases may be renamed; a name containing "fill" proves nothing.
+  const isFillModel = mode === 'edit' && capabilities?.loaded === true && capabilities.mask === 'required'
 
   const isEdit = mode === 'edit'
   // Variation mode: gen model with source image from Iterate button
@@ -251,10 +252,10 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
         <div className="flex items-center gap-1">
           <label className="text-muted-foreground">{t('image.prompt.guidance')}</label>
           <Help tip={t('image.prompt.guidanceTip')} />
-          <input type="number" value={settings.guidance}
-            onChange={(e) => onSettingsChange({ ...settings, guidance: Math.max(0, Math.min(20, parseFloat(e.target.value) || 0)) })}
+          <input type="number" value={settings.guidance} data-vmlx-control="image-guidance-quick"
+            onChange={(e) => onSettingsChange({ ...settings, guidance: imageGuidanceFromInput(e.target.value) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
-            min={0} max={20} step={0.5} />
+            min={0} step={0.5} />
         </div>
         {/* Strength: edit mode / variation mode, and only when the loaded model takes it */}
         {((isEdit && capabilities?.edit_strength !== false) || (isVariation && capabilities?.variation_strength !== false)) && (

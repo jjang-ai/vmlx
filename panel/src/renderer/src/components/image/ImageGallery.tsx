@@ -283,7 +283,7 @@ function ImageCard({
             {generation.width}x{generation.height}
           </span>
           <span>{t('image.gallery.stepsCount', { n: generation.steps })}</span>
-          {generation.strength != null && (
+          {isVariation && generation.strength != null && (
             <span>{t('image.gallery.strengthLabel', { v: generation.strength })}</span>
           )}
           {generation.elapsedSeconds != null && (
