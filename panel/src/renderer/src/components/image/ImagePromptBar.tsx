@@ -257,6 +257,8 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
           <label className="text-muted-foreground">{t('image.prompt.guidance')}</label>
           <Help tip={t('image.prompt.guidanceTip')} />
           <input type="number" value={settings.guidance} data-vmlx-control="image-guidance-quick"
+            disabled={capabilities?.guidance === false}
+            title={capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
             onChange={(e) => onSettingsChange({ ...settings, guidance: imageGuidanceFromInput(e.target.value) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
             min={0} step={0.5} />

@@ -210,6 +210,20 @@ class TestImageCapabilities:
         assert caps["negative_prompt"] is False
         assert caps["variation_strength"] is True
 
+    @pytest.mark.parametrize("supported", [False, True])
+    def test_flux_guidance_uses_loaded_model_config(self, supported):
+        from types import SimpleNamespace
+        engine = self._engine("Flux1", ["guidance"])
+        engine._model.model_config = SimpleNamespace(supports_guidance=supported)
+        assert engine.capabilities()["guidance"] is supported
+        engine._mflux_class = "QwenImage"
+        assert engine.capabilities()["guidance"] is None
+
+    def test_installed_schnell_and_dev_guidance_configs(self):
+        module = pytest.importorskip("mflux.models.common.config.model_config")
+        assert module.ModelConfig.schnell().supports_guidance is False
+        assert module.ModelConfig.dev().supports_guidance is True
+
     def test_installed_flux_negative_parameter_has_no_runtime_reads(self):
         # Qualification pin: reassess the explicit adapter contract if upstream
         # starts using the argument. A signature alone is not behavior proof.

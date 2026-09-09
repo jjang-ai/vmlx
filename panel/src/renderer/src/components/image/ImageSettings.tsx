@@ -95,11 +95,14 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
             type="number"
             value={settings.guidance}
             data-vmlx-control="image-guidance-settings"
+            disabled={capabilities?.guidance === false}
+            title={capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
             onChange={(e) => update('guidance', imageGuidanceFromInput(e.target.value))}
             className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
             min={0}
             step={0.5}
           />
+          {capabilities?.guidance === false && <p className="mt-1 text-xs text-muted-foreground">{t('image.settings.guidanceUnused')}</p>}
         </div>
 
         {/* Seed */}

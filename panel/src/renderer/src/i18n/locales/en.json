@@ -1830,6 +1830,7 @@
       "sizeTitle": "Output image dimensions. Larger = more detail but slower and more memory. 1024x1024 is standard.",
       "guidance": "Guidance",
       "guidanceTitle": "How closely the image follows your prompt. Higher = more literal, lower = more creative. Default 3.5 works for most prompts.",
+      "guidanceUnused": "Guidance is not used by this loaded model.",
       "seed": "Seed",
       "seedTitle": "Random seed for reproducibility. Same seed + same prompt = same image. Leave empty for random.",
       "seedPlaceholder": "Random",

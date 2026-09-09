@@ -1830,6 +1830,7 @@
       "sizeTitle": "Dimensiones de la imagen de salida. Mayor = más detalle pero más lento y con más memoria. 1024x1024 es el estándar.",
       "guidance": "Guía",
       "guidanceTitle": "Qué tan fielmente sigue la imagen su prompt. Mayor = más literal, menor = más creativo. El valor predeterminado de 3.5 funciona para la mayoría de los prompts.",
+      "guidanceUnused": "El modelo cargado no utiliza guidance.",
       "seed": "Semilla",
       "seedTitle": "Semilla aleatoria para reproducibilidad. Misma semilla + mismo prompt = misma imagen. Deje vacío para una aleatoria.",
       "seedPlaceholder": "Aleatoria",

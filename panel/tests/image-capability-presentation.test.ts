@@ -21,6 +21,13 @@ function submit(html: string) {
   return html.match(/<button[^>]*data-vmlx-control="image-generate"[^>]*>/)![0]
 }
 describe('image presentation follows task capabilities', () => {
+  it('disables guidance only when the loaded adapter declares it unused', () => {
+    for (const supported of [false, true, undefined]) {
+      const html = prompt('renamed-schnell', { loaded: true, guidance: supported })
+      const input = html.match(/<input[^>]*data-vmlx-control="image-guidance-quick"[^>]*>/)![0]
+      expect(input.includes('disabled=""')).toBe(supported === false)
+    }
+  })
   it('preserves the Fill guidance preset instead of silently capping at 20', () => {
     for (const value of [0, 3.5, 20, 30, 45]) expect(imageGuidanceFromInput(String(value))).toBe(value)
     expect(imageGuidanceFromInput('')).toBe(0)

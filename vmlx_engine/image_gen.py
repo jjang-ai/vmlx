@@ -954,6 +954,11 @@ class ImageGenEngine:
         params = self._get_generate_params()
         mclass = self._mflux_class or ""
         is_edit = mclass in self._EDIT_CLASSES
+        # Flux1's actual model configuration controls whether a guidance
+        # embedding exists. Schnell accepts the argument but does not use it;
+        # Dev does. Do not infer other adapters' semantics from this flag.
+        guidance = getattr(getattr(self._model, "model_config", None), "supports_guidance", None)
+        guidance = guidance if mclass == "Flux1" and isinstance(guidance, bool) else None
         return {
             "loaded": bool(self.is_loaded),
             "model": self._model_name,
@@ -961,6 +966,7 @@ class ImageGenEngine:
             "quantize": self._quantize,
             "mode": "edit" if is_edit else "generate",
             "negative_prompt": self._supports_negative_prompt(),
+            "guidance": guidance,
             "variation_strength": (not is_edit) and "image_strength" in params,
             "edit_strength": False if is_edit else None,
             "mask": "required" if mclass == "Flux1Fill" else "none",

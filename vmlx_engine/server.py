@@ -18418,6 +18418,12 @@ async def create_image(request: Request):
                 )
 
         image_warnings = []
+        if guidance not in (None, 0) and _image_gen.capabilities().get("guidance") is False:
+            image_warnings.append({
+                "code": "image_parameter_unsupported",
+                "parameter": "guidance",
+                "message": "guidance is not used by the loaded image adapter.",
+            })
         if (negative_prompt
                 and _image_gen.capabilities().get("negative_prompt") is False):
             image_warnings.append({
