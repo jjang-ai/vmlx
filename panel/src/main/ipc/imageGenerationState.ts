@@ -81,6 +81,20 @@ export function clearImageGenerationAbortReason(controller: AbortController): vo
   abortReasons.delete(controller)
 }
 
+/** Intentional session replacement/Stop owns only that server's image request.
+ * Keep busy until its HTTP request settles; do not abort another server or
+ * reinterpret an unexpected process crash as a user cancellation.
+ */
+export function markImageGenerationServerStopping(serverSessionId: string): boolean {
+  if (!activeGeneration || activeGeneration.serverSessionId !== serverSessionId) return false
+  markImageGenerationAbort(activeGeneration.controller, 'cancel')
+  return true
+}
+
+export function wasImageGenerationCancelled(controller?: AbortController | null): boolean {
+  return !!controller && abortReasons.get(controller) === 'cancel'
+}
+
 export function classifyImageGenerationError(
   error: unknown,
   controller?: AbortController | null,

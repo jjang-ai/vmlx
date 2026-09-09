@@ -14,7 +14,7 @@ vi.mock('../src/main/database', () => ({ db: {
 vi.mock('os', async (original) => ({ ...await original<object>(), homedir: () => state.root }))
 
 import { registerImageHandlers } from '../src/main/ipc/image'
-import { getImageGenerationStatus, resetImageGenerationStateForTests } from '../src/main/ipc/imageGenerationState'
+import { bindImageGenerationRequest, getActiveImageGenerationController, getImageGenerationStatus, markImageGenerationServerStopping, resetImageGenerationStateForTests } from '../src/main/ipc/imageGenerationState'
 
 describe('image HTTP failure releases the actual IPC job', () => {
   let server: Server
@@ -22,6 +22,8 @@ describe('image HTTP failure releases the actual IPC job', () => {
   let responseStatus = 500
   let responseBody = '{"detail":"test backend rejection"}'
   let cancellation: 'match' | 'foreign' | null = null
+  let stopping: 'owned' | 'foreign' | null = null
+  let disconnect = false
   beforeAll(async () => {
     state.root = mkdtempSync(join(tmpdir(), 'vmlx-image-http-test-'))
     registerImageHandlers()
@@ -29,6 +31,11 @@ describe('image HTTP failure releases the actual IPC job', () => {
       let body = ''
       req.on('data', chunk => { body += chunk })
       req.on('end', () => {
+        if (stopping) {
+          bindImageGenerationRequest(getActiveImageGenerationController()!, 'owned-server', JSON.parse(body).request_id)
+          markImageGenerationServerStopping(stopping === 'owned' ? 'owned-server' : 'other-server')
+        }
+        if (disconnect) { req.socket.destroy(); return }
         res.writeHead(responseStatus, { 'Content-Type': 'application/json' })
         res.end(cancellation ? JSON.stringify({detail:{code:'image_generation_cancelled',request_id:cancellation === 'match' ? JSON.parse(body).request_id : 'foreign'}}) : responseBody)
       })
@@ -41,6 +48,33 @@ describe('image HTTP failure releases the actual IPC job', () => {
     rmSync(state.root, { recursive: true, force: true })
   })
   for (const lane of ['generate', 'edit']) {
+    it(lane + ' recognizes an intentional owning-session stop, not foreign stops or crashes', async () => {
+      responseStatus = 200
+      responseBody = JSON.stringify({ data: [{ b64_json: 'dGVzdA==', seed: 1 }] })
+      try {
+        for (const outcome of ['disconnect', 'late-success'] as const) {
+          for (const owner of ['owned', 'foreign', null] as const) {
+            resetImageGenerationStateForTests()
+            stopping = owner
+            disconnect = outcome === 'disconnect'
+            const result = await state.handlers.get('image:' + lane)!({}, {
+              sessionId: 'stopped-' + lane, model: 'qwen-image-edit', prompt: 'test',
+              imageBase64: 'dGVzdA==', width: 512, height: 512, steps: 1,
+              guidance: 4, count: 1, serverPort: port,
+            })
+            expect(result.success).toBe(false)
+            if (owner === 'owned') {
+              expect(result.cancelled).toBe(true)
+              expect(result.error).toBeUndefined()
+            } else {
+              expect(result.cancelled).toBeUndefined()
+              expect(result.error).toBeTruthy()
+            }
+            expect(getImageGenerationStatus().generating).toBe(false)
+          }
+        }
+      } finally { stopping = null; disconnect = false }
+    })
     it(lane + ' treats only its matching cancellation as an expected outcome', async () => {
       responseStatus = 409
       try {

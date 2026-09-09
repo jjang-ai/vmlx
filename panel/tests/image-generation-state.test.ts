@@ -3,6 +3,9 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   beginImageGeneration,
+  bindImageGenerationRequest,
+  markImageGenerationServerStopping,
+  wasImageGenerationCancelled,
   classifyImageGenerationError,
   isImageRequestCancellationResponse,
   clearImageGenerationAfterLocalAbort,
@@ -46,6 +49,25 @@ const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
 
 describe("image generation in-flight state survives tab switches", () => {
+  it('marks only the stopped server and retains busy state until its request settles', () => {
+    resetImageGenerationStateForTests()
+    expect(markImageGenerationServerStopping('old-server')).toBe(false)
+    const old = beginImageGeneration('old-history')
+    bindImageGenerationRequest(old, 'old-server', 'old-request')
+    expect(markImageGenerationServerStopping('other-server')).toBe(false)
+    expect(wasImageGenerationCancelled(old)).toBe(false)
+    expect(markImageGenerationServerStopping('old-server')).toBe(true)
+    expect(wasImageGenerationCancelled(old)).toBe(true)
+    expect(old.signal.aborted).toBe(false)
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true })
+    const current = beginImageGeneration('new-history')
+    bindImageGenerationRequest(current, 'new-server', 'new-request')
+    finishImageGeneration(old)
+    expect(markImageGenerationServerStopping('old-server')).toBe(false)
+    expect(wasImageGenerationCancelled(current)).toBe(false)
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: false })
+    finishImageGeneration(current)
+  })
   it('recognizes only the typed cancellation for this exact request', () => {
     const body = JSON.stringify({ detail: { code: 'image_generation_cancelled', request_id: 'owned' } })
     expect(isImageRequestCancellationResponse(409, body, 'owned')).toBe(true)

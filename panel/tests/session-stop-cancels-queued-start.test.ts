@@ -42,6 +42,7 @@ vi.mock('electron', () => ({
 }))
 
 import { SessionManager } from '../src/main/sessions'
+import { beginImageGeneration, bindImageGenerationRequest, getImageGenerationStatus, resetImageGenerationStateForTests, wasImageGenerationCancelled } from '../src/main/ipc/imageGenerationState'
 
 const temporaryBundles: string[] = []
 
@@ -58,10 +59,40 @@ afterEach(() => {
   }
   state.sessions.length = 0
   state.settings.clear()
+  resetImageGenerationStateForTests()
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
 describe('explicit Stop cancels a queued start', () => {
+  it('marks the owning image request before manual stop without releasing it prematurely', async () => {
+    const manager = new SessionManager()
+    state.sessions = [{ id: 'image-owner', type: 'local', modelPath: modelBundle(), status: 'stopped', config: '{}' }]
+    const controller = beginImageGeneration('history')
+    bindImageGenerationRequest(controller, 'image-owner', 'request')
+    await manager.stopSession('image-owner')
+    expect(wasImageGenerationCancelled(controller)).toBe(true)
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true })
+    expect(controller.signal.aborted).toBe(false)
+  })
+
+  it('marks the owning image request before detected-process replacement sends its first signal', async () => {
+    vi.useFakeTimers()
+    const manager = new SessionManager()
+    const modelPath = modelBundle()
+    state.sessions = [{ id: 'image-owner', type: 'local', modelPath, port: 8013, pid: 987654321, status: 'running', config: '{}' }]
+    const controller = beginImageGeneration('history')
+    bindImageGenerationRequest(controller, 'image-owner', 'request')
+    const kill = vi.spyOn(manager as any, 'killPid').mockImplementation(() => {
+      expect(wasImageGenerationCancelled(controller)).toBe(true)
+    })
+    vi.spyOn(process, 'kill').mockImplementation(() => true)
+    const stop = (manager as any).terminateDetectedLocalEngine({ modelPath, port: 8013, pid: 987654321 })
+    expect(kill).toHaveBeenCalledWith(987654321)
+    await vi.advanceTimersByTimeAsync(1500)
+    await stop
+    expect(getImageGenerationStatus()).toMatchObject({ generating: true, cancelling: true })
+  })
   /**
    * Save & Restart is renderer-orchestrated update -> stop -> start over
    * separate IPC calls. The session lock serializes those operations but

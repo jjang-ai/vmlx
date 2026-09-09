@@ -1,5 +1,5 @@
 import { adoptNativeMtpConfig } from '../shared/nativeMtpAdoption'
-import { recordImageGenerationLog } from './ipc/imageGenerationState'
+import { markImageGenerationServerStopping, recordImageGenerationLog } from './ipc/imageGenerationState'
 import { GATEWAY_SINGLE_MODEL_MODE_KEY, isGatewaySettingEnabled } from '../shared/gatewaySettingsKeys'
 import {
   healthFailureToleranceCount,
@@ -2688,6 +2688,12 @@ export class SessionManager extends EventEmitter {
   }
 
   private async terminateDetectedLocalEngine(proc: DetectedProcess, sessions = db.getSessions()): Promise<void> {
+    const livePath = normalizePath(proc.modelPath)
+    const owner = sessions.find(s =>
+      s.type !== 'remote' &&
+      (normalizePath(s.modelPath) === livePath || s.port === proc.port || s.pid === proc.pid)
+    )
+    if (owner) markImageGenerationServerStopping(owner.id)
     this.killPid(proc.pid)
     await new Promise(r => setTimeout(r, 1500))
     try {
@@ -2695,11 +2701,6 @@ export class SessionManager extends EventEmitter {
       this.killPid(proc.pid, 'SIGKILL')
     } catch (_) { }
 
-    const livePath = normalizePath(proc.modelPath)
-    const owner = sessions.find(s =>
-      s.type !== 'remote' &&
-      (normalizePath(s.modelPath) === livePath || s.port === proc.port || s.pid === proc.pid)
-    )
     if (owner) {
       this.processes.delete(owner.id)
       db.updateSession(owner.id, {
@@ -3650,6 +3651,7 @@ export class SessionManager extends EventEmitter {
     // A global health probe may already be in flight when visible Stop
     // terminates the backend. Keep this fence until `stopped` is durable so
     // that probe cannot race the intentional exit and rewrite it as `error`.
+    markImageGenerationServerStopping(sessionId)
     this.intentionalStops.set(
       sessionId,
       (this.intentionalStops.get(sessionId) || 0) + 1,

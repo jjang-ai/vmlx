@@ -16,6 +16,7 @@ import {
   recordImageGenerationLog,
   classifyImageGenerationError,
   isImageRequestCancellationResponse,
+  wasImageGenerationCancelled,
   clearImageGenerationAfterLocalAbort,
   clearImageGenerationSessionHistory,
   finishImageGeneration,
@@ -402,6 +403,10 @@ export function registerImageHandlers(): void {
         clearInterval(touchInterval)
       }
 
+      if (wasImageGenerationCancelled(generationController)) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+        return { success: false, cancelled: true }
+      }
       if (!resp.ok) {
         if (isImageRequestCancellationResponse(resp.status, resp.data, clientJobId)) {
           logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
@@ -462,6 +467,10 @@ export function registerImageHandlers(): void {
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
     } catch (error) {
+      if (wasImageGenerationCancelled(generationController)) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+        return { success: false, cancelled: true }
+      }
       console.error('[IMAGE] Generation failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'failed', error: errorMessage })
@@ -584,6 +593,10 @@ export function registerImageHandlers(): void {
         clearInterval(touchInterval)
       }
 
+      if (wasImageGenerationCancelled(generationController)) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+        return { success: false, cancelled: true }
+      }
       if (!resp.ok) {
         if (isImageRequestCancellationResponse(resp.status, resp.data, clientJobId)) {
           logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
@@ -640,6 +653,10 @@ export function registerImageHandlers(): void {
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
     } catch (error) {
+      if (wasImageGenerationCancelled(generationController)) {
+        logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+        return { success: false, cancelled: true }
+      }
       console.error('[IMAGE] Edit failed:', error)
       const errorMessage = classifyImageGenerationError(error, generationController)
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'failed', error: errorMessage })
