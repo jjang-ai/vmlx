@@ -65,6 +65,18 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.start).toHaveBeenCalledWith('image-owned')
   })
 
+  it('rediscovers a standby image session for the page without claiming it is running', async () => {
+    const result = await state.handlers.get('image:getRunningServer')!({})
+    expect(result).toMatchObject({ sessionId: 'image-owned', status: 'standby', imageMode: 'edit', quantize: 8 })
+  })
+
+  it('prefers a running image over a different sleeper when no session is selected', async () => {
+    state.rows.push({ ...state.rows[0], id: 'running', modelPath: '/other/model', status: 'running' })
+    const result = await state.handlers.get('image:getRunningServer')!({})
+    expect(result).toMatchObject({ sessionId: 'running', status: 'running' })
+    expect(state.rows[0].id).toBe('image-owned')
+  })
+
   it('does not stop a different folder sharing the same basename', async () => {
     const result = await state.handlers.get('image:startServer')!({}, '/other/edit/q8', 8, 'edit')
     expect(result.success).toBe(true)

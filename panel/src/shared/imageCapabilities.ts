@@ -22,14 +22,21 @@ export interface ImageCapabilities {
   error?: string
 }
 
-/** Fetch the capability block from a running image server; null when the engine has none (older engine) or on error. */
-export async function fetchImageCapabilities(port: number): Promise<ImageCapabilities | null> {
-  try {
-    const resp = await fetch(`http://127.0.0.1:${port}/health`)
-    if (!resp.ok) return null
-    const body = await resp.json()
-    return body && typeof body === 'object' && body.image && typeof body.image === 'object' ? (body.image as ImageCapabilities) : null
-  } catch {
-    return null
+export type ImageServerStatus = 'stopped' | 'starting' | 'running' | 'standby' | 'error'
+
+/** HTTP liveness is not proof that diffusion weights are ready. */
+export function imageRuntimeSnapshot(body: unknown): { status: ImageServerStatus; capabilities: ImageCapabilities | null } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { status: 'error', capabilities: null }
+  const health = body as Record<string, any>
+  if (health.wake_in_progress === true || health.status === 'no_model' || health.status === 'loading') {
+    return { status: 'starting', capabilities: null }
   }
+  if (health.status === 'standby_soft' || health.status === 'standby_deep') return { status: 'standby', capabilities: null }
+  const image = health.image && typeof health.image === 'object' && !Array.isArray(health.image)
+    ? health.image as ImageCapabilities : null
+  const loaded = image ? image.loaded === true && health.model_loaded !== false
+    : health.model_type === 'image' && health.model_loaded === true
+  return health.status === 'healthy' && loaded
+    ? { status: 'running', capabilities: image }
+    : { status: 'error', capabilities: null }
 }

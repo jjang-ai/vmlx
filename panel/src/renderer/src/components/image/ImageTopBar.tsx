@@ -9,8 +9,9 @@ function formatElapsed(secs: number): string {
 }
 
 import { useTranslation } from '../../i18n'
+import type { ImageServerStatus } from '../../../../shared/imageCapabilities'
 
-type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
+type ServerStatus = ImageServerStatus
 
 interface ImageTopBarProps {
   model: string | null
@@ -23,6 +24,7 @@ interface ImageTopBarProps {
   onSettings: () => void
   onLogs: () => void
   onStop: () => void
+  onWake: () => void
   onChangeModel: () => void
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
@@ -39,6 +41,7 @@ export function ImageTopBar({
   onSettings,
   onLogs,
   onStop,
+  onWake,
   onChangeModel,
   sidebarCollapsed,
   onToggleSidebar
@@ -101,7 +104,7 @@ export function ImageTopBar({
         )}
 
         {/* Status indicator */}
-        <div className="flex items-center gap-1.5 ml-2">
+        <div data-vmlx-control="image-runtime-status" data-vmlx-state={status} className="flex items-center gap-1.5 ml-2">
           <div className={`w-2 h-2 rounded-full ${
             status === 'running' ? 'bg-green-500' :
             status === 'starting' ? 'bg-yellow-500 animate-pulse' :
@@ -112,6 +115,7 @@ export function ImageTopBar({
             {status === 'running' && port ? t('image.topbar.runningOnPort', { port }) :
              status === 'starting' ? `${t('chat.interface.loadingBanner')} ${formatElapsed(loadingElapsed)}` :
              status === 'error' ? t('status.error') :
+             status === 'standby' ? t('status.sleeping') :
              t('status.stopped')}
           </span>
         </div>
@@ -135,7 +139,14 @@ export function ImageTopBar({
         >
           <Settings className="h-4 w-4" />
         </button>
-        {(status === 'running' || status === 'starting') && (
+        {status === 'standby' && (
+          <button onClick={onWake} data-vmlx-control="image-wake"
+            className="px-2 py-1.5 text-xs hover:bg-accent text-foreground"
+            title={t('sessions.card.wake')}>
+            {t('sessions.card.wake')}
+          </button>
+        )}
+        {(status === 'running' || status === 'starting' || status === 'standby') && (
           <button
             onClick={onStop}
             data-vmlx-control="image-stop"

@@ -872,16 +872,18 @@ export function registerImageHandlers(): void {
       // First check the tracked active image session
       if (activeImageSessionId) {
         const session = sessionManager.getSession(activeImageSessionId)
-        if (session && (session.status === 'running' || session.status === 'loading')) {
+        if (session && (session.status === 'running' || session.status === 'loading' || session.status === 'standby')) {
           return buildResult(session)
         }
         activeImageSessionId = null
       }
 
       // Also scan all sessions for any image model (e.g., started from Server tab)
-      const allSessions = db.getSessions()
+      // Prefer a live model over an unrelated sleeper when this tab has no
+      // explicit current owner; do not mutate the database's returned array.
+      const allSessions = [...db.getSessions()].sort((a, b) => Number(a.status === 'standby') - Number(b.status === 'standby'))
       for (const s of allSessions) {
-        if (s.status !== 'running' && s.status !== 'loading') continue
+        if (s.type === 'remote' || (s.status !== 'running' && s.status !== 'loading' && s.status !== 'standby')) continue
         try {
           const cfg = JSON.parse(s.config || '{}')
           if (cfg.modelType === 'image') {

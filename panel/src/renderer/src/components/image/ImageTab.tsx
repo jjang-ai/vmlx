@@ -8,7 +8,7 @@ import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
 import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
-import { fetchImageCapabilities, type ImageCapabilities } from '../../../../shared/imageCapabilities'
+import { imageRuntimeSnapshot, type ImageCapabilities, type ImageServerStatus } from '../../../../shared/imageCapabilities'
 import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
 import type { ImageServerSettings } from './ImageModelPicker'
 
@@ -38,7 +38,7 @@ export interface ImageGenerationInfo {
   createdAt: number
 }
 
-type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
+type ServerStatus = ImageServerStatus
 
 interface ImageSettings {
   steps: number
@@ -70,6 +70,8 @@ export function ImageTab() {
   const [capabilities, setCapabilities] = useState<ImageCapabilities | null>(null)
   const [serverSessionId, _setServerSessionId] = useState<string | null>(null)
   const serverSessionIdRef = useRef<string | null>(null)
+  const healthRevision = useRef(0)
+  const wakePending = useRef(false)
   const setServerSessionId = (id: string | null) => { serverSessionIdRef.current = id; _setServerSessionId(id) }
   const [showSettings, setShowSettings] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -145,7 +147,8 @@ export function ImageTab() {
         const canonical = server.canonicalModelId || resolveImageModelFromDirectoryName(name)?.id || name
         setSelectedModel(canonical)
         setSelectedModelDisplayName(server.displayModelName || name)
-        setServerStatus(server.status === 'loading' ? 'starting' : 'running')
+        // Discovery identifies the session, not loaded model readiness.
+        setServerStatus(server.status === 'standby' ? 'standby' : 'starting')
         setServerPort(server.port)
         setServerSessionId(server.sessionId)
         setShowModelPicker(false)
@@ -197,22 +200,32 @@ export function ImageTab() {
   useEffect(() => {
     const unsubReady = window.api.sessions.onReady((data: any) => {
       if (data.sessionId === serverSessionIdRef.current) {
-        setServerStatus('running')
+        healthRevision.current++
+        setServerStatus('starting')
         // Fetch the session to get port
         window.api.sessions.get(data.sessionId).then((s: any) => {
-          if (s) setServerPort(s.port)
+          if (s && data.sessionId === serverSessionIdRef.current) setServerPort(s.port)
         }).catch(() => {})
       }
     })
     const unsubStopped = window.api.sessions.onStopped((data: any) => {
       if (data.sessionId === serverSessionIdRef.current) {
+        healthRevision.current++
         setServerStatus('stopped')
         setServerPort(null)
         setGenerating(false)  // Server stopped — cancel any in-flight generation
       }
     })
+    const unsubStandby = window.api.sessions.onStandby((data: any) => {
+      if (data.sessionId === serverSessionIdRef.current) {
+        healthRevision.current++
+        setServerStatus('standby')
+        setCapabilities(null)
+      }
+    })
     const unsubError = window.api.sessions.onError((data: any) => {
       if (data.sessionId === serverSessionIdRef.current) {
+        healthRevision.current++
         setServerStatus('error')
         const errMsg = data.error || t('image.tab.serverError')
         // Detect gated/auth errors and show helpful message
@@ -229,40 +242,51 @@ export function ImageTab() {
     return () => {
       unsubReady()
       unsubStopped()
+      unsubStandby()
       unsubError()
     }
   }, []) // Uses ref, not state — no dependency needed
 
-  // Read the loaded model's real capabilities once the server runs; forget
-  // them when it stops so stale limits never apply to the next model.
+  // Observe model readiness throughout its lifetime, not just process startup.
+  // One in-flight poll, cancelled on session/port change, prevents a late old
+  // health response from enabling the replacement model's composer.
   useEffect(() => {
-    if (serverStatus === 'running' && serverPort) {
-      let cancelled = false
-      fetchImageCapabilities(serverPort).then(caps => { if (!cancelled) setCapabilities(caps) })
-      return () => { cancelled = true }
-    }
-    if (serverStatus === 'stopped' || serverStatus === 'error') setCapabilities(null)
-    return undefined
-  }, [serverStatus, serverPort])
-
-  // Poll for server health when starting
-  useEffect(() => {
-    if (serverStatus !== 'starting' || !serverPort) return
-    pollRef.current = setInterval(async () => {
+    setCapabilities(null)
+    if (!serverPort || !serverSessionId) return
+    let cancelled = false
+    let inFlight = false
+    let controller: AbortController | null = null
+    const poll = async () => {
+      if (inFlight || cancelled) return
+      inFlight = true
+      const revision = healthRevision.current
+      controller = new AbortController()
+      const timeout = setTimeout(() => controller?.abort(), 5000)
       try {
-        const resp = await fetch(`http://127.0.0.1:${serverPort}/health`)
-        if (resp.ok) {
-          setServerStatus('running')
-          if (pollRef.current) clearInterval(pollRef.current)
-        }
+        const resp = await fetch(`http://127.0.0.1:${serverPort}/health`, { signal: controller.signal })
+        if (!resp.ok) throw new Error(`Image health HTTP ${resp.status}`)
+        const snapshot = imageRuntimeSnapshot(await resp.json())
+        if (cancelled || serverSessionIdRef.current !== serverSessionId || revision !== healthRevision.current) return
+        setServerStatus(wakePending.current && snapshot.status === 'standby' ? 'starting' : snapshot.status)
+        setCapabilities(snapshot.capabilities)
       } catch (_) {
-        // Still starting
+        if (!cancelled && serverSessionIdRef.current === serverSessionId && revision === healthRevision.current) {
+          setCapabilities(null)
+          setServerStatus(previous => previous === 'starting' ? 'starting' : 'error')
+        }
+      } finally {
+        clearTimeout(timeout)
+        inFlight = false
       }
-    }, 1000)
+    }
+    void poll()
+    pollRef.current = setInterval(poll, 2000)
     return () => {
+      cancelled = true
+      controller?.abort()
       if (pollRef.current) clearInterval(pollRef.current)
     }
-  }, [serverStatus, serverPort])
+  }, [serverSessionId, serverPort])
 
   // Load generations when session changes
   useEffect(() => {
@@ -341,7 +365,7 @@ export function ImageTab() {
       mode: sessionMode,
       settings,
     }
-    const serverWasLive = serverStatus === 'running' || serverStatus === 'starting'
+    const serverWasLive = serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'standby'
 
     setSelectedModel(modelId)
     setSelectedModelDisplayName(null)
@@ -548,7 +572,7 @@ export function ImageTab() {
   }, [])
 
   const handleChangeModel = useCallback(async () => {
-    if (serverStatus === 'running' || serverStatus === 'starting') {
+    if (serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'standby') {
       // Keep the server up: the picker opens over it, and the main process
       // only stops it once the replacement folder has been validated. "Keep
       // current" in the picker returns here with nothing changed.
@@ -562,6 +586,27 @@ export function ImageTab() {
     setSelectedModelDisplayName(null)
     setShowModelPicker(true)
   }, [serverStatus, handleStop])
+
+  const handleWake = useCallback(async () => {
+    const id = serverSessionIdRef.current
+    if (!id || serverStatus !== 'standby') return
+    healthRevision.current++
+    wakePending.current = true
+    setServerStatus('starting')
+    setError(null)
+    try {
+      const result = await window.api.sessions.wake(id)
+      if (result?.success === false) throw new Error(result.error || t('image.tab.serverError'))
+      // Loaded health, not IPC success alone, enables generation.
+    } catch (error) {
+      if (serverSessionIdRef.current === id) {
+        setServerStatus('standby')
+        setError((error as Error).message)
+      }
+    } finally {
+      wakePending.current = false
+    }
+  }, [serverStatus, t])
 
   const handleNewSession = useCallback(() => {
     setCurrentSessionId(null)
@@ -606,7 +651,7 @@ export function ImageTab() {
   }, [])
 
   // Show model picker if no model selected, or when switching while a server runs
-  const serverLive = serverStatus === 'running' || serverStatus === 'starting'
+  const serverLive = serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'standby'
   if (showModelPicker && (!selectedModel || serverLive)) {
     return (
       <div className="h-full min-h-0 min-w-0 flex flex-col">
@@ -646,6 +691,7 @@ export function ImageTab() {
           onSettings={() => setShowSettings(!showSettings)}
           onLogs={() => setShowLogs(!showLogs)}
           onStop={handleStop}
+          onWake={handleWake}
           onChangeModel={handleChangeModel}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
