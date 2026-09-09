@@ -1146,6 +1146,33 @@ _PAGED_MLLM_EXEMPT_FAMILIES = {
 }
 
 
+def _is_image_serve_request(args) -> bool:
+    """Use the loader's image routing before applying text-only policies."""
+    import json
+    from pathlib import Path
+    from .image_gen import SUPPORTED_MODELS, EDIT_MODELS
+
+    names = set(SUPPORTED_MODELS) | set(EDIT_MODELS) | {
+        'krea-dev', 'dev-krea', 'qwen', 'fibo', 'fibo-lite',
+    }
+    served = getattr(args, "served_model_name", None)
+    if (getattr(args, "image_mode", None) or getattr(args, "mflux_class", None)
+            or args.model.lower() in names
+            or (served and served.lower() in names)):
+        return True
+    folder = Path(args.model)
+    if (folder / "model_index.json").exists():
+        try:
+            return "_diffusers_version" in json.loads(
+                (folder / "model_index.json").read_text()
+            )
+        except Exception:
+            # Preserve routing to the image loader, which reports invalid metadata.
+            return True
+    return ((folder / "transformer").is_dir()
+            and ((folder / "text_encoder").is_dir() or (folder / "vae").is_dir()))
+
+
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
@@ -1158,6 +1185,7 @@ def serve_command(args):
     from .server import RateLimiter, app, load_model
 
     logger = logging.getLogger(__name__)
+    _is_image = _is_image_serve_request(args)
 
     # Engine-owned lifecycle progress: one generation per serve attempt. The
     # panel reads the mirrored LOADPROGRESS stdout lines during cold start
@@ -1365,7 +1393,11 @@ def serve_command(args):
         and not _m3_forced_no_kvq
         and not _openpangu_forced_no_kvq
     )
-    if _openpangu_forced_no_kvq:
+    if _is_image:
+        # Diffusion sessions do not construct the text KV/prefix scheduler.
+        # Do not mutate its policy environment or announce an SSD text cache.
+        pass
+    elif _openpangu_forced_no_kvq:
         args.kv_cache_quantization = "none"
         args.kv_cache_quantization_explicit = False
         args.generic_tq_diagnostic_opt_in = False
@@ -1547,43 +1579,10 @@ def serve_command(args):
             requests_per_minute=args.rate_limit, enabled=True
         )
 
-    # Early detection: image vs text model
-    from pathlib import Path
-    import json as _json
-    model_dir = Path(args.model)
-    _is_image = False
-
     # Header-only and cacheable: this does not allocate model tensors. It runs
     # before either text or image loading and is repeated independently by the
     # Electron preflight so a direct CLI launch cannot bypass bundle integrity.
     _preflight_local_model_bundle(args.model)
-
-    # Named mflux models (not filesystem paths) — detect by known names
-    # Keep in sync with SUPPORTED_MODELS + EDIT_MODELS in image_gen.py
-    from .image_gen import SUPPORTED_MODELS as _IMG_SUPPORTED, EDIT_MODELS as _EDIT_SUPPORTED
-    MFLUX_NAMED_MODELS = set(_IMG_SUPPORTED.keys()) | set(_EDIT_SUPPORTED.keys()) | {
-        'krea-dev', 'dev-krea', 'qwen', 'fibo', 'fibo-lite',  # Additional mflux models
-    }
-    _served_model_name = getattr(args, "served_model_name", None)
-    if getattr(args, "image_mode", None) or getattr(args, "mflux_class", None):
-        _is_image = True
-    elif args.model.lower() in MFLUX_NAMED_MODELS:
-        _is_image = True
-    elif _served_model_name and _served_model_name.lower() in MFLUX_NAMED_MODELS:
-        _is_image = True
-
-    if not _is_image and (model_dir / "model_index.json").exists():
-        try:
-            idx = _json.loads((model_dir / "model_index.json").read_text())
-            _is_image = "_diffusers_version" in idx
-        except Exception:
-            _is_image = True
-    elif (model_dir / "transformer").is_dir() and (model_dir / "text_encoder").is_dir():
-        # mflux-quantized models: transformer/ + text_encoder/ without model_index.json
-        _is_image = True
-    elif (model_dir / "transformer").is_dir() and (model_dir / "vae").is_dir():
-        # Diffusion model with transformer + vae subdirs
-        _is_image = True
 
     _validate_lora_args_for_model_type(args, is_image=_is_image)
 
@@ -1951,7 +1950,8 @@ def serve_command(args):
             args, "enable_prefix_cache", True
         ) and not getattr(args, "disable_prefix_cache", False)
         if (
-            getattr(args, "continuous_batching", True)
+            not _is_image
+            and getattr(args, "continuous_batching", True)
             and _paged_default_prefix_active
             and (
                 not _paged_default_is_mllm
@@ -1993,7 +1993,8 @@ def serve_command(args):
         # Index size only — resident RAM stays governed by --cache-memory-mb /
         # --cache-memory-percent, and DSV4 keeps its own 4097 lift above.
         if (
-            not getattr(args, "max_cache_blocks_explicit", False)
+            not _is_image
+            and not getattr(args, "max_cache_blocks_explicit", False)
             and not _is_dsv4_model
         ):
             _generic_block_size = int(

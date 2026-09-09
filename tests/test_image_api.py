@@ -1000,6 +1000,40 @@ class TestImageGenWorkerExecutor:
         assert "Max output fallback:" not in output
         assert "Block Disk Cache (SSD / L2), disk-only mode:" not in output
 
+    @pytest.mark.parametrize("kind,expected", [
+        ("text", False), ("named", True), ("class", True),
+        ("served", True), ("diffusers", True), ("components", True),
+    ])
+    def test_cli_image_routing_precedes_cache_policy(self, tmp_path, kind, expected):
+        import ast
+        import json
+        import vmlx_engine.cli as cli
+
+        args = SimpleNamespace(model=str(tmp_path))
+        if kind == "named":
+            args.model = "schnell"
+        elif kind == "class":
+            args.mflux_class = "Flux1"
+        elif kind == "served":
+            args.served_model_name = "dev"
+        elif kind == "diffusers":
+            (tmp_path / "model_index.json").write_text(json.dumps({"_diffusers_version": "test"}))
+        elif kind == "components":
+            (tmp_path / "transformer").mkdir()
+            (tmp_path / "vae").mkdir()
+        assert cli._is_image_serve_request(args) is expected
+
+        tree = ast.parse(inspect.getsource(cli.serve_command))
+        policy = next(n for n in tree.body[0].body if isinstance(n, ast.If)
+                      and isinstance(n.test, ast.Name) and n.test.id == "_is_image"
+                      and "_configure_generic_tq_diagnostic_policy" in ast.unparse(n))
+        detect = next(n for n in tree.body[0].body if isinstance(n, ast.Assign)
+                      and "_is_image_serve_request(args)" in ast.unparse(n))
+        assert detect.lineno < policy.lineno
+        # Actual image branch must not even read text policy arguments.
+        module = ast.fix_missing_locations(ast.Module(body=[policy], type_ignores=[]))
+        exec(compile(module, "<image-cache-policy>", "exec"), {"_is_image": True})
+
     def test_cli_startup_image_load_wires_lora_flags(self):
         import vmlx_engine.cli as cli
 
