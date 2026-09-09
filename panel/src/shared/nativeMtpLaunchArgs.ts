@@ -25,6 +25,13 @@ export function resolveNativeMtpMode(
   return configured
 }
 
+/** The form and launcher must display/use the same supported fixed ceiling. */
+export function resolveFixedNativeMtpDepth(configuredDepth?: number, detectedDepth?: number): number {
+  return Math.max(1, Math.min(3,
+    finitePositiveInteger(configuredDepth) || finitePositiveInteger(detectedDepth) || 1,
+  ))
+}
+
 /** One source of truth for Electron preview and the process launcher. */
 export function buildNativeMtpLaunchArgs(
   input: NativeMtpLaunchPolicyInput,
@@ -59,15 +66,7 @@ export function buildNativeMtpLaunchArgs(
     // source=VMLINUX_NATIVE_MTP_DEPTH).
     return ['--native-mtp-depth-policy', 'adaptive', ...samplingArgs]
   }
-  const depth = Math.max(
-    1,
-    Math.min(
-      3,
-      finitePositiveInteger(input.configuredDepth)
-        || finitePositiveInteger(input.detectedDepth)
-        || 1,
-    ),
-  )
+  const depth = resolveFixedNativeMtpDepth(input.configuredDepth, input.detectedDepth)
   return [
     '--native-mtp-depth',
     depth.toString(),

@@ -1,4 +1,5 @@
 import { DEFAULT_BLOCK_DISK_CACHE_PERCENT } from '../../../../shared/cacheDefaults'
+import { resolveFixedNativeMtpDepth } from '../../../../shared/nativeMtpLaunchArgs'
 import { useEffect, useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
 import { useTranslation } from '../../i18n'
@@ -553,7 +554,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive
   const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'auto'
   const nativeMtpDepth = config.nativeMtpDepthOverride === true
-    ? (config.nativeMtpDepth || detectedNativeMtp?.depth || 3)
+    ? resolveFixedNativeMtpDepth(config.nativeMtpDepth, detectedNativeMtp?.depth)
     : (detectedNativeMtp?.depth || config.nativeMtpDepth || 3)
   const nativeMtpDepthPolicy = config.nativeMtpDepthOverride === true
     ? 'fixed'
@@ -1745,6 +1746,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           label={t('sessions.config.nativeMtpDepth')}
           tooltip={t('sessions.config.nativeMtpDepthTooltip')}
           value={nativeMtpDepth}
+          maxInput={3}
           onChange={v => {
             onChange('nativeMtpDepth', v)
             onChange('nativeMtpDepthOverride', true)
