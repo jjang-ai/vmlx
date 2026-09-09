@@ -458,6 +458,12 @@ def _cache_topology_configuration(
     block_disk = getattr(paged, "_disk_store", None) if paged is not None else None
     prompt_disk = getattr(scheduler, "disk_cache", None)
     ssm_disk = getattr(scheduler, "_ssm_companion_disk_store", None)
+    if ssm_disk is None:
+        # The text scheduler owns L2 through its companion cache; the MLLM
+        # scheduler owns the disk store directly. Zero retained RAM entries
+        # do not mean this SSD-backed companion is disabled.
+        companion = getattr(scheduler, "_ssm_state_cache", None)
+        ssm_disk = getattr(companion, "_disk", None)
     instantiated = {
         "scheduler_present": scheduler is not None,
         "scheduler_class": type(scheduler).__name__ if scheduler is not None else None,
