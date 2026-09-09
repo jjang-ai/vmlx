@@ -4891,13 +4891,11 @@ export class SessionManager extends EventEmitter {
   async stopAll(): Promise<void> {
     this.stopGlobalMonitor()
 
-    const processes = await this.detect()
-
-    // B3: Send SIGTERM first to all processes for graceful shutdown
-    for (const proc of processes) {
-      this.killPid(proc.pid, 'SIGTERM')
-    }
-    for (const [, managed] of this.processes) {
+    // Discovery is not ownership. Another app/profile may have launched an
+    // engine since our startup adoption; quitting this app must not kill it.
+    // Explicitly adopted engines are already represented in this map.
+    const owned = [...this.processes.entries()]
+    for (const [, managed] of owned) {
       if (managed.process) {
         try { managed.process.kill('SIGTERM') } catch (_) { }
       } else if (managed.adoptedPid) {
@@ -4906,26 +4904,29 @@ export class SessionManager extends EventEmitter {
     }
 
     // Wait for graceful shutdown, then SIGKILL any survivors
-    if (processes.length > 0 || this.processes.size > 0) {
+    if (owned.length > 0) {
       await new Promise(r => setTimeout(r, 3000))
-      for (const proc of processes) {
-        try { process.kill(proc.pid, 'SIGKILL') } catch (_) { }
-      }
-      for (const [, managed] of this.processes) {
-        if (managed.process) {
+      for (const [id, managed] of owned) {
+        const current = this.processes.get(id)
+        if (managed.process && current?.process === managed.process &&
+            managed.process.exitCode == null && managed.process.signalCode == null) {
           try { managed.process.kill('SIGKILL') } catch (_) { }
-        } else if (managed.adoptedPid) {
-          try { process.kill(managed.adoptedPid, 'SIGKILL') } catch (_) { }
+        } else if (managed.adoptedPid && current?.adoptedPid === managed.adoptedPid) {
+          this.killPid(managed.adoptedPid, 'SIGKILL')
         }
       }
     }
 
-    this.processes.clear()
-
-    // Mark all sessions as stopped in DB (including standby — their processes were killed above)
+    // Do not claim an unowned or remote session stopped. Exit callbacks can
+    // replace an owned entry with its terminal record while we await grace.
     const sessions = db.getSessions()
-    for (const s of sessions) {
-      if (s.status === 'running' || s.status === 'loading' || s.status === 'standby') {
+    for (const [id, managed] of owned) {
+      const current = this.processes.get(id)
+      if (current && current !== managed && (current.process || current.adoptedPid)) continue
+      this.processes.delete(id)
+      const s = sessions.find(session => session.id === id)
+      if (s && s.type !== 'remote' &&
+          (s.status === 'running' || s.status === 'loading' || s.status === 'standby')) {
         db.updateSession(s.id, { status: 'stopped', pid: undefined, lastStoppedAt: Date.now(), standbyDepth: null })
       }
     }
