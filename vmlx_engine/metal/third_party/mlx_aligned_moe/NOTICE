@@ -1,0 +1,5 @@
+Qwen4 expert-aligned MoE adapts qmm_t_impl from Apple MLX 0.32.2.
+Copyright 2023-2024 Apple Inc. Distributed under the MIT license.
+Source: https://github.com/ml-explore/mlx/tree/v0.32.2/mlx/backend/metal/kernels
+Changes: expert-aligned row ranges, 16-row tiles, one M simdgroup, dynamic row counts.
+Headers are loaded from the installed MLX package with exact source hash guards.

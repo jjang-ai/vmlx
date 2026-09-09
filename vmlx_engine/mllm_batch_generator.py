@@ -12389,18 +12389,26 @@ class MLLMBatchGenerator:
                         getattr(request, "_original_token_ids", None)
                         or input_ids[0].tolist()
                     )
-                    processed = 0
-                    for capture_boundary in ssm_boundaries:
-                        if capture_boundary > processed:
-                            lm(
-                                input_ids[:, processed:capture_boundary],
-                                **_lm_kwargs_for(processed, capture_boundary),
+                    from .utils.qwen4_prefill_checkpoints import (
+                        coalesce_qwen4_prefill_checkpoints,
+                    )
+                    output = coalesce_qwen4_prefill_checkpoints(
+                        self, request, lm, input_ids, cache, all_tokens,
+                        ssm_boundaries, _lm_kwargs_for,
+                    )
+                    if output is None:
+                        processed = 0
+                        for capture_boundary in ssm_boundaries:
+                            if capture_boundary > processed:
+                                lm(
+                                    input_ids[:, processed:capture_boundary],
+                                    **_lm_kwargs_for(processed, capture_boundary),
+                                )
+                                processed = capture_boundary
+                            self._maybe_capture_clean_ssm_boundary(
+                                request, cache, all_tokens, capture_boundary
                             )
-                            processed = capture_boundary
-                        self._maybe_capture_clean_ssm_boundary(
-                            request, cache, all_tokens, capture_boundary
-                        )
-                    output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
+                        output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
                 else:
                     output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:

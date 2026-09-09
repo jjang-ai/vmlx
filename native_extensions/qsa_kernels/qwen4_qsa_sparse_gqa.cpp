@@ -1,0 +1,419 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Vendored into MTPLX from oMLX (https://github.com/jundot/omlx), PR #3244,
+// revision dc312e6e905e03d21ef0c4a86289cbfa2cf857cc.
+//
+// MTPLX changes, all deliberate and narrow:
+//   * namespace omlx::glm_kernels -> mtplx::qsa_kernels;
+//   * Metal library name "omlx_glm_kernels" -> "mtplx_qsa_kernels" (a
+//     same-process collision with a co-installed oMLX would otherwise pick
+//     whichever metallib loaded first);
+//   * primitive name OMLX... -> MTPLX...;
+//   * the accepted (key_tile, dimension_tile) set is narrowed to the single
+//     shipped specialization (64, 64) so this check matches both the
+//     packaged .metal instantiations and the Python support check exactly;
+//   * a WM threadgroup static_assert for the M2/M3 896-thread ceiling.
+
+#include "qwen4_qsa_sparse_gqa.h"
+
+#include <dlfcn.h>
+#include <filesystem>
+#include <sstream>
+
+#include "mlx/backend/common/utils.h"
+#include "mlx/backend/metal/device.h"
+#include "mlx/backend/metal/utils.h"
+#include "mlx/ops.h"
+#include "mlx/utils.h"
+
+namespace mtplx::qsa_kernels {
+
+namespace {
+
+using namespace mlx::core;
+
+// Metal library base name. Must match the metallib produced by CMakeLists.txt
+// and installed next to _ext*.so; get_library resolves it from the loaded
+// binary's directory.
+constexpr const char *kMetalLibrary = "mtplx_qsa_kernels";
+
+std::string current_binary_dir() {
+  static std::string binary_dir = []() {
+    Dl_info info;
+    if (!dladdr(reinterpret_cast<void *>(&current_binary_dir), &info)) {
+      throw std::runtime_error("Unable to get mtplx_qsa_kernels binary dir.");
+    }
+    return std::filesystem::path(info.dli_fname).parent_path().string();
+  }();
+  return binary_dir;
+}
+
+bool last_dim_contiguous(const array &arr) { return arr.strides(-1) == 1; }
+
+struct Qwen4QSASparseGQAParams {
+  int B;
+  int q_heads;
+  int kv_heads;
+  int qL;
+  int kL;
+  int topk;
+  int gqa_factor;
+  int q_offset;
+
+  float scale;
+
+  int64_t Q_strides[3];
+  int64_t K_strides[3];
+  int64_t V_strides[3];
+  int64_t Topk_strides[3];
+  int64_t O_strides[3];
+};
+
+class Qwen4QSASparseGQAPrimitive : public Primitive {
+public:
+  Qwen4QSASparseGQAPrimitive(Stream stream, float scale, int q_offset,
+                             int key_tile, int dimension_tile)
+      : Primitive(stream), scale_(scale), q_offset_(q_offset),
+        key_tile_(key_tile), dimension_tile_(dimension_tile) {}
+
+  static bool unsupported(const array &q, const array &k, const array &v,
+                          const array &selected, float scale, int q_offset,
+                          int key_tile, int dimension_tile, Stream stream) {
+    if (stream.device == Device::cpu || q.dtype() != k.dtype() ||
+        q.dtype() != v.dtype()) {
+      return true;
+    }
+    if (q.dtype() != float16 && q.dtype() != bfloat16) {
+      return true;
+    }
+    if (q.ndim() != 4 || k.ndim() != 4 || v.ndim() != 4 ||
+        selected.ndim() != 4 || selected.dtype() != uint32) {
+      return true;
+    }
+    if (!last_dim_contiguous(q) || !last_dim_contiguous(k) ||
+        !last_dim_contiguous(v) || !last_dim_contiguous(selected)) {
+      return true;
+    }
+    if (q.shape(0) != 1 || k.shape(0) != 1 || v.shape(0) != 1 ||
+        selected.shape(0) != 1 || q.shape(1) != 24 || k.shape(1) != 2 ||
+        v.shape(1) != 2 || q.shape(3) != 256 || k.shape(3) != 256 ||
+        v.shape(3) != 256 || k.shape(2) != v.shape(2) || q.shape(2) <= 0 ||
+        selected.shape(1) != 1 || selected.shape(2) != q.shape(2) ||
+        selected.shape(3) != 512) {
+      return true;
+    }
+    // MTPLX narrowing: only the packaged (BK, DC) = (64, 64) specialization.
+    if (key_tile != 64 || dimension_tile != 64) {
+      return true;
+    }
+    // Logical-view ABI: params.kL IS k.shape(2), so the caller must hand in
+    // the live cache prefix, not a capacity backing and not an interior
+    // window. Q is the SUFFIX ending exactly at the frontier, so equality —
+    // not <= — is the contract the Python wrapper enforces
+    // (key_len != total_tokens_i in qsa_prefill_direct.py). A shorter Q
+    // window would still launch here and silently attend the wrong rows.
+    if (q_offset < 0 || q_offset + q.shape(2) != k.shape(2)) {
+      return true;
+    }
+    // The one production scale: 1/sqrt(256) == 1/16, which is exactly
+    // representable in binary floating point, so this equality is safe and
+    // needs no tolerance. Any other value means the caller is not the QSA
+    // prefill lane this kernel was measured for.
+    if (scale != 0.0625f) {
+      return true;
+    }
+    return false;
+  }
+
+  void eval_cpu(const std::vector<array> & /* inputs */,
+                std::vector<array> & /* outputs */) override {
+    throw std::runtime_error("Qwen4QSASparseGQAPrimitive has no CPU path.");
+  }
+
+  void eval_gpu(const std::vector<array> &inputs,
+                std::vector<array> &outputs) override {
+    auto &stream = this->stream();
+    auto &device = metal::device(stream.device);
+    const auto &q = inputs[0];
+    const auto &k = inputs[1];
+    const auto &v = inputs[2];
+    const auto &selected = inputs[3];
+    auto &out = outputs[0];
+
+    constexpr int gqa = 12;
+    constexpr int dim = 256;
+    constexpr int wm = 2;
+    constexpr int hpad = 16;
+    // Mirrors the in-kernel assert: the launch below is (32, wm, 1) threads.
+    static_assert(wm * 32 <= 896,
+                  "Threadgroup exceeds the M2/M3 896-thread ceiling.");
+
+    out.set_data(allocator::malloc(out.nbytes()));
+    Qwen4QSASparseGQAParams params{
+        /* int B = */ 1,
+        /* int q_heads = */ 24,
+        /* int kv_heads = */ 2,
+        /* int qL = */ q.shape(2),
+        /* int kL = */ k.shape(2),
+        /* int topk = */ selected.shape(3),
+        /* int gqa_factor = */ gqa,
+        /* int q_offset = */ q_offset_,
+        /* float scale = */ scale_,
+        /* int64_t Q_strides[3] = */ {q.strides(0), q.strides(1), q.strides(2)},
+        /* int64_t K_strides[3] = */ {k.strides(0), k.strides(1), k.strides(2)},
+        /* int64_t V_strides[3] = */ {v.strides(0), v.strides(1), v.strides(2)},
+        /* int64_t Topk_strides[3] = */
+        {selected.strides(0), selected.strides(1), selected.strides(2)},
+        /* int64_t O_strides[3] = */
+        {out.strides(0), out.strides(1), out.strides(2)}};
+
+    std::string kernel_name;
+    concatenate(kernel_name, "qwen4_qsa_sparse_gqa_", type_to_name(q), "_bk",
+                key_tile_, "_dc", dimension_tile_, "_gqa", gqa, "_hp", hpad,
+                "_d", dim, "_wm", wm);
+
+    auto library = device.get_library(kMetalLibrary, current_binary_dir());
+    auto kernel = device.get_kernel(kernel_name, library);
+    auto &encoder = metal::get_command_encoder(stream);
+    encoder.set_compute_pipeline_state(kernel);
+    encoder.set_input_array(q, 0);
+    encoder.set_input_array(k, 1);
+    encoder.set_input_array(v, 2);
+    encoder.set_input_array(selected, 3);
+    encoder.set_output_array(out, 4);
+    encoder.set_bytes(params, 5);
+    encoder.dispatch_threadgroups(MTL::Size(q.shape(2), k.shape(1), 1),
+                                  MTL::Size(32, wm, 1));
+  }
+
+  DEFINE_NAME(MTPLXQwen4QSASparseGQAAttention)
+  DEFINE_INPUT_OUTPUT_SHAPE()
+  bool is_equivalent(const Primitive &other) const override {
+    const auto &rhs = static_cast<const Qwen4QSASparseGQAPrimitive &>(other);
+    return scale_ == rhs.scale_ && q_offset_ == rhs.q_offset_ &&
+           key_tile_ == rhs.key_tile_ && dimension_tile_ == rhs.dimension_tile_;
+  }
+  auto state() const {
+    return std::make_tuple(nullptr, scale_, q_offset_, key_tile_,
+                           dimension_tile_);
+  }
+
+private:
+  float scale_;
+  int q_offset_;
+  int key_tile_;
+  int dimension_tile_;
+};
+
+class Qwen4QSASparseScoresPrimitive : public Primitive {
+public:
+  Qwen4QSASparseScoresPrimitive(Stream stream, float scale, int q_offset,
+                             int key_tile, int dimension_tile)
+      : Primitive(stream), scale_(scale), q_offset_(q_offset),
+        key_tile_(key_tile), dimension_tile_(dimension_tile) {}
+
+  static bool unsupported(const array &q, const array &k, const array &v,
+                          const array &selected, float scale, int q_offset,
+                          int key_tile, int dimension_tile, Stream stream) {
+    if (stream.device == Device::cpu || q.dtype() != k.dtype() ||
+        q.dtype() != v.dtype()) {
+      return true;
+    }
+    if (q.dtype() != float16 && q.dtype() != bfloat16) {
+      return true;
+    }
+    if (q.ndim() != 4 || k.ndim() != 4 || v.ndim() != 4 ||
+        selected.ndim() != 4 || selected.dtype() != uint32) {
+      return true;
+    }
+    if (!last_dim_contiguous(q) || !last_dim_contiguous(k) ||
+        !last_dim_contiguous(v) || !last_dim_contiguous(selected)) {
+      return true;
+    }
+    if (q.shape(0) != 1 || k.shape(0) != 1 || v.shape(0) != 1 ||
+        selected.shape(0) != 1 || q.shape(1) != 24 || k.shape(1) != 2 ||
+        v.shape(1) != 2 || q.shape(3) != 256 || k.shape(3) != 256 ||
+        v.shape(3) != 256 || k.shape(2) != v.shape(2) || q.shape(2) <= 0 ||
+        selected.shape(1) != 1 || selected.shape(2) != q.shape(2) ||
+        selected.shape(3) != 512) {
+      return true;
+    }
+    // MTPLX narrowing: only the packaged (BK, DC) = (64, 64) specialization.
+    if (key_tile != 64 || dimension_tile != 64) {
+      return true;
+    }
+    // Logical-view ABI: params.kL IS k.shape(2), so the caller must hand in
+    // the live cache prefix, not a capacity backing and not an interior
+    // window. Q is the SUFFIX ending exactly at the frontier, so equality —
+    // not <= — is the contract the Python wrapper enforces
+    // (key_len != total_tokens_i in qsa_prefill_direct.py). A shorter Q
+    // window would still launch here and silently attend the wrong rows.
+    if (q_offset < 0 || q_offset + q.shape(2) != k.shape(2)) {
+      return true;
+    }
+    // The one production scale: 1/sqrt(256) == 1/16, which is exactly
+    // representable in binary floating point, so this equality is safe and
+    // needs no tolerance. Any other value means the caller is not the QSA
+    // prefill lane this kernel was measured for.
+    if (scale != 0.0625f) {
+      return true;
+    }
+    return false;
+  }
+
+  void eval_cpu(const std::vector<array> & /* inputs */,
+                std::vector<array> & /* outputs */) override {
+    throw std::runtime_error("Qwen4QSASparseScoresPrimitive has no CPU path.");
+  }
+
+  void eval_gpu(const std::vector<array> &inputs,
+                std::vector<array> &outputs) override {
+    auto &stream = this->stream();
+    auto &device = metal::device(stream.device);
+    const auto &q = inputs[0];
+    const auto &k = inputs[1];
+    const auto &v = inputs[2];
+    const auto &selected = inputs[3];
+    auto &out = outputs[0];
+
+    constexpr int gqa = 12;
+    constexpr int dim = 256;
+    constexpr int wm = 2;
+    constexpr int hpad = 16;
+    // Mirrors the in-kernel assert: the launch below is (32, wm, 1) threads.
+    static_assert(wm * 32 <= 896,
+                  "Threadgroup exceeds the M2/M3 896-thread ceiling.");
+
+    out.set_data(allocator::malloc(out.nbytes()));
+    Qwen4QSASparseGQAParams params{
+        /* int B = */ 1,
+        /* int q_heads = */ 24,
+        /* int kv_heads = */ 2,
+        /* int qL = */ q.shape(2),
+        /* int kL = */ k.shape(2),
+        /* int topk = */ selected.shape(3),
+        /* int gqa_factor = */ gqa,
+        /* int q_offset = */ q_offset_,
+        /* float scale = */ scale_,
+        /* int64_t Q_strides[3] = */ {q.strides(0), q.strides(1), q.strides(2)},
+        /* int64_t K_strides[3] = */ {k.strides(0), k.strides(1), k.strides(2)},
+        /* int64_t V_strides[3] = */ {v.strides(0), v.strides(1), v.strides(2)},
+        /* int64_t Topk_strides[3] = */
+        {selected.strides(0), selected.strides(1), selected.strides(2)},
+        /* int64_t O_strides[3] = */
+        {out.strides(0), out.strides(1), out.strides(2)}};
+
+    std::string kernel_name;
+    concatenate(kernel_name, "qwen4_qsa_sparse_scores_", type_to_name(q), "_bk",
+                key_tile_, "_dc", dimension_tile_, "_gqa", gqa, "_hp", hpad,
+                "_d", dim, "_wm", wm);
+    bool use_nax = false;
+#if defined(MTPLX_QSA_HAS_NAX)
+    // MLX's is_nax_available is not exported by the wheel. This build already
+    // requires macOS 26.2; mirror its architecture predicate conservatively.
+    // Numerical preflight still checks the installed wheel's actual math.
+    const auto architecture = device.get_architecture();
+    const std::string prefix = "applegpu_g";
+    if (architecture.rfind(prefix, 0) == 0 && architecture.size() > prefix.size() + 1) {
+      const auto generation = architecture.substr(prefix.size(),
+          architecture.size() - prefix.size() - 1);
+      if (generation.find_first_not_of("0123456789") == std::string::npos)
+        use_nax = std::stoi(generation) >= (architecture.back() == 'p' ? 18 : 17);
+    }
+    if (use_nax) {
+      kernel_name.clear();
+      concatenate(kernel_name, "qwen4_sparse_scores_nax_", type_to_name(q));
+    }
+#endif
+
+    auto library = device.get_library(kMetalLibrary, current_binary_dir());
+    auto kernel = device.get_kernel(kernel_name, library);
+    auto &encoder = metal::get_command_encoder(stream);
+    std::string fill_name;
+    concatenate(fill_name, "qwen4_sparse_scores_fill_", type_to_name(q));
+    auto fill_kernel = device.get_kernel(fill_name, library);
+    encoder.set_compute_pipeline_state(fill_kernel);
+    encoder.set_output_array(out, 0);
+    encoder.set_bytes(params.kL, 1);
+    encoder.dispatch_threadgroups(MTL::Size(q.shape(1) * q.shape(2), 1, 1),
+                                  MTL::Size(256, 1, 1));
+    encoder.barrier();
+    encoder.set_compute_pipeline_state(kernel);
+    encoder.set_input_array(q, 0);
+    encoder.set_input_array(k, 1);
+    encoder.set_input_array(v, 2);
+    encoder.set_input_array(selected, 3);
+    encoder.set_output_array(out, 4);
+    encoder.set_bytes(params, 5);
+    encoder.dispatch_threadgroups(
+        MTL::Size(q.shape(2), k.shape(1), use_nax ? (2051 + 31) / 32 : (2051 + 63) / 64),
+        MTL::Size(32, use_nax ? 1 : wm, 1));
+  }
+
+  DEFINE_NAME(MTPLXQwen4QSASparseScores)
+  DEFINE_INPUT_OUTPUT_SHAPE()
+  bool is_equivalent(const Primitive &other) const override {
+    const auto &rhs = static_cast<const Qwen4QSASparseScoresPrimitive &>(other);
+    return scale_ == rhs.scale_ && q_offset_ == rhs.q_offset_ &&
+           key_tile_ == rhs.key_tile_ && dimension_tile_ == rhs.dimension_tile_;
+  }
+  auto state() const {
+    return std::make_tuple(nullptr, scale_, q_offset_, key_tile_,
+                           dimension_tile_);
+  }
+
+private:
+  float scale_;
+  int q_offset_;
+  int key_tile_;
+  int dimension_tile_;
+};
+
+} // namespace
+
+array qwen4_qsa_sparse_gqa_attention(const array &queries, const array &keys,
+                                     const array &values,
+                                     const array &selected_blocks, float scale,
+                                     int q_offset, int key_tile,
+                                     int dimension_tile, StreamOrDevice s) {
+  auto stream = to_stream(s);
+  if (Qwen4QSASparseGQAPrimitive::unsupported(
+          queries, keys, values, selected_blocks, scale, q_offset, key_tile,
+          dimension_tile, stream)) {
+    std::ostringstream msg;
+    msg << "[mtplx_qsa_kernels.qwen4_qsa_sparse_gqa_attention] expected "
+        << "q=[1,24,M,256], k/v=[1,2,K,256], uint32 selected blocks="
+        << "[1,1,M,512], q_offset>=0 with q_offset+M==K (the logical cache "
+        << "prefix, so Q is the suffix ending at the frontier), "
+        << "scale==0.0625, (BK,DC)==(64,64); got " << queries.shape() << ", "
+        << keys.shape() << ", " << values.shape() << ", "
+        << selected_blocks.shape() << ", q_offset=" << q_offset
+        << ", scale=" << scale << ".";
+    throw std::invalid_argument(msg.str());
+  }
+
+  Shape out_shape{queries.shape(0), queries.shape(1), queries.shape(2),
+                  queries.shape(3)};
+  return array(std::move(out_shape), queries.dtype(),
+               std::make_shared<Qwen4QSASparseGQAPrimitive>(
+                   stream, scale, q_offset, key_tile, dimension_tile),
+               std::vector<array>{queries, keys, values, selected_blocks});
+}
+
+array qwen4_qsa_sparse_gqa_dense_scores(const array &queries, const array &keys,
+                                const array &selected_blocks, float scale,
+                                int q_offset, StreamOrDevice s) {
+  auto stream = to_stream(s);
+  if (Qwen4QSASparseScoresPrimitive::unsupported(
+          queries, keys, keys, selected_blocks, scale, q_offset, 64, 64, stream) ||
+      queries.shape(2) < 16) {
+    throw std::invalid_argument("Unsupported Qwen4 sparse QK geometry");
+  }
+  auto scaled = multiply(queries, array(scale, queries.dtype()), stream);
+  return array(Shape{1, 2, 12, queries.shape(2), keys.shape(2)}, queries.dtype(),
+               std::make_shared<Qwen4QSASparseScoresPrimitive>(
+                   stream, scale, q_offset, 64, 64),
+               std::vector<array>{scaled, keys, keys, selected_blocks});
+}
+
+} // namespace mtplx::qsa_kernels
