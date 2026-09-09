@@ -609,6 +609,24 @@ class ImageGenEngine:
 
         self._model = ModelClass(**model_kwargs)
 
+        # Older Qwen generation exports quantized their text encoder. Current
+        # mflux skips that component for NEW quantization, but a saved packed
+        # layer must still be reconstructed before it is called. Preserve the
+        # artifact's actual per-layer precision; full-precision saves are no-op.
+        if resolved_class == "QwenImage":
+            from .image_quantized_encoder import restore_packed_encoder
+            def load_stored_encoder():
+                from mflux.models.common.weights.loading.weight_loader import WeightLoader
+                from mflux.models.qwen.weights.qwen_weight_definition import QwenWeightDefinition
+                component = next(c for c in QwenWeightDefinition.get_components()
+                                 if c.name == "text_encoder")
+                return WeightLoader.load_single_local(
+                    component=component, root_path=Path(model_path)
+                ).components["text_encoder"]
+
+            self._model.text_encoder, _ = restore_packed_encoder(
+                self._model.text_encoder, load_stored_encoder)
+
         # Fix quantized embeddings with non-uint32 weights (mflux bug)
         if quantize and self._model is not None:
             fixed = _fix_quantized_layers(self._model)
