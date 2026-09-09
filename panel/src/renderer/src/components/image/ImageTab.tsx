@@ -9,6 +9,7 @@ import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
 import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
 import { fetchImageCapabilities, type ImageCapabilities } from '../../../../shared/imageCapabilities'
+import { ImageSubmissionGuard } from '../../../../shared/imageSubmissionGuard'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -74,6 +75,7 @@ export function ImageTab() {
   const [showLogs, setShowLogs] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const submissionGuard = useRef(new ImageSubmissionGuard())
   const [generations, setGenerations] = useState<ImageGenerationInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   // Non-fatal advisory from the start handler (e.g. low-precision edit variant) with an optional alternative to start instead.
@@ -175,7 +177,9 @@ export function ImageTab() {
   // Check if image generation is in-flight (persists across tab switches)
   // Also reload gallery if generation completed while we were on another tab
   useEffect(() => {
+    const snapshot = submissionGuard.current.snapshot()
     window.api.image.isGenerating().then((status: ImageGenerationStatus) => {
+      if (!submissionGuard.current.canApply(snapshot)) return
       if (status.generating) {
         setGenerating(true)
         if (status.sessionId) setCurrentSessionId(status.sessionId)
@@ -280,7 +284,10 @@ export function ImageTab() {
   }, [])
 
   const syncGenerationStatus = useCallback(async () => {
+    const snapshot = submissionGuard.current.snapshot()
+    if (!submissionGuard.current.canApply(snapshot)) return
     const status: ImageGenerationStatus = await window.api.image.isGenerating()
+    if (!submissionGuard.current.canApply(snapshot)) return
     if (status.generating) {
       setGenerating(true)
       if (status.sessionId && status.sessionId !== currentSessionId) {
@@ -454,6 +461,10 @@ export function ImageTab() {
       return
     }
 
+    // Session creation and IPC preprocessing precede backend busy state. An
+    // idle status response must not clear this submission or permit a duplicate.
+    const owner = submissionGuard.current.begin()
+    if (owner === null) return
     setGenerating(true)
     setError(null)
 
@@ -520,7 +531,7 @@ export function ImageTab() {
     } catch (err) {
       setError((err as Error).message)
     } finally {
-      setGenerating(false)
+      if (submissionGuard.current.finish(owner)) setGenerating(false)
     }
   }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, sessionMode, sourceImage, maskBase64, loadSessions])
 
