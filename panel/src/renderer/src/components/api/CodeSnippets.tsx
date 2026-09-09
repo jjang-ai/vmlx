@@ -105,7 +105,7 @@ function imageAuthHeader(apiKey: string | null): string {
   return apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
 }
 
-function buildImageCurl(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+export function buildImageCurl(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
   if (isEdit) {
     return `IMAGE_B64=$(base64 -i input.png | tr -d '\\n')
 MASK_B64=$(test -f mask.png && base64 -i mask.png | tr -d '\\n' || true)  # Optional, required by Fill/inpaint
@@ -129,13 +129,11 @@ curl ${baseUrl}/v1/images/edits \\
     "model": "${model}",
     "prompt": "A compact workstation on a walnut desk, product photo",
     "size": "1024x1024",
-    "steps": 4,
-    "guidance": 0,
     "response_format": "b64_json"
   }'`
 }
 
-function buildImagePython(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+export function buildImagePython(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
   const headers = apiKey
     ? `headers = {"Authorization": "Bearer ${apiKey}"}`
     : 'headers = {}'
@@ -183,8 +181,6 @@ response = requests.post(
         "model": "${model}",
         "prompt": "A compact workstation on a walnut desk, product photo",
         "size": "1024x1024",
-        "steps": 4,
-        "guidance": 0,
         "response_format": "b64_json",
     },
 )
@@ -192,7 +188,7 @@ response.raise_for_status()
 print(response.json()["data"][0]["b64_json"][:80])`
 }
 
-function buildImageJavaScript(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+export function buildImageJavaScript(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
   const authLine = apiKey ? `\n    Authorization: "Bearer ${apiKey}",` : ''
   if (isEdit) {
     return `import { readFile } from "node:fs/promises";
@@ -235,8 +231,6 @@ console.log(data.data[0].b64_json.slice(0, 80));`
     model: "${model}",
     prompt: "A compact workstation on a walnut desk, product photo",
     size: "1024x1024",
-    steps: 4,
-    guidance: 0,
     response_format: "b64_json",
   }),
 });
