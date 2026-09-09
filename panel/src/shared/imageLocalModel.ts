@@ -151,7 +151,19 @@ export interface BundleQuantization {
 export function readBundleQuantization(dir: string, fs: LocalImageModelFs = defaultFs): BundleQuantization {
   const transformer = join(dir, 'transformer')
   if (fs.isDirectory(transformer)) {
-    const shards = fs.readdirSync(transformer).filter((n) => n.endsWith('.safetensors')).sort()
+    const directoryShards = fs.readdirSync(transformer)
+      .filter((n) => n.endsWith('.safetensors') && !n.startsWith('._')).sort()
+    // Match mflux WeightLoader: a usable weight index owns the checkpoint.
+    // Leftover shards from an older export must not choose its precision.
+    // An unusable index falls back to the directory, as the loader does.
+    const index = fs.readJson(join(transformer, 'model.safetensors.index.json')) as { weight_map?: unknown } | null
+    const map = index && typeof index === 'object' ? index.weight_map : null
+    const names = map && typeof map === 'object' && !Array.isArray(map) ? Object.values(map) : []
+    const validIndex = names.length > 0 && names.every((n) =>
+      typeof n === 'string' && !!n && basename(n) === n)
+    const indexed = validIndex ? [...new Set(names as string[])].sort()
+      .filter(n => fs.existsSync(join(transformer, n)) && !fs.isDirectory(join(transformer, n))) : []
+    const shards = indexed.length ? indexed : directoryShards
     for (const shard of shards) {
       const meta = fs.readSafetensorsMetadata(join(transformer, shard))
       if (!meta) continue
@@ -254,6 +266,7 @@ export function resolveImageModelForLocalDirectory(path: string): ImageModelDef 
   // A declared pipeline takes precedence over a directory label. Do not infer
   // an ambiguous Flux variant from the pipeline class alone.
   const index = defaultFs.readJson(join(path, 'model_index.json')) as { _class_name?: string } | null
+  const config = defaultFs.readJson(join(path, 'config.json')) as { _class_name?: string; original_model?: string } | null
   const pipelines: Record<string, string> = {
     QwenImagePipeline: 'qwen-image',
     QwenImageEditPipeline: 'qwen-image-edit',
@@ -261,8 +274,21 @@ export function resolveImageModelForLocalDirectory(path: string): ImageModelDef 
     FluxKontextPipeline: 'kontext',
     FluxFillPipeline: 'fill',
   }
-  if (index?._class_name && pipelines[index._class_name]) {
-    return getImageModel(pipelines[index._class_name])
+  const pipeline = index?._class_name || config?._class_name
+  if (pipeline && pipelines[pipeline]) {
+    return getImageModel(pipelines[pipeline])
+  }
+  if (pipeline === 'FluxPipeline') {
+    // Older mflux exports carry this in config.json. FluxPipeline alone
+    // cannot distinguish Schnell from Dev, including after a folder rename.
+    if (typeof config?.original_model === 'string') {
+      const declared = resolveImageModelFromDirectoryName(basename(config.original_model))
+      if (declared?.id === 'schnell' || declared?.id === 'dev') return declared
+    }
+  } else if (pipeline) {
+    // An unknown declared architecture is stronger evidence than a filename.
+    // Leave it unresolved for an explicit supported adapter choice.
+    return undefined
   }
   const base = basename(path)
   const direct = resolveImageModelFromDirectoryName(base)

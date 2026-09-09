@@ -43,6 +43,43 @@ function mfluxBundle(root: string, name: string, stored: number | null, mfluxVer
 const tmp = () => mkdtempSync(join(tmpdir(), 'vmlx-img-'))
 
 describe('local image model directories (external drive bundles)', () => {
+  it('takes precision from indexed shards, not stale files left by an older export', () => {
+    const dir = mfluxBundle(tmp(), 'mixed-export', 8)
+    writeSafetensors(join(dir, 'transformer', '2.safetensors'), { mflux_version: '0.19.0', quantization_level: '4' })
+    writeFileSync(join(dir, 'transformer', 'model.safetensors.index.json'), JSON.stringify({ weight_map: { 'x.weight': '2.safetensors' } }))
+    expect(readBundleQuantization(dir)).toMatchObject({ bits: 4, source: 'metadata' })
+  })
+
+  it('ignores macOS resource-fork sidecars just like the mflux loader', () => {
+    const dir = mfluxBundle(tmp(), 'copied-export', 8)
+    writeSafetensors(join(dir, 'transformer', '._0.safetensors'), { mflux_version: '0.6.2', quantization_level: '4' })
+    expect(readBundleQuantization(dir)).toMatchObject({ bits: 8, source: 'metadata' })
+  })
+
+  it.each([{}, { weight_map: { x: '../outside.safetensors' } }, { weight_map: { x: [] } }])('matches mflux directory fallback for an unusable index: %s', index => {
+    const dir = mfluxBundle(tmp(), 'old-export', 6)
+    writeFileSync(join(dir, 'transformer', 'model.safetensors.index.json'), JSON.stringify(index))
+    expect(readBundleQuantization(dir)).toMatchObject({ bits: 6, source: 'metadata' })
+  })
+
+  it('recognizes a renamed legacy Flux export from its declared original model', () => {
+    const dir = mfluxBundle(tmp(), 'my-local-copy', 4, '0.6.2')
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ _class_name: 'FluxPipeline', original_model: 'black-forest-labs/FLUX.1-schnell' }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ model: { id: 'schnell', mfluxClass: 'Flux1' } })
+  })
+
+  it('does not guess Schnell versus Dev from FluxPipeline alone', () => {
+    const dir = mfluxBundle(tmp(), 'my-local-copy', 4)
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ _class_name: 'FluxPipeline' }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ model: undefined })
+  })
+
+  it('does not let a familiar folder name override an unsupported declared pipeline', () => {
+    const dir = mfluxBundle(tmp(), 'FLUX.1-schnell-mflux-4bit', 4)
+    writeFileSync(join(dir, 'model_index.json'), JSON.stringify({ _class_name: 'UnsupportedImagePipeline' }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ model: undefined })
+  })
+
   it('previews a q8 edit subfolder with its own adapter, task and defaults', () => {
     const parent = join(tmp(), 'Qwen-Image-Edit-mflux')
     mkdirSync(parent)
@@ -180,7 +217,7 @@ describe('local image model directories (external drive bundles)', () => {
     // local directory first, registry second
     expect(resolveAt).toBeLessThan(handler.indexOf('db.getImageModelPath('))
     // validate first, stop second: a rejected folder must leave the running server untouched
-    expect(handler.indexOf('db.getImageModelPath(')).toBeLessThan(handler.indexOf('sessionManager.stopSession(activeImageSessionId)'))
+    expect(handler.indexOf('sessionManager.stopSession(sessionId)')).toBeGreaterThan(handler.indexOf('db.getImageModelPath('))
     expect(handler).toContain('serverKept: true')
     // a registration whose folder is temporarily missing (drive unplugged) is kept, not deleted
     expect(handler).not.toContain('deleteImageModelPath(')
