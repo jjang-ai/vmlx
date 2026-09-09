@@ -50,6 +50,12 @@ class MiniMaxM3ReasoningParser(ThinkXmlReasoningParser):
         super().reset_state(think_in_prompt=think_in_prompt, **kwargs)
         self._adaptive_stream_pending = bool(adaptive_mode and not think_in_prompt)
 
+    def _direct_rail_without_opener(self, text: str) -> bool:
+        # M3 owns an end-only implicit-rail contract for both native and alias
+        # markers. Its adaptive stream holds the ambiguous initial text.
+        # A false prompt seed alone does not disable that family contract.
+        return False
+
     @property
     def adaptive_stream_pending(self) -> bool:
         """Whether the adaptive stream still has an ambiguous initial rail."""

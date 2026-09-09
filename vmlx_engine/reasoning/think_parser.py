@@ -105,6 +105,7 @@ class BaseThinkingReasoningParser(ReasoningParser):
     def __init__(self, tokenizer=None):
         super().__init__(tokenizer)
         self._think_in_prompt = False  # Set via reset_state() when <think> is in the prompt
+        self._think_in_prompt_explicit = False
 
     @property
     def alternate_reasoning_marker_pairs(self) -> tuple[tuple[str, str], ...]:
@@ -174,6 +175,27 @@ class BaseThinkingReasoningParser(ReasoningParser):
                 text before </think> is treated as reasoning.
         """
         self._think_in_prompt = think_in_prompt
+        self._think_in_prompt_explicit = True
+
+    def _direct_rail_without_opener(self, text: str) -> bool:
+        """A known closed prompt cannot retroactively open a private rail.
+
+        Keep standalone/unseeded implicit-close compatibility. Once the server
+        explicitly seeds a direct rail, only an actual opening marker can move
+        generated text into reasoning. Streaming cannot retract earlier prose.
+        """
+        return (
+            self._think_in_prompt_explicit
+            and not self._think_in_prompt
+            and self.start_token not in text
+        )
+
+    def _strip_unopened_closes(self, text: str) -> str:
+        # Called on normalized, marker-safe accumulated views. Preserve quoted
+        # mentions and every surrounding byte, including paragraph whitespace.
+        while (position := _first_unquoted(text, self.end_token)) >= 0:
+            text = text[:position] + text[position + len(self.end_token):]
+        return text
 
     def reasoning_tag_token_seqs(self, tokenizer) -> dict:
         """Return token sequences for the reasoning start/end tags.
@@ -236,6 +258,9 @@ class BaseThinkingReasoningParser(ReasoningParser):
             (reasoning, content) tuple. Either may be None.
         """
         text = self._normalize_reasoning_markers(model_output)
+
+        if self._direct_rail_without_opener(text):
+            return None, self._strip_unopened_closes(text) or None
 
         # Case 1: Both tags present (normal case)
         if self.start_token in text and self.end_token in text:
@@ -328,6 +353,12 @@ class BaseThinkingReasoningParser(ReasoningParser):
         )
         if not delta_text:
             return None
+
+        if self._direct_rail_without_opener(current_text):
+            before = self._strip_unopened_closes(previous_text)
+            after = self._strip_unopened_closes(current_text)
+            content = after[len(before):] if after.startswith(before) else ""
+            return DeltaMessage(content=content) if content else None
 
         # A delta that is ONLY a marker still carries whitespace around it, and
         # that whitespace is real answer text. Returning None dropped it: a
