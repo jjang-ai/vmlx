@@ -98,6 +98,14 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.create).not.toHaveBeenCalled()
   })
 
+  it('does not allow an explicit adapter override to bypass a rejected folder', async () => {
+    state.invalid = true
+    const result = await state.handlers.get('image:startServer')!({}, '/models/edit/q8', 8, 'edit', { mfluxClass: 'QwenImageEdit' })
+    expect(result).toMatchObject({ success: false, serverKept: true })
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.create).not.toHaveBeenCalled()
+  })
+
   it('does not revive an unresolved local architecture from a familiar folder name', async () => {
     state.unknownArchitecture = true
     const result = await state.handlers.get('image:startServer')!({}, '/models/FLUX.1-schnell-mflux-4bit', 4)

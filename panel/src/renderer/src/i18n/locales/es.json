@@ -1956,6 +1956,7 @@
     },
     "server": {
       "errors": {
+        "unsupportedImageFormat": "\"{path}\" declara {format} en {config}. El motor de imágenes mflux no admite este formato. Selecciona una exportación compatible con mflux; cambiar el adaptador o los bits solicitados no convierte los pesos.",
         "variants": "\"{name}\" contiene varias variantes del modelo: {variants}. Elige una carpeta de variante como ruta del modelo o selecciona una precisión que coincida.",
         "notAModelDirectory": "\"{path}\" existe pero no contiene ningún modelo de imagen (se esperaba transformer/ con text_encoder/ o vae/, o un model_index.json).",
         "volumeUnavailable": "\"{path}\" está en el volumen \"{volume}\", que no está montado. Conecta la unidad e inténtalo de nuevo.",

@@ -43,6 +43,31 @@ function mfluxBundle(root: string, name: string, stored: number | null, mfluxVer
 const tmp = () => mkdtempSync(join(tmpdir(), 'vmlx-img-'))
 
 describe('local image model directories (external drive bundles)', () => {
+  it.each(['config.json', 'transformer/config.json', 'text_encoder/config.json'])('rejects declared bitsandbytes at %s despite mflux-looking names or stamps', configPath => {
+    const dir = mfluxBundle(tmp(), 'Z-Image-Turbo-mflux-4bit', 4)
+    writeFileSync(join(dir, configPath), JSON.stringify({
+      quantization_config: { bits: 4, quant_method: 'bitsandbytes', bnb_4bit_quant_type: 'nf4' },
+    }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ success: false, errorCode: 'unsupportedImageFormat' })
+    expect(localImageModelError(resolveLocalImageModelDirectory(dir, 4) as any).message).toContain(configPath)
+  })
+
+  it('rejects NF4 declarations without a quant_method and in selected variant children', () => {
+    const root = tmp()
+    const dir = mfluxBundle(root, 'q4', 4)
+    writeFileSync(join(dir, 'text_encoder', 'config.json'), JSON.stringify({
+      quantization_config: { bnb_4bit_quant_type: 'nf4' },
+    }))
+    expect(resolveLocalImageModelDirectory(root, 4)).toMatchObject({ kind: 'unsupported-format', path: dir })
+  })
+
+  it('does not classify supported affine bits or native FP8 flags as bitsandbytes', () => {
+    const dir = mfluxBundle(tmp(), 'Z-Image-Turbo-mflux-4bit', 4)
+    writeFileSync(join(dir, 'text_encoder', 'config.json'), JSON.stringify({
+      ideogram_fp8_weight_only: true, quantization_config: { bits: 4, group_size: 64 },
+    }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ success: true, quantize: 4 })
+  })
   it('takes precision from indexed shards, not stale files left by an older export', () => {
     const dir = mfluxBundle(tmp(), 'mixed-export', 8)
     writeSafetensors(join(dir, 'transformer', '2.safetensors'), { mflux_version: '0.19.0', quantization_level: '4' })
@@ -243,7 +268,7 @@ describe('local image model directories (external drive bundles)', () => {
     const locales = join(__dirname, '..', 'src', 'renderer', 'src', 'i18n', 'locales')
     const en = JSON.parse(readFileSync(join(locales, 'en.json'), 'utf8'))
     const errors = en.image.server.errors
-    expect(Object.keys(errors).sort()).toEqual(['notAModelDirectory', 'notDownloaded', 'pathMissing', 'storedVolumeUnavailable', 'variants', 'volumeUnavailable'])
+    expect(Object.keys(errors).sort()).toEqual(['notAModelDirectory', 'notDownloaded', 'pathMissing', 'storedVolumeUnavailable', 'unsupportedImageFormat', 'variants', 'volumeUnavailable'])
     for (const loc of ['es', 'ja', 'ko', 'zh']) {
       const other = JSON.parse(readFileSync(join(locales, `${loc}.json`), 'utf8')).image.server.errors
       for (const key of Object.keys(errors)) {

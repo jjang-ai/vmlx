@@ -174,7 +174,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                     <p>{localPreview.model ? `${localPreview.model.name} · ${localPreview.model.category} · ${localPreview.model.mfluxClass}` : t('image.picker.unknownArchitecture')}</p>
                     <p>{t('image.picker.folderPrecision')}: {localPreview.quantize ? `${localPreview.quantize}-bit` : t('image.topbar.quantFull')} ({localPreview.quantizeSource || t('image.picker.notDeclared')})</p>
                   </>
-                ) : localPreview?.error}
+                ) : localPreview?.errorCode ? t(`image.server.errors.${localPreview.errorCode}`, { ...localPreview.errorParams, defaultValue: localPreview.error }) : localPreview?.error}
               </div>
             </div>
         </div>

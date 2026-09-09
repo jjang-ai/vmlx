@@ -91,6 +91,32 @@ export type LocalImageModelResolution =
   | { kind: 'variants'; path: string; variants: LocalImageModelVariant[]; requestedQuantize: number }
   | { kind: 'not-a-model-directory'; path: string }
   | { kind: 'path-missing'; path: string; volume: string | null }
+  | { kind: 'unsupported-format'; path: string; configPath: string; format: string }
+
+/** Explicit incompatible declarations are stronger than a filename bit hint.
+ * This is a rejection gate, not proof that every other tensor layout loads. */
+function unsupportedImageFormat(dir: string, fs: LocalImageModelFs): Extract<LocalImageModelResolution, { kind: 'unsupported-format' }> | null {
+  const roles = new Set(['transformer', 'unconditional_transformer', 'text_encoder', 'text_encoder_2', 'text_encoder_3', 'vae'])
+  const index = fs.readJson(join(dir, 'model_index.json'))
+  if (index && typeof index === 'object' && !Array.isArray(index)) {
+    for (const [key, value] of Object.entries(index)) {
+      if (!key.startsWith('_') && basename(key) === key && key !== '.' && key !== '..' && Array.isArray(value)) roles.add(key)
+    }
+  }
+  for (const configPath of ['config.json', ...[...roles].map(role => join(role, 'config.json'))]) {
+    const config = fs.readJson(join(dir, configPath))
+    if (!config || typeof config !== 'object' || Array.isArray(config)) continue
+    const quant = (config as Record<string, unknown>).quantization_config
+    if (!quant || typeof quant !== 'object' || Array.isArray(quant)) continue
+    const q = quant as Record<string, unknown>
+    const method = typeof q.quant_method === 'string' ? q.quant_method.trim().toLowerCase() : ''
+    const bnbType = typeof q.bnb_4bit_quant_type === 'string' ? q.bnb_4bit_quant_type.trim().toLowerCase() : ''
+    if (method === 'bitsandbytes' || bnbType === 'nf4' || bnbType === 'fp4') {
+      return { kind: 'unsupported-format', path: dir, configPath, format: bnbType ? `bitsandbytes/${bnbType}` : 'bitsandbytes' }
+    }
+  }
+  return null
+}
 
 function bitsOrNull(value: unknown): number | null {
   const bits = typeof value === 'string' ? Number(value.trim()) : typeof value === 'number' ? value : NaN
@@ -212,7 +238,11 @@ export function resolveLocalImageModelDirectory(
     return { kind: 'path-missing', path: dir, volume: unmountedVolume(dir, fs) }
   }
 
-  if (isModelDirectory(dir, fs)) return withSiblings(describeModel(dir, requestedQuantize, fs), fs)
+  if (isModelDirectory(dir, fs)) {
+    const unsupported = unsupportedImageFormat(dir, fs)
+    if (unsupported) return unsupported
+    return withSiblings(describeModel(dir, requestedQuantize, fs), fs)
+  }
 
   const variants: LocalImageModelVariant[] = []
   for (const name of fs.readdirSync(dir).sort()) {
@@ -223,8 +253,8 @@ export function resolveLocalImageModelDirectory(
   }
   if (variants.length === 0) return { kind: 'not-a-model-directory', path: dir }
   const match = requestedQuantize > 0 ? variants.find((v) => v.quantize === requestedQuantize) : undefined
-  if (match) return { ...describeModel(match.path, requestedQuantize, fs), siblings: variants.filter((v) => v.path !== match.path) }
-  if (variants.length === 1) return describeModel(variants[0].path, requestedQuantize, fs)
+  if (match) return resolveLocalImageModelDirectory(match.path, requestedQuantize, fs)
+  if (variants.length === 1) return resolveLocalImageModelDirectory(variants[0].path, requestedQuantize, fs)
   return { kind: 'variants', path: dir, variants, requestedQuantize }
 }
 
@@ -303,7 +333,7 @@ export function inspectLocalImageModel(input: string, requestedQuantize = 0) {
   if (!resolution) return { success: false as const, error: 'Select a local model folder.' }
   if (resolution.kind !== 'model') {
     const error = localImageModelError(resolution)
-    return { success: false as const, error: error.message, errorCode: error.code }
+    return { success: false as const, error: error.message, errorCode: error.code, errorParams: error.params }
   }
   const model = resolveImageModelForLocalDirectory(resolution.path)
   return {
@@ -334,13 +364,19 @@ export function variantList(res: Extract<LocalImageModelResolution, { kind: 'var
  * parameters the translation needs, and an English fallback message.
  */
 export interface LocalImageModelError {
-  code: 'variants' | 'notAModelDirectory' | 'volumeUnavailable' | 'pathMissing'
+  code: 'variants' | 'notAModelDirectory' | 'volumeUnavailable' | 'pathMissing' | 'unsupportedImageFormat'
   params: Record<string, string>
   message: string
 }
 
 export function localImageModelError(res: Exclude<LocalImageModelResolution, { kind: 'model' }>): LocalImageModelError {
   switch (res.kind) {
+    case 'unsupported-format':
+      return {
+        code: 'unsupportedImageFormat',
+        params: { path: res.path, config: res.configPath, format: res.format },
+        message: `"${res.path}" declares ${res.format} in ${res.configPath}. This format is not supported by the mflux image runtime. Select an mflux-compatible export; changing the adapter or requested bit size does not convert the weights.`,
+      }
     case 'variants':
       return { code: 'variants', params: { name: basename(res.path), variants: variantList(res) }, message: describeVariants(res) }
     case 'not-a-model-directory':

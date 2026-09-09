@@ -1956,6 +1956,7 @@
     },
     "server": {
       "errors": {
+        "unsupportedImageFormat": "「{path}」の {config} に {format} が指定されています。この形式は mflux 画像ランタイムに対応していません。mflux 対応のエクスポートを選択してください。アダプターや要求ビット数を変更しても重みは変換されません。",
         "variants": "\"{name}\" には複数のモデルバリアントがあります: {variants}。モデルパスとしてバリアントのフォルダを1つ選ぶか、一致する精度を選択してください。",
         "notAModelDirectory": "\"{path}\" は存在しますが画像モデルが含まれていません（transformer/ と text_encoder/ または vae/、あるいは model_index.json が必要です）。",
         "volumeUnavailable": "\"{path}\" はマウントされていないボリューム \"{volume}\" 上にあります。ドライブを接続してからやり直してください。",

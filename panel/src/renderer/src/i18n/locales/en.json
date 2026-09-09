@@ -1956,6 +1956,7 @@
     },
     "server": {
       "errors": {
+        "unsupportedImageFormat": "\"{path}\" declares {format} in {config}. This format is not supported by the mflux image runtime. Select an mflux-compatible export; changing the adapter or requested bit size does not convert the weights.",
         "variants": "\"{name}\" holds several model variants: {variants}. Pick one variant folder as the model path, or choose a matching precision.",
         "notAModelDirectory": "\"{path}\" exists but holds no image model (expected transformer/ with text_encoder/ or vae/, or a model_index.json).",
         "volumeUnavailable": "\"{path}\" is on the volume \"{volume}\", which is not mounted. Connect the drive and try again.",

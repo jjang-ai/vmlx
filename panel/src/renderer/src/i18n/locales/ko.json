@@ -1956,6 +1956,7 @@
     },
     "server": {
       "errors": {
+        "unsupportedImageFormat": "\"{path}\"의 {config}에 {format}이 선언되어 있습니다. mflux 이미지 런타임은 이 형식을 지원하지 않습니다. mflux 호환 모델을 선택하세요. 어댑터나 요청 비트 수를 바꿔도 가중치는 변환되지 않습니다.",
         "variants": "\"{name}\"에는 여러 모델 변형이 있습니다: {variants}. 모델 경로로 변형 폴더 하나를 선택하거나 일치하는 정밀도를 선택하세요.",
         "notAModelDirectory": "\"{path}\"은(는) 존재하지만 이미지 모델이 없습니다 (transformer/와 text_encoder/ 또는 vae/, 아니면 model_index.json이 필요합니다).",
         "volumeUnavailable": "\"{path}\"은(는) 마운트되지 않은 볼륨 \"{volume}\"에 있습니다. 드라이브를 연결한 뒤 다시 시도하세요.",
