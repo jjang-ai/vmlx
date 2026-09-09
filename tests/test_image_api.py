@@ -73,6 +73,58 @@ class TestBase64Import:
         assert "import base64" in source
 
 
+class TestImageSessionIdentity:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "schnell")])
+    @pytest.mark.parametrize("alias", ["canonical", "folder", "served", "basename"])
+    @pytest.mark.parametrize("loaded", [True, False])
+    async def test_session_alias_reuses_adapter(self, client, monkeypatch, tmp_path, lane, canonical, alias, loaded):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+
+        folder = str(tmp_path / "q8")
+        mclass = "QwenImageEdit" if lane == "edits" else "Flux1"
+        engine = SimpleNamespace(is_loaded=loaded, model_name=canonical,
+                                 _model_path=folder, _mflux_class=mclass)
+        engine.unload = MagicMock()
+        engine.load = MagicMock()
+        output = SimpleNamespace(b64_json="AAAA", seed=42)
+        engine.edit = MagicMock(return_value=output)
+        engine.generate = MagicMock(return_value=output)
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_path", folder)
+        monkeypatch.setattr(srv, "_model_name", "q8")
+        monkeypatch.setattr(srv, "_served_model_name", "my-image-server")
+        model = {"canonical": canonical, "folder": folder, "served": "my-image-server", "basename": "q8"}[alias]
+        source = io.BytesIO()
+        Image.new("RGB", (64, 64)).save(source, format="PNG")
+        response = await client.post(f"/v1/images/{lane}", json={
+            "model": model, "prompt": "change blue to red", "size": "64x64",
+            "image": base64.b64encode(source.getvalue()).decode(), "steps": 1, "seed": 42,
+        })
+        assert response.status_code == 200, response.text
+        engine.unload.assert_not_called()
+        if loaded:
+            engine.load.assert_not_called()
+        else:
+            engine.load.assert_called_once()
+            assert engine.load.call_args.args == (canonical,)
+            assert engine.load.call_args.kwargs["mflux_class"] == mclass
+            assert engine.load.call_args.kwargs["model_path"] == folder
+
+    def test_alias_does_not_hide_different_artifact(self, monkeypatch):
+        import vmlx_engine.server as srv
+        monkeypatch.setattr(srv, "_model_path", "/models/first")
+        monkeypatch.setattr(srv, "_model_name", "first")
+        monkeypatch.setattr(srv, "_served_model_name", "custom")
+        engine = SimpleNamespace(model_name="qwen-image-edit", _model_path="/models/second")
+        assert not srv._image_request_matches_current_model(engine, "custom", "custom")
+        assert not srv._image_request_matches_current_model(engine, "qwen-image-edit", "qwen-image-edit", "/models/third")
+
+
 # ---------------------------------------------------------------------------
 # 2. Image generation request body validation
 # ---------------------------------------------------------------------------

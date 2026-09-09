@@ -18151,6 +18151,27 @@ async def _cancel_image_disconnect_watch(task: asyncio.Task | None) -> None:
         pass
 
 
+def _image_request_matches_current_model(engine, model, resolved, model_path=None):
+    """Exact image-session identity, shared by generation and editing.
+
+    A local folder or served alias identifies the loaded adapter; it is not a
+    request to reinterpret that folder as a new architecture. Explicitly
+    selecting a different artifact must still reload, even with the same name.
+    """
+    current_name = getattr(engine, "model_name", None)
+    current_path = getattr(engine, "_model_path", None)
+    if model_path and model_path != (current_path or _model_path):
+        return False
+    names = {value for value in (current_name, current_path) if isinstance(value, str) and value}
+    same_startup_artifact = (
+        current_path == _model_path if current_path else
+        current_name is not None and current_name in (_model_name, _served_model_name)
+    )
+    if same_startup_artifact:
+        names.update(value for value in (_model_name, _served_model_name, _model_path) if value)
+    return bool(current_name) and (not model or model in names or resolved in names)
+
+
 @app.post(
     "/v1/images/generations",
     dependencies=[
@@ -18302,13 +18323,8 @@ async def create_image(request: Request):
         resolved_model = _IMG_MODELS.get(model.lower(), model) if model else model
 
         # If pre-loaded (from serve command), skip re-loading unless explicitly different model.
-        already_loaded = _image_gen.is_loaded and (
-            not model
-            or resolved_model == _image_gen.model_name
-            or model == _model_name
-            or model == _served_model_name
-            or model == _model_path
-        )
+        same_image_model = _image_request_matches_current_model(_image_gen, model, resolved_model, model_path)
+        already_loaded = _image_gen.is_loaded and same_image_model
         if not already_loaded:
             try:
                 if _image_gen.is_loaded:
@@ -18320,17 +18336,11 @@ async def create_image(request: Request):
                 _preserved_mflux_class = getattr(_image_gen, "_mflux_class", None)
                 _preserve_mflux_class_for_same_model = bool(
                     _preserved_mflux_class
-                    and (
-                        not model
-                        or resolved_model == getattr(_image_gen, "model_name", None)
-                        or model == _model_name
-                        or model == _served_model_name
-                        or model == _model_path
-                    )
+                    and same_image_model
                 )
                 await _run_image_gen_call(
                     _image_gen.load,
-                    model,
+                    _image_gen.model_name if same_image_model else model,
                     quantize=quantize,
                     model_path=model_path or _model_path,
                     mflux_class=(
@@ -18668,18 +18678,22 @@ async def create_image_edit(request: Request):
             resolved = EDIT_MODELS.get(model.lower(), model)
 
             # Check if we need to load a different model
-            already_loaded = _image_gen.is_loaded and (
-                resolved == _image_gen.model_name
+            same_image_model = _image_request_matches_current_model(
+                _image_gen, model, resolved, body.get("model_path")
             )
+            already_loaded = _image_gen.is_loaded and same_image_model
             if not already_loaded:
                 try:
+                    reload_name = _image_gen.model_name if same_image_model else model
+                    reload_class = getattr(_image_gen, "_mflux_class", None) if same_image_model else None
                     if _image_gen.is_loaded:
                         await _run_image_gen_call(_image_gen.unload)
                     edit_model_path = body.get("model_path") or _model_path
                     await _run_image_gen_call(
                         _image_gen.load,
-                        model,
+                        reload_name,
                         model_path=edit_model_path,
+                        mflux_class=reload_class,
                         quantize=_image_quantize,
                         lora_paths=_image_lora_paths,
                         lora_scales=_image_lora_scales,
