@@ -9,8 +9,10 @@ from vmlx_engine.image_progress import observed_image_call
 class Request:
     headers = {}
     disconnected = False
-    async def is_disconnected(self):
-        return self.disconnected
+    async def receive(self):
+        while not self.disconnected:
+            await asyncio.sleep(.01)
+        return {"type": "http.disconnect"}
 
 def test_idle_cancel_does_not_poison_next_request():
     assert cancel_image_request()["cancelled"] is False
@@ -60,6 +62,46 @@ def test_disconnect_cancels_only_own_request():
                 request.disconnected=True
                 await asyncio.sleep(.12)
                 state.check()
+    asyncio.run(run())
+
+def test_disconnect_through_http_middleware_after_body_consumed():
+    from fastapi import FastAPI, Request as FastAPIRequest
+    app = FastAPI()
+    @app.middleware("http")
+    async def timing(request, call_next):
+        return await call_next(request)
+    async def run():
+        incoming = asyncio.Queue()
+        entered = asyncio.Event()
+        observed = asyncio.Event()
+        lock = asyncio.Lock()
+        @app.post("/image")
+        async def endpoint(request: FastAPIRequest):
+            body = await request.json()
+            async with image_request_scope(request, body, lock) as state:
+                entered.set()
+                await state.stopped.wait()
+                observed.set()
+                state.check()
+        async def send(message):
+            pass
+        scope = {"type":"http", "asgi":{"version":"3.0"}, "http_version":"1.1",
+                 "method":"POST", "scheme":"http", "path":"/image", "raw_path":b"/image",
+                 "query_string":b"", "headers":[(b"content-type",b"application/json")],
+                 "client":("127.0.0.1",1234), "server":("127.0.0.1",8000)}
+        await incoming.put({"type":"http.request", "body":b'{"request_id":"middleware-gone"}', "more_body":False})
+        task = asyncio.create_task(app(scope, incoming.get, send))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await incoming.put({"type":"http.disconnect"})
+            await asyncio.wait_for(observed.wait(), .5)
+            await asyncio.wait_for(task, 1)
+            assert not lock.locked()
+            assert cancel_image_request("middleware-gone")["cancelled"] is False
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     asyncio.run(run())
 
 def test_duplicate_active_id_is_not_replaced():

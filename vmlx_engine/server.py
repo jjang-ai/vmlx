@@ -18346,7 +18346,7 @@ async def create_image(request: Request):
     global _image_gen_lock
     if _image_gen_lock is None:
         _image_gen_lock = asyncio.Lock()
-    async with image_request_scope(request, body, _image_gen_lock):
+    async with image_request_scope(request, body, _image_gen_lock) as image_request:
         # If in standby (deep/soft sleep), wake first to avoid split-brain
         # where _standby_state='deep' but we're about to load a model
         if _standby_state is not None:
@@ -18444,10 +18444,7 @@ async def create_image(request: Request):
 
             # Generate images (inside lock to prevent concurrent model swap)
             for i in range(n):
-                # Check for client disconnect between images
-                if await request.is_disconnected():
-                    logger.info("Image generation cancelled: client disconnected")
-                    break
+                image_request.check()
                 img_seed = (seed + i) if seed is not None else None
                 try:
                     result = await _run_image_gen_call(
@@ -18694,7 +18691,7 @@ async def create_image_edit(request: Request):
         global _image_gen_lock
         if _image_gen_lock is None:
             _image_gen_lock = asyncio.Lock()
-        async with image_request_scope(request, body, _image_gen_lock):
+        async with image_request_scope(request, body, _image_gen_lock) as image_request:
             # Wake from standby if needed (prevents split-brain state)
             if _standby_state is not None:
                 await admin_wake()
@@ -18781,9 +18778,7 @@ async def create_image_edit(request: Request):
             )
 
             for i in range(n):
-                if await request.is_disconnected():
-                    logger.info("Image edit cancelled: client disconnected")
-                    break
+                image_request.check()
                 img_seed = (seed + i) if seed is not None else None
                 try:
                     result = await _run_image_gen_call(

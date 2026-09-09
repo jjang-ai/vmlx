@@ -55,9 +55,13 @@ async def image_request_scope(request, body, lock):
     _requests[request_id] = state
     logger.info("IMAGE_REQUEST request_id=%s phase=queued", request_id)
     async def watch():
+        # The endpoint has fully consumed JSON/multipart before entering this
+        # scope. Own the receive channel until completion: zero-timeout
+        # is_disconnected() polling can be cancelled before BaseHTTPMiddleware
+        # forwards an already available disconnect.
         while True:
-            await asyncio.sleep(0.1)
-            if await request.is_disconnected():
+            message = await request.receive()
+            if message.get("type") == "http.disconnect":
                 state.stop()
                 logger.info("IMAGE_REQUEST request_id=%s phase=client_disconnected", request_id)
                 return
