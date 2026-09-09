@@ -18,6 +18,31 @@ import json
 import time
 from typing import Any
 
+from pydantic import ValidationError
+
+
+class OllamaRequestValidationError(ValueError):
+    """Invalid translated client input, not an engine/runtime exception."""
+
+
+def validate_ollama_request(model_class, values: dict):
+    """Keep model validation at the request boundary and preserve its meaning.
+
+    Hand-built translated requests do not pass through FastAPI's automatic
+    request validation. Catch only validation of this client-input model, never
+    exceptions raised later by inference or response construction.
+    """
+    try:
+        return model_class(**values)
+    except ValidationError as exc:
+        details = []
+        for error in exc.errors(include_input=False, include_context=False, include_url=False):
+            location = '.'.join(str(part) for part in error['loc'])
+            if location == 'max_tokens':
+                location = 'options.num_predict'
+            details.append(f"{location}: {error['msg']}")
+        raise OllamaRequestValidationError('Invalid Ollama request: ' + '; '.join(details)) from exc
+
 
 def _should_forward_reasoning_effort(body: dict, req: dict[str, Any]) -> bool:
     """Reasoning effort is only meaningful when thinking is not explicitly off."""

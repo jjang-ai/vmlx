@@ -76,6 +76,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # Import from new modular API
 # Re-export for backwards compatibility with tests
 from .video_controls import video_control_kwargs
+from .api.ollama_adapter import OllamaRequestValidationError, validate_ollama_request
 from .api.models import (
     AssistantMessage,  # noqa: F401
     ChatCompletionChoice,  # noqa: F401
@@ -6216,6 +6217,15 @@ app = FastAPI(
     version=__import__("vmlx_engine").__version__,
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(OllamaRequestValidationError)
+async def _ollama_request_validation_handler(request, exc):
+    from starlette.responses import JSONResponse
+
+    return JSONResponse(status_code=400, content={
+        "error": str(exc), "code": "invalid_request_error",
+    })
 
 
 @app.exception_handler(PrefillAdmissionError)
@@ -17351,7 +17361,7 @@ async def ollama_chat(fastapi_request: Request):
 
     from .api.models import ChatCompletionRequest, StreamOptions
 
-    chat_req = ChatCompletionRequest(**openai_req)
+    chat_req = validate_ollama_request(ChatCompletionRequest, openai_req)
     # Force usage accounting so the Ollama done-line carries eval_count /
     # prompt_eval_count / tok-s (the streaming path otherwise reports 0).
     chat_req.stream_options = StreamOptions(include_usage=True)
@@ -17867,7 +17877,7 @@ async def ollama_generate(fastapi_request: Request):
         openai_chat_req = ollama_generate_to_openai_chat(body)
         from .api.models import ChatCompletionRequest
 
-        chat_req = ChatCompletionRequest(**openai_chat_req)
+        chat_req = validate_ollama_request(ChatCompletionRequest, openai_chat_req)
         _ollama_gen_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
         if not is_streaming:
             _ollama_started_ns = time.perf_counter_ns()
@@ -17958,7 +17968,7 @@ async def ollama_generate(fastapi_request: Request):
 
     if not is_streaming:
         openai_req["stream"] = False
-        comp_req = CompletionRequest(**openai_req)
+        comp_req = validate_ollama_request(CompletionRequest, openai_req)
         prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
         _ollama_raw_max_prompt_tokens = _effective_max_prompt_tokens(comp_req)
         # create_completion takes only the CompletionRequest — no
@@ -17991,7 +18001,7 @@ async def ollama_generate(fastapi_request: Request):
     from .api.ollama_adapter import openai_completion_chunk_to_ollama_ndjson
 
     openai_req["stream"] = True
-    comp_req = CompletionRequest(**openai_req)
+    comp_req = validate_ollama_request(CompletionRequest, openai_req)
 
     engine = get_engine()
     prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
