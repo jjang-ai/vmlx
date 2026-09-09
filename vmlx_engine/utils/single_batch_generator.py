@@ -261,6 +261,34 @@ class SingleBatchGenerator:
             except TypeError:
                 mx.synchronize()
 
+    def _can_overlap_decode(self, req: _Request) -> bool:
+        """Overlap only established plain KV state after initial materialization.
+
+        The first step still resolves restored graphs on the concrete worker
+        stream. Custom, rotating, sparse and recurrent caches retain their
+        synchronous path; subclassing KVCache is not proof of that contract.
+        """
+        return (
+            bool(req.output_tokens)
+            and bool(req.cache)
+            and all(type(layer) is mlx_cache.KVCache for layer in req.cache)
+            and not self._needs_affine2_sync(req.cache)
+        )
+
+    def _submit_on_stream(self, *values):
+        with self._stream_context():
+            rebound = tuple(self._rehome_on_stream(value) for value in values)
+            mx.async_eval(*rebound)
+        return rebound
+
+    def _materialize_submitted_on_stream(self, *values):
+        # These arrays were already rebound and submitted on our stream. Adding
+        # another rebind here queues it AFTER the following decode and defeats
+        # one-token overlap. Initial restored graphs still use _eval_on_stream.
+        with self._stream_context():
+            mx.eval(*values)
+        return values
+
     def _make_new_cache(self):
         return mlx_cache.make_prompt_cache(self.model, max_kv_size=self.max_kv_size)
 
@@ -606,6 +634,8 @@ class SingleBatchGenerator:
         logits: mx.array,
         req: _Request,
         input_tokens: mx.array,
+        *,
+        overlap: bool = False,
     ) -> tuple[mx.array, Any]:
         token_context = None
         if req.logits_processors:
@@ -630,9 +660,15 @@ class SingleBatchGenerator:
             async_items.append(token_context)
         # Cache-hit replay can restore KV arrays whose lazy graph still refers
         # to a thread-local default stream from a prior request.  Materialize
-        # the sampled scalar/logprobs inside this generator's concrete stream so
-        # the next scheduler step never resolves a stale Stream(gpu,0).
-        evaluated = self._eval_on_stream(*async_items)
+        # the first sampled scalar/logprobs inside this generator's concrete
+        # stream so the next step never resolves a stale Stream(gpu,0).
+        # Qualified steady decode may then submit on that same owned stream;
+        # materializing the current token must not wait for the following one.
+        evaluated = (
+            self._submit_on_stream(*async_items)
+            if overlap
+            else self._eval_on_stream(*async_items)
+        )
         sampled = evaluated[0]
         if logprobs is not None:
             logprobs = evaluated[1]
@@ -688,13 +724,15 @@ class SingleBatchGenerator:
                 model_s = time.perf_counter() - model_t0
                 sample_t0 = time.perf_counter()
             logits = logits[:, -1, :]
+            overlap = self._can_overlap_decode(req)
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
                 input_tokens,
+                overlap=overlap,
             )
-            req.next_token_materialized = True
-            req.next_logprobs_materialized = req.next_logprobs is not None
+            req.next_token_materialized = not overlap
+            req.next_logprobs_materialized = not overlap and req.next_logprobs is not None
             # M3+affine-2: materialize the forward + cache state NOW (no lookahead
             # overlap) to avoid the async-overlap corruption of the custom Metal
             # kernel. Eval the cache too (not just the token) since paged/block-disk
@@ -792,9 +830,9 @@ class SingleBatchGenerator:
 
         try:
             if not current_token_materialized:
-                current_token = self._eval_on_stream(current_token)[0]
+                current_token = self._materialize_submitted_on_stream(current_token)[0]
             if current_logprobs is not None and not current_logprobs_materialized:
-                current_logprobs = self._eval_on_stream(current_logprobs)[0]
+                current_logprobs = self._materialize_submitted_on_stream(current_logprobs)[0]
         except Exception:
             self._sync()
 
