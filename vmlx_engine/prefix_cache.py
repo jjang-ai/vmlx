@@ -535,6 +535,7 @@ def compute_model_cache_key(
             "VMLX_QWEN4_VERIFY_SDPA",
             "VMLX_QWEN4_PREFILL_DIRECT",
             "VMLX_QWEN4_COALESCE_PREFILL_CHECKPOINTS",
+            "VMLX_QWEN4_ALIGNED_MOE_PREFILL",
         ):
             value = os.environ.get(flag, "0")
             enabled = (
@@ -543,6 +544,9 @@ def compute_model_cache_key(
                 else value == "1"
             )
             parts.append(f"{flag}={int(enabled)}")
+            if enabled and flag == "VMLX_QWEN4_ALIGNED_MOE_PREFILL":
+                from vmlx_engine.metal.qwen4_aligned_moe_prefill import MATH_ABI
+                parts.append("qwen4_aligned_moe_math=" + MATH_ABI)
             if enabled and flag == "VMLX_QWEN4_GDN_BLOCKED_PREFILL":
                 parts.append("qwen4_gdn_math=" + _QWEN4_GDN_MATH_ABI)
                 parts.append(

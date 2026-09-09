@@ -40,6 +40,7 @@ tests/test_native_mtp_stochastic_accept.py
 tests/test_native_mtp_verify_pad.py
 tests/test_native_mtp_verify_qmm.py
 tests/test_qsa_selector_prefix_contract.py
+tests/test_qwen4_aligned_moe_prefill.py
 tests/test_qwen4_exp_multirow_group_gates.py
 tests/test_qwen4_exp_qsa_pool_retention.py
 tests/test_qwen4_exp_qsa_rope_qualification.py

@@ -23,6 +23,7 @@ FLAGS = [
     "VMLX_QWEN4_VERIFY_SDPA",
     "VMLX_QWEN4_PREFILL_DIRECT",
     "VMLX_QWEN4_COALESCE_PREFILL_CHECKPOINTS",
+    "VMLX_QWEN4_ALIGNED_MOE_PREFILL",
 ]
 
 
@@ -141,12 +142,19 @@ def main():
             ("verify", [FLAGS[1]]),
             ("direct", [FLAGS[2]]),
             ("checkpoints", [FLAGS[3]]),
+            ("aligned_moe", [FLAGS[4]]),
             ("combined", FLAGS),
         ]:
             if label == "checkpoints" and context > 4096:
                 continue
+            from vmlx_engine.metal import qwen4_aligned_moe_prefill as aligned_impl
+            before_dispatch = aligned_impl.DISPATCH_COUNT
             start = time.monotonic()
             got = forward(tokens, flags, tail)
+
+            dispatches = aligned_impl.DISPATCH_COUNT - before_dispatch
+            if context == 1024 and label in ("aligned_moe", "combined"):
+                assert dispatches > 0, "aligned MoE guard silently bypassed the eligible case"
 
             def logsoftmax(x):
                 x = x.astype(np.float64)
@@ -162,6 +170,7 @@ def main():
                 "final_segment_tokens": tail,
                 "arm": label,
                 "rows": len(ref),
+                "aligned_moe_dispatches": dispatches,
                 "mean_kl": float(np.mean(kl)),
                 "max_kl": float(np.max(kl)),
                 "logit_rms": float(np.sqrt(np.mean(error**2))),
