@@ -51,6 +51,12 @@ The Metal compile now receives the same minimum OS as C++. A target below
 whose own dylib minimum OS is compatible with that target. Inspect actual
 Mach-O load commands and wheel platform tags before redistribution: an in-place
 build or its setuptools output directory is not evidence of portable packaging.
+Configuration rejects a target below the linked MLX dylib's recorded minimum.
+Wheel platform tags for macOS 11+ encode the major release only: a
+`macosx_26_0_arm64` tag does not establish support for 26.0 when the linked
+payload requires 26.2. Preserve the explicit minimum in deployment checks.
+Source distributions contain the native build sources, not prebuilt local
+binaries; build them against the intended serving interpreter and MLX wheel.
 Full-model quality, cache restoration and performance acceptance remain
 separate from component numerical tests.
 

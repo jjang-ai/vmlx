@@ -37,6 +37,28 @@ execute_process(
   OUTPUT_VARIABLE MLX_ROOT)
 find_package(MLX CONFIG REQUIRED)
 
+# An older extension target does not make a newer linked MLX dylib portable.
+# Inspect the selected imported library before compiling, rather than leave
+# this as a linker warning and produce a misleading deployment receipt.
+get_target_property(MTPLX_QSA_MLX_DYLIB mlx LOCATION)
+execute_process(
+  COMMAND xcrun vtool -show-build "${MTPLX_QSA_MLX_DYLIB}"
+  RESULT_VARIABLE MTPLX_QSA_VTOOL_RESULT
+  OUTPUT_VARIABLE MTPLX_QSA_MLX_BUILD
+  ERROR_VARIABLE MTPLX_QSA_VTOOL_ERROR)
+string(REGEX MATCHALL "minos[ \t]+[0-9]+\\.[0-9]+(\\.[0-9]+)?"
+       MTPLX_QSA_MLX_MINIMUMS "${MTPLX_QSA_MLX_BUILD}")
+if(NOT MTPLX_QSA_VTOOL_RESULT EQUAL 0 OR NOT MTPLX_QSA_MLX_MINIMUMS)
+  message(FATAL_ERROR "Cannot establish linked MLX minimum macOS: ${MTPLX_QSA_MLX_DYLIB}: ${MTPLX_QSA_VTOOL_ERROR}")
+endif()
+foreach(MTPLX_QSA_MLX_MINIMUM IN LISTS MTPLX_QSA_MLX_MINIMUMS)
+  string(REGEX REPLACE "^minos[ \t]+" "" MTPLX_QSA_MLX_MINIMUM "${MTPLX_QSA_MLX_MINIMUM}")
+  if(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS MTPLX_QSA_MLX_MINIMUM)
+    message(FATAL_ERROR
+      "QSA target ${CMAKE_OSX_DEPLOYMENT_TARGET} is older than linked MLX minimum ${MTPLX_QSA_MLX_MINIMUM}. Use a compatible MLX wheel or explicitly raise CMAKE_OSX_DEPLOYMENT_TARGET.")
+  endif()
+endforeach()
+
 # Build receipts baked into the module. The primitive links MLX's private C++
 # ABI, so the wrapper must be able to prove which wheel it was built against.
 execute_process(

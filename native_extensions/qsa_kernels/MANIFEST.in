@@ -1,0 +1,9 @@
+include CMakeLists.txt
+include bindings.cpp
+include qwen4_qsa_sparse_gqa.cpp
+include qwen4_qsa_sparse_gqa.h
+include qwen4_qsa_sparse_gqa.metal
+include VMLX_INTEGRATION.md
+recursive-include kernels *.h
+recursive-include mtplx_qsa_kernels *.txt NOTICE
+global-exclude *.so *.dylib *.metallib
