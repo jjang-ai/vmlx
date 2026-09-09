@@ -59,7 +59,7 @@ def test_incomplete_companion_cannot_report_stored(failure):
     s,r=fixture()
     if failure=="derive": s._prefill_for_prompt_only_cache.return_value=None
     elif failure=="layout": s._prefill_for_prompt_only_cache.return_value=["kv"]
-    elif failure=="media": r._cache_extra_keys={"media":"image"}
+    elif failure=="media": r.pixel_values=object()
     else: s._ssm_state_cache._disk.wait_for_write.return_value=False
     with pytest.raises(RuntimeError):
         s._persist_hybrid_ssd_companion(r,[1,2,3,4],SimpleNamespace(num_tokens=4))
@@ -71,3 +71,7 @@ def test_cleanup_owns_companion_before_success_record():
     companions=[n.lineno for n in calls if isinstance(n.func,ast.Attribute) and n.func.attr=="_persist_hybrid_ssd_companion"]
     assert len(companions)==1 and any(line<companions[0] for line in stores)
 
+def test_text_cache_discriminators_are_not_media_inputs():
+    s,r=fixture(); r._cache_extra_keys={"enable_thinking":True}
+    s._persist_hybrid_ssd_companion(r,[1,2,3,4],SimpleNamespace(num_tokens=4))
+    s._ssm_state_cache.store.assert_called_once()

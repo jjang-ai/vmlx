@@ -4693,7 +4693,12 @@ class Scheduler:
             raise RuntimeError("hybrid SSD companion has no valid retained KV boundary")
         # This text-only rederive cannot reproduce media embeddings. Do not
         # publish a complete-state claim under a media-salted KV identity.
-        if getattr(request, "_cache_extra_keys", None):
+        if (
+            getattr(request, "images", None)
+            or getattr(request, "videos", None)
+            or getattr(request, "pixel_values", None) is not None
+            or getattr(request, "pixel_values_videos", None) is not None
+        ):
             raise RuntimeError("hybrid SSD companion requires its media-aware owner")
         tokens = list(store_tokens[:boundary])
         started = time.perf_counter()
