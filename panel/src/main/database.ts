@@ -2448,6 +2448,13 @@ class DatabaseManager {
     this.db.prepare("DELETE FROM image_sessions WHERE id = ?").run(id);
   }
 
+  addImageGenerations(generations: ImageGeneration[]): void {
+    this.ensureOpen();
+    this.db.transaction(() => {
+      for (const generation of generations) this.addImageGeneration(generation);
+    })();
+  }
+
   addImageGeneration(gen: ImageGeneration): void {
     this.ensureOpen();
     this.db

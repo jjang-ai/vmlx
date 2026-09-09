@@ -1,13 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({ handlers: new Map<string, Function>(), root: '' }))
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: Function) => state.handlers.set(name, fn) } }))
 vi.mock('../src/main/sessions', () => ({ sessionManager: {} }))
-vi.mock('../src/main/database', () => ({ db: {} }))
+vi.mock('../src/main/database', () => ({ db: {
+  addImageGeneration: () => { throw new Error('test history insert failure') },
+  addImageGenerations: () => { throw new Error('test history insert failure') },
+} }))
 vi.mock('os', async (original) => ({ ...await original<object>(), homedir: () => state.root }))
 
 import { registerImageHandlers } from '../src/main/ipc/image'
@@ -36,6 +39,20 @@ describe('image HTTP failure releases the actual IPC job', () => {
     rmSync(state.root, { recursive: true, force: true })
   })
   for (const lane of ['generate', 'edit']) {
+    it(lane + ' removes its own files when history publication fails', async () => {
+      resetImageGenerationStateForTests()
+      responseStatus = 200
+      responseBody = JSON.stringify({ data: [{ b64_json: Buffer.from('fixture bytes').toString('base64'), seed: 1 }] })
+      const result = await state.handlers.get('image:' + lane)!({}, {
+        sessionId: 'write-failure-' + lane, model: 'qwen-image-edit', prompt: 'fixture',
+        imageBase64: 'dGVzdA==', strength: .75, width: 512, height: 512, steps: 1,
+        guidance: 4, count: 1, serverPort: port,
+      })
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('test history insert failure')
+      expect(readdirSync(join(state.root, '.mlxstudio', 'generated', 'write-failure-' + lane))).toEqual([])
+      expect(getImageGenerationStatus().generating).toBe(false)
+    })
     for (const status of [400, 500, 200]) {
       it(lane + ' clears busy state after ' + status + ' failure and permits a retry', async () => {
         resetImageGenerationStateForTests()

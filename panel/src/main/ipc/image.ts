@@ -3,7 +3,8 @@ import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
-import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
+import { publishImageOutputs, type ImageOutputFile } from '../imageOutputPublication'
 import { sessionManager } from '../sessions'
 import { sameLocalBundlePath } from '../local-bundle-identity'
 import { db } from '../database'
@@ -406,12 +407,13 @@ export function registerImageHandlers(): void {
       const elapsed = (Date.now() - startTime) / 1000
 
       // If img2img, save source image to disk for gallery display
+      const outputFiles: ImageOutputFile[] = []
       let sourceImagePath: string | undefined
       if (params.imageBase64 && params.strength != null) {
         const srcId = uuidv4()
         sourceImagePath = join(outputDir, `src_${srcId}.png`)
         const rawB64 = params.imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
-        writeFileSync(sourceImagePath, Buffer.from(rawB64, 'base64'))
+        outputFiles.push({ path: sourceImagePath, data: Buffer.from(rawB64, 'base64') })
       }
 
       // Save each image to disk and database
@@ -422,7 +424,7 @@ export function registerImageHandlers(): void {
 
         // Decode base64 and save as PNG
         const buffer = Buffer.from(item.b64_json, 'base64')
-        writeFileSync(imagePath, buffer)
+        outputFiles.push({ path: imagePath, data: buffer })
 
         // Use the actual seed from the server response (engine resolves random seeds)
         // so the user can reproduce the same image by entering the seed later
@@ -443,9 +445,10 @@ export function registerImageHandlers(): void {
           sourceImagePath,
           createdAt: Date.now()
         }
-        db.addImageGeneration(gen)
         generations.push(gen)
       }
+
+      publishImageOutputs(outputFiles, () => db.addImageGenerations(generations))
 
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
@@ -581,11 +584,12 @@ export function registerImageHandlers(): void {
       const elapsed = (Date.now() - startTime) / 1000
 
       // Save source image to disk for gallery display
+      const outputFiles: ImageOutputFile[] = []
       const srcGenId = uuidv4()
       const sourceImagePath = join(outputDir, `src_${srcGenId}.png`)
       const rawB64 = imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
       const srcBuffer = Buffer.from(rawB64, 'base64')
-      writeFileSync(sourceImagePath, srcBuffer)
+      outputFiles.push({ path: sourceImagePath, data: srcBuffer })
 
       // Save edited image to disk and database
       const generations: ImageGeneration[] = []
@@ -594,7 +598,7 @@ export function registerImageHandlers(): void {
         const imagePath = join(outputDir, `${genId}.png`)
 
         const buffer = Buffer.from(item.b64_json, 'base64')
-        writeFileSync(imagePath, buffer)
+        outputFiles.push({ path: imagePath, data: buffer })
 
         // Use the actual seed from the server response (engine resolves random seeds)
         const gen: ImageGeneration = {
@@ -614,9 +618,10 @@ export function registerImageHandlers(): void {
           sourceImagePath,
           createdAt: Date.now()
         }
-        db.addImageGeneration(gen)
         generations.push(gen)
       }
+
+      publishImageOutputs(outputFiles, () => db.addImageGenerations(generations))
 
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'outputs_saved', count: generations.length, history_session_id: sessionId })
       return { success: true, generations }
