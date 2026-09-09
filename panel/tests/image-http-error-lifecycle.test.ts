@@ -21,14 +21,16 @@ describe('image HTTP failure releases the actual IPC job', () => {
   let port: number
   let responseStatus = 500
   let responseBody = '{"detail":"test backend rejection"}'
+  let cancellation: 'match' | 'foreign' | null = null
   beforeAll(async () => {
     state.root = mkdtempSync(join(tmpdir(), 'vmlx-image-http-test-'))
     registerImageHandlers()
     server = createServer((req, res) => {
-      req.resume()
+      let body = ''
+      req.on('data', chunk => { body += chunk })
       req.on('end', () => {
         res.writeHead(responseStatus, { 'Content-Type': 'application/json' })
-        res.end(responseBody)
+        res.end(cancellation ? JSON.stringify({detail:{code:'image_generation_cancelled',request_id:cancellation === 'match' ? JSON.parse(body).request_id : 'foreign'}}) : responseBody)
       })
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -39,6 +41,23 @@ describe('image HTTP failure releases the actual IPC job', () => {
     rmSync(state.root, { recursive: true, force: true })
   })
   for (const lane of ['generate', 'edit']) {
+    it(lane + ' treats only its matching cancellation as an expected outcome', async () => {
+      responseStatus = 409
+      try {
+        for (const kind of ['match','foreign'] as const) {
+          resetImageGenerationStateForTests()
+          cancellation = kind
+          const result = await state.handlers.get('image:' + lane)!({}, {
+            sessionId:'cancelled-' + lane, model:'qwen-image-edit',prompt:'test',imageBase64:'dGVzdA==',
+            width:512,height:512,steps:1,guidance:4,count:1,serverPort:port,
+          })
+          expect(result.success).toBe(false)
+          if (kind === 'match') { expect(result.cancelled).toBe(true); expect(result.error).toBeUndefined() }
+          else { expect(result.cancelled).toBeUndefined(); expect(result.error).toContain('409') }
+          expect(getImageGenerationStatus().generating).toBe(false)
+        }
+      } finally { cancellation = null }
+    })
     it(lane + ' removes its own files when history publication fails', async () => {
       resetImageGenerationStateForTests()
       responseStatus = 200

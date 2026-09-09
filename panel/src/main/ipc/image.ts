@@ -15,6 +15,7 @@ import {
   bindImageGenerationRequest,
   recordImageGenerationLog,
   classifyImageGenerationError,
+  isImageRequestCancellationResponse,
   clearImageGenerationAfterLocalAbort,
   clearImageGenerationSessionHistory,
   finishImageGeneration,
@@ -402,6 +403,10 @@ export function registerImageHandlers(): void {
       }
 
       if (!resp.ok) {
+        if (isImageRequestCancellationResponse(resp.status, resp.data, clientJobId)) {
+          logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+          return { success: false, cancelled: true }
+        }
         logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'http_rejected', status: resp.status })
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
@@ -580,6 +585,10 @@ export function registerImageHandlers(): void {
       }
 
       if (!resp.ok) {
+        if (isImageRequestCancellationResponse(resp.status, resp.data, clientJobId)) {
+          logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'cancelled' })
+          return { success: false, cancelled: true }
+        }
         logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'http_rejected', status: resp.status })
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }

@@ -555,7 +555,7 @@ export function ImageTab() {
         await loadGenerations(sessionId!)
         await loadSessions() // Refresh session list (updatedAt changed)
       } else {
-        setError(result.error || (sessionMode === 'edit' ? t('image.tab.editFailed') : t('image.tab.generationFailed')))
+        if (!result.cancelled) setError(result.error || (sessionMode === 'edit' ? t('image.tab.editFailed') : t('image.tab.generationFailed')))
       }
     } catch (err) {
       setError((err as Error).message)

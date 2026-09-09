@@ -4,6 +4,7 @@ import { join } from "path";
 import {
   beginImageGeneration,
   classifyImageGenerationError,
+  isImageRequestCancellationResponse,
   clearImageGenerationAfterLocalAbort,
   finishImageGeneration,
   getImageGenerationStatus,
@@ -45,6 +46,14 @@ const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
 
 describe("image generation in-flight state survives tab switches", () => {
+  it('recognizes only the typed cancellation for this exact request', () => {
+    const body = JSON.stringify({ detail: { code: 'image_generation_cancelled', request_id: 'owned' } })
+    expect(isImageRequestCancellationResponse(409, body, 'owned')).toBe(true)
+    expect(isImageRequestCancellationResponse(409, body, 'other')).toBe(false)
+    expect(isImageRequestCancellationResponse(500, body, 'owned')).toBe(false)
+    expect(isImageRequestCancellationResponse(409, 'broken JSON', 'owned')).toBe(false)
+    expect(isImageRequestCancellationResponse(409, JSON.stringify({detail:{code:'image_request_id_in_use',request_id:'owned'}}), 'owned')).toBe(false)
+  })
   it("keeps cancellation busy until the original request finishes", () => {
     resetImageGenerationStateForTests();
     const controller = beginImageGeneration("cancel-owner");

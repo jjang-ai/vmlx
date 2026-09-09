@@ -114,6 +114,14 @@ export function classifyImageGenerationError(
     : msg
 }
 
+export function isImageRequestCancellationResponse(status: number, body: string, requestId: string): boolean {
+  if (status !== 409) return false
+  try {
+    const detail = JSON.parse(body)?.detail
+    return detail?.code === 'image_generation_cancelled' && detail.request_id === requestId
+  } catch { return false }
+}
+
 export function finishImageGeneration(controller?: AbortController | null): void {
   if (!controller || activeGeneration?.controller === controller) {
     activeGeneration = null

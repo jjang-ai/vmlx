@@ -493,6 +493,7 @@ declare global {
         }) => Promise<{
           success: boolean;
           generations?: any[];
+          cancelled?: boolean;
           error?: string;
         }>;
         edit: (params: {
@@ -512,6 +513,7 @@ declare global {
         }) => Promise<{
           success: boolean;
           generations?: any[];
+          cancelled?: boolean;
           error?: string;
         }>;
         startServer: (
