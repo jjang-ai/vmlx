@@ -1699,6 +1699,8 @@
     "picker": {
       "chooseFolderTitle": "选择图像模型",
       "folderFirstIntro": "选择本地模型文件夹，检查检测到的类型和存储精度，然后加载。选择文件夹不会停止当前模型或下载权重。",
+      "mfluxCompatibility": "仅支持兼容 mflux 的图像模型。量化权重必须使用 mflux 格式；此处不支持 GGUF、EXL3 或 NVFP4。加载前会验证文件夹内容。",
+      "mfluxDiscovery": "搜索显示声明为 mflux、包含受支持模型系列元数据和模型文件的候选项。搜索元数据不保证加载成功或图像质量。",
       "folderTab": "本地文件夹",
       "modelCatalog": "模型下载",
       "adapterOverride": "高级适配器设置",

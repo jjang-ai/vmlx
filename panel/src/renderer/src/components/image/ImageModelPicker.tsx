@@ -316,6 +316,10 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
             </button>
           )}
 
+          <p data-vmlx-status="mflux-compatibility" className="mt-3 text-xs text-muted-foreground">
+            {t('image.picker.mfluxCompatibility')}
+          </p>
+
         </div>
 
         <div className="flex flex-wrap gap-2" role="group" aria-label={t('image.picker.chooseFolderTitle')}>

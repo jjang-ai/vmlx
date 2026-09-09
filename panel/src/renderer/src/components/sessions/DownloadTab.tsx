@@ -39,11 +39,7 @@ function timeAgo(dateStr: string | null | undefined, t: (key: string, params?: R
   return t('sessions.download.timeYearsAgo', { n: Math.floor(days / 365) })
 }
 
-const COLLECTION_SLUGS = {
-  jang: 'jangq/jang-quantized-gguf-for-mlx',
-  uncensored: 'dealignai/crack-xtreme-quality-uncensored-gguf-on-mlx-69ba7ed343004d49cf8ca53f',
-} as const
-type CollectionTab = keyof typeof COLLECTION_SLUGS
+type CollectionTab = 'jang' | 'uncensored'
 
 export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const { t } = useTranslation()
@@ -58,6 +54,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   // Collection tabs (JANG / Uncensored)
   const [collectionTab, setCollectionTab] = useState<CollectionTab>('jang')
+  const collectionKey = modelType === 'image' ? 'image:mflux' : `text:${collectionTab}`
   const [feedSort, setFeedSort] = useState<HfModelFeedSort>('createdAt')
   const [feedRefresh, setFeedRefresh] = useState(0)
   const [collectionModels, setCollectionModels] = useState<Record<string, HFModel[]>>({})
@@ -100,6 +97,11 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [loadingReadme, setLoadingReadme] = useState(false)
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchRevision = useRef(0)
+  useEffect(() => () => {
+    searchRevision.current++
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+  }, [])
   const readmeRequestRef = useRef(0)
   const onDownloadCompleteRef = useRef(onDownloadComplete)
   onDownloadCompleteRef.current = onDownloadComplete
@@ -150,27 +152,28 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     let cancelled = false
     let inFlight = false
     const tab = collectionTab
+    const key = collectionKey
     const refresh = async () => {
       if (inFlight) return
       inFlight = true
-      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
-      setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
+      setLoadingCollectionTabs(prev => ({ ...prev, [key]: true }))
+      setCollectionErrors(prev => { const next = { ...prev }; delete next[key]; return next })
       try {
         const models = modelType === 'text'
           ? await window.api.models.getRecentModels(HF_MODEL_FEED_AUTHORS[tab], feedSort)
-          : await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
-        if (!cancelled) setCollectionModels(prev => ({ ...prev, [tab]: models }))
+          : await window.api.models.searchHF('', 'lastModified', 'desc', 'image')
+        if (!cancelled) setCollectionModels(prev => ({ ...prev, [key]: models }))
       } catch (err) {
-        if (!cancelled) setCollectionErrors(prev => ({ ...prev, [tab]: String(err instanceof Error ? err.message : err) }))
+        if (!cancelled) setCollectionErrors(prev => ({ ...prev, [key]: String(err instanceof Error ? err.message : err) }))
       } finally {
         inFlight = false
-        if (!cancelled) setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
+        if (!cancelled) setLoadingCollectionTabs(prev => ({ ...prev, [key]: false }))
       }
     }
     void refresh()
     const timer = setInterval(() => { if (!document.hidden) void refresh() }, 5 * 60_000)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [collectionTab, modelType, feedSort, feedRefresh, searchQuery])
+  }, [collectionTab, collectionKey, modelType, feedSort, feedRefresh, searchQuery])
 
   // Listen for download events
   useEffect(() => {
@@ -228,6 +231,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   // Debounced search
   const doSearch = useCallback(async (query: string, sort: string, dir: 'desc' | 'asc', type: 'text' | 'image' = 'text') => {
+    const revision = ++searchRevision.current
     if (!query.trim()) {
       setSearchResults([])
       setError(null)
@@ -237,16 +241,22 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     setError(null)
     try {
       const results = await window.api.models.searchHF(query.trim(), sort, dir, type === 'image' ? 'image' : undefined)
+      if (revision !== searchRevision.current) return
       setSearchResults(results)
     } catch (err) {
-      setError((err as Error).message)
-      setSearchResults([])
+      if (revision === searchRevision.current) {
+        setError((err as Error).message)
+        setSearchResults([])
+      }
     } finally {
-      setLoading(false)
+      if (revision === searchRevision.current) setLoading(false)
     }
   }, [])
 
   const handleSearch = useCallback((query: string) => {
+    searchRevision.current++
+    setSearchResults([])
+    setLoading(false)
     setSearchQuery(query)
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
     if (!query.trim()) {
@@ -266,6 +276,13 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   }, [doSearch, searchQuery, sortDir, modelType])
 
   const handleModelTypeChange = useCallback((type: 'text' | 'image') => {
+    searchRevision.current++
+    setSearchResults([])
+    setSelectedModel(null)
+    setSelectedReadme(null)
+    readmeRequestRef.current++
+    setError(null)
+    setLoading(false)
     setModelType(type)
     if (searchQuery.trim()) {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
@@ -358,9 +375,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
-  const activeCollection = collectionModels[collectionTab] || []
+  const activeCollection = collectionModels[collectionKey] || []
   const displayModels = searchQuery.trim() ? searchResults : activeCollection
-  const isCollectionLoading = !searchQuery.trim() && !!loadingCollectionTabs[collectionTab]
+  const isCollectionLoading = !searchQuery.trim() && !!loadingCollectionTabs[collectionKey]
 
   return (
     <div className="space-y-4">
@@ -481,6 +498,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
             {t('sessions.download.typeText')}
           </button>
           <button
+            data-vmlx-control="download-type-image"
             onClick={() => handleModelTypeChange('image')}
             className={`px-2.5 py-2 text-xs transition-colors ${modelType === 'image' ? 'bg-violet-500/15 text-violet-400 font-medium' : 'text-muted-foreground hover:bg-accent'}`}
           >
@@ -492,7 +510,8 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           placeholder={modelType === 'image' ? t('sessions.download.searchImagePlaceholder') : t('sessions.download.searchTextPlaceholder')}
           value={searchQuery}
           onChange={(e) => handleSearch(e.target.value)}
-          className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
+            data-vmlx-control="model-search"
+            className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
         />
         {searchQuery.trim() && (
           <>
@@ -522,6 +541,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         )}
         {loading && <span className="text-xs text-muted-foreground">{t('sessions.download.searching')}</span>}
       </div>
+      {modelType === 'image' && <p data-vmlx-status="mflux-compatibility" className="text-xs text-muted-foreground">
+        {t('image.picker.mfluxCompatibility')} {t('image.picker.mfluxDiscovery')}
+      </p>}
 
       {error && (
         <div className="p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-destructive">
@@ -543,6 +565,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
             <span className="text-xs text-muted-foreground uppercase tracking-wider mb-2">{t('sessions.download.searchResults')}</span>
           ) : (
             <div className="flex items-center gap-1 mb-2 flex-wrap">
+              {modelType === 'text' && <>
               <button
                 data-vmlx-action="feed-jang"
                 onClick={() => handleCollectionTabChange('jang')}
@@ -557,6 +580,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               >
                 {t('sessions.download.uncensored')}
               </button>
+              </>}
               {modelType === 'text' && <>
                 <select data-vmlx-setting="modelFeedSort" aria-label={t('sessions.download.sortTitle')}
                   className="cfg-input text-xs w-auto" value={feedSort}
@@ -577,16 +601,16 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           <div className="flex-1 overflow-y-auto space-y-1 pr-1">
             {isCollectionLoading ? (
               <p className="text-sm text-muted-foreground py-4 text-center">{t('sessions.download.loadingModels')}</p>
-            ) : !searchQuery.trim() && collectionErrors[collectionTab] ? (
+            ) : !searchQuery.trim() && collectionErrors[collectionKey] ? (
               // ms#68: fetch failure — distinct from empty collection. Show
               // the actual error + a retry button so the user isn't stuck
               // staring at "No models" wondering if the network died.
               <div className="text-sm py-4 text-center space-y-2">
                 <p className="text-muted-foreground">
-                  {modelType === 'text' ? t('sessions.download.feedLoadFailed') : t('sessions.download.collectionLoadFailed', { name: collectionTab === 'jang' ? 'JANG' : t('sessions.download.uncensored') })}
+                  {t('sessions.download.feedLoadFailed')}
                 </p>
                 <p className="text-xs text-muted-foreground/70 max-w-md mx-auto break-words">
-                  {collectionErrors[collectionTab]}
+                  {collectionErrors[collectionKey]}
                 </p>
                 <button
                   onClick={retryCollectionFetch}
@@ -597,7 +621,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               </div>
             ) : displayModels.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
-                {searchQuery.trim() ? (modelType === 'image' ? t('sessions.download.noImageModels') : t('sessions.download.noMlxModels')) : modelType === 'text' ? t('sessions.download.noFeedModels') : t('sessions.download.noCollectionModels')}
+                {modelType === 'image' ? t('sessions.download.noImageModels') : searchQuery.trim() ? t('sessions.download.noMlxModels') : t('sessions.download.noFeedModels')}
               </p>
             ) : (
               displayModels.map(model => (

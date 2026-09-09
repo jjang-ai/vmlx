@@ -39,6 +39,7 @@ import {
   generationDefaultsFromRemoteCapabilities,
 } from "../../shared/remoteModelCapabilities";
 import { attachChildProcessStreamErrorGuard } from '../childProcessStreamGuards'
+import { isMfluxImageCandidate, mfluxImageSearchParams } from '../../shared/mfluxImageDiscovery'
 
 /**
  * ms#75: resolve the HuggingFace-compatible base URL for API calls
@@ -2197,32 +2198,15 @@ export function registerModelHandlers(): void {
 
       let models: any[];
       if (modelType === "image") {
-        // Search both text-to-image and image-to-image pipelines in parallel
-        const p1 = new URLSearchParams(params);
-        p1.set("filter", "text-to-image");
-        const p2 = new URLSearchParams(params);
-        p2.set("filter", "image-to-image");
+        const imageParams = mfluxImageSearchParams(params);
         console.log(
           `[MODELS] Searching HuggingFace image models: ${query} (sort=${sortBy || "downloads"} dir=${sortDir || "desc"})`,
         );
-        const [r1Result, r2Result] = await Promise.all([
-          fetchHfPath(`/api/models?${p1}`, { headers: searchHeaders }),
-          fetchHfPath(`/api/models?${p2}`, { headers: searchHeaders }),
-        ]);
-        const r1 = r1Result.response;
-        const r2 = r2Result.response;
-        if (!r1.ok) throw new Error(`HuggingFace API error: ${r1.status}`);
-        const m1 = await r1.json();
-        const m2 = r2.ok ? await r2.json() : [];
-        // Deduplicate by model ID
-        const seen = new Set<string>();
-        models = [];
-        for (const m of [...m1, ...m2]) {
-          if (!seen.has(m.modelId || m.id)) {
-            seen.add(m.modelId || m.id);
-            models.push(m);
-          }
-        }
+        const { response } = await fetchHfPath(`/api/models?${imageParams}`, { headers: searchHeaders });
+        if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`);
+        const candidates = await response.json();
+        if (!Array.isArray(candidates)) throw new Error('Invalid HuggingFace image search response');
+        models = candidates.filter(isMfluxImageCandidate);
       } else {
         params.set("filter", "mlx");
         console.log(

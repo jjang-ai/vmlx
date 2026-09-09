@@ -1699,6 +1699,8 @@
     "picker": {
       "chooseFolderTitle": "Choose an image model",
       "folderFirstIntro": "Select a local model folder. Review its detected type and stored precision, then load it. Choosing a folder does not stop the current model or download weights.",
+      "mfluxCompatibility": "Only mflux-compatible image bundles are supported. Quantized weights must use mflux format; GGUF, EXL3 and NVFP4 are not supported here. Folder contents are validated before loading.",
+      "mfluxDiscovery": "Search shows mflux-declared bundles with supported family metadata and model files. Search metadata is not a guarantee of successful loading or image quality.",
       "folderTab": "Local folder",
       "modelCatalog": "Model downloads",
       "adapterOverride": "Advanced adapter override",

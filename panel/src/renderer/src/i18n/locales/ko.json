@@ -1699,6 +1699,8 @@
     "picker": {
       "chooseFolderTitle": "이미지 모델 선택",
       "folderFirstIntro": "로컬 모델 폴더를 선택하고 감지된 유형과 저장 정밀도를 확인한 다음 로드하세요. 폴더 선택만으로 현재 모델을 중지하거나 가중치를 다운로드하지 않습니다.",
+      "mfluxCompatibility": "mflux 호환 이미지 모델만 지원합니다. 양자화 가중치는 mflux 형식이어야 하며 GGUF, EXL3, NVFP4는 지원하지 않습니다. 로드 전에 폴더 내용을 검증합니다.",
+      "mfluxDiscovery": "검색에는 mflux로 표시되고 지원 모델 계열 정보와 모델 파일이 있는 후보가 표시됩니다. 검색 메타데이터는 로드 성공이나 이미지 품질을 보장하지 않습니다.",
       "folderTab": "로컬 폴더",
       "modelCatalog": "모델 다운로드",
       "adapterOverride": "고급 어댑터 설정",

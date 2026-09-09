@@ -1699,6 +1699,8 @@
     "picker": {
       "chooseFolderTitle": "Elegir un modelo de imagen",
       "folderFirstIntro": "Selecciona una carpeta local. Revisa el tipo y la precisión detectados y luego cárgala. Elegir una carpeta no detiene el modelo actual ni descarga pesos.",
+      "mfluxCompatibility": "Solo se admiten modelos de imagen compatibles con mflux. Los pesos cuantizados deben usar el formato mflux; aquí no se admiten GGUF, EXL3 ni NVFP4. El contenido de la carpeta se valida antes de cargarlo.",
+      "mfluxDiscovery": "La búsqueda muestra modelos declarados como mflux con metadatos de familias admitidas y archivos de modelo. Estos metadatos no garantizan la carga ni la calidad de imagen.",
       "folderTab": "Carpeta local",
       "modelCatalog": "Descargar modelos",
       "adapterOverride": "Configuración avanzada del adaptador",
