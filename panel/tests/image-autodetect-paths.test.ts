@@ -83,10 +83,12 @@ describe("image model autodetection path", () => {
   it("image startServer falls back to existing downloaded repo directories before failing", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
     expect(src).toContain("findDownloadedImageModelPath");
-    expect(src).toContain("Registered existing downloaded image model");
+    expect(src).toContain("Validated registered model directory");
+    expect(src).toContain("resolveLocalImageModelDirectory(modelPath, effectiveQuantize)");
+    expect(src).toContain("modelDef.id, effectiveQuantize, modelPath, discoveredRepoId");
     expect(src).toContain("resolveImageModelArtifact(modelId, quantize)");
     expect(src).toContain("join(base, repoName, artifact.subfolder)");
-    expect(src).toContain("db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)");
+    expect(src).not.toContain("db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)");
   });
 
   it("image edit requests normalize painted mask data URLs before proxying", () => {

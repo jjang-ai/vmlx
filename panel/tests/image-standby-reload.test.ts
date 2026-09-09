@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   rows: [] as any[],
   invalid: false,
   unknownArchitecture: false,
+  storedPath: null as string | null,
   registerPath: vi.fn(),
   stop: vi.fn(),
   create: vi.fn(),
@@ -19,11 +20,12 @@ vi.mock('../src/main/sessions', () => ({ sessionManager: {
 } }))
 vi.mock('../src/main/database', () => ({ db: {
   getSessions: () => state.rows,
+  getImageModelPath: () => state.storedPath ? { localPath: state.storedPath } : null,
   setImageModelPath: (...args: any[]) => state.registerPath(...args),
 } }))
 vi.mock('../src/shared/imageLocalModel', async original => ({
   ...await original<object>(),
-  resolveLocalImageModelDirectory: (path: string) => state.invalid
+  resolveLocalImageModelDirectory: (path: string) => !path.startsWith('/') ? null : state.invalid
     ? { kind: 'missing', path }
     : { kind: 'model', path, quantize: 8, quantizeSource: 'header' },
   localImageModelError: () => ({ code: 'missing', message: 'Missing folder' }),
@@ -43,6 +45,7 @@ describe('explicit folder load replaces its own untracked standby session', () =
     await state.handlers.get('image:getRunningServer')!({})
     state.invalid = false
     state.unknownArchitecture = false
+    state.storedPath = null
     state.registerPath.mockReset()
     state.rows = [{
       id: 'image-owned', type: 'local', status: 'standby', port: 8000,
@@ -110,5 +113,24 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(result).toMatchObject({ success: false, error: 'Stop refused' })
     expect(state.create).not.toHaveBeenCalled()
     expect(state.start).not.toHaveBeenCalled()
+  })
+
+  it('uses actual folder adapter and precision for a stale registered model id', async () => {
+    state.storedPath = __dirname
+    const result = await state.handlers.get('image:startServer')!({}, 'schnell', 4)
+    expect(result).toMatchObject({ success: true, quantize: 8, modelId: 'qwen-image-edit', imageMode: 'edit' })
+    expect(state.create).toHaveBeenCalledWith(__dirname, expect.objectContaining({
+      mfluxClass: 'QwenImageEdit', imageQuantize: 8, servedModelName: 'qwen-image-edit', imageMode: 'edit',
+    }))
+  })
+
+  it('rejects unresolved metadata reached through a registry id without replacing the owner', async () => {
+    state.storedPath = __dirname
+    state.unknownArchitecture = true
+    const result = await state.handlers.get('image:startServer')!({}, 'schnell', 4)
+    expect(result).toMatchObject({ success: false, serverKept: true })
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.create).not.toHaveBeenCalled()
+    expect(state.registerPath).not.toHaveBeenCalled()
   })
 })

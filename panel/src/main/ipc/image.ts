@@ -659,7 +659,8 @@ export function registerImageHandlers(): void {
           // disk.
           let modelPath = modelName
           let effectiveQuantize = quantize || 0
-          const localDir = resolveLocalImageModelDirectory(modelName, effectiveQuantize)
+          let discoveredRepoId: string | undefined
+          let localDir = resolveLocalImageModelDirectory(modelName, effectiveQuantize)
           if (localDir && localDir.kind !== 'model') {
             const err = localImageModelError(localDir)
             console.log(`[IMAGE] Rejected local model path (${err.code}): ${modelName}`)
@@ -688,8 +689,7 @@ export function registerImageHandlers(): void {
             const discovered = findDownloadedImageModelPath(modelName, effectiveQuantize)
             if (discovered) {
               modelPath = discovered.localPath
-              db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)
-              console.log(`[IMAGE] Registered existing downloaded image model: ${discovered.modelId} q=${quantize || 0} → ${modelPath}`)
+              discoveredRepoId = discovered.repoId
             } else if (storedPath && storedVolume) {
               return {
                 success: false,
@@ -704,13 +704,29 @@ export function registerImageHandlers(): void {
             }
           }
 
+          // A registry entry is only a location hint, not authority for the
+          // contents currently at that location. Re-inspect the resolved
+          // folder before choosing an adapter, precision or replacement.
+          if (localDir?.kind !== 'model') {
+            localDir = resolveLocalImageModelDirectory(modelPath, effectiveQuantize)
+            if (!localDir) {
+              return { success: false, error: 'Registered image model did not resolve to a local folder.', serverKept: true }
+            }
+            if (localDir.kind !== 'model') {
+              const err = localImageModelError(localDir)
+              console.warn(`[IMAGE] Rejected registered model path (${err.code}): ${modelPath}; current server kept`)
+              return { success: false, error: err.message, errorCode: err.code, errorParams: err.params, serverKept: true }
+            }
+            modelPath = localDir.path
+            if (localDir.quantize !== null) effectiveQuantize = localDir.quantize
+            console.log(`[IMAGE] Validated registered model directory: ${modelPath} (quantize=${effectiveQuantize || 'full'}, source=${localDir.quantizeSource || 'none'})`)
+          }
+
           // Resolve the adapter and its defaults BEFORE stopping a working
           // engine. Auto selection must not send a stale Flux1/generate pair.
           // A local inspection's unresolved result is meaningful. Do not
           // resurrect a rejected/unknown declaration from its folder name.
-          const modelDef = localDir?.kind === 'model'
-            ? resolveImageModelForLocalDirectory(modelPath)
-            : resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
+          const modelDef = resolveImageModelForLocalDirectory(modelPath)
           const mfluxName = modelDef?.mfluxName || modelName
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           const mode = imageMode || modelDef?.category || 'generate'
@@ -723,7 +739,7 @@ export function registerImageHandlers(): void {
           }
 
           if (localDir?.kind === 'model' && modelDef) {
-            try { db.setImageModelPath(modelDef.id, effectiveQuantize, modelPath, undefined) } catch (e) { console.warn('[IMAGE] Could not register validated local model directory:', e) }
+            try { db.setImageModelPath(modelDef.id, effectiveQuantize, modelPath, discoveredRepoId) } catch (e) { console.warn('[IMAGE] Could not register validated local model directory:', e) }
           }
 
           // Discovery intentionally presents running/loading image engines.
