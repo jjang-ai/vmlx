@@ -81,7 +81,10 @@ function looksLikeSingleDollarMath(text: string): boolean {
   //
   // Leading `+ - * /` stay rejected: a signed currency amount ("$-5") is real,
   // so those remain genuinely ambiguous. A leading `= < >` is not.
-  if (/^[+\-*/]/.test(trimmed) || /[+\-*/=<>]$/.test(trimmed)) return false
+  // Apply the incomplete-expression check to Unicode operators too. Otherwise
+  // currency such as "$245.00 = **−$24.50**" pairs the two amount prefixes as
+  // math and consumes the emphasis. Complete expressions still qualify below.
+  if (/^[+\-*/]/.test(trimmed) || /[+\-*/=<>−×÷±≤≥≠≈]$/.test(trimmed)) return false
   if (/^\d+(?:[.,]\d{2})?$/.test(trimmed)) return false
   // A missing single-dollar closer must never let a later currency amount
   // terminate a prose-sized span. Strip TeX commands, then look at the

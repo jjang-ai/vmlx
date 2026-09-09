@@ -5,7 +5,42 @@ import {
   prepareAssistantMarkdownWithMath,
   prepareStreamingPlainTextMath,
   prepareUserMarkdownWithMath,
+  renderChatMarkdownHtml,
 } from '../src/renderer/src/components/chat/mathMarkdown'
+
+describe('currency amounts separated by Unicode arithmetic', () => {
+  const invoice = 'Discount amount: 10% × $245.00 = **−$24.50**'
+
+  it('preserves the stored invoice amounts and their Markdown emphasis', () => {
+    const html = renderChatMarkdownHtml(invoice, { assistantContent: true })
+    expect(html).toContain('$245.00')
+    expect(html).toContain('<strong>−$24.50</strong>')
+    expect(html).not.toContain('math-inline')
+    expect(html).not.toContain('**')
+  })
+
+  it('does not consume currency delimiters at any streamed prefix', () => {
+    for (let end = 1; end <= invoice.length; end++) {
+      const prefix = invoice.slice(0, end)
+      expect(prepareStreamingPlainTextMath(prefix)).toBe(prefix)
+      expect(prepareMarkdownWithMath(prefix)).not.toContain('math-inline')
+    }
+  })
+
+  it.each(['−', '×', '÷', '±', '≤', '≥', '≠', '≈'])(
+    'does not treat an incomplete expression ending with %s as math',
+    (operator) => {
+      const source = 'Cost $245.00 = ' + operator + '$24.50'
+      expect(prepareMarkdownWithMath(source)).toBe(source)
+    },
+  )
+
+  it('retains complete Unicode arithmetic and welded TeX spans', () => {
+    for (const source of ['$245.00 − 24.50 = 220.50$', '$= 2 − 1$', '1024$\\times$768']) {
+      expect(prepareMarkdownWithMath(source)).toContain('class="katex"')
+    }
+  })
+})
 
 describe('prepareMarkdownWithMath', () => {
   it('renders inline TeX delimiters as readable math text', () => {
