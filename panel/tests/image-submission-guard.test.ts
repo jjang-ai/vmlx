@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { ImageSubmissionGuard } from '../src/shared/imageSubmissionGuard'
 
 describe('image submission busy-state ownership', () => {
+  it('allows current progress during submission without allowing idle to clear busy', () => {
+    const guard = new ImageSubmissionGuard()
+    const owner = guard.begin()!
+    const poll = guard.snapshot()
+    expect(guard.isCurrent(poll)).toBe(true)
+    expect(guard.canApply(poll)).toBe(false)
+    guard.finish(owner)
+    expect(guard.isCurrent(poll)).toBe(false)
+    guard.begin()
+    expect(guard.isCurrent(poll)).toBe(false)
+  })
   it('rejects an idle poll during history creation and prevents duplicate submission', () => {
     const guard = new ImageSubmissionGuard()
     const earlyPoll = guard.snapshot()

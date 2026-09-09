@@ -18,6 +18,8 @@ export class ImageSubmissionGuard {
 
   snapshot(): number { return this.revision }
 
+  isCurrent(snapshot: number): boolean { return snapshot === this.revision }
+
   canApply(snapshot: number): boolean {
     return this.owner === null && snapshot === this.revision
   }

@@ -305,17 +305,20 @@ export function ImageTab() {
 
   const syncGenerationStatus = useCallback(async () => {
     const snapshot = submissionGuard.current.snapshot()
-    if (!submissionGuard.current.canApply(snapshot)) return
+    if (!submissionGuard.current.isCurrent(snapshot)) return
     const status: ImageGenerationStatus = await window.api.image.isGenerating()
-    if (!submissionGuard.current.canApply(snapshot)) return
+    if (!submissionGuard.current.isCurrent(snapshot)) return
     if (status.generating) {
       setGenerating(true)
       setCancelling(status.cancelling === true)
-      setJobProgress(status.progress ?? null)
+      setJobProgress(status.sessionId === currentSessionId ? status.progress ?? null : null)
       setJobStartTime(status.startTime)
       return
     }
 
+    // Progress from the active request is useful during submission. An idle
+    // response is different: it cannot release locally owned preprocessing.
+    if (!submissionGuard.current.canApply(snapshot)) return
     setGenerating(false)
     const sessionIdToRefresh = currentSessionId
     if (sessionIdToRefresh) {
