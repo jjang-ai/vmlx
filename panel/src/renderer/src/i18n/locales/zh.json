@@ -1713,7 +1713,7 @@
       "editHint": "编辑：在测试的模型包中，4 位及以下的编辑变体输出无法使用；请使用 8 位或全精度。",
       "imageGeneration": "图像生成",
       "imageEditing": "图像编辑",
-      "customPathPlaceholder": "例如 black-forest-labs/FLUX.1-schnell 或 /path/to/model",
+      "customPathPlaceholder": "/path/to/local/model-folder",
       "browseTitle": "浏览文件夹",
       "modeLabel": "模式:",
       "classLabel": "类:",

@@ -1713,7 +1713,7 @@
       "editHint": "Edición: las variantes de edición de 4 bits o menos produjeron resultados inutilizables en los paquetes probados; usa 8 bits o precisión completa.",
       "imageGeneration": "Generación de imágenes",
       "imageEditing": "Edición de imágenes",
-      "customPathPlaceholder": "p. ej., black-forest-labs/FLUX.1-schnell o /ruta/al/modelo",
+      "customPathPlaceholder": "/ruta/al/modelo-local",
       "browseTitle": "Explorar carpetas",
       "modeLabel": "Modo:",
       "classLabel": "Clase:",

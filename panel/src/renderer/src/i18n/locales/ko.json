@@ -1713,7 +1713,7 @@
       "editHint": "편집: 테스트한 번들에서 4비트 이하 편집 변형은 사용할 수 없는 결과를 냈습니다. 8비트 또는 전체 정밀도를 사용하세요.",
       "imageGeneration": "이미지 생성",
       "imageEditing": "이미지 편집",
-      "customPathPlaceholder": "예: black-forest-labs/FLUX.1-schnell 또는 /path/to/model",
+      "customPathPlaceholder": "/path/to/local/model-folder",
       "browseTitle": "폴더 찾아보기",
       "modeLabel": "모드:",
       "classLabel": "클래스:",

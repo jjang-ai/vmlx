@@ -1713,7 +1713,7 @@
       "editHint": "Editing: 4-bit and lower edit variants produced unusable output on tested bundles; use 8-bit or full precision.",
       "imageGeneration": "Image Generation",
       "imageEditing": "Image Editing",
-      "customPathPlaceholder": "e.g., black-forest-labs/FLUX.1-schnell or /path/to/model",
+      "customPathPlaceholder": "/path/to/local/model-folder",
       "browseTitle": "Browse folders",
       "modeLabel": "Mode:",
       "classLabel": "Class:",

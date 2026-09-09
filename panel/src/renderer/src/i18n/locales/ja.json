@@ -1713,7 +1713,7 @@
       "editHint": "編集: テストしたバンドルでは 4 ビット以下の編集バリアントは使用に耐えない出力になりました。8 ビットまたはフル精度を使ってください。",
       "imageGeneration": "画像生成",
       "imageEditing": "画像編集",
-      "customPathPlaceholder": "例: black-forest-labs/FLUX.1-schnell または /path/to/model",
+      "customPathPlaceholder": "/path/to/local/model-folder",
       "browseTitle": "フォルダを参照",
       "modeLabel": "モード:",
       "classLabel": "クラス:",
