@@ -286,7 +286,7 @@ export function resolveImageModelFromDirectoryName(name: string): ImageModelDef 
   const normalize = (s: string): string => {
     let out = s.trim().toLowerCase()
     if (out.includes('/')) out = out.split('/').pop() || out
-    out = out.replace(/-mflux-\d+bit$/, '')
+    out = out.replace(/-mflux-(?:\d+bit|q[3-8]|bf16)$/, '')
     out = out.replace(/-mflux$/, '')
     out = out.replace(/[-_]\d+bit$/, '')
     for (const p of ['int-', 'ext-', 'int_', 'ext_']) {
@@ -295,6 +295,11 @@ export function resolveImageModelFromDirectoryName(name: string): ImageModelDef 
     return out
   }
   const norm = normalize(name)
+  // Exporters use both FLUX.1-Fill-dev and flux-1-dev-fill. Match
+  // complete architecture names only; CatVTON and unknown variants are
+  // distinct adapters, not a substring match for generic Fill.
+  const fluxEdit = norm.match(/^flux[.-]?1-(?:dev-(fill|kontext)|(fill|kontext)-dev)$/)
+  if (fluxEdit) return getImageModel(fluxEdit[1] || fluxEdit[2])
   const byIdNorm = IMAGE_MODELS.find(m => m.id.toLowerCase() === norm)
   if (byIdNorm) return byIdNorm
   const byMfluxNorm = IMAGE_MODELS.find(m => m.mfluxName.toLowerCase() === norm)

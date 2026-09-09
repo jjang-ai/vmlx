@@ -4,6 +4,20 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
+class TestImageExporterNames:
+    @pytest.mark.parametrize("variant", ["fill", "kontext"])
+    @pytest.mark.parametrize("suffix", ["q4", "q8", "bf16", "4bit"])
+    def test_full_edit_names(self, variant, suffix):
+        from vmlx_engine.image_gen import _normalize_for_lookup
+        for name in (f"mflux-community/flux-1-dev-{variant}-mflux-{suffix}",
+                     f"FLUX.1-{variant}-dev-mflux-{suffix}"):
+            assert _normalize_for_lookup(name) == f"dev-{variant}"
+
+    def test_specialised_variant_is_not_generic_fill(self):
+        from vmlx_engine.image_gen import _normalize_for_lookup, EDIT_MODELS
+        assert _normalize_for_lookup("flux-1-dev-fill-catvton-mflux-q4") not in EDIT_MODELS
+
+
 class TestImageGuidanceDefaults:
     @pytest.mark.parametrize("model,mclass,expected", [
         ("dev", "Flux1", 3.5), ("qwen-image-edit", "QwenImageEdit", 4.0),

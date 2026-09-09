@@ -25,6 +25,16 @@ import {
 } from '../src/shared/imageModels'
 
 describe('mlxstudio#82: resolveImageModelFromDirectoryName', () => {
+    it('recognizes complete Flux editing exporter names without accepting specialised variants', () => {
+        for (const variant of ['fill', 'kontext']) {
+            for (const suffix of ['q4', 'q8', 'bf16', '4bit']) {
+                expect(resolveImageModelFromDirectoryName(`mflux-community/flux-1-dev-${variant}-mflux-${suffix}`)?.id).toBe(variant)
+                expect(resolveImageModelFromDirectoryName(`FLUX.1-${variant}-dev-mflux-${suffix}`)?.id).toBe(variant)
+            }
+        }
+        expect(resolveImageModelFromDirectoryName('flux-1-dev-fill-catvton-mflux-q4')).toBeUndefined()
+        expect(resolveImageModelFromDirectoryName('flux-1-dev-refill-mflux-q4')).toBeUndefined()
+    })
     describe('Rule 1: exact id match (superset of getImageModel)', () => {
         it('resolves canonical ids', () => {
             expect(resolveImageModelFromDirectoryName('schnell')?.id).toBe('schnell')

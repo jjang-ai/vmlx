@@ -244,7 +244,7 @@ def _normalize_for_lookup(raw: str) -> str:
         s = s.rsplit("/", 1)[-1]
     # vmlx#96 second-chance decoration-strip. Order matters:
     # -mflux-Nbit before -mflux before -Nbit.
-    s = re.sub(r"-mflux-\d+bit$", "", s)
+    s = re.sub(r"-mflux-(?:\d+bit|q[3-8]|bf16)$", "", s)
     s = re.sub(r"-mflux$", "", s)
     s = re.sub(r"[-_]\d+bit$", "", s)
     # Mark's INT-/EXT- convention for renamed local/external instances
@@ -252,6 +252,11 @@ def _normalize_for_lookup(raw: str) -> str:
         if s.startswith(prefix):
             s = s[len(prefix):]
             break
+    # Full variant matches only: specialised exports such as CatVTON must
+    # not silently load the generic Fill adapter.
+    flux_edit = re.fullmatch(r"flux[.-]?1-(?:dev-(fill|kontext)|(fill|kontext)-dev)", s)
+    if flux_edit:
+        return "dev-" + (flux_edit.group(1) or flux_edit.group(2))
     return s
 
 
