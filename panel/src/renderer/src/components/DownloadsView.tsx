@@ -23,7 +23,8 @@ interface ActiveDownload {
 interface CompletedDownload {
   jobId: string
   repoId: string
-  status: 'complete' | 'cancelled'
+  status: 'complete' | 'cancelled' | 'error'
+  error?: string
   time: number
 }
 
@@ -58,7 +59,7 @@ export function DownloadsView() {
           const existing = new Set(prev.map(c => c.jobId))
           const newItems = status.completed
             .filter((c: any) => !existing.has(c.jobId))
-            .map((c: any) => ({ jobId: c.jobId, repoId: c.repoId, status: c.status as 'complete' | 'cancelled', time: Date.now() }))
+            .map((c: any) => ({ jobId: c.jobId, repoId: c.repoId, status: c.status as CompletedDownload['status'], error: c.error, time: Date.now() }))
           return [...newItems, ...prev]
         })
       }
@@ -88,7 +89,7 @@ export function DownloadsView() {
       ))
       setTimeout(() => {
         setActiveDownloads(prev => prev.filter(d => d.jobId !== data.jobId))
-        setCompleted(prev => [{ jobId: data.jobId, repoId: data.repoId, status: 'cancelled' as const, time: Date.now() }, ...prev])
+        setCompleted(prev => [{ jobId: data.jobId, repoId: data.repoId, status: 'error' as const, error: data.error || t('sessions.download.toast.failedTitle'), time: Date.now() }, ...prev.filter(d => d.jobId !== data.jobId)])
         refreshStatus()
       }, 3000)
     })
@@ -284,14 +285,17 @@ export function DownloadsView() {
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">{t('downloads.view.completed')}</h3>
             {completed.map((item) => (
-              <div key={item.jobId} className="flex items-center gap-2 py-2 px-3 border border-border rounded mb-1">
+              <div key={item.jobId} className="flex flex-wrap items-center gap-2 py-2 px-3 border border-border rounded mb-1" data-vmlx-download-status={item.status}>
                 {item.status === 'complete' ? (
                   <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
+                ) : item.status === 'error' ? (
+                  <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
                 ) : (
                   <X className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 )}
                 <span className="text-sm truncate">{shortName(item.repoId)}</span>
-                <span className="text-xs text-muted-foreground ml-auto">{item.status === 'complete' ? t('downloads.view.done') : t('downloads.view.cancelled')}</span>
+                <span className="text-xs text-muted-foreground ml-auto">{item.status === 'complete' ? t('downloads.view.done') : item.status === 'error' ? t('sessions.download.toast.failedTitle') : t('downloads.view.cancelled')}</span>
+                {item.status === 'error' && item.error && <p className="w-full text-xs text-destructive break-words">{item.error}</p>}
               </div>
             ))}
           </div>

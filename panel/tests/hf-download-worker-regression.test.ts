@@ -87,6 +87,40 @@ function writeFakeHubPackage(root: string): void {
 }
 
 describe('HuggingFace download worker fallback', () => {
+  it('reports missing dependencies as a structured error before any transfer', () => {
+    const result = spawnSync(process.env.PYTHON || 'python3',
+      ['-I', '-S', '-c', extractDownloadWorkerScript(), 'test/model', '/unused', '', ''],
+      { encoding: 'utf-8', timeout: 10000 })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toBe('')
+    expect(JSON.parse(result.stdout)).toEqual({
+      status: 'error',
+      error: expect.stringContaining('Download runtime dependency unavailable:'),
+    })
+  })
+
+  it('uses the engine project venv in development, retaining bundled precedence', async () => {
+    const source = readFileSync(join(process.cwd(), 'src/main/ipc/models.ts'), 'utf-8')
+    const body = source.split('async function getPythonPath(): Promise<string> {')[1].split('\n  async function processQueue')[0]
+    const resolve = (bundled: string | null, dev: string | null) => Function(
+      'getBundledPythonPath', 'getDevelopmentProjectVenv', 'access',
+      'return (async function() {' + body + ')()'
+    )(() => bundled, () => dev ? { pythonPath: dev } : null, async () => {})
+    expect(await resolve('/bundle/python', '/project/python')).toBe('/bundle/python')
+    expect(await resolve(null, '/project/python')).toBe('/project/python')
+    expect(await resolve(null, null)).toBe('python3')
+  })
+
+  it('preserves failed download state and diagnostic in the history renderer', () => {
+    const source = readFileSync(join(process.cwd(), 'src/renderer/src/components/DownloadsView.tsx'), 'utf-8')
+    const errorHandler = source.split('const unsubError =')[1].split('const unsubStart =')[0]
+    expect(errorHandler).toContain("status: 'error' as const")
+    expect(errorHandler).not.toContain("status: 'cancelled'")
+    expect(source).toContain('error: c.error')
+    expect(source).toContain('data-vmlx-download-status={item.status}')
+    expect(source).toContain("{item.status === 'error' && item.error &&")
+  })
+
   it('supports refresh while recovering from a stale backup endpoint plus stale token', () => {
     const workerScript = extractDownloadWorkerScript()
     const root = mkdtempSync(join(tmpdir(), 'vmlx-hf-worker-'))

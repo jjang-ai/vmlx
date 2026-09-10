@@ -17,7 +17,7 @@ import { homedir } from "os";
 import { spawn, ChildProcess } from "child_process";
 import { db } from "../database";
 import { detectModelConfigFromDir } from "../model-config-registry";
-import { getBundledPythonPath } from "../engine-manager";
+import { getBundledPythonPath, getDevelopmentProjectVenv } from "../engine-manager";
 import {
   getImageModelEncoderType,
   IMAGE_MODELS,
@@ -1460,7 +1460,7 @@ export function registerModelHandlers(): void {
         /* fall through */
       }
     }
-    return "python3";
+    return getDevelopmentProjectVenv()?.pythonPath || "python3";
   }
 
   async function processQueue() {
@@ -1492,8 +1492,12 @@ export function registerModelHandlers(): void {
     // Instead, we use hf_hub_download per file and track cumulative bytes ourselves.
     const script = [
       "import sys, json, os, time",
-      "from huggingface_hub import HfApi, hf_hub_download",
-      "from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError",
+      "try:",
+      "    from huggingface_hub import HfApi, hf_hub_download",
+      "    from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError",
+      "except ImportError as e:",
+      "    print(json.dumps({'status': 'error', 'error': 'Download runtime dependency unavailable: ' + str(e)}), flush=True)",
+      "    sys.exit(1)",
       "repo_id = sys.argv[1]",
       "local_dir = sys.argv[2]",
       "endpoint = sys.argv[3] or None",
