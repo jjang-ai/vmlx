@@ -295,6 +295,9 @@ export function resolveImageModelFromDirectoryName(name: string): ImageModelDef 
     return out
   }
   const norm = normalize(name)
+  // Component-index mflux exports also spell FLUX.1 as flux-1.
+  const fluxBase = norm.match(/^flux[.-]?1-(schnell|dev)$/)
+  if (fluxBase) return getImageModel(fluxBase[1])
   // Exporters use both FLUX.1-Fill-dev and flux-1-dev-fill. Match
   // complete architecture names only; CatVTON and unknown variants are
   // distinct adapters, not a substring match for generic Fill.

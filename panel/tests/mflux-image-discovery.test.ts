@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isMfluxImageCandidate, mfluxImageSearchParams } from '../src/shared/mfluxImageDiscovery'
+import { isMfluxImageCandidate, mfluxImageSearchParams, verifyMfluxComponentExport } from '../src/shared/mfluxImageDiscovery'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -8,6 +8,25 @@ const bundle = (id = 'OtherCreator/Qwen-Image-Edit-mflux-q8') => ({
   siblings: [{ rfilename: 'transformer/0.safetensors' }, { rfilename: 'text_encoder/0.safetensors' }],
 })
 describe('mflux-only image discovery', () => {
+  const untagged = () => ({ ...bundle('mflux-community/flux-1-schnell-mflux-q6'),
+    library_name: undefined, tags: ['safetensors'], pipeline_tag: undefined, sha: 'a'.repeat(40),
+    siblings: [...bundle().siblings, ...['transformer', 'text_encoder'].map(c => ({ rfilename: c + '/model.safetensors.index.json' }))] })
+  const index = () => ({ metadata: { mflux_version: '0.18.0', quantization_level: '6' }, weight_map: { 'linear.weight': '0.safetensors' } })
+  it('discovers untagged exporters only from pinned component metadata', async () => {
+    const paths: string[] = []
+    expect(isMfluxImageCandidate(untagged())).toBe(false)
+    expect(await verifyMfluxComponentExport(untagged(), async path => { paths.push(path); return index() })).toBe(true)
+    expect(paths).toHaveLength(2)
+    expect(paths.every(p => p.includes('/resolve/' + 'a'.repeat(40) + '/'))).toBe(true)
+  })
+  it('rejects missing metadata, missing shards, unsafe revisions and incompatible formats', async () => {
+    for (const bad of [{}, { ...index(), metadata: {} }, { ...index(), weight_map: { 'linear.weight': '../0.safetensors' } }, { ...index(), weight_map: { 'linear.weight': 'missing.safetensors' } }]) {
+      expect(await verifyMfluxComponentExport(untagged(), async () => bad)).toBe(false)
+    }
+    expect(await verifyMfluxComponentExport({ ...untagged(), sha: 'main' }, async () => index())).toBe(false)
+    expect(await verifyMfluxComponentExport({ ...untagged(), tags: ['gguf'] }, async () => index())).toBe(false)
+    expect(await verifyMfluxComponentExport(untagged(), async () => { throw Error('network') })).toBe(false)
+  })
   it.each(['OtherCreator/Qwen-Image-Edit-mflux-q8', 'OtherCreator/Z-Image-Turbo-mflux-4bit', 'dhairyashil/FLUX.1-schnell-mflux-8bit'])('admits declared supported mflux weights from any creator: %s', id => {
     expect(isMfluxImageCandidate(bundle(id))).toBe(true)
   })

@@ -39,7 +39,7 @@ import {
   generationDefaultsFromRemoteCapabilities,
 } from "../../shared/remoteModelCapabilities";
 import { attachChildProcessStreamErrorGuard } from '../childProcessStreamGuards'
-import { isMfluxImageCandidate, mfluxImageSearchParams } from '../../shared/mfluxImageDiscovery'
+import { isMfluxImageCandidate, mfluxImageSearchParams, verifyMfluxComponentExport } from '../../shared/mfluxImageDiscovery'
 
 /**
  * ms#75: resolve the HuggingFace-compatible base URL for API calls
@@ -2216,6 +2216,28 @@ export function registerModelHandlers(): void {
         const candidates = await response.json();
         if (!Array.isArray(candidates)) throw new Error('Invalid HuggingFace image search response');
         models = candidates.filter(isMfluxImageCandidate);
+        // Some real mflux exports have component indexes but no model card/tag.
+        // On an empty typed search, inspect a bounded unfiltered result set;
+        // immutable exporter metadata must qualify it before it can be shown.
+        if (models.length === 0 && query.trim()) {
+          const fallbackParams = mfluxImageSearchParams(params);
+          fallbackParams.delete('filter');
+          fallbackParams.set('limit', '8');
+          fallbackParams.append('expand[]', 'sha');
+          const fallback = await fetchHfPath(`/api/models?${fallbackParams}`, { headers: searchHeaders });
+          if (!fallback.response.ok) throw new Error(`HuggingFace API error: ${fallback.response.status}`);
+          const untagged = await fallback.response.json();
+          if (!Array.isArray(untagged)) throw new Error('Invalid HuggingFace image search response');
+          const metadataSignal = AbortSignal.timeout(10000);
+          for (const candidate of untagged.slice(0, 8)) {
+            if (metadataSignal.aborted) break;
+            if (await verifyMfluxComponentExport(candidate, async path => {
+              const result = await fetchHfPath(path, { headers: searchHeaders, signal: metadataSignal });
+              if (!result.response.ok) throw new Error(`Metadata unavailable: ${result.response.status}`);
+              return result.response.json();
+            })) models.push(candidate);
+          }
+        }
       } else {
         params.set("filter", "mlx");
         console.log(

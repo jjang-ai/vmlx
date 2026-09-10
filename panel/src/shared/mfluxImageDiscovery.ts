@@ -40,3 +40,39 @@ export function mfluxImageSearchParams(params: URLSearchParams): URLSearchParams
   }
   return image
 }
+
+/** Untagged exports require exporter evidence, never just an author/name match.
+ * Reads only two component indexes at the search result's immutable revision.
+ * This qualifies discovery, not tensor layout or runtime output quality.
+ */
+export async function verifyMfluxComponentExport(
+  value: unknown, readJson: (path: string) => Promise<unknown>,
+): Promise<boolean> {
+  if (!value || typeof value !== 'object') return false
+  const m = value as Record<string, any>
+  const id = m.modelId || m.id
+  if (!isMfluxImageCandidate({ ...m, library_name: 'mflux' })) return false
+  if (typeof m.sha !== 'string' || !/^[a-f0-9]{40}$/i.test(m.sha)) return false
+  const files = new Set<string>(m.siblings.map((s: any) => s.rfilename))
+  const indexes = ['transformer/model.safetensors.index.json', 'text_encoder/model.safetensors.index.json']
+  if (!indexes.every(path => files.has(path))) return false
+  try {
+    for (const path of indexes) {
+      const index = await readJson(`/${id}/resolve/${m.sha}/${path}`) as any
+      if (!index || typeof index !== 'object' || !index.metadata ||
+          typeof index.metadata.mflux_version !== 'string' ||
+          !/^\d+\.\d+\.\d+(?:[.+-].*)?$/.test(index.metadata.mflux_version) ||
+          ![2, 3, 4, 5, 6, 8, 16].includes(Number(index.metadata.quantization_level)) ||
+          !index.weight_map || typeof index.weight_map !== 'object' || Array.isArray(index.weight_map)) return false
+      const entries = Object.entries(index.weight_map)
+      const root = path.slice(0, path.lastIndexOf('/') + 1)
+      if (!entries.length || !entries.some(([key]) => key.endsWith('.weight')) ||
+          !entries.every(([, shard]) => typeof shard === 'string' &&
+            /^[^/\\]+\.safetensors$/.test(shard) && files.has(root + shard))) return false
+    }
+    return true
+  } catch {
+    // Metadata unavailable is not permission to guess compatibility.
+    return false
+  }
+}
