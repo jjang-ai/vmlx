@@ -133,6 +133,24 @@ def test_media_required_boundary_between_whole_media_items_is_kept_for_non_qwen_
     assert generator._media_clean_cache_boundary_for(request, tokens) == 4160
 
 
+def test_qwen4_unrestorable_pre_media_repair_does_not_replace_terminal():
+    generator = _Gen(64).gen
+    generator._model_type = "qwen4_exp"
+    generator._media_placeholder_token_ids = lambda: {99}
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=2752)
+    tokens = [1] * 3000 + [99] * 128 + [2] * 11700
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 14784
+
+
+def test_qwen4_without_after_media_boundary_does_not_store_rejected_prefix():
+    generator = _Gen(64).gen
+    generator._model_type = "qwen4_exp"
+    generator._media_placeholder_token_ids = lambda: {99}
+    request = SimpleNamespace(_ssm_required_checkpoint_tokens=64)
+    tokens = [1] * 100 + [99] * 1760
+    assert generator._media_clean_cache_boundary_for(request, tokens) == 0
+
+
 def test_in_media_clean_prefill_encodes_full_media_then_forwards_exact_prefix():
     """The repair must never feed full pixels to truncated placeholders."""
     import mlx.core as mx

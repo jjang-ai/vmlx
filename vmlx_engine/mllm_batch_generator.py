@@ -9824,8 +9824,9 @@ class MLLMBatchGenerator:
         block_size = int(getattr(self.block_aware_cache, "block_size", 0) or 0)
         # The fetch side can never restore a hit that cuts THROUGH a
         # placeholder run (partial media). The Qwen families additionally
-        # admit a media hit only when it covers every placeholder or ends
-        # strictly before the first one (their tail preparer), so for them the
+        # admit a media hit when it covers every placeholder. qwen3_5 and
+        # qwen3_5_moe also support ending before the first via their tail
+        # preparer; qwen4_exp does not. For these families the
         # whole media span is off limits; Muse and others admit a boundary
         # between whole media items. A boundary the fetch side declines costs
         # a clean prefill and a companion for nothing, so pick one it can use:
@@ -9845,9 +9846,18 @@ class MLLMBatchGenerator:
                 run = self._media_placeholder_run_at(token_ids, cand)
             if run is None:
                 return True, None
+            # Flash-Next cannot yet restore a pure-text prefix with media
+            # remaining: _prepare_qwen_hybrid_media_tail_for_cache_hit admits
+            # qwen3_5/qwen3_5_moe only. Do not repair a short KV-only hit at
+            # the expense of the after-media checkpoint the next tool step
+            # can actually restore.
+            if family == "qwen4_exp" and cand <= run[0]:
+                return False, run
             return (cand >= run[1] or cand <= run[0]), run
 
         def _pre_media(run: tuple[int, int]) -> int:
+            if family == "qwen4_exp":
+                return 0
             before = self._ssm_block_aligned_boundary(run[0])
             if before <= 0 and block_size > 0:
                 before = (run[0] // block_size) * block_size
@@ -9875,6 +9885,13 @@ class MLLMBatchGenerator:
                     terminal,
                 )
                 return required
+            if family == "qwen4_exp" and run is not None:
+                logger.info(
+                    "MLLM media prefix cache: learned boundary %d for %s "
+                    "leaves media in the tail; Flash-Next cannot restore that "
+                    "boundary, seeking an after-media checkpoint instead",
+                    required, request_id,
+                )
             before = _pre_media(run) if run is not None else 0
             if before > 0:
                 logger.info(
