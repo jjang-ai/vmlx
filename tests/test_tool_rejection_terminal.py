@@ -42,9 +42,13 @@ def test_responses_rejection_does_not_erase_actual_stop_cause(finish, reason):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('surface', ['chat', 'responses'])
-@pytest.mark.parametrize('stream', [True, False])
-async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surface, stream):
+@pytest.mark.parametrize('surface,stream,choice', [
+    ('chat', True, 'auto'), ('chat', False, 'auto'),
+    ('responses', True, 'auto'), ('responses', False, 'auto'),
+    ('chat', True, 'required'),
+    ('chat', True, {'type': 'function', 'function': {'name': 'read_file'}}),
+])
+async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surface, stream, choice):
     text = '<tool_call>unavailable_reader<arg_key>path</arg_key><arg_value>rates.json</arg_value></tool_call>'
     class Engine:
         tokenizer = SimpleNamespace(has_thinking=False)
@@ -68,7 +72,7 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
     messages = [{'role': 'user', 'content': 'Read rates.json'}]
     if surface == 'chat':
         tools = [{'type': 'function', 'function': function}]
-        request = server.ChatCompletionRequest(model='spark-rejection-test', messages=messages, tools=tools, stream=True, max_tokens=128)
+        request = server.ChatCompletionRequest(model='spark-rejection-test', messages=messages, tools=tools, stream=True, max_tokens=128, tool_choice=choice)
         request.stream_options = StreamOptions(include_usage=True)
         iterator = server.stream_chat_completion(engine, messages, request, fastapi_request=None, tools=tools, max_tokens=128)
     else:
@@ -96,7 +100,7 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
     if surface == 'chat':
         errors = [e['error'] for e in events if e.get('error')]
         assert len(errors) == 1
-        assert errors[0]['code'] == 'tool_calls_rejected'
+        assert errors[0]['code'] == ('tool_calls_required' if choice != 'auto' else 'tool_calls_rejected')
         assert not [c for e in events for c in e.get('choices', []) if c.get('finish_reason')]
         usage = [e['usage'] for e in events if e.get('usage')]
         assert len(usage) == 1

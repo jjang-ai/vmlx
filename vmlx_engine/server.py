@@ -26905,12 +26905,26 @@ async def stream_chat_completion(
             # generation work. Publish the error before the usage tail, as on
             # generation exceptions, so the route guard cannot infer success
             # from an otherwise terminal-looking usage chunk.
+            empty_output_error = _reasoning_only_chat_error_payload(
+                response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
+            )
+            if _is_pending_required_tool_choice(request):
+                # This branch returns before the later required-tool check.
+                # Keep the parser diagnostic, but report the unmet request
+                # contract rather than replacing it with an empty-output cause.
+                empty_output_error["error"] = {
+                    "message": (
+                        f"{_describe_required_tool_choice(request.tool_choice)} was set but the model did not "
+                        "produce any tool calls. Try rephrasing your prompt or using a "
+                        "model with better tool-calling support."
+                    ),
+                    "type": "invalid_request_error",
+                    "code": "tool_calls_required",
+                }
             yield (
                 "data: "
                 + json.dumps(
-                    _reasoning_only_chat_error_payload(
-                        response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
-                    ),
+                    empty_output_error,
                     ensure_ascii=True,
                 )
                 + "\n\n"
