@@ -17,6 +17,9 @@ from .abstract_tool_parser import (
 class Spark25ToolParser(ToolParser):
     NATIVE_MARKERS = ("<tool_call>",)
     SUPPORTS_NATIVE_TOOL_FORMAT = True
+    # A parsed call rejected by the request's allow-list is protocol, not prose.
+    # Preserve extracted surrounding content and the server's drop diagnostic.
+    SUPPRESS_INVALID_NATIVE_MARKUP = True
     _CALL = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
     _ARG = re.compile(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL)
 

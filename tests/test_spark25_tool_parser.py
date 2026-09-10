@@ -57,3 +57,26 @@ def test_implicit_reasoning_opener_is_not_visible_content():
         "I should read the file.</think><tool_call>read_file</tool_call>")
     assert result.content is None
     assert result.tool_calls[0]["name"] == "read_file"
+
+
+@pytest.mark.parametrize("surface", ["chat", "responses"])
+def test_unavailable_native_call_is_diagnostic_not_visible_markup(monkeypatch, surface):
+    import vmlx_engine.server as server
+    from vmlx_engine.api.models import ChatCompletionRequest, ResponsesRequest
+
+    monkeypatch.setattr(server, "_tool_call_parser", "spark25")
+    monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+    monkeypatch.setattr(server, "_engine", None)
+    function = {"name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}
+    request = (ChatCompletionRequest(model="spark", messages=[{"role": "user", "content": "Read the file"}], tools=[{"type": "function", "function": function}])
+               if surface == "chat" else ResponsesRequest(model="spark", input="Read the file", tools=[{"type": "function", **function}]))
+    server._begin_tool_call_drop_capture()
+    try:
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            'Before.<tool_call>unavailable_reader<arg_key>path</arg_key><arg_value>rates.json</arg_value></tool_call>After.', request)
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert calls is None
+        assert cleaned == "Before.After."
+        assert any("unavailable_reader" in warning and "not in" in warning for warning in warnings)
+    finally:
+        server._take_tool_call_drop_diagnostics()
