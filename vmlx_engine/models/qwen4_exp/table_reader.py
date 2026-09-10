@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import mmap
 import os
 import struct
@@ -36,6 +37,7 @@ _MLX_DTYPES = {
 
 _PARALLEL_READ_MAX_ROWS = 128
 _PARALLEL_READ_MAX_WORKERS = 16
+logger = logging.getLogger(__name__)
 
 
 def _parallel_ple_read_requested() -> bool:
@@ -675,6 +677,12 @@ class FileBackedQuantizedNGramTable:
         futures = {}
         host_batches = {}
         if parallel:
+            if not getattr(self, "_parallel_read_logged", False):
+                logger.info(
+                    "Qwen PLE parallel pread active: selected_shards=%d rows=%d",
+                    len(selections), flat_rows.size,
+                )
+                self._parallel_read_logged = True
             started = time.perf_counter() if profile is not None else None
             futures = {
                 shard_index: pool.submit(

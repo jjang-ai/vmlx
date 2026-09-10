@@ -2031,7 +2031,7 @@ def test_qwen4_exp_pread_rows_match_memmap_rows(tmp_path):
         source.close()
 
 
-def test_qwen4_exp_parallel_pread_gather_preserves_order_and_profiles():
+def test_qwen4_exp_parallel_pread_gather_preserves_order_and_profiles(caplog):
     from concurrent.futures import ThreadPoolExecutor
 
     from vmlx_engine.models.qwen4_exp.table_reader import (
@@ -2062,6 +2062,7 @@ def test_qwen4_exp_parallel_pread_gather_preserves_order_and_profiles():
     table._parallel_read = True
     table._read_pool = ThreadPoolExecutor(max_workers=2)
     try:
+        caplog.set_level("INFO")
         profile = {}
         actual = table.gather_mlx(
             np.array([5, 1, 6, 0], dtype=np.int64),
@@ -2075,6 +2076,8 @@ def test_qwen4_exp_parallel_pread_gather_preserves_order_and_profiles():
         assert profile["ssd_rows_cpu_ms"] >= 0
         assert profile["ssd_rows_parallel_wall_ms"] >= 0
         assert profile["scatter_gpu_ms"] >= 0
+        mx.eval(table.gather_mlx(np.array([5, 1], dtype=np.int64)))
+        assert caplog.text.count("Qwen PLE parallel pread active:") == 1
     finally:
         table.close()
 
