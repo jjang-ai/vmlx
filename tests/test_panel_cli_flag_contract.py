@@ -285,7 +285,8 @@ def test_command_preview_uses_runtime_numeric_sanitizers_for_advanced_modes() ->
     # only a user Fixed override sends a sanitized depth.
     assert "input.depthOverride !== true" in mtp_helper
     assert "input.configuredDepth" in mtp_helper
-    assert "finitePositiveInteger(input.configuredDepth)" in mtp_helper
+    assert "resolveFixedNativeMtpDepth(input.configuredDepth, input.detectedDepth)" in mtp_helper
+    assert "finitePositiveInteger(configuredDepth)" in mtp_helper
     assert "'--native-mtp-depth-policy', 'adaptive'" in mtp_helper
     assert "'fixed'" in mtp_helper
     assert "Math.round(Number(configuredDepth" not in preview_native
@@ -806,6 +807,7 @@ def test_native_mtp_depth_derives_from_the_bundle_not_a_hardcoded_three() -> Non
     assert "?? 3," not in registry
     assert "buildNativeMtpLaunchArgs" in sessions
     assert "buildNativeMtpLaunchArgs" in settings
-    assert "finitePositiveInteger(input.detectedDepth)" in shared
+    assert "resolveFixedNativeMtpDepth(input.configuredDepth, input.detectedDepth)" in shared
+    assert "finitePositiveInteger(detectedDepth)" in shared
     assert "|| 1" in shared
     assert "|| 3" not in shared
