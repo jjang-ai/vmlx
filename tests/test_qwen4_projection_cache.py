@@ -5,11 +5,11 @@ import pytest
 from vmlx_engine.models.qwen4_exp.projection_cache import validated_projection_group
 
 
-def make_linears(bits=4, group_size=32):
+def make_linears(bits=4, group_size=32, dtype=mx.float16):
     result = []
     for size in (64, 32, 96):
         m = nn.Linear(64, size, bias=False)
-        m.weight = m.weight.astype(mx.float16)
+        m.weight = m.weight.astype(dtype)
         result.append(m.to_quantized(group_size=group_size, bits=bits))
     return tuple(result)
 
@@ -73,3 +73,27 @@ def test_live_gdn_q8_group64_exact_outputs_and_replacement():
                for a, b in zip(expected, actual))
     linears[1].weight = mx.array(linears[1].weight)
     assert validated_projection_group(linears, mx.float16) is not group
+
+
+@pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
+@pytest.mark.parametrize("batch,rows", [(1, 1), (2, 1), (1, 2), (1, 4), (2, 4)])
+def test_existing_grouped_path_parity_for_batch_and_verify(monkeypatch, dtype, batch, rows):
+    from vmlx_engine.models.qwen4_exp import language
+
+    monkeypatch.setattr(language, "_gdn_group_max_rows", lambda: 4)
+    linears = make_linears(bits=8, group_size=64, dtype=dtype)
+    x = mx.random.normal((batch, rows, 64)).astype(dtype)
+    monkeypatch.setattr(language, "_FAST_PROJECTION_CACHE", False)
+    expected = language._decode_quantized_linears_fused(linears, x)
+    monkeypatch.setattr(language, "_FAST_PROJECTION_CACHE", True)
+    actual = language._decode_quantized_linears_fused(linears, x)
+    repeated = language._decode_quantized_linears_fused(linears, x)
+    mx.eval(*expected, *actual, *repeated)
+    assert all(bool(mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)))
+               for a, b in zip(expected, actual))
+    assert all(bool(mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)))
+               for a, b in zip(actual, repeated))
+    # Caller limits still apply before either cache implementation.
+    assert language._decode_quantized_linears_fused(
+        linears, mx.zeros((batch, 5, 64), dtype=dtype)
+    ) is None
