@@ -369,6 +369,9 @@ export function ImageTab() {
       mode: sessionMode,
       settings,
       settingsOwner,
+      sessionId: serverSessionIdRef.current,
+      port: serverPort,
+      capabilities,
     }
     const serverWasLive = serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'standby'
     const revision = ++settingsRevision.current
@@ -380,6 +383,14 @@ export function ImageTab() {
     settingsEdited.current = false
     setSettingsOwner(null)
 
+    // Preflight may spend seconds repairing a replacement while the old
+    // engine stays alive. Its health/events must not label the replacement
+    // Running or re-enable its controls. Detaching observation does not stop
+    // that engine or activate a different draft.
+    healthRevision.current++
+    setServerSessionId(null)
+    setServerPort(null)
+    setCapabilities(null)
     setSelectedModel(modelId)
     setSelectedModelDisplayName(null)
     setShowModelPicker(false)
@@ -473,6 +484,9 @@ export function ImageTab() {
           // Nothing was stopped: put the previous selection back and surface why.
           setSelectedModel(previous.model)
           setSelectedModelDisplayName(previous.displayName)
+          setServerSessionId(previous.sessionId)
+          setServerPort(previous.port)
+          setCapabilities(previous.capabilities)
           setServerStatus(previous.status)
           setQuantize(previous.quantize)
           setSessionMode(previous.mode)
@@ -493,7 +507,7 @@ export function ImageTab() {
         setRepairNotice(null)
       }
     }
-  }, [serverStatus, selectedModel, selectedModelDisplayName, quantize, sessionMode, settings, settingsOwner, hydrateSettings, describeStartError, t])
+  }, [serverStatus, serverPort, capabilities, selectedModel, selectedModelDisplayName, quantize, sessionMode, settings, settingsOwner, hydrateSettings, describeStartError, t])
 
   const handleSubmit = useCallback(async (prompt: string, overrideSettings?: Partial<ImageSettings>) => {
     if (!serverPort || serverStatus !== 'running' || !selectedModel || !settingsOwner) return
