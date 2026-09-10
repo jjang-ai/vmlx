@@ -7,7 +7,7 @@ keeps DSV4-specific cache proof reusable instead of leaving it as ad-hoc JSON:
 - real source/app server process
 - ``/v1/responses`` with ``previous_response_id``
 - per-run nonce so stale block-disk cache cannot fake a fresh store turn
-- explicit no-cache full-prompt control
+- matched previous_response_id control changing only cache bypass
 - DSV4 native composite health/status capture
 """
 from __future__ import annotations
@@ -50,6 +50,24 @@ def resolve_default_model(candidates: tuple[str, ...] = DSV4_AFFINE_MODEL_CANDID
 
 DEFAULT_MODEL = resolve_default_model()
 DEFAULT_OUT = REPO / "docs/internal/release-gates/dsv4_responses_cache_gate_latest.json"
+
+RECALL_PROMPT = (
+    "Recall the stored anchor facts from the earlier message. Return their "
+    "values, not the labels: the color value, the sum value, and the person "
+    "value, in that order, separated by ' / '. No explanation."
+)
+
+
+def recall_request(model: str, previous_response_id: str) -> dict[str, Any]:
+    """Both JSON arms use identical resolved history and sampling controls."""
+    return {
+        "model": model, "input": RECALL_PROMPT,
+        "previous_response_id": previous_response_id,
+        "store": True, "stream": False, "max_output_tokens": 192,
+        "temperature": 0.0, "top_p": 1.0, "top_k": 0,
+        "repetition_penalty": 1.0, "enable_thinking": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
 
 
 def post_json(url: str, payload: dict[str, Any], timeout: int = 600) -> dict[str, Any]:
@@ -381,18 +399,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         url = f"http://127.0.0.1:{args.port}/v1/responses"
         run_id = f"dsv4-responses-gate-{int(time.time() * 1000)}-{os.getpid()}"
         long_context = (
-            make_long_context(args.words)
-            + f"\n\nGATE RUN ID = {run_id}. "
-            "This nonce is diagnostic-only and does not modify the anchor facts."
+            f"GATE RUN ID = {run_id}.\n"
+            + make_long_context(args.words)
         )
         store_prompt = long_context + "\n\nStore the anchor facts. Reply exactly STORED."
-        follow_prompt = "Recall the anchors. Answer exactly: COLOR / SUM / PERSON."
-        full_prompt = (
-            long_context
-            + "\n\n"
-            + follow_prompt
-            + " Use CERULEAN, 45, and ADA LOVELACE if those are the anchors."
-        )
+        follow_prompt = RECALL_PROMPT
 
         store_turn = responses(
             url,
@@ -413,20 +424,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         previous_response_follow = responses(
             url,
-            {
-                "model": model_name,
-                "input": follow_prompt,
-                "previous_response_id": store_turn["id"],
-                "store": True,
-                "stream": False,
-                "max_output_tokens": 192,
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "top_k": 0,
-                "repetition_penalty": 1.0,
-                "enable_thinking": False,
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
+            recall_request(model_name, store_turn["id"]),
             timeout=600,
         )
         stream_previous_response_follow = stream_responses(
@@ -451,17 +449,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         explicit_no_cache_full_prompt = responses(
             url,
             {
-                "model": model_name,
-                "input": full_prompt,
-                "store": False,
-                "stream": False,
-                "max_output_tokens": 192,
-                "temperature": 0.0,
-                "top_p": 1.0,
-                "top_k": 0,
-                "repetition_penalty": 1.0,
-                "enable_thinking": False,
-                "chat_template_kwargs": {"enable_thinking": False},
+                **recall_request(model_name, store_turn["id"]),
                 "skip_prefix_cache": True,
             },
             timeout=600,
@@ -478,6 +466,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "VMLX_METAL_WS_REJECT_PCT": env.get("VMLX_METAL_WS_REJECT_PCT"),
             },
             "run_id": run_id,
+            # Preserve the historical case key for existing artifact readers.
+            "no_cache_control": "matched_previous_response_id_only_bypass_differs",
             "log_path": str(log_path),
             "health_before": health0,
             "health_after": health1,

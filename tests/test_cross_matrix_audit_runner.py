@@ -672,6 +672,18 @@ def test_dsv4_responses_cache_gate_uses_previous_response_and_no_cache_control()
     assert "native_cache" in src
 
 
+def test_dsv4_recall_control_does_not_supply_answers_or_change_history():
+    from tests.cross_matrix.run_dsv4_responses_cache_gate import recall_request
+
+    cached = recall_request("model-under-test", "stored-response")
+    bypass = {**recall_request("model-under-test", "stored-response"),
+              "skip_prefix_cache": True}
+    assert {k: v for k, v in bypass.items() if k != "skip_prefix_cache"} == cached
+    assert cached["previous_response_id"] == "stored-response"
+    assert "values, not the labels" in cached["input"]
+    assert all(answer not in cached["input"] for answer in ("CERULEAN", "45", "ADA LOVELACE"))
+
+
 def test_dsv4_responses_cache_gate_records_stream_ttft_and_usage():
     """Streaming TTFT must be measured from first real model delta, not SSE setup events."""
     import inspect
