@@ -77,6 +77,7 @@ from vmlx_engine.metal.sparse_index_score_decode import (
 )
 
 from .ngram import NGramHasher
+from .host_profile import profile_decode_forward
 
 
 logger = logging.getLogger(__name__)
@@ -2492,6 +2493,7 @@ class LanguageModel(nn.Module):
     def mtp_draft_head_status(self) -> Dict[str, Any]:
         return self._mtp_draft_head_state.status()
 
+    @profile_decode_forward
     def __call__(
         self,
         inputs: mx.array,
