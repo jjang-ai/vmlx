@@ -21,7 +21,7 @@ inline uint qsa_key(float value) {
 _SOURCE = r"""
 uint tid = thread_index_in_threadgroup;
 uint n = scores_shape[2];
-threadgroup atomic_uint hist[256];
+threadgroup atomic_uint hist[2048];
 threadgroup uint threshold;
 threadgroup uint need;
 threadgroup uint counts[256];
@@ -29,7 +29,8 @@ threadgroup uint equal_counts[256];
 if (tid == 0) { threshold = 0; need = K; }
 threadgroup_barrier(mem_flags::mem_threadgroup);
 for (uint pass = 0; pass < 4; ++pass) {
-    atomic_store_explicit(&hist[tid], 0u, memory_order_relaxed);
+    for (uint group = 0; group < 8u; ++group)
+        atomic_store_explicit(&hist[group * 256u + tid], 0u, memory_order_relaxed);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     uint shift = 24u - 8u * pass;
     uint mask = pass == 0 ? 0u : (0xffffffffu << (shift + 8u));
@@ -37,12 +38,17 @@ for (uint pass = 0; pass < 4; ++pass) {
     for (uint i = tid; i < n; i += 256u) {
         uint key = qsa_key(scores[i]);
         if ((key & mask) == prefix)
-            atomic_fetch_add_explicit(&hist[(key >> shift) & 255u], 1u, memory_order_relaxed);
+            atomic_fetch_add_explicit(&hist[(tid / 32u) * 256u + ((key >> shift) & 255u)], 1u, memory_order_relaxed);
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint bucket_total = 0;
+    for (uint group = 0; group < 8u; ++group)
+        bucket_total += atomic_load_explicit(&hist[group * 256u + tid], memory_order_relaxed);
+    counts[tid] = bucket_total;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid == 0) {
         for (int digit = 255; digit >= 0; --digit) {
-            uint count = atomic_load_explicit(&hist[digit], memory_order_relaxed);
+            uint count = counts[digit];
             if (count >= need) { threshold |= uint(digit) << shift; break; }
             need -= count;
         }
