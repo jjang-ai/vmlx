@@ -1492,7 +1492,7 @@ export function registerModelHandlers(): void {
     // huggingface_hub's snapshot_download uses tqdm per-file, which only shows shard progress.
     // Instead, we use hf_hub_download per file and track cumulative bytes ourselves.
     const script = [
-      "import sys, json, os, time",
+      "import sys, json, os, time, errno",
       "try:",
       "    from huggingface_hub import HfApi, hf_hub_download",
       "    from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError",
@@ -1601,6 +1601,9 @@ export function registerModelHandlers(): void {
       "            raise",
       "        except Exception as e:",
       "            last_error = e",
+      "            # Endpoint/auth fallback cannot repair local storage failures.",
+      "            if isinstance(e, OSError) and e.errno in (errno.EACCES, errno.EPERM, errno.ENOSPC, errno.EROFS, errno.EDQUOT, errno.EFBIG):",
+      "                raise",
       "            if active_token is not False and _is_auth_error(e):",
       "                continue",
       "            if active_endpoint is not None:",

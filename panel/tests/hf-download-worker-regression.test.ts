@@ -87,6 +87,27 @@ function writeFakeHubPackage(root: string): void {
 }
 
 describe('HuggingFace download worker fallback', () => {
+  it.each(['EACCES', 'EPERM', 'ENOSPC', 'EROFS', 'EDQUOT', 'EFBIG'])('does not retry a local filesystem failure across endpoints (errno %s)', (errno) => {
+    const root = mkdtempSync(join(tmpdir(), 'vmlx-hf-local-error-'))
+    try {
+      writeFakeHubPackage(root)
+      const pkg = join(root, 'huggingface_hub', '__init__.py')
+      writeFileSync(pkg, readFileSync(pkg, 'utf8').replace(
+        "raise RuntimeError('mirror unavailable')",
+        "raise OSError(__import__('errno')." + errno + ", 'local storage failure', '/owned/download/config.json')",
+      ))
+      const result = spawnSync(process.env.PYTHON || 'python3',
+        ['-B', '-s', '-u', '-c', extractDownloadWorkerScript(), 'test/model', join(root, 'download'), 'http://127.0.0.1:9', ''],
+        { encoding: 'utf8', timeout: 10000, env: { PATH: process.env.PATH || '', PYTHONPATH: root, HF_TOKEN: '' } })
+      expect(result.status).toBe(1)
+      expect(result.stdout).not.toContain('"type": "fallback"')
+      expect(result.stdout).not.toContain('"status": "complete"')
+      expect(JSON.parse(result.stdout.trim())).toMatchObject({ status: 'error', error: expect.stringContaining('local storage failure') })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('reports missing dependencies as a structured error before any transfer', () => {
     const result = spawnSync(process.env.PYTHON || 'python3',
       ['-I', '-S', '-c', extractDownloadWorkerScript(), 'test/model', '/unused', '', ''],
