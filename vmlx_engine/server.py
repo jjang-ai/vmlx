@@ -7863,6 +7863,18 @@ def _parse_tool_calls_with_parser(
                 ):
                     return result.content or "", None
                 return output_text, None
+            if getattr(parser_cls, "SUPPRESS_INVALID_NATIVE_MARKUP", False) and any(
+                marker in output_text
+                for marker in (getattr(parser_cls, "NATIVE_MARKERS", ()) or ())
+            ):
+                _record_tool_call_drop(
+                    f"The '{active_parser}' native tool parser could not decode "
+                    "the generated call. Its native control block was rejected; "
+                    "no tool was executed and generic argument repair was skipped."
+                )
+                return strip_marker_tokens_delta(
+                    _visible_prefix_before_unparsed_tool_markup(output_text)
+                ), None
             # Specific parser found nothing — try generic parser as fallback
             # (handles Nemotron, Llama, raw JSON, etc.)
             return _generic_parse_filtered(output_text)
@@ -8380,6 +8392,10 @@ def _terminal_visible_stream_suffix(
     if parser is not None:
         _reasoning, content = parser.extract_reasoning(final_text)
         final_text = content or ""
+    # Match ordinary parsed deltas: terminal-only channel headers are control
+    # text, not an answer. Parse raw reasoning FIRST, then strip markers;
+    # cleaning first would erase the evidence needed to keep reasoning private.
+    final_text = strip_marker_tokens_delta(final_text)
     if tools_active and final_text:
         # Unlike an activated tool buffer, terminal reconciliation also sees
         # ordinary prose. Release ambiguous punctuation withheld mid-stream;
@@ -26066,7 +26082,17 @@ async def stream_chat_completion(
 
     # ─── Post-stream: tool call extraction ───────────────────────────────
     # If we buffered text because of tool call markers, parse it now
-    if tool_call_buffering and accumulated_text and not _suppress_tools:
+    if (
+        accumulated_text
+        and not _suppress_tools
+        and (
+            tool_call_buffering
+            or (tool_call_active and _has_tool_marker_or_partial_suffix(accumulated_text))
+        )
+    ):
+        # A reasoning parser can hold an unrecognized native channel header
+        # until EOF. It must not prevent the final native tool envelope from
+        # reaching the tool parser (including honest rejection diagnostics).
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
         # If content is empty but reasoning has tool markers, check reasoning too

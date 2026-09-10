@@ -136,6 +136,11 @@ class Gemma4ToolParser(ToolParser):
 
     NATIVE_MARKERS = ("<|tool_call>",)
 
+    # Generic JSON repair does not understand malformed Gemma native envelopes.
+    # Keep non-native JSON/Hermes compatibility, but reject a native block that
+    # this parser could not decode rather than exposing or repairing its debris.
+    SUPPRESS_INVALID_NATIVE_MARKUP = True
+
     SUPPORTS_NATIVE_TOOL_FORMAT = True
     STREAM_STOPS_AFTER_COMPLETE_CALL = True
 

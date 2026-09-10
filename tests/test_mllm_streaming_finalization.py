@@ -210,6 +210,36 @@ def test_terminal_visible_stream_suffix_keeps_qwen_reasoning_private():
     ) == "]"
 
 
+def test_terminal_visible_suffix_does_not_publish_empty_gemma_channel_header():
+    # Captured Gemma output: malformed channel and call names must not be
+    # repaired into a tool call, or treated as a user-visible answer.
+    raw = '<|channel>_thought\n<channel|><|tool_call>_call:read_file{path:<|"|>/tmp/invoice.json<|"|>}<tool_call|>'
+    assert _terminal_visible_stream_suffix(
+        raw, "", parser=Gemma4ReasoningParser(), tools_active=True,
+    ) == ""
+
+
+@pytest.mark.parametrize("wire", [
+    '<|tool_call>call:read_file{path:<|"|>/tmp/invoice.json<|"|>}<tool_call|>',
+    '<tool_call>{"name":"read_file","arguments":{"path":"/tmp/invoice.json"}}</tool_call>',
+    '{"name":"read_file","arguments":{"path":"/tmp/invoice.json"}}',
+])
+def test_gemma_native_rejection_keeps_valid_and_generic_tool_formats(monkeypatch, wire):
+    server = _configure_terminal_suffix_server(monkeypatch)
+    monkeypatch.setattr(server, "_tool_call_parser", "gemma4")
+    monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+    request = ChatCompletionRequest(
+        model="gemma-terminal", messages=[Message(role="user", content="Use read_file")],
+        tools=[{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}],
+    )
+    server._begin_tool_call_drop_capture()
+    _, calls = server._parse_tool_calls_with_parser(wire, request)
+    assert len(calls or []) == 1
+    assert calls[0].function.name == "read_file"
+    assert json.loads(calls[0].function.arguments) == {"path": "/tmp/invoice.json"}
+    assert server._take_tool_call_drop_diagnostics() == []
+
+
 def test_terminal_visible_stream_suffix_never_rewrites_nonmonotonic_text():
     assert _terminal_visible_stream_suffix(
         "different final text",
@@ -309,6 +339,54 @@ async def test_chat_terminal_does_not_reparse_cleaned_gemma_reasoning(monkeypatc
             for chunk in chunks for choice in chunk.get("choices", [])
         )
     assert visible == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses"])
+async def test_malformed_gemma_call_has_no_channel_answer_or_fabricated_call(monkeypatch, route):
+    from vmlx_engine.api.utils import clean_output_text
+
+    server = _configure_terminal_suffix_server(monkeypatch)
+    monkeypatch.setattr(server, "_reasoning_parser", Gemma4ReasoningParser())
+    monkeypatch.setattr(server, "_tool_call_parser", "gemma4")
+    monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+    raw = '<|channel>_thought\n<channel|><|tool_call>_call:read_file{path:<|"|>/tmp/invoice.json<|"|>}<tool_call|>'
+    function = {"name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}
+    messages = [{"role": "user", "content": "Use read_file to read /tmp/invoice.json."}]
+
+    class Engine:
+        tokenizer = SimpleNamespace(has_thinking=False)
+
+        async def stream_chat(self, **kwargs):
+            for end in range(8, len(raw) + 8, 8):
+                text = raw[:end]
+                yield GenerationOutput(
+                    text=clean_output_text(text), raw_text=text,
+                    new_text=raw[end-8:end], prompt_tokens=3, completion_tokens=60,
+                    finished=end >= len(raw), finish_reason="stop" if end >= len(raw) else None,
+                )
+
+    if route == "responses":
+        request = ResponsesRequest(model="gemma-terminal", input=messages, stream=True, enable_thinking=True, tools=[{"type": "function", **function}])
+        stream = server.stream_responses_api(Engine(), messages, request)
+    else:
+        request = ChatCompletionRequest(model="gemma-terminal", messages=messages, stream=True, enable_thinking=True, tools=[{"type": "function", "function": function}])
+        stream = server.stream_chat_completion(Engine(), messages, request)
+    chunks = []
+    async for chunk in stream:
+        for line in chunk.splitlines():
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+    if route == "responses":
+        assert not any(c.get("delta") for c in chunks if c.get("type") == "response.output_text.delta")
+        assert not any(c.get("item", {}).get("type") == "function_call" for c in chunks)
+        terminals = [c for c in chunks if c.get("type") in {"response.failed", "response.incomplete", "response.completed"}]
+        assert len(terminals) == 1 and terminals[0]["type"] != "response.completed", chunks
+        assert any("native tool parser could not decode" in warning for warning in terminals[0]["response"].get("warnings", [])), terminals
+    else:
+        deltas = [c.get("delta", {}) for chunk in chunks for c in chunk.get("choices", [])]
+        assert not any(d.get("content") or d.get("tool_calls") for d in deltas)
+        assert any(c.get("error") for c in chunks), chunks
 
 
 def _configure_terminal_suffix_server(monkeypatch):
