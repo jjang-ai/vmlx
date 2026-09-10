@@ -8,7 +8,7 @@ import { publishImageOutputs, type ImageOutputFile } from '../imageOutputPublica
 import { sessionManager } from '../sessions'
 import { sameLocalBundlePath } from '../local-bundle-identity'
 import { db } from '../database'
-import { getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
+import { IMAGE_MODELS, getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
 import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
 import { createBundleRepairProgressReporter } from '../bundle-repair-progress'
 import {
@@ -767,7 +767,19 @@ export function registerImageHandlers(): void {
           // engine. Auto selection must not send a stale Flux1/generate pair.
           // A local inspection's unresolved result is meaningful. Do not
           // resurrect a rejected/unknown declaration from its folder name.
-          const modelDef = resolveImageModelForLocalDirectory(modelPath)
+          let modelDef = resolveImageModelForLocalDirectory(modelPath)
+          if (!modelDef && serverSettings?.mfluxClass) {
+            // A class identifies a runtime implementation, not always a base
+            // variant. Carry its canonical identity only when unambiguous;
+            // never guess Dev vs Schnell or a Klein parameter count.
+            const candidates = IMAGE_MODELS.filter(model =>
+              model.mfluxClass === serverSettings.mfluxClass &&
+              (!imageMode || model.category === imageMode))
+            if (candidates.length !== 1) {
+              return { success: false, error: 'This architecture/task does not identify one base model. Use a folder with supported base-model metadata so its variant can be identified before loading.', serverKept: true }
+            }
+            modelDef = candidates[0]
+          }
           const mfluxName = modelDef?.mfluxName || modelName
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
           const mode = imageMode || modelDef?.category || 'generate'

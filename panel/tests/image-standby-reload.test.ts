@@ -118,6 +118,24 @@ describe('explicit folder load replaces its own untracked standby session', () =
     expect(state.stop).not.toHaveBeenCalled()
   })
 
+  it('carries canonical identity from an unambiguous explicit adapter on a renamed folder', async () => {
+    state.unknownArchitecture = true
+    const result = await state.handlers.get('image:startServer')!({}, '/models/renamed-export', 6, 'generate', { mfluxClass: 'ZImage' })
+    expect(result.success).toBe(true)
+    expect(state.create.mock.calls[0][1]).toMatchObject({
+      servedModelName: 'z-image-turbo', mfluxClass: 'ZImage', imageMode: 'generate',
+    })
+  })
+
+  it.each(['Flux1', 'Flux2Klein'])('does not guess an ambiguous %s variant or stop the old engine', async mfluxClass => {
+    state.unknownArchitecture = true
+    const result = await state.handlers.get('image:startServer')!({}, '/models/renamed-export', 6, 'generate', { mfluxClass })
+    expect(result).toMatchObject({ success: false, serverKept: true })
+    expect(state.stop).not.toHaveBeenCalled()
+    expect(state.create).not.toHaveBeenCalled()
+    expect(state.preflight).not.toHaveBeenCalled()
+  })
+
   it('validates the new folder before stopping any session', async () => {
     state.invalid = true
     const result = await state.handlers.get('image:startServer')!({}, '/models/edit/q8', 8, 'edit')
