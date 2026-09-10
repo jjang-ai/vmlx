@@ -1,11 +1,11 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
+import { prepareDownloadDirectory, removeOwnedDownloadDirectory } from "../downloadDirectoryOwnership";
 import { hfModelFeedPath, validateHfModelFeed, type HfModelFeedSort } from "../../shared/hfModelFeed";
 import {
   readdir,
   stat,
   access,
   readFile,
-  mkdir,
   writeFile,
   unlink,
   rm,
@@ -1376,6 +1376,7 @@ export function registerModelHandlers(): void {
     modelDir: string;
     wasCancelled?: boolean;
     wasPaused?: boolean;
+    ownsModelDir?: boolean;
     /** For image model downloads: the canonical model ID (e.g. 'schnell') */
     imageModelName?: string;
     /** For image model downloads: the quantization level (e.g. 4, 8, 0) */
@@ -1626,7 +1627,7 @@ export function registerModelHandlers(): void {
     const downloadDir = repoSubfolder ? join(job.modelDir, "..") : job.modelDir;
     const markerFile = join(job.modelDir, ".vmlx-downloading");
     try {
-      await mkdir(job.modelDir, { recursive: true });
+      await prepareDownloadDirectory(job);
       await writeFile(
         markerFile,
         `${job.repoId}\n${Date.now()}\n${job.imageModelName || ""}\n${job.imageQuantize ?? ""}`,
@@ -1822,9 +1823,9 @@ export function registerModelHandlers(): void {
         try {
           await unlink(markerFile);
         } catch (_) {}
-        // Remove partial model directory to prevent incomplete models from appearing in scan
+        // Never delete a pre-existing folder when cancelling a retry/resume.
         try {
-          await rm(job.modelDir, { recursive: true, force: true });
+          await removeOwnedDownloadDirectory(job);
         } catch (_) {}
         job.status = "cancelled";
         emitToRenderer("models:downloadComplete", {
@@ -2437,8 +2438,12 @@ export function registerModelHandlers(): void {
       console.log(`[DOWNLOADS] Cancelled queued/paused: ${removed.repoId}`);
       // Clean up partial files for paused jobs (active jobs clean up in close handler)
       if (removed.wasPaused && removed.modelDir) {
+        // Cancel is terminal: do not leave a marker that auto-resumes on restart.
         try {
-          await rm(removed.modelDir, { recursive: true, force: true });
+          await unlink(join(removed.modelDir, ".vmlx-downloading"));
+        } catch (_) {}
+        try {
+          await removeOwnedDownloadDirectory(removed);
         } catch (_) {}
       }
       emitToRenderer("models:downloadComplete", {
