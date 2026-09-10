@@ -23,6 +23,7 @@ import mlx.nn as nn
 
 from vmlx_engine.metal.affine_moe_pair_decode import affine_moe_pair_activation
 from vmlx_engine.metal.qwen4_aligned_moe_prefill import aligned_switchglu
+from vmlx_engine.metal.qwen4_route_prepare import scatter_route_switchglu
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,9 @@ def qwen4_affine_switchglu(
     aligned = aligned_switchglu(switch, x, indices)
     if aligned is not None:
         return (aligned * scores[..., None]).sum(axis=-2), True
+    prepared = scatter_route_switchglu(switch, x, indices)
+    if prepared is not None:
+        return (prepared * scores[..., None]).sum(axis=-2), False
     full_fused_eligible = (
         getattr(switch, _OK_ATTR, False)
         and x.ndim in (2, 3)
