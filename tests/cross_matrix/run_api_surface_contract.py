@@ -105,7 +105,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "Hy3 local Responses Auto omits the toggle and reasoning_effort",
     "omits malformed Ollama context values instead of poisoning max_prompt_tokens",
     "omits unset and negative sentinels while forwarding explicit neutral sampling overrides",
-    "omits malformed Ollama num_predict values instead of poisoning max_tokens",
+    "preserves malformed Ollama num_predict for backend validation instead of silently changing budgets",
     "applies gateway timeout handling to Ollama embeddings proxy requests",
     "auto-switches by model id in single-model mode before preserving streaming deltas",
     "refuses auto-switch when previous local model cannot unload before starting target",
@@ -297,7 +297,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_ollama_gateway_omits_disabled_sentinels": (
             not failed
             and "omits unset and negative sentinels while forwarding explicit neutral sampling overrides" not in missing_panel_markers
-            and "omits malformed Ollama num_predict values instead of poisoning max_tokens" not in missing_panel_markers
+            and "preserves malformed Ollama num_predict for backend validation instead of silently changing budgets" not in missing_panel_markers
             and "omits malformed Ollama context values instead of poisoning max_prompt_tokens" not in missing_panel_markers
             and panel_passed >= 53
         ),
