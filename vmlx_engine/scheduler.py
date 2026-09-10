@@ -10341,6 +10341,52 @@ class Scheduler:
 
         return outputs, finished_ids
 
+    def _mixed_swa_deferred_seed(self, request: Request, key_tokens: List[int]):
+        """Refault the accepted immutable prefix, never the live decode cache.
+
+        Cleanup calls this on the model worker before releasing request block
+        references. No new prefix lookup, cross-request table, or resident KV
+        mirror is introduced. Unsupported layouts keep the clean-from-zero path.
+        """
+        if not getattr(self, "_mixed_attention_cache_model", False):
+            return None, 0
+        # Weight quantization is independent of cache quantization. Repeated
+        # lossy cache round-trips need their own drift qualification.
+        if getattr(self, "_kv_cache_bits", 0) or getattr(self, "_tq_active", False):
+            return None, 0
+        if os.environ.get("VMLX_DISABLE_MIXED_SWA_CLEAN_RESUME", "").lower() in (
+            "1", "true", "yes", "on",
+        ):
+            return None, 0
+        try:
+            from copy import deepcopy
+            from mlx_lm.models.cache import KVCache, RotatingKVCache
+
+            owner = getattr(self, "block_aware_cache", None)
+            table = getattr(request, "block_table", None)
+            entry = getattr(owner, "_request_tables", {}).get(request.request_id)
+            if table is None or getattr(entry, "block_table", None) is not table:
+                return None, 0
+            boundary = int(table.num_tokens)
+            if not (0 < boundary <= len(key_tokens)) or boundary != request.cached_tokens:
+                return None, 0
+            seed = owner.reconstruct_cache(table)
+            if seed is None:
+                return None, 0
+            if len(seed) != len(self.model.layers) or any(
+                type(layer) not in (KVCache, RotatingKVCache)
+                or int(layer.offset) != boundary
+                for layer in seed
+            ):
+                return None, 0
+            return deepcopy(seed), boundary
+        except Exception as exc:
+            logger.warning(
+                "Mixed-SWA clean-prefix seed unavailable for %s; using full prefill: %s",
+                request.request_id, exc,
+            )
+            return None, 0
+
     def _materialize_deferred_prompt_cache(
         self, request_id: str, request: Request
     ) -> None:
@@ -10381,7 +10427,28 @@ class Scheduler:
                 mode,
                 len(key_tokens),
             )
-            clean_cache = self._prefill_for_prompt_only_cache(key_tokens)
+            seed, seed_len = (
+                self._mixed_swa_deferred_seed(request, key_tokens)
+                if family == "Mixed-SWA" and mode == "paged"
+                else (None, 0)
+            )
+            if seed is not None:
+                logger.info(
+                    "Mixed-SWA clean-prefix resume for %s: checkpoint=%d target=%d suffix=%d",
+                    request_id, seed_len, len(key_tokens), len(key_tokens) - seed_len,
+                )
+                clean_cache = self._prefill_for_prompt_only_cache(
+                    key_tokens, base_cache=seed, base_token_count=seed_len,
+                )
+                if clean_cache is None:
+                    seed = None
+                    logger.warning(
+                        "Mixed-SWA clean-prefix resume failed for %s; retrying full prefill",
+                        request_id,
+                    )
+                    clean_cache = self._prefill_for_prompt_only_cache(key_tokens)
+            else:
+                clean_cache = self._prefill_for_prompt_only_cache(key_tokens)
             if clean_cache is None:
                 logger.warning(
                     "Cannot produce deferred %s prompt-only %s cache for %s; "
