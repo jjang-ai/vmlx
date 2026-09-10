@@ -549,7 +549,8 @@ def test_collapsed_acceptance_drops_only_one_rung(monkeypatch, depth):
     assert state.depth == depth - 1 and not state.ar_fallback_pending
 
 
-def test_active_value_probe_is_not_cancelled_by_old_acceptance(monkeypatch):
+@pytest.mark.parametrize("phase", ["active", "finished"])
+def test_active_value_probe_is_not_cancelled_by_old_acceptance(monkeypatch, phase):
     from vmlx_engine import mllm_batch_generator as m
 
     monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
@@ -559,8 +560,15 @@ def test_active_value_probe_is_not_cancelled_by_old_acceptance(monkeypatch):
     state.stats.cycles = 200
     state.stats.drafted_by_depth = [200, 200, 200]
     state.stats.accepted_by_depth = [180, 140, 70]  # old cumulative poor D3
-    state.adaptive_value.active_probe_origin = 2
-    state.adaptive_value.active_probe_target = 3
+    if phase == "active":
+        state.adaptive_value.active_probe_origin = 2
+        state.adaptive_value.active_probe_target = 3
+    else:
+        from vmlx_engine.native_mtp_adaptive import add_depth_cycle_sample
+        for cycle in range(185, 201):
+            add_depth_cycle_sample(state.adaptive_value, depth=3,
+                                   accepted_drafts=3, elapsed_ms=40.0,
+                                   cycle=cycle, window=16)
     decisions = []
     monkeypatch.setattr(m, "_native_mtp_maybe_choose_value_depth",
                         lambda rid, st, depth: decisions.append(depth) or False)

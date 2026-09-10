@@ -152,6 +152,7 @@ from .native_mtp_adaptive import (
     adaptive_value_snapshot,
     arm_depth_cycle,
     choose_depth_by_value,
+    depth_value_tps,
     finish_armed_depth_cycle,
     note_forced_depth_change,
 )
@@ -6883,17 +6884,24 @@ def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) ->
     if int(state.stats.cycles) < warmup:
         return
 
-    # A rolling-cost experiment owns its adjacent target until enough fresh
-    # samples judge it. Cumulative acceptance includes the older phase that
-    # prompted recovery; cancelling on those same samples repeatedly caused
-    # D3->D2->D3 oscillation on otherwise fast structured output. The caller's
-    # windowed AR safety still runs first on EVERY cycle and can abort a loss.
+    # Fresh rolling cost owns adaptation once available, including after a
+    # probe finishes. Cumulative acceptance/cost includes the older phase
+    # that prompted recovery; reapplying it would immediately cancel even a
+    # measured winning probe. Legacy gates remain for missing/stale samples.
+    # The caller's AR-safety window still runs first on EVERY cycle.
     value_state = getattr(state, "adaptive_value", None)
     if (
         _native_mtp_value_policy_enabled()
         and value_state is not None
-        and value_state.active_probe_origin > 0
-        and value_state.active_probe_target == current
+        and (
+            (value_state.active_probe_origin > 0
+             and value_state.active_probe_target == current)
+            or (
+                value_state.last_sample_cycle[current - 1] >= int(state.stats.cycles) - 1
+                and depth_value_tps(value_state, current,
+                                    minimum_samples=_native_mtp_value_min_samples()) is not None
+            )
+        )
     ):
         _native_mtp_maybe_choose_value_depth(request_id, state, current)
         return
