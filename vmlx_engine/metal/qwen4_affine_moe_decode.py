@@ -405,30 +405,44 @@ def _exact_self_test(switch: Any, projection: _ExactGateUpProjection) -> str | N
     return None
 
 
+def _exact_module_reason(module: Any) -> str | None:
+    """Exact row concatenation requires matching pair layouts, not q4 weights."""
+    up, gate = module.up_proj, module.gate_proj
+    for projection in (up, gate):
+        if projection.__class__.__name__ != "QuantizedSwitchLinear":
+            return "non-affine switch class"
+        if getattr(projection, "mode", None) != "affine" or projection.biases is None:
+            return "non-affine packing"
+        if projection.weight.dtype != mx.uint32 or projection.weight.ndim != 3:
+            return "unsupported packed weight geometry"
+    for name in ("bits", "group_size", "input_dims", "output_dims", "mode"):
+        if getattr(up, name) != getattr(gate, name):
+            return f"pair mismatch: {name}"
+    for name in ("weight", "scales", "biases"):
+        a, b = getattr(up, name), getattr(gate, name)
+        if a.shape != b.shape or a.dtype != b.dtype:
+            return f"pair mismatch: {name} geometry"
+    if int(up.input_dims) != _D or int(up.output_dims) != _M:
+        return "unsupported Qwen expert dimensions"
+    return None
+
+
 def _install_exact_gate_up(modules: list[Any]) -> int:
     """Replace separate up/gate storage after a bit-exact stock oracle."""
-    first_projection = _ExactGateUpProjection(
-        modules[0].up_proj, modules[0].gate_proj
-    )
-    mx.eval(
-        first_projection.weight,
-        first_projection.scales,
-        first_projection.biases,
-    )
-    failure = _exact_self_test(modules[0], first_projection)
-    if failure is not None:
-        _STATUS.update(installed=0, reason=failure, mode="exact_gate_up")
-        logger.warning("Qwen4 exact gate/up fusion refused: %s", failure)
-        return 0
-
-    for index, module in enumerate(modules):
-        projection = (
-            first_projection
-            if index == 0
-            else _ExactGateUpProjection(module.up_proj, module.gate_proj)
-        )
-        if index != 0:
-            mx.eval(projection.weight, projection.scales, projection.biases)
+    installed = 0
+    skipped: dict[str, int] = {}
+    for module in modules:
+        failure = _exact_module_reason(module)
+        if failure is not None:
+            skipped[failure] = skipped.get(failure, 0) + 1
+            continue
+        projection = _ExactGateUpProjection(module.up_proj, module.gate_proj)
+        mx.eval(projection.weight, projection.scales, projection.biases)
+        failure = _exact_self_test(module, projection)
+        if failure is not None:
+            setattr(module, _EXACT_PROJ_ATTR, None)
+            skipped[failure] = skipped.get(failure, 0) + 1
+            continue
         setattr(module, _EXACT_PROJ_ATTR, projection)
         setattr(module, _EXACT_OK_ATTR, True)
         # The combined projection owns exactly the same packed rows. Drop the
@@ -436,15 +450,18 @@ def _install_exact_gate_up(modules: list[Any]) -> int:
         # roughly 40 GB routed up/gate payload.
         module.up_proj = None
         module.gate_proj = None
+        installed += 1
         mx.clear_cache()
 
-    _STATUS.update(installed=len(modules), reason=None, mode="exact_gate_up")
+    _STATUS.update(installed=installed, reason=None if installed else "no eligible exact pairs",
+                   mode="exact_gate_up", skipped=skipped)
     logger.info(
         "Qwen4 exact affine gate/up gather-QMM fusion installed for %d modules "
         "(stock oracle max_abs=0)",
-        len(modules),
+        installed,
     )
-    return len(modules)
+    logger.info("Qwen4 exact gate/up stock fallbacks: %s", skipped)
+    return installed
 
 
 def install_qwen4_affine_moe(model: Any) -> int:
@@ -458,12 +475,12 @@ def install_qwen4_affine_moe(model: Any) -> int:
     if not modules:
         _STATUS.update(installed=0, reason="no SwitchGLU modules")
         return 0
+    if _exact_enabled():
+        return _install_exact_gate_up(modules)
     rejected = [reason for module in modules if (reason := _module_reason(module))]
     if rejected:
         _STATUS.update(installed=0, reason=f"incompatible modules: {rejected[:3]}")
         return 0
-    if _exact_enabled():
-        return _install_exact_gate_up(modules)
     failure = _self_test(modules[0])
     if failure is not None:
         _STATUS.update(installed=0, reason=failure)
