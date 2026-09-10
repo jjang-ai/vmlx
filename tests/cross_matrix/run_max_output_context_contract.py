@@ -89,12 +89,12 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_ollama_generate_omits_non_positive_num_predict_sentinels",
     "test_ollama_nonstream_num_predict_overrides_server_default_without_touching_context_cap",
     "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
-    "omits malformed Ollama num_predict values instead of poisoning max_tokens",
+    "preserves malformed Ollama num_predict for backend validation instead of silently changing budgets",
     "test_public_api_models_reject_non_positive_output_caps",
     # Panel launch/settings. These catch UI confusion between response length
     # and prompt/context length before a session can relaunch with stale state.
     "surfaces Max Output Tokens separately from Max Context Tokens",
-    "casual preset leaves maxTokens model-owned instead of forcing a hidden output cap",
+    "canonical defaults leave maxTokens model-owned without a casual override",
     "does not synthesize a huge max tokens flag when set to 0 (model/server default)",
     "does not copy model max_new_tokens into hidden startup maxTokens config",
     "database clears legacy session maxTokens before settings UI or launch can reuse them",
@@ -142,7 +142,8 @@ PANEL_PATTERN = (
     "maxTokens|Max Tokens|Max Output|Max Context|max context|max output|"
     "max_tokens|max_output_tokens|32768|server default output|per-chat|"
     "omits max_tokens|max token budget|output budgets|output limit|output cap|"
-    "context fallback|coding tool|maxThinkingTokens|max_thinking_tokens|thinking_budget"
+    "context fallback|coding tool|maxThinkingTokens|max_thinking_tokens|thinking_budget|"
+    "malformed Ollama context"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -295,7 +296,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_ollama_chat_omits_non_positive_num_predict_sentinels" not in missing_markers
             and "test_ollama_generate_omits_non_positive_num_predict_sentinels" not in missing_markers
             and "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" not in missing_markers
-            and "omits malformed Ollama num_predict values instead of poisoning max_tokens" not in missing_markers
+            and "preserves malformed Ollama num_predict for backend validation instead of silently changing budgets" not in missing_markers
             and "omits unset and negative sentinels while forwarding explicit neutral sampling overrides" not in missing_markers
         ),
         "prompt_context_caps_do_not_rewrite_output_cap": (
@@ -308,7 +309,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_server_default_output_maps_to_max_tokens": (
             not failed
             and "surfaces Max Output Tokens separately from Max Context Tokens" not in missing_markers
-            and "casual preset leaves maxTokens model-owned instead of forcing a hidden output cap" not in missing_markers
+            and "canonical defaults leave maxTokens model-owned without a casual override" not in missing_markers
             and "changing maxTokens produces different CLI output" not in missing_markers
         ),
         "panel_max_context_maps_to_max_prompt_tokens": (
