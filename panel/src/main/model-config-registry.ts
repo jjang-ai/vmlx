@@ -888,7 +888,7 @@ function readJangChatMetadata(
         : undefined
       if (modes) {
         next.supportsInstructMode = modes.some((mode: string) =>
-          ['chat', 'direct', 'instruct', 'off'].includes(mode),
+          ['chat', 'direct', 'instruct', 'off', 'no_think'].includes(mode),
         )
       }
 

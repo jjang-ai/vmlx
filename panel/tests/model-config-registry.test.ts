@@ -9,6 +9,19 @@ import { buildToolLaunchArgs } from '../src/shared/toolLaunchArgs'
 const createdDirs: string[] = []
 
 describe('Spark native defaults', () => {
+  it('recognizes the native no_think mode in the bundle stamp', () => {
+    const dir = makeModelDir({ model_type: 'spark2_5' }, {
+      capabilities: { family: 'spark2_5', supports_thinking: true, tool_parser: 'spark25' },
+      chat: { reasoning: { supported: true, parser: 'qwen3', modes: ['think', 'no_think'],
+        template_flag: 'enable_thinking', default_enabled: true } },
+    })
+    writeFileSync(join(dir, 'chat_template.jinja'),
+      "{% if enable_thinking %}<think>{% else %}</think>{% endif %}")
+    const config = detectModelConfigFromDir(dir)
+    expect(config.supportsInstructMode).toBe(true)
+    expect(config.honorsEnableThinking).toBe(true)
+    expect(config.defaultEnableThinking).toBe(true)
+  })
   it('derives parser, reasoning and text-only mode from config identity', () => {
     const dir = makeModelDir({ model_type: 'spark2_5', num_hidden_layers: 36,
       layer_types: ['sliding_attention', 'full_attention'], sliding_window: 512 })
