@@ -77,11 +77,12 @@ def test_live_gdn_q8_group64_exact_outputs_and_replacement():
 
 @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16])
 @pytest.mark.parametrize("batch,rows", [(1, 1), (2, 1), (1, 2), (1, 4), (2, 4)])
-def test_existing_grouped_path_parity_for_batch_and_verify(monkeypatch, dtype, batch, rows):
+@pytest.mark.parametrize("bits", [6, 8], ids=["q6", "q8"])
+def test_existing_grouped_path_parity_for_batch_and_verify(monkeypatch, dtype, batch, rows, bits):
     from vmlx_engine.models.qwen4_exp import language
 
     monkeypatch.setattr(language, "_gdn_group_max_rows", lambda: 4)
-    linears = make_linears(bits=8, group_size=64, dtype=dtype)
+    linears = make_linears(bits=bits, group_size=64, dtype=dtype)
     x = mx.random.normal((batch, rows, 64)).astype(dtype)
     monkeypatch.setattr(language, "_FAST_PROJECTION_CACHE", False)
     expected = language._decode_quantized_linears_fused(linears, x)
