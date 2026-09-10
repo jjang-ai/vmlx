@@ -5,12 +5,12 @@ import pytest
 from vmlx_engine.models.qwen4_exp.projection_cache import validated_projection_group
 
 
-def make_linears():
+def make_linears(bits=4, group_size=32):
     result = []
     for size in (64, 32, 96):
         m = nn.Linear(64, size, bias=False)
         m.weight = m.weight.astype(mx.float16)
-        result.append(m.to_quantized(group_size=32, bits=4))
+        result.append(m.to_quantized(group_size=group_size, bits=bits))
     return tuple(result)
 
 
@@ -58,3 +58,18 @@ def test_dtype_post_bias_and_module_replacement():
 
 def test_nonquantized_keeps_existing_path():
     assert validated_projection_group((nn.Linear(64, 32),), mx.float16) is None
+
+
+def test_live_gdn_q8_group64_exact_outputs_and_replacement():
+    # Observed projection metadata in Flash-Next 4S, not its routed-expert bits.
+    linears = make_linears(bits=8, group_size=64)
+    group = validated_projection_group(linears, mx.float16)
+    assert validated_projection_group(linears, mx.float16) is group
+    x = mx.random.normal((1, 1, 64)).astype(mx.float16)
+    expected = tuple(m(x) for m in linears)
+    actual = group(x)
+    mx.eval(*expected, *actual)
+    assert all(bool(mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)))
+               for a, b in zip(expected, actual))
+    linears[1].weight = mx.array(linears[1].weight)
+    assert validated_projection_group(linears, mx.float16) is not group
