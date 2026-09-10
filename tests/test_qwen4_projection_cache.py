@@ -1,0 +1,57 @@
+import mlx.core as mx
+import mlx.nn as nn
+import pytest
+
+from vmlx_engine.models.qwen4_exp.projection_cache import validated_projection_group
+
+
+def make_linears():
+    result = []
+    for size in (64, 32, 96):
+        m = nn.Linear(64, size, bias=False)
+        m.weight = m.weight.astype(mx.float16)
+        result.append(m.to_quantized(group_size=32, bits=4))
+    return tuple(result)
+
+
+def test_cache_hit_and_exact_group_outputs():
+    linears = make_linears()
+    group = validated_projection_group(linears, mx.float16)
+    assert validated_projection_group(linears, mx.float16) is group
+    x = mx.random.normal((1, 1, 64)).astype(mx.float16)
+    expected = tuple(m(x) for m in linears)
+    actual = group(x)
+    mx.eval(*expected, *actual)
+    assert all(bool(mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)))
+               for a, b in zip(expected, actual))
+
+
+@pytest.mark.parametrize("field", ["weight", "scales", "biases"])
+def test_replaced_tensor_rebuilds(field):
+    linears = make_linears()
+    old = validated_projection_group(linears, mx.float16)
+    setattr(linears[1], field, mx.array(getattr(linears[1], field)))
+    assert validated_projection_group(linears, mx.float16) is not old
+
+
+@pytest.mark.parametrize("field,value", [("bits", 8), ("group_size", 64), ("mode", "mxfp4")])
+def test_metadata_change_revalidates(field, value):
+    linears = make_linears()
+    assert validated_projection_group(linears, mx.float16) is not None
+    setattr(linears[1], field, value)
+    assert validated_projection_group(linears, mx.float16) is None
+
+
+def test_dtype_post_bias_and_module_replacement():
+    linears = make_linears()
+    old = validated_projection_group(linears, mx.float16)
+    assert validated_projection_group(linears, mx.float32) is None
+    linears[1].bias = mx.zeros((32,), dtype=mx.float16)
+    assert validated_projection_group(linears, mx.float16) is None
+    del linears[1].bias
+    replaced = (linears[0], make_linears()[1], linears[2])
+    assert validated_projection_group(replaced, mx.float16) is not old
+
+
+def test_nonquantized_keeps_existing_path():
+    assert validated_projection_group((nn.Linear(64, 32),), mx.float16) is None

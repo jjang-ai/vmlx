@@ -78,11 +78,13 @@ from vmlx_engine.metal.sparse_index_score_decode import (
 
 from .ngram import NGramHasher
 from .host_profile import profile_decode_forward
+from .projection_cache import validated_projection_group
 
 
 logger = logging.getLogger(__name__)
 
 _HYPER_SPLIT_INDICES = {}
+_FAST_PROJECTION_CACHE = os.environ.get("VMLX_QWEN4_FAST_PROJECTION_CACHE") == "1"
 
 
 def _load_calibrated_proposal_sidecar(
@@ -998,6 +1000,10 @@ def _decode_quantized_linears_fused(
     """
     if x.ndim != 3 or x.shape[1] < 1 or x.shape[1] > _gdn_group_max_rows():
         return None
+    if _FAST_PROJECTION_CACHE:
+        group = validated_projection_group(linears, x.dtype)
+        if group is not None:
+            return group(x)
     if quantized_projection_group_reason(
         linears, activation_dtype=x.dtype
     ) is not None:
