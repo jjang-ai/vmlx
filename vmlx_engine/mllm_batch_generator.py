@@ -6156,12 +6156,9 @@ _NATIVE_MTP_REENTRY_HYSTERESIS = 1.10
 # AR tokens; a re-entry that survived this many output tokens relaxes it.
 _NATIVE_MTP_REENTRY_MAX_BACKOFF = 8
 _NATIVE_MTP_REENTRY_SETTLE_TOKENS = 256
-# The final rung (D1 -> AR) costs a handoff, AR tokens and a re-seed, so it
-# needs a second losing window within this many windows of the first.
+# Seed-only or stale baselines need a second losing window within this many
+# windows. Fresh measured mean-and-median losses use the first full window.
 _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS = 3
-# Match the severe-loss threshold used for early probe aborts, but require a
-# complete window plus its median for settled D1 (not a single slow cycle).
-_NATIVE_MTP_D1_FAST_TRIP_RATIO = 1.5
 
 
 @dataclass(frozen=True)
@@ -6491,9 +6488,11 @@ def _native_mtp_maybe_ar_safety_fallback(
       configured depth (e.g. D3)  --loses to AR-->  D1  --loses to AR-->  AR
     with re-entry from AR probing D1 first (cheap, most likely to win) and a
     promotion probe from D1 back to the configured depth only when the
-    configured depth beats the MEASURED D1 cost.  "Never below AR": margin
-    1.0 against the seed / measured AR step; hysteresis lives in the probes,
-    which must win by 10%.  Returns True only on the AR demotion.
+    configured depth beats the MEASURED D1 cost. The measured AR margin is
+    1.0; a seed-only baseline has its own uncertainty margin. Hysteresis
+    lives in recovery probes, which must win by 10%. Window measurement and
+    handoff cost mean this is not an instantaneous AR speed guarantee.
+    Returns True only on the AR demotion.
     """
     if state.ar_fallback_pending:
         return False
@@ -6762,26 +6761,21 @@ def _native_mtp_maybe_ar_safety_fallback(
         )
         return False
 
-    # D1 lost a window.  The final rung costs a handoff, AR tokens and a
-    # re-seed, so it needs confirmation: a second losing window within
-    # _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS (an 8-cycle window at D1 spans
-    # ~12 tokens; on long answers D1 lost single windows by 2-7% and won
-    # the surrounding bins).
+    # D1 lost a window. The mean and median already exclude a lone slow
+    # cycle. With fresh measured AR, do not incur another losing window;
+    # hysteresis remains on recovery probes. Seed/stale baselines still
+    # require confirmation because their comparison is less reliable.
     window = ar_safety_window_cycles()
     pending = int(state.ar_trip_pending_cycle or 0)
-    # A full window with both its mean and median substantially slower than
-    # recently measured AR is already strong evidence. Do not spend another
-    # losing window merely to confirm it. Keep ordinary confirmation for
-    # marginal losses, seed-only baselines, and stale measurements.
-    severe_measured_loss = (
+    fresh_measured_loss = (
         measured_ar > 0.0
         and 0 <= cycles + int(state.stats.accepted_tokens)
         - int(state.last_ar_measure_emitted) < _NATIVE_MTP_CALIBRATION_MIN_SPACING_TOKENS
         and trip.window >= window
-        and trip.mtp_ms_per_tok > measured_ar * _NATIVE_MTP_D1_FAST_TRIP_RATIO
-        and trip.cycle_median_ms_per_tok > measured_ar * _NATIVE_MTP_D1_FAST_TRIP_RATIO
+        and trip.mtp_ms_per_tok > measured_ar
+        and trip.cycle_median_ms_per_tok > measured_ar
     )
-    if not severe_measured_loss and (
+    if not fresh_measured_loss and (
         pending <= 0 or cycles - pending > _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS * window
     ):
         state.ar_trip_pending_cycle = cycles
@@ -6795,7 +6789,7 @@ def _native_mtp_maybe_ar_safety_fallback(
     state.ar_trip_pending_cycle = 0
     state.ar_fallback_pending = True
     state.ar_fallback_reason = trip.reason(prior_depth)
-    if severe_measured_loss:
+    if fresh_measured_loss:
         logger.info(
             "MLLM MTP[%s] AR safety D1 fast confirmation at cycle=%d: "
             "mean=%.1f median=%.1f measured_ar=%.1f ms/tok",

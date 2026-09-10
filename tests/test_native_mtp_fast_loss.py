@@ -1,4 +1,4 @@
-"""A measured severe D1 loss must not spend another confirmation window."""
+"""A fresh, mean-and-median D1 loss needs no second losing window."""
 import pytest
 
 
@@ -35,7 +35,7 @@ def test_d1_confirmation_respects_loss_severity(
         context_now=140,
     )
     monkeypatch.setattr(m, "ar_safety_step", lambda *a, **k: trip)
-    expected_fast = measured and fresh and median_loses and ratio > 1.5
+    expected_fast = measured and fresh and median_loses and ratio > 1.0
     assert m._native_mtp_maybe_ar_safety_fallback("fast-loss", state) is expected_fast
     assert state.ar_fallback_pending is expected_fast
     assert state.depth <= ceiling

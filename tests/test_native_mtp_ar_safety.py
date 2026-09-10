@@ -324,6 +324,7 @@ def test_settled_reentry_that_trips_again_backs_off(monkeypatch):
     # AR window, and back off further (no immediate re-probe).
     from vmlx_engine import mllm_batch_generator as m
 
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
     state = _vlm_state(m)
     tier = m.NativeMTPArTier(depth=3)
@@ -339,9 +340,7 @@ def test_settled_reentry_that_trips_again_backs_off(monkeypatch):
     state.stats.accepted_tokens = 0
     state.ar_safety.anchor_cycle_ms = 40.0
     state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.040) for i in range(9)]
-    assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False  # pending confirmation
-    state.stats.cycles = 50
-    state.ar_safety.ring = [(41 + i, 41 + i, base_t + i * 0.040) for i in range(9)]
+    # Fresh measured AR: the first complete losing window is sufficient.
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is True
     assert tier.fallbacks == 2
     assert tier.tokens_since_fallback == 0
@@ -352,9 +351,8 @@ def test_settled_reentry_that_trips_again_backs_off(monkeypatch):
     state2.stats.cycles = 300; state2.stats.accepted_tokens = 0
     state2.ar_safety.anchor_cycle_ms = 40.0
     state2.ar_safety.ring = [(291 + i, 291 + i, base_t + i * 0.040) for i in range(9)]
-    assert m._native_mtp_maybe_ar_safety_fallback("req", state2) is False
-    state2.stats.cycles = 310
-    state2.ar_safety.ring = [(301 + i, 301 + i, base_t + i * 0.040) for i in range(9)]
+    # The tier retains last_measured_ms_per_tok across its empty AR window;
+    # this 300-token-old baseline is still fresh, so fallback is immediate.
     assert m._native_mtp_maybe_ar_safety_fallback("req", state2) is True
     assert tier.backoff == 0 and tier.next_probe_tokens == 16 and tier.fallbacks == 3
 
@@ -1113,7 +1111,7 @@ def test_calibration_drift_is_same_depth_and_consecutive_only(monkeypatch):
     assert abs(d - 1.0) < 0.05
 
 
-def test_d1_single_losing_window_recovers_without_fallback(monkeypatch):
+def test_d1_stale_baseline_single_losing_window_recovers_without_fallback(monkeypatch):
     """One losing D1 window sets a pending mark; a winning window clears it;
     a losing window long after the mark starts a new confirmation instead
     of falling back."""
@@ -1122,7 +1120,10 @@ def test_d1_single_losing_window_recovers_without_fallback(monkeypatch):
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
     monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
     state = _vlm_state(m, depth=1); state.depth_ceiling = 3; state.ladder_depth = 3
-    # Confirmation hysteresis presumes the baseline has been measured.
+    # A stale measurement still requires confirmation; fresh AR is covered
+    # by test_native_mtp_fast_loss and the settled re-entry test above.
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    state.last_ar_measure_emitted = -512
     state.ar_tier = m.NativeMTPArTier(depth=3)
     _ar_steps(state.ar_tier, 8, ms=18.0)
     base_t = time.perf_counter() - 1.0
