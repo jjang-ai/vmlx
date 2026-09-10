@@ -2002,6 +2002,11 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
+    value: 'spark25', label: 'Spark-X2.5', format: '<tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>', models: [
+      'Spark-X2.5 native XML arguments',
+    ]
+  },
+  {
     value: 'glm47', label: 'GLM / GPT-OSS — GLM-4 / GLM-4.7 / GLM-Z1', format: '<tool_call>name\n<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>', models: [
       'GLM-4 (9B)', 'GLM-4.7 (9B)', 'GLM-4.7 Flash (9B MoE)', 'GLM-Z1 (32B)', 'GPT-OSS-20B/120B',
     ]

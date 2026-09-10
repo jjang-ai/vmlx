@@ -8,6 +8,21 @@ import { buildToolLaunchArgs } from '../src/shared/toolLaunchArgs'
 
 const createdDirs: string[] = []
 
+describe('Spark native defaults', () => {
+  it('derives parser, reasoning and text-only mode from config identity', () => {
+    const dir = makeModelDir({ model_type: 'spark2_5', num_hidden_layers: 36,
+      layer_types: ['sliding_attention', 'full_attention'], sliding_window: 512 })
+    const config = detectModelConfigFromDir(dir)
+    expect(config.toolParser).toBe('spark25')
+    expect(config.reasoningParser).toBe('qwen3')
+    expect(config.thinkInTemplate).toBe(true)
+    expect(config.defaultEnableThinking).toBe(true)
+    expect(config.isMultimodal).toBe(false)
+    expect(buildToolLaunchArgs({ toolParser: config.toolParser!, enableAutoToolChoice: true }))
+      .toEqual(['--tool-call-parser', 'spark25', '--enable-auto-tool-choice'])
+  })
+})
+
 describe('MiniCPM5 declared XML dialect', () => {
   it.each(['minicpm5_xml_function', 'unrelated'])('scopes the capability correction to %s', (dialect) => {
     const dir = makeModelDir({ model_type: 'llama' }, {

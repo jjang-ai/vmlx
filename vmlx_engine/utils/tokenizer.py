@@ -1239,6 +1239,9 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     )
 
     ensure_nanbeige_runtime_registered(local_model_path)
+    from ..models.spark2_5 import ensure_spark2_5_runtime_registered
+
+    ensure_spark2_5_runtime_registered(local_model_path)
 
     def _finalize_loaded_model(model, tokenizer):
         validate_nanbeige_loop_cache_contract(model, local_model_path)

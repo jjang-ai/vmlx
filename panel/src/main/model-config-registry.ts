@@ -374,6 +374,7 @@ registerFamily('paligemma', { cacheType: 'kv', isMultimodal: true, description: 
 // own prompt/cache chain.
 registerFamily('gemma4', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'Gemma 4 (multimodal)', priority: 5 })
 registerFamily('gemma4-text', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, enableAutoToolChoice: true, usePagedCache: false, description: 'Gemma 4 (text-only)', priority: 4 })
+registerFamily('spark2_5', { cacheType: 'kv', toolParser: 'spark25', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: true, defaultEnableThinking: true, enableAutoToolChoice: true, isMultimodal: false, usePagedCache: false, description: 'Spark-X2.5 (mixed full/sliding attention)', priority: 4 })
 // Muse Glimmer: Gemma-shaped text backbone (sliding/full 3:1) + windowed ViT,
 // vision AND video. Reasoning is routed by recipient (to=self / to=user), not an
 // inline think pair, and its only live control is the reasoning_strength template
@@ -626,6 +627,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma3n_text': 'gemma3n-text',
   'gemma4': 'gemma4',
   'gemma4_text': 'gemma4-text',
+  'spark2_5': 'spark2_5',
   'gemma4_unified': 'gemma4',
   'gemma4_unified_text': 'gemma4-text',
   'muse_glimmer': 'muse-glimmer',

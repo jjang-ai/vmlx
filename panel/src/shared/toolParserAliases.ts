@@ -40,6 +40,7 @@ export const TOOL_PARSERS_FOR_CLI = new Set([
   'xlam',
   'functionary',
   'glm47',
+  'spark25',
   'step3p5',
   'gemma3',
   'gemma3n',

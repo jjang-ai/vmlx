@@ -68,6 +68,7 @@ from .qwen_tool_parser import QwenToolParser
 from .xlam_tool_parser import xLAMToolParser
 from .step3p5_tool_parser import Step3p5ToolParser
 from .glm47_tool_parser import Glm47ToolParser
+from .spark25_tool_parser import Spark25ToolParser
 from .minimax_tool_parser import MiniMaxToolParser
 from .minimax_m3_tool_parser import MiniMaxM3ToolParser  # MiniMax-M3 (tag-named-param XML)
 from .gemma4_tool_parser import Gemma4ToolParser

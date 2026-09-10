@@ -1036,6 +1036,24 @@ def register_all(registry=None):
         )
     )
 
+    # Spark owns its mixed full/sliding KV cache and native XML tool template.
+    _register(
+        ModelConfig(
+            family_name="spark2_5",
+            model_types=["spark2_5"],
+            cache_type="kv",
+            eos_tokens=["<｜end▁of▁sentence｜>"],
+            tool_parser="spark25",
+            reasoning_parser="qwen3",
+            think_in_template=True,
+            supports_thinking=True,
+            supports_native_tools=True,
+            is_mllm=False,
+            architecture_hints={"default_enable_thinking": True},
+            priority=4,
+        )
+    )
+
     # ── Gemma family ──
 
     _register(

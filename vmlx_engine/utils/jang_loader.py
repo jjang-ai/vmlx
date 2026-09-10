@@ -1839,6 +1839,9 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
     from .nanbeige_runtime import ensure_nanbeige_runtime_registered
 
     ensure_nanbeige_runtime_registered(path, config=config)
+    from ..models.spark2_5 import ensure_spark2_5_runtime_registered
+
+    ensure_spark2_5_runtime_registered(path, config=config)
 
     if "openpangu_v2" in model_types:
         # vMLX-owned vendored runtime (no upstream mlx-lm/jang_tools package).
