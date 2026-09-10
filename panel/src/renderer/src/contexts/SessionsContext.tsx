@@ -105,6 +105,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
         setLoadProgress(prev => { const next = new Map(prev); next.delete(data.sessionId); return next })
       }),
       window.api.sessions.onReady((data: any) => {
+        // Restart promotes pending launch settings after session:updated. The
+        // pre-restart list still carries the old active config; status/PID alone
+        // cannot refresh the config consumed by the chat toolbar and drawers.
+        void refreshSessions()
         setSessions(prev => prev.map(s =>
           s.id === data.sessionId
             ? { ...s, status: 'running' as const, ...(data.pid ? { pid: data.pid } : {}), ...(data.port ? { port: data.port } : {}) }
