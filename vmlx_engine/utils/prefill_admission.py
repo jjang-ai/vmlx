@@ -283,6 +283,28 @@ def project_span_peak_bytes(
     return int(transient * (final / at))
 
 
+def replace_chunk_transient_observation(
+    model_type: str,
+    measured_bytes: int,
+    measured_chunk_tokens: int,
+    retained_bytes: int,
+    retained_chunk_tokens: int,
+) -> bool:
+    """Keep the maximum, except after a measured GLM chunk-width reduction.
+
+    A completed smaller GLM chunk establishes a new allocation regime; do not
+    extrapolate the previous wider chunk forever. This does not predict an
+    unexecuted smaller chunk or change admission safety margins. Other hybrid
+    families retain their existing maximum-observation policy.
+    """
+    if measured_bytes <= 0:
+        return False
+    return measured_bytes >= retained_bytes or (
+        model_type in {"glm5_next", "glm5_next_text"}
+        and 0 < measured_chunk_tokens < retained_chunk_tokens
+    )
+
+
 def hybrid_chunk_valve_check(
     active_bytes: int,
     max_ws_bytes: int,

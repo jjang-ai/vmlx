@@ -2890,6 +2890,7 @@ from .utils.prefill_admission import (
     PrefillAdmissionError,
     fit_peak_model,
     hybrid_chunk_valve_check,
+    replace_chunk_transient_observation,
     prefill_keep_alloc_enabled,
     prefill_valve_enabled,
     prefill_valve_min_margin_bytes,
@@ -12025,7 +12026,13 @@ class MLLMBatchGenerator:
                         )
                         if _chunk_peak > _observed_chunk_peak_max:
                             _observed_chunk_peak_max = _chunk_peak
-                        if _this_transient >= _observed_chunk_transient:
+                        if replace_chunk_transient_observation(
+                            _hybrid_text_model_type,
+                            _this_transient,
+                            int(chunk_size),
+                            _observed_chunk_transient,
+                            _observed_transient_chunk_tokens,
+                        ):
                             # Record the context this was observed AT, not just
                             # the magnitude: the valve scales it forward by the
                             # context ratio, so a transient without its context
