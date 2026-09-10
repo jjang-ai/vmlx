@@ -25,7 +25,104 @@ deltas up to 70 on unnormalized fixtures while matching to 7e-4 in-regime).
 
 from __future__ import annotations
 
+import logging
+import os
+from functools import lru_cache
+
 import mlx.core as mx
+
+
+_LOGGER = logging.getLogger(__name__)
+_EXACT_PAIRWISE_OBSERVED = False
+_EXACT_PAIRWISE_REQUESTED = os.environ.get(
+    "VMLX_GLM5_EXACT_PAIRWISE_BUFFER", "0"
+).strip().lower() not in {"", "0", "false", "off", "no"}
+
+_EXACT_PAIRWISE_HEADER = """
+#include <metal_stdlib>
+using namespace metal;
+"""
+
+_EXACT_PAIRWISE_SOURCE = """
+    size_t output_index = (size_t)thread_position_in_grid.x;
+    if (output_index >= (size_t)ELEMENTS) return;
+
+    uint dimension = (uint)(output_index % (size_t)WIDTH);
+    size_t pair_index = output_index / (size_t)WIDTH;
+    uint column = (uint)(pair_index % (size_t)BLOCK);
+    uint row = (uint)((pair_index / (size_t)BLOCK) % (size_t)BLOCK);
+    size_t outer = pair_index / ((size_t)BLOCK * (size_t)BLOCK);
+    size_t left_index = (outer * (size_t)BLOCK + (size_t)row) *
+        (size_t)WIDTH + (size_t)dimension;
+    size_t right_index = (outer * (size_t)BLOCK + (size_t)column) *
+        (size_t)WIDTH + (size_t)dimension;
+
+    // Match MLX 0.32.2's separate safe-math primitives exactly: Subtract,
+    // Minimum, precise::Exp, Multiply, Multiply. The stock mx.sum remains a
+    // separate primitive over this row-contiguous product buffer, preserving
+    // its reduction tree and accumulation order.
+    float gate_delta = float(gates[left_index]) - float(gates[right_index]);
+    float clamped_delta = metal::min(gate_delta, 0.0f);
+    float decay = metal::precise::exp(clamped_delta);
+    float first_product = float(left[left_index]) * decay;
+    products[output_index] = first_product * float(right[right_index]);
+"""
+
+
+@lru_cache(maxsize=1)
+def _exact_pairwise_product_kernel():
+    return mx.fast.metal_kernel(
+        name="vmlx_glm5_exact_pairwise_product_v1",
+        input_names=["left", "right", "gates"],
+        output_names=["products"],
+        header=_EXACT_PAIRWISE_HEADER,
+        source=_EXACT_PAIRWISE_SOURCE,
+        ensure_row_contiguous=True,
+        compile_options={"math_mode": "safe"},
+    )
+
+
+def _exact_pairwise_product(
+    left: mx.array,
+    right: mx.array,
+    gates: mx.array,
+) -> mx.array | None:
+    """Materialize exact gated products; leave reduction to stock ``mx.sum``."""
+    if not _EXACT_PAIRWISE_REQUESTED:
+        return None
+    if left.ndim != 4 or left.shape != right.shape or left.shape != gates.shape:
+        return None
+    if any(value.dtype != mx.float32 for value in (left, right, gates)):
+        return None
+    block = int(left.shape[-2])
+    width = int(left.shape[-1])
+    if block != 64 or width != 128:
+        return None
+    outer = 1
+    for extent in left.shape[:-2]:
+        outer *= int(extent)
+    elements = outer * block * block * width
+    result = _exact_pairwise_product_kernel()(
+        inputs=[left, right, gates],
+        template=[
+            ("BLOCK", block),
+            ("WIDTH", width),
+            ("ELEMENTS", elements),
+        ],
+        grid=(elements, 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(*left.shape[:-2], block, block, width)],
+        output_dtypes=[mx.float32],
+    )[0]
+    global _EXACT_PAIRWISE_OBSERVED
+    if not _EXACT_PAIRWISE_OBSERVED:
+        _EXACT_PAIRWISE_OBSERVED = True
+        _LOGGER.warning(
+            "exact KDA pairwise product buffer engaged: shape=%s dtype=%s",
+            tuple(int(value) for value in left.shape),
+            left.dtype,
+        )
+    return result
 
 
 def l2norm(x: mx.array, eps: float = 1e-6) -> mx.array:
@@ -265,9 +362,16 @@ def kda_chunked(
     for ci in range(NT):
         g_c = gc[:, :, ci]                                  # [B,H,BT,K]
         k_c = kc[:, :, ci]
-        gd_c = mx.minimum(g_c[..., :, None, :] - g_c[..., None, :, :], 0.0)
-        akk_chunks.append(mx.sum(k_c[..., :, None, :] * mx.exp(gd_c)
-                                 * k_c[..., None, :, :], axis=-1))
+        products = _exact_pairwise_product(k_c, k_c, g_c)
+        if products is None:
+            gd_c = mx.minimum(
+                g_c[..., :, None, :] - g_c[..., None, :, :], 0.0
+            )
+            products = (
+                k_c[..., :, None, :] * mx.exp(gd_c)
+                * k_c[..., None, :, :]
+            )
+        akk_chunks.append(mx.sum(products, axis=-1))
     Akk = mx.stack(akk_chunks, axis=2)                      # [B,H,NT,BT,BT]
     A = mx.where(lower, -(Akk * bc[..., None]), mx.zeros_like(Akk))
 
@@ -286,8 +390,16 @@ def kda_chunked(
     for i in range(NT):
         q_i, k_i = qc[:, :, i], kc[:, :, i]
         u_i, g_i, w_i = u[:, :, i], gc[:, :, i], w[:, :, i]
-        gd = mx.minimum(g_i[..., :, None, :] - g_i[..., None, :, :], 0.0)
-        Aqk = mx.sum(q_i[..., :, None, :] * mx.exp(gd) * k_i[..., None, :, :], axis=-1)
+        products = _exact_pairwise_product(q_i, k_i, g_i)
+        if products is None:
+            gd = mx.minimum(
+                g_i[..., :, None, :] - g_i[..., None, :, :], 0.0
+            )
+            products = (
+                q_i[..., :, None, :] * mx.exp(gd)
+                * k_i[..., None, :, :]
+            )
+        Aqk = mx.sum(products, axis=-1)
         Aqk = mx.where(strict_upper, mx.zeros_like(Aqk), Aqk)
         v_i = u_i - w_i @ S
         outs.append((q_i * mx.exp(g_i)) @ S + Aqk @ v_i)
