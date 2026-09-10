@@ -241,10 +241,13 @@ class ArSafetyTrip:
             f"x{self.margin:.2f}"
         )
 
-    def log_text(self, prior_depth: int) -> str:
+    def log_text(
+        self, prior_depth: int, *, target_depth: int = 0, baseline_label: str = "AR",
+    ) -> str:
+        target = f"D{target_depth}" if target_depth > 0 else "AR"
         return (
-            f"windowed AR safety D{prior_depth} -> AR at cycle={self.cycles} "
-            f"({self.mtp_ms_per_tok:.1f}ms/tok vs ctx-scaled AR "
+            f"windowed AR safety D{prior_depth} -> {target} at cycle={self.cycles} "
+            f"({self.mtp_ms_per_tok:.1f}ms/tok vs ctx-scaled {baseline_label} "
             f"{self.ar_baseline:.1f}ms, seed {self.seed_ar_ms:.1f}ms, "
             f"window={self.window}, cycle median "
             f"{self.cycle_median_ms_per_tok:.1f} max "

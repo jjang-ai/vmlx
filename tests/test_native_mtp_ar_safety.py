@@ -489,7 +489,9 @@ def test_recovery_climbs_adjacent_rungs_and_stops_at_selected_ceiling(monkeypatc
     assert seen == list(range(1, ceiling + 1))
 
 
-def test_failed_d2_to_d3_promotion_returns_to_d2(monkeypatch):
+def test_failed_d2_to_d3_promotion_returns_to_d2(monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
     from vmlx_engine import mllm_batch_generator as m
 
     monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
@@ -503,6 +505,9 @@ def test_failed_d2_to_d3_promotion_returns_to_d2(monkeypatch):
     state.ar_safety.ring = [(31+i, 31+i, now+i*.020) for i in range(9)]
     assert not m._native_mtp_maybe_ar_safety_fallback("reject-promotion", state)
     assert state.depth == 2 and not state.promote_probe
+    assert "windowed AR safety D3 -> D2" in caplog.text
+    assert "min(D2, AR)" in caplog.text
+    assert "D3 -> AR" not in caplog.text
 
 
 @pytest.mark.parametrize("mode", ["transition", "probe-completed", "pending", "new-window"])

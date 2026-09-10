@@ -6711,7 +6711,10 @@ def _native_mtp_maybe_ar_safety_fallback(
             state.ar_safety.reset(cycles)
             logger.info(
                 "MLLM MTP[%s] promotion lost, back to D%d: %s",
-                request_id, state.depth, trip.log_text(depth_now),
+                request_id, state.depth, trip.log_text(
+                    depth_now, target_depth=state.depth,
+                    baseline_label=f"min(D{state.promote_from_depth}, AR)",
+                ),
             )
         return False
 
@@ -6765,7 +6768,8 @@ def _native_mtp_maybe_ar_safety_fallback(
         state.ar_safety.reset(cycles)
         logger.info(
             "MLLM MTP[%s] AR safety D%d -> D%d: %s",
-            request_id, prior_depth, state.depth, trip.log_text(prior_depth),
+            request_id, prior_depth, state.depth,
+            trip.log_text(prior_depth, target_depth=state.depth),
         )
         return False
 
@@ -16822,11 +16826,12 @@ class MLLMBatchGenerator:
         state.queue.append((int(next_tok.tolist()[0]), next_lp, "init"))
         request._native_mtp_state = state
         logger.info(
-            "MLLM native MTP path activated for request=%s depth=%d seed=%s "
+            "MLLM native MTP path activated for request=%s depth=%d ceiling=%d seed=%s "
             "prompt_prime=%s folded_pairs=%d seed_ar_ms=%.1f "
             "prompt_tokens=%d cached_tokens=%d profile=%s",
             request.request_id,
-            depth,
+            state.depth,
+            state.ladder_depth,
             profile_seed,
             prime_source,
             int(primed_pairs),

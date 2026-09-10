@@ -340,7 +340,9 @@ class TestSeedPathIntegration:
         assert state.depth == 3
         assert state.stats.profile_seed == "configured"
 
-    def test_scheduled_reentry_is_not_vetoed_by_startup_ar_profile(self, monkeypatch):
+    def test_scheduled_reentry_is_not_vetoed_by_startup_ar_profile(self, monkeypatch, caplog):
+        import logging
+        caplog.set_level(logging.INFO)
         generator, req, first_token = self._build_generator(monkeypatch)
         generator._model_type = "qwen4_exp"
         store = generator._native_mtp_profiles = NativeMTPProfileStore()
@@ -358,6 +360,7 @@ class TestSeedPathIntegration:
             assert state.depth == intended
             assert state.profile_key == key
             assert state.stats.profile_seed == "request_local_reentry"
+            assert f"depth={intended} ceiling=3 seed=request_local_reentry" in caplog.text
 
     def test_scheduled_reentry_keeps_request_eligibility_gate(self, monkeypatch):
         generator, req, first_token = self._build_generator(monkeypatch)
