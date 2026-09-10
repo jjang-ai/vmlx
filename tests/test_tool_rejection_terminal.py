@@ -106,5 +106,9 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
         terminals = [e for e in events if e.get('type') in {'response.completed', 'response.failed', 'response.incomplete'}]
         assert len(terminals) == 1
         assert terminals[0]['response'].get('incomplete_details') == {'reason': 'tool_calls_rejected'}, terminals[0]
+        items = {item['id']: item for item in terminals[0]['response']['output']}
+        for event in events:
+            if event.get('type') == 'response.output_item.done':
+                assert event['item']['status'] == items[event['item']['id']]['status']
     assert 'reasoning_only_no_content' not in json.dumps(events)
     assert '<tool_call>' not in json.dumps(events)

@@ -29128,7 +29128,19 @@ async def stream_responses_api(
             message_item = {
                 "id": msg_id,
                 "type": "message",
-                "status": _response_output_status,
+                # Parsing may have rejected a call since the provisional
+                # status was computed. Empty shells are not completed answers.
+                "status": _responses_terminal_state(
+                    getattr(last_output, "finish_reason", None) if last_output else None,
+                    cancelled=_response_was_cancelled,
+                    tool_calls_rejected=bool(
+                        _TOOL_CALL_REJECTED.get() and not display_text.strip()
+                    ),
+                    reasoning_only_no_content=bool(
+                        accumulated_reasoning.strip() and not display_text.strip()
+                    ),
+                    request_id=response_id,
+                ).item_status,
                 "role": "assistant",
                 "content": [
                     {"type": "output_text", "text": display_text, "annotations": []}
