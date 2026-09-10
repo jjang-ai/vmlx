@@ -3403,10 +3403,21 @@ class TestNativeMtpAutodetect:
 
         # MTP produced cycles + accepted = 6 confirmed tokens at 240ms total,
         # which is 40ms/token versus a calibrated 30ms AR step.
-        assert state.ar_fallback_pending is True
-        assert state.depth == 1
-        assert "adaptive depth D3 -> AR" in caplog.text
+        assert state.ar_fallback_pending is False
+        assert state.depth == 2
+        assert "cost gate D3 -> D2" in caplog.text
         assert "cost_ratio=1.333" in state.ar_fallback_reason
+
+        # This explicit calibrated-cost diagnostic descends one rung per
+        # losing decision; it may request AR only after reaching D1.
+        with caplog.at_level(logging.INFO, logger="vmlx_engine.mllm_batch_generator"):
+            _native_mtp_maybe_adapt_depth("cost-row", state)
+            assert state.depth == 1
+            assert state.ar_fallback_pending is False
+            _native_mtp_maybe_adapt_depth("cost-row", state)
+        assert state.ar_fallback_pending is True
+        assert "cost gate D2 -> D1" in caplog.text
+        assert "cost gate D1 -> AR" in caplog.text
 
     def test_native_mtp_cost_policy_requires_calibration_and_timings(
         self, monkeypatch
