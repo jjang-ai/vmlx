@@ -2036,6 +2036,8 @@ class TestModelConfigComprehensiveChecks:
         # vmlx_engine/tool_parsers/minimax_m3_tool_parser.py:130.
         "minimax_m3",
         "dsml", "zaya_xml", "xml_function",
+        # Spark-X2.5 native XML tool dialect, registered by spark25_tool_parser.
+        "spark25",
         # Muse Glimmer ATEM: <atem:function_calls><atem:invoke name=...>
         # <atem:parameter name=...>. Regex-based because the bundle's own
         # template states the output "is not expected to be valid XML".
