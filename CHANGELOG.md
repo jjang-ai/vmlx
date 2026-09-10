@@ -4,6 +4,15 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.57] - 2026-09-10
+
+- Image generation and editing: local-folder discovery, saved quantization metadata, launch validation, request-owned progress, cancellation, and output history handling. Compatible mflux exports can be discovered from component metadata as well as repository tags.
+- Downloads: preserve existing folders during cancellation, distinguish queued and paused jobs, and report local storage failures without retrying another endpoint.
+- API and sessions: output-token settings, tool-error finalization, gateway usage reporting, and live settings refresh corrections.
+- Runtime and caching: Spark-X2.5 native integration, mixed-state continuation handling, and restorable Flash-Next media checkpoints.
+- Speculative decoding: adjacent depth recovery and demotion use measured execution cost and net probe benefit. The configured fixed depth is an upper bound, not a promise that every window will exceed autoregressive speed.
+- Experimental kernel optimizations remain opt-in. GLM MTP capability and performance qualification, broader quantization coverage, and unresolved model-quality limitations are not claimed by this release.
+
 ## [1.6.56] - 2026-09-08
 
 - **Console Amber desktop layout.** Chat and image use, Servers and API, and model management have dedicated navigation. General Preferences groups language and the one-model loading preference. Retired cache controls are removed from the form without deleting saved settings or changing the canonical inference defaults. Explicit Reset clears optional overrides as well as visible values and waits for model defaults before allowing Launch.

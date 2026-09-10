@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.6.56"
+__version__ = "1.6.57"
 
 # transformers >= 5.13 rejects mlx-lm's legacy STRING-form tokenizer
 # registration — mlx_lm/tokenizer_utils.py:505 does
