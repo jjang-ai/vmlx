@@ -45,14 +45,14 @@ function writeFakeHubPackage(root: string): void {
       '    def list_repo_tree(self, repo_id, token=None, recursive=True):',
       '        if self.endpoint:',
       "            raise RuntimeError('mirror unavailable')",
-      '        if token:',
+      "        if token is not False and (token or os.environ.get('HF_TOKEN') or 'cached-stale-token'):",
       '            raise _auth_error()',
       "        return [Entry('config.json', 4)]",
       '',
       'def hf_hub_download(repo_id, filename, local_dir, token=None, endpoint=None, local_dir_use_symlinks=False, tqdm_class=None):',
       '    if endpoint:',
       "        raise RuntimeError('mirror unavailable')",
-      '    if token:',
+      "    if token is not False and (token or os.environ.get('HF_TOKEN') or 'cached-stale-token'):",
       '        raise _auth_error()',
       '    os.makedirs(local_dir, exist_ok=True)',
       '    path = os.path.join(local_dir, filename)',
@@ -122,7 +122,7 @@ describe('HuggingFace download worker fallback', () => {
     expect(source).toContain("{item.status === 'error' && item.error &&")
   })
 
-  it('supports refresh while recovering from a stale backup endpoint plus stale token', () => {
+  it.each(['stale-token', ''])('recovers from a stale endpoint and explicit or cached auth (%s)', (configuredToken) => {
     const workerScript = extractDownloadWorkerScript()
     const root = mkdtempSync(join(tmpdir(), 'vmlx-hf-worker-'))
     const fakeHubRoot = join(root, 'fake-hub')
@@ -149,7 +149,7 @@ describe('HuggingFace download worker fallback', () => {
           env: {
             PATH: process.env.PATH || '',
             PYTHONPATH: fakeHubRoot,
-            HF_TOKEN: 'stale-token',
+            HF_TOKEN: configuredToken,
           },
           timeout: 10000,
         },
