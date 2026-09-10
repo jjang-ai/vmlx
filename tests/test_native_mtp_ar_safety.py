@@ -577,6 +577,32 @@ def test_active_value_probe_is_not_cancelled_by_old_acceptance(monkeypatch, phas
     assert state.depth == 3 and not state.ar_fallback_pending
 
 
+@pytest.mark.parametrize("fresh", [True, False])
+def test_fresh_value_samples_own_lower_depth_economics(monkeypatch, fresh):
+    from vmlx_engine import mllm_batch_generator as m
+    from vmlx_engine.native_mtp_adaptive import add_depth_cycle_sample
+
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    monkeypatch.setattr(m, "_native_mtp_depth_probe_enabled", lambda: True)
+    monkeypatch.setattr(m, "_native_mtp_value_policy_enabled", lambda: True)
+    monkeypatch.setattr(m, "_native_mtp_adaptive_policy", lambda: True)
+    monkeypatch.setattr(m, "_native_mtp_recent_ms_per_tok", lambda st: 10.0)
+    state = _vlm_state(m, depth=3)
+    state.stats.cycles = 100
+    state.ar_step_ms = 50.0
+    state.depth_probe_at_cycle = 100
+    now = time.perf_counter() - 1
+    state.ar_safety.ring = [(91+i, (91+i)*4, now+i*.040) for i in range(9)]
+    for cycle in range(85, 101):
+        add_depth_cycle_sample(state.adaptive_value, depth=3,
+                               accepted_drafts=3, elapsed_ms=40.0,
+                               cycle=cycle if fresh else cycle-20, window=16)
+    m._native_mtp_maybe_ar_safety_fallback("duplicate-lower-probe", state)
+    assert state.depth_probe is (not fresh)
+    assert state.depth == (3 if fresh else 2)
+    assert not state.ar_fallback_pending
+
+
 def test_probe_early_abort_on_clear_loser(monkeypatch):
     from vmlx_engine.native_mtp_ar_safety import ArSafetyState, ar_safety_step
 

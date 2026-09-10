@@ -6550,11 +6550,27 @@ def _native_mtp_maybe_ar_safety_fallback(
     # Depth economics: a winning rung has a full judged window; compare its
     # adjacent lower rung against that MEASURED cost.
     depth_probing = bool(state.depth_probe)
+    value_state = getattr(state, "adaptive_value", None)
+    # The rolling controller already samples adjacent-depth value. Do not
+    # interleave a second lower-rung experiment with its own probe/backoff.
+    # Only fresh observations delegate economics; stale/missing samples and
+    # disabled adaptation retain the safety ladder's bounded depth probe.
+    # This does not bypass the AR-loss verdict or calibration below.
+    rolling_economics_ready = (
+        _native_mtp_adaptive_policy()
+        and _native_mtp_value_policy_enabled()
+        and value_state is not None
+        and value_state.last_sample_cycle[depth_now - 1] >= cycles - 1
+        and depth_value_tps(
+            value_state, depth_now, minimum_samples=_native_mtp_value_min_samples()
+        ) is not None
+    )
     if (
         not probing
         and not promoting
         and not depth_probing
         and _native_mtp_depth_probe_enabled()
+        and not rolling_economics_ready
         and depth_now > 1
         and state.depth_probe_at_cycle > 0
         and cycles >= state.depth_probe_at_cycle
