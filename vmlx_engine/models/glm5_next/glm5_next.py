@@ -58,6 +58,10 @@ from vmlx_engine.metal.gated_rmsnorm_decode import (
     fused_gated_rmsnorm_requested,
     sigmoid_gated_rmsnorm_small_rows,
 )
+from vmlx_engine.metal.glm5_mhc_prefill import (
+    fused_glm5_mhc_prefill_requested,
+    glm5_mhc_prefill_sinkhorn,
+)
 from vmlx_engine.metal.glm5_mhc_decode import (
     fused_glm5_mhc_requested,
     glm5_mhc_decode,
@@ -867,6 +871,7 @@ class HyperConnection(nn.Module):
         self.hc_base = mx.zeros(((2 + h) * h,))
         self.hc_scale = mx.ones((3,))
         self._fused_decode = fused_glm5_mhc_requested()
+        self._fused_prefill = fused_glm5_mhc_prefill_requested()
 
     def __call__(self, streams: mx.array):
         # streams: [B, S, H, D]
@@ -894,10 +899,16 @@ class HyperConnection(nn.Module):
         post = 2.0 * mx.sigmoid(post_w * s1 + base[h:2 * h])
         comb = mx.softmax(comb_w.reshape(*comb_w.shape[:-1], h, h) * s2
                           + base[2 * h:].reshape(h, h), axis=-1) + self.eps
-        comb = comb / (mx.sum(comb, axis=-2, keepdims=True) + self.eps)
-        for _ in range(self.iters - 1):
-            comb = comb / (mx.sum(comb, axis=-1, keepdims=True) + self.eps)
+        fused_comb = glm5_mhc_prefill_sinkhorn(
+            comb, sink_eps=self.eps, iterations=self.iters, enabled=self._fused_prefill
+        )
+        if fused_comb is not None:
+            comb = fused_comb
+        else:
             comb = comb / (mx.sum(comb, axis=-2, keepdims=True) + self.eps)
+            for _ in range(self.iters - 1):
+                comb = comb / (mx.sum(comb, axis=-1, keepdims=True) + self.eps)
+                comb = comb / (mx.sum(comb, axis=-2, keepdims=True) + self.eps)
 
         collapsed = mx.sum(pre[..., None] * streams.astype(mx.float32), axis=2)
         return post, comb, collapsed.astype(streams.dtype)
