@@ -6883,6 +6883,21 @@ def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) ->
     if int(state.stats.cycles) < warmup:
         return
 
+    # A rolling-cost experiment owns its adjacent target until enough fresh
+    # samples judge it. Cumulative acceptance includes the older phase that
+    # prompted recovery; cancelling on those same samples repeatedly caused
+    # D3->D2->D3 oscillation on otherwise fast structured output. The caller's
+    # windowed AR safety still runs first on EVERY cycle and can abort a loss.
+    value_state = getattr(state, "adaptive_value", None)
+    if (
+        _native_mtp_value_policy_enabled()
+        and value_state is not None
+        and value_state.active_probe_origin > 0
+        and value_state.active_probe_target == current
+    ):
+        _native_mtp_maybe_choose_value_depth(request_id, state, current)
+        return
+
     target = current
     accelerated_d3 = False
     if target >= 3:

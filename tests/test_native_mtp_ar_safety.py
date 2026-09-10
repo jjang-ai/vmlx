@@ -549,6 +549,26 @@ def test_collapsed_acceptance_drops_only_one_rung(monkeypatch, depth):
     assert state.depth == depth - 1 and not state.ar_fallback_pending
 
 
+def test_active_value_probe_is_not_cancelled_by_old_acceptance(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
+    monkeypatch.setattr(m, "_native_mtp_value_policy_enabled", lambda: True)
+    monkeypatch.setenv("VMLX_NATIVE_MTP_RUNTIME_COST_GATE", "0")
+    state = _vlm_state(m, depth=3)
+    state.stats.cycles = 200
+    state.stats.drafted_by_depth = [200, 200, 200]
+    state.stats.accepted_by_depth = [180, 140, 70]  # old cumulative poor D3
+    state.adaptive_value.active_probe_origin = 2
+    state.adaptive_value.active_probe_target = 3
+    decisions = []
+    monkeypatch.setattr(m, "_native_mtp_maybe_choose_value_depth",
+                        lambda rid, st, depth: decisions.append(depth) or False)
+    m._native_mtp_maybe_adapt_depth("live-resp_53a517814508", state)
+    assert decisions == [3]
+    assert state.depth == 3 and not state.ar_fallback_pending
+
+
 def test_probe_early_abort_on_clear_loser(monkeypatch):
     from vmlx_engine.native_mtp_ar_safety import ArSafetyState, ar_safety_step
 
