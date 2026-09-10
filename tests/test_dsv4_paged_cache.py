@@ -547,7 +547,8 @@ def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
     form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
     en_catalog = Path("panel/src/renderer/src/i18n/locales/en.json").read_text()
 
-    assert "const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')" in form
+    assert "<Section title={t('sessions.config.prefixCache')} sectionKey=\"prefixCache\"" in form
+    assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
     assert "const pagedCacheToggleLabel = dsv4Active" not in form
     # The "no hidden toggle" reassurance is user-visible copy, so the i18n pass
     # moved it into the locale catalog. The invariant is unchanged: the form
@@ -613,7 +614,8 @@ def test_dsv4_ui_exposes_native_composite_reuse_without_a_second_toggle():
     assert "applyDsv4CompositeCacheToggle" not in form
     assert "cacheControlUpdatesForDsv4PoolQuantToggle" not in form
     assert "applyDsv4PoolQuantToggle" not in form
-    assert "const genericPagedCacheToggleDisabled = cachePolicy.pagedCacheDisabled || exactTypedPromptDiskCache" in form
+    assert "disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || exactTypedPromptDiskCache}" in form
+    assert "cacheControlUpdatesForBlockDiskToggle(v, cacheControlState)" in form
     # The no-second-toggle copy is rendered via the locale catalog since the
     # i18n pass; the form must reference the key and English must still carry
     # the promise this test is named after.
@@ -717,14 +719,15 @@ def test_dsv4_cache_ui_uses_shared_cache_owner_without_duplicate_labels():
     assert "DSV4 Block Disk Cache (SSD / L2)" not in form
     assert "DSV4 Block Disk Cache (SSD / L2)" not in en_catalog
 
-    # DSV4 uses the standard prefix/RAM/L2 controls; only the incompatible
+    # DSV4 uses the shared prefix/SSD controls; only the incompatible
     # generic stored-KV codec selector stays disabled. There is no second
     # DSV4-specific prefix toggle.
     assert "<CheckField label={t('sessions.config.enablePrefixCache')}" in form
     assert '"enablePrefixCache": "Enable Prefix Cache"' in en_catalog
     assert "!dsv4Active && (\n          <CheckField label={t('sessions.config.enablePrefixCache')}" not in form
-    assert "<CheckField label={t('sessions.config.pagedKVCache')}" in form
-    assert '"pagedKVCache": "In-Memory Paged Cache (RAM) — Locked Off"' in en_catalog
+    assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
+    assert "checked={cachePolicy.blockDiskCacheChecked}" in form
+    assert "sessions.config.blockDiskPureSsdNote" in form
     assert 'className="cfg-input" disabled' in form
     assert "const effectiveStoredCacheQuantization = 'auto'" in form
     assert '<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>' in form, (
