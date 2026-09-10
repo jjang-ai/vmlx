@@ -12873,8 +12873,20 @@ class MLLMBatchGenerator:
         # cached and uncached answers on media prompts only (text prompts,
         # whose stores slice the main pass, were byte-identical).
         clean_boundary = self._native_media_clean_boundary(request, seq_len, cache)
+        # The generic 8192-token crossover is too late for a nearly resident
+        # GLM-5.3: connected image prompts can OOM below it. Qualification-only
+        # opt-in; other families and ordinary-headroom requests are unchanged.
+        bounded_glm = (
+            os.environ.get("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "0") == "1"
+            and getattr(lm, "model_type", "") in {"glm5_next", "glm5_next_text"}
+            and bool(getattr(self, "_tight_memory_prefill_drain", False))
+        )
+        min_chunk_seq = _MEDIA_PREFILL_CHUNK_MIN_SEQ
+        if bounded_glm:
+            chunk = max(1, min(int(self.prefill_step_size), _TIGHT_PROJECTED_STEP_CAP))
+            min_chunk_seq = chunk
         if clean_boundary <= 0 and (
-            chunk <= 0 or seq_len <= max(chunk, _MEDIA_PREFILL_CHUNK_MIN_SEQ)
+            chunk <= 0 or seq_len <= max(chunk, min_chunk_seq)
         ):
             return one_shot()
 
@@ -12914,7 +12926,7 @@ class MLLMBatchGenerator:
         runs = _media_placeholder_runs(token_list, media_ids)
         bounds = (
             _media_chunk_boundaries(seq_len, chunk, runs)
-            if chunk > 0 and seq_len > max(chunk, _MEDIA_PREFILL_CHUNK_MIN_SEQ)
+            if chunk > 0 and seq_len > max(chunk, min_chunk_seq)
             else [seq_len]
         )
         if clean_boundary > 0:
@@ -12954,7 +12966,22 @@ class MLLMBatchGenerator:
 
         output = None
         start = 0
+        observed_transient = observed_context = observed_width = 0
+        if bounded_glm:
+            # Realize the vision tower/merge once, independently of the LM's
+            # per-chunk graph. Never clear a pending vision graph's resources.
+            mx.eval(embeds)
         for end in bounds:
+            if bounded_glm:
+                active, limit = get_effective_metal_working_set_bytes(mx)
+                if prefill_valve_enabled():
+                    hybrid_chunk_valve_check(
+                        active, limit, observed_transient, observed_context,
+                        end, prefill_valve_min_margin_bytes(),
+                        chunk_start=start, chunk_end=end,
+                        model_label="GLM media prefill",
+                    )
+                mx.reset_peak_memory()
             call_kwargs: Dict[str, Any] = {"cache": cache}
             call_kwargs[embed_kwarg] = embeds[:, start:end]
             # Every family in this tree builds its masks from the cache
@@ -12977,6 +13004,22 @@ class MLLMBatchGenerator:
                     _diag_array_fp(embeds[:, start:end]), _diag_array_fp(position_ids[..., start:end]) if position_ids is not None else "-",
                 )
             output = lm(input_ids[:, start:end], **call_kwargs)
+            if bounded_glm:
+                _materialize_prefill_cache_state(cache)
+                peak = int(mx.get_peak_memory())
+                transient = max(0, peak - active)
+                if start > 0 and replace_chunk_transient_observation(
+                    "glm5_next", transient, end-start,
+                    observed_transient, observed_width,
+                ):
+                    observed_transient, observed_context, observed_width = (
+                        transient, end, end-start
+                    )
+                logger.info(
+                    "GLM media prefill chunk request=%s span=%d:%d "
+                    "active_bytes=%d peak_bytes=%d transient_bytes=%d",
+                    request.request_id, start, end, active, peak, transient,
+                )
             if end == clean_boundary and getattr(request, "_media_clean_snapshot_allowed", True):
                 self._snapshot_native_media_clean_boundary(request, cache, clean_boundary)
                 if _diag_fingerprints_enabled():

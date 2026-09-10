@@ -161,6 +161,42 @@ class _NoEmbedsLM:
 
 
 class TestMediaForwardFallbacks:
+    def test_bounded_glm_materializes_each_chunk_and_keeps_guard(self, monkeypatch):
+        from types import SimpleNamespace
+        import vmlx_engine.mllm_batch_generator as mllm
+
+        events = []
+        class Logits:
+            def __getitem__(self, key):
+                return self
+        class LM:
+            model_type = "glm5_next"
+            def __call__(self, ids, inputs_embeds=None, cache=None):
+                events.append("forward")
+                return Logits()
+        gen = self._gen(_OneShotModel([]), LM())
+        gen._tight_memory_prefill_drain = True
+        gen._media_placeholder_token_ids = lambda: set()
+        gen.model.get_input_embeddings = lambda ids, **kw: SimpleNamespace(
+            inputs_embeds=_FakeIds(2500)
+        )
+        monkeypatch.setenv("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "1")
+        monkeypatch.setattr(mllm, "get_effective_metal_working_set_bytes", lambda mx: (100, 1000))
+        monkeypatch.setattr(mllm, "hybrid_chunk_valve_check", lambda *a, **kw: events.append("guard"))
+        monkeypatch.setattr(mllm, "prefill_valve_enabled", lambda: True)
+        monkeypatch.setattr(mllm, "_materialize_prefill_cache_state", lambda c: events.append("state"))
+        monkeypatch.setattr(mllm.mx, "eval", lambda *x: events.append("eval"))
+        monkeypatch.setattr(mllm.mx, "clear_cache", lambda: events.append("clear"))
+        monkeypatch.setattr(mllm.mx, "reset_peak_memory", lambda: None)
+        monkeypatch.setattr(mllm.mx, "get_peak_memory", lambda: 200)
+        gen._media_forward(SimpleNamespace(request_id="glm"), _FakeIds(2500), 2500, [object()], {})
+        assert events.count("forward") == 3
+        assert events.count("guard") == events.count("state") == 3
+        assert events[0] == "eval"
+        for i, event in enumerate(events):
+            if event == "forward":
+                assert events[i-1] == "guard" and events[i+1] == "state"
+
     def _gen(self, model, lm):
         from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
