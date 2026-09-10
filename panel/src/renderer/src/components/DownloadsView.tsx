@@ -242,6 +242,8 @@ export function DownloadsView() {
                       <Play className="h-3 w-3" /> {t('downloads.view.resume')}
                     </button>
                     <button
+                      aria-label={t('common.cancel')}
+                      title={t('common.cancel')}
                       onClick={() => {
                         window.api.models.cancelDownload(item.jobId)
                         setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
@@ -272,7 +274,7 @@ export function DownloadsView() {
                   <span className="w-2 h-2 bg-yellow-500 rounded-full" />
                   <span className="text-sm truncate">{item.repoId}</span>
                 </div>
-                <button onClick={() => window.api.models.cancelDownload(item.jobId)} className="p-1 text-muted-foreground hover:text-destructive">
+                <button aria-label={t('common.cancel')} title={t('common.cancel')} onClick={() => window.api.models.cancelDownload(item.jobId)} className="p-1 text-muted-foreground hover:text-destructive">
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
