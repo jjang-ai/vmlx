@@ -27,7 +27,10 @@ import pytest
 
 # ---------- Fixtures ----------
 
-MODEL_JANGTQ = Path("/Users/example/models/Qwen3.6-35B-A3B-JANGTQ2")
+MODEL_JANGTQ = Path(os.environ.get(
+    "VMLX_TEST_QWEN36_JANGTQ_MODEL",
+    "/Users/example/models/Qwen3.6-35B-A3B-JANGTQ2",
+))
 MODEL_MXFP4 = Path("/Users/example/models/Qwen3.6-35B-A3B-MXFP4")
 HAS_JANGTQ = MODEL_JANGTQ.is_dir() and (MODEL_JANGTQ / "config.json").exists()
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -7398,7 +7401,7 @@ class TestJangStampAutoDetectsParsers:
         set is_mllm=True AND loader takes the VLM fast path."""
         from vmlx_engine.model_config_registry import get_model_config_registry
         import os, json
-        path = "/Users/example/.mlxstudio/models/MLXModels/dealignai/Qwen3.6-35B-A3B-JANGTQ2-CRACK"
+        path = str(MODEL_JANGTQ)
         if not os.path.isdir(path):
             pytest.skip("Qwen3.6-JANGTQ2 not present")
         reg = get_model_config_registry()
@@ -7515,7 +7518,7 @@ class TestQwen36VideoContentPathway:
         'vision' which is the VL umbrella covering both still images
         AND videos (video_max_frames controls frame sampling)."""
         import json, os
-        path = "/Users/example/.mlxstudio/models/MLXModels/dealignai/Qwen3.6-35B-A3B-JANGTQ2-CRACK/jang_config.json"
+        path = str(MODEL_JANGTQ / "jang_config.json")
         if not os.path.isfile(path):
             pytest.skip("Qwen3.6-JANGTQ2 not present")
         with open(path) as f:
