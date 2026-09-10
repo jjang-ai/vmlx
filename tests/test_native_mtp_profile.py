@@ -365,6 +365,41 @@ class TestSeedPathIntegration:
         assert not generator._seed_native_mtp_from_prefill(
             req, [object()], first_token, [None], start_depth_override=3)
 
+    def test_learned_ar_start_arms_measured_recovery_without_seed(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        store = generator._native_mtp_profiles = NativeMTPProfileStore()
+        key = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=2)
+        store.observe(key, final_depth=1, fallback_to_ar=True,
+                      fallback_reason="cost", finish_reason="fallback_to_ar")
+        assert not generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None])
+        assert not hasattr(req, "_native_mtp_state")
+        tier = req._native_mtp_ar_tier
+        assert tier.depth == 3
+        assert tier.fallbacks == 0
+        assert not tier.probe_due()
+        for n in range(tier.next_probe_tokens):
+            tier.record_step(1.0 + n * 0.03)
+        assert tier.probe_due()
+        assert tier.probe_depth(tier.depth) == 1
+
+    def test_unknown_start_does_not_invent_recovery_eligibility(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        assert not generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None])
+        assert getattr(req, "_native_mtp_ar_tier", None) is None
+
+    def test_learned_ar_start_respects_reentry_disabled(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_AR_REENTRY", "0")
+        store = generator._native_mtp_profiles = NativeMTPProfileStore()
+        key = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=2)
+        store.observe(key, final_depth=1, fallback_to_ar=True,
+                      fallback_reason="cost", finish_reason="fallback_to_ar")
+        assert not generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None])
+        assert getattr(req, "_native_mtp_ar_tier", None) is None
+
     def test_cached_prompt_uses_full_context_for_profile_and_governor(self, monkeypatch):
         import mlx.core as mx
 

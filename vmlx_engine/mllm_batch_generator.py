@@ -16578,6 +16578,9 @@ class MLLMBatchGenerator:
             if store is None:
                 store = self._native_mtp_profiles = NativeMTPProfileStore()
             sampled_profile = request_profile_key[0] == "sampled"
+            configured_ladder_depth = min(
+                depth, _native_mtp_depth_ceiling_for_request(request)
+            )
             # The process profile chooses a FRESH request's start. A scheduled
             # recovery/calibration already has a request-local AR baseline and
             # intended rung. Applying profile_ar here would veto every retry
@@ -16608,6 +16611,20 @@ class MLLMBatchGenerator:
                     unseen_start_source="qwen4_exp_measured_cold_start",
                 )
             if depth <= 0:
+                # A learned loss chooses AR initially, not forever. Keep the
+                # same measured recovery schedule used after an in-request
+                # loss; it gathers real AR steps before probing. Unknown
+                # profiles still do not acquire speculative eligibility.
+                if profile_seed == "profile_ar" and _native_mtp_reentry_enabled():
+                    request._native_mtp_ar_tier = NativeMTPArTier(
+                        depth=max(1, configured_ladder_depth), fallbacks=0,
+                    )
+                    logger.info(
+                        "MLLM MTP[%s] learned AR start: recovery armed up to D%d "
+                        "after %d measured AR tokens",
+                        request.request_id, configured_ladder_depth,
+                        request._native_mtp_ar_tier.next_probe_tokens,
+                    )
                 logger.info(
                     "MLLM native MTP stays AR for request=%s seed=%s key=%s",
                     request.request_id,
