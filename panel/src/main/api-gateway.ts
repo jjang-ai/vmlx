@@ -1784,6 +1784,9 @@ export class ApiGateway extends EventEmitter {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
+    // End-to-end gateway handling, including preparation, prefill, generation
+    // and durable completion. Do not mislabel this as decode-only duration.
+    const requestStartedNs = process.hrtime.bigint();
     const body = await this.readBody(req);
     if (body.length === 0) return this.sendJson(res, 400, { error: "Empty request body" });
     const bodyText = body.toString("utf8");
@@ -1904,7 +1907,7 @@ export class ApiGateway extends EventEmitter {
               },
               done: true,
               done_reason: choice?.finish_reason || "stop",
-              total_duration: 0,
+              total_duration: Number(process.hrtime.bigint() - requestStartedNs),
               eval_count: openai.usage?.completion_tokens || 0,
               prompt_eval_count: openai.usage?.prompt_tokens || 0,
             };
@@ -1962,6 +1965,7 @@ export class ApiGateway extends EventEmitter {
             created_at: new Date().toISOString(),
             message: { role: "assistant", content: "" },
             done: true,
+            total_duration: Number(process.hrtime.bigint() - requestStartedNs),
             done_reason:
               doneReason === "tool_calls" ? "tool_calls" : doneReason || "stop",
           };

@@ -493,6 +493,29 @@ describe("Ollama gateway request translation behavior", () => {
     ]);
   });
 
+  it.each([false, true])("measures chat total duration in nanoseconds (stream=%s)", async (stream) => {
+    backend = stream ? await startStreamingChatBackend() : await startCaptureBackend();
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const start = process.hrtime.bigint();
+    const response = await fetch(`http://127.0.0.1:${started.port}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({model: "hy3-model", stream, messages: [{role: "user", content: "hi"}]}),
+    });
+    const payload = await response.text();
+    const elapsed = Number(process.hrtime.bigint() - start);
+    const rows = stream ? payload.trim().split("\n").map((line) => JSON.parse(line)) : [JSON.parse(payload)];
+    const terminals = rows.filter((row) => row.done);
+    expect(response.status).toBe(200);
+    expect(terminals).toHaveLength(1);
+    expect(Number.isSafeInteger(terminals[0].total_duration)).toBe(true);
+    expect(terminals[0].total_duration).toBeGreaterThan(0);
+    expect(terminals[0].total_duration).toBeLessThanOrEqual(elapsed);
+    expect(terminals[0]).not.toHaveProperty("eval_duration");
+    expect(terminals[0]).not.toHaveProperty("prompt_eval_duration");
+  });
+
   it("omits unset and negative sentinels while forwarding explicit neutral sampling overrides", async () => {
     backend = await startCaptureBackend();
     const started = await startGateway(backend.port);
