@@ -6159,6 +6159,9 @@ _NATIVE_MTP_REENTRY_SETTLE_TOKENS = 256
 # The final rung (D1 -> AR) costs a handoff, AR tokens and a re-seed, so it
 # needs a second losing window within this many windows of the first.
 _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS = 3
+# Match the severe-loss threshold used for early probe aborts, but require a
+# complete window plus its median for settled D1 (not a single slow cycle).
+_NATIVE_MTP_D1_FAST_TRIP_RATIO = 1.5
 
 
 @dataclass(frozen=True)
@@ -6766,7 +6769,21 @@ def _native_mtp_maybe_ar_safety_fallback(
     # the surrounding bins).
     window = ar_safety_window_cycles()
     pending = int(state.ar_trip_pending_cycle or 0)
-    if pending <= 0 or cycles - pending > _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS * window:
+    # A full window with both its mean and median substantially slower than
+    # recently measured AR is already strong evidence. Do not spend another
+    # losing window merely to confirm it. Keep ordinary confirmation for
+    # marginal losses, seed-only baselines, and stale measurements.
+    severe_measured_loss = (
+        measured_ar > 0.0
+        and 0 <= cycles + int(state.stats.accepted_tokens)
+        - int(state.last_ar_measure_emitted) < _NATIVE_MTP_CALIBRATION_MIN_SPACING_TOKENS
+        and trip.window >= window
+        and trip.mtp_ms_per_tok > measured_ar * _NATIVE_MTP_D1_FAST_TRIP_RATIO
+        and trip.cycle_median_ms_per_tok > measured_ar * _NATIVE_MTP_D1_FAST_TRIP_RATIO
+    )
+    if not severe_measured_loss and (
+        pending <= 0 or cycles - pending > _NATIVE_MTP_D1_TRIP_CONFIRM_WINDOWS * window
+    ):
         state.ar_trip_pending_cycle = cycles
         state.ar_safety.ring.clear()
         logger.info(
@@ -6778,6 +6795,13 @@ def _native_mtp_maybe_ar_safety_fallback(
     state.ar_trip_pending_cycle = 0
     state.ar_fallback_pending = True
     state.ar_fallback_reason = trip.reason(prior_depth)
+    if severe_measured_loss:
+        logger.info(
+            "MLLM MTP[%s] AR safety D1 fast confirmation at cycle=%d: "
+            "mean=%.1f median=%.1f measured_ar=%.1f ms/tok",
+            request_id, cycles, trip.mtp_ms_per_tok,
+            trip.cycle_median_ms_per_tok, measured_ar,
+        )
     if tier is not None:
         tier.settled_trip(cycles + int(state.stats.accepted_tokens))
     logger.info("MLLM MTP[%s] %s", request_id, trip.log_text(prior_depth))

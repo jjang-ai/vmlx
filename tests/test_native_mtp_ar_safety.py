@@ -329,7 +329,7 @@ def test_settled_reentry_that_trips_again_backs_off(monkeypatch):
     tier = m.NativeMTPArTier(depth=3)
     t0 = time.perf_counter() - 2.0
     for i in range(20):
-        tier.record_step(t0 + i * 0.025)
+        tier.record_step(t0 + i * 0.030)
     tier.reentries = 1
     state.ar_tier = tier
     state.probe = False  # settled at D1 after a kept probe
@@ -1124,10 +1124,10 @@ def test_d1_single_losing_window_recovers_without_fallback(monkeypatch):
     state = _vlm_state(m, depth=1); state.depth_ceiling = 3; state.ladder_depth = 3
     # Confirmation hysteresis presumes the baseline has been measured.
     state.ar_tier = m.NativeMTPArTier(depth=3)
-    _ar_steps(state.ar_tier, 8, ms=10.0)
+    _ar_steps(state.ar_tier, 8, ms=18.0)
     base_t = time.perf_counter() - 1.0
     state.stats.cycles = 40; state.stats.accepted_tokens = 0
-    state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]  # 20 ms/tok vs AR 10
+    state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]  # marginal: 20 ms/tok vs AR 18
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.ar_trip_pending_cycle == 40 and not state.ar_fallback_pending
     # winning window (3 tok/cycle at 20 ms = 6.7 ms/tok): pending clears
