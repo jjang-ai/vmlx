@@ -302,7 +302,7 @@ export function DownloadsView() {
         )}
 
         {/* Empty */}
-        {activeDownloads.length === 0 && queue.length === 0 && completed.length === 0 && (
+        {activeDownloads.length === 0 && queue.length === 0 && paused.length === 0 && completed.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <Download className="h-10 w-10 mb-3 opacity-30" />
             <p className="text-sm">{t('downloads.noActiveDownloads')}</p>

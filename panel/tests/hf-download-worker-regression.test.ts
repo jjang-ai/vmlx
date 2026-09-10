@@ -118,6 +118,7 @@ describe('HuggingFace download worker fallback', () => {
     expect(errorHandler).not.toContain("status: 'cancelled'")
     expect(source).toContain('error: c.error')
     expect(source).toContain('data-vmlx-download-status={item.status}')
+    expect(source).toContain('queue.length === 0 && paused.length === 0 && completed.length === 0')
     expect(source).toContain("{item.status === 'error' && item.error &&")
   })
 
