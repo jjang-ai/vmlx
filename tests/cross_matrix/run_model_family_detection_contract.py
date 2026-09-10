@@ -150,6 +150,33 @@ REQUIRED_ROWS = (
     "panel_local_high_risk_rows_match_detector_policy",
 )
 
+LOCAL_HIGH_RISK_ROWS = (
+    "dsv4_k", "qwen27_jang4m", "qwen27_jang4m_mtp", "qwen27_mxfp4",
+    "qwen27_mxfp8_mtp", "qwen35_jangtq", "qwen35_4bit", "qwen35_mxfp8_mtp",
+    "hy3", "nemotron_jangtq", "nemotron_omni_nano_jangtq4", "nemotron_mxfp4",
+)
+
+
+def local_fixture_path(row_name: str, default: str) -> Path:
+    """Resolve explicit test-only paths; never rewrite benchmark model identities."""
+    import os
+    manifest = os.environ.get("VMLX_TEST_LOCAL_MODEL_PATHS")
+    if not manifest:
+        return Path(default)
+    paths = json.loads(Path(manifest).read_text())
+    if not isinstance(paths, dict) or set(paths) - set(LOCAL_HIGH_RISK_ROWS):
+        raise ValueError("local model manifest must map known high-risk row names")
+    if row_name not in paths:
+        return Path(default)
+    value = paths[row_name]
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError(f"{row_name}: local fixture path must be an absolute string")
+    path = Path(value)
+    if not path.is_dir() or not (path / "config.json").is_file():
+        raise ValueError(f"{row_name}: explicit local fixture/config is missing")
+    return path
+
+
 ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "dsv4_deepseek_v4_native_cache_and_parser": (
         "test_deepseek_v4_eos_includes_latest_reminder",
@@ -293,8 +320,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "decode_speed_plain_kv_cache_health_not_native": (
         "test_decode_speed_gate_detects_plain_kv_cache_health_mismatches",
     ),
-    "decode_speed_local_high_risk_rows_match_engine_registry": (
-        "test_decode_speed_local_high_risk_rows_match_current_engine_registry",
+    "decode_speed_local_high_risk_rows_match_engine_registry": tuple(
+        f"test_decode_speed_local_high_risk_rows_match_current_engine_registry[{name}]"
+        for name in LOCAL_HIGH_RISK_ROWS
     ),
     "panel_local_high_risk_rows_match_detector_policy": (
         "matches current local high-risk model paths to panel parser cache and modality policy",

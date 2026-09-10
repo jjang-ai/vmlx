@@ -2,6 +2,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from tests.cross_matrix.run_model_family_detection_contract import LOCAL_HIGH_RISK_ROWS
 
 
 def test_family_detection_contract_default_out_tracks_current_release_proof_artifact():
@@ -147,6 +148,39 @@ def test_family_gate_never_accepts_unexecuted_or_nonpassing_markers(row, outcome
     assert gate._build_checks({"test": {"returncode": 0, "stdout": text}})[row] is False
     passed = "\n".join(f"{marker} PASSED" for marker in gate.ROW_MARKERS[row])
     assert gate._build_checks({"test": {"returncode": 0, "stdout": passed}})[row] is True
+
+
+@pytest.mark.parametrize("payload", [
+    "[]", '{"unknown_row": "/missing"}', '{"nemotron_jangtq": "relative"}',
+    '{"nemotron_jangtq": 3}', '{"nemotron_jangtq": "/missing-fixture"}',
+])
+def test_local_fixture_manifest_fails_closed(monkeypatch, tmp_path, payload):
+    from tests.cross_matrix.run_model_family_detection_contract import local_fixture_path
+    manifest = tmp_path / "paths.json"
+    manifest.write_text(payload)
+    monkeypatch.setenv("VMLX_TEST_LOCAL_MODEL_PATHS", str(manifest))
+    with pytest.raises(ValueError):
+        local_fixture_path("nemotron_jangtq", "/original")
+
+
+def test_local_fixture_manifest_changes_only_explicit_row(monkeypatch, tmp_path):
+    import json
+    from tests.cross_matrix.run_model_family_detection_contract import local_fixture_path
+    (tmp_path / "config.json").write_text("{}")
+    manifest = tmp_path / "paths.json"
+    manifest.write_text(json.dumps({"nemotron_jangtq": str(tmp_path)}))
+    monkeypatch.setenv("VMLX_TEST_LOCAL_MODEL_PATHS", str(manifest))
+    assert local_fixture_path("nemotron_jangtq", "/original") == tmp_path
+    assert local_fixture_path("hy3", "/original") == Path("/original")
+
+
+def test_family_inventory_requires_every_parameterized_row():
+    from tests.cross_matrix import run_model_family_detection_contract as gate
+    markers = gate.ROW_MARKERS["decode_speed_local_high_risk_rows_match_engine_registry"]
+    assert len(markers) == 12
+    text = "\n".join(f"{m} PASSED" for m in markers[:3])
+    result = {"engine": {"returncode": 0, "stdout": text}}
+    assert gate._build_checks(result)["decode_speed_local_high_risk_rows_match_engine_registry"] is False
 
 
 def test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax():
@@ -831,26 +865,14 @@ def test_decode_speed_gate_has_external_nemotron3_jangtq_mxfp_rows():
         assert cmd[cmd.index("--reasoning-parser") + 1] == "deepseek_r1"
 
 
-def test_decode_speed_local_high_risk_rows_match_current_engine_registry():
+@pytest.mark.parametrize("row_name", LOCAL_HIGH_RISK_ROWS)
+def test_decode_speed_local_high_risk_rows_match_current_engine_registry(row_name):
     from pathlib import Path
 
     from tests.cross_matrix.run_decode_speed_gate import ROWS
     from vmlx_engine.model_config_registry import get_model_config_registry
 
-    row_names = (
-        "dsv4_k",
-        "qwen27_jang4m",
-        "qwen27_jang4m_mtp",
-        "qwen27_mxfp4",
-        "qwen27_mxfp8_mtp",
-        "qwen35_jangtq",
-        "qwen35_4bit",
-        "qwen35_mxfp8_mtp",
-        "hy3",
-        "nemotron_jangtq",
-        "nemotron_omni_nano_jangtq4",
-        "nemotron_mxfp4",
-    )
+    from tests.cross_matrix.run_model_family_detection_contract import local_fixture_path
     expected_families = {
         "dsv4_k": ("deepseek_v4", "kv", "deepseek_v4_composite"),
         "qwen27_jang4m": ("qwen3_5", "hybrid", None),
@@ -868,19 +890,19 @@ def test_decode_speed_local_high_risk_rows_match_current_engine_registry():
 
     registry = get_model_config_registry()
 
-    for row_name in row_names:
-        row = ROWS[row_name]
-        if not Path(row.path).is_dir():
-            pytest.skip(f"{row_name} path missing locally: {row.path}")
-        detected = registry.lookup(row.path)
-        family_name, cache_type, cache_subtype = expected_families[row_name]
+    row = ROWS[row_name]
+    path = local_fixture_path(row_name, row.path)
+    if not path.is_dir():
+        pytest.skip(f"{row_name} path missing locally: {path}")
+    detected = registry.lookup(str(path))
+    family_name, cache_type, cache_subtype = expected_families[row_name]
 
-        assert detected.family_name == family_name, row_name
-        assert detected.cache_type == cache_type, row_name
-        assert detected.cache_subtype == cache_subtype, row_name
-        assert detected.tool_parser == row.tool_parser, row_name
-        assert detected.reasoning_parser == row.reasoning_parser, row_name
-        assert detected.is_mllm is row.is_mllm, row_name
+    assert detected.family_name == family_name, row_name
+    assert detected.cache_type == cache_type, row_name
+    assert detected.cache_subtype == cache_subtype, row_name
+    assert detected.tool_parser == row.tool_parser, row_name
+    assert detected.reasoning_parser == row.reasoning_parser, row_name
+    assert detected.is_mllm is row.is_mllm, row_name
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
