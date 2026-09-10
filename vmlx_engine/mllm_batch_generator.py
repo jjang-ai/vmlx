@@ -6239,6 +6239,9 @@ class NativeMTPArTier:
     total_ar_ms: float = 0.0
     prev_measured_ar_ms: float = 0.0
     calibration_schedule: Optional[NativeMTPCalibrationSchedule] = None
+    # Reseeding for calibration resets state.stats, not the lifetime of the
+    # successful MTP stretch. Keep only its token count (never cache state).
+    calibrated_mtp_tokens: int = 0
 
     def record_step(self, now: float) -> None:
         if self.last_step_t > 0.0:
@@ -6276,6 +6279,7 @@ class NativeMTPArTier:
         )
 
     def _restart_ar_window(self) -> None:
+        self.calibrated_mtp_tokens = 0
         self.next_probe_tokens = _NATIVE_MTP_REENTRY_FIRST_PROBE_TOKENS << min(
             self.backoff, _NATIVE_MTP_REENTRY_MAX_BACKOFF
         )
@@ -6299,7 +6303,8 @@ class NativeMTPArTier:
         inevitable transient trips into permanent plain decoding (measured
         2026-09-05, packaged app: a 9,843-token answer spent 8,406 tokens in
         AR at 34 ms/tok after four kept re-entries, where D1 measured 20)."""
-        if int(survived_tokens) >= _NATIVE_MTP_REENTRY_SETTLE_TOKENS:
+        survived_tokens = max(0, int(survived_tokens)) + self.calibrated_mtp_tokens
+        if survived_tokens >= _NATIVE_MTP_REENTRY_SETTLE_TOKENS:
             self.backoff = max(0, self.backoff - 1)
         else:
             self.backoff += 1
@@ -6622,6 +6627,7 @@ def _native_mtp_maybe_ar_safety_fallback(
             tier.calibration = True
             tier.reenter_depth = depth_now
             tier.calibration_schedule = NativeMTPCalibrationSchedule.capture(state)
+            tier.calibrated_mtp_tokens += max(0, _emitted)
             tier.next_probe_tokens = _NATIVE_MTP_CALIBRATION_TOKENS
             tier.tokens_since_fallback = 0
             tier.step_walls_ms = []
@@ -6826,7 +6832,13 @@ def _native_mtp_maybe_ar_safety_fallback(
             trip.cycle_median_ms_per_tok, measured_ar,
         )
     if tier is not None:
+        survived = cycles + int(state.stats.accepted_tokens) + tier.calibrated_mtp_tokens
         tier.settled_trip(cycles + int(state.stats.accepted_tokens))
+        logger.info(
+            "MLLM MTP[%s] loss recovery schedule: survived_mtp_tokens=%d "
+            "backoff=%d next_probe_ar_tokens=%d",
+            request_id, survived, tier.backoff, tier.next_probe_tokens,
+        )
     logger.info("MLLM MTP[%s] %s", request_id, trip.log_text(prior_depth))
     return True
 

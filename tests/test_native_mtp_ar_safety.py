@@ -862,6 +862,46 @@ def test_calibration_triggers_on_cycle_wall_drift_and_reenters_at_same_depth(mon
     monkeypatch.delenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH")
 
 
+@pytest.mark.parametrize("calibrations", [1, 2])
+def test_calibration_preserves_settled_survival_for_later_loss(monkeypatch, calibrations):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: True)
+    monkeypatch.setattr(m, "_native_mtp_reentry_enabled", lambda: True)
+    tier = m.NativeMTPArTier(depth=2, backoff=3)
+    tier.last_measured_ms_per_tok = 30.0
+    for index in range(calibrations):
+        state = _running_state(m, depth=1, cycles=300, emitted_per_cycle=3)
+        state.ar_tier = tier
+        assert m._native_mtp_maybe_ar_safety_fallback("calibration-survival", state)
+        assert tier.calibration
+        # A pending handoff must not count the same 900-token phase twice.
+        assert not m._native_mtp_maybe_ar_safety_fallback("calibration-survival", state)
+        assert tier.calibrated_mtp_tokens == 900 * (index + 1)
+        tier.calibration = False
+    # Reseeding restarts stats. The later 40-token loss is not a 40-token
+    # oscillation: the same successful stretch survived 900 tokens first.
+    tier.calibration = False
+    tier.settled_trip(40)
+    assert tier.backoff == 2
+    assert tier.next_probe_tokens == 64
+    # A real loss starts a new stretch; the old 900 tokens cannot survive it.
+    tier.settled_trip(40)
+    assert tier.backoff == 3
+    assert tier.next_probe_tokens == 128
+
+
+def test_failed_reseed_clears_calibration_survival():
+    from vmlx_engine.mllm_batch_generator import NativeMTPArTier
+
+    tier = NativeMTPArTier(depth=2, calibrated_mtp_tokens=900)
+    tier.probe_failed()
+    assert tier.calibrated_mtp_tokens == 0
+    tier.settled_trip(40)
+    assert tier.backoff == 2  # both failures belong to fresh short stretches
+
+
 def test_unmeasured_seed_gets_early_calibration_at_each_depth(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
