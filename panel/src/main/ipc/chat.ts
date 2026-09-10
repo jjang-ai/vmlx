@@ -589,7 +589,7 @@ function isLoopbackUrl(url: string): boolean {
 }
 
 const DIRECT_MEDIA_ATTACHMENT_TOOL_RULE =
-  "\n\nIMPORTANT: The current user message includes media attachments as chat content. Inspect attached images, video, or audio directly through the model's multimodal input. Do not call read_image, read_video, or list_directory to find attached media unless the user explicitly gives a local filesystem path.";
+  "\n\nIMPORTANT: When a user message includes media attachments as chat content, inspect those images, video, or audio directly through the model's multimodal input. Do not call read_image, read_video, or list_directory to find attached media unless the user explicitly gives a local filesystem path.";
 
 // Tool category definitions for per-category filtering
 const FILE_TOOLS = new Set([
@@ -668,7 +668,6 @@ function getDisabledTools(overrides: any): Set<string> {
 function filterTools(
   overrides: any,
   context: {
-    hasDirectMediaAttachments?: boolean;
     zayaAppleScriptToolBundle?: boolean;
   } = {},
 ): any[] {
@@ -676,10 +675,6 @@ function filterTools(
     ? BUILTIN_TOOLS.filter((t: any) => t.function.name === "run_applescript")
     : BUILTIN_TOOLS;
   const disabled = getDisabledTools(overrides);
-  if (context.hasDirectMediaAttachments) {
-    disabled.add("read_image");
-    disabled.add("read_video");
-  }
   if (disabled.size === 0) return availableTools;
   return availableTools.filter((t: any) => !disabled.has(t.function.name));
 }
@@ -1691,13 +1686,16 @@ export function registerChatHandlers(
           chat.modelPath || resolvedSession?.remoteModel || chat.modelId,
         );
       const directMediaAttachmentRule =
-        hasMediaAttachments && attachBuiltinToolsForCurrentTurn
+        // Attachment presence is not a tool-capability change. Keep both the
+        // catalog and this conditional instruction stable across media/text
+        // turns so historical media prefixes remain reusable. Explicit tool
+        // restrictions and category toggles still control the catalog below.
+        (chatIsMultimodal || isRemote) && attachBuiltinToolsForCurrentTurn
           ? DIRECT_MEDIA_ATTACHMENT_TOOL_RULE
           : "";
       const unscopedCurrentTurnToolDefinitions =
         attachBuiltinToolsForCurrentTurn
           ? filterTools(overrides || {}, {
-              hasDirectMediaAttachments: hasMediaAttachments,
               zayaAppleScriptToolBundle: chatUsesZayaAppleScriptToolBundle,
             })
           : [];
