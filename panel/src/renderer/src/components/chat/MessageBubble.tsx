@@ -602,7 +602,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
             </div>
           )}
           {isEmptyAssistant && !isStreaming && (
-            <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground/90">
+            <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-foreground">
               <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-warning" />
               <span>{t('chat.bubble.noVisibleResponse')}</span>
             </div>
@@ -615,7 +615,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
             {warnings.map((warning, index) => (
               <div
                 key={`${index}-${warning}`}
-                className="flex gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground/90"
+                className="flex gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-foreground"
               >
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-warning" />
                 <span className="whitespace-pre-wrap break-words">{warning}</span>
