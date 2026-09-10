@@ -123,3 +123,56 @@ def test_registration_does_not_swallow_internal_dependency_error(monkeypatch):
     with pytest.raises(ModuleNotFoundError, match="missing runtime dependency"):
         registration.register_spark2_5_runtime()
     assert registration._PACKAGE not in registration.sys.modules
+
+
+@pytest.mark.parametrize("bits", [4, 6, 8])
+@pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
+def test_repeated_disk_resume_preserves_partitioned_state_and_logits(bits, dtype, tmp_path):
+    """Weight quantization plus repeated disk resume across SWA wrap points.
+
+    Compare identical computation partitions, isolating serialization from
+    backend GEMM/GEMV rounding differences. Every tensor and continuation logit
+    must be exact. This does not assert different prefill shapes are bit-exact.
+    """
+    from types import SimpleNamespace
+    from copy import deepcopy
+    from vmlx_engine.scheduler import Scheduler
+
+    mx.random.seed(23)
+    model = Model(args())
+    model.set_dtype(dtype)
+    nn.quantize(model, group_size=32, bits=bits,
+                class_predicate=lambda path, module:
+                isinstance(module, (nn.Linear, nn.Embedding)) and not path.endswith("g_proj"))
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    scheduler._uses_dsv4_cache = False
+    scheduler.config = SimpleNamespace(prefill_step_size=17)
+    tokens = [(i * 7 + 3) % 128 for i in range(70)]
+    resumed, boundary = None, 0
+    partitioned = None
+    for target in (15, 29, 53, 69):
+        resumed = scheduler._prefill_for_prompt_only_cache(
+            tokens[:target], base_cache=resumed, base_token_count=boundary)
+        partitioned = scheduler._prefill_for_prompt_only_cache(
+            tokens[:target], base_cache=partitioned, base_token_count=boundary)
+        assert resumed is not None and partitioned is not None
+        # Compare each layer in chronological rather than physical ring order.
+        for layer_index, (right, same_partition) in enumerate(zip(resumed, partitioned)):
+            assert right.offset == same_partition.offset == target
+            assert right.meta_state == same_partition.meta_state
+            for attr in ("keys", "values"):
+                b = getattr(right, attr)
+                b = right._temporal_order(b)[..., -16:, :] if isinstance(right, RotatingKVCache) else b[..., :target, :]
+                c = getattr(same_partition, attr)
+                c = same_partition._temporal_order(c)[..., -16:, :] if isinstance(same_partition, RotatingKVCache) else c[..., :target, :]
+                assert b.shape == c.shape
+                assert mx.array_equal(b, c).item(), ("disk_vs_same_partition", target, layer_index, attr)
+        next_token = mx.array([[tokens[target]]])
+        restored_logits = model(next_token, cache=deepcopy(resumed))
+        memory_logits = model(next_token, cache=deepcopy(partitioned))
+        assert mx.array_equal(restored_logits, memory_logits).item(), ("continuation_logits", target)
+        path = str(tmp_path / f"resume-{target}.safetensors")
+        save_prompt_cache(path, resumed)
+        resumed = load_prompt_cache(path)
+        boundary = target
