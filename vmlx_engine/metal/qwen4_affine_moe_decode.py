@@ -161,7 +161,7 @@ class _ExactGateUpProjection(nn.Module):
         self.mode = str(up.mode)
         self.split = int(up.output_dims)
 
-    def __call__(self, x: mx.array, indices: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, indices: mx.array, *, sorted_indices=False) -> mx.array:
         return mx.gather_qmm(
             x,
             self.weight,
@@ -172,7 +172,7 @@ class _ExactGateUpProjection(nn.Module):
             group_size=self.group_size,
             bits=self.bits,
             mode=self.mode,
-            sorted_indices=False,
+            sorted_indices=sorted_indices,
         )
 
 
@@ -183,11 +183,25 @@ def _exact_gate_up_switchglu(
     scores: mx.array,
 ) -> mx.array:
     """Run the stock affine math with one combined up+gate dispatch."""
+    from mlx_lm.models.switch_layers import _gather_sort, _scatter_unsort
+
     projection = getattr(switch, _EXACT_PROJ_ATTR)
     expanded = mx.expand_dims(x, (-2, -3))
-    pair = projection(expanded, indices)
+    # Match SwitchGLU's route layout and kernel selection on wide prefill.
+    # Skipping this changes gather-QMM arithmetic even with identical weights.
+    do_sort = indices.size >= 64
+    idx = indices
+    if do_sort:
+        expanded, idx, inverse = _gather_sort(expanded, indices)
+    if switch.training:
+        idx = mx.stop_gradient(idx)
+    pair = projection(expanded, idx, sorted_indices=do_sort)
     x_up, x_gate = mx.split(pair, [projection.split], axis=-1)
-    selected = switch.down_proj(switch.activation(x_up, x_gate), indices)
+    selected = switch.down_proj(
+        switch.activation(x_up, x_gate), idx, sorted_indices=do_sort
+    )
+    if do_sort:
+        selected = _scatter_unsort(selected, inverse, indices.shape)
     selected = selected.squeeze(-2)
     return (selected * scores[..., None]).sum(axis=-2)
 
