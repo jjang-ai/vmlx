@@ -639,6 +639,23 @@ class ImageGenEngine:
             ).components["transformer"]
             restore_legacy_modulation(self._model.transformer, stored_transformer)
 
+            from .image_saved_parameters import restore_output_modulation_bias
+            restore_output_modulation_bias(self._model.transformer, stored_transformer)
+
+        if resolved_class == "Flux1":
+            # Old mflux exports saved an output bias absent from the current
+            # native module. Read the component using its own format mapper;
+            # folder names and the requested quantization are not evidence.
+            from .image_saved_parameters import restore_output_modulation_bias
+            from mflux.models.common.weights.loading.weight_loader import WeightLoader
+            from mflux.models.flux.weights.flux_weight_definition import FluxWeightDefinition
+            component = next(c for c in FluxWeightDefinition.get_components()
+                             if c.name == "transformer")
+            stored_transformer = WeightLoader.load_single_local(
+                component=component, root_path=Path(model_path)
+            ).components["transformer"]
+            restore_output_modulation_bias(self._model.transformer, stored_transformer)
+
         # Fix quantized embeddings with non-uint32 weights (mflux bug)
         if quantize and self._model is not None:
             fixed = _fix_quantized_layers(self._model)
