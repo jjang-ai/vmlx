@@ -3338,6 +3338,25 @@ def test_r20_staged_app_requires_exact_one_and_full_source_parity(tmp_path):
         runner.find_exact_staged_app(staged)
 
 
+@pytest.mark.parametrize("flavor", ["sequoia", "tahoe"])
+@pytest.mark.parametrize("pin", ["f" * 40, "e" * 40, "", None, 123])
+def test_r20_runtime_contract_validates_optional_jang_release_pin(tmp_path, flavor, pin):
+    bundle = tmp_path / "bundle"
+    _write_r20_runtime_fixture(bundle, flavor=flavor, source_commit="a" * 40)
+    path = bundle / "vmlx-bundle-provenance.json"
+    provenance = json.loads(path.read_text())
+    provenance["jang"]["release_pin"] = pin
+    path.write_text(json.dumps(provenance))
+    if pin == "f" * 40:
+        result = runner.inspect_bundle_runtime_contract(
+            bundle_root=bundle, flavor=flavor, version="1.6.20")
+        assert result["bundle_provenance"]["jang"]["release_pin"] == pin
+    else:
+        with pytest.raises(runner.ArtifactChainError, match="JANG release pin"):
+            runner.inspect_bundle_runtime_contract(
+                bundle_root=bundle, flavor=flavor, version="1.6.20")
+
+
 def test_r20_runtime_contract_rejects_swapped_or_identical_wrong_platforms(
     tmp_path,
 ):

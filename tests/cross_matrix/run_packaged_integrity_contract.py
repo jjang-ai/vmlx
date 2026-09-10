@@ -2519,11 +2519,24 @@ def inspect_bundle_runtime_contract(
         {"commit", "version"},
         label=f"{flavor} vMLX bundle provenance source",
     )
-    _require_exact_dict_keys(
+    jang_fields = {"commit", "version"}
+    if isinstance(provenance["jang"], dict) and "release_pin" in provenance["jang"]:
+        jang_fields.add("release_pin")
+    jang = _require_exact_dict_keys(
         provenance["jang"],
-        {"commit", "version"},
+        jang_fields,
         label=f"{flavor} JANG bundle provenance source",
     )
+    if "release_pin" in jang:
+        pin = jang["release_pin"]
+        if (
+            not isinstance(pin, str)
+            or re.fullmatch(r"[0-9a-f]{40}", pin) is None
+            or pin != jang["commit"]
+        ):
+            raise ArtifactChainError(
+                f"{flavor} JANG release pin must match the exact source commit"
+            )
     if (
         provenance["schema_version"] != 1
         or vmlx["version"] != version
