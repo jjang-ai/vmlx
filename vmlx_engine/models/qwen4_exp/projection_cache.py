@@ -1,5 +1,6 @@
 """Opt-in guarded reuse of validated Qwen affine projection groups."""
 
+import logging
 from types import SimpleNamespace
 
 import mlx.core as mx
@@ -47,4 +48,9 @@ def validated_projection_group(linears, activation_dtype):
     # Keep original objects alive so a recycled Python id cannot masquerade as
     # an unchanged tensor. Do not expose duplicate source tensors as parameters.
     owner._qwen4_projection_source_refs = SimpleNamespace(tensors=tuple(tensors))
+    logging.getLogger(__name__).info(
+        "Qwen guarded projection group prepared: projections=%d bits=%s "
+        "group_size=%s activation_dtype=%s",
+        len(linears), linears[0].bits, linears[0].group_size, activation_dtype,
+    )
     return group

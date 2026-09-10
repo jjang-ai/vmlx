@@ -14,10 +14,13 @@ def make_linears():
     return tuple(result)
 
 
-def test_cache_hit_and_exact_group_outputs():
+def test_cache_hit_and_exact_group_outputs(caplog):
+    caplog.set_level("INFO", logger="vmlx_engine.models.qwen4_exp.projection_cache")
     linears = make_linears()
     group = validated_projection_group(linears, mx.float16)
     assert validated_projection_group(linears, mx.float16) is group
+    assert caplog.text.count("Qwen guarded projection group prepared:") == 1
+    assert "projections=3 bits=4 group_size=32" in caplog.text
     x = mx.random.normal((1, 1, 64)).astype(mx.float16)
     expected = tuple(m(x) for m in linears)
     actual = group(x)
