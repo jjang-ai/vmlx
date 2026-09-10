@@ -74,6 +74,7 @@ from vmlx_engine.metal.kda_conv_decode import (
     fused_kda_conv_requested,
     glm5_kda_conv_decode,
 )
+from vmlx_engine.metal.glm5_kda_conv_prefill import kda_conv_prefill
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -960,6 +961,8 @@ class KDAAttention(nn.Module):
         self.qkv_group = None
         self._fused_gated_norm = fused_gated_rmsnorm_requested()
         self._fused_kda_conv = fused_kda_conv_requested()
+        self._fused_kda_prefill = os.environ.get("VMLX_GLM5_KDA_CONV_PREFILL", "0") == "1"
+        self._fused_kda_prefill_observed = False
         self._fused_kda_step = fused_kda_step_requested()
         self._vectorized_speculative_verify = os.environ.get(
             "VMLINUX_GLM5_VECTOR_KDA_VERIFY",
@@ -1025,9 +1028,22 @@ class KDAAttention(nn.Module):
             if fused_conv is not None:
                 q, k, v, cq1, ck1, cv1 = fused_conv
             else:
-                q, cq1 = short_conv(q, self.q_conv1d, cq0)
-                k, ck1 = short_conv(k, self.k_conv1d, ck0)
-                v, cv1 = short_conv(v, self.v_conv1d, cv0)
+                prepared = None
+                if self._fused_kda_prefill and seg_t > 1:
+                    prepared = (
+                        kda_conv_prefill(q, self.q_conv1d, cq0),
+                        kda_conv_prefill(k, self.k_conv1d, ck0),
+                        kda_conv_prefill(v, self.v_conv1d, cv0),
+                    )
+                if prepared is not None and all(item is not None for item in prepared):
+                    (q, cq1), (k, ck1), (v, cv1) = prepared
+                    if not self._fused_kda_prefill_observed:
+                        _LOG.info("GLM KDA prefill convolution active: tokens=%d channels=%d", seg_t, H * K)
+                        self._fused_kda_prefill_observed = True
+                else:
+                    q, cq1 = short_conv(q, self.q_conv1d, cq0)
+                    k, ck1 = short_conv(k, self.k_conv1d, ck0)
+                    v, cv1 = short_conv(v, self.v_conv1d, cv0)
             q = l2norm(q.reshape(B, seg_t, H, K))
             k = l2norm(k.reshape(B, seg_t, H, K))
             v = v.reshape(B, seg_t, H, K)
