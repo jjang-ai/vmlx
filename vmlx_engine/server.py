@@ -25753,7 +25753,7 @@ async def stream_chat_completion(
 
                 if output.finished and not tool_call_buffering:
                     terminal_suffix = _terminal_visible_stream_suffix(
-                        getattr(output, "text", ""),
+                        getattr(output, "raw_text", "") or getattr(output, "text", ""),
                         streamed_content + (emit_content or ""),
                         parser=request_parser,
                         request=request,
@@ -25919,7 +25919,7 @@ async def stream_chat_completion(
 
                 if output.finished and not tool_call_buffering:
                     terminal_suffix = _terminal_visible_stream_suffix(
-                        getattr(output, "text", ""),
+                        getattr(output, "raw_text", "") or getattr(output, "text", ""),
                         streamed_content + (content or ""),
                         request=request,
                         suppress_markup=_suppress_markup_display,
@@ -28077,7 +28077,7 @@ async def stream_responses_api(
 
                             if output.finished and not tool_call_buffering:
                                 terminal_suffix = _terminal_visible_stream_suffix(
-                                    getattr(output, "text", ""),
+                                    getattr(output, "raw_text", "") or getattr(output, "text", ""),
                                     streamed_text + (emit_content or ""),
                                     parser=request_parser,
                                     request=request,
@@ -28174,7 +28174,7 @@ async def stream_responses_api(
 
                         if output.finished and not tool_call_buffering:
                             terminal_suffix = _terminal_visible_stream_suffix(
-                                getattr(output, "text", ""),
+                                getattr(output, "raw_text", "") or getattr(output, "text", ""),
                                 streamed_text + (content or ""),
                                 request=request,
                                 suppress_markup=_suppress_markup_display,

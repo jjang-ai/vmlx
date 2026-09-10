@@ -2761,6 +2761,9 @@ class BatchedEngine(BaseEngine):
                     _drain_request_diagnostics(request_id)
                 yield GenerationOutput(
                     text=clean_output_text(output.output_text),
+                    # Terminal reconciliation must parse channel markers before
+                    # display cleaning, just like non-streaming generation.
+                    raw_text=output.output_text,
                     new_text=new_text,
                     generated_at=getattr(output, "generated_at", None),
                     prompt_tokens=output.prompt_tokens,
@@ -2836,6 +2839,7 @@ class BatchedEngine(BaseEngine):
 
             yield GenerationOutput(
                 text=text,
+                raw_text=output.output_text,
                 logprobs=getattr(output, "logprobs", None),
                 generated_at=getattr(output, "generated_at", None),
                 new_text=output.new_text,

@@ -13,6 +13,7 @@ from vmlx_engine.engine.base import GenerationOutput
 from vmlx_engine.mllm_batch_generator import MLLMBatchResponse
 from vmlx_engine.mllm_scheduler import MLLMRequest, MLLMScheduler
 from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
 from vmlx_engine.request import RequestOutput, SamplingParams
 from vmlx_engine.server import _terminal_visible_stream_suffix
 
@@ -183,6 +184,7 @@ def test_batched_mllm_stream_generate_reconciles_terminal_suffix():
     outputs = asyncio.run(_collect())
     assert "".join(output.new_text for output in outputs) == "assert value == []"
     assert outputs[-1].text == "assert value == []"
+    assert outputs[-1].raw_text == "assert value == []"
     assert outputs[-1].finished is True
 
 
@@ -254,6 +256,59 @@ class _TerminalVisibleSuffixEngine:
             finished=True,
             finish_reason="stop",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["chat", "responses"])
+async def test_chat_terminal_does_not_reparse_cleaned_gemma_reasoning(monkeypatch, route):
+    server = _configure_terminal_suffix_server(monkeypatch)
+    monkeypatch.setattr(server, "_reasoning_parser", Gemma4ReasoningParser())
+    raw = "<|channel>thought\nPrivate unfinished calculation"
+
+    class Engine:
+        tokenizer = SimpleNamespace(has_thinking=False)
+
+        async def stream_chat(self, **kwargs):
+            yield GenerationOutput(
+                text="Private unfinished calculation", raw_text=raw,
+                new_text=raw, prompt_tokens=3, completion_tokens=8,
+                finished=False,
+            )
+            yield GenerationOutput(
+                text="Private unfinished calculation", raw_text=raw,
+                new_text="", prompt_tokens=3, completion_tokens=8,
+                finished=True, finish_reason="length",
+            )
+
+    request = ChatCompletionRequest(
+        model="gemma-terminal-reasoning", stream=True, enable_thinking=True,
+        max_tokens=8, messages=[Message(role="user", content="calculate")],
+    )
+    messages = [message.model_dump(exclude_none=True) for message in request.messages]
+    if route == "responses":
+        response_request = ResponsesRequest(
+            model=request.model, input="calculate", stream=True,
+            enable_thinking=True, max_output_tokens=8,
+        )
+        stream = server.stream_responses_api(Engine(), messages, response_request)
+    else:
+        stream = server.stream_chat_completion(Engine(), messages, request)
+    chunks = []
+    async for chunk in stream:
+        for line in chunk.splitlines():
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+    if route == "responses":
+        visible = "".join(
+            chunk.get("delta", "") for chunk in chunks
+            if chunk.get("type") == "response.output_text.delta"
+        )
+    else:
+        visible = "".join(
+            choice.get("delta", {}).get("content") or ""
+            for chunk in chunks for choice in chunk.get("choices", [])
+        )
+    assert visible == ""
 
 
 def _configure_terminal_suffix_server(monkeypatch):
