@@ -1208,10 +1208,10 @@ describe('Disk Cache', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         expect(source).toContain('resolveCacheControlPolicy')
         expect(source).toContain('cacheControlUpdatesForDiskToggle')
-        expect(source).toContain('cacheControlUpdatesForPagedToggle')
+        expect(source).not.toContain('cacheControlUpdatesForPagedToggle')
         expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
-        expect(source).toContain('const genericPagedCacheToggleDisabled = cachePolicy.pagedCacheDisabled || exactTypedPromptDiskCache')
-        expect(source).toContain('disabled={genericPagedCacheToggleDisabled}')
+        expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
+        expect(source).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || exactTypedPromptDiskCache}')
         expect(source).toContain('disabled={dsv4Active || cachePolicy.legacyDiskCacheDisabled}')
         expect(source).toContain('checked={cachePolicy.legacyDiskCacheChecked}')
         expect(source).not.toContain('disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged}')
@@ -3155,7 +3155,10 @@ describe('Default IP and New Settings', () => {
         expect(updateBlock).toContain('const explicitlyClearedKeys = new Set<string>()')
         expect(updateBlock).toContain('explicitlyClearedKeys.add(k)')
         expect(updateBlock).toContain('for (const key of explicitlyClearedKeys) delete migratedBaseline[key]')
-        expect(updateBlock).toContain('Object.prototype.hasOwnProperty.call(currentConfig, k)')
+        expect(updateBlock).toContain('planSessionConfigSave(session, effectiveConfig, merged, SessionManager.RESTART_REQUIRED_KEYS)')
+        const lifecycle = readFileSync('src/shared/sessionConfigLifecycle.ts', 'utf8')
+        expect(lifecycle).toContain('Object.prototype.hasOwnProperty.call(effective, key)')
+        expect(lifecycle).toContain('pendingConfig: restartRequired ? { ...desired } : null')
     })
 
     it('does not materialize detected multimodal or parser values into persisted Auto overrides at Start', () => {
@@ -3926,8 +3929,8 @@ describe('JIT Toggle', () => {
         expect(form).not.toContain('DSV4 Flash composite prefix cache is disabled')
         expect(form).not.toContain("dsv4Active ? applyDsv4CompositeCacheToggle(v) : applyCacheControlUpdates(cacheControlUpdatesForPagedToggle")
         expect(form).not.toContain("dsv4Active ? cacheControlUpdatesForDsv4BlockDiskToggle(v) : cacheControlUpdatesForBlockDiskToggle")
-        expect(form).toContain('const genericPagedCacheToggleDisabled = cachePolicy.pagedCacheDisabled || exactTypedPromptDiskCache')
-        expect(form).toContain('disabled={genericPagedCacheToggleDisabled}')
+        expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
+        expect(form).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || exactTypedPromptDiskCache}')
         expect(form).toContain("t('sessions.config.blockSizeTooltipDsv4')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
@@ -3963,9 +3966,9 @@ describe('JIT Toggle', () => {
         expect(countOccurrences(form, 'label="DSV4 Native Composite Prefix Cache"')).toBe(0)
         expect(countOccurrences(form, 'label="DSV4 CSA/HCA Pool Codec"')).toBe(0)
         expect(countOccurrences(form, "label={t('sessions.cache.blockDiskCache')}")).toBe(1)
-        expect(countOccurrences(form, "label={t('sessions.config.pagedKVCache')}")).toBe(1)
+        expect(countOccurrences(form, "label={t('sessions.config.pagedKVCache')}")).toBe(0)
         expect(form).not.toContain('LOCKED OFF')
-        expect(form).toContain("<CheckField label={t('sessions.config.pagedKVCache')}")
+        expect(form).toContain("t('sessions.config.blockDiskPureSsdNote')")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
         expect(enLocale).toContain('Locked Off')
         expect(enLocale).toContain('The app always launches --no-paged-cache')
@@ -4061,7 +4064,7 @@ describe('JIT Toggle', () => {
             'utf-8',
         )
 
-        expect(form).toContain('const genericPagedCacheToggleDisabled = cachePolicy.pagedCacheDisabled || exactTypedPromptDiskCache')
+        expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
         expect(form).toContain("t('sessions.config.m3NativeMsaNote')")
         expect(enLocale).toContain("MiniMax-M3's retained RAM tier is disabled")
@@ -4070,7 +4073,7 @@ describe('JIT Toggle', () => {
         expect(form).toContain('architectureBlockDiskOnlySupported && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked')
         expect(enLocale).toContain('Enable Block Disk Cache for persistent typed MSA prefix reuse')
         expect(form).not.toContain('LOCKED OFF')
-        expect(form).toContain('disabled={genericPagedCacheToggleDisabled}')
+        expect(form).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || exactTypedPromptDiskCache}')
     })
 
     it('settings form keeps legacy prompt disk unavailable while exposing DSV4 Block Disk L2', () => {
@@ -4085,11 +4088,11 @@ describe('JIT Toggle', () => {
         expect(enLocale).toContain('Its retained paged-RAM mirror is disabled')
         expect(enLocale).toContain('defaults On as the warm/cold stack')
         expect(form).toContain('disabled={dsv4Active || cachePolicy.legacyDiskCacheDisabled}')
-        expect(form).toContain("t('sessions.config.dsv4LegacyDiskNote')")
+        expect(form).toContain('{(exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked) && <div data-vmlx-section="typed-disk-cache">')
         expect(enLocale).toContain('DSV4 uses Block Disk Cache (SSD / L2) above for persistent native composite blocks')
         expect(form).toContain("t('sessions.config.dsv4SsdOnlyNote')")
         expect(enLocale).toContain('DSV4 SSD-only mode preserves typed SWA plus CSA/HCA state')
-        expect(form).toContain('{!dsv4Active && showCachingHelp && (')
+        expect(form).toContain('{showCachingHelp && <Modal')
         expect(form).not.toContain('DSV4 Native Composite Prefix Cache')
     })
 
@@ -4353,7 +4356,7 @@ describe('Feature Interaction', () => {
         expect(shared).not.toContain("args.push('--use-paged-cache')")
     })
 
-    it('settings form renders effective paged capacity and ignored memory-budget state', () => {
+    it('settings form renders effective SSD capacity and preserves legacy memory-budget state', () => {
         const source = readFileSync(
             resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'),
             'utf-8',
@@ -4365,7 +4368,8 @@ describe('Feature Interaction', () => {
             'utf-8',
         )
         expect(source).toContain('resolvePagedCacheCapacity')
-        expect(source).toContain("t('sessions.config.pagedCacheCapacity'")
+        expect(source).toContain('<InfoNote text={effectiveBlockDiskCapacityText} />')
+        expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
         expect(source).toContain("t('sessions.config.pagedCacheMemoryIgnored')")
         expect(catalog).toContain('Effective in-memory cache capacity')
         expect(catalog).toContain('Cache TTL does not apply while In-Memory Paged Cache is on')
