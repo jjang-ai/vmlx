@@ -336,7 +336,17 @@ def _row_text(results: dict[str, dict[str, Any]]) -> str:
     for result in results.values():
         chunks.append(str(result.get("stdout", "")))
         chunks.extend(str(line) for line in result.get("stdout_tail", []))
-    return "\n".join(chunks)
+    # A collected/skipped test name is not executed passing evidence.
+    # Accept pytest PASSED records and Vitest's verbose success records only.
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", "\n".join(chunks))
+    return "\n".join(
+        line for line in clean.splitlines()
+        if (
+            re.search(r"\sPASSED(?:\s+\[\s*\d+%\])?\s*$", line)
+            and not re.search(r"\b(?:SKIPPED|XFAIL|XPASS|FAILED)\b", line)
+        )
+        or line.lstrip().startswith(("✓ ", "✔ "))
+    )
 
 
 def _build_checks(results: dict[str, dict[str, Any]]) -> dict[str, bool]:

@@ -123,8 +123,8 @@ def test_family_detection_contract_marker_validation_fails_if_required_row_missi
         "panel_family_detection": {
             "returncode": 0,
             "stdout_tail": [
-                "detects backend-covered model_type=nemotron_h_v2",
-                "does not route Nemotron-H text extracts through MLLM",
+                "✓ detects backend-covered model_type=nemotron_h_v2",
+                "✓ does not route Nemotron-H text extracts through MLLM",
             ],
         },
     }
@@ -133,6 +133,20 @@ def test_family_detection_contract_marker_validation_fails_if_required_row_missi
 
     assert checks["qwen36_vl_video_hybrid"] is False
     assert checks["nemotron_h_hybrid_text_not_stale_omni"] is True
+
+
+@pytest.mark.parametrize("row", [
+    "decode_speed_local_high_risk_rows_match_engine_registry",
+    "qwen36_dense_linear_attention_hybrid_cache",
+    "nemotron_h_hybrid_text_not_stale_omni",
+])
+@pytest.mark.parametrize("outcome", ["SKIPPED", "XFAIL", "collected", "SKIPPED reason mentions PASSED"])
+def test_family_gate_never_accepts_unexecuted_or_nonpassing_markers(row, outcome):
+    from tests.cross_matrix import run_model_family_detection_contract as gate
+    text = "\n".join(f"{marker} {outcome}" for marker in gate.ROW_MARKERS[row])
+    assert gate._build_checks({"test": {"returncode": 0, "stdout": text}})[row] is False
+    passed = "\n".join(f"{marker} PASSED" for marker in gate.ROW_MARKERS[row])
+    assert gate._build_checks({"test": {"returncode": 0, "stdout": passed}})[row] is True
 
 
 def test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax():
