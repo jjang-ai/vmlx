@@ -355,7 +355,11 @@ def ar_safety_step(
         delta_emitted=int(emitted) - e0,
         delta_wall_ms=(float(now) - t0) * 1000.0,
         margin=margin,
-        per_cycle_ms_per_tok=per_cycle_ms_per_tok,
+        # Settled execution tolerates an isolated slow cycle. Probe callers,
+        # however, interpret a full window without a trip as a positive win
+        # and commit the tested rung. Require its total measured cost to meet
+        # the recovery margin; a cheap median cannot excuse a losing mean.
+        per_cycle_ms_per_tok=None if probe else per_cycle_ms_per_tok,
     )
     if verdict is None:
         return None

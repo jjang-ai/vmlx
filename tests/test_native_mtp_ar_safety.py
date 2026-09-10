@@ -25,6 +25,31 @@ BASE = dict(
 )
 
 
+@pytest.mark.parametrize('probe', [False, True])
+def test_probe_cannot_win_from_median_guard_alone(probe):
+    # Same window: five cheap cycles, three expensive ones. Median cost is
+    # 8ms/token but total cost is 14ms/token against measured AR at 10ms.
+    # A settled rung retains its transient-stall guard; a recovery experiment
+    # cannot count absence of a trip as positive evidence of a profitable win.
+    st = ArSafetyState(prompt_tokens=100)
+    warmup = 4 if probe else 8
+    now = 1.0
+    result = None
+    for cycle in range(1, warmup + 9):
+        duration = 0.008 if cycle <= warmup + 5 else 0.024
+        now += duration
+        result = ar_safety_step(
+            st, cycles=cycle, emitted=cycle, now=now,
+            seed_ar_ms=10.0, baseline_measured=True,
+            scale_context=False, probe=probe, margin=1 / 1.10,
+        )
+    if probe:
+        assert result is not None
+        assert result.mtp_ms_per_tok == pytest.approx(14.0)
+    else:
+        assert result is None
+
+
 def verdict(**over):
     return _native_mtp_windowed_ar_verdict(**{**BASE, **over})
 
@@ -303,6 +328,7 @@ def test_probe_kept_switches_baseline_to_measured_ar(monkeypatch):
     state.ar_safety.anchor_cycle_ms = 40.0
     # 40ms cycles, 3 tok/cycle = 13.3 ms/tok < 25/1.10 -> kept
     state.ar_safety.ring = [(31 + i, 3 * (31 + i), base_t + i * 0.040) for i in range(9)]
+    monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 9 * 0.040)
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.probe is False
     assert tier.reentries == 1
@@ -703,10 +729,12 @@ def test_depth_probe_keeps_adjacent_rung_when_it_beats_configured_depth(monkeypa
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.depth_probe is True and state.depth == 2 and state.depth_probes == 1
     assert abs(state.dcfg_ms_per_tok - 10.0) < 1e-6
-    # D1 window: 1.9 tok/cycle at 15 ms/cycle = 7.9 ms/tok < 10/1.1 -> keep D1
+    # D2 window: 1.9 tok/cycle at 15 ms/cycle = 7.9 ms/tok < 10/1.1.
     state.stats.cycles = 40
+    state.stats.accepted_tokens = int(1.9 * 40) - 40
     state.ar_safety.anchor_cycle_ms = 15.0
     state.ar_safety.ring = [(31 + i, int(1.9 * (31 + i)), base_t + i * 0.015) for i in range(9)]
+    monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 9 * 0.015)
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.depth_probe is False and state.depth == 2
     assert state.promote_at_cycle > 40 and state.d1_ms_per_tok > 0
