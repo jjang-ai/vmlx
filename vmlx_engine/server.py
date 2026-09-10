@@ -26901,6 +26901,24 @@ async def stream_chat_completion(
                     )
                 yield "data: [DONE]\n\n"
                 return
+            # Rejection/empty-output errors still consumed real prompt and
+            # generation work. Preserve requested accounting before the error;
+            # do not invent a successful finish chunk to carry it.
+            if include_usage:
+                error_usage = Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+                if cached_tokens > 0 or cache_detail:
+                    error_usage.prompt_tokens_details = PromptTokensDetails(
+                        cached_tokens=cached_tokens, cache_detail=cache_detail
+                    )
+                error_usage_chunk = ChatCompletionChunk(
+                    id=response_id, created=_created_ts, model=request.model,
+                    choices=[], usage=error_usage,
+                )
+                yield f"data: {_dump_chat_chunk(error_usage_chunk, terminal_usage=True)}\n\n"
             yield (
                 "data: "
                 + json.dumps(

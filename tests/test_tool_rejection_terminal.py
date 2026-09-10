@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from vmlx_engine import server
 from vmlx_engine.engine.base import GenerationOutput
+from vmlx_engine.api.models import StreamOptions
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +69,7 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
     if surface == 'chat':
         tools = [{'type': 'function', 'function': function}]
         request = server.ChatCompletionRequest(model='spark-rejection-test', messages=messages, tools=tools, stream=True, max_tokens=128)
+        request.stream_options = StreamOptions(include_usage=True)
         iterator = server.stream_chat_completion(engine, messages, request, fastapi_request=None, tools=tools, max_tokens=128)
     else:
         tools = [{'type': 'function', **function}]
@@ -93,6 +95,10 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
         errors = [e['error'] for e in events if e.get('error')]
         assert len(errors) == 1
         assert errors[0]['code'] == 'tool_calls_rejected'
+        usage = [e['usage'] for e in events if e.get('usage')]
+        assert len(usage) == 1
+        assert usage[0]['prompt_tokens'] == 10
+        assert usage[0]['completion_tokens'] == 20
     else:
         terminals = [e for e in events if e.get('type') in {'response.completed', 'response.failed', 'response.incomplete'}]
         assert len(terminals) == 1
