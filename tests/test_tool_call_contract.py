@@ -109,7 +109,7 @@ def test_tool_call_contract_accepts_review_artifact_when_dsv4_runtime_checks_pas
                     "code_file_written_exact": False,
                     "native_cache": True,
                     "native_prefix": True,
-                    "native_paged": True,
+                    "native_disk_only": True,
                     "native_l2": True,
                     "generic_tq_kv_off": True,
                     "cached_tokens_seen": True,

@@ -15,6 +15,7 @@ The script is safe to dry-run and has a memory preflight so it does not launch a
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -195,13 +196,13 @@ def build_command(args: argparse.Namespace) -> list[str]:
         cmd.extend(
             [
                 "--dsv4-enable-prefix-cache",
-                "--use-paged-cache",
+                "--no-paged-cache",
                 "--paged-cache-block-size",
                 "256",
                 "--max-cache-blocks",
-                "1000",
+                "4097",
                 "--enable-block-disk-cache",
-                "--block-disk-cache-max-gb",
+                "--block-disk-cache-max-percent",
                 "10",
             ]
         )
@@ -421,6 +422,20 @@ def execute_tool(workspace: Path, call: dict[str, Any]) -> dict[str, Any]:
     return {"type": "function_call_output", "call_id": call_id, "output": output}
 
 
+def validate_attached_health(health: dict[str, Any], args: argparse.Namespace) -> None:
+    """Fail closed before sending requests; never take ownership of an app PID."""
+    provenance = health.get("runtime_provenance") or {}
+    if health.get("status") != "healthy" or not health.get("model_loaded"):
+        raise ValueError("attached engine is not healthy and loaded")
+    if provenance.get("pid") != args.attach_pid:
+        raise ValueError("attached engine PID does not match")
+    if health.get("model_name") != args.model:
+        raise ValueError("attached model identity does not match")
+    expected = hashlib.sha256((REPO / "vmlx_engine/server.py").read_bytes()).hexdigest()
+    if provenance.get("server_module_sha256") != expected:
+        raise ValueError("attached engine source does not match")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     cmd = build_command(args)
     env = build_env(args)
@@ -461,7 +476,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "telemetry": [resource_snapshot("dry_run")],
         }
 
-    preflight_block = blocked_by_memory_preflight(args)
+    attached = bool(getattr(args, "attach_pid", None))
+    attached_health = None
+    if attached:
+        attached_health = get_json(f"http://127.0.0.1:{args.port}/health")
+        validate_attached_health(attached_health, args)
+    preflight_block = None if attached else blocked_by_memory_preflight(args)
     if preflight_block is not None:
         return {**preflight_block, "model": args.model, "cmd": cmd, "env": env_summary}
 
@@ -469,12 +489,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     log_dir = out.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"dsv4-default-cache-tool-loop-{int(time.time())}.log"
-    with log_path.open("w") as log:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+    proc = None
+    if not attached:
+        with log_path.open("w") as log:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
 
     try:
         telemetry = [resource_snapshot("server_spawned", proc)]
-        health0 = wait_health(args.port, proc, args.timeout)
+        health0 = attached_health if attached else wait_health(args.port, proc, args.timeout)
         telemetry.append(resource_snapshot("health_ready", proc))
         url = f"http://127.0.0.1:{args.port}/v1/responses"
         rounds: list[dict[str, Any]] = []
@@ -492,7 +514,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ]
             for index, prompt in enumerate(prompts):
                 body: dict[str, Any] = {
-                    "model": "dsv4-default-cache-tools",
+                    "model": args.model if attached else "dsv4-default-cache-tools",
                     "input": [*pending_outputs, {"role": "user", "content": prompt}]
                     if pending_outputs
                     else prompt,
@@ -574,7 +596,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "code_file_written_exact": code_file_content == EXPECTED_CODE_TOOL_CONTENT,
             "native_cache": native.get("cache_type") == "native_composite",
             "native_prefix": native.get("prefix") is True,
-            "native_paged": native.get("paged") is True,
+            "native_disk_only": native.get("paged") is False
+            and native.get("block_disk_only") is True,
             "native_l2": native.get("block_disk_l2") is True,
             "generic_tq_kv_off": (native.get("generic_turboquant_kv") or {}).get("enabled")
             is False,
@@ -584,8 +607,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "status": "pass" if all(checks.values()) else "review",
             "model": args.model,
-            "cmd": cmd,
-            "env": env_summary,
+            "cmd": None if attached else cmd,
+            "env": None if attached else env_summary,
+            "attached": attached,
             "diagnostic_cache_mode": "disabled"
             if bool(getattr(args, "disable_prefix_cache", False))
             else "default_native_prefix_paged_l2",
@@ -593,7 +617,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "request_thinking_mode": request_thinking_mode,
             "diagnostic_code_prompt_variant": code_prompt_variant,
             "code_round_request_controls": code_controls,
-            "server_pid": proc.pid,
+            "server_pid": args.attach_pid if attached else proc.pid,
             "log_path": str(log_path),
             "health": health1,
             "health_before": health0,
@@ -624,7 +648,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             else "",
         }
     finally:
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
             try:
                 proc.wait(timeout=25)
@@ -638,6 +662,7 @@ def main() -> None:
     parser.add_argument("--model", default=resolve_default_model())
     parser.add_argument("--python", type=Path, default=DEFAULT_PY)
     parser.add_argument("--port", type=int, default=8854)
+    parser.add_argument("--attach-pid", type=int, help="Use this existing app-owned engine; never spawn or stop it.")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--request-timeout", type=int, default=600)

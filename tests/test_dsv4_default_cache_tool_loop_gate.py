@@ -1,6 +1,49 @@
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
+import hashlib
+import pytest
+
+
+@pytest.mark.parametrize("field,value", [
+    ("pid", 8), ("model_name", "other"), ("server_module_sha256", "stale"),
+    ("status", "loading"), ("model_loaded", False),
+])
+def test_attached_engine_rejects_mismatched_provenance(field, value):
+    from tests.cross_matrix import run_dsv4_default_cache_tool_loop_gate as gate
+    health = {
+        "status": "healthy", "model_loaded": True, "model_name": "expected",
+        "runtime_provenance": {"pid": 7, "server_module_sha256":
+            hashlib.sha256((gate.REPO / "vmlx_engine/server.py").read_bytes()).hexdigest()},
+    }
+    gate.validate_attached_health(health, Namespace(attach_pid=7, model="expected"))
+    target = health["runtime_provenance"] if field in ("pid", "server_module_sha256") else health
+    target[field] = value
+    with pytest.raises(ValueError):
+        gate.validate_attached_health(health, Namespace(attach_pid=7, model="expected"))
+
+
+def test_attached_engine_is_never_spawned_or_stopped_on_request_failure(monkeypatch, tmp_path):
+    from tests.cross_matrix import run_dsv4_default_cache_tool_loop_gate as gate
+    health = {
+        "status": "healthy", "model_loaded": True, "model_name": "expected",
+        "runtime_provenance": {"pid": 7, "server_module_sha256":
+            hashlib.sha256((gate.REPO / "vmlx_engine/server.py").read_bytes()).hexdigest()},
+    }
+    monkeypatch.setattr(gate, "get_json", lambda *a, **k: health)
+    monkeypatch.setattr(gate, "resource_snapshot", lambda *a, **k: {})
+    def forbidden(*a, **k):
+        raise AssertionError("must not spawn or run memory admission for existing engine")
+    monkeypatch.setattr(gate.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(gate, "blocked_by_memory_preflight", forbidden)
+    def request_failure(*a, **k):
+        raise RuntimeError("request failed")
+    monkeypatch.setattr(gate, "post_json", request_failure)
+    result = gate.run(Namespace(model="expected", python=Path("/unused"), port=1,
+        out=tmp_path / "result.json", timeout=1, request_timeout=1,
+        min_free_gb=999, dry_run=False, pool_quant=False, attach_pid=7))
+    assert result["status"] == "error"
+    assert "request failed" in result["error"]
 
 
 def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_default_cache_flags():
@@ -23,7 +66,8 @@ def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_default_cache_flags():
 
     assert result["status"] == "dry_run"
     assert "--dsv4-enable-prefix-cache" in result["cmd"]
-    assert "--use-paged-cache" in result["cmd"]
+    assert "--no-paged-cache" in result["cmd"]
+    assert "--use-paged-cache" not in result["cmd"]
     assert "--enable-block-disk-cache" in result["cmd"]
     assert "--disable-prefix-cache" not in result["cmd"]
     assert "--kv-cache-quantization" not in result["cmd"]

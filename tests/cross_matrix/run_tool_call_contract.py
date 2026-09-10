@@ -393,7 +393,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "file_written",
         "native_cache",
         "native_prefix",
-        "native_paged",
+        "native_disk_only",
         "native_l2",
         "generic_tq_kv_off",
         "cached_tokens_seen",
