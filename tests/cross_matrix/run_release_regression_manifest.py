@@ -299,6 +299,14 @@ def release_clearance_from_proof_sweep(current_proof_sweep: dict) -> dict:
     proof_sweep_failed_components = [
         str(item) for item in current_proof_sweep.get("failed_components") or []
     ]
+    # This audit requires the installed release app. Missing evidence can wait
+    # for packaging; an audit that actually ran and failed cannot.
+    installed_audit = current_proof_sweep.get("issue181_183_runtime_audit") or {}
+    prepackage_pending_installed_audits = (
+        ["issue181_183_runtime_audit"]
+        if installed_audit.get("status") == "missing"
+        else []
+    )
     proof_sweep_failure_is_deferred = (
         proof_sweep_status == "pass"
         or (
@@ -313,6 +321,7 @@ def release_clearance_from_proof_sweep(current_proof_sweep: dict) -> dict:
         "release_ready": release_ready,
         "proof_sweep_status": proof_sweep_status,
         "proof_sweep_failed_components": proof_sweep_failed_components,
+        "prepackage_pending_installed_audits": prepackage_pending_installed_audits,
         "proof_sweep_failure_is_deferred": proof_sweep_failure_is_deferred,
         "open_requirements": open_requirements,
         "effective_open_requirements": effective_open_requirements,
@@ -346,8 +355,11 @@ def prepackage_clearance_from_release_clearance(release_clearance: dict) -> dict
     proof_sweep_failed_components = [
         str(item) for item in release_clearance.get("proof_sweep_failed_components") or []
     ]
+    pending_installed_audits = set(
+        release_clearance.get("prepackage_pending_installed_audits") or []
+    ) & {"issue181_183_runtime_audit"}
     proof_sweep_prepackage_ok = proof_sweep_status == "pass" or (
-        set(proof_sweep_failed_components)
+        (set(proof_sweep_failed_components) - pending_installed_audits)
         <= {
             "no_not_pass_post_budget_artifacts",
             "no_release_blockers",

@@ -15367,6 +15367,33 @@ def test_release_regression_manifest_runner_prepackage_rejects_model_blockers(
     assert artifact["release_ready"] is False
 
 
+def test_missing_installed_issue_audit_waits_for_packaging_but_not_release():
+    from tests.cross_matrix import run_release_regression_manifest as runner
+
+    sweep = {
+        "status": "fail",
+        "failed_components": ["issue181_183_runtime_audit"],
+        "issue181_183_runtime_audit": {"status": "missing"},
+        "regression_suite": {"open_requirements": []},
+        "release_blocker_ledger": {"blockers": []},
+    }
+    clearance = runner.release_clearance_from_proof_sweep(sweep)
+    assert clearance["release_ready"] is False
+    assert runner.prepackage_clearance_from_release_clearance(clearance)["prepackage_ready"] is True
+
+    # A completed-but-failing installed audit remains blocking even for builds.
+    sweep["issue181_183_runtime_audit"]["status"] = "fail"
+    clearance = runner.release_clearance_from_proof_sweep(sweep)
+    assert clearance["release_ready"] is False
+    assert runner.prepackage_clearance_from_release_clearance(clearance)["prepackage_ready"] is False
+
+    # This ordering correction does not waive unrelated model evidence.
+    sweep["issue181_183_runtime_audit"]["status"] = "missing"
+    sweep["failed_components"].append("model_family_matrix")
+    clearance = runner.release_clearance_from_proof_sweep(sweep)
+    assert runner.prepackage_clearance_from_release_clearance(clearance)["prepackage_ready"] is False
+
+
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
