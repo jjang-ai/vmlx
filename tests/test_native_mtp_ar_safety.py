@@ -424,9 +424,9 @@ def test_promotion_probe_wins_and_loses(monkeypatch):
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
     state = _vlm_state(m)
-    # This row tests promotion against a known AR cost, not seed refresh.
+    # D1 is faster than measured AR before probing the configured depth.
     state.ar_tier = m.NativeMTPArTier(depth=3)
-    _ar_steps(state.ar_tier, 8, ms=10.0)
+    _ar_steps(state.ar_tier, 8, ms=12.0)
     state.depth = 1
     state.ladder_depth = 3
     state.promote_at_cycle = 40
@@ -444,7 +444,7 @@ def test_promotion_probe_wins_and_loses(monkeypatch):
     state.ar_safety.ring = [(51 + i, int(3.5 * (51 + i)), base_t + i * 0.028) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.promote_probe is False and state.depth == 3
-    # Later D3 loses to AR (20 ms/tok vs 10) -> back to D1 with backoff.
+    # Later D3 loses to AR (20 ms/tok vs 12) -> back to D1 with backoff.
     state.stats.cycles = 100
     state.ar_safety.anchor_cycle_ms = 20.0
     state.ar_safety.ring = [(91 + i, 91 + i, base_t + i * 0.020) for i in range(9)]
@@ -483,7 +483,6 @@ def test_reentry_spacing_is_geometric_and_uncapped_in_count():
     for _ in range(12):
         tier.probe_failed()
     assert tier.backoff == 12 and tier.next_probe_tokens == 16 << m._NATIVE_MTP_REENTRY_MAX_BACKOFF
-    assert m._NATIVE_MTP_MAX_PROMOTIONS >= 1
 
 
 # ---- seed-uncertainty margin + sticky-start evidence (2026-09-05) ----------
@@ -956,7 +955,7 @@ def test_calibration_schedule_preserves_exhaustion_and_inactive_deadlines():
 
     prior = _vlm_state(m, depth=1)
     prior.stats.cycles = 100
-    prior.promotions = m._NATIVE_MTP_MAX_PROMOTIONS
+    prior.promotions = 12  # diagnostic count, no longer an exhausted budget
     prior.promote_backoff = 5
     prior.promote_at_cycle = 0
     prior.depth_probes = m._NATIVE_MTP_MAX_DEPTH_PROBES
@@ -965,7 +964,7 @@ def test_calibration_schedule_preserves_exhaustion_and_inactive_deadlines():
     resumed = _vlm_state(m, depth=1)
     resumed.stats.cycles = 7
     schedule.restore(resumed)
-    assert resumed.promotions == m._NATIVE_MTP_MAX_PROMOTIONS
+    assert resumed.promotions == 12
     assert resumed.promote_backoff == 5
     assert resumed.promote_at_cycle == 0
     assert resumed.depth_probes == m._NATIVE_MTP_MAX_DEPTH_PROBES

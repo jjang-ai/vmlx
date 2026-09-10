@@ -6312,10 +6312,8 @@ def _native_mtp_reentry_enabled() -> bool:
 
 
 _NATIVE_MTP_PROMOTE_FIRST_CYCLES = 32
-# Re-entry probes are not capped per request (see NativeMTPArTier.settled_trip);
-# the doubling interval bounds the tax.  Promotion back to the configured
-# depth gets three tries per D1 phase.
-_NATIVE_MTP_MAX_PROMOTIONS = 3
+# Recovery is bounded by exponentially spaced probes, not an attempt cap:
+# a long D1 phase can become predictable again after several failed probes.
 # Configured-depth -> D1 economics probe: first after the first full judged
 # window (warmup 8 + window 8), then with exponential backoff; two per request.
 _NATIVE_MTP_DEPTH_PROBE_FIRST_CYCLES = 16
@@ -6522,10 +6520,12 @@ def _native_mtp_maybe_ar_safety_fallback(
         and state.ladder_depth > 1
         and state.promote_at_cycle > 0
         and cycles >= state.promote_at_cycle
-        and state.promotions < _NATIVE_MTP_MAX_PROMOTIONS
     ):
         d1_cost = _native_mtp_recent_ms_per_tok(state)
-        if d1_cost > 0.0:
+        # A due probe must not preempt an as-yet-unjudged AR loss. Let the
+        # safety path below judge that window first; the due time stays set
+        # so a later winning window can recover without a permanent veto.
+        if 0.0 < d1_cost < ar_baseline:
             state.d1_ms_per_tok = d1_cost
             state.depth = state.ladder_depth
             state.promote_probe = True
