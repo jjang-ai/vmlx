@@ -89,12 +89,15 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
             assert response.incomplete_details == {'reason': 'tool_calls_rejected'}
             assert '<tool_call>' not in response.model_dump_json()
         return
+    if surface == 'chat':
+        iterator = server._terminal_finish_guard(iterator)
     chunks = [chunk async for chunk in iterator]
     events = [json.loads(line[6:]) for chunk in chunks for line in chunk.splitlines() if line.startswith('data: ') and line != 'data: [DONE]']
     if surface == 'chat':
         errors = [e['error'] for e in events if e.get('error')]
         assert len(errors) == 1
         assert errors[0]['code'] == 'tool_calls_rejected'
+        assert not [c for e in events for c in e.get('choices', []) if c.get('finish_reason')]
         usage = [e['usage'] for e in events if e.get('usage')]
         assert len(usage) == 1
         assert usage[0]['prompt_tokens'] == 10

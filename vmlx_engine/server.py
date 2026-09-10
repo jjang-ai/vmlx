@@ -26902,8 +26902,19 @@ async def stream_chat_completion(
                 yield "data: [DONE]\n\n"
                 return
             # Rejection/empty-output errors still consumed real prompt and
-            # generation work. Preserve requested accounting before the error;
-            # do not invent a successful finish chunk to carry it.
+            # generation work. Publish the error before the usage tail, as on
+            # generation exceptions, so the route guard cannot infer success
+            # from an otherwise terminal-looking usage chunk.
+            yield (
+                "data: "
+                + json.dumps(
+                    _reasoning_only_chat_error_payload(
+                        response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
+                    ),
+                    ensure_ascii=True,
+                )
+                + "\n\n"
+            )
             if include_usage:
                 error_usage = Usage(
                     prompt_tokens=prompt_tokens,
@@ -26919,16 +26930,6 @@ async def stream_chat_completion(
                     choices=[], usage=error_usage,
                 )
                 yield f"data: {_dump_chat_chunk(error_usage_chunk, terminal_usage=True)}\n\n"
-            yield (
-                "data: "
-                + json.dumps(
-                    _reasoning_only_chat_error_payload(
-                        response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
-                    ),
-                    ensure_ascii=True,
-                )
-                + "\n\n"
-            )
             yield "data: [DONE]\n\n"
             return
 
