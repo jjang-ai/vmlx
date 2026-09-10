@@ -433,6 +433,22 @@ class TestSeedPathIntegration:
             ) is True
             assert req._native_mtp_state.ar_safety.prompt_tokens == 10000
 
+    def test_reentry_context_includes_tokens_generated_before_this_phase(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
+        req._original_token_ids = [101] * 10000
+        req._gen_prefix_tokens = [102, 103]
+        for generated, depth in ((0, None), (1024, 1), (2048, 2)):
+            req.num_tokens = generated
+            assert generator._seed_native_mtp_from_prefill(
+                req, [object()], first_token, [None], start_depth_override=depth
+            )
+            state = req._native_mtp_state
+            assert state.ar_safety.prompt_tokens == 10002 + generated
+            # A rung-window reset must not forget the request-wide offset.
+            state.ar_safety.reset(12)
+            assert state.ar_safety.prompt_tokens == 10002 + generated
+
     def test_seed_without_canonical_ids_includes_restored_prefix(self, monkeypatch):
         generator, req, first_token = self._build_generator(monkeypatch)
         monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")

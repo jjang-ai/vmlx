@@ -16830,7 +16830,13 @@ class MLLMBatchGenerator:
             ),
             profile_key=request_profile_key,
         )
-        state.ar_safety.prompt_tokens = prompt_token_count
+        # Safety-window emitted counts restart with each MTP phase. Include
+        # already emitted request tokens in the context-label base on AR
+        # re-entry/calibration, without changing the prompt profile identity
+        # or adding prior tokens to this phase's throughput denominator.
+        state.ar_safety.prompt_tokens = prompt_token_count + int(
+            getattr(request, "num_tokens", 0) or 0
+        )
         # A learned start is advisory, not a reduction of the user's ceiling.
         state.ladder_depth = max(1, min(
             int(native_mtp_effective_depth()[0]), state.depth_ceiling,
