@@ -7272,6 +7272,9 @@ from .request_diagnostics import take as _rd_take  # noqa: E402
 # (recorded off-task by request id and drained into this bucket after
 # generation, see vmlx_engine/request_diagnostics.py).
 _TOOL_CALL_DROP_DIAGNOSTICS: contextvars.ContextVar[list[str] | None] = _REQUEST_DIAGNOSTICS
+_TOOL_CALL_REJECTED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "vmlx_tool_call_rejected", default=False
+)
 
 
 def _begin_tool_call_drop_capture() -> None:
@@ -7284,9 +7287,10 @@ def _begin_tool_call_drop_capture() -> None:
     instead of receiving an empty response with no signal.
     """
     _TOOL_CALL_DROP_DIAGNOSTICS.set([])
+    _TOOL_CALL_REJECTED.set(False)
 
 
-def _record_tool_call_drop(diagnostic: str) -> None:
+def _record_tool_call_drop(diagnostic: str, *, rejected: bool = True) -> None:
     """Append a human-readable diagnostic for a dropped tool call."""
     bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
     if bucket is None:
@@ -7295,6 +7299,8 @@ def _record_tool_call_drop(diagnostic: str) -> None:
         # raising; the logger.warning above this call still fires.
         return
     bucket.append(diagnostic)
+    if rejected:
+        _TOOL_CALL_REJECTED.set(True)
 
 
 def _take_tool_call_drop_diagnostics() -> list[str]:
@@ -7484,7 +7490,8 @@ def _parse_tool_calls_with_parser(
                         )
                         _record_tool_call_drop(
                             f"The tool call to '{name}' was delivered, but its "
-                            f"arguments violate the tool's schema: {detail}."
+                            f"arguments violate the tool's schema: {detail}.",
+                            rejected=False,
                         )
                     elif status == "unconstrained" and problems:
                         logger.info(
@@ -20688,6 +20695,7 @@ async def create_chat_completion(
             reasoning_text,
             tool_calls,
             finish_reason,
+            tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
         ),
         structured_output_warnings,
         _take_tool_call_drop_diagnostics() or None,
@@ -20695,13 +20703,15 @@ async def create_chat_completion(
     if (
         response_warnings
         and not response_content
-        and reasoning_text
+        and (reasoning_text or _TOOL_CALL_REJECTED.get())
         and not tool_calls
         and _normalize_responses_finish_reason(finish_reason) != "length"
     ):
         raise HTTPException(
             status_code=502,
-            detail=_reasoning_only_chat_error_payload(response_id)["error"],
+            detail=_reasoning_only_chat_error_payload(
+                response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
+            )["error"],
         )
 
     # Attach the context-clamp record when the admission clamp bound this
@@ -21086,6 +21096,7 @@ def _responses_terminal_state(
     cancelled: bool = False,
     failed: bool = False,
     reasoning_only_no_content: bool = False,
+    tool_calls_rejected: bool = False,
     request_id: str | None = None,
 ) -> _ResponsesTerminalState:
     """Return matching response/item status, details, and SSE terminal event."""
@@ -21127,6 +21138,14 @@ def _responses_terminal_state(
             event_type="response.incomplete",
             incomplete_details=_incomplete,
         )
+    if tool_calls_rejected:
+        return _ResponsesTerminalState(
+            finish_reason=normalized,
+            response_status="incomplete",
+            item_status="incomplete",
+            event_type="response.incomplete",
+            incomplete_details={"reason": "tool_calls_rejected"},
+        )
     if reasoning_only_no_content:
         return _ResponsesTerminalState(
             finish_reason=normalized,
@@ -21146,8 +21165,10 @@ def _responses_terminal_state(
 def _current_response_warnings_for_reasoning_only(
     reasoning_only: bool,
     finish_reason: str | None = None,
+    *,
+    tool_calls_rejected: bool = False,
 ) -> list[str] | None:
-    if not reasoning_only:
+    if not reasoning_only or tool_calls_rejected:
         return None
     base = (
         "This response produced reasoning only (no visible message, no tool "
@@ -21188,6 +21209,8 @@ def _chat_completion_warnings_for_reasoning_only(
     reasoning: str | None,
     tool_calls: list | None,
     finish_reason: str | None = None,
+    *,
+    tool_calls_rejected: bool = False,
 ) -> list[str] | None:
     has_visible_content = bool((content or "").strip())
     has_reasoning = bool((reasoning or "").strip())
@@ -21195,6 +21218,7 @@ def _chat_completion_warnings_for_reasoning_only(
     return _current_response_warnings_for_reasoning_only(
         has_reasoning and not has_visible_content and not has_tool_calls,
         finish_reason,
+        tool_calls_rejected=tool_calls_rejected,
     )
 
 
@@ -21202,7 +21226,18 @@ def _reasoning_only_chat_error_payload(
     response_id: str,
     *,
     message: str | None = None,
+    tool_calls_rejected: bool = False,
 ) -> dict[str, Any]:
+    if tool_calls_rejected:
+        return {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "error": {
+                "message": "No visible answer or usable tool call remained after tool-call rejection. Inspect the response warnings for the rejection reason.",
+                "type": "invalid_response_error",
+                "code": "tool_calls_rejected",
+            },
+        }
     return {
         "id": response_id,
         "object": "chat.completion.chunk",
@@ -24117,11 +24152,17 @@ async def create_response(
     # shells do not count as visible output. Tracked so chained turns surface
     # a warning.
     _reasoning_only = _responses_output_is_reasoning_only(output_items)
-    if _reasoning_only:
+    _rejected_only = bool(
+        _TOOL_CALL_REJECTED.get()
+        and not tool_calls
+        and not final_text.strip()
+    )
+    if _reasoning_only or _rejected_only:
         _note_request_diagnostics_id(response_id)
         _response_terminal = _responses_terminal_state(
             _response_finish,
-            reasoning_only_no_content=True,
+            reasoning_only_no_content=_reasoning_only,
+            tool_calls_rejected=_rejected_only,
             request_id=response_id,
         )
         for _item in output_items:
@@ -24146,6 +24187,7 @@ async def create_response(
             _current_response_warnings_for_reasoning_only(
                 _reasoning_only,
                 _response_finish,
+                tool_calls_rejected=_rejected_only,
             ),
             structured_output_warnings,
             _take_tool_call_drop_diagnostics() or None,
@@ -26774,6 +26816,7 @@ async def stream_chat_completion(
             content=None,
             reasoning=accumulated_reasoning,
             tool_calls=None,
+            tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
             finish_reason=(
                 getattr(last_output, "finish_reason", None)
                 if last_output is not None
@@ -26801,7 +26844,10 @@ async def stream_chat_completion(
             warnings=_stream_chat_warnings,
         )
         yield f"data: {_dump_chat_chunk(warning_chunk)}\n\n"
-        if not content_was_emitted and not tool_calls_emitted:
+        if (
+            not content_was_emitted and not tool_calls_emitted
+            and (accumulated_reasoning or _TOOL_CALL_REJECTED.get())
+        ):
             _warning_finish_reason = _normalize_responses_finish_reason(
                 (
                     getattr(last_output, "finish_reason", None)
@@ -26858,7 +26904,9 @@ async def stream_chat_completion(
             yield (
                 "data: "
                 + json.dumps(
-                    _reasoning_only_chat_error_payload(response_id),
+                    _reasoning_only_chat_error_payload(
+                        response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
+                    ),
                     ensure_ascii=True,
                 )
                 + "\n\n"
@@ -28392,9 +28440,9 @@ async def stream_responses_api(
                 _discarded_suffix[:500].replace("\n", "\\n"),
             )
             _record_tool_call_drop(
-                "Buffered native tool markup did not produce a schema-valid "
-                "function call. The incomplete control suffix was hidden; try a "
-                "clearer tool-use prompt or raise max_output_tokens."
+                "Buffered native tool markup did not produce a usable function "
+                "call. Its control suffix was hidden. Inspect the parser and "
+                "validation diagnostics; this alone does not establish output-token truncation."
             )
             if _buffered_reasoning_only:
                 # The safe prefix is still reasoning, not assistant-visible text.
@@ -28625,7 +28673,12 @@ async def stream_responses_api(
             # output_text is the correct signal — client renders the
             # already-streamed reasoning_content. Falling back to full_text
             # here was the bug that pollutes history.
-            if not reasoning_was_streamed and not _buffered_reasoning_only:
+            if (
+                not reasoning_was_streamed and not _buffered_reasoning_only
+                and not _TOOL_CALL_REJECTED.get()
+            ):
+                # A rejected native call may have no reasoning rail. Its
+                # sanitized empty text is authoritative; never revive raw XML.
                 display_text = clean_output_text(full_text) if full_text else ""
         if (
             not _response_was_cancelled
@@ -29187,6 +29240,9 @@ async def stream_responses_api(
         cancelled=_response_was_cancelled,
         failed=_required_tool_contract_failed,
         reasoning_only_no_content=_stream_reasoning_only,
+        tool_calls_rejected=bool(
+            _TOOL_CALL_REJECTED.get() and not tool_calls and not display_text.strip()
+        ),
         request_id=response_id,
     )
     _resp_status = _response_terminal.response_status
@@ -29211,6 +29267,7 @@ async def stream_responses_api(
         _current_response_warnings_for_reasoning_only(
             _stream_reasoning_only,
             _resp_finish,
+            tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
         ),
         _dropped_tc_diagnostics or None,
     )

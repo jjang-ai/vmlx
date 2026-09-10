@@ -92,7 +92,7 @@ export const TOOL_WITHOUT_ANSWER_NOTICE =
   "_The tool call above completed, but the model produced no visible answer for this turn._";
 
 export const REASONING_WITHOUT_ANSWER_NOTICE =
-  "_The model produced reasoning but no answer for this turn — it may have run out of output budget._";
+  "_Reasoning was received, but no visible answer was returned for this turn. See the response diagnostics for details._";
 
 /**
  * Decide what an assistant turn shows when nothing renderable survived.

@@ -10,6 +10,10 @@ import {
 } from "../src/shared/responsesStreamRecovery";
 
 describe("Responses speculative tool-buffer reconciliation", () => {
+  it("does not guess a token-budget cause from reasoning without an answer", () => {
+    expect(REASONING_WITHOUT_ANSWER_NOTICE).toContain("response diagnostics");
+    expect(REASONING_WITHOUT_ANSWER_NOTICE).not.toMatch(/budget|truncat|limit/i);
+  });
   it("restores authoritative final text when a heartbeat produced no function call", () => {
     expect(
       reconcileResponsesToolBufferAtStreamEnd({
