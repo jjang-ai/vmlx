@@ -153,11 +153,16 @@ def test_safety_runs_and_trips_under_fixed_policy(monkeypatch):
     state.stats.accepted_tokens = 0
     # Full ring, 1 tok/cycle at 20ms/cycle = 20 ms/tok, flat cycle wall.
     state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]
-    # Rung 1: D3 loses -> D1 with a fresh window (not AR yet).
+    # D3 loses -> D2 with a fresh window (not AR yet).
     assert m._native_mtp_maybe_ar_safety_fallback("req-fixed", state) is False
-    assert state.depth == 1 and state.ar_fallback_pending is False
+    assert state.depth == 2 and state.ar_fallback_pending is False
     assert state.ar_safety.ring == [] and state.ar_safety.cycle_base == 40
     assert state.promote_at_cycle > 40
+    state.stats.cycles = 60
+    state.ar_safety.anchor_cycle_ms = 20.0
+    state.ar_safety.ring = [(51 + i, 51 + i, base_t + i * .020) for i in range(9)]
+    assert m._native_mtp_maybe_ar_safety_fallback("req-fixed", state) is False
+    assert state.depth == 1 and not state.ar_fallback_pending
     # Rung 2: D1 loses a window -> pending confirmation, NOT yet AR.
     state.stats.cycles = 80
     state.ar_safety.anchor_cycle_ms = 20.0
@@ -416,7 +421,7 @@ def test_pending_d1_confirmation_resolves_before_overdue_promotion(monkeypatch, 
         state.stats.accepted_tokens = 118 * (tokens_per_cycle - 1)
         monkeypatch.setattr(m.time, "perf_counter", lambda: 100.020)
         assert m._native_mtp_maybe_ar_safety_fallback("after-recovery", state) is False
-        assert state.promote_probe and state.depth == ceiling and state.promotions == 1
+        assert state.promote_probe and state.depth == 2 and state.promotions == 1
 
 
 def test_promotion_probe_wins_and_loses(monkeypatch):
@@ -436,21 +441,107 @@ def test_promotion_probe_wins_and_loses(monkeypatch):
     # D1 has been running at 2 tok/cycle, 20ms/cycle = 10 ms/tok.
     state.ar_safety.ring = [(31 + i, 2 * (31 + i), base_t + i * 0.020) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.promote_probe is True and state.depth == 3
+    assert state.promote_probe is True and state.depth == 2
     assert abs(state.d1_ms_per_tok - 10.0) < 1e-6
-    # Promotion window: D3 at 3.5 tok/cycle, 28ms/cycle = 8 ms/tok < 10/1.1 -> promoted.
+    # D2 at 2.5 tok/cycle, 20ms/cycle = 8 ms/tok < 10/1.1.
     state.stats.cycles = 60
-    state.ar_safety.anchor_cycle_ms = 28.0
-    state.ar_safety.ring = [(51 + i, int(3.5 * (51 + i)), base_t + i * 0.028) for i in range(9)]
+    state.ar_safety.anchor_cycle_ms = 20.0
+    state.ar_safety.ring = [(51 + i, int(2.5 * (51 + i)), base_t + i * 0.020) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.promote_probe is False and state.depth == 3
-    # Later D3 loses to AR (20 ms/tok vs 12) -> back to D1 with backoff.
+    assert state.promote_probe is False and state.depth == 2
+    assert state.promote_at_cycle > 60  # D3 is a separate later experiment.
+    # Later D2 loses to AR -> adjacent D1 with backoff.
     state.stats.cycles = 100
     state.ar_safety.anchor_cycle_ms = 20.0
     state.ar_safety.ring = [(91 + i, 91 + i, base_t + i * 0.020) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.depth == 1 and state.ar_fallback_pending is False
     assert state.promote_at_cycle > 100
+
+
+@pytest.mark.parametrize("ceiling", [1, 2, 3])
+def test_recovery_climbs_adjacent_rungs_and_stops_at_selected_ceiling(monkeypatch, ceiling):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    monkeypatch.setattr(m, "_native_mtp_depth_probe_enabled", lambda: False)
+    # Decision math is covered separately; here pin scheduling and rung ownership.
+    monkeypatch.setattr(m, "ar_safety_step", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_native_mtp_recent_ms_per_tok", lambda st: 8.0)
+    state = _vlm_state(m, depth=1)
+    state.depth_ceiling = state.ladder_depth = ceiling
+    state.ar_step_ms = 12.0
+    state.promote_at_cycle = 32
+    seen = [1]
+    for origin in range(1, ceiling):
+        state.stats.cycles = state.promote_at_cycle
+        assert not m._native_mtp_maybe_ar_safety_fallback("climb", state)
+        assert state.promote_probe and state.promote_from_depth == origin
+        assert state.depth == origin + 1
+        seen.append(state.depth)
+        state.stats.cycles += 16
+        state.ar_safety.ring = [(i, i * 2, i * .016) for i in range(9)]
+        assert not m._native_mtp_maybe_ar_safety_fallback("keep", state)
+        assert not state.promote_probe
+    state.stats.cycles += 100
+    assert not m._native_mtp_maybe_ar_safety_fallback("ceiling", state)
+    assert state.depth == ceiling and not state.promote_probe
+    assert seen == list(range(1, ceiling + 1))
+
+
+def test_failed_d2_to_d3_promotion_returns_to_d2(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    state = _vlm_state(m, depth=3)
+    state.ladder_depth = 3
+    state.promote_probe = True
+    state.promote_from_depth = 2
+    state.d1_ms_per_tok = 10.0  # historical field name: measured origin cost
+    state.stats.cycles = 40
+    now = time.perf_counter() - 1
+    state.ar_safety.ring = [(31+i, 31+i, now+i*.020) for i in range(9)]
+    assert not m._native_mtp_maybe_ar_safety_fallback("reject-promotion", state)
+    assert state.depth == 2 and not state.promote_probe
+
+
+@pytest.mark.parametrize("mode", ["transition", "probe-completed", "pending", "new-window"])
+def test_second_controller_cannot_override_ladder_decision(monkeypatch, mode):
+    from vmlx_engine import mllm_batch_generator as m
+
+    state = _vlm_state(m, depth=3)
+    state.stats.cycles = 40
+    state.promote_probe = mode == "probe-completed"
+    def safety(_id, st):
+        if mode == "transition":
+            st.depth = 2
+        elif mode == "probe-completed":
+            st.promote_probe = False
+        elif mode == "pending":
+            st.ar_trip_pending_cycle = 39
+        else:
+            st.ar_safety.reset(39)
+        return False
+    monkeypatch.setattr(m, "_native_mtp_maybe_ar_safety_fallback", safety)
+    def unexpected(*args):
+        pytest.fail("another controller overwrote the ladder's measurement phase")
+    monkeypatch.setattr(m, "_native_mtp_maybe_adapt_depth", unexpected)
+    m._native_mtp_step_depth_controllers("one-owner", state)
+
+
+@pytest.mark.parametrize("depth", [2, 3])
+def test_collapsed_acceptance_drops_only_one_rung(monkeypatch, depth):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
+    monkeypatch.setenv("VMLX_NATIVE_MTP_RUNTIME_COST_GATE", "0")
+    monkeypatch.setenv("VMLX_NATIVE_MTP_COST_FALLBACK", "0")
+    state = _vlm_state(m, depth=depth)
+    state.stats.cycles = 200
+    state.stats.drafted_by_depth = [200, 200, 200]
+    state.stats.accepted_by_depth = [1, 0, 0]
+    m._native_mtp_maybe_adapt_depth("collapse", state)
+    assert state.depth == depth - 1 and not state.ar_fallback_pending
 
 
 def test_probe_early_abort_on_clear_loser(monkeypatch):
@@ -536,7 +627,7 @@ def test_sticky_start_evidence_rules():
     assert _native_mtp_first_promotion_cycle(False) == _NATIVE_MTP_PROMOTE_FIRST_CYCLES
 
 
-def test_depth_probe_keeps_d1_when_it_beats_configured_depth(monkeypatch):
+def test_depth_probe_keeps_adjacent_rung_when_it_beats_configured_depth(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
@@ -551,18 +642,18 @@ def test_depth_probe_keeps_d1_when_it_beats_configured_depth(monkeypatch):
     state.ar_step_ms = 12.0
     state.ar_safety.ring = [(11 + i, 3 * (11 + i), base_t + i * 0.030) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth_probe is True and state.depth == 1 and state.depth_probes == 1
+    assert state.depth_probe is True and state.depth == 2 and state.depth_probes == 1
     assert abs(state.dcfg_ms_per_tok - 10.0) < 1e-6
     # D1 window: 1.9 tok/cycle at 15 ms/cycle = 7.9 ms/tok < 10/1.1 -> keep D1
     state.stats.cycles = 40
     state.ar_safety.anchor_cycle_ms = 15.0
     state.ar_safety.ring = [(31 + i, int(1.9 * (31 + i)), base_t + i * 0.015) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth_probe is False and state.depth == 1
+    assert state.depth_probe is False and state.depth == 2
     assert state.promote_at_cycle > 40 and state.d1_ms_per_tok > 0
 
 
-def test_depth_probe_returns_to_configured_depth_when_d1_loses(monkeypatch):
+def test_depth_probe_returns_to_origin_when_adjacent_rung_loses(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
@@ -576,7 +667,7 @@ def test_depth_probe_returns_to_configured_depth_when_d1_loses(monkeypatch):
     state.ar_step_ms = 12.0
     state.ar_safety.ring = [(11 + i, 3 * (11 + i), base_t + i * 0.030) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth == 1 and state.depth_probe is True
+    assert state.depth == 2 and state.depth_probe is True
     # D1 window at 9.5 ms/tok: not 10% better than D3's 10 -> probe lost
     state.stats.cycles = 40
     state.ar_safety.anchor_cycle_ms = 19.0
@@ -588,7 +679,7 @@ def test_depth_probe_returns_to_configured_depth_when_d1_loses(monkeypatch):
     state.stats.cycles = state.depth_probe_at_cycle + 1
     state.ar_safety.ring = [(state.stats.cycles - 9 + i, 3 * (state.stats.cycles - 9 + i), base_t + i * 0.030) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth_probes == 2 and state.depth == 1
+    assert state.depth_probes == 2 and state.depth == 2
     state.depth_probe = False; state.depth = 3; state.depth_probe_at_cycle = state.stats.cycles
     state.ar_safety.ring = [(state.stats.cycles - 9 + i, 3 * (state.stats.cycles - 9 + i), base_t + i * 0.030) for i in range(9)]
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
@@ -605,8 +696,8 @@ def test_depth_probe_follows_policy_and_explicit_switch(monkeypatch):
     monkeypatch.delenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", raising=False)
     for policy_env, probe_env, expect_depth in (
         ("0", None, 3),   # fixed: no probe
-        ("1", None, 1),   # adaptive: probe
-        ("0", "1", 1),    # fixed + explicit probe on
+        ("1", None, 2),   # adaptive: adjacent probe
+        ("0", "1", 2),    # fixed + explicit probe on
         ("1", "0", 3),    # adaptive + explicit probe off
     ):
         monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", policy_env)
@@ -646,7 +737,7 @@ def test_fixed_policy_still_steps_down_only_through_ar_safety(monkeypatch):
     state.ar_safety.ring = [(11 + i, 11 + i, base_t + i * 0.020) for i in range(9)]
     state.ar_safety.anchor_cycle_ms = 20.0
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth == 1 and state.depth_probe is False
+    assert state.depth == 2 and state.depth_probe is False
     monkeypatch.delenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH")
 
 
@@ -857,7 +948,7 @@ def _ar_steps(tier, n, ms=25.0):
         tier.record_step(now); now += ms / 1000.0
 
 
-def test_probe_depth_alternates_between_d1_and_configured():
+def test_loss_probe_depth_always_reenters_adjacent_d1():
     from vmlx_engine.mllm_batch_generator import NativeMTPArTier
 
     t = NativeMTPArTier(depth=3)
@@ -865,7 +956,7 @@ def test_probe_depth_alternates_between_d1_and_configured():
     for k in range(4):
         t.probes = k
         seen.append(t.probe_depth(3))
-    assert seen == [1, 3, 1, 3]
+    assert seen == [1, 1, 1, 1]
     assert NativeMTPArTier(depth=1).probe_depth(1) == 1
 
 
@@ -901,7 +992,7 @@ def test_calibration_return_resumes_at_left_depth_without_spending_the_budget(mo
     assert state.calibrations == 1
 
 
-def test_loss_reentry_probe_alternates_depth_and_spends_the_budget(monkeypatch):
+def test_loss_reentry_repeats_d1_and_counts_each_probe(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_REENTRY", raising=False)
@@ -913,8 +1004,8 @@ def test_loss_reentry_probe_alternates_depth_and_spends_the_budget(monkeypatch):
     tier2 = m.NativeMTPArTier(depth=3); tier2.probes = 1
     _ar_steps(tier2, 32)
     ok, state2 = _reseed(m, gen, tier2)
-    assert ok and state2.probe is True and state2.depth == 3 and tier2.probes == 2
-    assert gen.seeds == [1, 3]
+    assert ok and state2.probe is True and state2.depth == 1 and tier2.probes == 2
+    assert gen.seeds == [1, 1]
 
 
 def test_calibration_preserves_ladder_schedule_and_attempts(monkeypatch):
@@ -1010,7 +1101,7 @@ def test_calibration_return_that_loses_steps_down_the_ladder_not_to_ar(monkeypat
     _ar_steps(tier, 8, ms=25.0)
     state = _calibrated_running_state(m, tier, tok_per_cycle=1, cycle_ms=45.0)  # 45 ms/tok, losing
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert state.depth == 1 and not state.ar_fallback_pending  # rung 1, judged with margin 1.0
+    assert state.depth == 2 and not state.ar_fallback_pending  # adjacent rung, margin 1.0
     assert tier.fallbacks == 1 and tier.backoff == 0
     monkeypatch.delenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH")
 
@@ -1042,7 +1133,7 @@ def test_calibration_lifecycle_three_and_four_returns_then_budget_closes(monkeyp
     state = _running_state(m, anchor_ms=30.0, cycle_ms=60.0, emitted_per_cycle=1, cycles=400)
     state.ar_tier = tier; state.calibrations = 4; state.last_ar_measure_emitted = 400 - 100
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
-    assert "ar_calibration" not in (state.ar_fallback_reason or "") and state.depth == 1
+    assert "ar_calibration" not in (state.ar_fallback_reason or "") and state.depth == 2
     monkeypatch.delenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH")
 
 

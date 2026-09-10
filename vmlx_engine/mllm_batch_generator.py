@@ -4573,22 +4573,23 @@ class MLLMNativeMTPState:
     # (probe cleared, baseline = measured AR) or falls back with backoff.
     ar_tier: Optional["NativeMTPArTier"] = None
     probe: bool = False
-    # Depth ladder: configured depth -> D1 -> AR.  ``ladder_depth`` is the
-    # configured depth to promote back to; ``promote_probe`` marks a running
-    # D1->configured promotion probe judged against ``d1_ms_per_tok``.
+    # Adjacent ladder under the selected ceiling. Keep each probe's origin:
+    # its comparison and rollback must not jump to D1 or the ceiling.
     ladder_depth: int = 0
     promote_probe: bool = False
+    promote_from_depth: int = 1
     promote_at_cycle: int = 0
     promote_backoff: int = 0
     promotions: int = 0
-    d1_ms_per_tok: float = 0.0
-    # Depth economics probe (configured depth -> D1 comparison).  At long
+    d1_ms_per_tok: float = 0.0  # retained field name: cost of promotion origin
+    # Depth economics probe (current depth -> adjacent lower comparison). At long
     # context the (depth+1)-row verify grows faster than a 2-row one:
     # measured 2026-09-05 on Flash-Next 4S at 26k tokens, D1 18-19 ms/tok
     # vs pure D3 26.5 ms/tok vs AR 27.5.  ``depth_probe`` marks a running
-    # D1 window judged against ``dcfg_ms_per_tok`` (the configured depth's
-    # measured cost); D1 must WIN by the hysteresis to stay.
+    # lower-rung window judged against ``dcfg_ms_per_tok`` (the origin's
+    # measured cost); the lower rung must WIN by the hysteresis to stay.
     depth_probe: bool = False
+    depth_probe_from_depth: int = 0
     depth_probe_at_cycle: int = 0
     depth_probe_backoff: int = 0
     depth_probes: int = 0
@@ -6124,18 +6125,19 @@ def _native_mtp_maybe_cost_fallback(
     if ratio < threshold:
         return False
 
-    state.depth = 1
-    state.ar_fallback_pending = True
+    state.depth = max(1, current_depth - 1)
+    state.ar_fallback_pending = current_depth <= 1
     state.ar_fallback_reason = (
         f"cost_ratio={ratio:.3f}>=threshold={threshold:.3f} "
         f"mtp_ms_per_token={mtp_ms_per_token:.2f} ar_step_ms={ar_step_ms:.2f}"
     )
     logger.info(
-        "MLLM MTP[%s] adaptive depth D%d -> AR after cycles=%d "
+        "MLLM MTP[%s] cost gate D%d -> %s after cycles=%d "
         "cost_ratio=%.3f threshold=%.3f mtp_ms_per_token=%.2f "
         "ar_step_ms=%.2f",
         request_id,
         current_depth,
+        "AR" if state.ar_fallback_pending else f"D{state.depth}",
         state.stats.cycles,
         ratio,
         threshold,
@@ -6258,14 +6260,12 @@ class NativeMTPArTier:
         return self.last_measured_ms_per_tok
 
     def probe_depth(self, configured: int) -> int:
-        """Depth of the next re-entry probe.  The ladder demotes through D1,
-        so a request in AR has seen BOTH rungs lose at some stretch; which
-        one wins later is unknown.  Probes alternate D1 (cheap cycle, most
-        likely to break even) and the configured depth (measured 2026-09-05
-        on 4S: D1 lost to AR at 27-32 ms/tok on stretches where pinned D3
-        ran 18-21), so neither rung is starved."""
-        configured = max(1, int(configured or 1))
-        return 1 if (self.probes % 2 == 0 or configured <= 1) else configured
+        """Re-enter at the adjacent rung; later measured probes may climb.
+
+        Calibration returns are separate and resume their previous depth.
+        A loss-driven retry must never skip D1, regardless of retry count.
+        """
+        return 1
 
     def probe_due(self) -> bool:
         return (
@@ -6483,10 +6483,10 @@ def _native_mtp_maybe_ar_safety_fallback(
     """Policy-INDEPENDENT on-the-fly depth ladder (multimodal lane).
 
     Runs every cycle for BOTH fixed and adaptive depth.  Ladder:
-      configured depth (e.g. D3)  --loses to AR-->  D1  --loses to AR-->  AR
+      D3 --loses to AR--> D2 --loses to AR--> D1 --loses to AR--> AR
     with re-entry from AR probing D1 first (cheap, most likely to win) and a
-    promotion probe from D1 back to the configured depth only when the
-    configured depth beats the MEASURED D1 cost. The measured AR margin is
+    adjacent promotion only when the next depth beats the measured lower
+    rung cost, bounded by the configured ceiling. The measured AR margin is
     1.0; a seed-only baseline has its own uncertainty margin. Hysteresis
     lives in recovery probes, which must win by 10%. Window measurement and
     handoff cost mean this is not an instantaneous AR speed guarantee.
@@ -6507,12 +6507,13 @@ def _native_mtp_maybe_ar_safety_fallback(
     primed = str(state.stats.prompt_prime_source or "unprimed") != "unprimed"
     depth_now = int(state.depth or 1)
 
-    # Promotion probe: D1 has been winning for a while -> try the configured
-    # depth against the measured D1 cost (must beat it by the hysteresis).
+    # Promotion: try the adjacent higher rung against the measured origin
+    # cost (must beat it by the hysteresis), never beyond the selected ceiling.
     if (
         not probing
         and not promoting
-        and depth_now == 1
+        and not state.depth_probe
+        and depth_now < state.ladder_depth
         # Finish a pending AR-safety confirmation before spending a promotion
         # probe. Promotion resets the timing ring and otherwise postpones the
         # second losing window while D1 is already slower than measured AR.
@@ -6527,31 +6528,32 @@ def _native_mtp_maybe_ar_safety_fallback(
         # so a later winning window can recover without a permanent veto.
         if 0.0 < d1_cost < ar_baseline:
             state.d1_ms_per_tok = d1_cost
-            state.depth = state.ladder_depth
+            state.promote_from_depth = depth_now
+            state.depth = depth_now + 1
             state.promote_probe = True
             state.promotions += 1
             state.promote_at_cycle = 0
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] promotion probe D1 -> D%d at cycle=%d "
-                "(D1 measured %.1fms/tok, AR %.1fms/tok)",
+                "MLLM MTP[%s] promotion probe D%d -> D%d at cycle=%d "
+                "(lower rung measured %.1fms/tok, AR %.1fms/tok)",
                 request_id,
-                state.ladder_depth,
+                depth_now,
+                state.depth,
                 cycles,
                 d1_cost,
                 ar_baseline,
             )
             return False
 
-    # Depth economics probe: the configured depth has a full judged window ->
-    # try D1 for one window against the configured depth's MEASURED cost.
+    # Depth economics: a winning rung has a full judged window; compare its
+    # adjacent lower rung against that MEASURED cost.
     depth_probing = bool(state.depth_probe)
     if (
         not probing
         and not promoting
         and not depth_probing
         and _native_mtp_depth_probe_enabled()
-        and depth_now == state.ladder_depth
         and depth_now > 1
         and state.depth_probe_at_cycle > 0
         and cycles >= state.depth_probe_at_cycle
@@ -6559,17 +6561,18 @@ def _native_mtp_maybe_ar_safety_fallback(
         and len(state.ar_safety.ring) > ar_safety_window_cycles()
     ):
         cfg_cost = _native_mtp_recent_ms_per_tok(state)
-        if cfg_cost > 0.0:
+        if 0.0 < cfg_cost < ar_baseline:
             state.dcfg_ms_per_tok = cfg_cost
-            state.depth = 1
+            state.depth_probe_from_depth = depth_now
+            state.depth = depth_now - 1
             state.depth_probe = True
             state.depth_probes += 1
             state.depth_probe_at_cycle = 0
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] depth probe D%d -> D1 at cycle=%d "
+                "MLLM MTP[%s] depth probe D%d -> D%d at cycle=%d "
                 "(D%d measured %.1fms/tok, AR %.1fms/tok)",
-                request_id, depth_now, cycles, depth_now, cfg_cost, ar_baseline,
+                request_id, depth_now, state.depth, cycles, depth_now, cfg_cost, ar_baseline,
             )
             return False
 
@@ -6623,9 +6626,9 @@ def _native_mtp_maybe_ar_safety_fallback(
             return True
 
     if promoting and state.d1_ms_per_tok > 0:
-        baseline = state.d1_ms_per_tok
+        baseline = min(state.d1_ms_per_tok, ar_baseline) if ar_baseline > 0 else state.d1_ms_per_tok
     elif depth_probing and state.dcfg_ms_per_tok > 0:
-        baseline = state.dcfg_ms_per_tok
+        baseline = min(state.dcfg_ms_per_tok, ar_baseline) if ar_baseline > 0 else state.dcfg_ms_per_tok
     else:
         baseline = ar_baseline
     any_probe = probing or promoting or depth_probing
@@ -6648,32 +6651,34 @@ def _native_mtp_maybe_ar_safety_fallback(
 
     if depth_probing:
         if trip is None and window_full:
-            # D1 beats the configured depth by the hysteresis: stay at D1;
-            # the promotion probe re-tries the configured depth with backoff.
+            # Keep the winning lower rung; re-try its origin with backoff.
             state.depth_probe = False
             state.d1_ms_per_tok = _native_mtp_recent_ms_per_tok(state)
             state.promote_backoff += 1
             state.promote_at_cycle = cycles + (
                 _NATIVE_MTP_PROMOTE_FIRST_CYCLES << min(state.promote_backoff, 6)
             )
+            state.depth_probe_at_cycle = (
+                cycles + _NATIVE_MTP_DEPTH_PROBE_FIRST_CYCLES if depth_now > 1 else 0
+            )
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] depth probe kept D1 (%.1fms/tok beats D%d %.1fms/tok)",
-                request_id, state.d1_ms_per_tok, state.ladder_depth, state.dcfg_ms_per_tok,
+                "MLLM MTP[%s] depth probe kept D%d (%.1fms/tok beats D%d %.1fms/tok)",
+                request_id, depth_now, state.d1_ms_per_tok, state.depth_probe_from_depth, state.dcfg_ms_per_tok,
             )
             return False
         if trip is not None:
             state.depth_probe = False
-            state.depth = state.ladder_depth
+            state.depth = min(state.ladder_depth, state.depth_probe_from_depth or depth_now + 1)
             state.depth_probe_backoff += 1
             state.depth_probe_at_cycle = cycles + (
                 _NATIVE_MTP_DEPTH_PROBE_FIRST_CYCLES << min(state.depth_probe_backoff, 6)
             )
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] depth probe lost, back to D%d: D1 %.1fms/tok vs D%d %.1fms/tok",
-                request_id, state.ladder_depth, trip.mtp_ms_per_tok,
-                state.ladder_depth, state.dcfg_ms_per_tok,
+                "MLLM MTP[%s] depth probe lost, back to D%d: D%d %.1fms/tok vs D%d %.1fms/tok",
+                request_id, state.depth, depth_now, trip.mtp_ms_per_tok,
+                state.depth, state.dcfg_ms_per_tok,
             )
         return False
 
@@ -6681,28 +6686,32 @@ def _native_mtp_maybe_ar_safety_fallback(
         if trip is None and window_full:
             state.promote_probe = False
             state.promote_backoff = 0
-            # The configured depth just beat D1; re-examine much later.
+            state.promote_at_cycle = (
+                cycles + _NATIVE_MTP_PROMOTE_FIRST_CYCLES
+                if depth_now < state.ladder_depth else 0
+            )
+            # The higher rung just beat its origin; re-examine much later.
             state.depth_probe_backoff += 1
             state.depth_probe_at_cycle = cycles + (
                 _NATIVE_MTP_DEPTH_PROBE_FIRST_CYCLES << min(state.depth_probe_backoff + 2, 6)
             )
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] promoted to D%d (beat D1 %.1fms/tok)",
-                request_id, depth_now, state.d1_ms_per_tok,
+                "MLLM MTP[%s] promoted to D%d (beat D%d %.1fms/tok)",
+                request_id, depth_now, state.promote_from_depth, state.d1_ms_per_tok,
             )
             return False
         if trip is not None:
             state.promote_probe = False
-            state.depth = 1
+            state.depth = max(1, state.promote_from_depth)
             state.promote_backoff += 1
             state.promote_at_cycle = cycles + (
                 _NATIVE_MTP_PROMOTE_FIRST_CYCLES << min(state.promote_backoff, 6)
             )
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] promotion lost, back to D1: %s",
-                request_id, trip.log_text(depth_now),
+                "MLLM MTP[%s] promotion lost, back to D%d: %s",
+                request_id, state.depth, trip.log_text(depth_now),
             )
         return False
 
@@ -6747,17 +6756,16 @@ def _native_mtp_maybe_ar_safety_fallback(
 
     prior_depth = depth_now
     if prior_depth > 1:
-        # First rung: drop to D1 (cheap cycles, often faster than D3 on
-        # prose) and judge again from a fresh window.
-        state.depth = 1
+        # Spend the next judged window on the adjacent shallower rung.
+        state.depth = prior_depth - 1
         state.promote_backoff += 1
         state.promote_at_cycle = cycles + (
             _NATIVE_MTP_PROMOTE_FIRST_CYCLES << min(state.promote_backoff, 6)
         )
         state.ar_safety.reset(cycles)
         logger.info(
-            "MLLM MTP[%s] AR safety D%d -> D1: %s",
-            request_id, prior_depth, trip.log_text(prior_depth),
+            "MLLM MTP[%s] AR safety D%d -> D%d: %s",
+            request_id, prior_depth, state.depth, trip.log_text(prior_depth),
         )
         return False
 
@@ -6800,6 +6808,43 @@ def _native_mtp_maybe_ar_safety_fallback(
         tier.settled_trip(cycles + int(state.stats.accepted_tokens))
     logger.info("MLLM MTP[%s] %s", request_id, trip.log_text(prior_depth))
     return True
+
+
+def _native_mtp_step_depth_controllers(request_id: str, state: MLLMNativeMTPState) -> None:
+    """One next-suffix owner per cycle, with unmixed probe measurements.
+
+    Safety always observes first. Legacy/value adaptation cannot override a
+    safety transition, a probe that just completed, or a pending D1 verdict.
+    A new rung gets a full timing window before cumulative acceptance/cost
+    gates may change it again. This changes no verified-token/cache commit.
+    """
+    before = int(state.depth)
+    was_probing = state.probe or state.promote_probe or state.depth_probe
+    _native_mtp_maybe_ar_safety_fallback(request_id, state)
+    if state.depth != before and getattr(state, "adaptive_value", None) is not None:
+        # Cancel a stale value experiment; otherwise its later rollback can
+        # undo the ladder decision using a different origin/depth window.
+        note_forced_depth_change(
+            state.adaptive_value, origin=before, target=state.depth,
+            cycle=int(state.stats.cycles), reason="ar_safety_ladder",
+        )
+    if (
+        state.ar_fallback_pending
+        or state.depth != before
+        or was_probing
+        or state.probe or state.promote_probe or state.depth_probe
+        or state.ar_trip_pending_cycle > 0
+        or int(state.stats.cycles) - state.ar_safety.cycle_base <= ar_safety_window_cycles()
+    ):
+        return
+    _native_mtp_maybe_adapt_depth(request_id, state)
+    if state.depth != before:
+        cycles = int(state.stats.cycles)
+        state.ar_safety.reset(cycles)
+        state.promote_at_cycle = (
+            cycles + _NATIVE_MTP_PROMOTE_FIRST_CYCLES
+            if state.depth < state.ladder_depth else 0
+        )
 
 
 def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) -> None:
@@ -6875,7 +6920,7 @@ def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) ->
             and rate_d3 < joint_floor_d3
         ):
             target = 2
-    if target >= 2:
+    if current == 2:
         drafted_d2 = int(state.stats.drafted_by_depth[1]) if len(state.stats.drafted_by_depth) > 1 else 0
         rate_d2 = _native_mtp_depth_rate(state.stats, 2)
         # Floor 0.70 and a REAL sample, not the 12-cycle warmup.  Measured
@@ -6951,17 +6996,18 @@ def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) ->
             if emitted > 0 and span_ms > 0.0:
                 mtp_ms_per_tok = span_ms / emitted
                 if mtp_ms_per_tok > ar_ms * margin:
-                    state.depth = 1
-                    state.ar_fallback_pending = True
+                    state.depth = max(1, current - 1)
+                    state.ar_fallback_pending = current <= 1
                     state.ar_fallback_reason = (
                         f"runtime_cost mtp_ms_per_tok={mtp_ms_per_tok:.1f}"
                         f">ar_step_ms={ar_ms:.1f}x{margin:.2f}"
                     )
                     logger.info(
-                        "MLLM MTP[%s] adaptive depth D%d -> AR after cycles=%d "
+                        "MLLM MTP[%s] runtime cost D%d -> %s after cycles=%d "
                         "runtime cost %.1fms/token vs AR %.1fms (margin %.2f)",
                         request_id,
                         current,
+                        "AR" if state.ar_fallback_pending else f"D{state.depth}",
                         cycles_done,
                         mtp_ms_per_tok,
                         ar_ms,
@@ -6976,7 +7022,7 @@ def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) ->
     # the MLLM path where a rejected cycle pays verify + replay; healthy
     # heads run 0.93-0.98, so the 0.65 floor cleanly separates).
     # VMLX_NATIVE_MTP_AR_FALLBACK=0 reverts.
-    if target <= 1 and _native_mtp_env_flag(
+    if current == 1 and _native_mtp_env_flag(
         True,
         "VMLINUX_NATIVE_MTP_AR_FALLBACK",
         "VMLX_NATIVE_MTP_AR_FALLBACK",
@@ -16730,7 +16776,10 @@ class MLLMBatchGenerator:
             profile_key=request_profile_key,
         )
         state.ar_safety.prompt_tokens = prompt_token_count
-        state.ladder_depth = max(1, int(depth))
+        # A learned start is advisory, not a reduction of the user's ceiling.
+        state.ladder_depth = max(1, min(
+            int(native_mtp_effective_depth()[0]), state.depth_ceiling,
+        ))
         if (
             depth > 1
             and start_depth == depth
@@ -16738,14 +16787,15 @@ class MLLMBatchGenerator:
             and _native_mtp_depth_probe_enabled()
         ):
             state.depth_probe_at_cycle = _NATIVE_MTP_DEPTH_PROBE_FIRST_CYCLES
-        if start_depth < depth and start_depth_override is None:
+        if start_depth < state.ladder_depth and start_depth_override is None:
             state.promote_at_cycle = _native_mtp_first_promotion_cycle(True)
             logger.info(
-                "MLLM MTP[%s] start rung D1 (previous request ended in %s); "
+                "MLLM MTP[%s] start rung D%d (previous request ended in %s); "
                 "promotion probe to D%d after %d cycles",
                 request.request_id,
+                start_depth,
                 _last_tier,
-                depth,
+                start_depth + 1,
                 state.promote_at_cycle,
             )
         state.stats.profile_seed = profile_seed
@@ -17117,8 +17167,7 @@ class MLLMBatchGenerator:
                 float(_value_cycle_now),
             )
             state._trace_prev_t = _value_cycle_now
-        _native_mtp_maybe_ar_safety_fallback(request.request_id, state)
-        _native_mtp_maybe_adapt_depth(request.request_id, state)
+        _native_mtp_step_depth_controllers(request.request_id, state)
         _native_mtp_arm_value_cycle(state, now=_value_cycle_now)
         if accepted == depth:
             state.stats.accepts += 1
@@ -17381,7 +17430,7 @@ class MLLMBatchGenerator:
             tier.calibration_schedule = None
             if schedule is not None:
                 schedule.restore(state)
-            elif state.depth == 1 and state.ladder_depth > 1:
+            elif state.depth < state.ladder_depth:
                 state.promote_at_cycle = int(state.stats.cycles) + _NATIVE_MTP_PROMOTE_FIRST_CYCLES
             logger.info(
                 "MLLM MTP[%s] calibration re-entry at D%d after %d AR tokens "
