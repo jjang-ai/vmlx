@@ -27,6 +27,10 @@ import mlx.nn as nn
 import numpy as np
 from mlx_lm.models.cache import ArraysCache
 from vmlx_engine.metal.qwen4_verify_sdpa import qwen4_verify_sdpa
+from vmlx_engine.metal.qwen4_hc_combine import (
+    exact_hc_combine,
+    exact_hc_combine_requested,
+)
 from vmlx_engine.metal.qwen4_gdn_blocked_prefill import (
     qwen4_blocked_gated_delta_update as gated_delta_update,
 )
@@ -524,6 +528,7 @@ class RMSNormGatedSigmoid(nn.Module):
 class GatedResidual(nn.Module):
     def __init__(self, args: Qwen4ExpTextArgs, use_combine: bool = True):
         super().__init__()
+        self._exact_combine = exact_hc_combine_requested()
         self.hc_count = args.hc_count
         self.hidden_size = args.hidden_size
         self.hc_lowrank = args.hc_lowrank
@@ -586,6 +591,12 @@ class GatedResidual(nn.Module):
     def combine(
         self, hyper_input: mx.array, block_out: mx.array, inject_w: mx.array
     ) -> mx.array:
+        if self._exact_combine:
+            candidate = exact_hc_combine(
+                hyper_input, block_out, inject_w, enabled=True
+            )
+            if candidate is not None:
+                return candidate
         inj = block_out[..., None, :] * inject_w[..., :, None]
         return (hyper_input + inj.reshape(
             *inj.shape[:-2], self.hc_count * self.hidden_size
