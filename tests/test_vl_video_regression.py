@@ -459,28 +459,26 @@ class TestVlmLoadSmoke:
             f"Image prefill should add <0.5GB MLX active, added {delta:.2f}GB"
         )
 
-    def test_jangtq_video_fallback_no_crash(self):
+    def test_jangtq_video_fallback_no_crash(self, tmp_path, monkeypatch):
         """4-frame video path does not crash and produces video_grid_thw.
 
-        In dev env torchvision is present and routes through real
-        video_processor which requires PyAV → skip in that case, since
-        the fallback path is the bundled-Python-specific code. The
-        unit-test class `TestInstallVideoFallback` above covers fallback
-        correctness without requiring the real model/decoder deps.
+        Use the real bundle processor with its optional video processor absent.
+        This is an explicit dependency-fallback test, not native-video or
+        model-generation proof. Model weights are not used by preprocessing.
         """
-        from jang_tools.load_jangtq_vlm import load_jangtq_vlm_model
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+        from mlx_vlm.utils import load_processor
         from PIL import Image
 
-        model, processor = load_jangtq_vlm_model(str(MODEL_JANGTQ))
-        if getattr(processor, "video_processor", None) is not None:
-            pytest.skip(
-                "dev venv has torchvision — fallback not active. "
-                "Bundled-python integration is exercised in TestInstallVideoFallback."
-            )
+        processor = load_processor(
+            MODEL_JANGTQ, add_generation_prompt=True, trust_remote_code=True,
+        )
+        monkeypatch.setattr(processor, "video_processor", None, raising=False)
+        _install_video_fallback(processor)
 
         frame_paths = []
         for i in range(4):
-            p = f"/tmp/_regtest_vf{i}.png"
+            p = str(tmp_path / f"frame-{i}.png")
             Image.new("RGB", (384, 384),
                       (20 + i * 30, 100, 150)).save(p)
             frame_paths.append(p)
