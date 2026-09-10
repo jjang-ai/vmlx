@@ -340,6 +340,31 @@ class TestSeedPathIntegration:
         assert state.depth == 3
         assert state.stats.profile_seed == "configured"
 
+    def test_scheduled_reentry_is_not_vetoed_by_startup_ar_profile(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        generator._model_type = "qwen4_exp"
+        store = generator._native_mtp_profiles = NativeMTPProfileStore()
+        key = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=2)
+        store.observe(key, final_depth=1, fallback_to_ar=True,
+                      fallback_reason="cost", finish_reason="fallback_to_ar")
+        # Fresh startup still honors the advisory profile. A scheduled probe
+        # must instead reach the request-local measured value controller.
+        assert not generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None])
+        for intended in (1, 2, 3):
+            assert generator._seed_native_mtp_from_prefill(
+                req, [object()], first_token, [None], start_depth_override=intended)
+            state = req._native_mtp_state
+            assert state.depth == intended
+            assert state.profile_key == key
+            assert state.stats.profile_seed == "request_local_reentry"
+
+    def test_scheduled_reentry_keeps_request_eligibility_gate(self, monkeypatch):
+        generator, req, first_token = self._build_generator(monkeypatch)
+        generator._native_mtp_enabled_for_request = lambda _req: False
+        assert not generator._seed_native_mtp_from_prefill(
+            req, [object()], first_token, [None], start_depth_override=3)
+
     def test_cached_prompt_uses_full_context_for_profile_and_governor(self, monkeypatch):
         import mlx.core as mx
 

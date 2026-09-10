@@ -16578,26 +16578,35 @@ class MLLMBatchGenerator:
             if store is None:
                 store = self._native_mtp_profiles = NativeMTPProfileStore()
             sampled_profile = request_profile_key[0] == "sampled"
-            depth, profile_seed = store.start_depth(
-                request_profile_key,
-                configured_depth=depth,
-                capability_ceiling=_native_mtp_depth_ceiling_for_request(request),
-                # Legacy tuning sidecars describe one benchmark-wide winner,
-                # not a sampler/context/tool profile. A greedy counting/code
-                # result must not auto-enable MTP for sampled prose. A profile
-                # learned in this process still takes precedence in the store.
-                tuning_validated=(
-                    "vmlx_mtp_tuning" in depth_source and not sampled_profile
-                ),
-                unseen_start_depth=(
-                    depth
-                    if str(getattr(self, "_model_type", "") or "").lower()
-                    == "qwen4_exp"
-                    and not sampled_profile
-                    else None
-                ),
-                unseen_start_source="qwen4_exp_measured_cold_start",
-            )
+            # The process profile chooses a FRESH request's start. A scheduled
+            # recovery/calibration already has a request-local AR baseline and
+            # intended rung. Applying profile_ar here would veto every retry
+            # after the very fallback that taught the profile, permanently
+            # preventing recovery. Preserve the key for subsequent learning.
+            if start_depth_override is not None:
+                depth = min(depth, _native_mtp_depth_ceiling_for_request(request))
+                profile_seed = "request_local_reentry"
+            else:
+                depth, profile_seed = store.start_depth(
+                    request_profile_key,
+                    configured_depth=depth,
+                    capability_ceiling=_native_mtp_depth_ceiling_for_request(request),
+                    # Legacy tuning sidecars describe one benchmark-wide winner,
+                    # not a sampler/context/tool profile. A greedy counting/code
+                    # result must not auto-enable MTP for sampled prose. A profile
+                    # learned in this process still takes precedence in the store.
+                    tuning_validated=(
+                        "vmlx_mtp_tuning" in depth_source and not sampled_profile
+                    ),
+                    unseen_start_depth=(
+                        depth
+                        if str(getattr(self, "_model_type", "") or "").lower()
+                        == "qwen4_exp"
+                        and not sampled_profile
+                        else None
+                    ),
+                    unseen_start_source="qwen4_exp_measured_cold_start",
+                )
             if depth <= 0:
                 logger.info(
                     "MLLM native MTP stays AR for request=%s seed=%s key=%s",
