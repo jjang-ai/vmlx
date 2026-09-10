@@ -5379,6 +5379,50 @@ def test_objective_proof_digest_rejects_shallow_default_cache_tool_loop_proof(
     assert row["details"]["tool_loop_checks"]["code_file_written_exact"] is False
 
 
+def test_objective_proof_digest_attached_ssd_tool_loop_requires_observed_policy(tmp_path):
+    from copy import deepcopy
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    path = tmp_path / "build/current-dsv4-default-cache-tool-loop/result.json"
+    proof = json.loads(path.read_text())
+    proof.update(attached=True, server_pid=123, cmd=None)
+    health = proof["health"]
+    health.update(status="healthy", model_loaded=True,
+                  active_parsers={"tool_call_parser": "dsml", "reasoning_parser": "deepseek_r1"})
+    health["native_cache"].update(paged=False, block_disk_only=True)
+    health["runtime_provenance"] = {
+        "pid": 123,
+        "cache_topology_provenance": {"configuration": {
+            "configured": {"enable_prefix_cache": True, "use_paged_cache": False,
+                           "enable_block_disk_cache": True},
+            "instantiated": {"block_disk_only": True, "paged_ram_enabled": False},
+        }},
+    }
+    proof["checks"].pop("native_paged")
+    proof["checks"]["native_disk_only"] = True
+
+    def grade(value):
+        path.write_text(json.dumps(value))
+        rows = {r["requirement"]: r for r in build_digest(tmp_path)["requirements"]}
+        return rows["Historical DSV4 native-cache multi-tool diagnostic is retained"]["status"]
+
+    assert grade(proof) == "pass"
+    for defect in ("missing_topology", "ram_enabled", "pid_mismatch", "missing_check", "wrong_parser"):
+        bad = deepcopy(proof)
+        if defect == "missing_topology":
+            bad["health"]["runtime_provenance"].pop("cache_topology_provenance")
+        elif defect == "ram_enabled":
+            bad["health"]["runtime_provenance"]["cache_topology_provenance"]["configuration"]["instantiated"]["paged_ram_enabled"] = True
+        elif defect == "pid_mismatch":
+            bad["server_pid"] = 999
+        elif defect == "missing_check":
+            bad["checks"].pop("native_disk_only")
+        else:
+            bad["health"]["active_parsers"]["tool_call_parser"] = "unknown"
+        assert grade(bad) == "open", defect
+
+
 def test_objective_proof_digest_surfaces_default_cache_tool_loop_round_diagnostics(
     tmp_path,
 ):

@@ -799,6 +799,34 @@ def _command_tokens(payload: dict[str, Any]) -> list[str]:
     return []
 
 
+def _attached_dsv4_ssd_tool_policy(payload: dict[str, Any]) -> bool:
+    """Read the attached producer's observed policy, never invent launch argv."""
+    health = payload.get("health") or {}
+    native = health.get("native_cache") or {}
+    provenance = health.get("runtime_provenance") or {}
+    topology = (provenance.get("cache_topology_provenance") or {}).get("configuration") or {}
+    configured = topology.get("configured") or {}
+    instantiated = topology.get("instantiated") or {}
+    parsers = health.get("active_parsers") or {}
+    return (
+        payload.get("attached") is True
+        and payload.get("server_pid") == provenance.get("pid")
+        and isinstance(provenance.get("pid"), int)
+        and provenance["pid"] > 0
+        and health.get("status") == "healthy"
+        and health.get("model_loaded") is True
+        and configured.get("enable_prefix_cache") is True
+        and configured.get("use_paged_cache") is False
+        and configured.get("enable_block_disk_cache") is True
+        and instantiated.get("block_disk_only") is True
+        and instantiated.get("paged_ram_enabled") is False
+        and native.get("paged") is False
+        and native.get("block_disk_only") is True
+        and parsers.get("tool_call_parser") == "dsml"
+        and parsers.get("reasoning_parser") == "deepseek_r1"
+    )
+
+
 def _resolve_artifact_path(root: Path, value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
@@ -5833,13 +5861,14 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         if isinstance(default_cache_tool_loop.get("checks"), dict)
         else {}
     )
+    attached_ssd_policy = _attached_dsv4_ssd_tool_policy(default_cache_tool_loop)
     required_default_tool_checks = (
         "tool_sequence_ordered",
         "final_done",
         "file_written",
         "native_cache",
         "native_prefix",
-        "native_paged",
+        "native_disk_only" if attached_ssd_policy else "native_paged",
         "native_l2",
         "generic_tq_kv_off",
         "cached_tokens_seen",
@@ -5857,18 +5886,20 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     default_tool_required_checks_ok = all(
         default_tool_checks.get(key) is True for key in required_default_tool_checks
     )
-    default_tool_parser_ok = "--tool-call-parser" in default_tool_cmd and "dsml" in default_tool_cmd
+    default_tool_parser_ok = attached_ssd_policy or ("--tool-call-parser" in default_tool_cmd and "dsml" in default_tool_cmd)
     default_reasoning_parser_ok = (
-        "--reasoning-parser" in default_tool_cmd and "deepseek_r1" in default_tool_cmd
+        attached_ssd_policy or ("--reasoning-parser" in default_tool_cmd and "deepseek_r1" in default_tool_cmd)
     )
     default_tool_cache_ok = (
         "--disable-prefix-cache" not in default_tool_cmd
-        and "--dsv4-enable-prefix-cache" in default_tool_cmd
-        and "--use-paged-cache" in default_tool_cmd
-        and "--enable-block-disk-cache" in default_tool_cmd
+        and (attached_ssd_policy or (
+            "--dsv4-enable-prefix-cache" in default_tool_cmd
+            and "--use-paged-cache" in default_tool_cmd
+            and "--enable-block-disk-cache" in default_tool_cmd
+        ))
         and default_tool_native.get("cache_type") == "native_composite"
         and default_tool_native.get("prefix") is True
-        and default_tool_native.get("paged") is True
+        and (attached_ssd_policy or default_tool_native.get("paged") is True)
         and default_tool_native.get("block_disk_l2") is True
         and (default_tool_native.get("generic_turboquant_kv") or {}).get("enabled")
         is False
