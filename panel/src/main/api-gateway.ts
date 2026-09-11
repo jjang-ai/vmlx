@@ -1794,6 +1794,14 @@ export class ApiGateway extends EventEmitter {
     return text || "the model failed to generate a response";
   }
 
+  private openAIStreamNoticeToOllama(payload: any): string {
+    // Same visible diagnostic convention as the direct Python Ollama adapter.
+    // Keep the warning separate from reasoning and before the single terminal.
+    if (payload?.choices?.length || !Array.isArray(payload?.warnings)) return "";
+    const messages = payload.warnings.filter(Boolean).map(String);
+    return messages.length ? "\n\n[vMLX notice] " + messages.join("; ") : "";
+  }
+
   // ── /api/chat ──
 
   private async handleOllamaChat(
@@ -2037,6 +2045,7 @@ export class ApiGateway extends EventEmitter {
                 return;
               }
               const delta = parsed.choices?.[0]?.delta;
+              const content = delta?.content || this.openAIStreamNoticeToOllama(parsed);
               const finishReason = parsed.choices?.[0]?.finish_reason;
               const reasoningDelta =
                 delta?.reasoning_content || delta?.reasoning;
@@ -2086,13 +2095,13 @@ export class ApiGateway extends EventEmitter {
               if (finishReason != null) {
                 doneReason = finishReason || "stop";
               }
-              if (delta?.content || reasoningDelta) {
+              if (content || reasoningDelta) {
                 const ollamaMsg: any = {
                   model: modelForResponse,
                   created_at: new Date().toISOString(),
                   message: {
                     role: "assistant",
-                    content: delta?.content || "",
+                    content,
                   },
                   done: false,
                 };
@@ -2381,9 +2390,9 @@ export class ApiGateway extends EventEmitter {
                 return;
               }
               const choice = chunk.choices?.[0];
-              const text = useRawCompletion
+              const text = (useRawCompletion
                 ? choice?.text || ""
-                : choice?.delta?.content || "";
+                : choice?.delta?.content || "") || this.openAIStreamNoticeToOllama(chunk);
               const thinking = useRawCompletion
                 ? ""
                 : choice?.delta?.reasoning_content || choice?.delta?.reasoning || "";

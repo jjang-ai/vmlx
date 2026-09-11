@@ -104,7 +104,7 @@ async function startDetailErrorBackend(detail: unknown = "lfm2 does not expose a
   return { server, port: await listen(server), bodies, paths };
 }
 
-async function startStreamingChatBackend(): Promise<BackendHandle> {
+async function startStreamingChatBackend(warnings = false): Promise<BackendHandle> {
   const bodies: any[] = [];
   const paths: string[] = [];
   const server = createServer((req, res) => {
@@ -127,6 +127,7 @@ async function startStreamingChatBackend(): Promise<BackendHandle> {
       res.write(
         'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":2}}\n\n',
       );
+      if (warnings) res.write('data: {"choices":[],"warnings":["image_controls: effective 252x252"]}\n\n');
       res.write("data: [DONE]\n\n");
       res.end();
     });
@@ -699,6 +700,21 @@ describe("Ollama gateway request translation behavior", () => {
     }
   });
 
+  it.each(["chat", "generate"])("retains %s effective media notices before one terminal", async (lane) => {
+    backend = await startStreamingChatBackend(true);
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const response = await fetch(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-model", prompt: "hi", messages: [], stream: true }),
+    });
+    const rows = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    const content = rows.map(row => lane === "chat" ? row.message?.content || "" : row.response || "").join("");
+    expect(content).toBe("hello\n\n[vMLX notice] image_controls: effective 252x252");
+    expect(rows.filter(row => row.done)).toHaveLength(1);
+    expect(rows.at(-1)).toMatchObject({ done: true, eval_count: 2, prompt_eval_count: 2 });
+  });
+
   it("forwards the Ollama seed on both chat and generate", async () => {
     // The Python route honours options.seed and top-level seed; the gateway
     // dropped both, so the identical request was reproducible against the
@@ -1258,6 +1274,10 @@ describe("Ollama gateway request translation behavior", () => {
         done: false,
       },
       {
+        model: "hy3-model", created_at: expect.any(String), done: false,
+        message: { role: "assistant", content: "\n\n[vMLX notice] The model ended normally while still in its reasoning phase." },
+      },
+      {
         error:
           "The model produced reasoning_content but no visible answer and no tool call.",
       },
@@ -1297,6 +1317,10 @@ describe("Ollama gateway request translation behavior", () => {
         response: "",
         thinking: "private plan",
         done: false,
+      },
+      {
+        model: "hy3-model", created_at: expect.any(String), done: false,
+        response: "\n\n[vMLX notice] The model ended normally while still in its reasoning phase.",
       },
       {
         error:
