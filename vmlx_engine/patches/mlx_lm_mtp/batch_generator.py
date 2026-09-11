@@ -662,8 +662,7 @@ class _MtpStats:
     draft_emits: int = 0  # tokens emitted as accepted drafts
     bonus_emits: int = 0  # tokens emitted as bonus (accepted + emit_bonus)
     verify_emits: int = 0  # tokens emitted as verify-position correction (reject path)
-    # Depth-aware counters (depth > 1 engages only when every cache layer is
-    # trimmable — pure-KV families like hy_v3; hybrids stay depth-1).
+    # Depth > 1 requires trimmable caches or explicit accepted-prefix rollback.
     depth: int = 1  # resolved draft depth for this sequence
     starting_depth: int = 1
     depth_ceiling: int = 1
@@ -694,6 +693,8 @@ class _MtpStats:
     fallback_mtp_ms_per_token: Optional[float] = None
     fallback_ar_step_ms: Optional[float] = None
     seed_ar_step_ms: Optional[float] = None
+    seed_context_tokens: Optional[int] = None
+    seed_context_source: str = "unknown"
     recovery: dict = field(default_factory=dict)
     # A phase can publish repeatedly while parked in AR. Count only deltas,
     # and do not count re-entry as a new logical request.
@@ -815,6 +816,8 @@ def _native_mtp_payload(
         "adaptive_depth_value": dict(stats.adaptive_depth_value),
         "recovery": dict(stats.recovery),
         "seed_ar_step_ms": stats.seed_ar_step_ms,
+        "seed_context_tokens": stats.seed_context_tokens,
+        "seed_context_source": stats.seed_context_source,
         "forwards": {
             "seed_main": int(stats.seed_main_forwards),
             "verify_main": int(stats.verify_main_forwards),
@@ -1490,6 +1493,45 @@ def _trim_glm_head_chain(state: "_MtpState") -> bool:
 # emitted tokens; stash a draft for the first verify cycle.
 # ---------------------------------------------------------------------------
 
+def _mtp_context_extent(gen_batch: Any) -> Tuple[int, str]:
+    """Read logical context before the seed, including SSD-restored positions.
+
+    GenerationBatch.tokens can contain only the admitted suffix. Never infer
+    the full context from an allocated KV buffer's shape. Native MTP owns a
+    singleton here; a vector offset for several rows is not one logical extent.
+    This value is telemetry only: the AR verdict scales by cycle-wall cost.
+    """
+    offsets = []
+    pending = list(getattr(gen_batch, "prompt_cache", ()) or ())
+    seen = set()
+    while pending:
+        entry = pending.pop()
+        if id(entry) in seen:
+            continue
+        seen.add(id(entry))
+        try:
+            pending.extend(getattr(entry, "caches", ()) or ())
+            value = getattr(entry, "offset", None)
+            if type(value) is int:
+                offset = value
+            elif value is not None and getattr(value, "size", None) == 1:
+                offset = value.reshape(()).item()
+                if type(offset) is not int:
+                    continue
+            else:
+                continue
+            if offset >= 0:
+                offsets.append(offset)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+    if offsets:
+        return max(offsets), "logical_cache_offset"
+    try:
+        return len(gen_batch.tokens[0]), "admitted_tokens_fallback"
+    except (AttributeError, IndexError, TypeError):
+        return 0, "unknown"
+
+
 def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = None) -> None:
     """Bridge from standard ``__init__``'s ``_step()`` into vMLX's MTP cycle.
 
@@ -1517,6 +1559,7 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
         return
 
     recovery_t0 = time.perf_counter() if recovery is not None else 0.0
+    seed_context_tokens, seed_context_source = _mtp_context_extent(gen_batch)
     sampler = _resolve_sampler(gen_batch)
     procs = _proc_list(gen_batch)
 
@@ -1555,15 +1598,15 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
     state.recovery_probe_started = recovery_t0
     state.ar_step_ms = recovery.ar_ms if recovery is not None else seed_step_ms
     state.stats.seed_ar_step_ms = seed_step_ms
+    state.stats.seed_context_tokens = seed_context_tokens
+    state.stats.seed_context_source = seed_context_source
+    state.ar_safety.prompt_tokens = seed_context_tokens
     logger.info(
-        "MTP[%s] AR baseline: seed_step_ms=%.3f effective_ms=%.3f source=%s",
+        "MTP[%s] AR baseline: seed_step_ms=%.3f effective_ms=%.3f source=%s context_tokens=%d context_source=%s",
         gen_batch.uids[0], seed_step_ms, state.ar_step_ms,
         "productive_ar" if recovery is not None else "single_seed",
+        seed_context_tokens, seed_context_source,
     )
-    try:
-        state.ar_safety.prompt_tokens = int(len(gen_batch.tokens[0]))
-    except Exception:
-        state.ar_safety.prompt_tokens = 0
     if _glm_prompt_priming_enabled(gen_batch.model):
         from ...native_mtp_prompt_priming import prime_stats, take_primed
 

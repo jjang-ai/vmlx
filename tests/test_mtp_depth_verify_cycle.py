@@ -411,6 +411,9 @@ class TestMtpDepthGreedyIdentity:
                 assert cache.offset == len(prompt) + len(got)
             pending = int(batch._next_tokens.item())
             _post_init_mtp(batch)
+            assert batch._omlx_mtp_state.stats.seed_context_tokens == len(prompt) + len(got)
+            assert batch._omlx_mtp_state.stats.seed_context_source == "logical_cache_offset"
+            assert batch._omlx_mtp_state.ar_safety.prompt_tokens == len(prompt) + len(got)
             # Re-priming computes ahead, but cannot publish or append history.
             assert batch.tokens[0] == initial_history + got
             assert batch._omlx_mtp_state.queue[0][0] == pending
