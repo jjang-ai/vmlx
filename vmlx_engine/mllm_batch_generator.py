@@ -10401,6 +10401,46 @@ class MLLMBatchGenerator:
             and _media_embed_kwarg_name(self.language_model) is not None
         )
 
+    def _has_qwen_hybrid_media_tail_path(self) -> bool:
+        return str(getattr(self, "_model_type", "") or "").lower() in {
+            "qwen3_5", "qwen3_5_moe",
+        }
+
+    def _decline_unsupported_hybrid_media_tail(
+        self, request: "MLLMBatchRequest", token_ids: List[int], cached_tokens: int,
+    ) -> bool:
+        """Apply the existing media-tail rejection before companion work.
+
+        Reconstructing or deriving an SSM checkpoint is wasted when the final
+        hybrid admission would discard the hit anyway. Supported conditioned
+        tails keep their full boundary/capability validation later; this early
+        check grants no new reuse and never mutates media payloads.
+        """
+        if self._has_qwen_hybrid_media_tail_path() or cached_tokens <= 0:
+            return False
+        try:
+            tail_has_media = self._tokens_contain_media_placeholders(
+                list(token_ids[cached_tokens:])
+                + list(getattr(request, "_gen_prefix_tokens", None) or [])
+            )
+        except Exception:
+            # Retain the existing late admission path if detection is unknown.
+            return False
+        if not tail_has_media:
+            return False
+        self._discard_request_cache_hit(
+            request,
+            reason="media_placeholders_in_uncached_tail",
+            attempted_cached_tokens=cached_tokens,
+        )
+        logger.info(
+            "VLM hybrid cache hit declined before companion work for %s: "
+            "%d cached tokens leave unsupported media in the suffix; "
+            "skipping reconstruction and SSM derive, full prefill",
+            request.request_id, cached_tokens,
+        )
+        return True
+
     def _prepare_qwen_hybrid_media_tail_for_cache_hit(
         self,
         request: "MLLMBatchRequest",
@@ -10416,8 +10456,7 @@ class MLLMBatchGenerator:
         sliced. A prefix containing media requires per-item cache identity,
         and must not end inside a placeholder run.
         """
-        family = str(getattr(self, "_model_type", "") or "").lower()
-        if family not in {"qwen3_5", "qwen3_5_moe"}:
+        if not self._has_qwen_hybrid_media_tail_path():
             return None
         if cached_tokens <= 0 or cached_tokens > len(token_ids):
             return None
@@ -13848,6 +13887,10 @@ class MLLMBatchGenerator:
                                 )
 
                                 if is_hybrid:
+                                    if self._decline_unsupported_hybrid_media_tail(
+                                        req, list(token_list), int(block_table.num_tokens),
+                                    ):
+                                        continue
                                     # Check companion SSM state cache BEFORE reconstruction.
                                     # Use actual prompt token count (not block-aligned) to match
                                     # the store key which also uses len(all_tokens).
