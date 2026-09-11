@@ -4580,6 +4580,10 @@ class MLLMNativeMTPState:
     ladder_depth: int = 0
     promote_probe: bool = False
     promote_from_depth: int = 1
+    # Observational only: start wall, verified-token count, origin and AR cost.
+    # Includes the promotion's warmup, unlike the decision ring. No tensors or
+    # synchronization; promotion is already in MTP and does not reseed from AR.
+    promotion_accounting: Optional[Tuple[float, int, float, float]] = None
     promote_at_cycle: int = 0
     promote_backoff: int = 0
     promotions: int = 0
@@ -6484,6 +6488,35 @@ def _native_mtp_recent_ms_per_tok(state: MLLMNativeMTPState) -> float:
     return d_ms / d_e if d_e > 0 and d_ms > 0 else 0.0
 
 
+def _native_mtp_log_promotion_accounting(
+    request_id: str, state: MLLMNativeMTPState, outcome: str, *, now: float
+) -> None:
+    """Observe a complete promotion trial, never change its admission verdict.
+
+    Counters describe verified tokens, not client delivery. Reference costs
+    are the rates frozen at trial entry, not a simultaneous AR counterfactual.
+    An unfinished trial has no completed observation. Seed and final queue
+    drain are outside this interval and must not be inferred from this log.
+    """
+    start = state.promotion_accounting
+    state.promotion_accounting = None
+    if start is None:
+        return
+    started, initial_tokens, origin_ms, ar_ms = start
+    tokens = int(state.stats.cycles) + int(state.stats.accepted_tokens) - initial_tokens
+    wall_ms = (now - started) * 1000.0
+    if tokens <= 0 or wall_ms < 0:
+        return
+    logger.info(
+        "MLLM MTP[%s] promotion accounting D%d -> D%d outcome=%s "
+        "verified_tokens=%d wall_ms=%.3f ms_per_verified_token=%.3f "
+        "origin_reference_ms=%.3f ar_reference_ms=%.3f "
+        "includes_warmup=true includes_seed=false includes_final_drain=false",
+        request_id, state.promote_from_depth, state.depth, outcome,
+        tokens, wall_ms, wall_ms / tokens, origin_ms * tokens, ar_ms * tokens,
+    )
+
+
 def _native_mtp_maybe_ar_safety_fallback(
     request_id: str, state: MLLMNativeMTPState
 ) -> bool:
@@ -6538,6 +6571,10 @@ def _native_mtp_maybe_ar_safety_fallback(
             state.promote_from_depth = depth_now
             state.depth = depth_now + 1
             state.promote_probe = True
+            state.promotion_accounting = (
+                time.perf_counter(), cycles + int(state.stats.accepted_tokens),
+                d1_cost, ar_baseline,
+            )
             state.promotions += 1
             state.promote_at_cycle = 0
             state.ar_safety.reset(cycles)
@@ -6708,6 +6745,9 @@ def _native_mtp_maybe_ar_safety_fallback(
 
     if promoting:
         if trip is None and window_full:
+            _native_mtp_log_promotion_accounting(
+                request_id, state, "kept", now=time.perf_counter()
+            )
             state.promote_probe = False
             state.promote_backoff = 0
             state.promote_at_cycle = (
@@ -6726,6 +6766,9 @@ def _native_mtp_maybe_ar_safety_fallback(
             )
             return False
         if trip is not None:
+            _native_mtp_log_promotion_accounting(
+                request_id, state, "lost", now=time.perf_counter()
+            )
             state.promote_probe = False
             state.depth = max(1, state.promote_from_depth)
             state.promote_backoff += 1

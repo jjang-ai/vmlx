@@ -25,6 +25,36 @@ BASE = dict(
 )
 
 
+def test_promotion_accounting_includes_warmup_without_changing_decision(caplog):
+    import logging
+    from vmlx_engine import mllm_batch_generator as m
+
+    state = m.MLLMNativeMTPState(depth=2, promote_probe=True)
+    state.promote_from_depth = 1
+    state.promotion_accounting = (10.0, 100, 20.0, 30.0)
+    state.stats.cycles = 60
+    state.stats.accepted_tokens = 60
+    # Complete trial 600ms/20 tokens. A smaller judged ring must not replace
+    # its warmup-inclusive denominator; this observation cannot change depth.
+    state.ar_safety.ring = [(52, 110, 10.4), (60, 120, 10.6)]
+    with caplog.at_level(logging.INFO):
+        m._native_mtp_log_promotion_accounting("trial", state, "lost", now=10.6)
+    assert "verified_tokens=20" in caplog.text
+    assert "wall_ms=600.000" in caplog.text
+    assert "origin_reference_ms=400.000" in caplog.text
+    assert "ar_reference_ms=600.000" in caplog.text
+    assert state.depth == 2 and state.promote_probe
+    assert state.promotion_accounting is None
+
+
+def test_promotion_accounting_missing_start_is_not_zero_cost(caplog):
+    from vmlx_engine import mllm_batch_generator as m
+
+    state = m.MLLMNativeMTPState(depth=2)
+    m._native_mtp_log_promotion_accounting("missing", state, "kept", now=10.6)
+    assert not caplog.records
+
+
 @pytest.mark.parametrize('probe', [False, True])
 def test_probe_cannot_win_from_median_guard_alone(probe):
     # Same window: five cheap cycles, three expensive ones. Median cost is
