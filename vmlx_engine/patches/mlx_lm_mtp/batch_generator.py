@@ -973,6 +973,9 @@ def _restore_or_trim_caches(prompt_cache: List[Any], n: int = 1) -> bool:
     # caller must fail the request loudly (uniform with the MLLM path).
     for c in prompt_cache:
         if callable(getattr(c, "rollback_speculative", None)):
+            can_rollback = getattr(c, "can_rollback_speculative", None)
+            if callable(can_rollback) and not can_rollback(n):
+                return False
             continue
         if getattr(c, "rollback_state", None) is not None:
             continue
@@ -1006,8 +1009,7 @@ def _effective_depth_resolution(gen_batch: Any) -> tuple[int, str]:
         an arbitrary accepted speculative prefix, and
       - ``mtp_forward`` supporting ``return_hidden`` (chained drafting feeds
         the head's hidden back as the next step's previous-hidden).
-    Hybrid families (qwen3.5/3.6) fail the trimmable check and keep the
-    proven depth-1 behavior byte-for-byte.
+    Hybrid layers without an explicit partial-rollback contract remain D1.
     """
     try:
         from vmlx_engine.native_mtp import native_mtp_effective_depth

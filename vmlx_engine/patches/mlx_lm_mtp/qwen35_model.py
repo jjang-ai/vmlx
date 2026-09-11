@@ -353,6 +353,11 @@ def _patch_gated_delta_net(q35: Any) -> None:
     ):
         B, S, _ = inputs.shape
 
+        if cache is not None:
+            from .qwen_rollback import prepare_qwen_rollback
+
+            prepare_qwen_rollback(cache)
+
         if self.sharding_group is not None:
             inputs = sum_gradients(self.sharding_group)(inputs)
 
@@ -433,6 +438,26 @@ def _patch_gated_delta_net(q35: Any) -> None:
             )
             if cache is not None:
                 cache.rollback_state = (conv_c, ssm_c)
+                from .qwen_rollback import record_qwen_rollback
+
+                def restore_accepted_prefix(accepted):
+                    if accepted == 0:
+                        return conv_c, ssm_c
+                    end = n_confirmed + accepted
+                    # Re-evaluate only this layer's short recurrent suffix
+                    # from its confirmed snapshot. Projection GEMMs and the
+                    # rest of the backbone are not replayed.
+                    _, conv_r, ssm_r = self._process_chunk(
+                        qkv[:, n_confirmed:end],
+                        a[:, n_confirmed:end],
+                        b[:, n_confirmed:end],
+                        conv_c,
+                        ssm_c,
+                        mask[:, n_confirmed:end] if mask is not None else None,
+                    )
+                    return conv_r, ssm_r
+
+                record_qwen_rollback(cache, S - n_confirmed, restore_accepted_prefix)
             capture_gdn_sink(
                 qkv[:, n_confirmed:],
                 a[:, n_confirmed:],
