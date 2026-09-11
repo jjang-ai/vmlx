@@ -364,6 +364,66 @@ class TestMtpDepthGreedyIdentity:
         finally:
             set_mtp_active(previous)
 
+    @pytest.mark.parametrize("depth", [1, 2, 3])
+    @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
+    def test_productive_ar_reentry_preserves_pending_token_and_history(
+        self, monkeypatch, depth, wrong_from_step
+    ):
+        """Pin the resume seam before wiring an automatic recovery policy.
+
+        A performance handoff consumes the last visible MTP token. After
+        productive stock steps, post-init must consume the *pending* sample,
+        not the last visible token, and emit it exactly once.
+        """
+        from vmlx_engine.patches.mlx_lm_mtp import (
+            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        )
+        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _post_init_mtp
+
+        assert apply_mlx_lm_mtp_patch() is True
+        prompt, limit = [3, 5, 7, 11, 13], 48
+        previous = is_mtp_active()
+        try:
+            set_mtp_active(False)
+            expected = _run_generation(_FakeCacheModel(), prompt, limit)
+            monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
+            monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+            set_mtp_active(True)
+            batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
+            # The shared fixture passes the complete prompt to stock init,
+            # whose initial _step appends the final prompt token. Isolate
+            # handoff/re-entry mutations from that existing fixture convention.
+            initial_history = list(batch.tokens[0])
+            state = batch._omlx_mtp_state
+            state.ar_fallback_pending = True
+            state.ar_fallback_reason = "test controlled performance handoff"
+            got = []
+            while getattr(batch, "_omlx_mtp_state", None) is not None:
+                got.extend(int(r.token) for r in batch.next())
+                assert len(got) < limit
+            for _ in range(5):
+                got.extend(int(r.token) for r in batch.next())
+            assert batch.tokens[0] == initial_history + got
+            for cache in batch.prompt_cache:
+                assert cache.offset == len(prompt) + len(got)
+            pending = int(batch._next_tokens.item())
+            _post_init_mtp(batch)
+            # Re-priming computes ahead, but cannot publish or append history.
+            assert batch.tokens[0] == initial_history + got
+            assert batch._omlx_mtp_state.queue[0][0] == pending
+            first = batch.next()
+            assert int(first[0].token) == pending
+            got.extend(int(r.token) for r in first)
+            while len(got) < limit:
+                responses = batch.next()
+                assert responses
+                got.extend(int(r.token) for r in responses)
+                if responses[-1].finish_reason is not None:
+                    break
+            assert got == expected
+        finally:
+            set_mtp_active(previous)
+
     def test_cache_length_tracks_emitted_tokens_exactly(self, monkeypatch):
         """Rollback must leave the KV cache exactly at the confirmed prefix.
 
