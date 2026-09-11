@@ -689,6 +689,10 @@ class _MtpStats:
     fallback_ar_step_ms: Optional[float] = None
     seed_ar_step_ms: Optional[float] = None
     recovery: dict = field(default_factory=dict)
+    # A phase can publish repeatedly while parked in AR. Count only deltas,
+    # and do not count re-entry as a new logical request.
+    totals_published: dict = field(default_factory=dict, repr=False)
+    request_counted: bool = False
 
 
 @dataclass
@@ -836,20 +840,21 @@ def _publish_native_mtp_stats(
     payload = _native_mtp_payload(uid, stats, finish_reason)
     with _MTP_TELEMETRY_LOCK:
         _LAST_NATIVE_MTP = payload
-        _NATIVE_MTP_TOTALS["requests"] += 1
-        _NATIVE_MTP_TOTALS["cycles"] += int(stats.cycles)
-        _NATIVE_MTP_TOTALS["drafted_tokens"] += int(
-            stats.draft_tokens_proposed
-        )
-        _NATIVE_MTP_TOTALS["accepted_tokens"] += int(
-            stats.draft_tokens_accepted
-        )
-        _NATIVE_MTP_TOTALS["mtp_cache_recreated_on_rejects"] += int(
-            stats.mtp_cache_recreated_on_rejects
-        )
-        _NATIVE_MTP_TOTALS["mtp_cache_retained_on_rejects"] += int(
-            stats.mtp_cache_retained_on_rejects
-        )
+        if not stats.request_counted:
+            _NATIVE_MTP_TOTALS["requests"] += 1
+            stats.request_counted = True
+        counters = {
+            "cycles": stats.cycles,
+            "drafted_tokens": stats.draft_tokens_proposed,
+            "accepted_tokens": stats.draft_tokens_accepted,
+            "mtp_cache_recreated_on_rejects": stats.mtp_cache_recreated_on_rejects,
+            "mtp_cache_retained_on_rejects": stats.mtp_cache_retained_on_rejects,
+        }
+        for key, value in counters.items():
+            value = int(value)
+            previous = stats.totals_published.get(key, 0)
+            _NATIVE_MTP_TOTALS[key] += max(0, value - previous)
+            stats.totals_published[key] = max(previous, value)
     return payload
 
 
@@ -1540,6 +1545,7 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
 
     state = _MtpState()
     state.recovery = recovery
+    state.stats.request_counted = recovery is not None
     state.recovery_probe_started = recovery_t0
     state.ar_step_ms = recovery.ar_ms if recovery is not None else seed_step_ms
     state.stats.seed_ar_step_ms = seed_step_ms

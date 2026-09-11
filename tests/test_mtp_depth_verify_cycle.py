@@ -465,6 +465,7 @@ class TestMtpDepthGreedyIdentity:
                     assert state.recovery.standard_tokens == 128
                     assert state.recovery.attempts == 1
                     assert state.ar_step_ms == 100.0
+                    assert state.stats.request_counted
                 if state is not None:
                     assert 1 <= state.depth <= depth
                 if responses[-1].finish_reason is not None:
