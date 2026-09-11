@@ -23,3 +23,23 @@ def test_invalid_num_predict_is_400_before_generation(monkeypatch, path, extra, 
     assert result.json()['code'] == 'invalid_request_error'
     assert 'num_predict' in result.json()['error']
     generation.assert_not_called()
+
+@pytest.mark.parametrize('path,extra', [('/api/chat', {'messages': [{'role':'user','content':'hi'}]}),
+    ('/api/generate', {'prompt':'hi'})])
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('nested', [False, True])
+def test_invalid_media_control_is_400_before_generation(monkeypatch, path, extra, stream, nested):
+    from vmlx_engine import server
+    monkeypatch.setattr(server, '_engine', SimpleNamespace(is_mllm=False))
+    monkeypatch.setattr(server, '_api_key', None)
+    monkeypatch.setattr(server, '_standby_state', None)
+    generation = Mock(side_effect=AssertionError('invalid request reached inference'))
+    monkeypatch.setattr(server, 'create_chat_completion', generation)
+    controls = {'image_max_pixels': 0, 'media_controls_strict': True}
+    body = {'model':'test', 'stream':stream, **extra,
+            **({'options':controls} if nested else controls)}
+    with TestClient(server.app, raise_server_exceptions=False) as client:
+        result = client.post(path, json=body)
+    assert result.status_code == 400, result.text
+    assert 'image_max_pixels' in result.json()['error']
+    generation.assert_not_called()

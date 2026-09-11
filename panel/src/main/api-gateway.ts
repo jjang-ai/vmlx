@@ -2667,6 +2667,11 @@ export class ApiGateway extends EventEmitter {
     const detailMessage =
       typeof detail === "string"
         ? detail
+        : Array.isArray(detail)
+          ? detail
+              .filter((item: any) => typeof item?.msg === "string")
+              .map((item: any) => item.msg)
+              .join("; ") || undefined
         : typeof detail?.message === "string"
           ? detail.message
           : undefined;

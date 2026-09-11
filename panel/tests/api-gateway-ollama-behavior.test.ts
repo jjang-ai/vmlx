@@ -83,7 +83,7 @@ async function startCaptureBackend(): Promise<BackendHandle> {
   return { server, port: await listen(server), bodies, paths };
 }
 
-async function startDetailErrorBackend(): Promise<BackendHandle> {
+async function startDetailErrorBackend(detail: unknown = "lfm2 does not expose a native thinking-off/instruct mode", status = 400): Promise<BackendHandle> {
   const bodies: any[] = [];
   const paths: string[] = [];
   const server = createServer((req, res) => {
@@ -93,10 +93,10 @@ async function startDetailErrorBackend(): Promise<BackendHandle> {
       paths.push(req.url || "");
       const raw = Buffer.concat(chunks).toString("utf8");
       bodies.push(raw ? JSON.parse(raw) : {});
-      res.writeHead(400, { "Content-Type": "application/json" });
+      res.writeHead(status, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          detail: "lfm2 does not expose a native thinking-off/instruct mode",
+          detail,
         }),
       );
     });
@@ -678,6 +678,24 @@ describe("Ollama gateway request translation behavior", () => {
     });
     for (const field of Object.keys(controls)) {
       expect(backend.bodies[1]).not.toHaveProperty(field);
+    }
+  });
+
+  it.each(["chat", "generate"])("retains %s backend validation details without echoing input", async (lane) => {
+    backend = await startDetailErrorBackend([
+      { loc: ["body", "image_max_pixels"], msg: "Value error, image_max_pixels must be a whole number >= 1", input: "private-input" },
+    ], 422);
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    for (const stream of [false, true]) {
+      const response = await fetch(`http://127.0.0.1:${started.port}/api/${lane}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "text-model", prompt: "hi", messages: [], stream }),
+      });
+      expect(response.status).toBe(422);
+      const wire = await response.text();
+      expect(wire).toContain("image_max_pixels must be a whole number");
+      expect(wire).not.toContain("private-input");
     }
   });
 

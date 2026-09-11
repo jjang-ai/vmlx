@@ -433,6 +433,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["repetition_penalty"] = opts["repeat_penalty"]
     _apply_ollama_prompt_context_limit(body, req)
     _apply_ollama_thinking(body, req)
+    _apply_ollama_video_controls(body, req)
     if _should_forward_reasoning_effort(body, req):
         req["reasoning_effort"] = body["reasoning_effort"]
     if isinstance(body.get("chat_template_kwargs"), dict):
