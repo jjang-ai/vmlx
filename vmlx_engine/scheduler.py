@@ -3781,6 +3781,17 @@ class Scheduler:
                     generator._vmlx_prompt_boundary_callback = (
                         self._store_glm_prompt_boundary
                     )
+                elif (
+                    self._is_hybrid
+                    and not self._uses_dsv4_cache
+                    and not self._uses_zaya_cache
+                    and not self._mixed_attention_cache_model
+                    and self.block_aware_cache is not None
+                    and self._ssm_state_cache is not None
+                    and self._ssm_state_cache.disk_enabled
+                ):
+                    generator._vmlx_hybrid_boundary_target = self._hybrid_prefill_boundary_target
+                    generator._vmlx_hybrid_boundary_store = self._store_hybrid_prefill_boundary
                 return generator
         except Exception as _mtp_gen_err:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
@@ -4666,6 +4677,60 @@ class Scheduler:
             len(store_tokens),
             boundary,
         )
+
+    def _hybrid_prefill_capture_request(self, uid, processed):
+        request_id = self.uid_to_request_id.get(int(uid))
+        request = self.running.get(request_id) if request_id is not None else None
+        if request is None or getattr(request, "_bypass_prefix_cache", False):
+            return None
+        if (getattr(request, "images", None) or getattr(request, "videos", None)
+                or getattr(request, "pixel_values", None) is not None
+                or getattr(request, "pixel_values_videos", None) is not None):
+            return None
+        base = max(0, int(getattr(request, "cached_tokens", 0) or 0))
+        full = list(request.prompt_token_ids or [])
+        # Stock BatchGenerator has no all_tokens on this path: its token list
+        # contains only the admitted suffix. Verify that contract, never guess.
+        if list(processed) != full[base:base + len(processed)]:
+            return None
+        key_tokens = prefix_cache_key_tokens(request)
+        boundary = len(key_tokens) - 1
+        if boundary <= 0 or base > boundary:
+            return None
+        return request, base, key_tokens[:boundary]
+
+    def _hybrid_prefill_boundary_target(self, uid, processed):
+        owner = self._hybrid_prefill_capture_request(uid, processed)
+        if owner is None:
+            return None
+        request, base, tokens = owner
+        if getattr(request, "_hybrid_prefill_companion_captured", False):
+            return None
+        return len(tokens) - base
+
+    def _store_hybrid_prefill_boundary(self, uid, processed, cache):
+        owner = self._hybrid_prefill_capture_request(uid, processed)
+        if owner is None:
+            return False
+        request, base, tokens = owner
+        if base + len(processed) != len(tokens) or len(cache) != self._hybrid_num_layers:
+            return False
+        kv_positions = set(self._hybrid_kv_positions or [])
+        states = [layer for i, layer in enumerate(cache) if i not in kv_positions]
+        if not states:
+            return False
+        started = time.perf_counter()
+        # store() synchronously detaches/materializes native state and queues
+        # bounded CPU-owned bytes. No full KV snapshot survives this callback.
+        self._ssm_state_cache.store(tokens, len(tokens), states)
+        request._hybrid_prefill_companion_captured = True
+        logger.info(
+            "Hybrid SSD companion prefill capture: request=%s tokens=%d "
+            "states=%d elapsed_ms=%.3f (terminal durability still required)",
+            request.request_id, len(tokens), len(states),
+            (time.perf_counter() - started) * 1000.0,
+        )
+        return True
 
     def _persist_hybrid_ssd_companion(
         self, request: Request, store_tokens: List[int], block_table: Any

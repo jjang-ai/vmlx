@@ -201,7 +201,9 @@ def apply() -> bool:
 
         model = getattr(self, "model", None)
         if not _glm_prompt_priming_enabled(model) or not capture_requested(model):
-            return original_prompt_processing_prompt(self, tokens)
+            from ...utils.hybrid_prefill_capture import prompt_with_hybrid_capture
+
+            return prompt_with_hybrid_capture(self, tokens, original_prompt_processing_prompt)
         self.model = _GlmPromptCaptureProxy(model)
         try:
             return original_prompt_processing_prompt(self, tokens)
@@ -393,6 +395,10 @@ def apply() -> bool:
         return attach_prompt_cache_snapshots(self, responses)
 
     def patched_batch_generator_next(self, *args, **kwargs):
+        prompt_batch = getattr(self, "_prompt_batch", None)
+        if prompt_batch is not None:
+            for name in ("_vmlx_hybrid_boundary_target", "_vmlx_hybrid_boundary_store"):
+                setattr(prompt_batch, name, getattr(self, name, None))
         snapshots = _capture_glm_prompt_boundary_snapshots(self)
         result = original_batch_generator_next(self, *args, **kwargs)
         if snapshots:
