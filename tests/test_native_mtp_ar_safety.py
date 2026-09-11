@@ -232,10 +232,15 @@ def test_text_lane_trips_under_fixed_policy(monkeypatch):
     state.stats.draft_tokens_accepted = 0
     state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]
     assert tl._text_mtp_maybe_cost_fallback("req", state, now=time.perf_counter()) is False
-    # Rung 1: D3 -> D1.
+    # Each measured loss descends one rung: D3 -> D2 -> D1.
+    assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is False
+    assert state.depth == 2 and state.ar_fallback_pending is False
+    state.stats.cycles = 60
+    state.ar_safety.anchor_cycle_ms = 20.0
+    state.ar_safety.ring = [(51 + i, 51 + i, base_t + i * 0.020) for i in range(9)]
     assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.depth == 1 and state.ar_fallback_pending is False
-    # Rung 2: D1 -> AR.
+    # Final rung: D1 -> AR.
     state.stats.cycles = 80
     state.ar_safety.anchor_cycle_ms = 20.0
     state.ar_safety.ring = [(71 + i, 71 + i, base_t + i * 0.020) for i in range(9)]

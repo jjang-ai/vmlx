@@ -1119,10 +1119,12 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         return False
     prior_depth = int(state.depth or 1)
     if prior_depth > 1:
-        # First rung: D1 with a fresh window; AR only if D1 loses too.
-        state.depth = 1
+        # Judge the adjacent lower rung on its own fresh window. Fixed Dn is
+        # the ceiling, not permission to skip an unmeasured intermediate rung.
+        state.depth = prior_depth - 1
+        state.stats.depth = state.depth
         state.ar_safety.reset(cycles)
-        logger.info("MTP[%s] AR safety D%d -> D1: %s", request_id, prior_depth, trip.log_text(prior_depth))
+        logger.info("MTP[%s] AR safety D%d -> D%d: %s", request_id, prior_depth, state.depth, trip.log_text(prior_depth))
         return False
     state.ar_fallback_pending = True
     state.ar_fallback_reason = trip.reason(prior_depth)
