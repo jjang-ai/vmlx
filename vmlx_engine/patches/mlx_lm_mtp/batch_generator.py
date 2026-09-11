@@ -1164,6 +1164,17 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         return False
     cycles = int(state.stats.cycles)
     probing = state.recovery_probe_started > 0.0
+    # Neighbor value trials complete after eight samples. Settled-phase
+    # warmup would consume that entire trial without judging its AR cost.
+    # Use the existing probe window without treating it as AR re-entry:
+    # re-entry alone owns seed/priming qualification and its stricter margin.
+    probe_origin = int(state.adaptive_value.active_probe_origin or 0)
+    probe_target = int(state.adaptive_value.active_probe_target or 0)
+    neighbor_probing = (
+        probe_origin > 0
+        and probe_target == state.depth
+        and abs(probe_target - probe_origin) == 1
+    )
     measured = state.recovery is not None and state.recovery.ar_ms > 0.0
     if state.recovery is not None:
         state.stats.recovery = state.recovery.snapshot()
@@ -1174,7 +1185,7 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         now=time.perf_counter(),
         seed_ar_ms=float(state.ar_step_ms or 0.0),
         primed=str(state.stats.prompt_prime_source or "unprimed") != "unprimed",
-        probe=probing,
+        probe=probing or neighbor_probing,
         scale_context=not measured,
         baseline_measured=measured,
         margin=0.9 if probing else None,
