@@ -103,6 +103,15 @@ function App() {
   const activeSession = (pinnedSession && !sessionUsable(pinnedSession))
     ? sessions.find(s => sessionMatchesModelPath(s.modelPath, pinnedSession.modelPath) && sessionUsable(s)) || pinnedSession
     : pinnedSession
+  // Adopt the same-identity recovery, not only its endpoint. Otherwise Stop
+  // removes the usable twin and the next render silently reverts to the old
+  // stopped row, so Start/settings act on a different session again.
+  useEffect(() => {
+    if (state.activeChatId && activeSession?.id && activeSession.id !== state.activeSessionId) {
+      openChat(state.activeChatId, activeSession.id)
+    }
+  }, [state.activeChatId, state.activeSessionId, activeSession?.id, openChat])
+
   // Standby sessions still have a live process on their port — JIT middleware
   // auto-wakes. Loading sessions expose their endpoint too: a message sent
   // mid-load queues exactly once in the main process (visible load progress,

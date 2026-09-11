@@ -32,4 +32,9 @@ describe('active session usable-twin fallback', () => {
     expect(content).toBeDefined()
     expect(content).toContain('activeSessionId={activeSession?.id || state.activeSessionId}')
   })
+
+  it('adopts the resolved twin so Stop then Start cannot revert to the stale pin', () => {
+    expect(source).toContain('activeSession.id !== state.activeSessionId')
+    expect(source).toContain('openChat(state.activeChatId, activeSession.id)')
+  })
 })
