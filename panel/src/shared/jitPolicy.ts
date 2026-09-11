@@ -17,6 +17,11 @@
  * correctness/compatibility, not speed -- do not treat lifting an entry here as
  * a performance win without an A/B that logs the JIT lines.
  */
+/** Missing legacy/new-session values use the same default as the settings UI. */
+export function resolveRequestedJit(saved: boolean | undefined): boolean {
+  return saved !== false
+}
+
 export interface JitSuppressionInput {
   /** The saved session toggle. */
   enableJitRequested: boolean

@@ -5,6 +5,7 @@ import {
   computeEffectiveJit,
   isJitSuppressedByRuntime,
   jitSuppressionReason,
+  resolveRequestedJit,
 } from "../src/shared/jitPolicy"
 
 const ENABLED = {
@@ -28,6 +29,26 @@ const CONSUMERS = [
 ]
 
 describe("JIT suppression policy", () => {
+  it("defaults missing persisted JIT on without overriding an explicit off", () => {
+    for (const saved of [undefined, true, false]) {
+      const requested = resolveRequestedJit(saved)
+      expect(requested).toBe(saved !== false)
+      expect(computeEffectiveJit({ ...ENABLED, enableJitRequested: requested })).toBe(saved !== false)
+      expect(computeEffectiveJit({ ...ENABLED, enableJitRequested: requested, isMultimodal: true })).toBe(false)
+    }
+  })
+
+  it("preserves requested JIT through the drawer default merge", () => {
+    for (const stored of [{}, { enableJit: true }, { enableJit: false }]) {
+      const reopened = { enableJit: true, ...stored }
+      expect(resolveRequestedJit(stored.enableJit)).toBe(resolveRequestedJit(reopened.enableJit))
+    }
+    for (const rel of CONSUMERS) {
+      const src = readFileSync(resolve(__dirname, "..", rel), "utf8")
+      expect(src).not.toContain("enableJitRequested: !!config.enableJit")
+      expect(src).toContain("enableJitRequested: resolveRequestedJit(config.enableJit)")
+    }
+  })
   it("enables JIT only when requested and no runtime owns its own kernels", () => {
     expect(computeEffectiveJit(ENABLED)).toBe(true)
     expect(jitSuppressionReason(ENABLED)).toBeNull()
@@ -52,7 +73,7 @@ describe("JIT suppression policy", () => {
     }
   })
 
-  it("treats an unset toggle as disabled regardless of runtime", () => {
+  it("treats an explicit off as disabled regardless of runtime", () => {
     expect(
       jitSuppressionReason({ ...ENABLED, enableJitRequested: false }),
     ).toBe("disabled")

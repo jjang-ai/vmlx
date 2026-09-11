@@ -25,7 +25,7 @@ import {
   usesExactTypedPromptDiskCache,
 } from '../../../../shared/detectedFamilyNames'
 import { isRuntimeVideoCapable } from '../../../../shared/videoCapableFamilies'
-import { computeEffectiveJit, isJitSuppressedByRuntime } from '../../../../shared/jitPolicy'
+import { computeEffectiveJit, isJitSuppressedByRuntime, resolveRequestedJit } from '../../../../shared/jitPolicy'
 import { isMixedSwaBundle } from '../../../../shared/storedKvQuantPolicy'
 export interface SessionConfig {
   host: string
@@ -1344,7 +1344,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <input
               type="checkbox"
               checked={computeEffectiveJit({
-                enableJitRequested: !!config.enableJit,
+                enableJitRequested: resolveRequestedJit(config.enableJit),
                 isMultimodal: multimodalActive,
                 flashMoeActive,
                 distributedActive,

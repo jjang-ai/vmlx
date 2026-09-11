@@ -34,7 +34,7 @@ import {
 import {
   cacheTypeRequiresPaged,
 } from '../../../../shared/cacheTypeCapabilities'
-import { computeEffectiveJit } from '../../../../shared/jitPolicy'
+import { computeEffectiveJit, resolveRequestedJit } from '../../../../shared/jitPolicy'
 import {
   filterAdditionalArgs,
   finitePositiveInteger,
@@ -326,7 +326,7 @@ function buildCommandPreview(
       config.kvCacheQuantization !== 'auto',
   })
   const effectiveEnableJit = computeEffectiveJit({
-      enableJitRequested: !!config.enableJit,
+      enableJitRequested: resolveRequestedJit(config.enableJit),
       isMultimodal: isVLM,
       flashMoeActive: effectiveFlashMoe,
       distributedActive: effectiveDistributed,
@@ -345,7 +345,7 @@ function buildCommandPreview(
       config.enablePrefixCache !== false &&
       !!config.kvCacheQuantization &&
       config.kvCacheQuantization !== 'auto',
-    enableJitRequested: !!config.enableJit,
+    enableJitRequested: resolveRequestedJit(config.enableJit),
   })) {
     parts[0] = `${DISABLE_JANG_AFFINE_JIT_DEFAULT_ENV}=1 vmlx-engine serve`
   }

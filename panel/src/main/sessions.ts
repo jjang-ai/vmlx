@@ -92,7 +92,7 @@ import {
   verifyBundledEngineOnFilesystem,
 } from './engine-manager'
 import { app as electronApp } from 'electron'
-import { computeEffectiveJit } from '../shared/jitPolicy'
+import { computeEffectiveJit, resolveRequestedJit } from '../shared/jitPolicy'
 import {
   GENERIC_DEFAULT_TIMEOUT_SECONDS,
   SLOW_FAMILY_TIMEOUTS,
@@ -3272,7 +3272,7 @@ export class SessionManager extends EventEmitter {
       detected: freshDetectedConfig,
       kvCacheQuantization: config.kvCacheQuantization,
       explicitKvCacheQuantizationApplied: args.includes('--kv-cache-quantization'),
-      enableJitRequested: !!config.enableJit,
+      enableJitRequested: resolveRequestedJit(config.enableJit),
     }
     const lagunaMixedSwaTurboQuantActive =
       isLagunaMixedSwaTurboQuantEffective(lagunaJitPolicyInput)
@@ -5306,7 +5306,7 @@ export class SessionManager extends EventEmitter {
     const effectiveDistributed = requestedDistributed && !dsv4Active
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
     const effectiveEnableJit = computeEffectiveJit({
-      enableJitRequested: !!config.enableJit,
+      enableJitRequested: resolveRequestedJit(config.enableJit),
       isMultimodal: isVLM,
       flashMoeActive: effectiveFlashMoe,
       distributedActive: effectiveDistributed,
@@ -5323,7 +5323,7 @@ export class SessionManager extends EventEmitter {
     if (requestedFlashMoe && !effectiveFlashMoe) {
       console.warn(`[SESSION] Ignoring stale Flash MoE flag because ${dsv4Active ? 'DSV4-Flash is active' : 'distributed mode is active'}`)
     }
-    if (config.enableJit && !effectiveEnableJit) {
+    if (resolveRequestedJit(config.enableJit) && !effectiveEnableJit) {
       const reason = dsv4Active
         ? 'DeepSeek-V4 full-model tracing is unsafe for native SWA+CSA/HCA state; native compiled router/SwiGLU and fused Metal mHC decode remain automatic'
         : m3Active
