@@ -1,21 +1,21 @@
 {
-  "version": "1.6.56",
-  "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.56/vMLX-1.6.56-tahoe-arm64.dmg",
-  "sha256": "4c5ea8634443daee2f4ed143c20609eb1304c75b501e9f433ff3e204fb2728dc",
-  "sha512": "vK3Zt0bwzBWYLcKwZhQkGr533nvlctZ5wuLlHoPvWuxM72YKCMgSfov9UDaRvBMOxJxaLoTlt3oTeVg2NzygPg==",
+  "version": "1.6.57",
+  "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.57/vMLX-1.6.57-tahoe-arm64.dmg",
+  "sha256": "dda6f01660d3493a0e1f932f89796fdb40dcc1535c73555a4ccff4f936f5e78a",
+  "sha512": "mbFtZDDRtujCygKGjVguMZjalSxNILA1vFyEZYhnjTKdkkSVs6EYd1FEugFCD7vTu5z4WpsqwjDMwHIjTYq+JA==",
   "downloads": {
     "sequoia": {
-      "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.56/vMLX-1.6.56-sequoia-arm64.dmg",
-      "bytes": 534656884,
-      "sha256": "c14c83bc70bcf378e01a4cf33305c6be1f3bc72d852f1e0fe823e2ff4a07cf99",
-      "sha512": "giV53+el/kpszm4rtTieLZoVE2X5p+HplnxBMprZrHu1dD9I4BxsQ5NQ2JxkW7gy06ecwVXgy6RqVYLnRXnMHw=="
+      "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.57/vMLX-1.6.57-sequoia-arm64.dmg",
+      "bytes": 534688604,
+      "sha256": "45f9964c53738772b1bf32fb7686d11edadec9d7abf15346ec8479b7d6468710",
+      "sha512": "LXp+vV9FmoeNEdUGFBOeTxvEKiGv0FR2ocPmwTgyCgW2oa+BalkfsEerJtlCBGBgEQuea4zFCt2vX2CKYE5YTA=="
     },
     "tahoe": {
-      "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.56/vMLX-1.6.56-tahoe-arm64.dmg",
-      "bytes": 556487427,
-      "sha256": "4c5ea8634443daee2f4ed143c20609eb1304c75b501e9f433ff3e204fb2728dc",
-      "sha512": "vK3Zt0bwzBWYLcKwZhQkGr533nvlctZ5wuLlHoPvWuxM72YKCMgSfov9UDaRvBMOxJxaLoTlt3oTeVg2NzygPg=="
+      "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.6.57/vMLX-1.6.57-tahoe-arm64.dmg",
+      "bytes": 556653913,
+      "sha256": "dda6f01660d3493a0e1f932f89796fdb40dcc1535c73555a4ccff4f936f5e78a",
+      "sha512": "mbFtZDDRtujCygKGjVguMZjalSxNILA1vFyEZYhnjTKdkkSVs6EYd1FEugFCD7vTu5z4WpsqwjDMwHIjTYq+JA=="
     }
   },
-  "notes": "# vMLX 1.6.56\n\n## Console Amber\n\n- New Chat & Images, Servers & API, and Models navigation, with the updated app icon, readable amber contrast, responsive controls, and General Preferences.\n- Existing chats, sessions, and saved settings are preserved. New profiles default to one loaded model; existing profiles retain their choice.\n- Server settings group concurrent processing, SSD prefix caching, power, generation, MCP, and speculative decoding. Removing retired controls does not silently reset existing settings.\n- JANG model feeds filter out non-JANG repositories. Update notices remain usable in narrow windows and a dismissed version does not hide later updates.\n\n## Runtime and API\n\n- Atomic on-disk safetensors alignment repair during local model preflight, including nested draft/media shards, with validation and unsafe-path protections.\n- MiniCPM5 native tool/reasoning integration and guarded affine projection handling.\n- Per-request image/video controls, effective-setting diagnostics, and typed strict-mode errors across API dialects.\n- Hybrid partial-prefix and media-position cache corrections, idle SSD cleanup, capacity-only notices, and guarded cache clearing.\n- Tool/JSON parsing preserves string data and terminal punctuation; Ollama generation streams retain final usage without repeating content.\n- MTP context accounting includes restored tokens. Existing depth policies remain in effect.\n\n## Limits\n\n- No universal MTP-over-AR speed floor is promised. The previously observed intermittent Qwen 27B 2D slowdown remains unresolved.\n- Media controls can reduce sampled content, and cache reuse depends on exact prompt, media, and settings identity. New media may require prefill.\n- Schema validation cannot guarantee that a model generates a requested tool call or repeats every requested literal. Warning transport differs by API dialect.\n- The packaged MiniCPM check covered connected UI and Chat/Responses tool continuations. Its Responses final answer omitted a requested repeated filename; tool arguments, results, streaming, and cache ordering were intact. This is not an all-model quality or compatibility guarantee.\n\n## Downloads and provenance\n\nBoth macOS DMGs are Developer ID signed, independently notarized, stapled, and Gatekeeper checked. Tahoe is the macOS 26 build; Sequoia is the compatibility build.\n\n- Source: `c006a367e8a72e6fb1f4c158f1272cfccf1ea2ee`\n- Bundled JANG: `2.5.47` at `f3c79081c3d99e8a26fa28444934f7567acb00c6`\n- Tahoe SHA-256: `4c5ea8634443daee2f4ed143c20609eb1304c75b501e9f433ff3e204fb2728dc`\n- Sequoia SHA-256: `c14c83bc70bcf378e01a4cf33305c6be1f3bc72d852f1e0fe823e2ff4a07cf99`\n\nWheel and source distribution are included as release assets. PyPI publication is tracked separately."
+  "notes": "# vMLX 1.6.57\n\n- Improved local-folder discovery and launch validation for compatible mflux image generation/editing exports, including quantization metadata, progress, cancellation and output history.\n- Corrected downloader cancellation, paused/queued states and local-storage error handling.\n- Corrected output-token settings, live settings refresh, tool-error finalization and gateway usage reporting.\n- Added Spark-X2.5 integration and corrected mixed-state and Flash-Next media-prefix continuation handling.\n- Corrected terminal reasoning/content separation and rejection of malformed Gemma native tool envelopes without fabricating tool arguments.\n- Native MTP recovery and demotion use measured execution cost. The selected fixed depth is a ceiling; an instantaneous or universal autoregressive speed floor is not guaranteed.\n\nModel-generated answers can still be incorrect. Media output can vary between cached and uncached execution; universal numerical equivalence and all-family quality are not claimed. Experimental kernel optimizations remain opt-in. Additional GLM/MTP performance and broader quantization qualification continue separately.\n\nKnown limitation: a connected Gemma video/API test omitted a requested tool call and produced an incorrect answer; its cause remains under investigation. Successful transport is not a guarantee of model answer accuracy. The intermittent 27B slowdown and model-dependent media re-prefill remain follow-up work."
 }
