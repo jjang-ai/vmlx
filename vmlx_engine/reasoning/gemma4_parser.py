@@ -217,6 +217,17 @@ class Gemma4ReasoningParser(ReasoningParser):
         # still arriving — otherwise it renders in chat as `<turn|`.
         text = _trim_trailing_eot(text)
 
+        # Streaming withholds an unfinished native thought header. Terminal
+        # extraction must make the same decision: otherwise a length-limited
+        # response flushes the withheld <|channel> into visible content.
+        # Only native control prefixes qualify. A bare '<', the ordinary word
+        # 'thought', and markers mentioned inside a sentence remain text.
+        header = _SOC + _THOUGHT
+        for size in range(len(header) - 1, 1, -1):
+            if text.endswith(header[:size]):
+                text = text[:-size]
+                break
+
         # Detect the channel anywhere in the generation.  Tool continuations
         # can emit a complete visible answer and then start a second thought
         # rail; the prefix remains visible while the late rail stays private.

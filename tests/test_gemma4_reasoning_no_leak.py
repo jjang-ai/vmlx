@@ -38,6 +38,19 @@ def parser():
     return Gemma4ReasoningParser()
 
 
+@pytest.mark.parametrize("suffix", ["<|", "<|chan", "<|channel>", "<|channel>th", "<|channel>though"])
+@pytest.mark.parametrize("prefix", ["", "Visible answer. "])
+def test_terminal_incomplete_native_channel_is_not_visible(parser, prefix, suffix):
+    reasoning, content = parser.extract_reasoning(prefix + suffix)
+    assert reasoning is None
+    assert content == (prefix.strip() or None)
+
+
+@pytest.mark.parametrize("text", ["thought", "thoughtful answer", "a < b", "Use <|channel> in a template."])
+def test_terminal_plain_text_is_not_a_truncated_native_header(parser, text):
+    assert parser.extract_reasoning(text) == (None, text)
+
+
 class TestGemma4ReasoningParserNoLeak:
     def test_no_thought_channel_pure_content(self, parser):
         """Plain content without channel markers passes through clean."""
