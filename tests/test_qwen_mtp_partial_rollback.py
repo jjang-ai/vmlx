@@ -94,3 +94,13 @@ def test_commit_releases_capture_and_restores_sequence_lengths():
     _clear_rollback([cache])
     assert cache._vmlx_qwen_rollback is None
     assert not cache.can_rollback_speculative(1)
+
+
+def test_nonfallback_telemetry_keeps_seed_measurement():
+    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
+        _MtpStats, _native_mtp_payload)
+    stats = _MtpStats(seed_ar_step_ms=123.456, depth=3)
+    payload = _native_mtp_payload("slow-cached-turn", stats, "stop")
+    assert payload["seed_ar_step_ms"] == 123.456
+    assert payload["fallback_reason"] is None
+    assert _native_mtp_payload("unmeasured", _MtpStats(), "stop")["seed_ar_step_ms"] is None

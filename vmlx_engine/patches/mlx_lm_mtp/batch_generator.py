@@ -687,6 +687,7 @@ class _MtpStats:
     fallback_cost_ratio: Optional[float] = None
     fallback_mtp_ms_per_token: Optional[float] = None
     fallback_ar_step_ms: Optional[float] = None
+    seed_ar_step_ms: Optional[float] = None
     recovery: dict = field(default_factory=dict)
 
 
@@ -803,6 +804,7 @@ def _native_mtp_payload(
         "depth_acceptance_rates": depth_rates,
         "adaptive_depth_value": dict(stats.adaptive_depth_value),
         "recovery": dict(stats.recovery),
+        "seed_ar_step_ms": stats.seed_ar_step_ms,
         "forwards": {
             "seed_main": int(stats.seed_main_forwards),
             "verify_main": int(stats.verify_main_forwards),
@@ -1181,7 +1183,7 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         state.adaptive_value.last_change_cycle = cycles
         state.adaptive_value.active_probe_origin = 0
         state.adaptive_value.active_probe_target = 0
-        logger.info("MTP[%s] AR safety D%d -> D%d: %s", request_id, prior_depth, state.depth, trip.log_text(prior_depth))
+        logger.info("MTP[%s] %s", request_id, trip.log_text(prior_depth, target_depth=state.depth))
         return False
     state.ar_fallback_pending = True
     state.ar_fallback_reason = trip.reason(prior_depth)
@@ -1540,6 +1542,12 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
     state.recovery = recovery
     state.recovery_probe_started = recovery_t0
     state.ar_step_ms = recovery.ar_ms if recovery is not None else seed_step_ms
+    state.stats.seed_ar_step_ms = seed_step_ms
+    logger.info(
+        "MTP[%s] AR baseline: seed_step_ms=%.3f effective_ms=%.3f source=%s",
+        gen_batch.uids[0], seed_step_ms, state.ar_step_ms,
+        "productive_ar" if recovery is not None else "single_seed",
+    )
     try:
         state.ar_safety.prompt_tokens = int(len(gen_batch.tokens[0]))
     except Exception:
