@@ -480,6 +480,18 @@ class TestNativeCleanMediaBoundary:
         gen, cache, req = self._gen(1764, [1] * 4 + [99] * 1760)
         assert gen._native_media_clean_boundary(req, 1764, cache) == 0
 
+    def test_conditioned_warm_tail_snapshots_new_boundary_not_restored_boundary(self):
+        tokens = [1] * 4 + [99] * 1760 + [2] * 8
+        gen, cache, req = self._gen(len(tokens) + 7, tokens)
+        req._cached_tokens = 64
+        assert gen._native_media_clean_boundary(
+            req, len(tokens) + 7, cache, allow_conditioned_tail=True
+        ) == 1771
+        req._cached_tokens = 1771
+        assert gen._native_media_clean_boundary(
+            req, len(tokens) + 7, cache, allow_conditioned_tail=True
+        ) == 0
+
 
 class TestMediaHitTextTailKeepsMRoPEPositions:
     """First divergent computation between cached and uncached video answers (fingerprints on the box): the warm tail,

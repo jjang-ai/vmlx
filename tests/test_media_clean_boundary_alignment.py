@@ -22,6 +22,8 @@ Giving up at most block_size-1 tokens of stored prefix buys all of that back.
 import inspect
 from types import SimpleNamespace
 
+import pytest
+
 from vmlx_engine.mllm_batch_generator import (
     MLLMBatchGenerator,
     MLLMBatchResponse,
@@ -297,7 +299,8 @@ def test_qwen_hybrid_media_tail_admits_only_a_pure_text_prefix():
     ) is None
 
 
-def test_qwen_hybrid_media_tail_forwards_conditioned_suffix_over_native_cache():
+@pytest.mark.parametrize("boundary", [0, 7, 9])
+def test_qwen_hybrid_media_tail_forwards_conditioned_suffix_over_native_cache(boundary):
     import mlx.core as mx
 
     calls = []
@@ -341,12 +344,24 @@ def test_qwen_hybrid_media_tail_forwards_conditioned_suffix_over_native_cache():
     generator.model = Wrapper()
     generator.language_model = language
     generator._media_prefill_chunk_tokens = lambda _seq_len: 4
+    generator._is_hybrid = True
+    generator._ssm_state_cache = object()
+    generator._hybrid_kv_positions = [0]
+    generator._media_prefix_cache_allowed = lambda req, tokens: True
+    generator._media_clean_cache_boundary_for = lambda req, tokens: boundary
+    snapshots = []
+    generator._snapshot_native_media_clean_boundary = (
+        lambda req, native_cache, point: snapshots.append(
+            (point, native_cache is cache, calls[-1][1][-1][-1] + 1)
+        )
+    )
     full_ids = mx.array([list(range(10))])
     request = SimpleNamespace(
         request_id="qwen-tail",
         _qwen_media_tail_full_input_ids=full_ids,
         _qwen_media_tail_cached_tokens=4,
         _cached_tokens=4,
+        _original_token_ids=list(range(10)),
         input_ids=full_ids[:, 4:],
         pixel_values=object(),
         image_grid_thw=object(),
@@ -364,14 +379,20 @@ def test_qwen_hybrid_media_tail_forwards_conditioned_suffix_over_native_cache():
 
     assert output.logits.tolist() == [[1.0]]
     assert calls[0][0:2] == ("embed", [list(range(10))])
+    ends = sorted({8, 10} | ({boundary} if boundary else set()))
+    starts = [4] + ends[:-1]
     assert [entry[1] for entry in calls[1:]] == [
-        [[4, 5, 6, 7]],
-        [[8, 9]],
+        [list(range(start, end))] for start, end in zip(starts, ends)
     ]
     assert [entry[2] for entry in calls[1:]] == [
-        [[[12, 13, 14], [15, 16, 17], [18, 19, 20], [21, 22, 23]]],
-        [[[24, 25, 26], [27, 28, 29]]],
+        [[[3 * i, 3 * i + 1, 3 * i + 2] for i in range(start, end)]]
+        for start, end in zip(starts, ends)
     ]
+    assert [entry[3] for entry in calls[1:]] == [
+        [[list(range(offset + start, offset + end))] for offset in (0, 10, 20)]
+        for start, end in zip(starts, ends)
+    ]
+    assert snapshots == ([(boundary, True, boundary)] if boundary else [])
     assert request.pixel_values is None
     assert not hasattr(request, "_qwen_media_tail_cached_tokens")
 

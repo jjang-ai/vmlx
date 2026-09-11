@@ -12712,8 +12712,15 @@ class MLLMBatchGenerator:
             output = None
             tail_len = int(input_ids.shape[1])
             chunk = max(1, int(self._media_prefill_chunk_tokens(tail_len)))
-            for start in range(0, tail_len, chunk):
-                end = min(start + chunk, tail_len)
+            clean_boundary = self._native_media_clean_boundary(
+                request, int(full_input_ids.shape[1]), cache,
+                allow_conditioned_tail=True,
+            )
+            bounds = set(range(chunk, tail_len, chunk)) | {tail_len}
+            if cached_tokens < clean_boundary < cached_tokens + tail_len:
+                bounds.add(clean_boundary - cached_tokens)
+            start = 0
+            for end in sorted(bounds):
                 full_start = cached_tokens + start
                 full_end = cached_tokens + end
                 output = self.language_model(
@@ -12723,6 +12730,14 @@ class MLLMBatchGenerator:
                     cache=cache,
                     position_ids=position_ids[..., full_start:full_end],
                 )
+                if (
+                    full_end == clean_boundary
+                    and getattr(request, "_media_clean_snapshot_allowed", True)
+                ):
+                    self._snapshot_native_media_clean_boundary(
+                        request, cache, clean_boundary
+                    )
+                start = end
             if output is None:
                 raise ValueError("Qwen conditioned tail produced no output")
             if _diag_fingerprints_enabled():
@@ -12754,6 +12769,9 @@ class MLLMBatchGenerator:
             for attr in (
                 "_qwen_media_tail_full_input_ids",
                 "_qwen_media_tail_cached_tokens",
+                "_media_clean_prefix_cache",
+                "_media_clean_prefix_len",
+                "_media_clean_native",
             ):
                 try:
                     delattr(request, attr)
@@ -13103,12 +13121,14 @@ class MLLMBatchGenerator:
         )
 
     def _native_media_clean_boundary(
-        self, request: "MLLMBatchRequest", seq_len: int, cache: Optional[List[Any]]
+        self, request: "MLLMBatchRequest", seq_len: int, cache: Optional[List[Any]],
+        *, allow_conditioned_tail: bool = False,
     ) -> int:
         """The clean media boundary to snapshot INSIDE the main forward, or 0.
 
-        Cold hybrid media requests only (a warm request already owns its
-        boundary). The boundary is the one the fetch side can use
+        Cold hybrid media requests and explicitly conditioned warm tails.
+        A warm request owns its restored boundary, not the longer boundary
+        produced by this prefill. The boundary is the one the fetch side can use
         (``_media_clean_cache_boundary_for``) and must lie strictly inside the
         prompt. Opt out with VMLX_DISABLE_NATIVE_MEDIA_BOUNDARY=1 (the
         auxiliary clean prefill then runs as before)."""
@@ -13118,7 +13138,8 @@ class MLLMBatchGenerator:
             return 0
         if not getattr(self, "_hybrid_kv_positions", None):
             return 0
-        if int(getattr(request, "_cached_tokens", 0) or 0) > 0:
+        cached_tokens = int(getattr(request, "_cached_tokens", 0) or 0)
+        if cached_tokens > 0 and not allow_conditioned_tail:
             return 0
         if getattr(request, "_media_clean_prefix_cache", None) is not None:
             return 0
@@ -13142,7 +13163,7 @@ class MLLMBatchGenerator:
         except Exception as exc:  # noqa: BLE001
             logger.info("MLLM media prefix cache: native boundary not chosen for %s: %s", getattr(request, "request_id", "?"), exc)
             return 0
-        if boundary <= 0 or boundary >= len(tokens):
+        if boundary <= cached_tokens or boundary >= len(tokens):
             return 0
         return boundary
 
@@ -15631,6 +15652,17 @@ class MLLMBatchGenerator:
                         req._inline_ssm_layers = None
                         req._inline_ssm_tokens = None
                         req._inline_ssm_checkpoints = None
+                        continue
+                    if _media_context_for_ssm:
+                        # Token IDs and a media salt identify a cache entry;
+                        # they cannot reconstruct its media-conditioned state.
+                        # Without a real forward checkpoint, leave it absent
+                        # rather than publishing a text-only SSM companion.
+                        logger.warning(
+                            "MLLM media prefix cache: no conditioned SSM "
+                            "checkpoint for %s; skipping text-only re-derive",
+                            req.request_id,
+                        )
                         continue
                     try:
                         kv_set = set(self._hybrid_kv_positions)
