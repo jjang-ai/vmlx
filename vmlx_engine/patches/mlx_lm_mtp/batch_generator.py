@@ -1015,7 +1015,7 @@ def _restore_or_trim_caches(prompt_cache: List[Any], n: int = 1) -> bool:
     return True
 
 
-def _effective_depth_resolution(gen_batch: Any) -> tuple[int, str]:
+def _effective_depth_resolution(gen_batch: Any, *, adaptive_ceiling: bool = False) -> tuple[int, str]:
     """Resolve the draft-chain depth and its owning configuration source.
 
     Sources, in order: VMLINUX/VMLX_NATIVE_MTP_DEPTH env, the bundle's
@@ -1028,9 +1028,15 @@ def _effective_depth_resolution(gen_batch: Any) -> tuple[int, str]:
     Hybrid layers without an explicit partial-rollback contract remain D1.
     """
     try:
-        from vmlx_engine.native_mtp import native_mtp_effective_depth
+        from vmlx_engine.native_mtp import native_mtp_effective_depth, native_mtp_max_depth
 
         depth, source = native_mtp_effective_depth(None)
+        # Producer best_depth is an admission recommendation, not a permanent
+        # adaptive search limit. Explicit limits and family fallbacks retain
+        # their existing meaning. Apply the same rollback checks below to the
+        # expanded range; starting depth remains D1 and promotions cost-tested.
+        if adaptive_ceiling and _adaptive_depth_enabled() and "vmlx_mtp_tuning.json" in source:
+            depth = native_mtp_max_depth()
     except Exception:
         depth = 1
         source = "resolution_error"
@@ -1633,7 +1639,7 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
     else:
         state.mtp_cache, state.stats.prompt_primed_pairs = primed
         state.stats.prompt_prime_source = "cold_prompt"
-    state.depth_ceiling = recovery.depth_ceiling if recovery is not None else _effective_depth(gen_batch)
+    state.depth_ceiling = recovery.depth_ceiling if recovery is not None else _effective_depth_resolution(gen_batch, adaptive_ceiling=True)[0]
     state.adaptive_enabled = recovery.adaptive if recovery is not None else _adaptive_depth_enabled()
     state.depth = 1 if recovery is not None or state.adaptive_enabled else state.depth_ceiling
     if recovery is not None:

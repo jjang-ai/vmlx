@@ -1023,6 +1023,51 @@ class TestGlmAlignedHeadCache:
 
 
 class TestDepthGating:
+    def test_adaptive_tuned_batch_starts_d1_with_supported_ceiling(self, monkeypatch):
+        from vmlx_engine import native_mtp
+        from vmlx_engine.patches.mlx_lm_mtp import apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active
+
+        assert apply_mlx_lm_mtp_patch()
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
+        monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (2, "vmlx_mtp_tuning.json:best_depth"))
+        monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
+        previous = is_mtp_active()
+        try:
+            set_mtp_active(True)
+            batch = _make_batch(_build_model(attach_mtp=True), [3, 5, 7], 16)
+            state = batch._omlx_mtp_state
+            assert state.depth == state.stats.starting_depth == 1
+            assert state.depth_ceiling == state.stats.depth_ceiling == 3
+            assert state.stats.depth_policy == "adaptive"
+        finally:
+            set_mtp_active(previous)
+
+    @pytest.mark.parametrize("adaptive", [False, True])
+    @pytest.mark.parametrize("recommended", [1, 2, 3])
+    @pytest.mark.parametrize("safe", [False, True])
+    def test_adaptive_recommendation_is_not_rollback_ceiling(self, monkeypatch, adaptive, recommended, safe):
+        from types import SimpleNamespace
+        from vmlx_engine import native_mtp
+        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", str(int(adaptive)))
+        monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (recommended, "vmlx_mtp_tuning.json:best_depth"))
+        monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
+        batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: safe)])
+        assert _effective_depth_resolution(batch)[0] == (recommended if safe else 1)
+        assert _effective_depth_resolution(batch, adaptive_ceiling=True)[0] == ((3 if adaptive else recommended) if safe else 1)
+
+    @pytest.mark.parametrize("source", ["VMLINUX_NATIVE_MTP_DEPTH", "VMLX_NATIVE_MTP_DEPTH", "family", "resolution_error"])
+    def test_adaptive_keeps_explicit_and_safety_limits(self, monkeypatch, source):
+        from types import SimpleNamespace
+        from vmlx_engine import native_mtp
+        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
+        monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (1, source))
+        batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: True)])
+        assert _effective_depth_resolution(batch, adaptive_ceiling=True) == (1, source)
+
     def test_non_trimmable_cache_forces_depth_1(self, monkeypatch):
         """Depth > 1 needs partial rollback, which only trimmable KV supports.
 
