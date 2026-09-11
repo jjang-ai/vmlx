@@ -1602,7 +1602,7 @@
       "mtp": "MTP",
       "weightsPresentRuntimeReady": "权重存在；运行时就绪",
       "weightsPresentRuntimeUnwired": "权重存在；运行时未接线",
-      "mtpDepth": "MTP 深度",
+      "mtpDepth": "MTP 配置 / 推荐深度",
       "mtpDepthDefaultValue": "D{depth} 默认",
       "mtpScope": "MTP 范围",
       "scopeOnlyValue": "仅 {scope}",

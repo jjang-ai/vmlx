@@ -1602,7 +1602,7 @@
       "mtp": "MTP",
       "weightsPresentRuntimeReady": "가중치 있음; 런타임 준비됨",
       "weightsPresentRuntimeUnwired": "가중치 있음; 런타임 미연결",
-      "mtpDepth": "MTP 깊이",
+      "mtpDepth": "MTP 설정 / 권장 깊이",
       "mtpDepthDefaultValue": "D{depth} 기본값",
       "mtpScope": "MTP 범위",
       "scopeOnlyValue": "{scope} 전용",

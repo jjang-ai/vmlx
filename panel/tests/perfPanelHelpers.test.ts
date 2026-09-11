@@ -4,6 +4,11 @@ import { formatMtpScope, reportedCount } from '../src/renderer/src/components/se
 // Cache/Perf display audit (2026-09-07): an absent MTP measurement must read as
 // unknown, never as zero, and the MTP cards must say which request they describe.
 describe('Performance panel MTP helpers', () => {
+  it('uses text runtime ceiling and policy, and names AR rather than D0', () => {
+    expect(formatMtpScope({ request_id: '27', finish_reason: 'stop', depth_ceiling: 3, final_depth: 1, depth_policy: 'adaptive' })).toBe('27 · stop · D3→D1 adaptive')
+    expect(formatMtpScope({ request_id: '28', finish_reason: 'fallback_to_ar', depth_ceiling: 2, configured_depth: 3, final_depth: 0, depth_policy: 'fixed' })).toBe('28 · fallback_to_ar · D2→AR fixed')
+    expect(formatMtpScope({ final_depth: Number.NaN, depth_ceiling: Number.NaN })).toBe('— · last completed · —')
+  })
   it('reports unknown counts as a dash and explicit zero as 0', () => {
     expect(reportedCount(undefined)).toBe('—')
     expect(reportedCount(null)).toBe('—')

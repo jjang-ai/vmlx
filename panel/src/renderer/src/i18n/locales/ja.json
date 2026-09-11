@@ -1602,7 +1602,7 @@
       "mtp": "MTP",
       "weightsPresentRuntimeReady": "重みあり。ランタイム準備完了",
       "weightsPresentRuntimeUnwired": "重みあり。ランタイム未接続",
-      "mtpDepth": "MTP 深度",
+      "mtpDepth": "MTP 設定 / 推奨深度",
       "mtpDepthDefaultValue": "D{depth} デフォルト",
       "mtpScope": "MTP スコープ",
       "scopeOnlyValue": "{scope} のみ",

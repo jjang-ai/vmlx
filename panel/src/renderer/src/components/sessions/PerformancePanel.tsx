@@ -50,6 +50,8 @@ interface HealthData {
         fallback_reason?: string | null
         policy?: string | null
         configured_depth?: number | null
+        depth_ceiling?: number | null
+        depth_policy?: string | null
         at?: number | null
       } | null
       last_native_mtp_skip?: {
@@ -419,7 +421,7 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 label={t('sessions.performance.mtp')}
                 value={
                   health.mtp.runtime_active
-                    ? `${t('sessions.performance.statusActive')}${health.mtp.effective_depth ? ` D${health.mtp.effective_depth}` : ''}${health.mtp.runtime_scope ? ` (${health.mtp.runtime_scope})` : ''}`
+                    ? `${t('sessions.performance.statusActive')}${health.mtp.runtime_scope ? ` (${health.mtp.runtime_scope})` : ''}`
                     : health.mtp.runtime_available
                       ? t('sessions.performance.weightsPresentRuntimeReady')
                     : health.mtp.artifact_available
@@ -898,13 +900,18 @@ export function formatMtpScope(m: {
   final_depth?: number
   policy?: string | null
   configured_depth?: number | null
+  depth_ceiling?: number | null
+  depth_policy?: string | null
 }): string {
   const id = m.request_id ? m.request_id.slice(-12) : '—'
   const finish = m.finish_reason || 'last completed'
-  const configured = typeof m.configured_depth === 'number' ? `D${m.configured_depth}` : null
-  const final = typeof m.final_depth === 'number' ? `D${m.final_depth}` : null
+  const ceiling = m.depth_ceiling ?? m.configured_depth
+  const configured = typeof ceiling === 'number' && Number.isFinite(ceiling) ? `D${ceiling}` : null
+  const final = typeof m.final_depth === 'number' && Number.isFinite(m.final_depth)
+    ? (m.final_depth === 0 ? 'AR' : `D${m.final_depth}`) : null
   const depth = configured && final && configured !== final ? `${configured}→${final}` : (final || configured || '—')
-  const policy = m.policy ? ` ${m.policy}` : ''
+  const reportedPolicy = m.depth_policy ?? m.policy
+  const policy = reportedPolicy ? ` ${reportedPolicy}` : ''
   return `${id} · ${finish} · ${depth}${policy}`
 }
 

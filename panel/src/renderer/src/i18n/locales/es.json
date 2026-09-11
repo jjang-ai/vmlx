@@ -1602,7 +1602,7 @@
       "mtp": "MTP",
       "weightsPresentRuntimeReady": "pesos presentes; runtime listo",
       "weightsPresentRuntimeUnwired": "pesos presentes; runtime no conectado",
-      "mtpDepth": "Profundidad MTP",
+      "mtpDepth": "Profundidad MTP configurada / recomendada",
       "mtpDepthDefaultValue": "D{depth} predeterminado",
       "mtpScope": "Alcance MTP",
       "scopeOnlyValue": "solo {scope}",
