@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 
 def _rows(contract):
     return {row["id"]: row for row in contract["features"]}
@@ -158,6 +160,52 @@ def test_glm_mtp_prompt_priming_is_exact_opt_in(monkeypatch):
     rows = _rows(build_acceleration_contract("glm5_next"))
     assert rows["mtp_prompt_priming"]["requested"] is True
     assert rows["mtp_prompt_priming"]["state"] == "configured_unattested"
+
+
+def test_ernie_mtp_prompt_priming_defaults_on_with_explicit_opt_out(monkeypatch):
+    from vmlx_engine.acceleration_contract import (
+        acceleration_family_from_config,
+        build_acceleration_contract,
+    )
+
+    assert acceleration_family_from_config({"model_type": "ernie4_5_moe"}) == "ernie4_5"
+    monkeypatch.delenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", raising=False)
+    monkeypatch.delenv("VMLINUX_ERNIE45_MTP_PROMPT_PRIMING", raising=False)
+    contract = build_acceleration_contract("ernie4_5_moe")
+    assert contract["known_family"] is True
+    rows = _rows(contract)
+    assert rows["mtp_prompt_priming"]["requested"] is True
+    assert rows["mtp_prompt_priming"]["selection_source"] == "default"
+    assert rows["mtp_prompt_priming"]["state"] == "configured_unattested"
+
+    monkeypatch.setenv("VMLX_ERNIE45_MTP_PROMPT_PRIMING", "0")
+    rows = _rows(build_acceleration_contract("ernie4_5_moe"))
+    assert rows["mtp_prompt_priming"]["requested"] is False
+    assert rows["mtp_prompt_priming"]["state"] == "disabled"
+
+
+@pytest.mark.parametrize(
+    "vmlinux,vmlx",
+    [
+        (None, None), ("", None), (None, ""), ("0", None), (None, "0"), ("1", None),
+        (None, "1"), ("false", "1"), ("1", "0"), ("0", "1"), ("off", "off"), ("yes", "no"),
+    ],
+)
+def test_ernie_priming_report_matches_runtime_gate(monkeypatch, vmlinux, vmlx):
+    """Both aliases, any combination: what /health reports must be what the gate does."""
+    from vmlx_engine.acceleration_contract import build_acceleration_contract
+    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _glm_prompt_priming_enabled
+
+    for name, value in (
+        ("VMLINUX_ERNIE45_MTP_PROMPT_PRIMING", vmlinux),
+        ("VMLX_ERNIE45_MTP_PROMPT_PRIMING", vmlx),
+    ):
+        monkeypatch.delenv(name, raising=False)
+        if value is not None:
+            monkeypatch.setenv(name, value)
+    reported = _rows(build_acceleration_contract("ernie4_5_moe"))["mtp_prompt_priming"]["requested"]
+    actual = _glm_prompt_priming_enabled(type("Model", (), {"model_type": "ernie4_5_moe"})())
+    assert reported is actual
 
 
 def test_glm_vectorized_kda_verify_defaults_on_with_explicit_opt_out(

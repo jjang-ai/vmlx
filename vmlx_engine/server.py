@@ -9775,6 +9775,9 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
                 key.startswith("mtp.")
                 or ".mtp." in lowered
                 or (glm_mtp_prefix is not None and key.startswith(glm_mtp_prefix))
+                # ERNIE-4.5: model.mtp_block.N / mtp_emb_norm.N / mtp_hidden_norm.N /
+                # mtp_linear_proj.N (underscore names, no `mtp.` segment)
+                or re.search(r"(?:^|\.)mtp_(?:block|emb_norm|hidden_norm|linear_proj)(?:\.|$)", lowered)
             ):
                 mtp_tensor_count += 1
             if ".switch_mlp." in lowered:

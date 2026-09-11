@@ -416,6 +416,54 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     })
   })
 
+  it('renders native MTP for ERNIE-4.5, whose head is stored as mtp_block (no bare mtp segment)', () => {
+    // Verbatim key shape from the shipped JANG_6M bundle index: model.mtp_block.0.*,
+    // model.mtp_emb_norm.0.weight, ... The generic /(^|\.)mtp(\.|$)/ test never
+    // matches these, so without the mtp_* pattern the family allowlist alone
+    // would still hide the control while the engine runs MTP.
+    const dir = makeModelDir(
+      { model_type: 'ernie4_5_moe', num_hidden_layers: 28, num_nextn_predict_layers: 1 },
+      { format: 'jang', mtp: { kept: true, enabled: true, num_layers: 1, tensor_count: 12 } },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'model.mtp_block.0.self_attn.q_proj.weight': 'model.safetensors',
+        'model.mtp_emb_norm.0.weight': 'model.safetensors',
+        'model.mtp_hidden_norm.0.weight': 'model.safetensors',
+        'model.mtp_linear_proj.0.weight': 'model.safetensors',
+      },
+    }))
+    // Sidecar shape written 2026-09-05 from the measured depth sweep.
+    writeFileSync(join(dir, 'vmlx_mtp_tuning.json'), JSON.stringify({
+      native_mtp: { best_depth: 1, validated: true },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.nativeMtp).toMatchObject({
+      supported: true,
+      depth: 1,
+      depthSource: 'vmlx_mtp_tuning.json:native_mtp.best_depth',
+      runtimeScope: 'text',
+      // Plain GQA attention: the engine reports native_cache schema plain_kv_v1.
+      nativeCacheType: 'plain_kv_v1',
+      requiresDeterministicSampling: false,
+      defaultMode: 'auto',
+    })
+  })
+
+  it('hides native MTP for an ERNIE-4.5 bundle whose MTP tensors were dropped', () => {
+    const dir = makeModelDir(
+      { model_type: 'ernie4_5_moe', num_hidden_layers: 28, num_nextn_predict_layers: 1 },
+      { format: 'jang' },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: { 'model.embed_tokens.weight': 'model.safetensors' },
+    }))
+    expect(detectModelConfigFromDir(dir).nativeMtp).toBeUndefined()
+  })
+
   it('detects the appended layer-N GLM MTP block for the native VL runtime', () => {
     const dir = makeModelDir({
       model_type: 'glm5_next',

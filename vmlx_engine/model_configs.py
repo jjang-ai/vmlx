@@ -867,6 +867,40 @@ def register_all(registry=None):
         )
     )
 
+    # ── ERNIE-4.5 MoE (ernie4_5_moe model_type; baidu/ERNIE-4.5-21B-A3B-PT etc.) ──
+    # Plain GQA attention (20 q / 4 kv heads), with no hybrid cache subtype;
+    # the engine's supported plain-KV cache policy applies. Layer 0
+    # dense, layers 1-27 MoE (64 routed top-6 + 2 shared) with a router
+    # selection bias; the runtime is vMLX-owned and installed OVER upstream
+    # mlx-lm (models/ernie4_5/ernie4_5_moe.py explains why). The PT chat
+    # template is `User: ...\nAssistant: ...` with no tool-call syntax and no
+    # think block, so tools and reasoning are declared unsupported rather
+    # than left for probes to guess; the `-Thinking` variants need their own
+    # row with a reasoning parser once live-proven. Stop tokens: the model
+    # emits `</s>` (id 2, tokenizer eos, generation_config eos) — measured on
+    # 8 greedy generations 2026-09-04 — while the chat template closes
+    # assistant turns in history with `<|end_of_sentence|>` (id 100272, a
+    # different token). Both are listed so either ends a generation.
+    # generation_config recommends temperature 0.8 / top_p 0.8. The vendored
+    # runtime supplies the native MTP head (`num_nextn_predict_layers` = 1).
+    _register(
+        ModelConfig(
+            family_name="ernie4_5",
+            model_types=["ernie4_5_moe", "ernie4_5"],
+            cache_type="kv",
+            eos_tokens=["</s>", "<|end_of_sentence|>"],
+            tool_parser=None,
+            supports_native_tools=False,
+            reasoning_parser=None,
+            think_in_template=False,
+            supports_thinking=False,
+            is_mllm=False,
+            architecture_hints={"default_enable_thinking": False},
+            description="ERNIE-4.5 MoE (Baidu): dense layer 0 + 64-expert MoE, GQA, MTP head",
+            priority=20,
+        )
+    )
+
     # ── Ling-2.6-flash / Bailing-V2.5 (bailing_hybrid model_type) ──
     # Hybrid MLA + Lightning-Attn-2 (Gated Linear Attention). Layer
     # dispatch is controlled by `layer_group_size` (default 8 for

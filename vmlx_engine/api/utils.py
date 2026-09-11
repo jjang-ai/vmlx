@@ -591,6 +591,35 @@ def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bo
     except Exception:
         pass
 
+    # ERNIE-4.5 (baidu, ernie4_5_moe / ernie4_5): text-only family with a
+    # source-owned runtime (vmlx_engine.models.ernie4_5). mlx_vlm has no
+    # ernie4_5_moe loader or MTP drafter, so a forced --is-mllm (panel VLM toggle,
+    # or bench/native_mtp_speed_ab.py which always passes it) crashes at load
+    # with "No module named 'mlx_vlm.speculative.drafters.ernie4_5_moe'".
+    # Same rule as MiniMax-M3 above: never let force_mllm push it into mlx_vlm.
+    try:
+        _cfg_p_ernie = os.path.join(local_path, "config.json")
+        if os.path.isfile(_cfg_p_ernie):
+            _cfg_ernie = json.loads(open(_cfg_p_ernie).read())
+            _mt_ernie = str(_cfg_ernie.get("model_type") or "").strip().lower()
+            if _mt_ernie in {"ernie4_5_moe", "ernie4_5"}:
+                if force_mllm:
+                    _logger.warning(
+                        "is_mllm_model(%s): ERNIE-4.5 overrides force_mllm — "
+                        "mlx_vlm has no %s runtime; routing through the "
+                        "source-owned text runtime",
+                        model_name,
+                        _mt_ernie,
+                    )
+                else:
+                    _logger.info(
+                        "is_mllm_model(%s): tier=ernie4_5_text_route result=False",
+                        model_name,
+                    )
+                return False
+    except Exception:
+        pass
+
     # GLM-5.3 uses one top-level model type for text and multimodal bundles.
     # Route to mlx-vlm only when both the config and the checkpoint index prove
     # that a visual tower is present; otherwise preserve the existing text lane.

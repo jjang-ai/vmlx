@@ -1227,6 +1227,15 @@ def serve_command(args):
     except Exception as _glm5reg_e:
         logger.debug("glm5_next runtime registration skipped: %s", _glm5reg_e)
 
+    # Install the vMLX-owned ERNIE-4.5 MoE runtime OVER upstream mlx-lm's
+    # ernie4_5_moe (upstream drops the router selection bias; see
+    # models/ernie4_5/ernie4_5_moe.py). Idempotent.
+    try:
+        from .models.ernie4_5.register import register_ernie4_5_runtime
+        register_ernie4_5_runtime()
+    except Exception as _ernie_reg_e:
+        logger.debug("ernie4_5 runtime registration skipped: %s", _ernie_reg_e)
+
     # -- openPangu-2.0-Flash auto-settings TRANSPARENCY log + policy --
     # Mirrors the M3 block below: on an openpangu_v2 bundle, force-disable JIT
     # (the DSA lightning-indexer top-k selection is input-dependent/dynamic —
