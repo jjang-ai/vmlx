@@ -34,6 +34,11 @@ class NativeMTPRecovery:
     skip_sample: bool = True
     completed_mtp: dict = field(default_factory=dict)
     parked_stats: Any = field(default=None, repr=False)
+    # A scheduled baseline refresh is not a failed speculation attempt. Keep
+    # its return rung separate from ordinary recovery, which always probes D1.
+    calibrating: bool = False
+    resume_depth: int = 1
+    calibrations: int = 0
 
     def observe_standard(self, elapsed_ms: float) -> None:
         self.standard_tokens += 1
@@ -53,6 +58,8 @@ class NativeMTPRecovery:
         return self.remaining == 0 and len(self.samples) >= MIN_AR_SAMPLES
 
     def park(self, *, failed_probe: bool) -> None:
+        self.calibrating = False
+        self.resume_depth = 1
         if failed_probe:
             self.failed_probes += 1
             self.cooldown = min(MAX_COOLDOWN_TOKENS, self.cooldown * 2)
@@ -62,9 +69,28 @@ class NativeMTPRecovery:
         self.samples.clear()
         self.skip_sample = True
 
+    def park_for_calibration(self, *, depth: int) -> None:
+        """Measure productive AR without forgiving previous failed probes.
+
+        The caller must first establish the same exact cache/token frontier as
+        a performance handoff. One transition step plus eight measured steps
+        is the minimum; invalid timings cannot make ``ready`` true early.
+        """
+        if isinstance(depth, bool) or not isinstance(depth, int) or not 1 <= depth <= self.depth_ceiling:
+            raise ValueError("calibration return depth must respect the request ceiling")
+        self.calibrating = True
+        self.resume_depth = depth
+        self.calibrations += 1
+        self.remaining = MIN_AR_SAMPLES + 1
+        self.samples.clear()
+        self.skip_sample = True
+
     def snapshot(self) -> dict:
         return {
             "attempts": self.attempts,
+            "calibrating": self.calibrating,
+            "calibrations": self.calibrations,
+            "resume_depth": self.resume_depth,
             "failed_probes": self.failed_probes,
             "cooldown_tokens": self.cooldown,
             "remaining_ar_tokens": self.remaining,

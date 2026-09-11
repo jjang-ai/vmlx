@@ -36,6 +36,47 @@ def _ready_batch():
     return b, r
 
 
+@pytest.mark.parametrize("depth", [1, 2, 3])
+def test_calibration_preserves_failure_backoff_and_measures_productive_ar(depth):
+    r = NativeMTPRecovery("a", depth, False)
+    r.park(failed_probe=True)
+    r.attempts = 2
+    r.park_for_calibration(depth=depth)
+    assert (r.cooldown, r.failed_probes, r.attempts) == (256, 1, 2)
+    assert r.calibrating and r.resume_depth == depth and r.calibrations == 1
+    r.observe_standard(9000)
+    for _ in range(7):
+        r.observe_standard(10)
+    assert not r.ready
+    r.observe_standard(10)
+    assert r.ready and r.ar_ms == 10
+    assert r.standard_wall_ms == 9080  # Transition cost remains accounted.
+    assert r.snapshot()["calibrating"] is True
+    r.park(failed_probe=True)
+    assert not r.calibrating and r.resume_depth == 1
+    assert r.cooldown == 512 and r.failed_probes == 2
+
+
+@pytest.mark.parametrize("depth", [0, 3, True, 1.5])
+def test_calibration_rejects_invalid_or_above_ceiling_depth_without_mutation(depth):
+    r = NativeMTPRecovery("a", 2, False)
+    before = r.snapshot()
+    with pytest.raises(ValueError):
+        r.park_for_calibration(depth=depth)
+    assert r.snapshot() == before
+
+
+def test_calibration_requires_eight_valid_samples_not_only_elapsed_steps():
+    r = NativeMTPRecovery("a", 3, False)
+    r.park_for_calibration(depth=3)
+    for value in [1, float("nan"), float("inf"), 0, -1, 10, 10, 10, 10]:
+        r.observe_standard(value)
+    assert r.remaining == 0 and not r.ready
+    for _ in range(4):
+        r.observe_standard(10)
+    assert r.ready and r.ar_ms == 10
+
+
 @pytest.mark.parametrize("condition", ["multirow", "rollback", "terminal", "no_head", "pending_mtp"])
 def test_reentry_refuses_unsafe_or_unprofitable_boundaries(monkeypatch, condition):
     from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
