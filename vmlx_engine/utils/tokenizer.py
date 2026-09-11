@@ -1228,6 +1228,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     _glm5_next_native_mtp_expected = False
     _glm5_next_runtime_expected = False
     _glm5_next_model_config_override = None
+    _generic_native_mtp_expected = False
 
     # Nanbeige 4.2 is a looped transformer: 22 shared module layers execute
     # twice and require 44 independent KV-cache slots. Register the loop-aware
@@ -1245,6 +1246,16 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
 
     def _finalize_loaded_model(model, tokenizer):
         validate_nanbeige_loop_cache_contract(model, local_model_path)
+        if _generic_native_mtp_expected:
+            from ..native_mtp import deactivate_native_mtp, model_has_native_mtp_runtime
+
+            if not model_has_native_mtp_runtime(model):
+                deactivate_native_mtp()
+                raise RuntimeError(
+                    "Native MTP was enabled before generic model construction, "
+                    "but the loaded model has no attached draft head/runtime "
+                    "contract; refusing to silently serve it autoregressively"
+                )
         if _glm5_next_native_mtp_expected:
             from ..native_mtp import (
                 deactivate_native_mtp,
@@ -1507,6 +1518,22 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         _m, _t = load_jang_model(local_model_path)
         _inject_chat_template_if_missing(_t, local_model_path)
         return _finalize_loaded_model(_m, _t)
+
+    # Affine/standard MLX bundles bypass load_jang_model, whose pre-load hook
+    # normally activates the native head. Do this before BOTH generic model
+    # constructors, including the tokenizer fallback. Inspection owns family,
+    # tensor and explicit-Off gating; do not infer activation from the folder
+    # label or the startup banner. GLM already owns this handoff above.
+    if not _glm5_next_runtime_expected:
+        from ..native_mtp import maybe_apply_native_mtp
+
+        _generic_mtp_status = maybe_apply_native_mtp(local_model_path, allow_runtime=True)
+        if _generic_mtp_status.get("status") == "runtime_patch_failed":
+            raise RuntimeError(
+                "Native MTP activation failed before generic model construction; "
+                "refusing to discard the preserved draft head"
+            )
+        _generic_native_mtp_expected = bool(_generic_mtp_status.get("runtime_active"))
 
     # Check if model needs tokenizer fallback (e.g., Nemotron).
     # Pass resolved local path so _get_model_type_from_config can read config.json.
