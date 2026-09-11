@@ -1012,7 +1012,7 @@
       "nativeMtpDepthAdaptive": "Adaptive (measured start)",
       "nativeMtpDepthFixed": "Fixed (selected ceiling)",
       "nativeMtpDepthAdaptiveNote": "Adaptive uses a measured profile matching the request's sampling mode. An unmeasured sampled profile remains on ordinary AR until current-runtime evidence can enable MTP safely.",
-      "nativeMtpDepthFixedNote": "Fixed uses D{depth} as the request ceiling. D1-D2 draft that depth; at D3, a low-confidence first proposal may stop the remaining draft chain instead of paying for predictions unlikely to be accepted.",
+      "nativeMtpDepthFixedNote": "D{depth} is the maximum draft depth, not a speed guarantee. Runtime safety and cost checks may lower the depth to ordinary autoregressive decoding (AR), then retry higher depths without exceeding this limit.",
       "nativeMtpDetectedNote": "Detected scope: {scope}; native cache: {cache}; depth source: {depthSource}. Hybrid cache bundles keep KV blocks and typed SSM companion state in the SSD cache contract; retained paged RAM stays disabled.",
       "specDecodeHint": "Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss.",
       "specDecodeIncompatBatching": "Speculative decoding is incompatible with continuous batching. The draft model is omitted at launch while the cache-stack scheduler is active.",

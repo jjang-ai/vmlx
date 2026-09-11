@@ -1012,7 +1012,7 @@
       "nativeMtpDepthAdaptive": "Adaptativa (inicio medido)",
       "nativeMtpDepthFixed": "Fija (límite seleccionado)",
       "nativeMtpDepthAdaptiveNote": "Adaptativa usa un perfil medido que coincide con el modo de muestreo de la solicitud. Un perfil muestreado aún no medido permanece en AR normal hasta que la evidencia del runtime actual permita activar MTP con seguridad.",
-      "nativeMtpDepthFixedNote": "Fija usa D{depth} como límite de la solicitud. D1-D2 generan borradores hasta esa profundidad; en D3, una primera propuesta de baja confianza puede detener el resto de la cadena para evitar predicciones con poca probabilidad de aceptación.",
+      "nativeMtpDepthFixedNote": "D{depth} es la profundidad máxima del borrador, no una garantía de velocidad. Las comprobaciones de seguridad y coste del runtime pueden reducir la profundidad hasta la decodificación autorregresiva normal (AR) y luego volver a probar profundidades mayores sin superar este límite.",
       "nativeMtpDetectedNote": "Alcance detectado: {scope}; caché nativa: {cache}; fuente de profundidad: {depthSource}. Los bundles híbridos conservan los bloques KV y el estado SSM tipado en el contrato de caché SSD; la RAM paginada retenida permanece deshabilitada.",
       "specDecodeHint": "Usa un modelo borrador pequeño para proponer tokens y luego verificarlos en una sola pasada del modelo objetivo. Puede dar un 20-90% de aceleración sin pérdida de calidad.",
       "specDecodeIncompatBatching": "La decodificación especulativa es incompatible con el procesamiento por lotes continuo. El modelo borrador se omite en el arranque mientras el planificador de la pila de caché está activo.",

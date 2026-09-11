@@ -4,6 +4,15 @@ import { describe, expect, it } from 'vitest'
 import { buildNativeMtpLaunchArgs, resolveFixedNativeMtpDepth } from '../src/shared/nativeMtpLaunchArgs'
 
 describe('fixed MTP input and effective ceiling parity', () => {
+  it('explains dynamic fallback and bounded recovery instead of an exact draft depth', () => {
+    const note = JSON.parse(readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8'))
+      .sessions.config.nativeMtpDepthFixedNote
+    expect(note).toContain('D{depth} is the maximum draft depth')
+    expect(note).toContain('not a speed guarantee')
+    expect(note).toContain('autoregressive decoding (AR)')
+    expect(note).toContain('retry higher depths without exceeding this limit')
+    expect(note).not.toContain('D1-D2 draft that depth')
+  })
   it.each([1, 2, 3, 23, 0, -1, NaN, Infinity, 2.9, undefined])(
     'displays the same fixed ceiling that launch emits for %s', (configuredDepth) => {
       const args = buildNativeMtpLaunchArgs({

@@ -1012,7 +1012,7 @@
       "nativeMtpDepthAdaptive": "自适应（实测起点）",
       "nativeMtpDepthFixed": "固定（所选上限）",
       "nativeMtpDepthAdaptiveNote": "自适应使用与请求采样模式匹配的实测配置。未测量的采样配置会保持普通 AR，直到当前运行时证据能够安全启用 MTP。",
-      "nativeMtpDepthFixedNote": "固定使用 D{depth} 作为请求上限。D1-D2 会按该深度起草；在 D3 下，如果第一个提议置信度较低，可以停止剩余草稿链，避免计算不太可能被接受的预测。",
+      "nativeMtpDepthFixedNote": "D{depth} 是最大草稿深度，而非速度保证。运行时的安全性和计算成本检查可能将深度降至普通自回归解码（AR），然后在不超过此上限的范围内重新尝试更高的深度。",
       "nativeMtpDetectedNote": "检测到的范围：{scope}；原生缓存：{cache}；深度来源：{depthSource}。混合 bundle 将 KV 块和类型化 SSM 状态保存在 SSD 缓存契约中；常驻分页 RAM 保持禁用。",
       "specDecodeHint": "使用小型草稿模型提出 token，然后在目标模型的单次传递中验证。可带来 20-90% 加速且零质量损失。",
       "specDecodeIncompatBatching": "推测解码与连续批处理不兼容。缓存栈调度器激活期间，启动时省略草稿模型。",

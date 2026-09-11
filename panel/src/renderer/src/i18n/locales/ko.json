@@ -1012,7 +1012,7 @@
       "nativeMtpDepthAdaptive": "적응형 (측정 시작값)",
       "nativeMtpDepthFixed": "고정형 (선택한 상한)",
       "nativeMtpDepthAdaptiveNote": "적응형은 요청의 샘플링 방식과 일치하는 측정 프로필을 사용합니다. 측정되지 않은 샘플링 프로필은 현재 런타임 증거로 MTP를 안전하게 활성화할 때까지 일반 AR을 유지합니다.",
-      "nativeMtpDepthFixedNote": "고정형은 D{depth}를 요청 상한으로 사용합니다. D1-D2는 해당 깊이까지 초안을 생성하며, D3에서는 첫 제안의 신뢰도가 낮으면 수락 가능성이 낮은 나머지 초안 체인을 중단할 수 있습니다.",
+      "nativeMtpDepthFixedNote": "D{depth}는 최대 초안 깊이이며 속도를 보장하지 않습니다. 런타임 안전성 및 처리 비용 검사에 따라 일반 자기회귀 디코딩(AR)까지 깊이를 낮춘 뒤, 이 상한을 넘지 않는 범위에서 더 높은 깊이를 다시 시도할 수 있습니다.",
       "nativeMtpDetectedNote": "감지된 범위: {scope}; 네이티브 캐시: {cache}; 깊이 소스: {depthSource}. 하이브리드 번들은 KV 블록과 타입 SSM 상태를 SSD 캐시 계약에 저장하며 유지형 페이지 RAM은 비활성 상태로 유지됩니다.",
       "specDecodeHint": "작은 드래프트 모델로 토큰을 제안한 다음 타깃 모델의 단일 패스로 검증합니다. 품질 손실 없이 20-90% 속도 향상이 가능합니다.",
       "specDecodeIncompatBatching": "투기적 디코딩은 연속 배치 처리와 호환되지 않습니다. 캐시 스택 스케줄러가 활성인 동안 시작 시 드래프트 모델이 생략됩니다.",
