@@ -478,6 +478,71 @@ class TestMtpDepthGreedyIdentity:
         finally:
             set_mtp_active(previous)
 
+    @pytest.mark.parametrize("depth", [1, 2, 3])
+    @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
+    def test_scheduled_calibration_preserves_rung_history_and_exact_output(
+        self, monkeypatch, depth, wrong_from_step
+    ):
+        from vmlx_engine.patches.mlx_lm_mtp import (
+            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        )
+        from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+        from vmlx_engine.native_mtp_recovery import NativeMTPRecovery
+
+        assert apply_mlx_lm_mtp_patch()
+        previous = is_mtp_active()
+        prompt, limit = [3, 5, 7, 11], 960
+        observe = NativeMTPRecovery.observe_standard
+        monkeypatch.setattr(NativeMTPRecovery, "observe_standard", lambda self, ms: observe(self, 100.0))
+        # Isolate scheduling and actual cache/token handoff, not timing policy.
+        monkeypatch.setattr(lane, "_text_mtp_maybe_ar_safety_fallback", lambda *a: False)
+        monkeypatch.setattr(lane, "_text_mtp_maybe_cost_fallback", lambda *a, **k: False)
+        monkeypatch.setattr(lane, "_adaptive_finish_cycle", lambda *a, **k: None)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+        try:
+            set_mtp_active(False)
+            expected = _run_generation(_FakeCacheModel(), prompt, limit)
+            set_mtp_active(True)
+            batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
+            initial_history = list(batch.tokens[0])
+            value = batch._omlx_mtp_state.adaptive_value
+            value.probe_revert_counts[0] = 3
+            value.last_probe_cycle[0] = 12
+            value.last_change_cycle = 10
+            got, resumed, deadlines = [], 0, []
+            while len(got) < limit:
+                before = getattr(batch, "_omlx_mtp_state", None)
+                pending = int(batch._next_tokens.item()) if before is None else None
+                responses = batch.next()
+                assert responses
+                got.extend(int(r.token) for r in responses)
+                state = getattr(batch, "_omlx_mtp_state", None)
+                if before is not None and state is None and responses[-1].finish_reason is None:
+                    assert batch.tokens[0] == initial_history + got
+                    for cache in batch.prompt_cache:
+                        assert cache.offset == len(prompt) + len(got)
+                    assert batch._vmlx_mtp_recovery.calibrating
+                if before is None and state is not None:
+                    resumed += 1
+                    assert int(responses[0].token) == pending
+                    assert state.depth == state.depth_ceiling == depth
+                    assert state.recovery.attempts == state.recovery.failed_probes == 0
+                    assert state.recovery.standard_tokens == resumed * 9
+                    assert state.recovery_probe_started == 0
+                    assert state.ar_step_ms == 100
+                    assert state.adaptive_value.probe_revert_counts[0] == 3
+                    assert state.adaptive_value.last_probe_cycle[0] == 12
+                    assert state.adaptive_value.last_change_cycle == 10
+                    assert state.adaptive_cycle_offset > 0
+                    deadlines.append(state.recovery.next_calibration_token)
+                if responses[-1].finish_reason is not None:
+                    break
+            assert resumed == 2 and deadlines[1] > deadlines[0]
+            assert got == expected
+        finally:
+            set_mtp_active(previous)
+
     def test_cache_length_tracks_emitted_tokens_exactly(self, monkeypatch):
         """Rollback must leave the KV cache exactly at the confirmed prefix.
 

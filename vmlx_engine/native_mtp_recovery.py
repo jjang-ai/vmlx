@@ -39,6 +39,11 @@ class NativeMTPRecovery:
     calibrating: bool = False
     resume_depth: int = 1
     calibrations: int = 0
+    next_calibration_token: int = 128
+    adaptive_state: Any = field(default=None, repr=False)
+    adaptive_cycle_offset: int = 0
+    handoff_wall_ms: float = 0.0
+    resume_wall_ms: float = 0.0
 
     def observe_standard(self, elapsed_ms: float) -> None:
         self.standard_tokens += 1
@@ -60,6 +65,8 @@ class NativeMTPRecovery:
     def park(self, *, failed_probe: bool) -> None:
         self.calibrating = False
         self.resume_depth = 1
+        self.adaptive_state = None
+        self.adaptive_cycle_offset = 0
         if failed_probe:
             self.failed_probes += 1
             self.cooldown = min(MAX_COOLDOWN_TOKENS, self.cooldown * 2)
@@ -91,6 +98,9 @@ class NativeMTPRecovery:
             "calibrating": self.calibrating,
             "calibrations": self.calibrations,
             "resume_depth": self.resume_depth,
+            "next_calibration_token": self.next_calibration_token,
+            "handoff_wall_ms": self.handoff_wall_ms,
+            "resume_wall_ms": self.resume_wall_ms,
             "failed_probes": self.failed_probes,
             "cooldown_tokens": self.cooldown,
             "remaining_ar_tokens": self.remaining,

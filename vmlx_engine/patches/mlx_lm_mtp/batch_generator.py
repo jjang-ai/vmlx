@@ -337,8 +337,9 @@ def apply() -> bool:
             if state is not None:
                 try:
                     responses = _mtp_next(self, state)
+                    calibration = _text_mtp_calibration_due(self, state)
                     if (
-                        state.ar_fallback_pending
+                        (state.ar_fallback_pending or calibration)
                         and not state.queue
                         and getattr(self, "_omlx_mtp_state", None) is state
                         and responses
@@ -348,6 +349,7 @@ def apply() -> bool:
                             self,
                             state,
                             responses[0].logprobs,
+                            calibration=calibration and not state.ar_fallback_pending,
                         )
                     return attach_prompt_cache_snapshots(self, responses)
                 except _MtpStepFallback as exc:
@@ -752,6 +754,7 @@ class _MtpState:
     cycle_span_start: float = 0.0
     recovery: Optional[NativeMTPRecovery] = None
     recovery_probe_started: float = 0.0
+    adaptive_cycle_offset: int = 0
     # Policy-independent AR safety valve (runs for fixed depth too); see
     # vmlx_engine/native_mtp_ar_safety.py.
     ar_safety: ArSafetyState = field(default_factory=ArSafetyState)
@@ -1200,7 +1203,7 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         state.depth = prior_depth - 1
         state.stats.depth = state.depth
         state.ar_safety.reset(cycles)
-        state.adaptive_value.last_change_cycle = cycles
+        state.adaptive_value.last_change_cycle = cycles + state.adaptive_cycle_offset
         state.adaptive_value.active_probe_origin = 0
         state.adaptive_value.active_probe_target = 0
         logger.info("MTP[%s] %s", request_id, trip.log_text(prior_depth, target_depth=state.depth))
@@ -1351,7 +1354,7 @@ def _adaptive_finish_cycle(
         state.adaptive_value,
         depth=completed_depth,
         accepted_drafts=accepted,
-        cycle=int(state.stats.cycles),
+        cycle=int(state.stats.cycles) + state.adaptive_cycle_offset,
         now=now,
         window=window,
     )
@@ -1364,7 +1367,7 @@ def _adaptive_finish_cycle(
         state.adaptive_value,
         current_depth=state.depth,
         depth_ceiling=state.depth_ceiling,
-        cycle=int(state.stats.cycles),
+        cycle=int(state.stats.cycles) + state.adaptive_cycle_offset,
         minimum_samples=minimum_samples,
         cooldown_cycles=_adaptive_env_int(
             8,
@@ -1601,7 +1604,8 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
     state = _MtpState()
     state.recovery = recovery
     state.stats.request_counted = recovery is not None
-    state.recovery_probe_started = recovery_t0
+    calibration_resume = recovery is not None and recovery.calibrating
+    state.recovery_probe_started = 0.0 if calibration_resume else recovery_t0
     state.ar_step_ms = recovery.ar_ms if recovery is not None else seed_step_ms
     state.stats.seed_ar_step_ms = seed_step_ms
     state.stats.seed_context_tokens = seed_context_tokens
@@ -1642,8 +1646,21 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
     state.depth_ceiling = recovery.depth_ceiling if recovery is not None else _effective_depth_resolution(gen_batch, adaptive_ceiling=True)[0]
     state.adaptive_enabled = recovery.adaptive if recovery is not None else _adaptive_depth_enabled()
     state.depth = 1 if recovery is not None or state.adaptive_enabled else state.depth_ceiling
+    if calibration_resume:
+        state.depth = recovery.resume_depth
+        if recovery.adaptive_state is not None:
+            state.adaptive_value = recovery.adaptive_state
+            state.adaptive_cycle_offset = recovery.adaptive_cycle_offset
+            # Retain probe debt/deadlines, not pre-refresh wall measurements.
+            for samples in state.adaptive_value.samples_by_depth:
+                samples.clear()
+            state.adaptive_value.armed_at = 0.0
+            state.adaptive_value.armed_depth = 0
     if recovery is not None:
-        recovery.attempts += 1
+        if not calibration_resume:
+            recovery.attempts += 1
+        recovery.calibrating = False
+        recovery.next_calibration_token = int(gen_batch._num_tokens[0]) + 768
         state.stats.recovery = recovery.snapshot()
     state.stats.depth = state.depth
     state.stats.starting_depth = state.depth
@@ -1668,6 +1685,8 @@ def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = No
         state.next_main,
         prev_buf=prev_buf,
     )
+    if recovery is not None:
+        recovery.resume_wall_ms += (time.perf_counter() - recovery_t0) * 1000.0
 
 
 # ---------------------------------------------------------------------------
@@ -1722,15 +1741,35 @@ def _text_mtp_maybe_resume(gen_batch: Any, recovery: NativeMTPRecovery) -> bool:
         return False
     if any(getattr(c, "rollback_state", None) is not None for c in gen_batch.prompt_cache):
         return False
+    calibration = recovery.calibrating
     _post_init_mtp(gen_batch, recovery=recovery)
-    logger.info("MTP[%s] AR -> D1 recovery probe: ceiling=D%d ar_ms_per_token=%.3f cooldown=%d", recovery.uid, recovery.depth_ceiling, recovery.ar_ms, recovery.cooldown)
+    logger.info("MTP[%s] AR -> D%d %s: ceiling=D%d ar_ms_per_token=%.3f cooldown=%d", recovery.uid, gen_batch._omlx_mtp_state.depth, "calibration resume" if calibration else "recovery probe", recovery.depth_ceiling, recovery.ar_ms, recovery.cooldown)
     return True
+
+
+def _text_mtp_calibration_due(gen_batch: Any, state: _MtpState) -> bool:
+    """Refresh at a drained productive frontier, never inside a value probe."""
+    recovery = state.recovery
+    deadline = recovery.next_calibration_token if recovery is not None else 128
+    return (
+        not state.ar_fallback_pending
+        and not state.queue
+        and state.recovery_probe_started <= 0.0
+        and not state.adaptive_value.active_probe_target
+        and getattr(gen_batch, "uids", None) is not None
+        and len(gen_batch.uids) == 1
+        and int(gen_batch._num_tokens[0]) >= deadline
+        # Nine AR steps plus a meaningful resumed cycle; avoid terminal-only work.
+        and int(gen_batch.max_tokens[0]) - int(gen_batch._num_tokens[0]) >= 32
+    )
 
 
 def _prepare_mtp_ar_handoff(
     gen_batch: Any,
     state: _MtpState,
     last_logprobs: Any,
+    *,
+    calibration: bool = False,
 ) -> None:
     """Prime stock ``GenerationBatch.next`` without re-emitting a token.
 
@@ -1741,6 +1780,7 @@ def _prepare_mtp_ar_handoff(
     sample, then discard MTP state. The next public ``next()`` therefore emits
     the following AR token exactly once.
     """
+    handoff_t0 = time.perf_counter()
     ready, reason = _mtp_ar_handoff_ready(gen_batch, state)
     if not ready:
         raise RuntimeError(f"native MTP AR fallback unsafe: {reason}")
@@ -1765,7 +1805,13 @@ def _prepare_mtp_ar_handoff(
     if recovery is None:
         recovery = NativeMTPRecovery(gen_batch.uids[0], state.depth_ceiling, state.adaptive_enabled)
         gen_batch._vmlx_mtp_recovery = recovery
-    recovery.park(failed_probe=state.recovery_probe_started > 0.0)
+    if calibration:
+        recovery.park_for_calibration(depth=state.depth)
+        recovery.adaptive_state = copy.deepcopy(state.adaptive_value)
+        recovery.adaptive_cycle_offset = state.adaptive_cycle_offset + int(state.stats.cycles)
+    else:
+        recovery.park(failed_probe=state.recovery_probe_started > 0.0)
+    recovery.handoff_wall_ms += (time.perf_counter() - handoff_t0) * 1000.0
     for name in ("cycles", "draft_tokens_proposed", "draft_tokens_accepted", "seed_main_forwards", "verify_main_forwards", "mtp_forwards", "init_emits", "draft_emits", "bonus_emits", "verify_emits"):
         recovery.completed_mtp[name] = recovery.completed_mtp.get(name, 0) + getattr(state.stats, name)
     state.stats.recovery = recovery.snapshot()
@@ -1774,7 +1820,7 @@ def _prepare_mtp_ar_handoff(
     _log_mtp_stats(
         gen_batch.uids[0] if gen_batch.uids else "?",
         state.stats,
-        "fallback_to_ar",
+        "calibration_ar" if calibration else "fallback_to_ar",
         state.mtp_cache,
     )
     if getattr(gen_batch, "_omlx_mtp_state", None) is state:
@@ -1782,7 +1828,7 @@ def _prepare_mtp_ar_handoff(
     logger.info(
         "MTP[%s] fallback to AR after verified queue drain: %s",
         gen_batch.uids[0] if gen_batch.uids else "?",
-        state.ar_fallback_reason or "adaptive runtime cost",
+        "productive baseline calibration" if calibration else state.ar_fallback_reason or "adaptive runtime cost",
     )
 
 def _mtp_next(gen_batch: Any, state: _MtpState) -> Any:

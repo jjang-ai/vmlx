@@ -146,3 +146,19 @@ def test_parked_payload_reports_ar_not_previous_mtp_depth():
     payload = lane._native_mtp_payload("a", stats, "ar")
     assert payload["final_depth"] == 0
     assert payload["depth_ceiling"] == payload["starting_depth"] == 3
+
+
+@pytest.mark.parametrize("blocked", ["early", "terminal", "queue", "probe", "reentry", "fallback", "multirow"])
+def test_calibration_waits_for_safe_productive_window(blocked):
+    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+    s = lane._MtpState(depth=3, depth_ceiling=3)
+    b = SimpleNamespace(uids=["a"], _num_tokens=[128], max_tokens=[1024])
+    assert lane._text_mtp_calibration_due(b, s)
+    if blocked == "early": b._num_tokens = [127]
+    elif blocked == "terminal": b.max_tokens = [159]
+    elif blocked == "queue": s.queue.append(object())
+    elif blocked == "probe": s.adaptive_value.active_probe_target = 2
+    elif blocked == "reentry": s.recovery_probe_started = 1
+    elif blocked == "fallback": s.ar_fallback_pending = True
+    else: b.uids.append("b")
+    assert not lane._text_mtp_calibration_due(b, s)
