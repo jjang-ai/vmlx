@@ -7393,7 +7393,7 @@ def _parse_tool_calls_with_parser(
                     return tc.get("name"), tc.get("arguments") or "{}", tc.get("id", "")
                 return None, "{}", ""
 
-        def _coerce_json_args(raw_args: Any) -> dict[str, Any]:
+        def _coerce_json_args(raw_args: Any) -> dict[str, Any] | None:
             if isinstance(raw_args, dict):
                 return dict(raw_args)
             if isinstance(raw_args, str) and raw_args.strip():
@@ -7401,21 +7401,21 @@ def _parse_tool_calls_with_parser(
                     parsed = json.loads(raw_args)
                     if isinstance(parsed, dict):
                         return parsed
-                except Exception:
-                    return {}
-            return {}
+                except (ValueError, TypeError):
+                    return None
+            return None
 
         def _missing_required_args(name: str | None, raw_args: Any) -> list[str]:
             if not name:
                 return []
             schema = schemas_by_name.get(name) or {}
-            return missing_required_tool_args(schema, _coerce_json_args(raw_args))
+            return missing_required_tool_args(schema, _coerce_json_args(raw_args) or {})
 
         def _rewrite_tool_alias(tc: Any) -> Any | None:
             name, raw_args, call_id = _function_payload(tc)
             if name != "create_file" or "write_file" not in allowed:
                 return None
-            args = _coerce_json_args(raw_args)
+            args = _coerce_json_args(raw_args) or {}
             path = (
                 args.get("path")
                 or args.get("file_path")
@@ -7448,6 +7448,18 @@ def _parse_tool_calls_with_parser(
         for tc in tool_calls:
             name, raw_args, call_id = _function_payload(tc)
             if name in allowed:
+                parsed_args = _coerce_json_args(raw_args)
+                if parsed_args is None:
+                    # Structural validity is required even when optional JSON
+                    # Schema checks are disabled. Never validate {} and then
+                    # deliver a different, non-object argument payload.
+                    logger.warning("Dropping parsed tool call %s for %r: arguments are not a valid JSON object",
+                                   call_id or "<no-id>", name)
+                    _record_tool_call_drop(
+                        f"A tool call to '{name}' was dropped because its arguments are not a valid JSON object."
+                    )
+                    _filter_drop_kinds.append("validation")
+                    continue
                 missing = _missing_required_args(name, raw_args)
                 if missing:
                     logger.warning(
@@ -7467,7 +7479,7 @@ def _parse_tool_calls_with_parser(
                     continue
                 if schema_mode != "off":
                     status, problems = validate_tool_args_against_schema(
-                        schemas_by_name.get(name) or {}, _coerce_json_args(raw_args)
+                        schemas_by_name.get(name) or {}, parsed_args
                     )
                     if status == "invalid":
                         detail = "; ".join(problems[:6])
