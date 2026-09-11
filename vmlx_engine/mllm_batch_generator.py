@@ -10407,13 +10407,14 @@ class MLLMBatchGenerator:
         token_ids: List[int],
         cached_tokens: int,
     ) -> Optional[Dict[str, Any]]:
-        """Admit a Qwen hybrid hit strictly before every media placeholder.
+        """Admit a Qwen hybrid hit before or between complete media items.
 
-        The restored KV+SSM state owns the pure-text prefix. The forward path
+        The restored KV+SSM state owns the matched prefix. The forward path
         will still vision-encode the complete, untrimmed request so Qwen's
         merged embeddings and mRoPE positions remain exact, then feed only the
-        uncached suffix over that native state. Hits after media begins stay
-        fail-closed because they require item-level processor payload slicing.
+        uncached suffix over that native state. No raw processor payload is
+        sliced. A prefix containing media requires per-item cache identity,
+        and must not end inside a placeholder run.
         """
         family = str(getattr(self, "_model_type", "") or "").lower()
         if family not in {"qwen3_5", "qwen3_5_moe"}:
@@ -10421,8 +10422,17 @@ class MLLMBatchGenerator:
         if cached_tokens <= 0 or cached_tokens > len(token_ids):
             return None
         media_limit = self._media_safe_capture_limit(token_ids)
-        if media_limit <= 0 or cached_tokens > media_limit:
+        if media_limit <= 0:
             return None
+        if cached_tokens > media_limit:
+            scope = getattr(request, "_media_cache_scope", None) or {}
+            if scope.get("mode") != "per_media_placeholder":
+                return None
+            runs = _media_placeholder_runs(
+                token_ids, self._media_placeholder_token_ids()
+            )
+            if not runs or any(start < cached_tokens < end for start, end in runs):
+                return None
         if not self._media_prefix_cache_allowed(request, token_ids):
             return None
         if not callable(getattr(self.model, "get_input_embeddings", None)):
@@ -12655,7 +12665,7 @@ class MLLMBatchGenerator:
         cache: Optional[List[Any]],
         kwargs: Dict[str, Any],
     ) -> Any:
-        """Forward a Qwen media tail over a restored pure-text KV+SSM prefix."""
+        """Forward conditioned embeddings over a restored KV+SSM prefix."""
         cached_tokens = int(
             getattr(request, "_qwen_media_tail_cached_tokens", 0) or 0
         )

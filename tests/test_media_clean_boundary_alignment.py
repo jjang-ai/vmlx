@@ -299,6 +299,42 @@ def test_qwen_hybrid_media_tail_admits_only_a_pure_text_prefix():
     ) is None
 
 
+@pytest.mark.parametrize("cached,mode,accepted", [
+    (4, "per_media_placeholder", True),
+    (6, "per_media_placeholder", False),
+    (8, "per_media_placeholder", True),
+    (9, "per_media_placeholder", True),
+    (11, "per_media_placeholder", False),
+    (8, "aggregate_first_placeholder", False),
+])
+def test_qwen_conditioned_tail_complete_item_boundary(cached, mode, accepted):
+    import mlx.core as mx
+
+    class Language:
+        def __call__(self, inputs, inputs_embeds=None, cache=None):
+            pass
+
+    tokens = [1] * 5 + [99] * 3 + [2] * 2 + [99] * 3 + [3] * 2
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator._model_type = "qwen3_5"
+    generator.model = SimpleNamespace(get_input_embeddings=lambda *a, **kw: None)
+    generator.language_model = Language()
+    generator._media_safe_capture_limit = lambda _: 5
+    generator._media_placeholder_token_ids = lambda: {99}
+    generator._media_prefix_cache_allowed = lambda *args: True
+    request = SimpleNamespace(
+        input_ids=mx.array([tokens + [4, 5]]),
+        _media_cache_scope={"mode": mode},
+    )
+    result = generator._prepare_qwen_hybrid_media_tail_for_cache_hit(
+        request, tokens, cached
+    )
+    assert (result is not None) == accepted
+    if accepted:
+        assert request._qwen_media_tail_full_input_ids.tolist() == [tokens + [4, 5]]
+        assert result["conditioned_tail_tokens"] == len(tokens) + 2 - cached
+
+
 @pytest.mark.parametrize("boundary", [0, 7, 9])
 def test_qwen_hybrid_media_tail_forwards_conditioned_suffix_over_native_cache(boundary):
     import mlx.core as mx
