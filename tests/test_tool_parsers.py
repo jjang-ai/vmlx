@@ -1531,7 +1531,7 @@ class TestMiniMaxToolParser:
             },
         ],
     )
-    def test_direct_child_without_matching_schema_keeps_raw_behavior(
+    def test_direct_child_without_matching_schema_does_not_invent_raw_argument(
         self, parser, parser_request
     ):
         text = """<minimax:tool_call>
@@ -1542,10 +1542,9 @@ class TestMiniMaxToolParser:
 
         result = parser.extract_tool_calls(text, request=parser_request)
 
-        assert result.tools_called
-        assert json.loads(result.tool_calls[0]["arguments"]) == {
-            "raw": "<value>do-not-promote-without-matching-schema</value>"
-        }
+        assert not result.tools_called
+        assert result.tool_calls == []
+        assert not result.content
 
     def test_multiple_invocations(self, parser):
         """Test multiple <invoke> blocks within a single tool_call."""
@@ -1697,7 +1696,7 @@ class TestMiniMaxToolParser:
         result = parser.extract_tool_calls(text)
 
         assert not result.tools_called
-        assert "<minimax:tool_call>" in result.content
+        assert not result.content
 
     def test_empty_invoke(self, parser):
         """Test invoke with no parameters."""

@@ -75,7 +75,8 @@ class MiniMaxToolParser(ToolParser):
     Used when --enable-auto-tool-choice --tool-call-parser minimax are set.
     """
 
-    NATIVE_MARKERS = ("<minimax:tool_call>",)
+    NATIVE_MARKERS = ("<minimax:tool_call>", "</minimax:tool_call>")
+    SUPPRESS_INVALID_NATIVE_MARKUP = True
 
     SUPPORTS_NATIVE_TOOL_FORMAT = True
 
@@ -250,8 +251,17 @@ class MiniMaxToolParser(ToolParser):
             )
         else:
             return ExtractedToolCallInformation(
-                tools_called=False, tool_calls=[], content=cleaned_text
+                tools_called=False,
+                tool_calls=[],
+                content=self._safe_invalid_protocol_content(normalized_text),
             )
+
+    @classmethod
+    def _safe_invalid_protocol_content(cls, text: str) -> str:
+        # An undecodable native envelope is not visible answer text. Keep
+        # surrounding prose but never promote its contents to invented args.
+        text = cls.TOOL_CALL_PATTERN.sub("", text)
+        return text.split("<minimax:tool_call>", 1)[0].strip()
 
     def _tool_call_from_invoke(
         self,
@@ -306,14 +316,7 @@ class MiniMaxToolParser(ToolParser):
                     "arguments": raw_content,
                 }
             except json.JSONDecodeError:
-                return {
-                    "id": generate_tool_id(),
-                    "name": func_name,
-                    "arguments": json.dumps(
-                        {"raw": raw_content},
-                        ensure_ascii=False,
-                    ),
-                }
+                return None
 
         if lenient:
             return None
@@ -402,13 +405,7 @@ class MiniMaxToolParser(ToolParser):
                         "arguments": content,
                     }
                 except json.JSONDecodeError:
-                    return {
-                        "id": generate_tool_id(),
-                        "name": func_name,
-                        "arguments": json.dumps(
-                            {"raw": content}, ensure_ascii=False
-                        ),
-                    }
+                    return None
 
         # 2. func_name\n{...}
         func_json_match = self.FUNC_JSON_PATTERN.search(block_content)
