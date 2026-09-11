@@ -1730,6 +1730,22 @@ export class ApiGateway extends EventEmitter {
     }
   }
 
+  private applyOllamaMediaControls(parsed: any, openaiBody: any): void {
+    // Match the Python Ollama adapter: top-level values take precedence over
+    // options, including false and zero. Preserve invalid values for the
+    // engine's validation instead of silently generating without the limit.
+    const fields = [
+      "video_fps", "video_max_frames", "video_max_pixels", "video_min_pixels",
+      "video_total_pixels", "video_resized_height", "video_resized_width",
+      "video_token_budget", "image_max_pixels", "image_min_pixels",
+      "image_resized_height", "image_resized_width", "media_controls_strict",
+    ];
+    for (const field of fields) {
+      const value = parsed[field] ?? parsed.options?.[field];
+      if (value != null) openaiBody[field] = value;
+    }
+  }
+
   private applyOllamaNumPredict(opts: any, openaiBody: any): void {
     const value = opts?.num_predict;
     if (value === undefined || value === null) return;
@@ -1832,6 +1848,7 @@ export class ApiGateway extends EventEmitter {
       stream_options: { include_usage: true },
     };
     this.applyOllamaNumPredict(opts, openaiBody);
+    this.applyOllamaMediaControls(parsed, openaiBody);
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     // Ollama top_k=0 explicitly disables top-k. Forward it so the local engine
@@ -2200,6 +2217,7 @@ export class ApiGateway extends EventEmitter {
           stream_options: { include_usage: true },
         };
     this.applyOllamaNumPredict(opts, openaiBody);
+    this.applyOllamaMediaControls(parsed, openaiBody);
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     if (opts.top_k != null && Number(opts.top_k) >= 0) openaiBody.top_k = opts.top_k;

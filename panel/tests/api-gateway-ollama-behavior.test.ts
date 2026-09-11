@@ -652,6 +652,35 @@ describe("Ollama gateway request translation behavior", () => {
     ]);
   });
 
+  it.each(["chat", "generate"])("preserves %s media controls and invalid values for engine validation", async (lane) => {
+    backend = await startCaptureBackend();
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const controls = {
+      video_fps: 2, video_max_frames: 8, video_max_pixels: 200000,
+      video_min_pixels: 65536, video_total_pixels: 1000000,
+      video_resized_height: 256, video_resized_width: 256,
+      video_token_budget: 512, image_max_pixels: 0,
+      image_min_pixels: 65536, image_resized_height: 256,
+      image_resized_width: 256, media_controls_strict: false,
+    };
+    await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      model: "text-model", stream: false, prompt: "Hello",
+      messages: [{ role: "user", content: "Hello" }],
+      options: { ...controls, media_controls_strict: true, image_max_pixels: 200000 },
+      image_max_pixels: 0, media_controls_strict: false,
+      video_fps: null,
+    });
+    expect(backend.bodies[0]).toMatchObject(controls);
+    await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      model: "text-model", stream: false, prompt: "Hello",
+      messages: [{ role: "user", content: "Hello" }],
+    });
+    for (const field of Object.keys(controls)) {
+      expect(backend.bodies[1]).not.toHaveProperty(field);
+    }
+  });
+
   it("forwards the Ollama seed on both chat and generate", async () => {
     // The Python route honours options.seed and top-level seed; the gateway
     // dropped both, so the identical request was reproducible against the
