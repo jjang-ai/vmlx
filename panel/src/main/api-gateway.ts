@@ -1790,7 +1790,12 @@ export class ApiGateway extends EventEmitter {
         ? error
         : error?.message || error?.detail || error?.type;
     if (message == null) return undefined;
-    const text = String(message).trim();
+    let text = String(message).trim();
+    // Ollama has a string error field. Match the direct adapter's convention
+    // so clients can still identify typed request failures after HTTP 200.
+    if (error?.type === "invalid_request_error" && error?.code && text && !text.includes(String(error.code))) {
+      text = `${error.code}: ${text}`;
+    }
     return text || "the model failed to generate a response";
   }
 

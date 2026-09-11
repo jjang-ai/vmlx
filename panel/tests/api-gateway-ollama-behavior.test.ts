@@ -174,7 +174,7 @@ async function startStreamingThinkingBackend(rawCompletion = false): Promise<Bac
   return { server, port: await listen(server), bodies, paths };
 }
 
-async function startReasoningOnlyErrorBackend(): Promise<BackendHandle> {
+async function startReasoningOnlyErrorBackend(error: any = { message: "The model produced reasoning_content but no visible answer and no tool call.", type: "invalid_response_error", code: "reasoning_only_no_content" }): Promise<BackendHandle> {
   const bodies: any[] = [];
   const paths: string[] = [];
   const server = createServer((req, res) => {
@@ -195,7 +195,7 @@ async function startReasoningOnlyErrorBackend(): Promise<BackendHandle> {
         'data: {"choices":[],"warnings":["The model ended normally while still in its reasoning phase."]}\n\n',
       );
       res.write(
-        'data: {"error":{"message":"The model produced reasoning_content but no visible answer and no tool call.","type":"invalid_response_error","code":"reasoning_only_no_content"}}\n\n',
+        `data: ${JSON.stringify({ error })}\n\n`,
       );
       res.write("data: [DONE]\n\n");
       res.end();
@@ -713,6 +713,20 @@ describe("Ollama gateway request translation behavior", () => {
     expect(content).toBe("hello\n\n[vMLX notice] image_controls: effective 252x252");
     expect(rows.filter(row => row.done)).toHaveLength(1);
     expect(rows.at(-1)).toMatchObject({ done: true, eval_count: 2, prompt_eval_count: 2 });
+  });
+
+  it.each(["chat", "generate"])("preserves %s typed invalid-request stream error codes", async (lane) => {
+    backend = await startReasoningOnlyErrorBackend({ message: "Processor floor exceeds requested budget", type: "invalid_request_error", code: "media_controls_unmeetable" });
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const response = await fetch(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-model", prompt: "hi", messages: [], stream: true }),
+    });
+    const rows = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.at(-1)).toEqual({ error: "media_controls_unmeetable: Processor floor exceeds requested budget" });
+    expect(rows.filter(row => row.error)).toHaveLength(1);
+    expect(rows.some(row => row.done)).toBe(false);
   });
 
   it("forwards the Ollama seed on both chat and generate", async () => {
