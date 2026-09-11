@@ -56,6 +56,31 @@ def test_default_disabled(monkeypatch):
     assert qwen4_verify_sdpa(*tensors(4), scale=256**-0.5) is None
 
 
+@pytest.mark.parametrize(
+    "context,path", [(8193, "sparse_qk_dense_pv"), (16384, "sparse_qk_compact_pv")]
+)
+def test_actual_verification_branch_logged_once(context, path, monkeypatch, caplog):
+    import importlib
+
+    module = importlib.import_module("vmlx_engine.metal.qwen4_verify_sdpa")
+    monkeypatch.setattr(module, "_logged_dispatches", set())
+    monkeypatch.setenv("VMLX_QWEN4_VERIFY_SDPA", "1")
+    caplog.set_level("INFO", logger=module.__name__)
+    q, k, v, mask = tensors(4, context)
+    for _ in range(2):
+        result = qwen4_verify_sdpa(
+            q, k, v, mask, scale=256**-0.5,
+            selected_token_bound=2051, selected_four_token_block_bound=513,
+        )
+        assert result is not None
+        mx.eval(result)
+    records = [r for r in caplog.records if "QSA verification dispatch" in r.message]
+    assert len(records) == 1
+    assert f"path={path}" in records[0].message
+    assert f"context={context}" in records[0].message
+    assert "rows=4" in records[0].message
+
+
 @pytest.mark.parametrize("context,dtype", [(4096, mx.bfloat16), (8192, mx.float32)])
 def test_unqualified_shapes_fall_back(context, dtype, monkeypatch):
     monkeypatch.setenv("VMLX_QWEN4_VERIFY_SDPA", "1")

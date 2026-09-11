@@ -8,9 +8,26 @@ different rounding and is not used here. Full-model qualification is required.
 
 from __future__ import annotations
 
+import logging
 import os
 
 import mlx.core as mx
+
+logger = logging.getLogger(__name__)
+_logged_dispatches: set[tuple[str, int, str]] = set()
+
+
+def _log_dispatch(q, k, path: str) -> None:
+    # Shape/dtype metadata only: do not eval, synchronize, or read tensor data.
+    # Context is reported on first use, not keyed, so growing history cannot
+    # turn this into a per-token log or an unbounded set.
+    key = (path, q.shape[2], str(q.dtype))
+    if key not in _logged_dispatches:
+        _logged_dispatches.add(key)
+        logger.info(
+            "QSA verification dispatch path=%s rows=%d context=%d dtype=%s",
+            path, q.shape[2], k.shape[2], q.dtype,
+        )
 
 
 def qwen4_verify_sdpa(
@@ -135,10 +152,13 @@ def qwen4_verify_sdpa(
                     probabilities, pv_indices[None, None, :, None, :], axis=-1
                 )
                 compact_values = mx.take(v, pv_indices, axis=2)
+                _log_dispatch(q, k, "sparse_qk_compact_pv")
                 return (compact_probabilities @ compact_values).transpose(
                     0, 1, 3, 2, 4
                 ).reshape(batch, heads, rows, dim)
+        _log_dispatch(q, k, "sparse_qk_dense_pv")
         return (
             probabilities.transpose(0, 1, 3, 2, 4) @ v[:, :, None]
         ).reshape(batch, heads, rows, dim)
+    _log_dispatch(q, k, "stock_sdpa")
     return mx.fast.scaled_dot_product_attention(q, k, v, mask=mask, scale=scale)
