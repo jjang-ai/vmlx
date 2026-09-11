@@ -359,8 +359,11 @@ class TestMtpDepthGreedyIdentity:
             assert got == baseline
             assert getattr(batch, "_omlx_mtp_state", None) is None
             receipt = native_mtp_stats_snapshot()["last_native_mtp"]
-            assert receipt["finish_reason"] == "fallback_to_ar"
+            assert receipt["finish_reason"] == "length"
+            assert receipt["final_depth"] == 0
             assert "calibrated_cost" in receipt["fallback_reason"]
+            assert receipt["recovery"]["productive_ar_tokens"] > 0
+            assert receipt["recovery"]["attempts"] == 0
         finally:
             set_mtp_active(previous)
 
@@ -421,6 +424,53 @@ class TestMtpDepthGreedyIdentity:
                 if responses[-1].finish_reason is not None:
                     break
             assert got == expected
+        finally:
+            set_mtp_active(previous)
+
+    @pytest.mark.parametrize("depth", [1, 2, 3])
+    @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
+    def test_automatic_ar_reentry_keeps_ceiling_and_exact_output(
+        self, monkeypatch, depth, wrong_from_step
+    ):
+        from vmlx_engine.patches.mlx_lm_mtp import (
+            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        )
+        from vmlx_engine.native_mtp_recovery import NativeMTPRecovery
+        assert apply_mlx_lm_mtp_patch()
+        previous = is_mtp_active()
+        prompt, limit = [3, 5, 7, 11], 180
+        # Deterministic timing input tests policy/identity, not performance.
+        observe = NativeMTPRecovery.observe_standard
+        monkeypatch.setattr(NativeMTPRecovery, "observe_standard", lambda self, ms: observe(self, 100.0))
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
+        try:
+            set_mtp_active(False)
+            expected = _run_generation(_FakeCacheModel(), prompt, limit)
+            set_mtp_active(True)
+            batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
+            batch._omlx_mtp_state.ar_fallback_pending = True
+            batch._omlx_mtp_state.ar_fallback_reason = "controlled performance park"
+            got, entered = [], False
+            while len(got) < limit:
+                before = getattr(batch, "_omlx_mtp_state", None)
+                responses = batch.next()
+                assert responses
+                got.extend(int(r.token) for r in responses)
+                state = getattr(batch, "_omlx_mtp_state", None)
+                if before is None and state is not None:
+                    entered = True
+                    assert state.depth == 1
+                    assert state.depth_ceiling == depth
+                    assert state.recovery.standard_tokens == 128
+                    assert state.recovery.attempts == 1
+                    assert state.ar_step_ms == 100.0
+                if state is not None:
+                    assert 1 <= state.depth <= depth
+                if responses[-1].finish_reason is not None:
+                    break
+            assert entered and got == expected
+            assert not hasattr(batch, "_vmlx_mtp_recovery")
         finally:
             set_mtp_active(previous)
 

@@ -90,6 +90,7 @@ from ...native_mtp_adaptive import (
     finish_armed_depth_cycle,
 )
 from ...native_mtp_ar_safety import ArSafetyState, ar_safety_step
+from ...native_mtp_recovery import NativeMTPRecovery
 from ...native_mtp_cache_telemetry import (
     native_mtp_cache_lifecycle_snapshot,
     native_mtp_cache_snapshot,
@@ -326,6 +327,9 @@ def apply() -> bool:
                         }
 
     def patched_next(self, *args, **kwargs):
+        recovery = _text_recovery_for_batch(self)
+        if recovery is not None:
+            _text_mtp_maybe_resume(self, recovery)
         if _is_mtp_eligible(self):
             state = getattr(self, "_omlx_mtp_state", None)
             if state is not None:
@@ -345,6 +349,9 @@ def apply() -> bool:
                         )
                     return attach_prompt_cache_snapshots(self, responses)
                 except _MtpStepFallback as exc:
+                    # A correctness fallback cannot schedule a retry from a
+                    # potentially damaged boundary, even after a prior park.
+                    self.__dict__.pop("_vmlx_mtp_recovery", None)
                     logger.debug(
                         "MTP next() fallback to standard step: %s", exc
                     )
@@ -371,7 +378,18 @@ def apply() -> bool:
                             delattr(self, "_omlx_mtp_state")
                         except AttributeError:
                             pass
+        stock_recovery = recovery if recovery is not None and getattr(self, "uids", None) == [recovery.uid] else None
+        step_t0 = time.perf_counter() if stock_recovery is not None else 0.0
         responses = original_next(self, *args, **kwargs)
+        if (
+            stock_recovery is not None
+            and responses
+        ):
+            stock_recovery.observe_standard((time.perf_counter() - step_t0) * 1000.0)
+            stats = stock_recovery.parked_stats
+            if stats is not None and (stock_recovery.standard_tokens % 16 == 0 or responses[0].finish_reason is not None):
+                stats.recovery = stock_recovery.snapshot()
+                _publish_native_mtp_stats(stock_recovery.uid, stats, responses[0].finish_reason or "ar")
         return attach_prompt_cache_snapshots(self, responses)
 
     def patched_batch_generator_next(self, *args, **kwargs):
@@ -430,6 +448,8 @@ def apply() -> bool:
         # MTP post-init runs on the fresh batch (since that's the one whose
         # __init__ fires with uids=[0]); without this transfer the state
         # would die with the donor instance.
+        was_empty = not getattr(self, "uids", None)
+        donor_recovery = _text_recovery_for_batch(batch)
         donor_state = getattr(batch, "_omlx_mtp_state", None)
         result = original_extend(self, batch, *args, **kwargs)
         if donor_state is not None and not hasattr(self, "_omlx_mtp_state"):
@@ -442,6 +462,10 @@ def apply() -> bool:
                 "MTP state transferred from donor batch to host batch (uid=%s)",
                 getattr(self, "uids", ["?"])[0] if getattr(self, "uids", None) else "?",
             )
+        if was_empty and donor_recovery is not None:
+            self._vmlx_mtp_recovery = donor_recovery
+            batch.__dict__.pop("_vmlx_mtp_recovery", None)
+        _text_recovery_for_batch(self)
         return result
 
     def patched_filter(self, keep, *args, **kwargs):
@@ -451,6 +475,7 @@ def apply() -> bool:
         # _emit_response finish path doesn't fire.
         state = getattr(self, "_omlx_mtp_state", None)
         result = original_filter(self, keep, *args, **kwargs)
+        _text_recovery_for_batch(self)
         if state is not None and not getattr(self, "uids", None):
             # Batch is now empty — log + drop state.
             try:
@@ -662,6 +687,7 @@ class _MtpStats:
     fallback_cost_ratio: Optional[float] = None
     fallback_mtp_ms_per_token: Optional[float] = None
     fallback_ar_step_ms: Optional[float] = None
+    recovery: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -712,6 +738,8 @@ class _MtpState:
     ar_fallback_reason: Optional[str] = None
     ar_step_ms: float = 0.0
     cycle_span_start: float = 0.0
+    recovery: Optional[NativeMTPRecovery] = None
+    recovery_probe_started: float = 0.0
     # Policy-independent AR safety valve (runs for fixed depth too); see
     # vmlx_engine/native_mtp_ar_safety.py.
     ar_safety: ArSafetyState = field(default_factory=ArSafetyState)
@@ -748,7 +776,7 @@ def _native_mtp_payload(
     return {
         "request_id": str(uid),
         "finish_reason": finish_reason,
-        "final_depth": int(stats.depth or 1),
+        "final_depth": int(stats.depth),
         "starting_depth": int(stats.starting_depth or 1),
         "depth_ceiling": int(stats.depth_ceiling or 1),
         "depth_policy": str(stats.depth_policy or "fixed"),
@@ -774,6 +802,7 @@ def _native_mtp_payload(
         "drafted_by_depth": list(stats.drafted_by_depth),
         "depth_acceptance_rates": depth_rates,
         "adaptive_depth_value": dict(stats.adaptive_depth_value),
+        "recovery": dict(stats.recovery),
         "forwards": {
             "seed_main": int(stats.seed_main_forwards),
             "verify_main": int(stats.verify_main_forwards),
@@ -1107,6 +1136,10 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
     if state.ar_fallback_pending:
         return False
     cycles = int(state.stats.cycles)
+    probing = state.recovery_probe_started > 0.0
+    measured = state.recovery is not None and state.recovery.ar_ms > 0.0
+    if state.recovery is not None:
+        state.stats.recovery = state.recovery.snapshot()
     trip = ar_safety_step(
         state.ar_safety,
         cycles=cycles,
@@ -1114,7 +1147,26 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         now=time.perf_counter(),
         seed_ar_ms=float(state.ar_step_ms or 0.0),
         primed=str(state.stats.prompt_prime_source or "unprimed") != "unprimed",
+        probe=probing,
+        scale_context=not measured,
+        baseline_measured=measured,
+        margin=0.9 if probing else None,
     )
+    if probing and trip is None and cycles >= 12:
+        # Include seed/priming, draft, verification and delivery wall time.
+        # Warmup cannot hide a probe whose complete cost loses to stock AR.
+        confirmed = 2 + cycles + int(state.stats.draft_tokens_accepted)
+        cost = (time.perf_counter() - state.recovery_probe_started) * 1000 / confirmed
+        if cost <= state.ar_step_ms * 0.9:
+            state.recovery_probe_started = 0.0
+            logger.info("MTP[%s] AR re-entry D1 accepted: total_ms_per_token=%.3f ar=%.3f", request_id, cost, state.ar_step_ms)
+        else:
+            state.ar_fallback_pending = True
+            state.ar_fallback_reason = "reentry_total_cost"
+            state.stats.fallback_reason = state.ar_fallback_reason
+            state.stats.fallback_mtp_ms_per_token = cost
+            state.stats.fallback_ar_step_ms = state.ar_step_ms
+            return True
     if trip is None:
         return False
     prior_depth = int(state.depth or 1)
@@ -1124,6 +1176,9 @@ def _text_mtp_maybe_ar_safety_fallback(request_id: str, state: _MtpState) -> boo
         state.depth = prior_depth - 1
         state.stats.depth = state.depth
         state.ar_safety.reset(cycles)
+        state.adaptive_value.last_change_cycle = cycles
+        state.adaptive_value.active_probe_origin = 0
+        state.adaptive_value.active_probe_target = 0
         logger.info("MTP[%s] AR safety D%d -> D%d: %s", request_id, prior_depth, state.depth, trip.log_text(prior_depth))
         return False
     state.ar_fallback_pending = True
@@ -1145,7 +1200,8 @@ def _text_mtp_maybe_cost_fallback(
 
     An explicit calibrated cost experiment may override any depth policy.
     Otherwise the runtime gate applies only to an already-active adaptive
-    request. Fixed D1/D2/D3 remains an exact user selection.
+    request. Fixed D1/D2/D3 is a ceiling governed by the shared AR safety
+    valve; this optional cost experiment does not replace that controller.
     """
 
     explicit = _adaptive_env_flag(
@@ -1243,8 +1299,6 @@ def _adaptive_value_min_samples() -> int:
 
 
 def _adaptive_arm_cycle(state: _MtpState, *, now: float) -> None:
-    if not state.adaptive_enabled:
-        return
     arm_depth_cycle(state.adaptive_value, depth=state.depth, now=now)
 
 
@@ -1260,10 +1314,9 @@ def _adaptive_finish_cycle(
 
     The completed verify/rollback cycle always stays at its original depth.
     Any decision applies only to the next draft chain, where no speculative
-    state exists yet. Fixed D1/D2/D3 never enter this function.
+    state exists yet. Both fixed-ceiling and adaptive modes use measured
+    neighbour probes; the configured ceiling and initial choice remain distinct.
     """
-    if not state.adaptive_enabled:
-        return
     window = _adaptive_env_int(
         16,
         "VMLINUX_NATIVE_MTP_VALUE_WINDOW",
@@ -1278,6 +1331,10 @@ def _adaptive_finish_cycle(
         now=now,
         window=window,
     )
+    # A mandatory safety demotion owns this cycle. Also finish the D1 AR
+    # re-entry qualification before considering any higher-depth experiment.
+    if state.depth != completed_depth or state.recovery_probe_started > 0.0:
+        return
     minimum_samples = _adaptive_value_min_samples()
     decision = choose_depth_by_value(
         state.adaptive_value,
@@ -1318,6 +1375,8 @@ def _adaptive_finish_cycle(
     current = state.depth
     state.depth = target
     state.stats.depth = target
+    if target != current:
+        state.ar_safety.reset(int(state.stats.cycles))
     logger.info(
         "MTP[%s] adaptive value %s D%d -> D%d after cycles=%d: %s",
         request_id,
@@ -1416,7 +1475,7 @@ def _trim_glm_head_chain(state: "_MtpState") -> bool:
 # emitted tokens; stash a draft for the first verify cycle.
 # ---------------------------------------------------------------------------
 
-def _post_init_mtp(gen_batch: Any) -> None:
+def _post_init_mtp(gen_batch: Any, *, recovery: Optional[NativeMTPRecovery] = None) -> None:
     """Bridge from standard ``__init__``'s ``_step()`` into vMLX's MTP cycle.
 
     State on entry (after standard ``__init__``):
@@ -1442,6 +1501,7 @@ def _post_init_mtp(gen_batch: Any) -> None:
         # next() call will be a no-op anyway; leave the patch inert.
         return
 
+    recovery_t0 = time.perf_counter() if recovery is not None else 0.0
     sampler = _resolve_sampler(gen_batch)
     procs = _proc_list(gen_batch)
 
@@ -1475,7 +1535,9 @@ def _post_init_mtp(gen_batch: Any) -> None:
     seed_step_ms = (time.perf_counter() - seed_step_t0) * 1000.0
 
     state = _MtpState()
-    state.ar_step_ms = seed_step_ms
+    state.recovery = recovery
+    state.recovery_probe_started = recovery_t0
+    state.ar_step_ms = recovery.ar_ms if recovery is not None else seed_step_ms
     try:
         state.ar_safety.prompt_tokens = int(len(gen_batch.tokens[0]))
     except Exception:
@@ -1506,9 +1568,12 @@ def _post_init_mtp(gen_batch: Any) -> None:
     else:
         state.mtp_cache, state.stats.prompt_primed_pairs = primed
         state.stats.prompt_prime_source = "cold_prompt"
-    state.depth_ceiling = _effective_depth(gen_batch)
-    state.adaptive_enabled = _adaptive_depth_enabled()
-    state.depth = 1 if state.adaptive_enabled else state.depth_ceiling
+    state.depth_ceiling = recovery.depth_ceiling if recovery is not None else _effective_depth(gen_batch)
+    state.adaptive_enabled = recovery.adaptive if recovery is not None else _adaptive_depth_enabled()
+    state.depth = 1 if recovery is not None or state.adaptive_enabled else state.depth_ceiling
+    if recovery is not None:
+        recovery.attempts += 1
+        state.stats.recovery = recovery.snapshot()
     state.stats.depth = state.depth
     state.stats.starting_depth = state.depth
     state.stats.depth_ceiling = state.depth_ceiling
@@ -1559,6 +1624,38 @@ def _mtp_ar_handoff_ready(gen_batch: Any, state: _MtpState) -> Tuple[bool, str]:
     return True, "ready"
 
 
+def _text_recovery_for_batch(gen_batch: Any) -> Optional[NativeMTPRecovery]:
+    recovery = getattr(gen_batch, "_vmlx_mtp_recovery", None)
+    if recovery is not None and recovery.uid not in (getattr(gen_batch, "uids", None) or ()):
+        gen_batch.__dict__.pop("_vmlx_mtp_recovery", None)
+        return None
+    return recovery
+
+
+def _text_mtp_maybe_resume(gen_batch: Any, recovery: NativeMTPRecovery) -> bool:
+    """Re-enter only from a productive, singleton stock-AR boundary.
+
+    A seed failure is fatal: post-init may already have advanced native caches,
+    so do not catch it and pretend the old stock state is still usable.
+    """
+    if (
+        getattr(gen_batch, "_omlx_mtp_state", None) is not None
+        or not recovery.ready
+        or not _is_mtp_eligible(gen_batch)
+        or getattr(gen_batch, "uids", None) != [recovery.uid]
+        or getattr(gen_batch, "_next_tokens", None) is None
+    ):
+        return False
+    # Do not seed two tokens on a request which is about to finish.
+    if int(gen_batch.max_tokens[0]) - int(gen_batch._num_tokens[0]) < 3:
+        return False
+    if any(getattr(c, "rollback_state", None) is not None for c in gen_batch.prompt_cache):
+        return False
+    _post_init_mtp(gen_batch, recovery=recovery)
+    logger.info("MTP[%s] AR -> D1 recovery probe: ceiling=D%d ar_ms_per_token=%.3f cooldown=%d", recovery.uid, recovery.depth_ceiling, recovery.ar_ms, recovery.cooldown)
+    return True
+
+
 def _prepare_mtp_ar_handoff(
     gen_batch: Any,
     state: _MtpState,
@@ -1593,6 +1690,16 @@ def _prepare_mtp_ar_handoff(
             f"expected={visible_id} actual={list(consumed)}"
         )
 
+    recovery = _text_recovery_for_batch(gen_batch)
+    if recovery is None:
+        recovery = NativeMTPRecovery(gen_batch.uids[0], state.depth_ceiling, state.adaptive_enabled)
+        gen_batch._vmlx_mtp_recovery = recovery
+    recovery.park(failed_probe=state.recovery_probe_started > 0.0)
+    for name in ("cycles", "draft_tokens_proposed", "draft_tokens_accepted", "seed_main_forwards", "verify_main_forwards", "mtp_forwards", "init_emits", "draft_emits", "bonus_emits", "verify_emits"):
+        recovery.completed_mtp[name] = recovery.completed_mtp.get(name, 0) + getattr(state.stats, name)
+    state.stats.recovery = recovery.snapshot()
+    state.stats.depth = 0  # Effective AR, not the last configured MTP rung.
+    recovery.parked_stats = state.stats
     _log_mtp_stats(
         gen_batch.uids[0] if gen_batch.uids else "?",
         state.stats,
@@ -1867,17 +1974,6 @@ def _run_verify_cycle(gen_batch: Any, state: _MtpState) -> None:
             _trim_token_buffer(gen_batch, n - k)
     state.stats.cache_ops_ms += (time.perf_counter() - t0) * 1000
 
-    # The decision applies only to the next chain. The just-completed verify
-    # and its rollback/commit are already final, so changing depth here cannot
-    # alter current output or cache state.
-    _adaptive_finish_cycle(
-        str(gen_batch.uids[0]) if gen_batch.uids else "?",
-        state,
-        completed_depth=n,
-        accepted=k,
-        now=time.perf_counter(),
-    )
-
     # --- queue emits: k accepted drafts + 1 correction/bonus ---
     for i in range(k):
         state.queue.append((state.draft_ids[i], state.draft_lps[i], "draft"))
@@ -1923,6 +2019,12 @@ def _run_verify_cycle(gen_batch: Any, state: _MtpState) -> None:
         state.draft_ids = []
         state.head_chain_pairs = 0
         return
+    # Safety gets first refusal. An optional neighbour probe must never reset
+    # the losing window before the mandatory descent has had a chance to act.
+    _adaptive_finish_cycle(
+        request_label, state, completed_depth=n, accepted=k,
+        now=time.perf_counter(),
+    )
     _adaptive_arm_cycle(state, now=time.perf_counter())
     if _glm_aligned_head_cache_enabled(gen_batch):
         state.stats.mtp_head_cache_policy = "glm_aligned"
