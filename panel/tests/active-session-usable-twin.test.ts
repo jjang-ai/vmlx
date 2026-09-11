@@ -23,4 +23,13 @@ describe('active session usable-twin fallback', () => {
       "(s.status === 'running' || s.status === 'loading' || s.status === 'standby')",
     )
   })
+
+  it('passes the resolved session identity alongside its endpoint to chat controls', () => {
+    // ChatModeContent forwards this ID to toolbar Start/Stop, settings,
+    // cache/stat controls and ChatInterface. It must identify the same
+    // session that owns sessionEndpoint, not the stale persisted pin.
+    const content = source.match(/<ChatModeContent\s[\s\S]*?\/>/)?.[0]
+    expect(content).toBeDefined()
+    expect(content).toContain('activeSessionId={activeSession?.id || state.activeSessionId}')
+  })
 })

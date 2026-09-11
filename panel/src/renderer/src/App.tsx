@@ -274,7 +274,7 @@ function App() {
                 activeChatId={state.activeChatId}
                 sessionEndpoint={sessionEndpoint}
                 sessionStatus={activeSession?.status}
-                activeSessionId={state.activeSessionId}
+                activeSessionId={activeSession?.id || state.activeSessionId}
                 onNewChat={handleNewChat}
                 onSessionChange={handleSessionChange}
               />
