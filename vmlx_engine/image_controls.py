@@ -246,6 +246,7 @@ def image_controls_diagnostics(
     token_pixels: int,
     pixel_floor: int | None,
     pixel_ceiling: int | None,
+    processor: Any = None,
 ) -> tuple[list[str], list[str]]:
     """(reports, unmeetable): what the processor will still change after our
     bound, with effective values. ``unmeetable`` entries are the ones strict
@@ -254,7 +255,16 @@ def image_controls_diagnostics(
 
     h, w = int(after[0]), int(after[1])
     factor = max(1, int(round(math.sqrt(max(1, int(token_pixels))))))
-    eh, ew = smart_resize_dims(h, w, factor=factor, min_pixels=pixel_floor, max_pixels=pixel_ceiling)
+    ip = getattr(processor, "image_processor", None) or processor
+    native_size = getattr(ip, "image_control_size", None)
+    if callable(native_size):
+        # Some native processors pad upward rather than use Qwen's nearest
+        # smart-resize grid. Use the same owner as actual preprocessing.
+        eh, ew = native_size(h, w)
+        adjustment = "pads/resizes"
+    else:
+        eh, ew = smart_resize_dims(h, w, factor=factor, min_pixels=pixel_floor, max_pixels=pixel_ceiling)
+        adjustment = "rounds"
     tokens = max(1, (eh * ew) // max(1, int(token_pixels)))
     reports: list[str] = []
     unmeetable: list[str] = []
@@ -269,17 +279,17 @@ def image_controls_diagnostics(
     # 2. the processor's own grid/floor/ceiling changes the effective size past a sent bound
     proc_miss = bounds_satisfied(eh, ew, controls) if (eh, ew) != (h, w) else []
     if proc_miss and not (pixel_floor and h * w < int(pixel_floor)) and not (pixel_ceiling and h * w > int(pixel_ceiling)):
-        msg = (f"image_controls: the processor rounds {h}x{w} to its patch grid: effective {eh}x{ew} ({eh * ew} px, {tokens} tokens), "
+        msg = (f"image_controls: the processor {adjustment} {h}x{w} to its patch grid: effective {eh}x{ew} ({eh * ew} px, {tokens} tokens), "
                f"which {'; '.join(proc_miss)}")
         reports.append(msg); unmeetable.append(msg)
         return reports, unmeetable
     if pixel_floor and h * w < int(pixel_floor):
         msg = (f"image_controls: {asked} bounded the image to {h}x{w}, below the image processor floor ({pixel_floor} px); "
-               f"the processor upscales it: effective {eh}x{ew}, {tokens} tokens")
+               f"the processor {'pads/resizes' if callable(native_size) else 'upscales'} it: effective {eh}x{ew}, {tokens} tokens")
         reports.append(msg); unmeetable.append(msg)
     elif pixel_ceiling and h * w > int(pixel_ceiling):
         msg = (f"image_controls: {asked} leaves the image at {h}x{w}, above the image processor ceiling ({pixel_ceiling} px); "
-               f"the processor downscales it: effective {eh}x{ew}, {tokens} tokens")
+               f"the processor {'pads/resizes' if callable(native_size) else 'downscales'} it: effective {eh}x{ew}, {tokens} tokens")
         reports.append(msg); unmeetable.append(msg)
     return reports, unmeetable
 

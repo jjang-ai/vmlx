@@ -13371,7 +13371,8 @@ class MLLMBatchGenerator:
                 request._derived_media_files = derived  # type: ignore[attr-defined]
             derived.append(new_path)
         reports, unmeetable = image_controls_diagnostics(
-            controls, before=before, after=after, token_pixels=token_px, pixel_floor=floor, pixel_ceiling=ceiling
+            controls, before=before, after=after, token_pixels=token_px, pixel_floor=floor, pixel_ceiling=ceiling,
+            processor=self.processor,
         )
         logger.info(
             "Image controls for %s: %s -> %s (%s) reports=%d",

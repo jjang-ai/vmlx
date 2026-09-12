@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from transformers.image_processing_utils import ImageProcessingMixin
 
 _CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
 _CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+_LOG = logging.getLogger(__name__)
 
 
 def _aligned_canvas(
@@ -101,7 +103,26 @@ class Glm5NextImageProcessor(ImageProcessingMixin):
         self.do_normalize = bool(do_normalize)
         self.image_mean = list(image_mean or _CLIP_MEAN)
         self.image_std = list(image_std or _CLIP_STD)
+        # Loader compatibility only; not a one-pixel processing ceiling.
         self.size = {"longest_edge": 1}
+
+    @property
+    def min_pixels(self) -> int:
+        return self.min_image_tokens * (self.patch_size * self.merge_size) ** 2
+
+    @property
+    def max_pixels(self) -> int:
+        return self.max_image_tokens * (self.patch_size * self.merge_size) ** 2
+
+    def image_control_size(self, height: int, width: int) -> tuple[int, int]:
+        """Native padded canvas, shared by preprocessing and control diagnostics."""
+        return _aligned_canvas(
+            height, width,
+            factor=self.patch_size * self.merge_size,
+            temporal_factor=self.temporal_patch_size,
+            min_tokens=self.min_image_tokens,
+            max_tokens=self.max_image_tokens,
+        )
 
     def fetch_images(self, images):
         if not isinstance(images, list):
@@ -112,14 +133,7 @@ class Glm5NextImageProcessor(ImageProcessingMixin):
         array = _as_rgb_array(image)
         height, width = array.shape[:2]
         factor = self.patch_size * self.merge_size
-        target_h, target_w = _aligned_canvas(
-            height,
-            width,
-            factor=factor,
-            temporal_factor=self.temporal_patch_size,
-            min_tokens=self.min_image_tokens,
-            max_tokens=self.max_image_tokens,
-        )
+        target_h, target_w = self.image_control_size(height, width)
         scale = min(target_h / height, target_w / width)
         if self.temporal_patch_size * height * width >= (
             self.temporal_patch_size * factor * factor * self.min_image_tokens
@@ -147,6 +161,12 @@ class Glm5NextImageProcessor(ImageProcessingMixin):
         channels, resized_h, resized_w = pixels.shape
         grid_h = resized_h // self.patch_size
         grid_w = resized_w // self.patch_size
+        _LOG.info(
+            "GLM image processed: input=%dx%d content=%dx%d canvas=%dx%d "
+            "grid=1x%dx%d tokens=%d",
+            height, width, content_h, content_w, resized_h, resized_w,
+            grid_h, grid_w, grid_h * grid_w // self.merge_size**2,
+        )
         patches = pixels.reshape(
             channels,
             grid_h // self.merge_size,
