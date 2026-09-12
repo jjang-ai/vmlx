@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import os
+
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_vlm.models.base import InputEmbeddingsFeatures, LanguageModelOutput
@@ -7,6 +12,58 @@ from mlx_vlm.models.base import InputEmbeddingsFeatures, LanguageModelOutput
 from .config import ModelConfig
 from .glm5_next import Model as TextModel
 from .vision import VisionModel
+
+_LOG = logging.getLogger(__name__)
+_MEDIA_TRACE_MAX_ELEMENTS = 4 * 1024 * 1024
+
+
+def _trace_media_scatter(features, merged, mask, modality, grid, input_dtype):
+    """Opt-in bounded fingerprints, never media contents or a runtime policy."""
+    if os.environ.get("VMLX_GLM5_MEDIA_TRACE", "0") != "1":
+        return
+    payload = {
+        "modality": modality,
+        "features_shape": list(features.shape),
+        "features_dtype": str(features.dtype),
+        "input_dtype": str(input_dtype),
+        "merged_dtype": str(merged.dtype),
+    }
+    if features.size > _MEDIA_TRACE_MAX_ELEMENTS:
+        payload["fingerprints"] = "skipped_element_limit"
+    else:
+        import numpy as np
+
+        # At most two 16 MiB copies; this opt-in diagnostic is deliberately
+        # not a timing path. Preserve actual features/placement without casts
+        # to the language dtype, masking changes or any semantic workaround.
+        positions = np.flatnonzero(np.array(mask)).astype(np.int32)
+        placed = merged[mx.array(positions)]
+        expected = np.array(features.astype(mx.float32))
+        actual = np.array(placed.astype(mx.float32))
+        counts = [len(expected)]
+        if grid is not None:
+            counts = []
+            for temporal, height, width in grid.tolist():
+                # Derive rows/group from the actual merged feature count,
+                # not a hardcoded patch/merge size.
+                counts.extend([int(height) * int(width)] * int(temporal))
+            divisor, remainder = divmod(sum(counts), len(expected))
+            if remainder or divisor <= 0 or any(count % divisor for count in counts):
+                counts = [len(expected)]
+            else:
+                counts = [count // divisor for count in counts]
+        groups, offset = [], 0
+        for count in counts:
+            end = offset + count
+            groups.append({
+                "rows": count,
+                "source_sha256": hashlib.sha256(expected[offset:end].tobytes()).hexdigest(),
+                "placed_sha256": hashlib.sha256(actual[offset:end].tobytes()).hexdigest(),
+            })
+            offset = end
+        payload.update(groups=groups, finite=bool(np.isfinite(expected).all()),
+                       exact_placement=bool(np.array_equal(expected, actual)))
+    _LOG.info("GLM media scatter trace: %s", json.dumps(payload, sort_keys=True))
 
 
 class LanguageModel(TextModel):
@@ -78,6 +135,7 @@ class Model(nn.Module):
                 self.config.image_token_id,
                 "image",
                 region=~video_region if video_region is not None else None,
+                grid=grid,
             )
 
         if pixel_values_videos is not None:
@@ -93,12 +151,13 @@ class Model(nn.Module):
                 self.config.image_token_id,
                 "video",
                 region=video_region,
+                grid=grid,
             )
 
         return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
 
     @staticmethod
-    def _scatter_features(inputs_embeds, input_ids, features, token_id, modality, *, region=None):
+    def _scatter_features(inputs_embeds, input_ids, features, token_id, modality, *, region=None, grid=None):
         mask = input_ids == token_id
         if region is not None:
             mask = mask & region
@@ -114,6 +173,7 @@ class Model(nn.Module):
         feature_index = mx.cumsum(flat_mask.astype(mx.int32)) - 1
         gathered = feature_rows[mx.maximum(feature_index, 0)]
         merged = mx.where(flat_mask[:, None], gathered, flat_input)
+        _trace_media_scatter(feature_rows, merged, flat_mask, modality, grid, inputs_embeds.dtype)
         return merged.reshape(inputs_embeds.shape)
 
     def __call__(
