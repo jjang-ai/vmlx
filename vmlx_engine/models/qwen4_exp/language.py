@@ -87,6 +87,7 @@ _HYPER_SPLIT_INDICES = {}
 _FAST_PROJECTION_CACHE = os.environ.get("VMLX_QWEN4_FAST_PROJECTION_CACHE") == "1"
 _EAGER_DISPATCH_MAX_ROWS = 64
 _PLE_PREFETCH_MAX_TOKENS = 64
+_HC_VIEW_SPLIT_MAX_ROWS = 4
 
 
 def _load_calibrated_proposal_sidecar(
@@ -534,6 +535,7 @@ class GatedResidual(nn.Module):
     def __init__(self, args: Qwen4ExpTextArgs, use_combine: bool = True):
         super().__init__()
         self._exact_combine = exact_hc_combine_requested()
+        self._hc_view_split = os.environ.get("VMLX_QWEN4_HC_VIEW_SPLIT") == "1"
         self.hc_count = args.hc_count
         self.hidden_size = args.hidden_size
         self.hc_lowrank = args.hc_lowrank
@@ -565,6 +567,11 @@ class GatedResidual(nn.Module):
     def _forward(self, hyper_input: mx.array):
         normed = self.hc_norm(hyper_input)
         input_inject_weight = getattr(self, "input_inject_weight", None)
+        view_split = (
+            self._hc_view_split
+            and input_inject_weight is not None
+            and 1 <= hyper_input.shape[-2] <= _HC_VIEW_SPLIT_MAX_ROWS
+        )
         if input_inject_weight is None:
             mix = self.input_mix_weight_down(normed)
             block_injection = (
@@ -574,12 +581,21 @@ class GatedResidual(nn.Module):
             )
         else:
             combined = input_inject_weight(normed)
-            mix_indices, injection_indices = _hyper_split_indices(
-                self.hc_lowrank, self.hc_count
-            )
-            mix = mx.take(combined, mix_indices, axis=-1)
-            block_injection = mx.take(combined, injection_indices, axis=-1)
+            if view_split:
+                mix = combined[..., :self.hc_lowrank]
+                block_injection = combined[..., self.hc_lowrank:]
+            else:
+                mix_indices, injection_indices = _hyper_split_indices(
+                    self.hc_lowrank, self.hc_count
+                )
+                mix = mx.take(combined, mix_indices, axis=-1)
+                block_injection = mx.take(combined, injection_indices, axis=-1)
         mix = nn.silu(mix / self.hc_count)
+        if view_split:
+            # take(axis=-1) produces column-major rows. Merely using views or
+            # a row-contiguous copy changes GEMM traversal and FP16 rounding.
+            # Preserve that layout, including flattened batch/token axes.
+            mix = _hyper_column_major_rows(mix)
         mix = mx.sigmoid(self.input_mix_weight_up(mix))
         mix = mix.astype(normed.dtype)
         mix = mix.reshape(*mix.shape[:-1], self.hc_count, self.hidden_size)
@@ -606,6 +622,11 @@ class GatedResidual(nn.Module):
         return (hyper_input + inj.reshape(
             *inj.shape[:-2], self.hc_count * self.hidden_size
         )).astype(hyper_input.dtype)
+
+
+def _hyper_column_major_rows(value: mx.array) -> mx.array:
+    matrix = value.reshape(-1, value.shape[-1])
+    return mx.contiguous(matrix.T).T.reshape(value.shape)
 
 
 def _hyper_split_indices(lowrank: int, hc_count: int) -> tuple[mx.array, mx.array]:
@@ -677,6 +698,8 @@ def compile_hyper_connections(model: nn.Module) -> int:
     modules = [model]
     modules.extend(module for _, module in model.named_modules() if module is not model)
     compiled = 0
+    view_split_modules = 0
+    view_split_dtypes = {}
     seen = set()
     for module in modules:
         if id(module) in seen:
@@ -688,6 +711,16 @@ def compile_hyper_connections(model: nn.Module) -> int:
             continue
         module._compiled_forward = mx.compile(module._forward)
         compiled += 1
+        if module._hc_view_split and hasattr(module, "input_inject_weight"):
+            view_split_modules += 1
+            dtype = str(module.input_inject_weight.weight.dtype)
+            view_split_dtypes[dtype] = view_split_dtypes.get(dtype, 0) + 1
+    if view_split_modules:
+        logger.info(
+            "Qwen4 HC view split installed: modules=%d max_rows=%d "
+            "projection_weight_dtypes=%s mix_up_layout=column_major",
+            view_split_modules, _HC_VIEW_SPLIT_MAX_ROWS, view_split_dtypes,
+        )
     return compiled
 
 
