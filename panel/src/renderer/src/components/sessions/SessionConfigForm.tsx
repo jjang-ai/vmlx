@@ -310,6 +310,8 @@ interface SessionConfigFormProps {
   detectedForceTextOnly?: boolean
   /** Bundle-declared runtime modalities (capabilities.modalities) when detection read them. */
   detectedRuntimeModalities?: string[]
+  /** Modalities from the exact running session's capability response. */
+  liveRuntimeModalities?: string[]
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
   /** Native MTP capability from config/index metadata */
@@ -333,7 +335,7 @@ interface SessionConfigFormProps {
   modelIdentity?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedArchitectureHints, detectedToolParser, detectedReasoningParser, detectedEnableAutoToolChoice, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedRuntimeModalities, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId, modelIdentity }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedArchitectureHints, detectedToolParser, detectedReasoningParser, detectedEnableAutoToolChoice, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedRuntimeModalities, liveRuntimeModalities, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId, modelIdentity }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -544,6 +546,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const detectedRuntimeVideoCapable = isRuntimeVideoCapable({
     normalizedFamily: normalizedDetectedFamily,
     runtimeModalities: detectedRuntimeModalities,
+    liveRuntimeModalities,
   })
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive && (
     detectedRuntimeVideoCapable ||

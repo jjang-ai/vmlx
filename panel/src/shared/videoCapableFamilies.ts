@@ -53,7 +53,13 @@ export function modalitiesIncludeVideo(modalities?: readonly string[] | null): b
 export function isRuntimeVideoCapable(input: {
   normalizedFamily?: string
   runtimeModalities?: readonly string[] | null
+  liveRuntimeModalities?: readonly string[] | null
 }): boolean {
+  // A source-matched live report wins over offline family/sidecar guesses.
+  // Missing metadata is unknown, not a claim that the model is text-only.
+  if (Array.isArray(input.liveRuntimeModalities)) {
+    return modalitiesIncludeVideo(input.liveRuntimeModalities)
+  }
   if (modalitiesIncludeVideo(input.runtimeModalities)) return true
   return RUNTIME_VIDEO_CAPABLE_FAMILIES.includes(input.normalizedFamily || '')
 }

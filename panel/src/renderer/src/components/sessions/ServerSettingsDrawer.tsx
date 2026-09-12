@@ -17,6 +17,7 @@ import {
 } from '../../../../shared/sessionGenerationDefaults'
 import { usesExactTypedPromptDiskCache } from '../../../../shared/detectedFamilyNames'
 import { hasLiveLocalSession } from '../../../../shared/sessionConfigLifecycle'
+import { apiCapabilityKey, sessionCapabilityModalities } from '../../../../shared/apiModelCapabilities'
 
 interface Session {
   id: string
@@ -56,6 +57,10 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedRuntimeModalities, setDetectedRuntimeModalities] = useState<string[] | undefined>(undefined)
+  const [liveCapabilities, setLiveCapabilities] = useState<{ key: string; modalities: string[] } | null>(null)
+  const capabilityKey = apiCapabilityKey(session)
+  const liveRuntimeModalities = liveCapabilities?.key === capabilityKey
+    ? liveCapabilities.modalities : undefined
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [detectedNativeMtp, setDetectedNativeMtp] = useState<any>(undefined)
   const [singleModelMode, setSingleModelMode] = useState(false)
@@ -64,6 +69,20 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const resetRequestRef = useRef(0)
   restartingRef.current = restarting
   sessionIdRef.current = session.id
+
+  useEffect(() => {
+    let cancelled = false
+    setLiveCapabilities(null)
+    // Reuse the API page's read-only, authenticated, incarnation-keyed query.
+    // It never wakes a sleeping engine or probes a remote provider.
+    if (!isRemote && session.status === 'running') {
+      void window.api.performance.capabilities(session.id).then(reply => {
+        const modalities = sessionCapabilityModalities(session, reply)
+        if (!cancelled && modalities) setLiveCapabilities({ key: capabilityKey, modalities })
+      }).catch(() => { /* Unknown: retain offline detection, not text-only. */ })
+    }
+    return () => { cancelled = true }
+  }, [capabilityKey, isRemote])
 
   useEffect(() => {
     let active = true
@@ -83,6 +102,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     setDetectedIsTurboQuant(false)
     setDetectedIsMultimodal(false)
     setDetectedForceTextOnly(false)
+    setDetectedRuntimeModalities(undefined)
     setDetectedMaxContext(undefined)
     setDetectedNativeMtp(undefined)
     const load = async () => {
@@ -426,7 +446,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedUsePagedCache={detectedUsePagedCache} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedArchitectureHints={detectedArchitectureHints} detectedToolParser={detectedToolParser} detectedReasoningParser={detectedReasoningParser} detectedEnableAutoToolChoice={detectedEnableAutoToolChoice} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedRuntimeModalities={detectedRuntimeModalities} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} modelIdentity={`${session.modelName || ''} ${session.modelPath}`} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedUsePagedCache={detectedUsePagedCache} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedArchitectureHints={detectedArchitectureHints} detectedToolParser={detectedToolParser} detectedReasoningParser={detectedReasoningParser} detectedEnableAutoToolChoice={detectedEnableAutoToolChoice} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedRuntimeModalities={detectedRuntimeModalities} liveRuntimeModalities={liveRuntimeModalities} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} modelIdentity={`${session.modelName || ''} ${session.modelPath}`} />
         )}
       </div>
 

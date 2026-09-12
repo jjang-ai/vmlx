@@ -12,6 +12,13 @@ import { normalizeDetectedFamilyName } from '../src/shared/detectedFamilyNames'
 // and honoured video_token_budget over the API. Visibility now comes from the
 // bundle's declared modalities OR the family list, either one sufficing.
 describe('video controls visibility (S21)', () => {
+  it('uses the exact live report ahead of offline family or bundle guesses', () => {
+    expect(isRuntimeVideoCapable({ normalizedFamily: 'glm5-next', liveRuntimeModalities: ['text', 'vision', 'video'] })).toBe(true)
+    expect(isRuntimeVideoCapable({ normalizedFamily: 'qwen4-exp', runtimeModalities: ['video'], liveRuntimeModalities: ['text'] })).toBe(false)
+    expect(isRuntimeVideoCapable({ normalizedFamily: 'qwen4-exp', liveRuntimeModalities: ['vision'] })).toBe(false)
+    expect(isRuntimeVideoCapable({ normalizedFamily: 'qwen4-exp', liveRuntimeModalities: undefined })).toBe(true)
+    expect(isRuntimeVideoCapable({ normalizedFamily: 'glm5-next', liveRuntimeModalities: null })).toBe(false)
+  })
   it('shows the controls for Muse Glimmer through the engine family spelling', () => {
     const normalized = normalizeDetectedFamilyName('muse_glimmer')
     expect(isRuntimeVideoCapable({ normalizedFamily: normalized })).toBe(true)

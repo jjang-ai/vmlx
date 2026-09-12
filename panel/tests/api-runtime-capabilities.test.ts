@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { apiCapabilityKey, apiCapabilityLabel } from '../src/shared/apiModelCapabilities'
+import { apiCapabilityKey, apiCapabilityLabel, sessionCapabilityModalities } from '../src/shared/apiModelCapabilities'
 
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Function>(), getSession: vi.fn() }))
 vi.mock('electron', () => ({ ipcMain: { handle: (name: string, fn: Function) => mocks.handlers.set(name, fn) } }))
@@ -20,6 +20,26 @@ describe('live API model capabilities', () => {
     for (const change of [{ pid: 124 }, { modelPath: '/other' }, { status: 'stopped' }, { port: 8002 }]) {
       expect(apiCapabilityKey({ ...session, ...change })).not.toBe(apiCapabilityKey(session))
     }
+  })
+  it('binds drawer modalities only to the exact running session', () => {
+    const reply = { key: apiCapabilityKey(session), capabilities: { modalities: ['text', 'vision', 'video'] } }
+    expect(sessionCapabilityModalities(session, reply)).toEqual(['text', 'vision', 'video'])
+    for (const change of [{ id: 'other' }, { pid: 124 }, { modelPath: '/other' }, { status: 'stopped' }, { status: 'standby' }, { port: 8002 }, { host: 'other' }]) {
+      expect(sessionCapabilityModalities({ ...session, ...change }, reply)).toBeUndefined()
+    }
+    expect(sessionCapabilityModalities({ ...session, status: 'stopped' }, {
+      ...reply, key: apiCapabilityKey({ ...session, status: 'stopped' }),
+    })).toBeUndefined()
+  })
+  it('distinguishes unknown drawer modalities from live text-only metadata', () => {
+    for (const capabilities of [null, {}, { model_type: 'mllm' }, { modalities: [] }, { modalities: 'video' }]) {
+      expect(sessionCapabilityModalities(session, { key: apiCapabilityKey(session), capabilities })).toBeUndefined()
+    }
+    expect(sessionCapabilityModalities(session, null)).toBeUndefined()
+    expect(sessionCapabilityModalities(session, {
+      key: apiCapabilityKey(session),
+      capabilities: { modalities: ['vision', 'video'], media: { runtime_modalities: ['text'] } },
+    })).toEqual(['text'])
   })
   it.each(['standby', 'stopped', 'loading'])('does not wake a %s session', async status => {
     mocks.getSession.mockReturnValue({ ...session, status })
