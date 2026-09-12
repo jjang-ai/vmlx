@@ -121,6 +121,7 @@ from .native_mtp_ar_safety import (
     windowed_ar_verdict,
     median,
 )
+from .native_mtp_seed_trace import start_native_mtp_seed_trace
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -16802,6 +16803,7 @@ class MLLMBatchGenerator:
         names the depth it intends to run at, so the FIRST draft chain is
         already that width; the sticky start rung applies only to fresh
         requests."""
+        seed_trace = start_native_mtp_seed_trace()
         if not self._native_mtp_enabled_for_request(request):
             return False
         if request.max_tokens <= 1:
@@ -16809,8 +16811,12 @@ class MLLMBatchGenerator:
         if first_tokens is None or int(first_tokens.shape[0]) != 1:
             return False
 
+        if seed_trace is not None:
+            seed_trace.mark("eligibility")
         first_tok = _native_mtp_ensure_uint32(first_tokens)
         first_id = int(first_tok.tolist()[0])
+        if seed_trace is not None:
+            seed_trace.mark("pending_token_read")
         if first_id in self.stop_tokens:
             return False
 
@@ -16940,10 +16946,14 @@ class MLLMBatchGenerator:
         seed_main_forwards = 1
         # Drain a batch partner's pending lazy work so the seed measures THIS
         # request's AR step only (the AR-safety baseline).
+        if seed_trace is not None:
+            seed_trace.mark("setup")
         try:
             mx.synchronize()
         except Exception:
             pass
+        if seed_trace is not None:
+            seed_trace.mark("drain")
         _seed_t0 = time.perf_counter()
         output = self.language_model(
             first_tok[:, None],
@@ -16968,6 +16978,8 @@ class MLLMBatchGenerator:
         # perfectly healthy MTP.
         mx.eval(next_tok)
         _seed_ar_ms = (time.perf_counter() - _seed_t0) * 1000.0
+        if seed_trace is not None:
+            seed_trace.mark("target_forward_sample")
         from .native_mtp_prompt_priming import parked_context_active, take_primed
 
         was_parked = parked_context_active(self.language_model)
@@ -16984,6 +16996,8 @@ class MLLMBatchGenerator:
                 prime_source = "restored_prefix_and_tail"
             else:
                 prime_source = "cold_prompt"
+        if seed_trace is not None:
+            seed_trace.mark("prime_enqueue")
         draft_head_before = _native_mtp_draft_head_status(self.language_model)
         # Sticky start rung: when the previous request on this engine ended in
         # AR or D1, the configured depth just lost on this workload, so start
@@ -17005,6 +17019,8 @@ class MLLMBatchGenerator:
             start_depth,
         )
         mx.eval(first_tok, next_tok)
+        if seed_trace is not None:
+            seed_trace.mark("initial_draft_call")
 
         state = MLLMNativeMTPState(
             mtp_cache=mtp_cache,
@@ -17089,6 +17105,15 @@ class MLLMBatchGenerator:
             int(getattr(request, "_cached_tokens", 0) or 0),
             state.stats.profile_key_label or "configured",
         )
+        if seed_trace is not None:
+            seed_trace.mark("finalize")
+            seed_trace.emit(
+                logger, request_id=request.request_id,
+                reentry=start_depth_override is not None,
+                requested_depth=start_depth, initial_drafts=len(drafts),
+                prime_source=prime_source, primed_pairs=int(primed_pairs),
+                seed_ar_ms=float(_seed_ar_ms),
+            )
         return True
 
     def _replay_native_mtp_confirmed_tokens(

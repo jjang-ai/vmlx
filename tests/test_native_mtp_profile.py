@@ -340,6 +340,64 @@ class TestSeedPathIntegration:
         assert state.depth == 3
         assert state.stats.profile_seed == "configured"
 
+    def test_seed_trace_preserves_tokens_depth_and_evaluation_calls(self, monkeypatch, caplog):
+        import json
+        import logging
+
+        import mlx.core as mx
+        import pytest
+
+        caplog.set_level(logging.INFO)
+        original_eval, original_sync = mx.eval, mx.synchronize
+        observed = []
+        for enabled in (False, True):
+            generator, request, first_token = self._build_generator(monkeypatch)
+            monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
+            monkeypatch.delenv("VMLINUX_NATIVE_MTP_SEED_TRACE", raising=False)
+            monkeypatch.setenv("VMLX_NATIVE_MTP_SEED_TRACE", "1" if enabled else "0")
+            calls = []
+
+            def eval_spy(*args, **kwargs):
+                calls.append(("eval", len(args)))
+                return original_eval(*args, **kwargs)
+
+            def sync_spy(*args, **kwargs):
+                calls.append(("sync", len(args)))
+                return original_sync(*args, **kwargs)
+
+            caplog.clear()
+            with monkeypatch.context() as scope:
+                scope.setattr(mx, "eval", eval_spy)
+                scope.setattr(mx, "synchronize", sync_spy)
+                assert generator._seed_native_mtp_from_prefill(
+                    request, [object()], first_token, [None], start_depth_override=2,
+                )
+            state = request._native_mtp_state
+            observed.append({
+                "calls": calls, "depth": state.depth,
+                "drafts": [token.tolist() for token in state.drafts],
+                "queue": [(row[0], row[2]) for row in state.queue],
+            })
+            events = [json.loads(record.args[0]) for record in caplog.records
+                      if record.msg == "MLLM native MTP seed stages %s"]
+            if not enabled:
+                assert events == []
+                continue
+            assert len(events) == 1
+            event = events[0]
+            assert event["request_id"] == request.request_id
+            assert event["reentry"] is True
+            assert event["requested_depth"] == state.depth == 2
+            assert event["initial_drafts"] == len(state.drafts)
+            assert list(event["stages_ms"]) == [
+                "eligibility", "pending_token_read", "setup", "drain",
+                "target_forward_sample", "prime_enqueue", "initial_draft_call", "finalize",
+            ]
+            assert all(value >= 0 for value in event["stages_ms"].values())
+            assert event["total_ms"] == pytest.approx(sum(event["stages_ms"].values()))
+            assert event["clock"] == "host_wall_no_added_sync"
+        assert observed[0] == observed[1]
+
     def test_scheduled_reentry_is_not_vetoed_by_startup_ar_profile(self, monkeypatch, caplog):
         import logging
         caplog.set_level(logging.INFO)
