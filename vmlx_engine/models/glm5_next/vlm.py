@@ -54,6 +54,15 @@ class Model(nn.Module):
         if pixel_values is None and pixel_values_videos is None:
             return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
 
+        video_region = None
+        if pixel_values_videos is not None:
+            # Native video frames use image tokens inside begin/end-of-video,
+            # not the unexpanded video placeholder. Keep historical images
+            # separate when both modalities occur in one connected request.
+            starts = mx.cumsum((input_ids == self.config.video_start_token_id).astype(mx.int32), axis=-1)
+            ends = mx.cumsum((input_ids == self.config.video_end_token_id).astype(mx.int32), axis=-1)
+            video_region = starts > ends
+
         if pixel_values is not None:
             grid = kwargs.get("image_grid_thw")
             if grid is None:
@@ -68,6 +77,7 @@ class Model(nn.Module):
                 features,
                 self.config.image_token_id,
                 "image",
+                region=~video_region if video_region is not None else None,
             )
 
         if pixel_values_videos is not None:
@@ -80,15 +90,18 @@ class Model(nn.Module):
                 inputs_embeds,
                 input_ids,
                 features,
-                self.config.video_token_id,
+                self.config.image_token_id,
                 "video",
+                region=video_region,
             )
 
         return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
 
     @staticmethod
-    def _scatter_features(inputs_embeds, input_ids, features, token_id, modality):
+    def _scatter_features(inputs_embeds, input_ids, features, token_id, modality, *, region=None):
         mask = input_ids == token_id
+        if region is not None:
+            mask = mask & region
         token_count = int(mx.sum(mask).item())
         if token_count != int(features.shape[0]):
             raise ValueError(

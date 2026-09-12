@@ -2397,7 +2397,10 @@ def _call_processor_direct_unscoped(
             )
             if "fps" in params or accepts_var_kwargs:
                 kwargs["fps"] = _video_fps
-            if video_timestamps is not None and "video_timestamps" in params:
+            if video_timestamps is not None and (
+                "video_timestamps" in params
+                or getattr(processor, "supports_video_timestamps", False) is True
+            ):
                 kwargs["video_timestamps"] = video_timestamps
             # Request-local video processor settings (clip pixel budget): passed
             # per call, never written to the shared processor.
