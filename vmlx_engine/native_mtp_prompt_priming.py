@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import mlx.core as mx
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 _CTX_ATTR = "_vmlx_native_mtp_prime_ctx"
 _PLAN_ATTR = "_vmlx_native_mtp_prime_plan"
 _LAST_ATTR = "_vmlx_native_mtp_prime_last"
+_PARK_FOLD_BLOCK = 32
 
 
 def _record(host: Any, reason: str, **detail: Any) -> None:
@@ -89,6 +90,11 @@ class _PrimeContext:
     extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None
     boundary_candidate: Optional[_BoundaryCandidate] = None
     window_exceeded: bool = False
+    # Request-local AR parking, never a prefix-cache/SSD snapshot. Keep the
+    # already aligned head and at most one small block of confirmed pairs.
+    parked: bool = False
+    backbone_entries: tuple[Any, ...] = ()
+    pending_pairs: list[tuple[Any, Any]] = field(default_factory=list)
 
 
 def _eligible(host: Any) -> bool:
@@ -109,6 +115,41 @@ def drop_context(host: Any) -> None:
                 delattr(host, attr)
             except AttributeError:
                 pass
+
+
+def parked_priming_enabled() -> bool:
+    """Experimental warm AR re-entry; no change to the default AR path."""
+    return priming_enabled() and os.environ.get(
+        "VMLX_NATIVE_MTP_PARKED_PRIMING", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parked_context_active(host: Any) -> bool:
+    ctx = getattr(host, _CTX_ATTR, None)
+    return isinstance(ctx, _PrimeContext) and ctx.parked
+
+
+def drop_parked_context(host: Any, request_id: Optional[str] = None) -> None:
+    """Release only the parked generation owned by this lifecycle event."""
+    ctx = getattr(host, _CTX_ATTR, None)
+    if not isinstance(ctx, _PrimeContext) or not ctx.parked:
+        return
+    if request_id is None or ctx.request_id == request_id:
+        drop_context(host)
+
+
+def _backbone_entries(cache: Any) -> tuple[Any, ...]:
+    # The MLLM lane may create a fresh scalar-offset proxy for the same
+    # BatchKVCache on every step. Compare the underlying objects, not offsets
+    # alone: another request can have exactly the same context length.
+    return tuple(getattr(entry, "_inner", entry) for entry in (cache or ()))
+
+
+def _same_parked_backbone(ctx: _PrimeContext, cache: Any) -> bool:
+    entries = _backbone_entries(cache)
+    return len(entries) == len(ctx.backbone_entries) and all(
+        actual is expected for actual, expected in zip(entries, ctx.backbone_entries)
+    )
 
 
 def capture_requested(host: Any) -> bool:
@@ -213,6 +254,107 @@ def _snapshot_arrays(snapshot: NativeMTPPrefixSnapshot) -> list[Any]:
             elif isinstance(value, (list, tuple)):
                 arrays.extend(item for item in value if isinstance(item, mx.array))
     return arrays
+
+
+def _head_at_offset(cache: list[Any], offset: int) -> bool:
+    entries = list(_flat_entries(cache))
+    return bool(entries) and all(_read_offset(entry) == offset for entry in entries)
+
+
+def park_after_confirmed(
+    host: Any,
+    *,
+    request_id: str,
+    backbone_cache: Any,
+    mtp_cache: list[Any],
+    confirmed_hidden: Any,
+    confirmed_tokens: Any,
+) -> bool:
+    """Commit verified pairs and transfer their aligned head to AR parking.
+
+    The caller must trim speculative head-chain rows first. At this seam the
+    last queued token has not entered the backbone yet, but its preceding
+    hidden/token pair belongs in the head. The first ordinary AR forward
+    captures that token's hidden without folding the same pair twice.
+    """
+    if not parked_priming_enabled() or not _eligible(host) or not mtp_cache:
+        return False
+    offset = _cache_offset(backbone_cache)
+    if (
+        offset is None
+        or getattr(confirmed_tokens, "ndim", 0) != 2
+        or confirmed_tokens.shape[0] != 1
+        or confirmed_hidden.shape[:2] != confirmed_tokens.shape
+    ):
+        return False
+    count = int(confirmed_tokens.shape[1])
+    if count <= 0 or not _head_at_offset(mtp_cache, offset - count):
+        _record(host, "park_head_offset_mismatch", expected_offset=offset)
+        return False
+    try:
+        # No proposal sampling or logits evaluation: only confirmed cache
+        # state is needed. Target/verifier cache objects are never written.
+        host.mtp_forward(confirmed_hidden, confirmed_tokens, mtp_cache)
+        if not _head_at_offset(mtp_cache, offset):
+            _record(host, "park_commit_offset_mismatch", expected_offset=offset)
+            return False
+        ctx = _PrimeContext(
+            mtp_cache=mtp_cache,
+            folded=offset,
+            expected_offset=offset,
+            request_id=request_id,
+            parked=True,
+            backbone_entries=_backbone_entries(backbone_cache),
+        )
+        drop_context(host)
+        setattr(host, _CTX_ATTR, ctx)
+        _record(host, "parked", folded_pairs=offset, request_id=request_id)
+        logger.info(
+            "MLLM MTP[%s] parked aligned head at %d pairs (buffer cap=%d)",
+            request_id, offset, _PARK_FOLD_BLOCK,
+        )
+        return True
+    except Exception:
+        drop_parked_context(host, request_id)
+        logger.debug("native MTP park commit failed closed", exc_info=True)
+        return False
+
+
+def _flush_parked(host: Any, ctx: _PrimeContext) -> None:
+    if not ctx.pending_pairs:
+        return
+    hidden = mx.concatenate([pair[0] for pair in ctx.pending_pairs], axis=1)
+    tokens = mx.concatenate([pair[1] for pair in ctx.pending_pairs], axis=1)
+    host.mtp_forward(hidden, tokens, ctx.mtp_cache)
+    ctx.folded += int(tokens.shape[1])
+    ctx.pending_pairs.clear()
+    if not _head_at_offset(ctx.mtp_cache, ctx.folded):
+        raise ValueError("parked MTP fold did not advance every head layer")
+    arrays = _snapshot_arrays(
+        NativeMTPPrefixSnapshot(ctx.folded, ctx.mtp_cache, ctx.pending_hidden)
+    )
+    if arrays:
+        mx.async_eval(*arrays)
+
+
+def _capture_parked(
+    host: Any, ctx: _PrimeContext, inputs: Any, hidden: Any, offset_after: int
+) -> None:
+    if inputs.shape[1] != 1 or hidden.shape[:2] != inputs.shape:
+        _record(host, "park_non_singleton_forward")
+        drop_context(host)
+        return
+    if ctx.pending_hidden is not None:
+        ctx.pending_pairs.append((ctx.pending_hidden, inputs))
+    ctx.pending_hidden = hidden[:, -1:]
+    ctx.expected_offset = offset_after
+    try:
+        if len(ctx.pending_pairs) >= _PARK_FOLD_BLOCK:
+            _flush_parked(host, ctx)
+    except Exception:
+        _record(host, "park_fold_failed")
+        drop_context(host)
+        logger.debug("native MTP parked fold failed closed", exc_info=True)
 
 
 def prepare_prompt(
@@ -344,6 +486,7 @@ def _capture_boundary(ctx: _PrimeContext, hidden: Any, start: int, end: int) -> 
 def capture_prefill(host: Any, inputs: Any, expanded_hidden: Any, cache: Any) -> None:
     """Fold one contiguous Qwen prompt forward into the native MTP cache."""
     if not priming_enabled():
+        drop_parked_context(host)
         _record(host, "capture_disabled")
         return
     if not _eligible(host):
@@ -356,6 +499,12 @@ def capture_prefill(host: Any, inputs: Any, expanded_hidden: Any, cache: Any) ->
     plan = getattr(host, _PLAN_ATTR, None)
     ctx = getattr(host, _CTX_ATTR, None)
     if not isinstance(plan, _PrimePlan) and not isinstance(ctx, _PrimeContext):
+        return
+    if isinstance(ctx, _PrimeContext) and ctx.parked and (
+        not parked_priming_enabled() or not _same_parked_backbone(ctx, cache)
+    ):
+        _record(host, "park_backbone_changed_or_disabled")
+        drop_context(host)
         return
     offset_after = _cache_offset(cache)
     if offset_after is None:
@@ -372,6 +521,9 @@ def capture_prefill(host: Any, inputs: Any, expanded_hidden: Any, cache: Any) ->
             actual_start=start,
         )
         drop_context(host)
+        return
+    if isinstance(ctx, _PrimeContext) and ctx.parked:
+        _capture_parked(host, ctx, inputs, expanded_hidden, offset_after)
         return
     if isinstance(ctx, _PrimeContext) and ctx.window_exceeded:
         _record(host, "capture_window_already_exceeded")
@@ -513,7 +665,13 @@ def take_primed(host: Any, backbone_cache: Any, main_token: Any) -> Optional[tup
     if ctx.window_exceeded or ctx.folded <= 0 or ctx.pending_hidden is None:
         return None
     offset = _cache_offset(backbone_cache)
-    if offset is None or ctx.expected_offset != offset - 1:
+    if (
+        offset is None or ctx.expected_offset != offset - 1
+        or (ctx.parked and (
+            not parked_priming_enabled()
+            or not _same_parked_backbone(ctx, backbone_cache)
+        ))
+    ):
         logger.info(
             "MLLM native MTP priming discarded at seam: expected=%s actual=%s",
             ctx.expected_offset,
@@ -521,15 +679,25 @@ def take_primed(host: Any, backbone_cache: Any, main_token: Any) -> Optional[tup
         )
         return None
     try:
+        if ctx.parked:
+            _flush_parked(host, ctx)
         host.mtp_forward(
             ctx.pending_hidden,
             main_token.reshape(1, 1),
             ctx.mtp_cache,
         )
+        if ctx.parked and not _head_at_offset(ctx.mtp_cache, ctx.folded + 1):
+            raise ValueError("parked MTP seam did not advance every head layer")
     except Exception:
         logger.debug("native MTP priming seam failed closed", exc_info=True)
         return None
     _publish_boundary(ctx)
+    if ctx.parked:
+        _record(host, "park_resumed", folded_pairs=ctx.folded + 1)
+        logger.info(
+            "MLLM MTP[%s] resumed parked head at %d pairs",
+            ctx.request_id, ctx.folded + 1,
+        )
     return ctx.mtp_cache, ctx.folded + 1
 
 
@@ -551,6 +719,10 @@ __all__ = [
     "NativeMTPPrefixSnapshot",
     "capture_prefill",
     "drop_context",
+    "drop_parked_context",
+    "park_after_confirmed",
+    "parked_context_active",
+    "parked_priming_enabled",
     "prepare_prompt",
     "prime_stats",
     "priming_enabled",

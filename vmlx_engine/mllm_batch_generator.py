@@ -6221,9 +6221,9 @@ class NativeMTPArTier:
     steps, windowed median) at the live context, and schedules MTP re-entry
     probes at 16 * 2**k AR tokens (k = failed probes; no cap, just backoff).
     A probe re-seeds native MTP from the pending token (that forward is a
-    real AR step, nothing is wasted) with a fresh head cache — measured
-    2026-09-04: an unprimed head loses no acceptance worth a re-prime — and
-    is judged by the valve against the measured AR with 1.10 hysteresis.
+    real AR step, nothing is wasted). The default uses a fresh head cache;
+    opt-in parked priming may supply checked, contiguous head history.
+    The valve judges either against measured AR with 1.10 hysteresis.
     """
 
     depth: int
@@ -8528,6 +8528,9 @@ class MLLMBatchGenerator:
 
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""
+        from .native_mtp_prompt_priming import drop_parked_context
+
+        drop_parked_context(getattr(self, "language_model", None))
         if self._old_wired_limit is not None:
             try:
                 if MLLMBatchGenerator._stream is not None:
@@ -8612,6 +8615,11 @@ class MLLMBatchGenerator:
                 if uid not in uid_set:
                     continue
                 request = self.active_batch.requests[index]
+                from .native_mtp_prompt_priming import drop_parked_context
+
+                drop_parked_context(
+                    getattr(self, "language_model", None), request.request_id
+                )
                 mtp_state = getattr(request, "_native_mtp_state", None)
                 if mtp_state is None:
                     continue
@@ -16960,8 +16968,9 @@ class MLLMBatchGenerator:
         # perfectly healthy MTP.
         mx.eval(next_tok)
         _seed_ar_ms = (time.perf_counter() - _seed_t0) * 1000.0
-        from .native_mtp_prompt_priming import take_primed
+        from .native_mtp_prompt_priming import parked_context_active, take_primed
 
+        was_parked = parked_context_active(self.language_model)
         primed = take_primed(self.language_model, cache, first_tok)
         if primed is None:
             mtp_cache = self.language_model.make_mtp_cache()
@@ -16969,11 +16978,12 @@ class MLLMBatchGenerator:
             prime_source = "unprimed"
         else:
             mtp_cache, primed_pairs = primed
-            prime_source = (
-                "restored_prefix_and_tail"
-                if int(getattr(request, "_cached_tokens", 0) or 0) > 0
-                else "cold_prompt"
-            )
+            if was_parked:
+                prime_source = "parked_ar_history"
+            elif int(getattr(request, "_cached_tokens", 0) or 0) > 0:
+                prime_source = "restored_prefix_and_tail"
+            else:
+                prime_source = "cold_prompt"
         draft_head_before = _native_mtp_draft_head_status(self.language_model)
         # Sticky start rung: when the previous request on this engine ended in
         # AR or D1, the configured depth just lost on this workload, so start
@@ -17424,6 +17434,10 @@ class MLLMBatchGenerator:
             next_hidden = hidden[:, depth : depth + 1, :]
             state.next_main = bonus_tok
             if state.ar_fallback_pending:
+                self._park_native_mtp_head_for_ar(
+                    request, cache, state, hidden[:, : depth + 1, :],
+                    state.drafts + [bonus_tok],
+                )
                 _native_mtp_capture_head_cache_before_discard(
                     state.stats,
                     state.mtp_cache,
@@ -17549,6 +17563,10 @@ class MLLMBatchGenerator:
             _native_mtp_trace_stop(state.stats, "replay_ms", trace_t0)
         state.next_main = correction
         if state.ar_fallback_pending:
+            self._park_native_mtp_head_for_ar(
+                request, cache, state, hidden[:, : accepted + 1, :],
+                accepted_drafts + [correction],
+            )
             _native_mtp_capture_head_cache_before_discard(
                 state.stats,
                 state.mtp_cache,
@@ -17603,6 +17621,42 @@ class MLLMBatchGenerator:
             state.stats,
         )
 
+    def _park_native_mtp_head_for_ar(
+        self, request: Any, cache: Any, state: "MLLMNativeMTPState",
+        confirmed_hidden: Any, confirmed_tokens: List[Any],
+    ) -> bool:
+        """Keep only exact, already-primed Qwen4Exp head history for AR."""
+        from .native_mtp_prompt_priming import (
+            park_after_confirmed, parked_priming_enabled,
+        )
+
+        if (
+            not parked_priming_enabled()
+            or getattr(self, "_model_type", None) != "qwen4_exp"
+            or not _NATIVE_MTP_ALIGNED_HEAD_CACHE
+            or not _native_mtp_reentry_enabled()
+            or not state.mtp_cache
+            or state.stats.prompt_primed_pairs <= 0
+        ):
+            return False
+        try:
+            _native_mtp_trim_head_chain(state)
+            tokens = mx.concatenate([
+                _native_mtp_ensure_uint32(token).reshape(1)
+                for token in confirmed_tokens
+            ]).reshape(1, len(confirmed_tokens))
+            parked = park_after_confirmed(
+                self.language_model, request_id=request.request_id,
+                backbone_cache=cache, mtp_cache=state.mtp_cache,
+                confirmed_hidden=confirmed_hidden, confirmed_tokens=tokens,
+            )
+            if parked:
+                state.stats.mtp_forwards += 1
+            return parked
+        except Exception:
+            logger.debug("native MTP AR parking declined", exc_info=True)
+            return False
+
     def _reseed_native_mtp_probe(
         self, batch: Any, tier: "NativeMTPArTier"
     ) -> bool:
@@ -17610,7 +17664,8 @@ class MLLMBatchGenerator:
 
         Seeds exactly like the post-prefill seed, from the pending token in
         ``batch.y`` (sampled, not yet fed nor emitted — the same shape as the
-        first token after prefill).  The head cache starts fresh; the valve
+        first token after prefill). The head cache starts fresh unless the
+        opt-in parked-history path supplies exact contiguous state; the valve
         judges the probe's first full window against the tier's MEASURED AR
         with hysteresis and either keeps MTP or falls back with backoff.
         """
@@ -18076,6 +18131,11 @@ class MLLMBatchGenerator:
                         tier.last_step_t = time.perf_counter()
                         batch.requests[0]._native_mtp_ar_tier = tier
             except Exception as exc:
+                from .native_mtp_prompt_priming import drop_parked_context
+
+                drop_parked_context(
+                    getattr(self, "language_model", None), batch.requests[0].request_id
+                )
                 logger.error(
                     "MLLM native MTP decode failed for %s: %s",
                     batch.requests[0].request_id,
@@ -18236,6 +18296,11 @@ class MLLMBatchGenerator:
             )
 
             if finish_reason is not None:
+                from .native_mtp_prompt_priming import drop_parked_context
+
+                drop_parked_context(
+                    getattr(self, "language_model", None), req.request_id
+                )
                 mtp_state_for_finish = getattr(req, "_native_mtp_state", None)
                 if mtp_state_for_finish is not None:
                     self._rewind_native_mtp_terminal_boundary(
