@@ -895,6 +895,52 @@ describe("Ollama gateway request translation behavior", () => {
     expect(backend.bodies[2].max_prompt_tokens).toBe(4096);
   });
 
+  it.each(["chat", "generate"])("forwards Ollama native effort levels and explicit overrides on %s", async (lane) => {
+    backend = await startCaptureBackend();
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+    const levels = ["minimal", "low", "medium", "high", "xhigh", "max"];
+    for (const effort of levels) {
+      await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+        model: "hy3-model", stream: false, prompt: "hello",
+        messages: [{ role: "user", content: "hello" }],
+        think: ` ${effort.toUpperCase()} `,
+      });
+      expect(backend.bodies.at(-1)).toMatchObject({
+        enable_thinking: true, reasoning_effort: effort,
+      });
+    }
+    await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      model: "hy3-model", stream: false, prompt: "hello",
+      messages: [{ role: "user", content: "hello" }],
+      think: "low", reasoning_effort: "high",
+    });
+    expect(backend.bodies.at(-1)).toMatchObject({ enable_thinking: true, reasoning_effort: "high" });
+    await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      model: "hy3-model", stream: false, prompt: "hello",
+      messages: [{ role: "user", content: "hello" }],
+      think: "none", reasoning_effort: "high",
+    });
+    expect(backend.bodies.at(-1).enable_thinking).toBe(false);
+    expect(backend.bodies.at(-1)).not.toHaveProperty("reasoning_effort");
+    // Explicit null matches the direct Python adapter's setdefault semantics.
+    await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+      model: "hy3-model", stream: false, prompt: "hello",
+      messages: [{ role: "user", content: "hello" }],
+      think: "low", reasoning_effort: null,
+    });
+    expect(backend.bodies.at(-1).enable_thinking).toBe(true);
+    expect(backend.bodies.at(-1)).not.toHaveProperty("reasoning_effort");
+    for (const controls of [{}, { think: "unknown-effort" }]) {
+      await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
+        model: "hy3-model", stream: false, prompt: "hello",
+        messages: [{ role: "user", content: "hello" }], ...controls,
+      });
+      expect(backend.bodies.at(-1)).not.toHaveProperty("enable_thinking");
+      expect(backend.bodies.at(-1)).not.toHaveProperty("reasoning_effort");
+    }
+  });
+
   it("does not coerce string false enable_thinking into reasoning on", async () => {
     backend = await startCaptureBackend();
     const started = await startGateway(backend.port);

@@ -1692,11 +1692,21 @@ export class ApiGateway extends EventEmitter {
   private applyOllamaThinking(parsed: any, openaiBody: any): void {
     // Omitted thinking controls stay omitted so the model's native
     // tokenizer/template/runtime default decides. Native Ollama `think:false`
-    // is an explicit opt-out and must not be overwritten.
+    // is an explicit opt-out and must not be overwritten. Match the direct
+    // Python adapter: string effort levels also select native reasoning depth.
     const think = this.normalizeOllamaBoolean(parsed?.think);
+    const thinkLevel = typeof parsed?.think === "string" ? parsed.think.trim().toLowerCase() : undefined;
     const enableThinking = this.normalizeOllamaBoolean(parsed?.enable_thinking);
     if (think !== undefined) {
       openaiBody.enable_thinking = think;
+    } else if (thinkLevel !== undefined && ["minimal", "low", "medium", "high", "xhigh", "max"].includes(thinkLevel)) {
+      openaiBody.enable_thinking = true;
+      // Preserve explicit body-level effort, including null, as Python does.
+      if (!Object.prototype.hasOwnProperty.call(parsed, "reasoning_effort")) {
+        parsed.reasoning_effort = thinkLevel;
+      }
+    } else if (thinkLevel === "none") {
+      openaiBody.enable_thinking = false;
     } else if (enableThinking !== undefined) {
       openaiBody.enable_thinking = enableThinking;
     } else {
