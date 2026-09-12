@@ -614,6 +614,12 @@ class MLLMScheduler:
         self.model = model
         self.processor = processor
         self.config = config or MLLMSchedulerConfig()
+        # Preserve requested settings when an unsupported native-state backend
+        # must be disabled. Health distinguishes configuration from execution.
+        self._prefix_cache_requested = bool(self.config.enable_prefix_cache)
+        self._prompt_disk_cache_requested = bool(self.config.enable_disk_cache)
+        self._block_disk_cache_requested = bool(self.config.enable_block_disk_cache)
+        self._prefix_cache_unavailable_reason: Optional[str] = None
 
         # Thread-safe lock for wait/run queues since MLLM step() runs in background thread
         self._queue_lock = threading.RLock()
@@ -742,22 +748,25 @@ class MLLMScheduler:
             except Exception as e:
                 logger.warning(f"Failed to enable Mamba batching support: {e}")
                 self._is_hybrid = False  # Fall back to standard KV-only handling
-            # MambaCache cannot use the legacy memory-aware cache, and paged RAM
-            # is OFF for every family. With Block Disk L2 also switched off there
-            # is no correct backend for hybrid state, so drop the memory-aware
-            # lane and take the reuse loss rather than reuse it incorrectly.
+            # Without paged/SSD blocks there is no restorable hybrid backend.
+            # Disabling only memory-aware caching used to fall through to the
+            # legacy RAM trie below. That retained hundreds of MB per request
+            # despite zero reuse and zero reported RAM-cache totals on GLM.
+            # Disable prefix storage itself: an unavailable SSD/native route
+            # must never silently become a resident payload cache.
             if (
                 self._is_hybrid
                 and self.config.enable_prefix_cache
                 and not self.config.use_paged_cache
                 and not self.config.enable_block_disk_cache
             ):
-                logger.info(
-                    "Hybrid VLM with Block Disk L2 disabled: paged RAM stays "
-                    "OFF (SSD L2 is the only tier); disabling the memory-aware "
-                    "lane. Enable --enable-block-disk-cache for hybrid reuse."
+                self._prefix_cache_unavailable_reason = (
+                    "hybrid prefix cache has no supported backend with "
+                    "paged and block-disk cache disabled; no RAM fallback"
                 )
+                logger.warning("%s", self._prefix_cache_unavailable_reason)
                 self.config.use_memory_aware_cache = False
+                self.config.enable_prefix_cache = False
 
         # --- Cache initialization chain (block-aware > memory-aware > legacy) ---
         if self.config.enable_prefix_cache:
@@ -3773,6 +3782,13 @@ class MLLMScheduler:
             if request is not None and getattr(request, '_bypass_prefix_cache', False):
                 _skip_cache_store = True
                 _skip_cache_store_reason = "explicit prefix-cache bypass"
+            elif getattr(self, "_prefix_cache_unavailable_reason", None):
+                _skip_cache_store = True
+                _skip_cache_store_reason = self._prefix_cache_unavailable_reason
+                _PERSIST.record(
+                    request_id, "skipped", _skip_cache_store_reason,
+                    retained_tokens=0, durable=False,
+                )
             # A hybrid cache restored for this request combines reconstructed
             # attention KV with path-dependent SSM state.  The restored prefix
             # is safe to consume, but promoting that live, extended cache into
