@@ -79,6 +79,10 @@ from vmlx_engine.metal.glm5_kda_qkv_prefill import (
     kda_qkv_prefill,
     qkv_prefill_requested,
 )
+from vmlx_engine.metal.glm5_router_post import (
+    glm5_router_post,
+    router_compile_requested,
+)
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -1819,17 +1823,31 @@ class MoEBlock(nn.Module):
         self.switch_mlp = SwitchGLU(args.hidden_size, args.moe_intermediate_size, E,
                                     activation=ClampedSwiGLU(args.swiglu_limit))
         self.shared_experts = DenseMLP(args, args.moe_intermediate_size * args.n_shared_experts)
+        # Enabled only for base text layers by the post-hydration hook. The
+        # optional MTP block is deliberately outside this qualification.
+        self._compiled_router = False
 
     def __call__(self, x: mx.array):
-        # Router in fp32 (weights are fp32 keeps; logits/topk fp32 by contract).
+        # FP32 compute does not imply FP32 storage: real bundles keep BF16
+        # router weights. Preserve their storage and cast at the owning matmul.
         logits = x.astype(mx.float32) @ self.gate.weight.astype(mx.float32).T
-        scores = mx.sigmoid(logits)
-        choice = scores + self.e_score_correction_bias.astype(mx.float32)
-        idx = mx.argpartition(-choice, kth=self.k - 1, axis=-1)[..., : self.k]
-        w = mx.take_along_axis(scores, idx, axis=-1)
-        if self.norm_topk:
-            w = w / (mx.sum(w, axis=-1, keepdims=True) + 1e-20)
-        w = w * self.scaling
+        route = None
+        if self._compiled_router:
+            route = glm5_router_post(
+                logits, self.e_score_correction_bias.astype(mx.float32),
+                top_k=self.k, norm_topk=self.norm_topk, scaling=self.scaling,
+                enabled=True,
+            )
+        if route is None:
+            scores = mx.sigmoid(logits)
+            choice = scores + self.e_score_correction_bias.astype(mx.float32)
+            idx = mx.argpartition(-choice, kth=self.k - 1, axis=-1)[..., : self.k]
+            w = mx.take_along_axis(scores, idx, axis=-1)
+            if self.norm_topk:
+                w = w / (mx.sum(w, axis=-1, keepdims=True) + 1e-20)
+            w = w * self.scaling
+        else:
+            idx, w = route
         routed, pair_fused = affine_moe_routed_output(
             self.switch_mlp, x, idx, w
         )
@@ -2054,7 +2072,11 @@ class Model(nn.Module):
 
         base_kda_groups = 0
         base_dense_gate_up_groups = 0
+        base_compiled_router_modules = 0
         for layer in self.model.layers:
+            if isinstance(layer.mlp, MoEBlock):
+                layer.mlp._compiled_router = router_compile_requested()
+                base_compiled_router_modules += int(layer.mlp._compiled_router)
             if layer.is_linear and layer.self_attn.prepare_runtime():
                 base_kda_groups += 1
             dense = (
@@ -2069,6 +2091,7 @@ class Model(nn.Module):
             mtp_dense_gate_up_groups = 1
         mx.clear_cache()
         return {
+            "base_compiled_router_modules": base_compiled_router_modules,
             "base_kda_qkv_groups": base_kda_groups,
             "base_dense_gate_up_groups": base_dense_gate_up_groups,
             "mtp_dense_gate_up_groups": mtp_dense_gate_up_groups,
