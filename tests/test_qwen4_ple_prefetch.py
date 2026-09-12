@@ -16,18 +16,25 @@ from vmlx_engine.models.qwen4_exp import language, table_reader
 
 
 @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16, mx.float32])
-@pytest.mark.parametrize("parallel", [False, True])
-def test_prefetch_exact_mixed_layouts_only_upload_on_caller(tmp_path, monkeypatch, dtype, parallel):
+@pytest.mark.parametrize("parallel", ["off", "eligible", "ineligible"])
+@pytest.mark.parametrize("pread", [False, True])
+def test_prefetch_exact_mixed_layouts_only_upload_on_caller(tmp_path, monkeypatch, dtype, parallel, pread):
     monkeypatch.setenv("VMLX_QWEN4_PLE_HOST_GATHER", "1")
     monkeypatch.setenv("VMLX_QWEN4_PLE_PREFETCH", "1")
+    monkeypatch.delenv("VMLX_QWEN4_PLE_PREFETCH_PREAD", raising=False)
+    if pread:
+        monkeypatch.setenv("VMLX_QWEN4_PLE_PREFETCH_PREAD", "1")
     table = _table(tmp_path, [(1, 32), (2, 64), (6, 32), (8, 128)], dtype)
-    if parallel:
+    if parallel != "off":
         table._read_pool = ThreadPoolExecutor(max_workers=1)
+    if parallel == "ineligible":
+        monkeypatch.setattr(table_reader, "_PARALLEL_READ_MAX_ROWS", 1)
     rows = np.array([25, 0, 8, 14, 25, 7, 0])
     stream = mx.new_stream(mx.gpu)
     caller = threading.get_ident()
     dequantize = mx.dequantize
     calls = []
+    reads = []
 
     def checked(*args, **kwargs):
         assert threading.get_ident() == caller
@@ -39,6 +46,12 @@ def test_prefetch_exact_mixed_layouts_only_upload_on_caller(tmp_path, monkeypatc
         with mx.stream(stream):
             expected = _bits(table.gather_mlx(rows)).copy()
             monkeypatch.setattr(mx, "dequantize", checked)
+            for shard in table.shards:
+                original = shard.read_rows
+                def checked_read(*args, _read=original, **kwargs):
+                    reads.append((threading.get_ident(), kwargs["use_pread"], kwargs["preserve_bits"]))
+                    return _read(*args, **kwargs)
+                monkeypatch.setattr(shard, "read_rows", checked_read)
             ticket = table.prefetch_rows(rows)
             rows[0] = 1  # The ticket owns its immutable selection, not this view.
             assert not ticket.rows.flags.writeable
@@ -48,6 +61,9 @@ def test_prefetch_exact_mixed_layouts_only_upload_on_caller(tmp_path, monkeypatc
             actual = table.gather_mlx(ticket.rows, prepared=ticket)
             np.testing.assert_array_equal(_bits(actual), expected)
             assert len(calls) == 4
+            assert len(reads) == 4
+            assert all(thread != caller and use_pread == (pread or parallel == "eligible")
+                       and preserve_bits for thread, use_pread, preserve_bits in reads)
             assert table._prefetch_ticket is None and ticket.future is None
             assert table.prefetch_stats["consumed"] == 1
     finally:
@@ -118,14 +134,17 @@ def test_failed_read_drains_siblings_and_close_drains_before_descriptors(tmp_pat
         table.close()
 
 
-def test_close_waits_for_pending_host_work(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pread", [False, True])
+def test_close_waits_for_pending_host_work(tmp_path, monkeypatch, pread):
     monkeypatch.setenv("VMLX_QWEN4_PLE_HOST_GATHER", "1")
     monkeypatch.setenv("VMLX_QWEN4_PLE_PREFETCH", "1")
+    monkeypatch.setenv("VMLX_QWEN4_PLE_PREFETCH_PREAD", "1" if pread else "0")
     table = _table(tmp_path, [(4, 32)], mx.float16, 160)
     entered, release, completed, closed = (threading.Event() for _ in range(4))
     original = table.shards[0].read_rows
 
     def blocked(*args, **kwargs):
+        assert kwargs["use_pread"] == pread
         entered.set()
         assert release.wait(5)
         result = original(*args, **kwargs)

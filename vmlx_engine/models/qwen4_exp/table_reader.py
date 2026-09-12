@@ -663,6 +663,10 @@ class FileBackedQuantizedNGramTable:
         self._parallel_read = _parallel_ple_read_requested()
         self._host_assembly = _host_ple_gather_requested()
         self._prefetch_enabled = os.environ.get("VMLX_QWEN4_PLE_PREFETCH") == "1"
+        # Read-ahead changes scheduling, not the ordinary mmap I/O policy.
+        # Keep pread separately selectable for qualification on cold SSD pages.
+        # The existing parallel-read policy still applies to eligible gathers.
+        self._prefetch_pread = os.environ.get("VMLX_QWEN4_PLE_PREFETCH_PREAD") == "1"
         self._prefetch_lock = threading.Lock()
         self._prefetch_pool = None
         self._prefetch_ticket = None
@@ -877,8 +881,9 @@ class FileBackedQuantizedNGramTable:
                 self._prefetch_pool = ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="vmlx-ple-prefetch"
                 )
-            future = self._prefetch_pool.submit(self._read_host_assembled, rows,
-                                                use_pread=True)
+            future = self._prefetch_pool.submit(
+                self._read_host_assembled, rows, use_pread=self._prefetch_pread
+            )
             ticket = _PLEReadTicket(self, rows, future)
             self._prefetch_ticket = ticket
             self.prefetch_stats["submitted"] += 1
@@ -905,9 +910,12 @@ class FileBackedQuantizedNGramTable:
             key = "consumed" if consumed else "discarded"
             if consumed and not self.prefetch_stats["consumed"]:
                 logger.info("Qwen PLE host prefetch consumed: rows=%d "
-                            "max_rows=%d max_packed_bytes=%d stream=caller",
+                            "max_rows=%d max_packed_bytes=%d stream=caller "
+                            "serial_io=%s parallel_pool=%s",
                             ticket.rows.size, _PREFETCH_MAX_ROWS,
-                            _PREFETCH_MAX_PACKED_BYTES)
+                            _PREFETCH_MAX_PACKED_BYTES,
+                            "pread" if self._prefetch_pread else "mmap",
+                            "enabled" if self._read_pool is not None else "disabled")
             self.prefetch_stats[key] += 1
 
     def _read_host_assembled(self, flat_rows: np.ndarray, *,
