@@ -75,6 +75,10 @@ from vmlx_engine.metal.kda_conv_decode import (
     glm5_kda_conv_decode,
 )
 from vmlx_engine.metal.glm5_kda_conv_prefill import kda_conv_prefill
+from vmlx_engine.metal.glm5_kda_qkv_prefill import (
+    kda_qkv_prefill,
+    qkv_prefill_requested,
+)
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -963,6 +967,7 @@ class KDAAttention(nn.Module):
         self._fused_kda_conv = fused_kda_conv_requested()
         self._fused_kda_prefill = os.environ.get("VMLX_GLM5_KDA_CONV_PREFILL", "0") == "1"
         self._fused_kda_prefill_observed = False
+        self._fused_kda_qkv_prefill = qkv_prefill_requested()
         self._fused_kda_step = fused_kda_step_requested()
         self._vectorized_speculative_verify = os.environ.get(
             "VMLINUX_GLM5_VECTOR_KDA_VERIFY",
@@ -1029,7 +1034,15 @@ class KDAAttention(nn.Module):
                 q, k, v, cq1, ck1, cv1 = fused_conv
             else:
                 prepared = None
-                if self._fused_kda_prefill and seg_t > 1:
+                preparation_mode = "separate_sum"
+                if self._fused_kda_qkv_prefill and seg_t > 1:
+                    prepared = kda_qkv_prefill(
+                        (q, k, v), (self.q_conv1d, self.k_conv1d, self.v_conv1d),
+                        (cq0, ck0, cv0), enabled=True,
+                    )
+                    if prepared is not None:
+                        preparation_mode = "qkv_silu"
+                if prepared is None and self._fused_kda_prefill and seg_t > 1:
                     prepared = (
                         kda_conv_prefill(q, self.q_conv1d, cq0),
                         kda_conv_prefill(k, self.k_conv1d, ck0),
@@ -1038,7 +1051,10 @@ class KDAAttention(nn.Module):
                 if prepared is not None and all(item is not None for item in prepared):
                     (q, cq1), (k, ck1), (v, cv1) = prepared
                     if not self._fused_kda_prefill_observed:
-                        _LOG.info("GLM KDA prefill convolution active: tokens=%d channels=%d", seg_t, H * K)
+                        _LOG.info(
+                            "GLM KDA prefill convolution active: tokens=%d channels=%d mode=%s",
+                            seg_t, H * K, preparation_mode,
+                        )
                         self._fused_kda_prefill_observed = True
                 else:
                     q, cq1 = short_conv(q, self.q_conv1d, cq0)
