@@ -85,6 +85,7 @@ logger = logging.getLogger(__name__)
 
 _HYPER_SPLIT_INDICES = {}
 _FAST_PROJECTION_CACHE = os.environ.get("VMLX_QWEN4_FAST_PROJECTION_CACHE") == "1"
+_EAGER_DISPATCH_MAX_ROWS = 64
 
 
 def _load_calibrated_proposal_sidecar(
@@ -2066,6 +2067,11 @@ class Qwen4ExpTextModel(nn.Module):
     def __init__(self, args: Qwen4ExpTextArgs):
         super().__init__()
         self.args = args
+        # Qualification only: submit completed small layer graphs while the
+        # caller builds the next layer (including host-only PLE SSD reads).
+        # Never create a worker/stream here or change logical cache update order.
+        self._eager_dispatch = os.environ.get("VMLX_QWEN4_EAGER_DISPATCH") == "1"
+        self._eager_dispatch_logged = False
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.hyper_connection_mixer = GatedResidual(args, use_combine=False)
@@ -2112,6 +2118,21 @@ class Qwen4ExpTextModel(nn.Module):
         if cache is None:
             cache = [None] * len(self.layers)
         _layer_fp = _layer_fingerprint_enabled(inputs)
+        eager_dispatch = (
+            self._eager_dispatch
+            and not profile
+            and not _layer_fp
+            and 0 < inputs.shape[0] * inputs.shape[1] <= _EAGER_DISPATCH_MAX_ROWS
+        )
+        if eager_dispatch and not self._eager_dispatch_logged:
+            logger.info(
+                "Qwen early layer submission active: rows=%d max_rows=%d "
+                "layers=%d stream=caller checkpointed=false",
+                inputs.shape[0] * inputs.shape[1],
+                _EAGER_DISPATCH_MAX_ROWS,
+                len(self.layers),
+            )
+            self._eager_dispatch_logged = True
         if _layer_fp:
             _log_layer_fingerprint(-1, h, cache[0] if cache else None)  # input to layer 0
             if _contiguous_state_experiment_enabled():
@@ -2131,6 +2152,11 @@ class Qwen4ExpTextModel(nn.Module):
                 prefill_checkpoint_steps=prefill_checkpoint_steps,
                 last_token_only=last_token_only and layer_index == len(self.layers) - 1,
             )
+            if eager_dispatch:
+                # No wait, queue, retained activation cache, or arithmetic
+                # substitution. Dependencies remain on the caller's MLX stream;
+                # cache consumers and terminal durability fences stay unchanged.
+                mx.async_eval(h)
             if _layer_fp:
                 _log_layer_fingerprint(layer_index, h, c)
                 if layer_index < 2:
