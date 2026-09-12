@@ -86,6 +86,7 @@ logger = logging.getLogger(__name__)
 _HYPER_SPLIT_INDICES = {}
 _FAST_PROJECTION_CACHE = os.environ.get("VMLX_QWEN4_FAST_PROJECTION_CACHE") == "1"
 _EAGER_DISPATCH_MAX_ROWS = 64
+_PLE_PREFETCH_MAX_TOKENS = 64
 
 
 def _load_calibrated_proposal_sidecar(
@@ -748,14 +749,16 @@ class ShardedNGramEmbedding(nn.Module):
         self,
         rows_np: np.ndarray,
         profile: Optional[Dict[str, float]] = None,
+        prepared=None,
     ) -> mx.array:
         """rows_np: int64 [B, S, H] row ids into the concatenated table."""
         fb = getattr(self, "_file_backed", None)
         if fb is not None:
+            kwargs = {"prepared": prepared} if prepared is not None else {}
             vals = (
-                fb.gather_mlx(rows_np.reshape(-1))
+                fb.gather_mlx(rows_np.reshape(-1), **kwargs)
                 if profile is None
-                else fb.gather_mlx(rows_np.reshape(-1), profile=profile)
+                else fb.gather_mlx(rows_np.reshape(-1), profile=profile, **kwargs)
             )
             if self.output_dtype is not None and vals.dtype != self.output_dtype:
                 vals = vals.astype(self.output_dtype)
@@ -821,11 +824,27 @@ class PLELayer(nn.Module):
         self.conv1d_weight = mx.zeros((hc_hidden, self.conv_kernel_size))
         self._fused_conv_decode = fused_ple_conv_requested()
 
+    def prepare_read(self, input_ids, cache):
+        """Snapshot current hashed IDs, but never advance PLE history early.
+
+        _embed recomputes the selection at consumption and the table checks
+        exact identity. A ticket cannot leak across a changed cache context.
+        """
+        table = getattr(self.ngram_embedding, "_file_backed", None)
+        if (table is None or not getattr(table, "_prefetch_enabled", False)
+                or not table._host_assembly):
+            return None
+        ids = np.asarray(input_ids, dtype=np.int64)
+        prev = (np.asarray(cache[2], dtype=np.int64)
+                if cache is not None and cache[2] is not None else None)
+        return table.prefetch_rows(self.hasher.hash_tokens(ids, prev).reshape(-1))
+
     def _embed(
         self,
         input_ids: mx.array,
         cache,
         profile: Optional[Dict[str, float]] = None,
+        prepared=None,
     ) -> mx.array:
         started = time.perf_counter() if profile is not None else None
         ids_np = np.asarray(input_ids, dtype=np.int64)
@@ -839,6 +858,7 @@ class PLELayer(nn.Module):
         emb = self.ngram_embedding(
             rows,
             profile=profile,
+            prepared=prepared,
         )  # [B, S, heads, head_dim]
         if cache is not None:
             ctx = np.concatenate(
@@ -906,10 +926,11 @@ class PLELayer(nn.Module):
         input_ids: mx.array,
         cache,
         profile: bool = False,
+        prepared=None,
     ) -> mx.array:
         phases: Optional[Dict[str, float]] = {} if profile else None
         total_started = time.perf_counter() if profile else None
-        emb = self._embed(input_ids, cache, profile=phases)
+        emb = self._embed(input_ids, cache, profile=phases, prepared=prepared)
         projection_started = time.perf_counter() if profile else None
         key = self.norm_key(self.key_proj(emb))
         key = key.reshape(*key.shape[:-1], self.hc_count, self.hidden_size)
@@ -1954,6 +1975,7 @@ class DecoderLayer(nn.Module):
         n_confirmed: int = 0,
         prefill_checkpoint_steps: tuple[int, ...] = (),
         last_token_only: bool = False,
+        ple_prefetch=None,
     ):
         phase_ms: Dict[str, float] = {}
         if self.ple is not None:
@@ -1982,6 +2004,7 @@ class DecoderLayer(nn.Module):
                     confirmed_ids,
                     cache,
                     profile=profile_layer is not None,
+                    prepared=ple_prefetch,
                 )
                 ple_context = cache[2]
                 ple_conv = cache[3]
@@ -2016,6 +2039,7 @@ class DecoderLayer(nn.Module):
                     input_ids,
                     cache,
                     profile=profile_layer is not None,
+                    prepared=ple_prefetch,
                 )
             if profile_layer is not None:
                 phase_ms["ple"] = _profile_eval(h)
@@ -2072,6 +2096,7 @@ class Qwen4ExpTextModel(nn.Module):
         # Never create a worker/stream here or change logical cache update order.
         self._eager_dispatch = os.environ.get("VMLX_QWEN4_EAGER_DISPATCH") == "1"
         self._eager_dispatch_logged = False
+        self._ple_prefetch = os.environ.get("VMLX_QWEN4_PLE_PREFETCH") == "1"
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.hyper_connection_mixer = GatedResidual(args, use_combine=False)
@@ -2138,29 +2163,46 @@ class Qwen4ExpTextModel(nn.Module):
             if _contiguous_state_experiment_enabled():
                 _materialize_recurrent_state(cache)
                 logger.info("QWEN4_LAYER_FP contiguous-state experiment applied before step %d", _LAYER_FP_STEPS["n"])
-        for layer_index, (layer, c) in enumerate(zip(self.layers, cache)):
-            if _layer_fp and layer_index < 2:
-                _log_layer_fingerprint(-10 - layer_index, h, c)  # PRE: state before this layer runs
-            h = layer(
-                h,
-                mask=None,
-                cache=c,
-                input_ids=inputs,
-                position_ids=position_ids,
-                profile_layer=layer_index if profile else None,
-                n_confirmed=n_confirmed,
-                prefill_checkpoint_steps=prefill_checkpoint_steps,
-                last_token_only=last_token_only and layer_index == len(self.layers) - 1,
-            )
-            if eager_dispatch:
-                # No wait, queue, retained activation cache, or arithmetic
-                # substitution. Dependencies remain on the caller's MLX stream;
-                # cache consumers and terminal durability fences stay unchanged.
-                mx.async_eval(h)
-            if _layer_fp:
-                _log_layer_fingerprint(layer_index, h, c)
-                if layer_index < 2:
-                    _log_module_state(layer_index, layer)
+        prepared_reads = {}
+        try:
+            if (self._ple_prefetch and not profile and not _layer_fp
+                    and 0 < inputs.shape[0] * inputs.shape[1] <= _PLE_PREFETCH_MAX_TOKENS):
+                # Verification splits the PLE update at n_confirmed. Prepare
+                # only that exact first segment; draft and rollback reads keep
+                # their existing context/update order and synchronous path.
+                first_ids = (inputs[:, :n_confirmed]
+                             if 0 < n_confirmed < inputs.shape[1] else inputs)
+                for index, (layer, current) in enumerate(zip(self.layers, cache)):
+                    if layer.ple is not None:
+                        ticket = layer.ple.prepare_read(first_ids, current)
+                        if ticket is not None:
+                            prepared_reads[index] = ticket
+            for layer_index, (layer, c) in enumerate(zip(self.layers, cache)):
+                if _layer_fp and layer_index < 2:
+                    _log_layer_fingerprint(-10 - layer_index, h, c)  # PRE: state before this layer runs
+                h = layer(
+                    h,
+                    mask=None,
+                    cache=c,
+                    input_ids=inputs,
+                    position_ids=position_ids,
+                    profile_layer=layer_index if profile else None,
+                    n_confirmed=n_confirmed,
+                    prefill_checkpoint_steps=prefill_checkpoint_steps,
+                    last_token_only=last_token_only and layer_index == len(self.layers) - 1,
+                    ple_prefetch=prepared_reads.get(layer_index),
+                )
+                if eager_dispatch:
+                    # Dependencies remain on the caller's MLX stream; cache
+                    # consumers and terminal durability fences stay unchanged.
+                    mx.async_eval(h)
+                if _layer_fp:
+                    _log_layer_fingerprint(layer_index, h, c)
+                    if layer_index < 2:
+                        _log_module_state(layer_index, layer)
+        finally:
+            for ticket in prepared_reads.values():
+                ticket.close()
         mixed = self.hyper_connection_mixer(h)
         if profile:
             mixer_ms = _profile_eval(mixed)

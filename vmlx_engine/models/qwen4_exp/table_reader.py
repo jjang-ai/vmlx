@@ -11,7 +11,7 @@ import struct
 import threading
 import time
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import CancelledError, ThreadPoolExecutor, wait
 from pathlib import Path
 
 import mlx.core as mx
@@ -37,6 +37,8 @@ _MLX_DTYPES = {
 
 _PARALLEL_READ_MAX_ROWS = 128
 _PARALLEL_READ_MAX_WORKERS = 16
+_PREFETCH_MAX_ROWS = 8192
+_PREFETCH_MAX_PACKED_BYTES = 8 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +51,18 @@ def _host_ple_gather_requested() -> bool:
     # Qualification switch: host assembly changes dispatch, never the bundle.
     value = os.environ.get("VMLX_QWEN4_PLE_HOST_GATHER", "0").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
+
+
+class _PLEReadTicket:
+    """Single-use, table-owned host buffers; never holds a decoded MLX array."""
+
+    def __init__(self, owner, rows, future):
+        self.owner = owner
+        self.rows = rows
+        self.future = future
+
+    def close(self):
+        self.owner._finish_prefetch(self, consumed=False)
 
 
 class _SharedPreadFile:
@@ -648,6 +662,13 @@ class FileBackedQuantizedNGramTable:
         )
         self._parallel_read = _parallel_ple_read_requested()
         self._host_assembly = _host_ple_gather_requested()
+        self._prefetch_enabled = os.environ.get("VMLX_QWEN4_PLE_PREFETCH") == "1"
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_pool = None
+        self._prefetch_ticket = None
+        self._closed = False
+        self.prefetch_stats = {"submitted": 0, "consumed": 0, "discarded": 0,
+                               "capacity_fallbacks": 0}
         self.host_gather_stats = {
             "calls": 0, "rows": 0, "unique_rows": 0,
             "shards": 0, "layout_groups": 0,
@@ -662,6 +683,19 @@ class FileBackedQuantizedNGramTable:
         )
 
     def close(self) -> None:
+        # The outer reader may be awaiting shard workers. Drain it before
+        # shutting down that distinct pool or closing any shared descriptors.
+        lock = getattr(self, "_prefetch_lock", None)
+        if lock is not None:
+            with lock:
+                self._closed = True
+                prefetch_pool = self._prefetch_pool
+                ticket = self._prefetch_ticket
+            if prefetch_pool is not None:
+                prefetch_pool.shutdown(wait=True, cancel_futures=True)
+            if ticket is not None:
+                ticket.close()
+            self._prefetch_pool = None
         pool = getattr(self, "_read_pool", None)
         if pool is not None:
             pool.shutdown(wait=True, cancel_futures=True)
@@ -684,6 +718,8 @@ class FileBackedQuantizedNGramTable:
         self,
         flat_rows: np.ndarray,
         profile: dict[str, float] | None = None,
+        *,
+        prepared: _PLEReadTicket | None = None,
     ) -> mx.array:
         """Gather random SSD rows and keep dequantized values on the MLX path."""
         flat_rows = np.asarray(flat_rows, dtype=np.int64).reshape(-1)
@@ -691,6 +727,24 @@ class FileBackedQuantizedNGramTable:
             raise IndexError("PLE row must be non-negative")
         if flat_rows.size and int(flat_rows.max()) >= self.total_rows:
             raise IndexError("PLE row exceeds the configured n-gram table")
+        if getattr(self, "_closed", False):
+            raise RuntimeError("PLE table is closed")
+        if prepared is not None:
+            if prepared.owner is not self:
+                raise ValueError("PLE read ticket belongs to a different table")
+            consumed = False
+            try:
+                future = prepared.future
+                if future is None:
+                    raise ValueError("PLE read ticket was already released")
+                if not np.array_equal(flat_rows, prepared.rows):
+                    raise ValueError("PLE read ticket does not match the exact row IDs")
+                hosts = future.result()
+                result = self._materialize_host_assembled(flat_rows.size, hosts, profile)
+                consumed = True
+                return result
+            finally:
+                self._finish_prefetch(prepared, consumed=consumed)
         if getattr(self, "_host_assembly", False):
             return self._gather_host_assembled(flat_rows, profile)
         shard_indices = flat_rows // self.per
@@ -782,6 +836,83 @@ class FileBackedQuantizedNGramTable:
         """
         if not flat_rows.size:
             return mx.zeros((0, self.head_dim), dtype=self.output_dtype)
+        hosts = self._read_host_assembled(flat_rows, profile=profile)
+        return self._materialize_host_assembled(flat_rows.size, hosts, profile)
+
+    def prefetch_rows(self, flat_rows: np.ndarray) -> _PLEReadTicket | None:
+        """Prepare one bounded exact selection without running MLX on a worker.
+
+        Callers must consume or close the ticket in a finally block. A busy or
+        oversized request uses the unchanged synchronous path, not a queue.
+        """
+        if not self._prefetch_enabled or not self._host_assembly:
+            return None
+        rows = np.array(flat_rows, dtype=np.int64, copy=True).reshape(-1)
+        if rows.size and (int(rows.min()) < 0 or int(rows.max()) >= self.total_rows):
+            raise IndexError("PLE prefetch row exceeds the configured n-gram table")
+        if not rows.size:
+            return None
+        if rows.size > _PREFETCH_MAX_ROWS:
+            self.prefetch_stats["capacity_fallbacks"] += 1
+            return None
+        unique = np.unique(rows)
+        shard_ids, counts = np.unique(unique // self.per, return_counts=True)
+        packed_bytes = sum(
+            int(count) * sum(reader.row_bytes for reader in
+                             (self.shards[int(s)].weight, self.shards[int(s)].scales,
+                              self.shards[int(s)].biases))
+            for s, count in zip(shard_ids, counts)
+        )
+        if packed_bytes > _PREFETCH_MAX_PACKED_BYTES:
+            self.prefetch_stats["capacity_fallbacks"] += 1
+            return None
+        rows.setflags(write=False)
+        with self._prefetch_lock:
+            if self._closed:
+                raise RuntimeError("PLE table is closed")
+            if self._prefetch_ticket is not None:
+                self.prefetch_stats["capacity_fallbacks"] += 1
+                return None
+            if self._prefetch_pool is None:
+                self._prefetch_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="vmlx-ple-prefetch"
+                )
+            future = self._prefetch_pool.submit(self._read_host_assembled, rows,
+                                                use_pread=True)
+            ticket = _PLEReadTicket(self, rows, future)
+            self._prefetch_ticket = ticket
+            self.prefetch_stats["submitted"] += 1
+        return ticket
+
+    def _finish_prefetch(self, ticket: _PLEReadTicket, *, consumed: bool) -> None:
+        if ticket.owner is not self:
+            raise ValueError("PLE read ticket belongs to a different table")
+        future = ticket.future
+        if future is None:
+            return
+        # Drain even when the caller failed before reaching its PLE layer.
+        # Do not mask that caller exception with an abandoned read exception.
+        try:
+            future.exception()
+        except CancelledError:
+            pass
+        with self._prefetch_lock:
+            if ticket.future is None:
+                return
+            ticket.future = None
+            if self._prefetch_ticket is ticket:
+                self._prefetch_ticket = None
+            key = "consumed" if consumed else "discarded"
+            if consumed and not self.prefetch_stats["consumed"]:
+                logger.info("Qwen PLE host prefetch consumed: rows=%d "
+                            "max_rows=%d max_packed_bytes=%d stream=caller",
+                            ticket.rows.size, _PREFETCH_MAX_ROWS,
+                            _PREFETCH_MAX_PACKED_BYTES)
+            self.prefetch_stats[key] += 1
+
+    def _read_host_assembled(self, flat_rows: np.ndarray, *,
+                             profile=None, use_pread: bool = False):
+        """Host-only preparation, shared by sync and bounded prefetch paths."""
         started = time.perf_counter() if profile is not None else None
         unique_rows, inverse = np.unique(flat_rows, return_inverse=True)
         shard_ids = unique_rows // self.per
@@ -816,7 +947,7 @@ class FileBackedQuantizedNGramTable:
         else:
             host_batches = {
                 shard_id: self.shards[shard_id].read_rows(
-                    local_rows[selected], preserve_bits=True
+                    local_rows[selected], use_pread=use_pread, preserve_bits=True
                 )
                 for shard_id, selected in selections
             }
@@ -825,7 +956,7 @@ class FileBackedQuantizedNGramTable:
                 time.perf_counter() - started
             ) * 1000.0
 
-        out = None
+        assembled = []
         for members in groups.values():
             shard = self.shards[members[0][0]]
             selected = np.concatenate([indices for _, indices in members])
@@ -833,6 +964,14 @@ class FileBackedQuantizedNGramTable:
                 np.concatenate([host_batches[shard_id][i] for shard_id, _ in members])
                 for i in range(3)
             )
+            assembled.append((shard, selected, hosts))
+        return inverse, unique_rows.size, len(selections), assembled
+
+    def _materialize_host_assembled(self, row_count, prepared, profile):
+        """Only the caller uploads, dequantizes and restores original row order."""
+        inverse, unique_count, shard_count, groups = prepared
+        out = None
+        for shard, selected, hosts in groups:
             values = shard.dequantize_rows_mlx(
                 hosts, profile=profile, preserve_bits=True
             )
@@ -842,7 +981,7 @@ class FileBackedQuantizedNGramTable:
             else:
                 if out is None:
                     out = mx.zeros(
-                        (unique_rows.size, self.head_dim), dtype=self.output_dtype
+                        (unique_count, self.head_dim), dtype=self.output_dtype
                     )
                 out[mx.array(selected.astype(np.uint32))] = values
         out = out[mx.array(inverse.astype(np.uint32))]
@@ -857,11 +996,11 @@ class FileBackedQuantizedNGramTable:
             logger.info(
                 "Qwen PLE host assembly active: rows=%d unique_rows=%d "
                 "selected_shards=%d layout_groups=%d",
-                flat_rows.size, unique_rows.size, len(selections), len(groups),
+                row_count, unique_count, shard_count, len(groups),
             )
         stats["calls"] += 1
-        stats["rows"] += int(flat_rows.size)
-        stats["unique_rows"] += int(unique_rows.size)
-        stats["shards"] += len(selections)
+        stats["rows"] += int(row_count)
+        stats["unique_rows"] += int(unique_count)
+        stats["shards"] += shard_count
         stats["layout_groups"] += len(groups)
         return out
