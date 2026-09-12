@@ -1462,6 +1462,10 @@ class MLAAttention(nn.Module):
             1,
             min(S, self.gather_element_budget // max(K * rank, 1)),
         )
+        materialize_tiles = (
+            S > tile
+            and os.environ.get("VMLX_GLM5_DSA_PREFILL_MATERIALIZE", "0") == "1"
+        )
         outputs = []
         for start in range(0, S, tile):
             stop = min(start + tile, S)
@@ -1509,6 +1513,19 @@ class MLAAttention(nn.Module):
                     keys,
                     scale=self.scale,
                     mask=bias.astype(queries.dtype),
+                )
+            if materialize_tiles:
+                # A Python loop alone does not bound lazy gathered buffers:
+                # every tile graph otherwise survives until concatenation is
+                # evaluated. Realize only this tile's small attention output.
+                # Keep the exact same tile shapes, indices, dtype and SDPA
+                # operation; this is not whole-model prefill rechunking.
+                mx.eval(attended)
+                _LOG.info(
+                    "GLM DSA gather materialized: span=%d:%d queries=%d "
+                    "selected=%d rank=%d dtype=%s active_bytes=%d peak_bytes=%d",
+                    start, stop, S, K, rank, queries.dtype,
+                    mx.get_active_memory(), mx.get_peak_memory(),
                 )
             outputs.append(
                 attended.reshape(B, rows, n_heads, rank).transpose(0, 2, 1, 3)
