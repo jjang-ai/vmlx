@@ -969,14 +969,6 @@ class KDAAttention(nn.Module):
         self._fused_kda_prefill_observed = False
         self._fused_kda_qkv_prefill = qkv_prefill_requested()
         self._fused_kda_step = fused_kda_step_requested()
-        # Qualification-only native precision boundary. The pinned native
-        # implementation returns KDA output in the query activation dtype,
-        # while the recurrent cache remains FP32. Keep the established path
-        # unchanged until whole-model semantic/numerical qualification.
-        self._native_kda_output_dtype = os.environ.get(
-            "VMLX_GLM5_KDA_NATIVE_OUTPUT_DTYPE", "0"
-        ) == "1"
-        self._native_kda_output_dtype_observed = False
         self._vectorized_speculative_verify = os.environ.get(
             "VMLINUX_GLM5_VECTOR_KDA_VERIFY",
             os.environ.get("VMLX_GLM5_VECTOR_KDA_VERIFY", "1"),
@@ -1007,18 +999,6 @@ class KDAAttention(nn.Module):
         f = f.reshape(B, T, self.H, self.K)
         rate = mx.exp(self.A_log.astype(mx.float32)).reshape(1, 1, self.H, 1)
         return self.lower_bound * mx.sigmoid(rate * f)
-
-    def _output_dtype_boundary(self, output: mx.array, dtype) -> mx.array:
-        if not self._native_kda_output_dtype:
-            return output
-        if not self._native_kda_output_dtype_observed:
-            _LOG.info(
-                "GLM KDA native output dtype boundary: output=%s activation=%s "
-                "state=unchanged tokens=%d",
-                output.dtype, dtype, output.shape[1],
-            )
-            self._native_kda_output_dtype_observed = True
-        return output.astype(dtype)
 
     def __call__(
         self,
@@ -1111,7 +1091,6 @@ class KDAAttention(nn.Module):
                 o, s1 = kda_recurrent(q, k, v, g, beta, s0)
             else:
                 o, s1 = kda_chunked(q, k, v, g, beta, s0)
-            o = self._output_dtype_boundary(o, seg.dtype)
             gate = self.g_b_proj(self.g_a_proj(seg)).reshape(B, seg_t, H, K)
             gated = sigmoid_gated_rmsnorm_small_rows(
                 o,
@@ -1163,7 +1142,6 @@ class KDAAttention(nn.Module):
                 o, state, recurrent_states = kda_recurrent_with_states(
                     q, k, v, g, beta, state
                 )
-                o = self._output_dtype_boundary(o, x.dtype)
                 gate = self.g_b_proj(self.g_a_proj(x)).reshape(B, T, H, K)
                 gated = sigmoid_gated_rmsnorm_small_rows(
                     o,
