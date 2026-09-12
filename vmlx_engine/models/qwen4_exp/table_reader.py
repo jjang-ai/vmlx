@@ -11,7 +11,7 @@ import struct
 import threading
 import time
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 import mlx.core as mx
@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__)
 
 def _parallel_ple_read_requested() -> bool:
     value = os.environ.get("VMLX_QWEN4_PLE_PARALLEL_READ", "0").strip().lower()
+    return value not in {"", "0", "false", "off", "no"}
+
+
+def _host_ple_gather_requested() -> bool:
+    # Qualification switch: host assembly changes dispatch, never the bundle.
+    value = os.environ.get("VMLX_QWEN4_PLE_HOST_GATHER", "0").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
 
 
@@ -298,7 +304,9 @@ class SafetensorsRowReader:
         self._pread_file = pread_file
         self.random_access_advised = _advise_random_access(self.mm)
 
-    def rows(self, indices: np.ndarray) -> np.ndarray:
+    def rows(
+        self, indices: np.ndarray, *, preserve_bits: bool = False
+    ) -> np.ndarray:
         """Gather rows from the mmap; each distinct row is copied once.
 
         A PLE gather repeats rows whenever an n-gram recurs inside the chunk
@@ -316,12 +324,14 @@ class SafetensorsRowReader:
                 values = self.mm[indices]
         else:
             values = self.mm[indices]
-        if self.dtype_tag == "BF16":
+        if self.dtype_tag == "BF16" and not preserve_bits:
             raw = np.asarray(values, dtype=np.uint16)
             return (raw.astype(np.uint32) << 16).view(np.float32)
         return np.asarray(values)
 
-    def rows_pread(self, indices: np.ndarray) -> np.ndarray:
+    def rows_pread(
+        self, indices: np.ndarray, *, preserve_bits: bool = False
+    ) -> np.ndarray:
         """Read selected rows without faulting the process-wide mmap."""
 
         if self._pread_file is None:
@@ -343,7 +353,7 @@ class SafetensorsRowReader:
                 count=int(np.prod(self.shape[1:], dtype=np.int64)),
             ).reshape(self.shape[1:])
         values = host[inverse].reshape(*indices.shape, *self.shape[1:])
-        if self.dtype_tag == "BF16":
+        if self.dtype_tag == "BF16" and not preserve_bits:
             raw = np.asarray(values, dtype=np.uint16)
             return (raw.astype(np.uint32) << 16).view(np.float32)
         return values
@@ -418,6 +428,22 @@ class _AffineShard:
     def output_dtype(self):
         return self.scales.mlx_dtype
 
+    @property
+    def layout_signature(self) -> tuple:
+        """Only rows with identical dequantization contracts may share a call.
+
+        Artifact/row identity stays in the selection, not this grouping key:
+        the arrays carry each shard's actual weights, scales and biases.
+        There is no cross-table or persistent decoded-row cache here.
+        """
+        return (
+            self.logical_bits, self.storage_bits, self.group_size, self.mode,
+            self.head_dim,
+            self.weight.dtype_tag, self.weight.shape[1:],
+            self.scales.dtype_tag, self.scales.shape[1:],
+            self.biases.dtype_tag, self.biases.shape[1:],
+        )
+
     def gather_mlx(
         self,
         rows: np.ndarray,
@@ -442,12 +468,13 @@ class _AffineShard:
         rows: np.ndarray,
         *,
         use_pread: bool = False,
+        preserve_bits: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         read = "rows_pread" if use_pread else "rows"
-        return (
-            getattr(self.weight, read)(rows),
-            getattr(self.scales, read)(rows),
-            getattr(self.biases, read)(rows),
+        kwargs = {"preserve_bits": True} if preserve_bits else {}
+        return tuple(
+            getattr(reader, read)(rows, **kwargs)
+            for reader in (self.weight, self.scales, self.biases)
         )
 
     def dequantize_rows_mlx(
@@ -455,11 +482,19 @@ class _AffineShard:
         host_rows: tuple[np.ndarray, np.ndarray, np.ndarray],
         *,
         profile: dict[str, float] | None = None,
+        preserve_bits: bool = False,
     ) -> mx.array:
         started = time.perf_counter() if profile is not None else None
-        packed = mx.array(host_rows[0]).astype(self.weight.mlx_dtype)
-        scales = mx.array(host_rows[1]).astype(self.scales.mlx_dtype)
-        biases = mx.array(host_rows[2]).astype(self.biases.mlx_dtype)
+        def upload(host, reader):
+            value = mx.array(host)
+            if preserve_bits and reader.dtype_tag == "BF16":
+                # uint16 -> BF16 bit view, not an integer-to-float conversion.
+                return value.view(mx.bfloat16)
+            return value.astype(reader.mlx_dtype)
+
+        packed = upload(host_rows[0], self.weight)
+        scales = upload(host_rows[1], self.scales)
+        biases = upload(host_rows[2], self.biases)
         if profile is not None:
             mx.eval(packed, scales, biases)
             profile["host_to_mlx_ms"] = profile.get("host_to_mlx_ms", 0.0) + (
@@ -508,7 +543,7 @@ class _AffineShard:
 
 
 class FileBackedQuantizedNGramTable:
-    """Gather/dequantize only requested PLE rows from its 128 SSD shards."""
+    """Gather/dequantize only requested PLE rows from the checkpoint shards."""
 
     def __init__(
         self,
@@ -612,6 +647,11 @@ class FileBackedQuantizedNGramTable:
             bool(reader.random_access_advised) for reader in readers
         )
         self._parallel_read = _parallel_ple_read_requested()
+        self._host_assembly = _host_ple_gather_requested()
+        self.host_gather_stats = {
+            "calls": 0, "rows": 0, "unique_rows": 0,
+            "shards": 0, "layout_groups": 0,
+        }
         self._read_pool = (
             ThreadPoolExecutor(
                 max_workers=min(_PARALLEL_READ_MAX_WORKERS, n_shards),
@@ -651,6 +691,8 @@ class FileBackedQuantizedNGramTable:
             raise IndexError("PLE row must be non-negative")
         if flat_rows.size and int(flat_rows.max()) >= self.total_rows:
             raise IndexError("PLE row exceeds the configured n-gram table")
+        if getattr(self, "_host_assembly", False):
+            return self._gather_host_assembled(flat_rows, profile)
         shard_indices = flat_rows // self.per
         local_rows = flat_rows % self.per
         out = mx.zeros(
@@ -692,6 +734,9 @@ class FileBackedQuantizedNGramTable:
                 )
                 for shard_index, selected in selections
             }
+            # A failed shard must not leave sibling reads running past the
+            # caller's error cleanup / descriptor lifetime.
+            wait(futures.values())
             host_batches = {
                 shard_index: future.result()
                 for shard_index, future in futures.items()
@@ -724,4 +769,99 @@ class FileBackedQuantizedNGramTable:
             profile["scatter_gpu_ms"] = profile.get("scatter_gpu_ms", 0.0) + (
                 time.perf_counter() - started
             ) * 1000.0
+        return out
+
+    def _gather_host_assembled(
+        self, flat_rows: np.ndarray, profile: dict[str, float] | None
+    ) -> mx.array:
+        """Read on the host, upload/dequantize once per *actual* layout.
+
+        Deduplication applies to row IDs within this call only. It does not
+        reuse rows from a previous history/model or retain an unbounded table.
+        All MLX work stays on the caller's generation stream; workers do I/O.
+        """
+        if not flat_rows.size:
+            return mx.zeros((0, self.head_dim), dtype=self.output_dtype)
+        started = time.perf_counter() if profile is not None else None
+        unique_rows, inverse = np.unique(flat_rows, return_inverse=True)
+        shard_ids = unique_rows // self.per
+        local_rows = unique_rows % self.per
+        selections = [
+            (int(shard_id), np.flatnonzero(shard_ids == shard_id))
+            for shard_id in np.unique(shard_ids)
+        ]
+        groups = {}
+        for shard_id, selected in selections:
+            signature = self.shards[shard_id].layout_signature
+            groups.setdefault(signature, []).append((shard_id, selected))
+
+        pool = getattr(self, "_read_pool", None)
+        parallel = (
+            pool is not None and len(selections) > 1
+            and unique_rows.size <= _PARALLEL_READ_MAX_ROWS
+        )
+        host_batches = {}
+        if parallel:
+            futures = {
+                shard_id: pool.submit(
+                    self.shards[shard_id].read_rows, local_rows[selected],
+                    use_pread=True, preserve_bits=True,
+                )
+                for shard_id, selected in selections
+            }
+            wait(futures.values())
+            host_batches = {
+                shard_id: future.result() for shard_id, future in futures.items()
+            }
+        else:
+            host_batches = {
+                shard_id: self.shards[shard_id].read_rows(
+                    local_rows[selected], preserve_bits=True
+                )
+                for shard_id, selected in selections
+            }
+        if profile is not None:
+            profile["ssd_rows_cpu_ms"] = profile.get("ssd_rows_cpu_ms", 0.0) + (
+                time.perf_counter() - started
+            ) * 1000.0
+
+        out = None
+        for members in groups.values():
+            shard = self.shards[members[0][0]]
+            selected = np.concatenate([indices for _, indices in members])
+            hosts = tuple(
+                np.concatenate([host_batches[shard_id][i] for shard_id, _ in members])
+                for i in range(3)
+            )
+            values = shard.dequantize_rows_mlx(
+                hosts, profile=profile, preserve_bits=True
+            )
+            if len(groups) == 1:
+                # unique_rows is sorted, hence members are already in order.
+                out = values
+            else:
+                if out is None:
+                    out = mx.zeros(
+                        (unique_rows.size, self.head_dim), dtype=self.output_dtype
+                    )
+                out[mx.array(selected.astype(np.uint32))] = values
+        out = out[mx.array(inverse.astype(np.uint32))]
+        if profile is not None:
+            started = time.perf_counter()
+            mx.eval(out)
+            profile["scatter_gpu_ms"] = profile.get("scatter_gpu_ms", 0.0) + (
+                time.perf_counter() - started
+            ) * 1000.0
+        stats = self.host_gather_stats
+        if not stats["calls"]:
+            logger.info(
+                "Qwen PLE host assembly active: rows=%d unique_rows=%d "
+                "selected_shards=%d layout_groups=%d",
+                flat_rows.size, unique_rows.size, len(selections), len(groups),
+            )
+        stats["calls"] += 1
+        stats["rows"] += int(flat_rows.size)
+        stats["unique_rows"] += int(unique_rows.size)
+        stats["shards"] += len(selections)
+        stats["layout_groups"] += len(groups)
         return out
