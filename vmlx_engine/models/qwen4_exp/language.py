@@ -27,6 +27,7 @@ import mlx.nn as nn
 import numpy as np
 from mlx_lm.models.cache import ArraysCache
 from vmlx_engine.metal.qwen4_verify_sdpa import qwen4_verify_sdpa
+from vmlx_engine.metal.qwen4_qsa_mask import qsa_block_mask, qsa_mask_requested
 from vmlx_engine.metal.qwen4_hc_combine import (
     exact_hc_combine,
     exact_hc_combine_requested,
@@ -1428,6 +1429,7 @@ class QSAIndexer(nn.Module):
         self._fused_score_decode = fused_sparse_index_score_requested(
             "qwen4_exp"
         )
+        self._fused_block_mask = qsa_mask_requested()
 
     @staticmethod
     def _position_payload(position_ids: mx.array, batch: int, length: int) -> mx.array:
@@ -1552,6 +1554,12 @@ class QSAIndexer(nn.Module):
             return selected, selected < ncb_mx[:, None]
         keep_blocks = mx.zeros((B, S, num_blocks), dtype=mx.bool_)
         keep_blocks = mx.put_along_axis(keep_blocks, top_idx, mx.array(True), axis=-1)
+        fused_mask = qsa_block_mask(
+            keep_blocks, ncb_mx, ratio=self.compress_ratio, key_length=T,
+            enabled=self._fused_block_mask,
+        )
+        if fused_mask is not None:
+            return fused_mask
         # queries with fewer complete blocks than k_sel picked -inf entries; drop those
         keep_blocks = keep_blocks & complete[None]
 
