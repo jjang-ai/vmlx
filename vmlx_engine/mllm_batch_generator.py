@@ -4589,7 +4589,7 @@ class MLLMNativeMTPState:
     ladder_depth: int = 0
     promote_probe: bool = False
     promote_from_depth: int = 1
-    # Observational only: start wall, verified-token count, origin and AR cost.
+    # Admission record: start wall, verified-token count, origin and AR cost.
     # Includes the promotion's warmup, unlike the decision ring. No tensors or
     # synchronization; promotion is already in MTP and does not reseed from AR.
     promotion_accounting: Optional[Tuple[float, int, float, float]] = None
@@ -4605,6 +4605,8 @@ class MLLMNativeMTPState:
     # measured cost); the lower rung must WIN by the hysteresis to stay.
     depth_probe: bool = False
     depth_probe_from_depth: int = 0
+    # Same complete-trial contract as promotion, with no seed/cache ownership.
+    depth_probe_accounting: Optional[Tuple[float, int, float, float]] = None
     depth_probe_at_cycle: int = 0
     depth_probe_backoff: int = 0
     depth_probes: int = 0
@@ -6497,17 +6499,18 @@ def _native_mtp_recent_ms_per_tok(state: MLLMNativeMTPState) -> float:
     return d_ms / d_e if d_e > 0 and d_ms > 0 else 0.0
 
 
-def _native_mtp_promotion_total_cost(
-    state: MLLMNativeMTPState, *, now: float
+def _native_mtp_adjacent_total_cost(
+    state: MLLMNativeMTPState,
+    start: Optional[Tuple[float, int, float, float]],
+    *, now: float,
 ) -> Optional[Tuple[int, float, float, float]]:
     """Verified tokens, full trial wall ms, cost/token and frozen reference.
 
-    Promotion has no reseed. Its clock starts at the rung change, before
+    An adjacent trial has no reseed. Its clock starts at the rung change, before
     warmup, and includes subsequent drafting, verification and queue work.
     The final verified queue and terminal SSD fence may not be drained yet.
-    Missing/invalid observations are not evidence of a profitable promotion.
+    Missing/invalid observations are not evidence of a profitable trial.
     """
-    start = state.promotion_accounting
     if start is None:
         return None
     started, initial_tokens, origin_ms, ar_ms = start
@@ -6520,6 +6523,12 @@ def _native_mtp_promotion_total_cost(
     ):
         return None
     return tokens, wall_ms, wall_ms / tokens, min(origin_ms, ar_ms)
+
+
+def _native_mtp_promotion_total_cost(
+    state: MLLMNativeMTPState, *, now: float
+) -> Optional[Tuple[int, float, float, float]]:
+    return _native_mtp_adjacent_total_cost(state, state.promotion_accounting, now=now)
 
 
 def _native_mtp_log_promotion_accounting(
@@ -6680,6 +6689,10 @@ def _native_mtp_maybe_ar_safety_fallback(
             state.depth_probe_from_depth = depth_now
             state.depth = depth_now - 1
             state.depth_probe = True
+            state.depth_probe_accounting = (
+                time.perf_counter(), cycles + int(state.stats.accepted_tokens),
+                cfg_cost, ar_baseline,
+            )
             state.depth_probes += 1
             state.depth_probe_at_cycle = 0
             state.ar_safety.reset(cycles)
@@ -6765,7 +6778,29 @@ def _native_mtp_maybe_ar_safety_fallback(
     window_full = len(state.ar_safety.ring) > ar_safety_window_cycles()
 
     if depth_probing:
-        if trip is None and window_full:
+        if trip is None and not window_full:
+            return False
+        decision_now = time.perf_counter()
+        start = state.depth_probe_accounting
+        total = _native_mtp_adjacent_total_cost(state, start, now=decision_now)
+        total_wins = (
+            total is not None
+            and baseline > 0.0
+            and total[2] <= min(baseline, total[3]) / _NATIVE_MTP_REENTRY_HYSTERESIS
+        )
+        keep = trip is None and window_full and total_wins
+        state.depth_probe_accounting = None
+        if start is not None and total is not None:
+            logger.info(
+                "MLLM MTP[%s] depth probe accounting D%d -> D%d outcome=%s "
+                "verified_tokens=%d wall_ms=%.3f ms_per_verified_token=%.3f "
+                "origin_reference_ms=%.3f ar_reference_ms=%.3f "
+                "includes_warmup=true includes_seed=false includes_final_drain=false",
+                request_id, state.depth_probe_from_depth, depth_now,
+                "kept" if keep else "lost", total[0], total[1], total[2],
+                start[2] * total[0], start[3] * total[0],
+            )
+        if keep:
             # Keep the winning lower rung; re-try its origin with backoff.
             state.depth_probe = False
             state.d1_ms_per_tok = _native_mtp_recent_ms_per_tok(state)
@@ -6782,7 +6817,19 @@ def _native_mtp_maybe_ar_safety_fallback(
                 request_id, depth_now, state.d1_ms_per_tok, state.depth_probe_from_depth, state.dcfg_ms_per_tok,
             )
             return False
-        if trip is not None:
+        if trip is not None or window_full:
+            if trip is not None:
+                reason = trip.log_text(
+                    depth_now, target_depth=min(state.ladder_depth, state.depth_probe_from_depth or depth_now + 1),
+                    baseline_label=f"min(D{state.depth_probe_from_depth}, AR)",
+                )
+            elif total is not None:
+                reason = (
+                    f"depth_probe_total_cost ms_per_token={total[2]:.3f} "
+                    f"reference_ms_per_token={min(baseline, total[3]):.3f}"
+                )
+            else:
+                reason = "depth_probe_total_cost unavailable"
             state.depth_probe = False
             state.depth = min(state.ladder_depth, state.depth_probe_from_depth or depth_now + 1)
             state.depth_probe_backoff += 1
@@ -6791,9 +6838,8 @@ def _native_mtp_maybe_ar_safety_fallback(
             )
             state.ar_safety.reset(cycles)
             logger.info(
-                "MLLM MTP[%s] depth probe lost, back to D%d: D%d %.1fms/tok vs D%d %.1fms/tok",
-                request_id, state.depth, depth_now, trip.mtp_ms_per_tok,
-                state.depth, state.dcfg_ms_per_tok,
+                "MLLM MTP[%s] depth probe lost, back to D%d: %s",
+                request_id, state.depth, reason,
             )
         return False
 

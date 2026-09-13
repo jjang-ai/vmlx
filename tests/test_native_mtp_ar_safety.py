@@ -832,6 +832,91 @@ def test_sticky_start_evidence_rules():
     assert _native_mtp_first_promotion_cycle(False) == _NATIVE_MTP_PROMOTE_FIRST_CYCLES
 
 
+@pytest.mark.parametrize("origin_depth", [2, 3])
+@pytest.mark.parametrize("policy", ["adaptive", "fixed_override"])
+@pytest.mark.parametrize("expensive_warmup", [False, True])
+def test_lower_depth_probe_charges_complete_trial(
+    monkeypatch, origin_depth, policy, expensive_warmup, caplog
+):
+    import logging
+    from vmlx_engine import mllm_batch_generator as m
+
+    # Exercise the existing fallback economics path, not a fabricated
+    # promotion. Adaptive uses it while fresh rolling samples are absent;
+    # fixed policy reaches it only with an explicit depth-probe override.
+    monkeypatch.delenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", raising=False)
+    monkeypatch.setenv(
+        "VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "1" if policy == "adaptive" else "0"
+    )
+    monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH_PROBE", raising=False)
+    monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH_PROBE", raising=False)
+    if policy == "fixed_override":
+        monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH_PROBE", "1")
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    state = _vlm_state(m, depth=origin_depth)
+    state.ladder_depth = origin_depth
+    state.depth_ceiling = origin_depth
+    state.depth_probe_at_cycle = 20
+    state.ar_step_ms = 20.0
+    state.stats.cycles = 20
+    state.stats.accepted_tokens = (origin_depth - 1) * 20
+    now = [10.0]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: now[0])
+    state.ar_safety.ring = [
+        (12 + i, origin_depth * (12 + i), now[0] - (8 - i) * origin_depth * 0.010)
+        for i in range(9)
+    ]
+    with caplog.at_level(logging.INFO):
+        assert m._native_mtp_maybe_ar_safety_fallback("lower-total", state) is False
+        target_depth = origin_depth - 1
+        assert state.depth == target_depth and state.depth_probe
+        # Warmed 16 ms cycles beat the 10 ms/token origin at either rung.
+        # Four 200 ms warmup cycles make the complete trial lose even to
+        # the 20 ms AR reference. They must not disappear from the verdict.
+        for cycle in range(12):
+            now[0] += 0.200 if expensive_warmup and cycle < 4 else 0.016
+            state.stats.cycles += 1
+            state.stats.accepted_tokens += target_depth
+            assert m._native_mtp_maybe_ar_safety_fallback("lower-total", state) is False
+
+    assert not state.depth_probe
+    assert state.depth == (origin_depth if expensive_warmup else target_depth)
+    assert not state.ar_fallback_pending
+    assert state.depth_probe_accounting is None
+    assert "includes_warmup=true" in caplog.text
+    if expensive_warmup:
+        assert "depth_probe_total_cost" in caplog.text
+
+
+@pytest.mark.parametrize("origin_depth", [2, 3])
+@pytest.mark.parametrize("accounting", [None, (float("nan"), 60, 10.0, 20.0)])
+def test_lower_depth_probe_unknown_total_returns_to_origin(
+    monkeypatch, origin_depth, accounting, caplog
+):
+    import logging
+    from vmlx_engine import mllm_batch_generator as m
+
+    state = _vlm_state(m, depth=origin_depth - 1)
+    state.ladder_depth = origin_depth
+    state.depth_ceiling = origin_depth
+    state.depth_probe = True
+    state.depth_probe_from_depth = origin_depth
+    state.depth_probe_accounting = accounting
+    state.dcfg_ms_per_tok = 10.0
+    state.ar_step_ms = 20.0
+    state.stats.cycles = 40
+    state.stats.accepted_tokens = 40
+    state.ar_safety.anchor_cycle_ms = 10.0
+    state.ar_safety.ring = [(32 + i, 2 * (32 + i), 10.0 + i * 0.010) for i in range(9)]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: 10.080)
+    with caplog.at_level(logging.INFO):
+        assert not m._native_mtp_maybe_ar_safety_fallback("lower-unknown", state)
+    assert not state.depth_probe and state.depth == origin_depth
+    assert state.depth_probe_accounting is None
+    assert state.depth_probe_backoff == 1
+    assert "depth_probe_total_cost unavailable" in caplog.text
+
+
 def test_depth_probe_keeps_adjacent_rung_when_it_beats_configured_depth(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
@@ -840,7 +925,8 @@ def test_depth_probe_keeps_adjacent_rung_when_it_beats_configured_depth(monkeypa
     state.depth = 3
     state.ladder_depth = 3
     state.depth_probe_at_cycle = 16
-    base_t = time.perf_counter() - 1.0
+    base_t = 10.0
+    monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 8 * 0.030)
     state.stats.cycles = 20
     state.stats.accepted_tokens = 40
     # D3 window: 3 tok/cycle at 30 ms/cycle = 10 ms/tok (AR seed 12 -> healthy)
@@ -853,8 +939,10 @@ def test_depth_probe_keeps_adjacent_rung_when_it_beats_configured_depth(monkeypa
     state.stats.cycles = 40
     state.stats.accepted_tokens = int(1.9 * 40) - 40
     state.ar_safety.anchor_cycle_ms = 15.0
-    state.ar_safety.ring = [(31 + i, int(1.9 * (31 + i)), base_t + i * 0.015) for i in range(9)]
-    monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 9 * 0.015)
+    # Full trial has 16 additional verified tokens in 120 ms. The old
+    # window-only fixture moved the clock backwards from the probe start.
+    state.ar_safety.ring = [(31 + i, int(1.9 * (31 + i)), base_t + 0.240 + i * 0.015) for i in range(9)]
+    monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 0.240 + 8 * 0.015)
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.depth_probe is False and state.depth == 2
     assert state.promote_at_cycle > 40 and state.d1_ms_per_tok > 0
