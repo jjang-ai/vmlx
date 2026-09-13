@@ -152,6 +152,69 @@ def test_failed_parallel_read_drains_sibling_before_return(tmp_path, monkeypatch
         table.close()
 
 
+@pytest.mark.parametrize("entry", ["legacy", "assembled", "prefetched"])
+def test_failed_shard_submission_drains_accepted_reads(tmp_path, monkeypatch, entry):
+    table = _table(tmp_path, [(4, 32), (6, 32)], mx.float16, 160)
+    rows = np.array([0, 7, 0, 9], dtype=np.int64)
+    table._host_assembly = entry != "legacy"
+    table._prefetch_enabled = entry == "prefetched"
+    expected = _bits(table.gather_mlx(rows)).copy()
+    table._read_pool = ThreadPoolExecutor(max_workers=2)
+    entered, release, completed, rejected, returned = (
+        threading.Event() for _ in range(5)
+    )
+    real_submit = table._read_pool.submit
+    real_read = table.shards[0].read_rows
+    submitted = 0
+
+    def controlled_read(*args, **kwargs):
+        entered.set()
+        assert release.wait(5), "test must release accepted SSD read"
+        value = real_read(*args, **kwargs)
+        completed.set()
+        return value
+
+    def reject_second_submit(*args, **kwargs):
+        nonlocal submitted
+        submitted += 1
+        if submitted == 2:
+            assert entered.wait(5)
+            rejected.set()
+            raise RuntimeError("owned shard submission failure")
+        return real_submit(*args, **kwargs)
+
+    def failed_gather():
+        try:
+            ticket = table.prefetch_rows(rows) if entry == "prefetched" else None
+            # Failure occurs in host I/O, before any MLX upload on this thread.
+            return table.gather_mlx(rows, prepared=ticket)
+        finally:
+            returned.set()
+
+    monkeypatch.setattr(table.shards[0], "read_rows", controlled_read)
+    monkeypatch.setattr(table._read_pool, "submit", reject_second_submit)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            task = caller.submit(failed_gather)
+            try:
+                assert rejected.wait(5)
+                escaped_before_read_finished = returned.wait(0.1)
+            finally:
+                release.set()
+            with pytest.raises(RuntimeError, match="owned shard submission failure"):
+                task.result(timeout=5)
+        assert completed.is_set(), "caller returned with an accepted read outstanding"
+        assert not escaped_before_read_finished
+        assert table._prefetch_ticket is None
+        # Failed submission must not poison the table or change row order/bits.
+        monkeypatch.setattr(table._read_pool, "submit", real_submit)
+        ticket = table.prefetch_rows(rows) if entry == "prefetched" else None
+        np.testing.assert_array_equal(_bits(table.gather_mlx(rows, prepared=ticket)), expected)
+    finally:
+        release.set()
+        table.close()
+
+
 @pytest.mark.parametrize("value,expected", [
     (None, True), ("1", True), ("0", False), ("false", False),
     ("off", False), ("no", False), ("", False),

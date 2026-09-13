@@ -54,6 +54,28 @@ def _host_ple_gather_requested() -> bool:
     return value not in {"", "0", "false", "off", "no"}
 
 
+def _read_parallel_shards(pool, shards, local_rows, selections, **read_kwargs):
+    """Own every accepted read, including when a later submission fails."""
+    futures = {}
+    try:
+        for shard_index, selected in selections:
+            futures[shard_index] = pool.submit(
+                shards[shard_index].read_rows,
+                local_rows[selected],
+                use_pread=True,
+                **read_kwargs,
+            )
+        return {
+            shard_index: future.result()
+            for shard_index, future in futures.items()
+        }
+    finally:
+        # Keep workers inside the caller's I/O lifetime on submission AND
+        # read errors. Waiting only after a comprehension loses the accepted
+        # futures when the executor rejects a later submission.
+        wait(futures.values())
+
+
 class _PLEReadTicket:
     """Single-use, table-owned host buffers; never holds a decoded MLX array."""
 
@@ -775,7 +797,6 @@ class FileBackedQuantizedNGramTable:
                 for shard_index, _selected in selections
             )
         )
-        futures = {}
         host_batches = {}
         if parallel:
             if not getattr(self, "_parallel_read_logged", False):
@@ -785,21 +806,9 @@ class FileBackedQuantizedNGramTable:
                 )
                 self._parallel_read_logged = True
             started = time.perf_counter() if profile is not None else None
-            futures = {
-                shard_index: pool.submit(
-                    self.shards[shard_index].read_rows,
-                    local_rows[selected],
-                    use_pread=True,
-                )
-                for shard_index, selected in selections
-            }
-            # A failed shard must not leave sibling reads running past the
-            # caller's error cleanup / descriptor lifetime.
-            wait(futures.values())
-            host_batches = {
-                shard_index: future.result()
-                for shard_index, future in futures.items()
-            }
+            host_batches = _read_parallel_shards(
+                pool, self.shards, local_rows, selections
+            )
             if profile is not None:
                 read_wall_ms = (time.perf_counter() - started) * 1000.0
                 # Preserve the established aggregate key for profile consumers
@@ -942,17 +951,9 @@ class FileBackedQuantizedNGramTable:
         )
         host_batches = {}
         if parallel:
-            futures = {
-                shard_id: pool.submit(
-                    self.shards[shard_id].read_rows, local_rows[selected],
-                    use_pread=True, preserve_bits=True,
-                )
-                for shard_id, selected in selections
-            }
-            wait(futures.values())
-            host_batches = {
-                shard_id: future.result() for shard_id, future in futures.items()
-            }
+            host_batches = _read_parallel_shards(
+                pool, self.shards, local_rows, selections, preserve_bits=True
+            )
         else:
             host_batches = {
                 shard_id: self.shards[shard_id].read_rows(
