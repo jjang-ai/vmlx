@@ -11,6 +11,9 @@ with that controller disabled so the older cumulative acceptance gates remain
 available as a controlled A/B fallback.
 """
 
+import math
+
+import mlx.core as mx
 import pytest
 
 from vmlx_engine import mllm_batch_generator as gen
@@ -98,6 +101,60 @@ class TestFixedDepthConfidenceGate:
         assert gen._native_mtp_draft_margin_threshold("glm5_next") == pytest.approx(
             0.25
         )
+
+
+class TestDraftMarginReduction:
+    @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16, mx.float32])
+    @pytest.mark.parametrize("size", [2, 129, 248320])
+    @pytest.mark.parametrize("two_rows", [False, True])
+    @pytest.mark.parametrize("case", [
+        "distinct", "duplicate_max", "equal", "signed_zero", "positive_inf",
+        "two_positive_inf", "negative_inf", "nan_first", "nan_last",
+    ])
+    def test_matches_topk_including_ties_and_nonfinite(self, dtype, size, two_rows, case):
+        row = (mx.arange(size) % 31).astype(dtype) / 32
+        if case == "distinct":
+            row = mx.concatenate([row[:-1], mx.array([2.0], dtype=dtype)])
+        if case == "duplicate_max":
+            row = mx.concatenate([mx.array([5.0], dtype=dtype), row[1:-1],
+                                  mx.array([5.0], dtype=dtype)])
+        elif case == "equal":
+            row = mx.full((size,), 7, dtype=dtype)
+        elif case == "signed_zero":
+            row = mx.concatenate([mx.array([-0.0], dtype=dtype),
+                                  mx.zeros((size - 1,), dtype=dtype)])
+        elif case == "positive_inf":
+            row = mx.concatenate([row[:-1], mx.array([float("inf")], dtype=dtype)])
+        elif case == "two_positive_inf":
+            row = mx.concatenate([mx.array([float("inf")], dtype=dtype), row[1:-1],
+                                  mx.array([float("inf")], dtype=dtype)])
+        elif case == "negative_inf":
+            row = mx.full((size,), -float("inf"), dtype=dtype)
+        elif case == "nan_first":
+            row = mx.concatenate([mx.array([float("nan")], dtype=dtype), row[1:]])
+        elif case == "nan_last":
+            row = mx.concatenate([row[:-1], mx.array([float("nan")], dtype=dtype)])
+        logits = mx.stack([mx.zeros_like(row), row]) if two_rows else row
+        original = mx.topk(row, 2)
+        expected = mx.abs(original[0] - original[1])
+        actual = gen._native_mtp_top2_margin(logits)
+        mx.eval(expected, actual)
+        assert actual.shape == expected.shape
+        assert actual.dtype == expected.dtype
+        a, b = actual.item(), expected.item()
+        assert a == b or (math.isnan(a) and math.isnan(b))
+
+    def test_float_logits_do_not_use_topk(self, monkeypatch):
+        def fail_topk(*args, **kwargs):
+            raise AssertionError("confidence margin must not sort float logits")
+
+        monkeypatch.setattr(mx, "topk", fail_topk)
+        assert gen._native_mtp_top2_margin(mx.array([2.0, 5.0, 5.0])).item() == 0
+        assert gen._native_mtp_top2_margin(mx.array([2.0, 5.0, 3.0])).item() == 2
+
+    def test_too_small_input_keeps_prior_rejection(self):
+        with pytest.raises(ValueError):
+            gen._native_mtp_top2_margin(mx.array([1.0]))
 
 
 class TestRaises:

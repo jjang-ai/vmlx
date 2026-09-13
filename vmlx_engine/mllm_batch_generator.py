@@ -4777,11 +4777,21 @@ def _native_mtp_draft_margin_threshold(model_type: Optional[str] = None) -> floa
 def _native_mtp_top2_margin(logits_2d: mx.array) -> mx.array:
     """Top-1 minus top-2 logit for the final position, as a 0-d array.
 
-    Deliberately NOT a full sort. The sampler's full-vocabulary sort was
-    measured at roughly 30% of decode on wide-vocabulary bundles, so this takes
-    a k=2 partial reduction instead.
+    Removing only the winning index preserves duplicate maxima: a tie has
+    margin zero, not the gap to the next distinct value. Two reductions avoid
+    topk's selection overhead on the wide vocabularies used by native MTP.
+    No host read or synchronization is added to the draft graph.
     """
     row = logits_2d[-1] if logits_2d.ndim > 1 else logits_2d
+    if row.ndim == 1 and row.shape[0] >= 2 and row.dtype in (
+        mx.float16, mx.bfloat16, mx.float32
+    ):
+        winner = mx.argmax(row)
+        runner_up = mx.max(
+            mx.where(mx.arange(row.shape[0]) == winner, -float("inf"), row)
+        )
+        return mx.abs(row[winner] - runner_up)
+    # Preserve the existing behavior for malformed/small or non-logit inputs.
     top2 = mx.topk(row, 2)
     return mx.abs(top2[..., 0] - top2[..., 1])
 
