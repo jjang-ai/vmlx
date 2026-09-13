@@ -1,0 +1,9 @@
+GLM DSA block selection uses the unchanged ThreadSort and BlockMergeSort
+helpers from Apple MLX 0.32.2 mlx/backend/metal/kernels/sort.h.
+Copyright 2023-2024 Apple Inc. Distributed under the MIT license.
+Source: https://github.com/ml-explore/mlx/blob/v0.32.2/mlx/backend/metal/kernels/sort.h
+Original complete header SHA256:
+3171f47dabf2cf501dffc2e388e3d66446d6f71712e8d070028258a084b63574
+The portion before the Kernel sort section is packaged as glm5_dsa_sort.metal.
+The vMLX caller uses runtime lengths and writes only the retained candidates
+with original indices. No helper comparator or sort arithmetic was changed.

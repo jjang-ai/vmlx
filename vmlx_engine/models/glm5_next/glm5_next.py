@@ -83,6 +83,10 @@ from vmlx_engine.metal.glm5_router_post import (
     glm5_router_post,
     router_compile_requested,
 )
+from vmlx_engine.metal.glm5_dsa_select import (
+    glm5_dsa_select,
+    glm5_dsa_select_requested,
+)
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -1253,6 +1257,8 @@ class Glm5NextIndexer(nn.Module):
         self._fused_score_decode = fused_sparse_index_score_requested(
             "glm5_next"
         )
+        # Enabled only for base layers by prepare_acceleration; never MTP.
+        self._block_select_prefill = False
         self._state_dtype = (
             mx.bfloat16 if _dsa_bf16_state_requested() else mx.float32
         )
@@ -1362,7 +1368,13 @@ class Glm5NextIndexer(nn.Module):
             pool_scores = mx.where(visible, pool_scores, mx.full(pool_scores.shape, -mx.inf))
 
             select_k = min(self.topk // P, n_pools)
-            sel = mx.argpartition(-pool_scores, kth=select_k - 1, axis=-1)[..., :select_k]
+            sel = None
+            if self._block_select_prefill:
+                sel = glm5_dsa_select(
+                    -pool_scores, k=select_k, enabled=True,
+                )
+            if sel is None:
+                sel = mx.argpartition(-pool_scores, kth=select_k - 1, axis=-1)[..., :select_k]
             sel_visible = mx.take_along_axis(visible.astype(mx.bool_)
                                              if visible.ndim == 3 else visible,
                                              sel, axis=-1)
@@ -2073,7 +2085,12 @@ class Model(nn.Module):
         base_kda_groups = 0
         base_dense_gate_up_groups = 0
         base_compiled_router_modules = 0
+        base_dsa_block_select_modules = 0
         for layer in self.model.layers:
+            indexer = getattr(getattr(layer, "self_attn", None), "indexer", None)
+            if isinstance(indexer, Glm5NextIndexer):
+                indexer._block_select_prefill = glm5_dsa_select_requested()
+                base_dsa_block_select_modules += int(indexer._block_select_prefill)
             if isinstance(layer.mlp, MoEBlock):
                 layer.mlp._compiled_router = router_compile_requested()
                 base_compiled_router_modules += int(layer.mlp._compiled_router)
@@ -2091,6 +2108,7 @@ class Model(nn.Module):
             mtp_dense_gate_up_groups = 1
         mx.clear_cache()
         return {
+            "base_dsa_block_select_modules": base_dsa_block_select_modules,
             "base_compiled_router_modules": base_compiled_router_modules,
             "base_kda_qkv_groups": base_kda_groups,
             "base_dense_gate_up_groups": base_dense_gate_up_groups,
