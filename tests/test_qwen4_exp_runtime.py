@@ -6,6 +6,370 @@ import pytest
 from vmlx_engine.models.qwen4_exp.language import LanguageModel, Qwen4ExpTextArgs
 
 
+def test_unified_gdn_fp16_softplus_matches_mlx_for_finite_inputs():
+    from vmlx_engine.metal.qwen4_unified_gdn_verify import _HEADER
+
+    values = np.arange(65536, dtype=np.uint16).view(np.float16)
+    x = mx.array(values[np.isfinite(values)])
+    got = mx.fast.metal_kernel(
+        name="vmlx_gdn_fp16_softplus_admission",
+        input_names=["x"], output_names=["y"], header=_HEADER,
+        source="""
+          uint i = thread_position_in_grid.x;
+          if (i < N) y[i] = mlx_softplus_fast(x[i]);
+        """,
+    )(
+        inputs=[x], template=[("N", x.size)],
+        grid=(x.size, 1, 1), threadgroup=(128, 1, 1),
+        output_shapes=[x.shape], output_dtypes=[x.dtype],
+    )[0]
+    want = nn.softplus(x)
+    mx.eval(want, got)
+    mismatches = int(mx.sum(want != got).item())
+    print({"fp16_finite_softplus_inputs": x.size, "different": mismatches})
+    assert mismatches == 0
+
+
+@pytest.mark.parametrize("steps", [3, 4])
+def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
+    """Qualify the isolated kernel before any model dispatch can use it."""
+    from vmlx_engine.metal.qwen4_unified_gdn_verify import (
+        qwen4_unified_gdn_verify,
+    )
+    from vmlx_engine.models.qwen4_exp.language import GatedDeltaNet
+
+    mx.random.seed(960)
+    layer = GatedDeltaNet(Qwen4ExpTextArgs())
+    layer.eval()
+    layer._fused_conv_decode = False
+    layer.norm._fused_decode = False
+    heads, dim, channels = layer.num_v_heads, layer.head_v_dim, layer.conv_dim
+    dtype = mx.float16
+
+    def random(shape, scale=0.25):
+        return (mx.random.normal(shape) * scale).astype(dtype)
+
+    layer.conv1d.weight = random((channels, 4, 1))
+    layer.A_log = random((heads,))
+    layer.dt_bias = random((heads,))
+    layer.norm.weight = (1 + random((dim,), 0.1)).astype(dtype)
+    qkv = random((1, steps, channels))
+    z = random((1, steps, heads * dim), 2.0)
+    a, b = random((1, steps, heads)), random((1, steps, heads), 2.0)
+    conv = random((1, 3, channels))
+    state = mx.random.normal((1, heads, dim, layer.head_k_dim)) * 0.05
+    mx.eval(qkv, z, a, b, conv, state, layer.conv1d.weight,
+            layer.A_log, layer.dt_bias, layer.norm.weight)
+
+    # Admission diagnostics only: localize dtype/operation-order changes
+    # before weakening a recurrence or accepted-prefix assertion.
+    from mlx_lm.models.gated_delta import compute_g
+    from vmlx_engine.metal.qwen4_unified_gdn_verify import _HEADER
+
+    gates = mx.fast.metal_kernel(
+        name="vmlx_gdn_fp16_gate_diagnostic",
+        input_names=["a", "b", "A_log", "dt_bias"],
+        output_names=["av", "sp", "g", "beta"],
+        header=_HEADER,
+        source="""
+          uint i = thread_position_in_grid.x;
+          if (i >= N) return;
+          uint h = i % HV;
+          T v = a[i] + dt_bias[h];
+          T s = mlx_softplus_fast(v);
+          av[i] = v;
+          sp[i] = s;
+          g[i] = metal::precise::exp(
+              -metal::precise::exp(float(A_log[h])) * float(s));
+          beta[i] = mlx_sigmoid_precise(b[i]);
+        """,
+    )(
+        inputs=[a, b, layer.A_log, layer.dt_bias],
+        template=[("T", dtype), ("N", steps * heads), ("HV", heads)],
+        grid=(steps * heads, 1, 1), threadgroup=(64, 1, 1),
+        output_shapes=[a.shape] * 4,
+        output_dtypes=[dtype, dtype, mx.float32, dtype],
+    )
+    gate_references = [
+        a + layer.dt_bias,
+        nn.softplus(a + layer.dt_bias),
+        mx.concatenate([
+            compute_g(layer.A_log, a[:, :1], layer.dt_bias),
+            compute_g(layer.A_log, a[:, 1:], layer.dt_bias),
+        ], axis=1),
+        mx.sigmoid(b),
+    ]
+    for name, want, got in zip(("av", "softplus", "g", "beta"), gate_references, gates):
+        mx.eval(want, got)
+        wn, gn = np.asarray(want), np.asarray(got)
+        idx = np.argwhere(wn != gn)
+        print({"gate": name, "different": len(idx),
+               "first": [{"index": p.tolist(), "want": float(wn[tuple(p)]),
+                          "got": float(gn[tuple(p)])} for p in idx[:8]]})
+
+    # The production verifier handles the confirmed token and draft slab
+    # separately. Use that exact partition, including each accepted prefix.
+    out_c, conv_c, state_c = layer._process_chunk(
+        qkv[:, :1], a[:, :1], b[:, :1], conv, state
+    )
+    prefixes = [(out_c, conv_c, state_c)]
+    for end in range(2, steps + 1):
+        out_d, conv_d, state_d = layer._process_chunk(
+            qkv[:, 1:end], a[:, 1:end], b[:, 1:end], conv_c, state_c
+        )
+        prefixes.append((mx.concatenate([out_c, out_d], axis=1), conv_d, state_d))
+    expected = layer.norm(prefixes[-1][0], z.reshape(1, steps, heads, dim))
+    mx.eval(expected, *[v for p in prefixes for v in p])
+    output, next_conv, next_state, states, convs = qwen4_unified_gdn_verify(
+        qkv, z, b, a, conv, layer.conv1d.weight, layer.A_log,
+        layer.dt_bias, state, layer.norm.weight, layer.norm.eps,
+        threadgroup_y=32,
+    )
+    mx.eval(output, next_conv, next_state, states, convs)
+    comparisons = [
+        ("output", expected.reshape(output.shape), output),
+        ("final_conv", prefixes[-1][1], next_conv),
+        ("final_state", prefixes[-1][2], next_state),
+    ]
+    tail_qkv = random((1, 1, channels))
+    tail_a, tail_b = random((1, 1, heads)), random((1, 1, heads))
+    for i, (_, ref_conv, ref_state) in enumerate(prefixes[:-1]):
+        comparisons.extend([
+            (f"prefix_{i + 1}_conv", ref_conv, convs[:, i]),
+            (f"prefix_{i + 1}_state", ref_state, states[:, i]),
+        ])
+        want = layer._process_chunk(tail_qkv, tail_a, tail_b, ref_conv, ref_state)
+        got = layer._process_chunk(tail_qkv, tail_a, tail_b, convs[:, i], states[:, i])
+        comparisons.extend((f"after_prefix_{i + 1}_{j}", x, y)
+                           for j, (x, y) in enumerate(zip(want, got)))
+
+    failures = []
+    for name, want, got in comparisons:
+        mx.eval(want, got)
+        equal = bool(mx.array_equal(want, got).item())
+        delta = mx.abs(want.astype(mx.float32) - got.astype(mx.float32))
+        record = {
+            "field": name,
+            "exact": equal,
+            "different": int(mx.sum(want != got).item()),
+            "max_abs": float(mx.max(delta).item()),
+        }
+        print(record)
+        if not equal:
+            failures.append(record)
+    assert not failures, failures
+
+    # Explicit diagnostic invocation only; normal tests never grade speed.
+    # Includes every output/snapshot write and synchronization. This measures
+    # the isolated recurrence, not model decode or speculative acceptance.
+    import os
+    if os.environ.get("VMLX_QWEN4_GDN_COMPONENT_TIMING") == "1":
+        import time
+
+        def split_path():
+            oc, cc, sc = layer._process_chunk(qkv[:, :1], a[:, :1], b[:, :1], conv, state)
+            od, cd, sd = layer._process_chunk(qkv[:, 1:], a[:, 1:], b[:, 1:], cc, sc)
+            y = layer.norm(mx.concatenate([oc, od], axis=1), z.reshape(1, steps, heads, dim))
+            return y, cc, sc, cd, sd
+
+        def fused_path():
+            return qwen4_unified_gdn_verify(
+                qkv, z, b, a, conv, layer.conv1d.weight, layer.A_log,
+                layer.dt_bias, state, layer.norm.weight, layer.norm.eps,
+                threadgroup_y=32,
+            )
+
+        arms = {"split": split_path, "unified": fused_path}
+        for fn in arms.values():
+            for _ in range(5):
+                mx.eval(*fn())
+        samples = {name: [] for name in arms}
+        for block in range(6):
+            order = list(arms) if block % 2 == 0 else list(reversed(arms))
+            for name in order:
+                mx.synchronize()
+                for _ in range(20):
+                    start = time.perf_counter_ns()
+                    mx.eval(*arms[name]())
+                    samples[name].append((time.perf_counter_ns() - start) / 1000)
+        print({"component_cost": {"steps": steps, "dtype": str(dtype),
+               "includes": "graph creation, all state writes, synchronized evaluation",
+               "arms": {name: {"n": len(xs), "median_us": float(np.median(xs)),
+                               "p90_us": float(np.percentile(xs, 90))}
+                        for name, xs in samples.items()}}})
+
+
+def _unified_gdn_layer_case(steps=4):
+    """Actual recurrence geometry, fixed projection outputs; not a model run."""
+    from vmlx_engine.models.qwen4_exp.language import GatedDeltaNet
+
+    mx.random.seed(961)
+    layer = GatedDeltaNet(Qwen4ExpTextArgs())
+
+    def random(shape, scale=0.25):
+        return (mx.random.normal(shape) * scale).astype(mx.float16)
+
+    class Projection(nn.Module):
+        def __init__(self, value):
+            super().__init__()
+            self.value = value
+
+        def __call__(self, inputs):
+            return self.value[:, :inputs.shape[1]]
+
+    layer.in_proj_qkv = Projection(random((1, steps, layer.conv_dim)))
+    layer.in_proj_z = Projection(random((1, steps, layer.value_dim)))
+    layer.in_proj_a = Projection(random((1, steps, layer.num_v_heads)))
+    layer.in_proj_b = Projection(random((1, steps, layer.num_v_heads)))
+    layer.out_proj = nn.Identity()
+    layer.conv1d.weight = random((layer.conv_dim, 4, 1))
+    layer.A_log = random((layer.num_v_heads,))
+    layer.dt_bias = random((layer.num_v_heads,))
+    layer.norm.weight = (1 + random((layer.head_v_dim,), 0.1)).astype(mx.float16)
+    layer._fused_conv_decode = False
+    layer.norm._fused_decode = False
+    layer.eval()
+    inputs = mx.zeros((1, steps, 2560), dtype=mx.float16)
+    conv = random((1, 3, layer.conv_dim))
+    state = mx.random.normal((1, layer.num_v_heads, layer.head_v_dim, layer.head_k_dim)) * 0.05
+    return layer, inputs, conv, state
+
+
+@pytest.mark.parametrize("steps,accepted", [(3, 0), (3, 1), (4, 0), (4, 1), (4, 2)])
+def test_unified_gdn_layer_keeps_existing_rollback_and_auxiliary_cache(steps, accepted):
+    from mlx_lm.models.cache import ArraysCache
+    from vmlx_engine.mllm_batch_generator import _native_mtp_rollback_to_confirmed
+
+    layer, inputs, conv, state = _unified_gdn_layer_case(steps)
+    aux = (mx.array([[11, 17, 23]]), mx.array([[[0.5, -0.25]]]))
+
+    def new_cache():
+        result = ArraysCache(size=4)
+        result[0], result[1], result[2], result[3] = conv, state, *aux
+        return result
+
+    reference, candidate = new_cache(), new_cache()
+    layer._unified_gdn_verify = False
+    want = layer(inputs, cache=reference, n_confirmed=1)
+    layer._unified_gdn_verify = True
+    got = layer(inputs, cache=candidate, n_confirmed=1)
+    mx.eval(want, got, *reference.state, *candidate.state)
+    assert layer._unified_gdn_verify_graph_calls == 1
+    assert bool(mx.array_equal(want, got).item())
+    for x, y in zip(reference.state, candidate.state):
+        assert bool(mx.array_equal(x, y).item())
+
+    # Every accepted boundary, including full acceptance, is addressable;
+    # this does not mutate or recompute the speculative slab.
+    for count in range(steps):
+        expected = reference.rollback_state if count == 0 else reference.rollback_to(count)
+        actual = candidate.rollback_to(count)
+        mx.eval(*expected, *actual)
+        assert all(bool(mx.array_equal(x, y).item()) for x, y in zip(expected, actual))
+    with pytest.raises(ValueError, match="accepted-draft count"):
+        candidate.rollback_to(steps)
+
+    # Existing MLLM consumer also owns the PLE auxiliary restore. The fused
+    # GDN producer must leave those closures and slots intact for it.
+    rolled_aux = (aux[0] + accepted + 1, aux[1] + accepted + 1)
+    for cache in (reference, candidate):
+        cache.rollback_aux_state = rolled_aux
+        cache.rollback_aux_to = lambda count: rolled_aux
+        assert _native_mtp_rollback_to_confirmed(
+            [cache], reject_tokens=steps - 1 - accepted, accepted_drafts=accepted,
+        )
+        assert cache.rollback_state is None and cache.rollback_to is None
+        assert cache.rollback_aux_state is None and cache.rollback_aux_to is None
+    mx.eval(*reference.state, *candidate.state)
+    assert all(bool(mx.array_equal(x, y).item()) for x, y in zip(reference.state, candidate.state))
+    assert all(bool(mx.array_equal(candidate[i + 2], x).item()) for i, x in enumerate(rolled_aux))
+
+
+@pytest.mark.parametrize("case", [
+    "off", "mask", "lengths", "no_confirmed", "width_two", "checkpoint",
+    "other_conv", "other_norm", "geometry",
+])
+def test_unified_gdn_layer_preserves_unsupported_or_disabled_path(case):
+    from mlx_lm.models.cache import ArraysCache
+
+    layer, inputs, conv, state = _unified_gdn_layer_case(2 if case == "width_two" else 4)
+    cache = ArraysCache(size=2)
+    cache[0], cache[1] = conv, state
+    layer._unified_gdn_verify = case != "off"
+    kwargs = {"cache": cache, "n_confirmed": 1}
+    if case == "mask":
+        kwargs["mask"] = mx.ones(inputs.shape[:2], dtype=mx.bool_)
+    if case == "lengths":
+        cache.lengths = mx.array([inputs.shape[1]])
+    if case == "no_confirmed":
+        kwargs["n_confirmed"] = 0
+    if case == "checkpoint":
+        kwargs.update(n_confirmed=0, prefill_checkpoint_steps=(1, 3))
+    if case == "other_conv":
+        layer._fused_conv_decode = True
+    if case == "other_norm":
+        layer.norm._fused_decode = True
+    if case == "geometry":
+        # Same flattened projection size is not the same head topology.
+        layer.num_k_heads, layer.head_k_dim = 32, 64
+        cache[1] = state[..., :64]
+    out = layer(inputs, **kwargs)
+    mx.eval(out, cache[0], cache[1])
+    assert layer._unified_gdn_verify_graph_calls == 0
+
+
+def test_unified_gdn_cache_setter_failure_does_not_retry(monkeypatch):
+    from mlx_lm.models.cache import ArraysCache
+
+    class FailingCache(ArraysCache):
+        armed = False
+
+        def __setitem__(self, index, value):
+            if self.armed and index == 1:
+                raise RuntimeError("state ownership failure")
+            super().__setitem__(index, value)
+
+    layer, inputs, conv, state = _unified_gdn_layer_case()
+    cache = FailingCache(size=2)
+    cache[0], cache[1] = conv, state
+    cache.armed = True
+    layer._unified_gdn_verify = True
+
+    def no_retry(*args, **kwargs):
+        pytest.fail("split-path retry after cache ownership transfer")
+
+    monkeypatch.setattr(layer, "_process_chunk", no_retry)
+    with pytest.raises(RuntimeError, match="state ownership failure"):
+        layer(inputs, cache=cache, n_confirmed=1)
+
+
+def test_unified_gdn_explicit_opt_in_and_actual_dtype_guards(monkeypatch):
+    from vmlx_engine.metal.qwen4_unified_gdn_verify import (
+        unified_gdn_verify_eligible, unified_gdn_verify_requested,
+    )
+
+    monkeypatch.delenv("VMLX_QWEN4_UNIFIED_GDN_VERIFY", raising=False)
+    assert not unified_gdn_verify_requested()
+    monkeypatch.setenv("VMLX_QWEN4_UNIFIED_GDN_VERIFY", "1")
+    assert unified_gdn_verify_requested()
+    layer, _, conv, state = _unified_gdn_layer_case()
+    args = [layer.in_proj_qkv.value, layer.in_proj_z.value,
+            layer.in_proj_b.value, layer.in_proj_a.value, conv,
+            layer.conv1d.weight, layer.A_log, layer.dt_bias, state,
+            layer.norm.weight, layer.norm.eps]
+    assert unified_gdn_verify_eligible(*args)
+    for index in range(10):
+        wrong = list(args)
+        wrong[index] = args[index].astype(mx.bfloat16)
+        assert not unified_gdn_verify_eligible(*wrong)
+    wrong = list(args)
+    wrong[8] = None
+    assert not unified_gdn_verify_eligible(*wrong)
+    wrong = list(args)
+    wrong[0] = wrong[0][:, :, :-1]
+    assert not unified_gdn_verify_eligible(*wrong)
+
+
 def _tiny_args() -> Qwen4ExpTextArgs:
     return Qwen4ExpTextArgs(
         hidden_size=64,

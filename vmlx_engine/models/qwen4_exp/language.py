@@ -67,6 +67,11 @@ from vmlx_engine.metal.gdn_conv_decode import (
     fused_gdn_conv_requested,
     qwen4_gdn_conv_decode,
 )
+from vmlx_engine.metal.qwen4_unified_gdn_verify import (
+    qwen4_unified_gdn_verify,
+    unified_gdn_verify_eligible,
+    unified_gdn_verify_requested,
+)
 from vmlx_engine.metal.quantized_projection_group import (
     QuantizedProjectionGroup,
     cached_quantized_projection_group,
@@ -1096,6 +1101,8 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
             )
         # else: keep the inherited silu-gated norm
         self._fused_conv_decode = fused_gdn_conv_requested()
+        self._unified_gdn_verify = unified_gdn_verify_requested()
+        self._unified_gdn_verify_graph_calls = 0
 
     def _process_chunk(
         self,
@@ -1201,6 +1208,36 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
             else:
                 qkv = mx.where(mask[..., None], qkv, 0)
 
+        # Projections above keep their native bits/group sizes. The opt-in
+        # recurrence only sees their actual arrays, never a quant-name guess.
+        # Unsupported/masked/prefill/batched routes retain the existing path.
+        unified = None
+        if (
+            self._unified_gdn_verify
+            and n_confirmed == 1
+            and cache is not None
+            and mask is None
+            and getattr(cache, "lengths", None) is None
+            and not prefill_checkpoint_steps
+            and type(self.norm) is RMSNormGatedSigmoid
+            and not self._fused_conv_decode
+            and not self.norm._fused_decode
+            and (self.num_k_heads, self.num_v_heads, self.head_k_dim,
+                 self.head_v_dim, self.conv_kernel_size) == (16, 48, 128, 128, 4)
+            and not self.training
+            and mx.default_device() == mx.gpu
+            and unified_gdn_verify_eligible(
+                qkv, z.reshape(batch_size, seq_len, -1), b, a, conv_state,
+                self.conv1d.weight, self.A_log, self.dt_bias, ssm_state,
+                self.norm.weight, self.norm.eps,
+            )
+        ):
+            unified = qwen4_unified_gdn_verify(
+                qkv, z.reshape(batch_size, seq_len, -1), b, a, conv_state,
+                self.conv1d.weight, self.A_log, self.dt_bias, ssm_state,
+                self.norm.weight, self.norm.eps, threadgroup_y=32,
+            )
+
         if prefill_checkpoint_steps:
             if cache is None or n_confirmed or not (
                 tuple(sorted(set(prefill_checkpoint_steps))) == prefill_checkpoint_steps
@@ -1224,6 +1261,33 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
                 start = end
             cache.prefill_checkpoint_states = checkpoints
             out = mx.concatenate(pieces, axis=1)
+        elif unified is not None:
+            out, conv_f, ssm_f, state_prefixes, conv_prefixes = unified
+            # Existing cache ABI: post-confirmed state and accepted-draft
+            # lookup. PLE auxiliary slots/closures and QSA are not touched.
+            conv_c, ssm_c = conv_prefixes[:, 0], state_prefixes[:, 0]
+
+            def rollback_to(
+                count, _convs=conv_prefixes, _states=state_prefixes,
+                _conv_final=conv_f, _state_final=ssm_f, _steps=seq_len,
+            ):
+                if type(count) is not int or not 0 <= count < _steps:
+                    raise ValueError("invalid unified GDN accepted-draft count")
+                if count == _steps - 1:
+                    return _conv_final, _state_final
+                return _convs[:, count], _states[:, count]
+
+            # Construct first, then transfer ownership. Setter failures must
+            # propagate, not retry the old route with partially changed state.
+            cache.rollback_state = (conv_c, ssm_c)
+            cache.rollback_to = rollback_to
+            self._unified_gdn_verify_graph_calls += 1
+            if self._unified_gdn_verify_graph_calls == 1:
+                logger.info(
+                    "QWEN4_UNIFIED_GDN graph_built width=%d dtype=%s "
+                    "key_heads=%d value_heads=%d snapshots=%d",
+                    seq_len, qkv.dtype, self.num_k_heads, self.num_v_heads, seq_len - 1,
+                )
         elif 0 < n_confirmed < seq_len:
             confirmed_mask = mask[:, :n_confirmed] if mask is not None else None
             draft_mask = mask[:, n_confirmed:] if mask is not None else None
@@ -1283,7 +1347,8 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
             advance = getattr(cache, "advance", None)
             if callable(advance):
                 advance(seq_len)
-        out = self.norm(out, z)
+        if unified is None:
+            out = self.norm(out, z)
         return self.out_proj(out.reshape(batch_size, seq_len, -1))
 
 
