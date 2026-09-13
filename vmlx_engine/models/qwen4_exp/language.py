@@ -2132,10 +2132,11 @@ class Qwen4ExpTextModel(nn.Module):
     def __init__(self, args: Qwen4ExpTextArgs):
         super().__init__()
         self.args = args
-        # Qualification only: submit completed small layer graphs while the
+        # Submit completed small layer graphs while the
         # caller builds the next layer (including host-only PLE SSD reads).
         # Never create a worker/stream here or change logical cache update order.
-        self._eager_dispatch = os.environ.get("VMLX_QWEN4_EAGER_DISPATCH") == "1"
+        # An explicit 0 retains the lazy scheduling path for diagnosis.
+        self._eager_dispatch = os.environ.get("VMLX_QWEN4_EAGER_DISPATCH", "1") == "1"
         self._eager_dispatch_logged = False
         self._ple_prefetch = os.environ.get("VMLX_QWEN4_PLE_PREFETCH") == "1"
         self.embed_tokens = nn.Embedding(args.vocab_size, args.hidden_size)

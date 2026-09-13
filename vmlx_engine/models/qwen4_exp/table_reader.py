@@ -48,8 +48,9 @@ def _parallel_ple_read_requested() -> bool:
 
 
 def _host_ple_gather_requested() -> bool:
-    # Qualification switch: host assembly changes dispatch, never the bundle.
-    value = os.environ.get("VMLX_QWEN4_PLE_HOST_GATHER", "0").strip().lower()
+    # Assemble by actual quantization layout without changing the bundle.
+    # Explicit opt-out retains the original per-shard upload path.
+    value = os.environ.get("VMLX_QWEN4_PLE_HOST_GATHER", "1").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
 
 

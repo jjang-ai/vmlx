@@ -152,10 +152,20 @@ def test_failed_parallel_read_drains_sibling_before_return(tmp_path, monkeypatch
         table.close()
 
 
-def test_host_gather_is_explicit_opt_in(tmp_path, monkeypatch):
-    monkeypatch.delenv("VMLX_QWEN4_PLE_HOST_GATHER", raising=False)
+@pytest.mark.parametrize("value,expected", [
+    (None, True), ("1", True), ("0", False), ("false", False),
+    ("off", False), ("no", False), ("", False),
+])
+def test_host_gather_default_on_with_explicit_opt_out(tmp_path, monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("VMLX_QWEN4_PLE_HOST_GATHER", raising=False)
+    else:
+        monkeypatch.setenv("VMLX_QWEN4_PLE_HOST_GATHER", value)
     table = _table(tmp_path, [(4, 32)], mx.float16, 160)
     try:
-        assert table._host_assembly is False
+        assert table._host_assembly is expected
+        # Changing the environment cannot switch an already loaded table.
+        monkeypatch.setenv("VMLX_QWEN4_PLE_HOST_GATHER", "0" if expected else "1")
+        assert table._host_assembly is expected
     finally:
         table.close()

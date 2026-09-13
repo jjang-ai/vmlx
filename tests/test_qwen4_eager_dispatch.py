@@ -11,10 +11,10 @@ from vmlx_engine.models.qwen4_exp import language
 
 
 def _model(monkeypatch, enabled=True):
-    if enabled:
-        monkeypatch.setenv("VMLX_QWEN4_EAGER_DISPATCH", "1")
-    else:
+    if enabled is None:
         monkeypatch.delenv("VMLX_QWEN4_EAGER_DISPATCH", raising=False)
+    else:
+        monkeypatch.setenv("VMLX_QWEN4_EAGER_DISPATCH", "1" if enabled else "0")
     args = _tiny_args()
     args.linear_key_head_dim = 32
     args.linear_value_head_dim = 32
@@ -142,7 +142,16 @@ def test_eager_dispatch_exact_verify_rollback_and_continuation(monkeypatch, acce
     _assert_exact(*results)
 
 
-def test_eager_dispatch_default_off_and_flattened_row_bound(monkeypatch):
+@pytest.mark.parametrize("enabled,expected", [(None, True), (True, True), (False, False)])
+def test_eager_dispatch_default_on_with_explicit_opt_out(monkeypatch, enabled, expected):
+    model = _model(monkeypatch, enabled=enabled)
+    assert model.model._eager_dispatch is expected
+    # The policy is captured at construction, not changed mid-generation.
+    monkeypatch.setenv("VMLX_QWEN4_EAGER_DISPATCH", "0" if expected else "1")
+    assert model.model._eager_dispatch is expected
+
+
+def test_eager_dispatch_explicit_off_and_flattened_row_bound(monkeypatch):
     model = _model(monkeypatch, enabled=False)
     assert model.model._eager_dispatch is False
     calls = []
