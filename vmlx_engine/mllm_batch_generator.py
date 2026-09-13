@@ -6497,6 +6497,31 @@ def _native_mtp_recent_ms_per_tok(state: MLLMNativeMTPState) -> float:
     return d_ms / d_e if d_e > 0 and d_ms > 0 else 0.0
 
 
+def _native_mtp_promotion_total_cost(
+    state: MLLMNativeMTPState, *, now: float
+) -> Optional[Tuple[int, float, float, float]]:
+    """Verified tokens, full trial wall ms, cost/token and frozen reference.
+
+    Promotion has no reseed. Its clock starts at the rung change, before
+    warmup, and includes subsequent drafting, verification and queue work.
+    The final verified queue and terminal SSD fence may not be drained yet.
+    Missing/invalid observations are not evidence of a profitable promotion.
+    """
+    start = state.promotion_accounting
+    if start is None:
+        return None
+    started, initial_tokens, origin_ms, ar_ms = start
+    tokens = int(state.stats.cycles) + int(state.stats.accepted_tokens) - initial_tokens
+    wall_ms = (now - started) * 1000.0
+    if (
+        tokens <= 0 or initial_tokens < 0
+        or not all(math.isfinite(v) for v in (started, now, wall_ms, origin_ms, ar_ms))
+        or wall_ms <= 0.0 or origin_ms <= 0.0 or ar_ms <= 0.0
+    ):
+        return None
+    return tokens, wall_ms, wall_ms / tokens, min(origin_ms, ar_ms)
+
+
 def _native_mtp_log_promotion_accounting(
     request_id: str, state: MLLMNativeMTPState, outcome: str, *, now: float
 ) -> None:
@@ -6508,21 +6533,19 @@ def _native_mtp_log_promotion_accounting(
     drain are outside this interval and must not be inferred from this log.
     """
     start = state.promotion_accounting
+    total = _native_mtp_promotion_total_cost(state, now=now)
     state.promotion_accounting = None
-    if start is None:
+    if start is None or total is None:
         return
-    started, initial_tokens, origin_ms, ar_ms = start
-    tokens = int(state.stats.cycles) + int(state.stats.accepted_tokens) - initial_tokens
-    wall_ms = (now - started) * 1000.0
-    if tokens <= 0 or wall_ms < 0:
-        return
+    _, _, origin_ms, ar_ms = start
+    tokens, wall_ms, cost, _ = total
     logger.info(
         "MLLM MTP[%s] promotion accounting D%d -> D%d outcome=%s "
         "verified_tokens=%d wall_ms=%.3f ms_per_verified_token=%.3f "
         "origin_reference_ms=%.3f ar_reference_ms=%.3f "
         "includes_warmup=true includes_seed=false includes_final_drain=false",
         request_id, state.promote_from_depth, state.depth, outcome,
-        tokens, wall_ms, wall_ms / tokens, origin_ms * tokens, ar_ms * tokens,
+        tokens, wall_ms, cost, origin_ms * tokens, ar_ms * tokens,
     )
 
 
@@ -6775,9 +6798,18 @@ def _native_mtp_maybe_ar_safety_fallback(
         return False
 
     if promoting:
-        if trip is None and window_full:
+        if trip is None and not window_full:
+            return False
+        decision_now = time.perf_counter()
+        total = _native_mtp_promotion_total_cost(state, now=decision_now)
+        total_wins = (
+            total is not None
+            and baseline > 0.0
+            and total[2] <= min(baseline, total[3]) / _NATIVE_MTP_REENTRY_HYSTERESIS
+        )
+        if trip is None and window_full and total_wins:
             _native_mtp_log_promotion_accounting(
-                request_id, state, "kept", now=time.perf_counter()
+                request_id, state, "kept", now=decision_now
             )
             state.promote_probe = False
             state.promote_backoff = 0
@@ -6796,9 +6828,24 @@ def _native_mtp_maybe_ar_safety_fallback(
                 request_id, depth_now, state.promote_from_depth, state.d1_ms_per_tok,
             )
             return False
-        if trip is not None:
+        if trip is not None or window_full:
+            # A cheap post-warmup ring cannot erase the complete trial's
+            # loss. Return to the origin, not directly to AR; its ordinary
+            # safety window still owns any later AR handoff.
+            if trip is not None:
+                reason = trip.log_text(
+                    depth_now, target_depth=max(1, state.promote_from_depth),
+                    baseline_label=f"min(D{state.promote_from_depth}, AR)",
+                )
+            elif total is not None:
+                reason = (
+                    f"promotion_total_cost ms_per_token={total[2]:.3f} "
+                    f"reference_ms_per_token={min(baseline, total[3]):.3f}"
+                )
+            else:
+                reason = "promotion_total_cost unavailable"
             _native_mtp_log_promotion_accounting(
-                request_id, state, "lost", now=time.perf_counter()
+                request_id, state, "lost", now=decision_now
             )
             state.promote_probe = False
             state.depth = max(1, state.promote_from_depth)
@@ -6809,10 +6856,7 @@ def _native_mtp_maybe_ar_safety_fallback(
             state.ar_safety.reset(cycles)
             logger.info(
                 "MLLM MTP[%s] promotion lost, back to D%d: %s",
-                request_id, state.depth, trip.log_text(
-                    depth_now, target_depth=state.depth,
-                    baseline_label=f"min(D{state.promote_from_depth}, AR)",
-                ),
+                request_id, state.depth, reason,
             )
         return False
 

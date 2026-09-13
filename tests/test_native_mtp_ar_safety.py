@@ -486,6 +486,90 @@ def test_pending_d1_confirmation_resolves_before_overdue_promotion(monkeypatch, 
         assert state.promote_probe and state.depth == 2 and state.promotions == 1
 
 
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("target_depth", [2, 3])
+@pytest.mark.parametrize("expensive_warmup", [False, True])
+def test_promotion_admission_charges_complete_trial(
+    monkeypatch, adaptive, target_depth, expensive_warmup
+):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setattr(m, "_native_mtp_adaptive_policy", lambda: adaptive)
+    monkeypatch.setattr(m, "_native_mtp_calibration_enabled", lambda: False)
+    monkeypatch.setattr(m, "_native_mtp_depth_probe_enabled", lambda: False)
+    now = [10.0]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: now[0])
+    origin = target_depth - 1
+    state = _vlm_state(m, depth=origin)
+    state.depth_ceiling = state.ladder_depth = target_depth
+    state.ar_tier = m.NativeMTPArTier(depth=target_depth)
+    _ar_steps(state.ar_tier, 8, ms=12.0)
+    state.stats.cycles = state.stats.accepted_tokens = 40
+    state.promote_at_cycle = 40
+    # Actual origin window: 10ms/token, against 12ms/token measured AR.
+    state.ar_safety.ring = [
+        (32 + i, 2 * (32 + i), now[0] - (8 - i) * .020)
+        for i in range(9)
+    ]
+    assert not m._native_mtp_maybe_ar_safety_fallback("promotion-start", state)
+    assert state.promote_probe and state.depth == target_depth
+    assert state.promotion_accounting == pytest.approx((10.0, 80, 10.0, 12.0))
+    # Four expensive warmup cycles are excluded from the judged ring, but
+    # the user still paid them. The following eight cycles are cheap enough
+    # to win that ring even when the complete trial loses to origin AND AR.
+    for cycle in range(1, 13):
+        now[0] += .200 if expensive_warmup and cycle <= 4 else .016
+        state.stats.cycles += 1
+        state.stats.accepted_tokens += target_depth
+        assert not m._native_mtp_maybe_ar_safety_fallback("promotion-step", state)
+    assert not state.promote_probe and not state.ar_fallback_pending
+    assert state.promotion_accounting is None
+    assert state.depth == (origin if expensive_warmup else target_depth)
+    assert state.promotions == 1
+    assert state.depth <= state.depth_ceiling
+
+
+@pytest.mark.parametrize("invalid", [
+    "missing", "future_start", "zero_wall", "nan_start", "zero_tokens",
+    "negative_initial", "zero_origin", "nan_ar",
+])
+def test_promotion_missing_or_invalid_total_is_not_a_win(monkeypatch, invalid, caplog):
+    import logging
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setattr(m.time, "perf_counter", lambda: 10.0)
+    state = _vlm_state(m, depth=2)
+    state.promote_probe = True
+    state.promote_from_depth = 1
+    state.ladder_depth = state.depth_ceiling = 3
+    state.d1_ms_per_tok = 10.0
+    state.ar_tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(state.ar_tier, 8, ms=12.0)
+    state.stats.cycles = state.stats.accepted_tokens = 100
+    state.ar_safety.cycle_base = 88
+    state.ar_safety.ring = [
+        (92 + i, 2 * (92 + i), 10.0 - (8 - i) * .008) for i in range(9)
+    ]
+    start = [9.8, 164, 10.0, 12.0]
+    changes = {
+        "future_start": (0, 11.0), "zero_wall": (0, 10.0),
+        "nan_start": (0, float("nan")), "zero_tokens": (1, 200),
+        "negative_initial": (1, -1), "zero_origin": (2, 0.0),
+        "nan_ar": (3, float("nan")),
+    }
+    if invalid in changes:
+        index, value = changes[invalid]
+        start[index] = value
+    state.promotion_accounting = None if invalid == "missing" else tuple(start)
+    assert m._native_mtp_promotion_total_cost(state, now=10.0) is None
+    with caplog.at_level(logging.INFO):
+        assert not m._native_mtp_maybe_ar_safety_fallback("invalid-total", state)
+    assert state.depth == 1 and not state.promote_probe
+    assert state.promotion_accounting is None
+    assert state.promote_at_cycle > 100 and not state.ar_fallback_pending
+    assert "promotion_total_cost unavailable" in caplog.text
+
+
 def test_promotion_probe_wins_and_loses(monkeypatch):
     from vmlx_engine import mllm_batch_generator as m
 
