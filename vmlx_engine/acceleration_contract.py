@@ -502,10 +502,28 @@ def build_acceleration_contract(
     )
     features = []
     for spec in definition["features"]:
-        requested, selected, source = _requested(spec)
         runtime = runtime_features.get(spec["id"])
         if not isinstance(runtime, dict):
             runtime = None
+        if (
+            canonical == "qwen4_exp"
+            and spec["id"] == "affine_moe_pair"
+            and runtime is not None
+            and runtime.get("scope") == "ar_only"
+        ):
+            # This loader-attested variant is opt-in and excludes MTP seed,
+            # draft and verify. Do not label it as the default single-row
+            # kernel or mutate the family definition used by other requests.
+            spec = {
+                **spec,
+                "scopes": ("ar_decode",),
+                "default": False,
+                "env": (
+                    "VMLX_QWEN4_FUSED_MOE_PAIR",
+                    "VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY",
+                ),
+            }
+        requested, selected, source = _requested(spec)
         row = {
             "id": spec["id"],
             "label": spec["label"],

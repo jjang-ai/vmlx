@@ -56,6 +56,71 @@ def test_qwen4_affine_moe_pair_default_has_explicit_opt_out(monkeypatch):
     assert rows["affine_moe_pair"]["state"] == "disabled"
 
 
+def test_qwen4_ar_only_pair_reports_attested_phase_and_opt_in(monkeypatch):
+    from vmlx_engine.acceleration_contract import build_acceleration_contract
+
+    monkeypatch.delenv("VMLX_QWEN4_FUSED_MOE_PAIR", raising=False)
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY", "1")
+    runtime = {"features": {"affine_moe_pair": {
+        "scope": "ar_only", "installed": 48, "observed_calls": 1,
+    }}}
+    row = _rows(build_acceleration_contract("qwen4_exp", runtime))["affine_moe_pair"]
+    assert row["scopes"] == ["ar_decode"]
+    assert row["default"] is False
+    assert row["requested"] is True
+    assert row["selection_source"] == "VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY"
+    assert row["selection"] == "1"
+    assert row["state"] == "active_observed"
+
+
+def test_qwen4_ar_only_pair_does_not_mutate_default_contract(monkeypatch):
+    from vmlx_engine.acceleration_contract import build_acceleration_contract
+
+    monkeypatch.delenv("VMLX_QWEN4_FUSED_MOE_PAIR", raising=False)
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY", "1")
+    runtime = {"features": {"affine_moe_pair": {
+        "scope": "ar_only", "installed": 48,
+    }}}
+    scoped = _rows(build_acceleration_contract("qwen4_exp", runtime))["affine_moe_pair"]
+    assert scoped["default"] is False
+    unbound = _rows(build_acceleration_contract("qwen4_exp"))["affine_moe_pair"]
+    assert unbound["default"] is True
+    assert unbound["scopes"] == ["ar_decode", "mtp_decode"]
+    assert unbound["selection_source"] == "default"
+    assert unbound["state"] == "configured_unattested"
+
+
+def test_qwen4_ar_only_pair_primary_disable_wins(monkeypatch):
+    from vmlx_engine.acceleration_contract import build_acceleration_contract
+
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR", "0")
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY", "1")
+    runtime = {"features": {"affine_moe_pair": {
+        "scope": "ar_only", "installed": 48,
+    }}}
+    row = _rows(build_acceleration_contract("qwen4_exp", runtime))["affine_moe_pair"]
+    assert row["scopes"] == ["ar_decode"]
+    assert row["requested"] is False
+    assert row["selection_source"] == "VMLX_QWEN4_FUSED_MOE_PAIR"
+    assert row["state"] == "disabled"
+
+
+def test_qwen4_pair_explicit_force_preserves_single_row_scope(monkeypatch):
+    from vmlx_engine.acceleration_contract import build_acceleration_contract
+
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR", "1")
+    monkeypatch.setenv("VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY", "1")
+    runtime = {"features": {"affine_moe_pair": {
+        "scope": "single_row", "installed": 48,
+    }}}
+    row = _rows(build_acceleration_contract("qwen4_exp", runtime))["affine_moe_pair"]
+    assert row["scopes"] == ["ar_decode", "mtp_decode"]
+    assert row["default"] is True
+    assert row["requested"] is True
+    assert row["selection_source"] == "VMLX_QWEN4_FUSED_MOE_PAIR"
+    assert row["state"] == "installed_unobserved"
+
+
 def test_glm_mhc_default_has_explicit_opt_out(monkeypatch):
     from vmlx_engine.acceleration_contract import build_acceleration_contract
     from vmlx_engine.metal.glm5_mhc_decode import fused_glm5_mhc_requested
