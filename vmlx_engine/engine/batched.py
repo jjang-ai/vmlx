@@ -765,7 +765,11 @@ class BatchedEngine(BaseEngine):
     def _normalize_tool_call_arguments_for_template(
         messages: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Return messages whose assistant tool-call arguments are mappings."""
+        """Decode valid JSON-object arguments on a request-local render copy.
+
+        Malformed JSON and non-object values are left intact for the owning
+        validator/template; never fabricate an empty argument object.
+        """
         normalized: list[dict[str, Any]] = []
         for message in messages:
             if not isinstance(message, dict):
@@ -790,10 +794,9 @@ class BatchedEngine(BaseEngine):
 
                                 parsed = json.loads(arguments)
                             except (json.JSONDecodeError, TypeError, ValueError):
-                                parsed = {}
-                            copied_function["arguments"] = (
-                                parsed if isinstance(parsed, dict) else {}
-                            )
+                                parsed = None
+                            if isinstance(parsed, dict):
+                                copied_function["arguments"] = parsed
                         copied_call["function"] = copied_function
                     copied_calls.append(copied_call)
                 msg["tool_calls"] = copied_calls
@@ -2022,6 +2025,11 @@ class BatchedEngine(BaseEngine):
     ) -> str:
         """Apply chat template to messages."""
         tokenizer = self.tokenizer
+        # Normalize before BOTH processor and text renderers. Otherwise an
+        # image-history tool call can fail the processor's mapping-only template
+        # and fall back to a different prompt, breaking cache-prefix identity.
+        # Keep caller-owned history unchanged, including content=None below.
+        messages = self._normalize_tool_call_arguments_for_template(messages)
 
         def _chat_template_renderer():
             """Return the object that owns the real HF chat template.
@@ -2374,19 +2382,6 @@ class BatchedEngine(BaseEngine):
 
         renderer = _chat_template_renderer()
         if renderer is not None:
-            # Ensure tool_calls arguments are dicts, not JSON strings.
-            # Chat templates (Qwen3, Llama, etc.) call .items() on arguments.
-            for msg in messages:
-                for tc in msg.get("tool_calls") or []:
-                    fn = tc.get("function", {})
-                    args = fn.get("arguments")
-                    if isinstance(args, str):
-                        try:
-                            import json
-                            fn["arguments"] = json.loads(args)
-                        except (json.JSONDecodeError, TypeError):
-                            fn["arguments"] = {}
-
             template_kwargs = build_chat_template_kwargs(
                 enable_thinking=enable_thinking,
                 extra=extra_template_kwargs,
