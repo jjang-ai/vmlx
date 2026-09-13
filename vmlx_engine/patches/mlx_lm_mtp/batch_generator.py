@@ -91,6 +91,7 @@ from ...native_mtp_adaptive import (
 )
 from ...native_mtp_ar_safety import ArSafetyState, ar_safety_step
 from ...native_mtp_recovery import NativeMTPRecovery
+from ...metal.affine_moe_pair_decode import affine_moe_ar_scope
 from ...native_mtp_cache_telemetry import (
     native_mtp_cache_lifecycle_snapshot,
     native_mtp_cache_snapshot,
@@ -384,7 +385,9 @@ def apply() -> bool:
                             pass
         stock_recovery = recovery if recovery is not None and getattr(self, "uids", None) == [recovery.uid] else None
         step_t0 = time.perf_counter() if stock_recovery is not None else 0.0
-        responses = original_next(self, *args, **kwargs)
+        # Resume/seed and MTP verification above must not inherit AR kernels.
+        with affine_moe_ar_scope():
+            responses = original_next(self, *args, **kwargs)
         if (
             stock_recovery is not None
             and responses
@@ -1800,7 +1803,8 @@ def _prepare_mtp_ar_handoff(
     gen_batch._next_tokens = _ensure_uint32(state.next_main)
     gen_batch._next_logprobs = [last_logprobs]
     try:
-        consumed, _ = gen_batch._step()
+        with affine_moe_ar_scope():
+            consumed, _ = gen_batch._step()
     except Exception:
         # The cache may already have advanced, so silent recovery is unsafe.
         if not gen_batch.tokens[0] or int(gen_batch.tokens[0][-1]) != visible_id:

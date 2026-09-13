@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Any
 
@@ -32,6 +34,22 @@ _CONFIG_ATTR = "_vmlx_affine_moe_pair_config"
 _STATUS: dict[str, dict[str, Any]] = {}
 _FIRST_FAST_CALL: set[str] = set()
 _FIRST_FALLBACK: set[str] = set()
+_AR_SCOPE: ContextVar[bool] = ContextVar("vmlx_affine_moe_ar_scope", default=False)
+
+
+@contextmanager
+def affine_moe_ar_scope():
+    """Select AR-only kernels while constructing a non-speculative graph.
+
+    Seed, draft and verify forwards must remain outside this scope. MLX
+    evaluation can be asynchronous: the selected graph owns its kernel after
+    scope exit. This does not alter sampling, cache state or module weights.
+    """
+    token = _AR_SCOPE.set(True)
+    try:
+        yield
+    finally:
+        _AR_SCOPE.reset(token)
 
 
 @dataclass(frozen=True)
@@ -48,6 +66,7 @@ class _PairConfig:
     # Flash-Next 4S carries q2 gate / q3 up, 6S q4 / q6).  None = same as gate.
     up_bits: int | None = None
     up_group_size: int | None = None
+    ar_only: bool = False
 
     @property
     def up_bits_eff(self) -> int:
@@ -599,6 +618,8 @@ def affine_moe_pair_activation(
     config = getattr(switch, _CONFIG_ATTR, None)
     if config is None or bool(getattr(switch, "training", False)):
         return None, False
+    if config.ar_only and not _AR_SCOPE.get():
+        return None, False
     reason = None
     if x.dtype not in (mx.float16, mx.bfloat16):
         reason = f"activation_dtype={x.dtype}"
@@ -620,13 +641,14 @@ def affine_moe_pair_activation(
         if config.family not in _FIRST_FAST_CALL:
             mx.eval(output)
             logger.info(
-                "%s affine MoE pair fusion active: q%d/g%d hidden=%d intermediate=%d top_k=%d",
+                "%s affine MoE pair fusion active: q%d/g%d hidden=%d intermediate=%d top_k=%d scope=%s",
                 config.family,
                 config.bits,
                 config.group_size,
                 config.hidden,
                 config.intermediate,
                 config.top_k,
+                "ar_only" if config.ar_only else "single_row",
             )
             _FIRST_FAST_CALL.add(config.family)
             _STATUS.setdefault(config.family, {})["observed_calls"] = 1
@@ -696,18 +718,27 @@ def install_affine_moe_pair_decode(
     with the kernel off, acceptance 34-39% vs 44%) after the draft head was
     excluded, and 20-25% with the head included; plain decoding gains +3%.
     Under native MTP the kernel therefore stays off unless the family env
-    requests it explicitly."""
+    requests it explicitly. The separate experimental Qwen AR_ONLY opt-in
+    registers base modules for productive AR/handoff/calibration only; it
+    never admits the MTP head or seed/verify forwards."""
 
     if family not in _FAMILY_CONTRACTS:
         raise ValueError(f"unsupported affine MoE pair family {family}")
     if not _requested(family):
         _STATUS[family] = {"installed": 0, "reason": "disabled via env"}
         return 0
-    if native_mtp_active and not _explicitly_requested(family):
+    ar_only = bool(
+        native_mtp_active
+        and not _explicitly_requested(family)
+        and family == "qwen4_exp"
+        and os.environ.get("VMLX_QWEN4_FUSED_MOE_PAIR_AR_ONLY", "").strip().lower()
+        in {"1", "true", "on", "yes"}
+    )
+    if native_mtp_active and not _explicitly_requested(family) and not ar_only:
         _STATUS[family] = {
             "installed": 0,
             "reason": "native_mtp_active",
-            "detail": "single-row expert kernel measured slower on the MTP verify cycle at identical acceptance",
+            "detail": "single-row expert kernel measured slower during MTP; base-only acceptance also changed",
         }
         logger.info(
             "%s affine MoE pair fusion kept stock path: native MTP is active "
@@ -730,7 +761,7 @@ def install_affine_moe_pair_decode(
     # 1.7k / 6.6k / 26k against 51.6 / 45.9 / 37.2 with it off, at identical
     # acceptance; the backbone's single-row decode keeps its +3%. Keep the
     # head's modules on the stock path unless explicitly requested.
-    include_head = _mtp_head_requested(family)
+    include_head = _mtp_head_requested(family) and not ar_only
     excluded = [
         name for name, _module in named
         if not include_head and _is_mtp_head_module(name)
@@ -743,7 +774,7 @@ def install_affine_moe_pair_decode(
     rejected: list[tuple[Any, str]] = []
     for module in modules:
         try:
-            accepted.append((module, _switch_config(module, family)))
+            accepted.append((module, replace(_switch_config(module, family), ar_only=ar_only)))
         except (AttributeError, TypeError, ValueError) as exc:
             rejected.append((module, str(exc)))
     if rejected:
@@ -799,6 +830,7 @@ def install_affine_moe_pair_decode(
         "fallback_modules": len(rejected),
         "total_modules": len(modules),
         "excluded_mtp_head_modules": len(excluded),
+        "scope": "ar_only" if ar_only else "single_row",
         "reason": None if not rejected else "partial_layout_fallback",
         "fallback_reasons": fallback_reasons[:3],
         "layouts": layouts,
@@ -806,7 +838,7 @@ def install_affine_moe_pair_decode(
     }
     logger.info(
         "%s affine MoE pair fusion registered for %d/%d modules; layouts=%s; "
-        "fallback=%d; full_down=%d; mtp_head_excluded=%d",
+        "fallback=%d; full_down=%d; mtp_head_excluded=%d; scope=%s",
         family,
         len(accepted),
         len(modules),
@@ -814,6 +846,7 @@ def install_affine_moe_pair_decode(
         len(rejected),
         full_down_modules,
         len(excluded),
+        "ar_only" if ar_only else "single_row",
     )
     return len(accepted)
 
@@ -825,6 +858,7 @@ def affine_moe_pair_status(family: str | None = None) -> dict[str, Any]:
 
 
 __all__ = [
+    "affine_moe_ar_scope",
     "affine_moe_pair_activation",
     "affine_moe_routed_output",
     "affine_moe_pair_status",

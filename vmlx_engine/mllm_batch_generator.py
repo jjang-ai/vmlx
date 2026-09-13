@@ -122,6 +122,7 @@ from .native_mtp_ar_safety import (
     median,
 )
 from .native_mtp_seed_trace import start_native_mtp_seed_trace
+from .metal.affine_moe_pair_decode import affine_moe_ar_scope
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -17927,7 +17928,10 @@ class MLLMBatchGenerator:
             self._decode_trace_posid_s = getattr(
                 self, "_decode_trace_posid_s", 0.0
             ) + (time.perf_counter() - _posid_t0)
-        output = self.language_model(input_tokens, **lm_kwargs)
+        # Only _step owns productive AR and the AR handoff/calibration.
+        # Native-MTP seed/draft/verify forwards use their separate owners.
+        with affine_moe_ar_scope():
+            output = self.language_model(input_tokens, **lm_kwargs)
         if _diag_fingerprints_enabled():
             try:
                 for _req in (getattr(getattr(self, "active_batch", None), "requests", None) or []):
