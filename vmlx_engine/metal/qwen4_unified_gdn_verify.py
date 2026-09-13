@@ -36,11 +36,22 @@ def unified_gdn_verify_requested() -> bool:
     }
 
 
+def _coefficient_layout_supported(A_log, dt_bias) -> bool:
+    # Qwen's loader preserves recurrence coefficients independently of the
+    # activation compute dtype. Never downcast these to admit a fused path.
+    return all(
+        value is not None
+        and tuple(value.shape) == (NUM_VALUE_HEADS,)
+        and value.dtype in (mx.float16, mx.bfloat16, mx.float32)
+        for value in (A_log, dt_bias)
+    )
+
+
 def unified_gdn_verify_eligible(
     qkv, z, b, a, conv_state, conv_weight, A_log, dt_bias,
     recurrent_state, norm_weight, norm_eps,
 ) -> bool:
-    """Only the measured FP16 geometry; no state/dtype coercion or allocation."""
+    """FP16 activations with preserved coefficients; no coercion/allocation."""
     if (qkv.ndim != 3 or qkv.shape[0] != 1 or qkv.shape[2] != CONV_DIM
             or qkv.dtype != mx.float16 or not 3 <= qkv.shape[1] <= MAX_VERIFY_STEPS):
         return False
@@ -51,12 +62,10 @@ def unified_gdn_verify_eligible(
         (b, (1, steps, NUM_VALUE_HEADS), qkv.dtype),
         (conv_state, (1, CONV_KERNEL - 1, CONV_DIM), qkv.dtype),
         (conv_weight, (CONV_DIM, CONV_KERNEL, 1), qkv.dtype),
-        (A_log, (NUM_VALUE_HEADS,), qkv.dtype),
-        (dt_bias, (NUM_VALUE_HEADS,), qkv.dtype),
         (recurrent_state, (1, NUM_VALUE_HEADS, VALUE_HEAD_DIM, KEY_HEAD_DIM), mx.float32),
         (norm_weight, (VALUE_HEAD_DIM,), qkv.dtype),
     )
-    return (norm_eps == 1e-6 and all(
+    return (norm_eps == 1e-6 and _coefficient_layout_supported(A_log, dt_bias) and all(
         value is not None and tuple(value.shape) == shape and value.dtype == dtype
         for value, shape, dtype in expected
     ))
@@ -192,8 +201,10 @@ _SOURCE = r"""
     }
 
     if (tid == 0u) {
-      T av = a[t * HV + hv] + dt_bias[hv];
-      T sp = mlx_softplus_fast(av);
+      // Match MLX promotion BEFORE addition: FP16 + BF16 yields FP32.
+      // Casting the sum back to the activation dtype changes recurrent state.
+      GT av = static_cast<GT>(a[t * HV + hv]) + static_cast<GT>(dt_bias[hv]);
+      GT sp = mlx_softplus_fast(av);
       shr[2] = metal::precise::exp(
           -metal::precise::exp(float(A_log[hv])) * float(sp));
       // mx.sigmoid on bf16 is the precise form on every finite bf16 input;
@@ -348,12 +359,12 @@ def qwen4_unified_gdn_verify(
         (b, (1, steps, NUM_VALUE_HEADS), qkv.dtype),
         (conv_state, (1, CONV_KERNEL - 1, CONV_DIM), qkv.dtype),
         (conv_weight, (CONV_DIM, CONV_KERNEL, 1), qkv.dtype),
-        (A_log, (NUM_VALUE_HEADS,), qkv.dtype),
-        (dt_bias, (NUM_VALUE_HEADS,), qkv.dtype),
         (recurrent_state, (1, NUM_VALUE_HEADS, VALUE_HEAD_DIM, KEY_HEAD_DIM), mx.float32),
         (norm_weight, (VALUE_HEAD_DIM,), qkv.dtype),
     )
-    if any(tuple(v.shape) != shape or v.dtype != dtype for v, shape, dtype in expected):
+    if (not _coefficient_layout_supported(A_log, dt_bias)
+            or any(tuple(v.shape) != shape or v.dtype != dtype
+                   for v, shape, dtype in expected)):
         raise ValueError("unsupported GDN verify parameter/state layout")
     if norm_eps != 1e-6:
         raise ValueError("unsupported GDN verify norm epsilon")
@@ -379,6 +390,7 @@ def qwen4_unified_gdn_verify(
         ],
         template=[
             ("T", qkv.dtype),
+            ("GT", mx.result_type(a.dtype, dt_bias.dtype)),
             ("HK", NUM_KEY_HEADS),
             ("HV", NUM_VALUE_HEADS),
             ("DK", KEY_HEAD_DIM),

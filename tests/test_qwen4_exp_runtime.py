@@ -31,7 +31,13 @@ def test_unified_gdn_fp16_softplus_matches_mlx_for_finite_inputs():
 
 
 @pytest.mark.parametrize("steps", [3, 4])
-def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
+@pytest.mark.parametrize("a_dtype,dt_dtype", [
+    (x, y) for x in ("float16", "bfloat16", "float32")
+    for y in ("float16", "bfloat16", "float32")
+])
+def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(
+    steps, a_dtype, dt_dtype,
+):
     """Qualify the isolated kernel before any model dispatch can use it."""
     from vmlx_engine.metal.qwen4_unified_gdn_verify import (
         qwen4_unified_gdn_verify,
@@ -50,8 +56,10 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
         return (mx.random.normal(shape) * scale).astype(dtype)
 
     layer.conv1d.weight = random((channels, 4, 1))
-    layer.A_log = random((heads,))
-    layer.dt_bias = random((heads,))
+    # The loader deliberately preserves these coefficients: they need not
+    # share the FP16 activation dtype. The live 6S bundle keeps both BF16.
+    layer.A_log = (mx.random.normal((heads,)) * 0.25).astype(getattr(mx, a_dtype))
+    layer.dt_bias = (mx.random.normal((heads,)) * 0.25).astype(getattr(mx, dt_dtype))
     layer.norm.weight = (1 + random((dim,), 0.1)).astype(dtype)
     qkv = random((1, steps, channels))
     z = random((1, steps, heads * dim), 2.0)
@@ -75,8 +83,8 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
           uint i = thread_position_in_grid.x;
           if (i >= N) return;
           uint h = i % HV;
-          T v = a[i] + dt_bias[h];
-          T s = mlx_softplus_fast(v);
+          GT v = static_cast<GT>(a[i]) + static_cast<GT>(dt_bias[h]);
+          GT s = mlx_softplus_fast(v);
           av[i] = v;
           sp[i] = s;
           g[i] = metal::precise::exp(
@@ -85,10 +93,12 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
         """,
     )(
         inputs=[a, b, layer.A_log, layer.dt_bias],
-        template=[("T", dtype), ("N", steps * heads), ("HV", heads)],
+        template=[("GT", mx.result_type(a.dtype, layer.dt_bias.dtype)),
+                  ("N", steps * heads), ("HV", heads)],
         grid=(steps * heads, 1, 1), threadgroup=(64, 1, 1),
         output_shapes=[a.shape] * 4,
-        output_dtypes=[dtype, dtype, mx.float32, dtype],
+        output_dtypes=[mx.result_type(a.dtype, layer.dt_bias.dtype)] * 2
+                      + [mx.float32, dtype],
     )
     gate_references = [
         a + layer.dt_bias,
@@ -106,6 +116,7 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
         print({"gate": name, "different": len(idx),
                "first": [{"index": p.tolist(), "want": float(wn[tuple(p)]),
                           "got": float(gn[tuple(p)])} for p in idx[:8]]})
+        assert not len(idx), f"{name} does not preserve promoted arithmetic"
 
     # The production verifier handles the confirmed token and draft slab
     # separately. Use that exact partition, including each accepted prefix.
@@ -193,13 +204,14 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(steps):
                     mx.eval(*arms[name]())
                     samples[name].append((time.perf_counter_ns() - start) / 1000)
         print({"component_cost": {"steps": steps, "dtype": str(dtype),
+               "A_log_dtype": a_dtype, "dt_bias_dtype": dt_dtype,
                "includes": "graph creation, all state writes, synchronized evaluation",
                "arms": {name: {"n": len(xs), "median_us": float(np.median(xs)),
                                "p90_us": float(np.percentile(xs, 90))}
                         for name, xs in samples.items()}}})
 
 
-def _unified_gdn_layer_case(steps=4):
+def _unified_gdn_layer_case(steps=4, coefficient_dtype=mx.float16):
     """Actual recurrence geometry, fixed projection outputs; not a model run."""
     from vmlx_engine.models.qwen4_exp.language import GatedDeltaNet
 
@@ -223,8 +235,8 @@ def _unified_gdn_layer_case(steps=4):
     layer.in_proj_b = Projection(random((1, steps, layer.num_v_heads)))
     layer.out_proj = nn.Identity()
     layer.conv1d.weight = random((layer.conv_dim, 4, 1))
-    layer.A_log = random((layer.num_v_heads,))
-    layer.dt_bias = random((layer.num_v_heads,))
+    layer.A_log = random((layer.num_v_heads,)).astype(coefficient_dtype)
+    layer.dt_bias = random((layer.num_v_heads,)).astype(coefficient_dtype)
     layer.norm.weight = (1 + random((layer.head_v_dim,), 0.1)).astype(mx.float16)
     layer._fused_conv_decode = False
     layer.norm._fused_decode = False
@@ -236,11 +248,14 @@ def _unified_gdn_layer_case(steps=4):
 
 
 @pytest.mark.parametrize("steps,accepted", [(3, 0), (3, 1), (4, 0), (4, 1), (4, 2)])
-def test_unified_gdn_layer_keeps_existing_rollback_and_auxiliary_cache(steps, accepted):
+@pytest.mark.parametrize("coefficient_dtype", [mx.float16, mx.bfloat16, mx.float32])
+def test_unified_gdn_layer_keeps_existing_rollback_and_auxiliary_cache(
+    steps, accepted, coefficient_dtype,
+):
     from mlx_lm.models.cache import ArraysCache
     from vmlx_engine.mllm_batch_generator import _native_mtp_rollback_to_confirmed
 
-    layer, inputs, conv, state = _unified_gdn_layer_case(steps)
+    layer, inputs, conv, state = _unified_gdn_layer_case(steps, coefficient_dtype)
     aux = (mx.array([[11, 17, 23]]), mx.array([[[0.5, -0.25]]]))
 
     def new_cache():
@@ -359,9 +374,22 @@ def test_unified_gdn_explicit_opt_in_and_actual_dtype_guards(monkeypatch):
             layer.norm.weight, layer.norm.eps]
     assert unified_gdn_verify_eligible(*args)
     for index in range(10):
+        if index in (6, 7):
+            continue  # Preserved coefficients use independently checked dtypes.
         wrong = list(args)
         wrong[index] = args[index].astype(mx.bfloat16)
         assert not unified_gdn_verify_eligible(*wrong)
+    for a_dtype in (mx.float16, mx.bfloat16, mx.float32):
+        for dt_dtype in (mx.float16, mx.bfloat16, mx.float32):
+            preserved = list(args)
+            preserved[6] = args[6].astype(a_dtype)
+            preserved[7] = args[7].astype(dt_dtype)
+            assert unified_gdn_verify_eligible(*preserved)
+    for index in (6, 7):
+        for value in (None, args[index][:-1], args[index].astype(mx.int32)):
+            wrong = list(args)
+            wrong[index] = value
+            assert not unified_gdn_verify_eligible(*wrong)
     wrong = list(args)
     wrong[8] = None
     assert not unified_gdn_verify_eligible(*wrong)

@@ -1285,8 +1285,11 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
             if self._unified_gdn_verify_graph_calls == 1:
                 logger.info(
                     "QWEN4_UNIFIED_GDN graph_built width=%d dtype=%s "
+                    "A_log_dtype=%s dt_bias_dtype=%s gate_dtype=%s "
                     "key_heads=%d value_heads=%d snapshots=%d",
-                    seq_len, qkv.dtype, self.num_k_heads, self.num_v_heads, seq_len - 1,
+                    seq_len, qkv.dtype, self.A_log.dtype, self.dt_bias.dtype,
+                    mx.result_type(a.dtype, self.dt_bias.dtype),
+                    self.num_k_heads, self.num_v_heads, seq_len - 1,
                 )
         elif 0 < n_confirmed < seq_len:
             confirmed_mask = mask[:, :n_confirmed] if mask is not None else None
