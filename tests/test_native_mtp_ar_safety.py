@@ -363,6 +363,7 @@ def test_probe_kept_switches_baseline_to_measured_ar(monkeypatch):
     state.ar_safety.anchor_cycle_ms = 40.0
     # 40ms cycles, 3 tok/cycle = 13.3 ms/tok < 25/1.10 -> kept
     state.ar_safety.ring = [(31 + i, 3 * (31 + i), base_t + i * 0.040) for i in range(9)]
+    state.reentry_accounting = (base_t - 1.0, 2)
     monkeypatch.setattr(m.time, 'perf_counter', lambda: base_t + 9 * 0.040)
     assert m._native_mtp_maybe_ar_safety_fallback("req", state) is False
     assert state.probe is False
@@ -1149,6 +1150,7 @@ def test_calibration_return_resumes_at_left_depth_without_spending_the_budget(mo
     assert ok and state is not None
     assert gen.seeds == [3]  # the FIRST draft chain is already the return width
     assert state.probe is False and state.depth == 3  # resumed run, not a probe
+    assert state.reentry_accounting is None  # calibration is not a new loss trial
     assert tier.probes == 4 and tier.backoff == 3 and tier.calibration is False  # nothing spent
     assert state.ar_tier is tier and state.epoch == 6  # 4 probes + 1 calibration + 1
     assert state.calibrations == 1
@@ -1168,6 +1170,74 @@ def test_loss_reentry_repeats_d1_and_counts_each_probe(monkeypatch):
     ok, state2 = _reseed(m, gen, tier2)
     assert ok and state2.probe is True and state2.depth == 1 and tier2.probes == 2
     assert gen.seeds == [1, 1]
+
+
+@pytest.mark.parametrize("ceiling", [1, 2, 3])
+@pytest.mark.parametrize("adaptive", ["0", "1"])
+@pytest.mark.parametrize("seed_ms", [0.0, 250.0])
+def test_reentry_admission_charges_seed_and_warmup(monkeypatch, ceiling, adaptive, seed_ms):
+    from vmlx_engine import mllm_batch_generator as m
+
+    monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", adaptive)
+    monkeypatch.delenv("VMLX_NATIVE_MTP_AR_REENTRY", raising=False)
+    clock = [10.0]
+    monkeypatch.setattr(m.time, "perf_counter", lambda: clock[0])
+
+    class CostedSeed(_FakeGen):
+        def _seed_native_mtp_from_prefill(self, req, cache, y, logprobs, start_depth_override=None):
+            seeded = super()._seed_native_mtp_from_prefill(
+                req, cache, y, logprobs, start_depth_override=start_depth_override,
+            )
+            # Match production's two confirmed init outputs, without a model
+            # or asynchronous GPU timing in a deterministic controller test.
+            req._native_mtp_state.queue.extend([(11, None, "init"), (12, None, "init")])
+            clock[0] += seed_ms / 1000.0
+            return seeded
+
+    tier = m.NativeMTPArTier(depth=ceiling)
+    _ar_steps(tier, 16, ms=10.0)
+    ok, state = _reseed(m, CostedSeed(m), tier)
+    assert ok and state.probe and state.depth == 1
+    assert state.ladder_depth == ceiling
+    result = False
+    for cycle in range(1, 13):
+        clock[0] += 0.010
+        state.stats.cycles = cycle
+        state.stats.accepted_tokens = cycle
+        result = m._native_mtp_maybe_ar_safety_fallback("seed-cost", state)
+        if cycle < 12:
+            assert result is False
+            assert state.probe is True
+    if seed_ms:
+        # Judged window is 5ms/token, but the whole trial is 370ms/26
+        # confirmed tokens: slower than the independently measured AR10ms.
+        assert result is True
+        assert state.ar_fallback_pending is True
+        assert "reentry_total_cost" in state.ar_fallback_reason
+        assert tier.reentries == 0 and tier.backoff == 1
+    else:
+        assert result is False and state.probe is False
+        assert tier.reentries == 1 and tier.backoff == 0
+
+
+@pytest.mark.parametrize("trial", [None, (float("nan"), 2), (11.0, 2), (10.0, -1)])
+def test_reentry_missing_or_invalid_total_cost_is_not_a_win(monkeypatch, trial):
+    from vmlx_engine import mllm_batch_generator as m
+
+    state = _vlm_state(m, depth=1)
+    tier = m.NativeMTPArTier(depth=3)
+    _ar_steps(tier, 16, ms=10.0)
+    state.ar_tier = tier
+    state.probe = True
+    state.reentry_accounting = trial
+    state.stats.cycles = 12
+    state.stats.accepted_tokens = 12
+    state.ar_safety.ring = [(i, i * 2, 10.0 + i * 0.01) for i in range(4, 13)]
+    monkeypatch.setattr(m, "ar_safety_step", lambda *a, **k: None)
+    monkeypatch.setattr(m.time, "perf_counter", lambda: 10.12)
+    assert m._native_mtp_maybe_ar_safety_fallback("invalid-cost", state) is True
+    assert state.ar_fallback_reason == "reentry_total_cost unavailable"
+    assert tier.reentries == 0 and tier.backoff == 1
 
 
 def test_calibration_preserves_ladder_schedule_and_attempts(monkeypatch):

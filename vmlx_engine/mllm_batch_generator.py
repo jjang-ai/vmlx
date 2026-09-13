@@ -4579,6 +4579,10 @@ class MLLMNativeMTPState:
     # (probe cleared, baseline = measured AR) or falls back with backoff.
     ar_tier: Optional["NativeMTPArTier"] = None
     probe: bool = False
+    # Seed-start wall and the confirmed init outputs queued by that seed.
+    # Re-entry must pay its complete trial cost, not just the warmed decision
+    # ring. Scalars only; this record owns no tensors/cache and adds no sync.
+    reentry_accounting: Optional[Tuple[float, int]] = None
     # Adjacent ladder under the selected ceiling. Keep each probe's origin:
     # its comparison and rollback must not jump to D1 or the ceiling.
     ladder_depth: int = 0
@@ -6521,6 +6525,28 @@ def _native_mtp_log_promotion_accounting(
     )
 
 
+def _native_mtp_reentry_total_cost(
+    state: MLLMNativeMTPState, *, now: float
+) -> Optional[Tuple[int, float, float]]:
+    """Return confirmed tokens, full trial wall ms and ms/confirmed token.
+
+    The seed queues confirmed init outputs before the first verify cycle.
+    Count those once, plus subsequent verified output, and include seed,
+    warmup, draft/verify/rollback and intervening queue delivery time. The
+    last verified queue may not yet be drained: this is an admission cost,
+    not completed client throughput or a terminal SSD-fence measurement.
+    """
+    trial = state.reentry_accounting
+    if trial is None:
+        return None
+    started, initial_tokens = trial
+    confirmed = initial_tokens + int(state.stats.cycles) + int(state.stats.accepted_tokens)
+    wall_ms = (now - started) * 1000.0
+    if initial_tokens < 0 or confirmed <= 0 or not math.isfinite(wall_ms) or wall_ms <= 0.0:
+        return None
+    return confirmed, wall_ms, wall_ms / confirmed
+
+
 def _native_mtp_maybe_ar_safety_fallback(
     request_id: str, state: MLLMNativeMTPState
 ) -> bool:
@@ -6790,7 +6816,25 @@ def _native_mtp_maybe_ar_safety_fallback(
         return False
 
     if probing:
-        if trip is None and window_full:
+        if trip is None and not window_full:
+            return False
+        total = _native_mtp_reentry_total_cost(state, now=time.perf_counter())
+        total_wins = (
+            total is not None
+            and baseline > 0.0
+            and total[2] <= baseline / _NATIVE_MTP_REENTRY_HYSTERESIS
+        )
+        keep = trip is None and window_full and total_wins
+        if total is not None:
+            logger.info(
+                "MLLM MTP[%s] re-entry total-cost outcome=%s "
+                "confirmed_tokens=%d wall_ms=%.3f ms_per_confirmed_token=%.3f "
+                "ar_ms_per_token=%.3f includes_seed=true includes_warmup=true "
+                "includes_final_drain=false",
+                request_id, "kept" if keep else "lost", *total, baseline,
+            )
+        state.reentry_accounting = None
+        if keep:
             state.probe = False
             if tier is not None:
                 tier.reentries += 1
@@ -6801,17 +6845,24 @@ def _native_mtp_maybe_ar_safety_fallback(
                 request_id, depth_now, baseline,
             )
             return False
-        if trip is None:
-            return False
         # Probe lost -> AR with backoff.
         prior_depth = depth_now
         state.depth = 1
         state.ar_fallback_pending = True
-        state.ar_fallback_reason = trip.reason(prior_depth)
+        if trip is not None:
+            state.ar_fallback_reason = trip.reason(prior_depth)
+        elif total is not None:
+            state.ar_fallback_reason = (
+                f"reentry_total_cost ms_per_token={total[2]:.3f} "
+                f"ar_ms_per_token={baseline:.3f}"
+            )
+        else:
+            state.ar_fallback_reason = "reentry_total_cost unavailable"
         if tier is not None:
             tier.probe_failed()
         logger.info(
-            "MLLM MTP[%s] re-entry probe lost: %s", request_id, trip.log_text(prior_depth)
+            "MLLM MTP[%s] re-entry probe lost: %s", request_id,
+            trip.log_text(prior_depth) if trip is not None else state.ar_fallback_reason,
         )
         return True
 
@@ -17771,6 +17822,9 @@ class MLLMBatchGenerator:
             )
             return True
         state.probe = True
+        state.reentry_accounting = (
+            _seed_t0, sum(source == "init" for _, _, source in state.queue),
+        )
         state.depth = _intended_depth
         tier.probes += 1
         logger.info(
