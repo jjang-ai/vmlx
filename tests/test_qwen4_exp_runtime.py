@@ -3104,13 +3104,15 @@ def _write_sidecar_bundle(tmp_path, source_head, *, sha=None, bits=4):
         "model_type": "qwen4_exp",
         "tie_word_embeddings": False,
         "jang_config": {"calibrated": True},
-        "quantization": {"lm_head": {"bits": 8, "group_size": 64,
+        "quantization": {"lm_head": {"bits": source_head.bits,
+                                     "group_size": source_head.group_size,
                                      "mode": "affine"}},
     }))
     (tmp_path / "vmlx_mtp_proposal_head.json").write_text(_json.dumps({
         "version": 1,
         "family": "qwen4_exp",
-        "source": {"bits": 8, "group_size": 64, "mode": "affine",
+        "source": {"bits": source_head.bits,
+                   "group_size": source_head.group_size, "mode": "affine",
                    "tied": False},
         "eligible": True,
         "proposal_bits": 4,
@@ -3118,12 +3120,100 @@ def _write_sidecar_bundle(tmp_path, source_head, *, sha=None, bits=4):
             "file": "mtp_draft/vmlx_mtp_proposal_head.safetensors",
             "sha256": sha or real_sha,
             "bits": bits,
-            "group_size": 64,
+            "group_size": source_head.group_size,
             "mode": "affine",
             "acceptance_validated": False,
         },
     }))
     return w
+
+
+@pytest.mark.parametrize("group_size", [64, 128])
+@pytest.mark.parametrize("sidecar", [False, True], ids=["rtn", "calibrated"])
+def test_qwen4_exp_stamped_proposal_preserves_loaded_group_size(
+    monkeypatch, tmp_path, group_size, sidecar,
+):
+    """Honor a pre-existing layout-approved stamp without changing eligibility.
+
+    A 64-input placeholder is not valid for a g128 head, even when the real
+    tensors and the supplied, hash-verified sidecar have valid dimensions.
+    This is real MLX construction/forward proof, not a model-speed claim.
+    """
+    import json
+    from dataclasses import replace
+    from vmlx_engine import native_mtp
+
+    monkeypatch.delenv("VMLINUX_QWEN4_MTP_DRAFT_HEAD_BITS", raising=False)
+    monkeypatch.delenv("VMLX_QWEN4_MTP_DRAFT_HEAD_BITS", raising=False)
+    monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", tmp_path)
+    model = LanguageModel(replace(_tiny_args(), hidden_size=128))
+    _randomize(model)
+    model.lm_head = model.lm_head.to_quantized(group_size=group_size, bits=8)
+    target_head = model.lm_head
+    target_arrays = [np.asarray(getattr(target_head, key)).copy()
+                     for key in ("weight", "scales", "biases")]
+    sidecar_weight = _write_sidecar_bundle(tmp_path, target_head)
+    stamp_path = tmp_path / "vmlx_mtp_proposal_head.json"
+    if not sidecar:
+        stamp = json.loads(stamp_path.read_text())
+        del stamp["draft_artifact"]
+        stamp_path.write_text(json.dumps(stamp))
+    stamp_bytes = stamp_path.read_bytes()
+    ids = mx.array([[3, 5, 7, 11]], dtype=mx.int32)
+    target_before = _logits(model, ids)
+    mx.eval(target_before)
+
+    status = model.prepare_mtp_draft_head()
+
+    assert status["available"] is True, status
+    assert status["reason"] == ("ready_sidecar" if sidecar else "ready")
+    assert status["source_bits"] == 8
+    assert status["draft_bits"] == 4
+    assert status["group_size"] == group_size
+    assert model.lm_head is target_head
+    assert stamp_path.read_bytes() == stamp_bytes
+    proposal = model._mtp_draft_head_state.head
+    assert proposal.group_size == group_size
+    assert proposal.weight.shape[0] == model.args.vocab_size
+    if sidecar:
+        np.testing.assert_array_equal(np.asarray(proposal.weight),
+                                      np.asarray(sidecar_weight))
+    else:
+        dense = mx.dequantize(target_head.weight, target_head.scales,
+                              target_head.biases, group_size=group_size, bits=8)
+        expected = mx.quantize(dense, group_size=group_size, bits=4)
+        for key, value in zip(("weight", "scales", "biases"), expected):
+            np.testing.assert_array_equal(np.asarray(getattr(proposal, key)),
+                                          np.asarray(value))
+    _target, hidden = model(ids, cache=model.make_cache(), return_hidden=True)
+    drafted = model.mtp_forward(hidden[:, -1:, :], mx.array([[19]]),
+                                model.make_mtp_cache())
+    target_after = _logits(model, ids)
+    mx.eval(target_after, drafted)
+    assert drafted.shape == (1, 1, model.args.vocab_size)
+    assert bool(mx.all(mx.isfinite(drafted)))
+    assert model.mtp_draft_head_status()["calls"] == 1
+    np.testing.assert_array_equal(np.asarray(target_before), np.asarray(target_after))
+    for key, before in zip(("weight", "scales", "biases"), target_arrays):
+        np.testing.assert_array_equal(np.asarray(getattr(target_head, key)), before)
+
+
+def test_qwen4_exp_unstamped_g128_does_not_expand_proposal_eligibility(
+    monkeypatch, tmp_path,
+):
+    from dataclasses import replace
+    from vmlx_engine import native_mtp
+
+    monkeypatch.delenv("VMLINUX_QWEN4_MTP_DRAFT_HEAD_BITS", raising=False)
+    monkeypatch.delenv("VMLX_QWEN4_MTP_DRAFT_HEAD_BITS", raising=False)
+    monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", tmp_path)
+    model = LanguageModel(replace(_tiny_args(), hidden_size=128))
+    model.lm_head = model.lm_head.to_quantized(group_size=128, bits=8)
+    target = model.lm_head
+    status = model.prepare_mtp_draft_head()
+    assert status["available"] is False
+    assert status["reason"] == "unmeasured_layout_q8_g128"
+    assert model.lm_head is target
 
 
 def test_calibrated_sidecar_used_when_sha_verifies(monkeypatch, tmp_path):

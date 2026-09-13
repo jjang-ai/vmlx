@@ -113,7 +113,10 @@ def _qwen35_mtp_proposal_head(model: Any) -> Any:
             mode=source.mode,
         )
         proposal = nn.QuantizedLinear(
-            64,
+            # A pre-existing eligible stamp can describe a larger group than
+            # the measured default g64 plan. The shell needs one whole group;
+            # its arrays are replaced by the actual checkpoint-shaped tensors.
+            max(64, source.group_size),
             64,
             bias=False,
             group_size=source.group_size,
@@ -127,7 +130,9 @@ def _qwen35_mtp_proposal_head(model: Any) -> Any:
         state["head"] = proposal
         state["reason"] = "ready"
         logger.info(
-            "qwen3_5 MTP proposal head ready: q8/g64 -> q%d/g%d build_ms=%.2f",
+            "qwen3_5 MTP proposal head ready: q%d/g%d -> q%d/g%d build_ms=%.2f",
+            source.bits,
+            source.group_size,
             bits,
             source.group_size,
             (_time.perf_counter() - started) * 1000.0,

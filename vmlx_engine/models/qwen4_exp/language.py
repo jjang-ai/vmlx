@@ -2634,9 +2634,13 @@ class LanguageModel(nn.Module):
                     mode=source.mode,
                 )
             # Construct only a tiny shell, then replace all generated arrays.
+            # Its input width must hold a complete loaded quantization group:
+            # a matching eligible g128 stamp is valid even though the default
+            # automatic proposal admission is measured only for q8/g64.
+            # Keep the existing g64 allocation/RNG behavior unchanged.
             # The real output/input geometry lives in the quantized tensors.
             proposal = nn.QuantizedLinear(
-                64,
+                max(64, source.group_size),
                 64,
                 bias=False,
                 group_size=source.group_size,
