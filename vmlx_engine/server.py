@@ -4144,6 +4144,8 @@ def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) ->
 
 
 def _loaded_omni_modalities() -> list[str] | None:
+    if _force_text_only:
+        return None
     try:
         from .omni_multimodal import omni_multimodal_component_status
         _omni_path = _model_path or _model_name
@@ -4678,6 +4680,8 @@ def _loaded_mllm_modalities() -> list[str] | None:
 
 
 def _loaded_runtime_modalities() -> list[str]:
+    if _force_text_only:
+        return ["text"]
     modalities = _loaded_omni_modalities()
     if modalities is not None:
         return modalities
@@ -4839,6 +4843,19 @@ def _normalize_modality_set(modalities: set[str] | list[str] | tuple[str, ...]) 
     if "image" in normalized:
         normalized.add("vision")
     return normalized
+
+
+def _enforce_text_only_override(endpoint: str, requested_modalities: set[str]) -> None:
+    """Apply the operator override before any native media or fallback route."""
+    if _force_text_only and requested_modalities:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{endpoint} received {', '.join(sorted(requested_modalities))} media "
+                "while Force text-only (--text-only) is enabled. Restart the session "
+                "with multimodal mode Auto or On, or send a text-only conversation."
+            ),
+        )
 
 
 def _reject_unsupported_multimodal(
@@ -13983,9 +14000,13 @@ async def health():
         if _omni_status.get("bundle_compatible"):
             result["omni_multimodal"] = {
                 "bundle_compatible": True,
+                "enabled": not _force_text_only,
+                "disabled_reason": "force_text_only" if _force_text_only else None,
                 "backend": OmniMultimodalDispatcher._pick_backend(),
-                "modalities": _omni_status.get("modalities")
-                or ["text", "audio", "image"],
+                "artifact_modalities": _omni_status.get("modalities") or ["text"],
+                "modalities": ["text"] if _force_text_only else (
+                    _omni_status.get("modalities") or ["text"]
+                ),
                 "components": {
                     "radio": bool(_omni_status.get("has_radio_weights")),
                     "parakeet": bool(_omni_status.get("has_parakeet_weights")),
@@ -13993,7 +14014,7 @@ async def health():
                 },
                 "session_l2": OmniMultimodalDispatcher.session_l2_status_for(
                     _omni_path,
-                    enabled=_loaded_block_disk_cache_enabled(),
+                    enabled=not _force_text_only and _loaded_block_disk_cache_enabled(),
                     disk_cache_policy=_loaded_omni_disk_cache_policy(),
                 ),
             }
@@ -16519,6 +16540,7 @@ async def model_capabilities(model_id: str) -> dict:
     mimo_runtime_modalities = _mimo_v2_runtime_modalities(_model_path or model_key)
     if (
         modalities == ["text"]
+        and not _force_text_only
         and engine_is_mllm
         and family != "mimo_v2"
         and mimo_runtime_modalities is None
@@ -16767,6 +16789,9 @@ async def create_anthropic_message(
     # actually seeing the image. Mirrors the dispatch in
     # `create_chat_completion` at server.py:5295-5311.
     try:
+        _enforce_text_only_override(
+            "/v1/messages", _messages_requested_modalities(chat_req.messages)
+        )
         from .omni_multimodal import (
             is_omni_multimodal_bundle,
             request_has_multimodal,
@@ -17801,6 +17826,9 @@ async def ollama_chat(fastapi_request: Request):
         "/api/chat",
         _model_path or _model_name or chat_req.model,
         _messages_multimodal_summary(chat_req.messages),
+    )
+    _enforce_text_only_override(
+        "/api/chat", _messages_requested_modalities(chat_req.messages)
     )
     _ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
 
@@ -19965,6 +19993,9 @@ async def create_chat_completion(
         _messages_multimodal_summary(request.messages),
     )
 
+    _enforce_text_only_override(
+        "/v1/chat/completions", _messages_requested_modalities(request.messages)
+    )
     _chat_max_prompt_tokens = _effective_max_prompt_tokens(request)
 
     if request.logprobs:
@@ -23361,6 +23392,7 @@ async def create_response(
     engine = get_engine()
     _responses_has_media = _responses_input_has_multimodal(request.input)
     _responses_requested_modalities = _responses_input_requested_modalities(request.input)
+    _enforce_text_only_override("/v1/responses", _responses_requested_modalities)
     _log_multimodal_request_shape(
         "/v1/responses",
         _model_path or _model_name or request.model,
@@ -23436,6 +23468,9 @@ async def create_response(
     )
     if request.previous_response_id:
         previous_messages = _responses_get_history(request.previous_response_id)
+        _enforce_text_only_override(
+            "/v1/responses", _messages_requested_modalities(previous_messages)
+        )
         if previous_messages and _responses_should_scrub_multimodal_history_for_followup(
             request.input,
             current_request_has_media=_responses_has_media,
