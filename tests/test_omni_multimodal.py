@@ -203,6 +203,7 @@ def test_omni_dispatcher_sets_thinking_flag_on_first_session_turn(tmp_path):
 
     dispatcher = OmniMultimodalDispatcher.__new__(OmniMultimodalDispatcher)
     dispatcher.bundle_path = "/fake"
+    dispatcher._backend = "stage1"
     dispatcher._session = _FakeSession()
     dispatcher._lock = __import__("threading").Lock()
     dispatcher._last_signature = None

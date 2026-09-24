@@ -1632,6 +1632,49 @@ class _OmniIncrementalRailSplitter:
         return events
 
 
+def _validate_native_media_sources(messages):
+    """Reject sources the native collector cannot consume before cache lookup."""
+    from fastapi import HTTPException
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            kind = part.get("type")
+            if kind in _IMAGE_TYPES:
+                source = part.get("image_url") or part.get("image")
+            elif kind in _VIDEO_TYPES:
+                source = part.get("video_url") or part.get("video")
+            elif kind in _AUDIO_TYPES:
+                source = part.get("input_audio") or part.get("audio") or part.get("audio_url")
+            else:
+                continue
+            payload = source.get("data") if isinstance(source, dict) and kind in _AUDIO_TYPES else None
+            url = source.get("url") if isinstance(source, dict) else source
+            valid = False
+            try:
+                if payload:
+                    valid = isinstance(payload, str) and bool(base64.b64decode(payload, validate=True))
+                elif isinstance(url, str) and url.startswith("data:"):
+                    header, encoded = url.split(",", 1)
+                    valid = header.endswith(";base64") and bool(base64.b64decode(encoded, validate=True))
+                elif isinstance(url, str) and url:
+                    if url.lower().startswith(("http://", "https://")):
+                        raise HTTPException(status_code=400, detail=(
+                            "Native Omni media source HTTP URLs are not supported. "
+                            "Send a base64 data URL or a local file path."
+                        ))
+                    valid = Path(url).is_file()
+            except (ValueError, OSError):
+                valid = False
+            if not valid:
+                raise HTTPException(status_code=400, detail=(
+                    f"Invalid native Omni media source for {kind}: "
+                    "expected nonempty base64 data or an existing local file."
+                ))
+
+
 def _validate_native_media_controls(request, messages):
     """Reject constraints absent from the native media generation path.
 
@@ -1746,6 +1789,7 @@ async def dispatch_omni_chat_completion(
             msgs_dump.append(dict(m))
 
     _validate_native_media_controls(request, msgs_dump)
+    _validate_native_media_sources(msgs_dump)
     status = omni_multimodal_component_status(bundle_path)
     supported_modalities = set(status.get("modalities") or ["text"])
     requested_modalities = request_modalities(msgs_dump)
