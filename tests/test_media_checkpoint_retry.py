@@ -6,7 +6,8 @@ import pytest
 
 
 @pytest.mark.parametrize("failures,fatal", [(1, False), (2, False), (3, False), (1, True)])
-def test_outer_prefill_retry_discards_native_snapshots(monkeypatch, failures, fatal):
+@pytest.mark.parametrize("media", [None, "images", "video_pixel_values", "audio_features", "history"])
+def test_outer_prefill_retry_discards_native_snapshots(monkeypatch, failures, fatal, media):
     import vmlx_engine.mllm_batch_generator as module
 
     monkeypatch.setattr(module.MLLMBatchGenerator, "_stream", module.mx.default_stream(module.mx.gpu))
@@ -31,12 +32,14 @@ def test_outer_prefill_retry_discards_native_snapshots(monkeypatch, failures, fa
     gen._prefill_errors = []
     gen._drain_tight_memory_allocator = lambda *args: None
     gen._media_scoped_cache_extra_keys = lambda *args: {}
-    gen._request_has_media_cache_context = lambda *args: False
+    gen._tokens_contain_media_placeholders = lambda ids: 99 in ids
     gen._media_prefix_cache_allowed = lambda *args: False
     gen._prepare_native_mtp_prompt_priming = lambda *args: None
     gen._seed_native_mtp_from_prefill = lambda *args: None
     gen._make_request_sampler = lambda req: lambda logits: module.mx.array([2])
     req = module.MLLMBatchRequest(uid=1, request_id="retry", prompt="one")
+    if media and media != "history":
+        setattr(req, media, ["image"] if media == "images" else module.mx.zeros((1,)))
     sibling = module.MLLMBatchRequest(uid=2, request_id="sibling", prompt="two")
     sibling._media_clean_prefix_cache = ["sibling-owned"]
     forwards = []
@@ -55,6 +58,9 @@ def test_outer_prefill_retry_discards_native_snapshots(monkeypatch, failures, fa
     def preprocess(request):
         request.input_ids = module.mx.arange(8)[None, :]
         request._original_token_ids = list(range(8))
+        if request is req and media == "history":
+            request._original_token_ids[0] = 99
+            request.input_ids = module.mx.array([request._original_token_ids])
 
     def forward(request, cache):
         forwards.append(request.request_id)
@@ -75,11 +81,11 @@ def test_outer_prefill_retry_discards_native_snapshots(monkeypatch, failures, fa
     gen._preprocess_request = preprocess
     gen._run_vision_encoding = forward
     batch = gen._process_prompts([req, sibling])
-    succeeded = not fatal and failures < 3
+    succeeded = not fatal and not media and failures < 3
     assert batch.request_ids == (["retry", "sibling"] if succeeded else ["sibling"])
     assert len(gen._prefill_errors) == (0 if succeeded else 1)
-    assert forwards == ["retry"] * (1 if fatal else min(failures + 1, 3)) + ["sibling"]
+    assert forwards == ["retry"] * (1 if fatal or media else min(failures + 1, 3)) + ["sibling"]
     assert retry_snapshots == [(None, 0, False, None, ())] * len(retry_snapshots)
     assert snapshots(req) == (None, 0, False, None, ())
     assert sibling._media_clean_prefix_cache == ["sibling-owned"]
-    assert block_cache.clear.call_count == (1 if not fatal and failures >= 2 else 0)
+    assert block_cache.clear.call_count == (1 if not fatal and not media and failures >= 2 else 0)

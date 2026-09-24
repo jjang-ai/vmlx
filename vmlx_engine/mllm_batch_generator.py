@@ -10600,6 +10600,10 @@ class MLLMBatchGenerator:
             return True
         if getattr(request, "pixel_values", None) is not None:
             return True
+        if getattr(request, "video_pixel_values", None) is not None:
+            return True
+        if getattr(request, "pixel_values_videos", None) is not None:
+            return True
         if getattr(request, "audio_codes", None) is not None:
             return True
         if getattr(request, "audio_embeds", None) is not None:
@@ -16498,7 +16502,17 @@ class MLLMBatchGenerator:
                 # Don't require req.prompt_cache to be set: the stale shapes can come
                 # from paged cache blocks that were fetched but didn't set prompt_cache,
                 # or from batch KV cache state left over from the previous generation.
-                if "broadcast" in str(prefill_err).lower():
+                # This legacy recovery discards processor payloads. It is safe
+                # only for text: an encoder shape error must never become a
+                # successful answer generated without the requested media.
+                # Sources and original tokens also cover cache-hit paths that
+                # already consumed/sliced their image, video or audio tensors.
+                if (
+                    "broadcast" in str(prefill_err).lower()
+                    and not self._request_has_media_cache_context(
+                        req, getattr(req, "_original_token_ids", None)
+                    )
+                ):
                     # Log diagnostic info to identify stale shape source
                     _diag_parts = []
                     _diag_parts.append(f"prompt_cache={'set' if req.prompt_cache is not None else 'None'}")

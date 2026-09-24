@@ -857,7 +857,7 @@ class TestIssueGuards:
         import numpy as np
         from mlx_vlm.models.gemma4 import vision as _g4v
 
-        src = inspect.getsource(_g4v.VisionModel.__call__)
+        src = inspect.getsource(inspect.unwrap(_g4v.VisionModel.__call__))
         compat = "mlxstudio#88" in src and "isinstance(v, mx.array)" in src
         native = all(
             needle in src
