@@ -40,6 +40,22 @@ def _is_no_reasoning_effort(value: str | None) -> bool:
     return isinstance(value, str) and value.strip().lower() in _NO_REASONING_EFFORTS
 
 
+def _validate_reasoning_budget(value, field_name="reasoning.budget_tokens"):
+    if value is not None and (type(value) is not int or value < 1):
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _normalize_nested_reasoning_budget(obj):
+    # Token caps are independent of effort selection. This runs in an after
+    # validator, so validate explicitly before assigning a field whose own
+    # validator has already run.
+    if obj.reasoning is not None:
+        budget = _validate_reasoning_budget(obj.reasoning.get("budget_tokens"))
+        if obj.max_thinking_tokens is None and budget is not None:
+            obj.max_thinking_tokens = budget
+
+
 def _normalize_prompt_context_aliases(obj):
     """Normalize vMLX max prompt/context aliases onto max_prompt_tokens."""
     if getattr(obj, "max_prompt_tokens", None) is not None:
@@ -346,6 +362,7 @@ class ChatCompletionRequest(BaseModel):
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
         _normalize_prompt_context_aliases(self)
+        _normalize_nested_reasoning_budget(self)
         # If caller sent `reasoning: {"effort": "..."}` and didn't set
         # `reasoning_effort`, lift real effort names up so downstream code
         # sees them. Treat explicit no-reasoning aliases (`none`, `off`, ...)
@@ -357,9 +374,6 @@ class ChatCompletionRequest(BaseModel):
         # still opts into thinking when no explicit effort is present.
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
-            budget_tokens = self.reasoning.get("budget_tokens")
-            if self.max_thinking_tokens is None and isinstance(budget_tokens, int):
-                self.max_thinking_tokens = budget_tokens
             if _is_no_reasoning_effort(eff):
                 if self.enable_thinking is None:
                     self.enable_thinking = False
@@ -1072,11 +1086,9 @@ class ResponsesRequest(BaseModel):
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
         _normalize_prompt_context_aliases(self)
+        _normalize_nested_reasoning_budget(self)
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
-            budget_tokens = self.reasoning.get("budget_tokens")
-            if self.max_thinking_tokens is None and isinstance(budget_tokens, int):
-                self.max_thinking_tokens = budget_tokens
             if _is_no_reasoning_effort(eff):
                 if self.enable_thinking is None:
                     self.enable_thinking = False

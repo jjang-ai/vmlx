@@ -20,6 +20,35 @@ Without reasoning parsing, you get the raw output with the tags included. With r
 
 ## Getting Started
 
+### Effort and token budgets
+
+Reasoning effort selects a model-native tier; a thinking budget limits tokens.
+They are independent. A large budget never implicitly selects `max` effort.
+Use the loaded model's advertised effort levels: some bundles support
+`low`/`medium`/`xhigh`, while others use a different set or only an On/Off switch.
+Omitting effort preserves the native default.
+
+Chat Completions and Responses accept a nested budget alongside an explicit
+top-level effort:
+
+```json
+{
+  "reasoning_effort": "low",
+  "reasoning": {"budget_tokens": 4096}
+}
+```
+
+The budget becomes `max_thinking_tokens`; an explicit `max_thinking_tokens`
+takes precedence over that alias. Nested budgets must be positive integers.
+Anthropic-compatible `/v1/messages` uses
+`"thinking": {"type": "enabled", "budget_tokens": 4096}` and accepts
+`reasoning_effort` as a vMLX extension. An explicit effort is preserved even
+with a budget above 32,768 tokens.
+
+Budget enforcement depends on the loaded runtime's
+`supports_thinking_budget` capability. An accepted field alone does not prove
+that a model supports a thinking-token cap. Total output limits remain separate.
+
 ### Start the Server with Reasoning Parser
 
 The easiest way is to use `auto`, which detects the correct parser from the model name:

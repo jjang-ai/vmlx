@@ -44,6 +44,7 @@ from .models import (
     StreamOptions,
     ToolDefinition,
     _validate_image_token_budget,
+    _validate_reasoning_budget,
 )
 
 
@@ -52,7 +53,7 @@ from .models import (
 
 class AnthropicThinking(BaseModel):
     type: str = "enabled"  # "enabled" or "disabled"
-    budget_tokens: int | None = None
+    budget_tokens: int | None = Field(default=None, strict=True, ge=1)
 
 
 class AnthropicToolInput(BaseModel):
@@ -127,6 +128,14 @@ class AnthropicRequest(BaseModel):
     image_resized_height: int | None = None
     image_resized_width: int | None = None
     media_controls_strict: bool | None = None
+
+    @field_validator("thinking", mode="before")
+    @classmethod
+    def validate_thinking_budget(cls, value):
+        # The dict union branch must not bypass AnthropicThinking validation.
+        if isinstance(value, dict):
+            _validate_reasoning_budget(value.get("budget_tokens"), "thinking.budget_tokens")
+        return value
 
     @field_validator("image_token_budget")
     @classmethod
@@ -249,14 +258,10 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         if thinking.get("type") == "enabled":
             enable_thinking = True
             _thinking_source_seen = True
-            # Forward budget_tokens as thinking_budget for Qwen3 models.
-            # For DSV4 (research/DSV4-RUNTIME-ARCHITECTURE.md §4): a large
-            # budget_tokens threshold selects "max" mode over plain thinking
-            # (DSV4 uses a discrete "max" tier rather than a token budget).
-            # Threshold ≥ 32768 matches our _EFFORT_THINKING_BUDGET["high"]
-            # ceiling so clients that explicitly request >32k chains land
-            # on the deeper reasoning path.
-            if thinking.get("budget_tokens"):
+            # A token budget caps thinking; it does not select a native effort
+            # tier. Preserve Auto or the client's explicit effort on every
+            # family, including those without a `max` tier.
+            if thinking.get("budget_tokens") is not None:
                 if chat_template_kwargs is None:
                     chat_template_kwargs = {}
                 chat_template_kwargs["thinking_budget"] = thinking["budget_tokens"]
@@ -267,8 +272,6 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
                 # the Anthropic budget capped nothing.
                 if isinstance(thinking["budget_tokens"], int):
                     max_thinking_tokens = thinking["budget_tokens"]
-                if thinking["budget_tokens"] >= 32768:
-                    chat_template_kwargs.setdefault("reasoning_effort", "max")
         elif thinking.get("type") == "disabled":
             enable_thinking = False
             _thinking_source_seen = True
@@ -316,8 +319,7 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         image_token_budget=req.image_token_budget,
         chat_template_kwargs=chat_template_kwargs,
         # Forward reasoning_effort: explicit top-level field first (parity
-        # with the chat/responses/ollama dialects), then the ct_kwargs copy
-        # (DSV4 "max" gets set via thinking.budget_tokens≥32768 above).
+        # with the chat/responses/ollama dialects), then the ct_kwargs copy.
         # Keeps the Anthropic → OpenAI conversion honest with the shared
         # OpenAI-path auto-mapping block at server.py:5186 / :3122.
         reasoning_effort=(

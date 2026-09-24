@@ -1194,7 +1194,7 @@ def test_anthropic_budget_tokens_arms_max_thinking_tokens():
     assert cc.max_thinking_tokens == 4096
     assert cc.enable_thinking is True
 
-    # A >=32k budget also selects the discrete "max" tier for DSV4.
+    # A large token budget must not select an unrequested native effort tier.
     big = AnthropicRequest(
         model="m",
         max_tokens=100,
@@ -1203,7 +1203,7 @@ def test_anthropic_budget_tokens_arms_max_thinking_tokens():
     )
     cc_big = to_chat_completion(big)
     assert cc_big.max_thinking_tokens == 40000
-    assert cc_big.reasoning_effort == "max"
+    assert cc_big.reasoning_effort is None
 
     # Thinking disabled arms no cap.
     off = AnthropicRequest(
