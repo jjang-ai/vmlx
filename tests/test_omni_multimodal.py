@@ -372,7 +372,8 @@ async def test_omni_stream_emits_generation_time_reasoning_content_and_usage(
         "completion_tokens": 5,
         "total_tokens": 28,
     }
-    assert dispatcher.persist_calls == 1
+    # Both bypass spellings above prohibit publication as well as reuse.
+    assert dispatcher.persist_calls == 0
     assert captured["max_tokens"] == 16_384
     assert captured["temperature"] == 0.6
     assert captured["top_p"] == 0.95

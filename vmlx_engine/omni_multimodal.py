@@ -1712,6 +1712,13 @@ async def dispatch_omni_chat_completion(
     completion_id = f"chatcmpl-{_uuid.uuid4().hex[:24]}"
     created = int(_time.time())
     t_start = _time.time()
+    # Match the server's public bypass contract: a non-empty salt requests
+    # fresh state, not a persistent salted namespace. Neither restore nor
+    # publication may run for this request.
+    _cache_salt = getattr(request, "cache_salt", None)
+    _bypass_cache = getattr(request, "skip_prefix_cache", None) is True or (
+        isinstance(_cache_salt, str) and bool(_cache_salt)
+    )
 
     def _run_chat(token_callback=None):
         try:
@@ -1721,12 +1728,15 @@ async def dispatch_omni_chat_completion(
                 temperature=float(_temperature),
                 top_p=float(_top_p),
                 enable_thinking=_enable_thinking,
-                force_reset=bool(getattr(request, "skip_prefix_cache", False)),
-                cache_salt=getattr(request, "cache_salt", None),
+                force_reset=_bypass_cache,
+                cache_salt=_cache_salt,
                 token_callback=token_callback,
                 video_controls=video_controls,
             )
-            dispatcher.finish_request_cache()
+            if _bypass_cache:
+                dispatcher.reset()
+            else:
+                dispatcher.finish_request_cache()
             return result
         except Exception:
             dispatcher.reset()
