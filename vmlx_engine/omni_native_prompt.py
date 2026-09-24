@@ -11,7 +11,8 @@ from copy import deepcopy
 
 def run_full_history(session, messages, *, scratch_dir, extract_parts,
                      enable_thinking, max_tokens, temperature, top_p,
-                     token_callback=None, checkpoints=None, template_options=None):
+                     token_callback=None, checkpoints=None, template_options=None,
+                     tools=None):
     import numpy as np
     from PIL import Image
 
@@ -81,6 +82,8 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
         rendered.append(item)
 
     kwargs = {**(template_options or {}), "tokenize": False, "add_generation_prompt": True}
+    if tools:
+        kwargs["tools"] = tools
     if enable_thinking is not None:
         kwargs["enable_thinking"] = bool(enable_thinking)
     prompt = session.tokenizer.apply_chat_template(rendered, **kwargs)
@@ -93,7 +96,7 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
             session, messages, scratch_dir=scratch_dir, extract_parts=extract_parts,
             enable_thinking=enable_thinking, max_tokens=max_tokens,
             temperature=temperature, top_p=top_p, token_callback=token_callback,
-            checkpoints=checkpoints, template_options=template_options,
+            checkpoints=checkpoints, template_options=template_options, tools=tools,
         )
     if hasattr(session, "_vmlx_prompt_rail_callback"):
         from .omni_native_controls import record_prompt_rail

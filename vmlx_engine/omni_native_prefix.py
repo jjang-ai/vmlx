@@ -15,12 +15,15 @@ logger = logging.getLogger(__name__)
 _KIND = "prompt_prefill_v1"
 
 
-def source_prefix_keys(messages, video_policy):
+def source_prefix_keys(messages, video_policy, tools=None):
     """Hash each source message once, including decoded media identity."""
     from .omni_multimodal import _media_part_identity
 
+    policy = {"contract": _KIND, "video_policy": video_policy}
+    if tools:
+        policy["tools"] = tools
     digest = hashlib.sha256(json.dumps(
-        {"contract": _KIND, "video_policy": video_policy},
+        policy,
         sort_keys=True, separators=(",", ":"),
     ).encode())
     result = []
@@ -34,7 +37,13 @@ def source_prefix_keys(messages, video_policy):
             item["content"] = parts
         encoded = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         digest.update(str(len(encoded)).encode() + b":" + encoded)
-        if message.get("role") == "user":
+        # Admission has checked complete call/result batches. The native
+        # template groups contiguous tool results in one user-role segment;
+        # only its closing boundary is a reusable prompt checkpoint.
+        tool_boundary = message.get("role") == "tool" and (
+            count == len(messages) or messages[count].get("role") != "tool"
+        )
+        if message.get("role") == "user" or tool_boundary:
             result.append((count, "prefill:" + digest.hexdigest()))
     return result
 
@@ -65,9 +74,9 @@ def prefill_state(session, embeds):
 
 
 class NativePrefillCheckpoints:
-    def __init__(self, dispatcher, messages, video_policy, *, publish):
+    def __init__(self, dispatcher, messages, video_policy, *, publish, tools=None):
         self.dispatcher = dispatcher
-        self.keys = source_prefix_keys(messages, video_policy)
+        self.keys = source_prefix_keys(messages, video_policy, tools)
         self.message_count = len(messages)
         self.publish_enabled = publish
         self.candidate = None

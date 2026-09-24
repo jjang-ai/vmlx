@@ -283,3 +283,36 @@ def test_wrong_native_cache_topology_is_rejected(tmp_path):
     d._native_disk_store().save(checkpoint.keys[-1][1], lambda p: save_prompt_cache(str(p), list(reversed(cache)), metadata))
     assert NativePrefillCheckpoints(d, messages, {}, publish=False).find() is None
     assert d._session._cache is None
+
+
+def test_complete_tool_result_checkpoint_restores_native_hybrid_state(tmp_path):
+    import mlx.core as mx
+    from mlx_lm.models.cache import load_prompt_cache
+    d = owner(tmp_path)
+    messages = [
+        {'role': 'user', 'content': 'image'},
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'a', 'function': {'name': 'inspect', 'arguments': {}}}]},
+        {'role': 'tool', 'tool_call_id': 'a', 'content': 'green circle'},
+    ]
+    checkpoint = put_checkpoint(d, messages, [1, 2, 3, 4])
+    _, metadata = load_prompt_cache(str(d._session_l2_path), return_metadata=True)
+    assert metadata['source_message_count'] == '3'
+    next_messages = messages + [
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'b', 'function': {'name': 'inspect', 'arguments': {}}}]},
+        {'role': 'tool', 'tool_call_id': 'b', 'content': 'saved'},
+    ]
+    restore = NativePrefillCheckpoints(d, next_messages, {}, publish=True)
+    assert restore.find()['source_count'] == 3
+    tokens = [1, 2, 3, 4, 5, 6]
+    assert restore.accept(np.array([tokens])) == 4
+    warm = d._session.mlx_model(mx.array([tokens[4:]]), cache=d._session._cache)
+    cold = d._session.mlx_model(mx.array([tokens]), cache=d._session.mlx_model.make_cache())
+    mx.eval(warm, cold)
+    assert mx.allclose(warm, cold[:, 4:], atol=1e-4, rtol=1e-4).item()
+    restore.publish(np.array([tokens]), next_messages)
+    assert d._session_l2_stats['stores'] == 2
+    latest = NativePrefillCheckpoints(d, next_messages, {}, publish=False)
+    assert latest.find()['source_count'] == 5
+    assert checkpoint.keys[-1][0] == 3

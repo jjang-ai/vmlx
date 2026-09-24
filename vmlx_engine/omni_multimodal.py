@@ -1322,6 +1322,8 @@ class OmniMultimodalDispatcher:
         video_controls=None,
         template_options=None,
         prompt_rail_callback=None,
+        tools=None,
+        tool_context=False,
     ) -> Dict[str, Any]:
         """Run one OmniSession turn and return an OpenAI-shaped response."""
         # Native encoders synchronously consume these files during this turn.
@@ -1335,7 +1337,7 @@ class OmniMultimodalDispatcher:
             self._ensure_session()
             from .omni_native_controls import has_native_thinking_directive
             template_options = dict(template_options or {})
-            template_sensitive = bool(template_options) or has_native_thinking_directive(messages)
+            template_sensitive = bool(template_options) or tool_context or has_native_thinking_directive(messages)
             self._session._vmlx_template_options = template_options
             self._session._vmlx_prompt_rail_callback = prompt_rail_callback
             self._session._vmlx_prompt_thinking_off = enable_thinking is False
@@ -1372,6 +1374,7 @@ class OmniMultimodalDispatcher:
                 from .omni_native_prefix import NativePrefillCheckpoints
                 checkpoints = NativePrefillCheckpoints(
                     self, messages, video_policy, publish=template_sensitive or enable_thinking is not False,
+                    tools=tools,
                 )
             full_history = getattr(self, "_backend", "stage1") == "stage1" and (
                 checkpoints is not None or multi_clip or template_sensitive or (should_reset and len(messages) > 1)
@@ -1449,6 +1452,7 @@ class OmniMultimodalDispatcher:
                     token_callback=token_callback,
                     checkpoints=checkpoints,
                     template_options=template_options,
+                    tools=tools,
                 )
                 cached_tokens = self._session._vmlx_restored_prefix_tokens
             else:
@@ -1689,18 +1693,13 @@ def _validate_native_media_sources(messages):
 def _validate_native_media_controls(request, messages):
     """Reject constraints absent from the native media generation path.
 
-    The bundle template may support tools; that does not make the separate
-    native media dispatcher a tool/schema-capable runtime. Keep unsupported
-    requests out of the encoder and cache until those paths are implemented.
+    Tool catalogs/history are validated separately against the native tool
+    contract. Constrained output and samplers without a native implementation
+    stay out of the encoder and cache instead of being silently ignored.
     """
     from fastapi import HTTPException
 
     unsupported = []
-    choice = getattr(request, "tool_choice", None)
-    if (getattr(request, "tools", None) and choice != "none") or choice not in (None, "auto", "none"):
-        unsupported.append("tool calling")
-    if any(m.get("role") == "tool" or m.get("tool_calls") for m in messages):
-        unsupported.append("tool-result history")
     response_format = getattr(request, "response_format", None)
     if hasattr(response_format, "model_dump"):
         response_format = response_format.model_dump(exclude_none=True)
@@ -1803,6 +1802,11 @@ async def dispatch_omni_chat_completion(
             msgs_dump.append(dict(m))
 
     _validate_native_media_controls(request, msgs_dump)
+    from .omni_native_tools import prepare_native_tools, NativeToolOutput
+    tool_contract = prepare_native_tools(
+        getattr(request, "tools", None), getattr(request, "tool_choice", None), msgs_dump,
+    )
+    msgs_dump = tool_contract.messages
     _validate_native_media_sources(msgs_dump)
     status = omni_multimodal_component_status(bundle_path)
     supported_modalities = set(status.get("modalities") or ["text"])
@@ -1834,6 +1838,8 @@ async def dispatch_omni_chat_completion(
 
     if _template_options and dispatcher._backend != "stage1":
         raise HTTPException(400, "Native Omni template options are supported only by the Stage-1 media runtime")
+    if tool_contract.active and dispatcher._backend != "stage1":
+        raise HTTPException(400, "Native Omni tools are supported only by the Stage-1 media runtime")
 
     # Protocol handlers resolve request/session/bundle defaults before this
     # bridge.  Do not replace an omitted request cap with the bridge's old
@@ -1894,7 +1900,21 @@ async def dispatch_omni_chat_completion(
                 video_controls=video_controls,
                 template_options=_template_options,
                 prompt_rail_callback=prompt_rail_callback,
+                tools=tool_contract.template_tools,
+                tool_context=tool_contract.active,
             )
+            if tool_contract.active:
+                _, visible = _split_omni_reply(
+                    result.get("content") or "",
+                    explicit_thinking_off=result.get("prompt_thinking_off", _explicit_thinking_off),
+                )
+                output = NativeToolOutput(tool_contract)
+                safe = output.feed(visible)
+                tail, calls = output.finish(result.get("finish_reason") or "stop")
+                result["visible_content"] = safe + tail
+                result["tool_calls"] = calls
+                if calls:
+                    result["finish_reason"] = "tool_calls"
             if _bypass_cache:
                 dispatcher.reset()
             else:
@@ -1922,6 +1942,7 @@ async def dispatch_omni_chat_completion(
             result.get("content") or "",
             explicit_thinking_off=result.get("prompt_thinking_off", _explicit_thinking_off),
         )
+        content = result.get("visible_content", content)
         prompt_tokens = int(result.get("prompt_tokens") or 0)
         completion_tokens = int(result.get("completion_tokens") or 0)
         finish_reason = str(result.get("finish_reason") or "stop")
@@ -1937,6 +1958,8 @@ async def dispatch_omni_chat_completion(
         message: Dict[str, Any] = {"role": "assistant", "content": content}
         if reasoning_content:
             message["reasoning_content"] = reasoning_content
+        if result.get("tool_calls"):
+            message["tool_calls"] = result["tool_calls"]
         return {
             "id": completion_id,
             "object": "chat.completion",
@@ -2005,6 +2028,7 @@ async def dispatch_omni_chat_completion(
         future.add_done_callback(_on_done)
         streamed_reasoning = ""
         streamed_content = ""
+        tool_output = NativeToolOutput(tool_contract) if tool_contract.active else None
         result = None
         try:
             while True:
@@ -2021,6 +2045,10 @@ async def dispatch_omni_chat_completion(
                             streamed_reasoning += delta
                             delta_payload = {"reasoning_content": delta}
                         else:
+                            if tool_output is not None:
+                                delta = tool_output.feed(delta)
+                                if not delta:
+                                    continue
                             streamed_content += delta
                             delta_payload = {"content": delta}
                         chunk = {
@@ -2070,6 +2098,10 @@ async def dispatch_omni_chat_completion(
                     streamed_reasoning += delta
                     delta_payload = {"reasoning_content": delta}
                 else:
+                    if tool_output is not None:
+                        delta = tool_output.feed(delta)
+                        if not delta:
+                            continue
                     streamed_content += delta
                     delta_payload = {"content": delta}
                 chunk = {
@@ -2085,11 +2117,36 @@ async def dispatch_omni_chat_completion(
                 }
                 yield f"data: {_json.dumps(chunk)}\n\n"
 
+            if tool_output is not None:
+                tail, _ = tool_output.finish(
+                    "stop" if (result or {}).get("tool_calls") else (result or {}).get("finish_reason", "stop")
+                )
+                if tail:
+                    streamed_content += tail
+                    yield "data: " + _json.dumps({
+                        "id": completion_id, "object": "chat.completion.chunk",
+                        "created": created, "model": request.model,
+                        "choices": [{"index": 0, "delta": {"content": tail}, "finish_reason": None}],
+                    }) + "\n\n"
+                calls = (result or {}).get("tool_calls")
+                if calls:
+                    # The owner has completed finish_request_cache before its
+                    # done event. No client can act on a call ahead of SSD
+                    # publication; the next request needs no artificial wait.
+                    yield "data: " + _json.dumps({
+                        "id": completion_id, "object": "chat.completion.chunk",
+                        "created": created, "model": request.model,
+                        "choices": [{"index": 0, "delta": {"tool_calls": [
+                            {"index": index, **call} for index, call in enumerate(calls)
+                        ]}, "finish_reason": None}],
+                    }) + "\n\n"
+
             raw = (result or {}).get("content") or ""
             final_reasoning, final_content = _split_omni_reply(
                 raw,
                 explicit_thinking_off=(result or {}).get("prompt_thinking_off", _explicit_thinking_off),
             )
+            final_content = (result or {}).get("visible_content", final_content)
             if final_reasoning and not final_reasoning.startswith(
                 streamed_reasoning.strip()
             ):

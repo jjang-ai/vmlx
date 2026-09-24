@@ -11,7 +11,7 @@ IMAGE = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controls", [
-    {"tools": [TOOL]}, {"tools": [TOOL], "tool_choice": "required"},
+    {"tools": [TOOL], "tool_choice": "required"},
     {"response_format": {"type": "json_object"}},
     {"response_format": {"type": "json_schema", "json_schema": {"name": "result", "schema": {"type": "object"}, "strict": True}}},
     {"stop": ["END"]}, {"seed": 7}, {"top_k": 8}, {"min_p": .1},
@@ -27,7 +27,7 @@ async def test_unimplemented_native_constraints_fail_before_loading(monkeypatch,
     with pytest.raises(HTTPException) as error:
         await omni.dispatch_omni_chat_completion(request, "/unused")
     assert error.value.status_code == 400
-    assert "Native Omni media" in error.value.detail
+    assert "native omni" in error.value.detail.lower()
 
 
 def test_neutral_controls_and_explicit_no_tools_remain_valid():
@@ -38,17 +38,17 @@ def test_neutral_controls_and_explicit_no_tools_remain_valid():
     omni._validate_native_media_controls(request, [m.model_dump(exclude_none=True) for m in request.messages])
 
 
-def test_native_tool_history_is_not_replayed_as_last_user_turn():
-    from types import SimpleNamespace
-    with pytest.raises(HTTPException, match="tool-result history"):
-        omni._validate_native_media_controls(SimpleNamespace(), [
+def test_malformed_native_tool_history_is_rejected_before_rendering():
+    from vmlx_engine.omni_native_tools import prepare_native_tools
+    with pytest.raises(HTTPException, match="function tool history"):
+        prepare_native_tools([], None, [
             {"role": "assistant", "content": "", "tool_calls": [{"id": "call1"}]},
             {"role": "tool", "tool_call_id": "call1", "content": "result"},
         ])
 
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
-@pytest.mark.parametrize("control", ["tools", "top_k", "image_max_pixels"])
+@pytest.mark.parametrize("control", ["top_k", "image_max_pixels"])
 def test_native_rejection_survives_each_protocol_adapter(monkeypatch, path, control):
     from fastapi.testclient import TestClient
     from tests.test_ollama_reasoning_parity import _run_streaming_ollama_chat
