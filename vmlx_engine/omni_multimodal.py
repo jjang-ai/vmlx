@@ -1394,11 +1394,29 @@ async def dispatch_omni_chat_completion(
     # This dispatch precedes the standard server thinking-policy resolver.
     # Omni exposes a boolean enable_thinking control, not native mode kwargs.
     # Reject explicit mode requests before constructing/loading a dispatcher.
-    native_mode = (getattr(request, "chat_template_kwargs", None) or {}).get("thinking_mode")
+    request_template_kwargs = getattr(request, "chat_template_kwargs", None) or {}
+    native_mode = request_template_kwargs.get("thinking_mode")
     if native_mode in ("enabled", "disabled", "adaptive"):
         raise HTTPException(
             status_code=400,
             detail=f"Omni does not support native thinking_mode={native_mode!r}; use enable_thinking",
+        )
+
+    # This native session has only a total generation limit. The standard
+    # server's separate thinking/answer budget policy does not run here, so
+    # accepting either budget spelling would silently ignore the constraint.
+    if (
+        getattr(request, "max_thinking_tokens", None) is not None
+        or request_template_kwargs.get("thinking_budget") is not None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Nemotron Omni does not support a separate thinking-token budget. "
+                "Omit max_thinking_tokens/reasoning.budget_tokens/"
+                "thinking.budget_tokens/chat_template_kwargs.thinking_budget; "
+                "use the total output-token limit instead."
+            ),
         )
 
     msgs_dump: list[dict] = []

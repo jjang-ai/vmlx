@@ -57,6 +57,11 @@ Budget enforcement depends on the loaded runtime's
 `supports_thinking_budget` capability. An accepted field alone does not prove
 that a model supports a thinking-token cap. Total output limits remain separate.
 
+Nemotron Omni's multimodal session supports a total output limit, but no
+separate thinking-token cap. Its route rejects explicit thinking budgets with
+HTTP 400 before loading the multimodal components; omit that field and use the
+protocol's total output-token limit.
+
 ### Native adaptive thinking
 
 The loaded model's `/v1/capabilities` response lists `native_thinking_modes`.

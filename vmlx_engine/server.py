@@ -23757,6 +23757,8 @@ async def create_response(
                 stream=bool(request.stream),
                 enable_thinking=request.enable_thinking,
                 reasoning_effort=request.reasoning_effort,
+                max_thinking_tokens=request.max_thinking_tokens,
+                chat_template_kwargs=_ct_kwargs,
             )
             cc = await _omni_dispatch_resp(
                 _cc_req,
