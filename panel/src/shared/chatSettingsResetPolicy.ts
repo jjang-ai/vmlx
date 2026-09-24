@@ -14,6 +14,7 @@ export interface ChatSettingsResetOverrides {
   maxToolIterations?: number
   builtinToolsEnabled?: boolean
   workingDirectory?: string
+  thinkingMode?: 'adaptive'
   enableThinking?: boolean
   reasoningEffort?: string
   hideToolStatus?: boolean

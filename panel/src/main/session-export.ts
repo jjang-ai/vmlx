@@ -16,7 +16,7 @@ const SERVER_SETTINGS = [
   'kvCacheGroupSize', 'pagedCacheBlockSize', 'maxCacheBlocks', 'enablePrefixCache',
   'enableBlockDiskCache', 'blockDiskCacheMaxPercent', 'blockDiskCacheMaxGb',
   'usePagedCache', 'prefillBatchSize', 'prefillStepSize', 'maxNumSeqs', 'streamInterval',
-  'enableThinking', 'reasoningEffort', 'imageTokenBudget', 'videoFps', 'videoMaxFrames',
+  'enableThinking', 'thinkingMode', 'reasoningEffort', 'imageTokenBudget', 'videoFps', 'videoMaxFrames',
   'videoMaxPixels', 'videoTokenBudget',
   // These are requested execution controls, not a claim that an accelerator ran.
   'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',

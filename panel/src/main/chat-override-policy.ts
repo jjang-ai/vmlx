@@ -27,6 +27,7 @@ export interface ChatOverridePolicyInput {
   maxToolIterations?: number
   builtinToolsEnabled?: boolean
   workingDirectory?: string
+  thinkingMode?: 'adaptive'
   enableThinking?: boolean
   reasoningEffort?: string
   hideToolStatus?: boolean
@@ -178,6 +179,13 @@ export function sanitizeChatOverrides<T extends ChatOverridePolicyInput>(overrid
     CHAT_OVERRIDE_REASONING_EFFORTS.has(source.reasoningEffort)
   ) {
     sanitized.reasoningEffort = source.reasoningEffort
+  }
+
+  if (source.thinkingMode === 'adaptive') {
+    if (typeof source.enableThinking === 'boolean') {
+      throw new Error('Adaptive thinking conflicts with an explicit On/Off choice.')
+    }
+    sanitized.thinkingMode = 'adaptive'
   }
 
   return sanitized as T

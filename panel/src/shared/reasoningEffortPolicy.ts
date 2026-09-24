@@ -33,6 +33,8 @@ export function normalizeReasoningEffortLevels(
 }
 
 export interface ReasoningRequestFieldsInput {
+  thinkingMode?: 'adaptive'
+  supportsAdaptiveThinking?: boolean
   enableThinking?: boolean
   reasoningEffort?: unknown
   isRemote: boolean
@@ -85,6 +87,20 @@ export function applyReasoningRequestFields(
   // effort fails clearly instead of partially serializing or falling back to
   // the bundle default under a different label.
   const effort = resolveReasoningEffortForRequest(input)
+  if (input.thinkingMode === 'adaptive') {
+    if (input.supportsAdaptiveThinking !== true ||
+        (input.isRemote && input.remoteReasoningFormat !== 'vmlx')) {
+      throw new Error('The loaded runtime does not advertise native adaptive thinking.')
+    }
+    if (input.enableThinking !== undefined) {
+      throw new Error('Adaptive thinking conflicts with an explicit On/Off choice.')
+    }
+    body.thinking_mode = 'adaptive'
+    body.chat_template_kwargs = { ...(body.chat_template_kwargs || {}), thinking_mode: 'adaptive' }
+    if (effort) body.reasoning_effort = effort
+    return
+  }
+
 
   // A remote API returns structured reasoning; it does not need a local text
   // parser. Keep provider fields separate from vMLX template extensions. This

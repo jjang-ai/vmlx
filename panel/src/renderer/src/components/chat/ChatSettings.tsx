@@ -60,6 +60,7 @@ interface ChatOverrides {
   maxToolIterations?: number
   builtinToolsEnabled?: boolean
   workingDirectory?: string
+  thinkingMode?: 'adaptive'
   enableThinking?: boolean
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   hideToolStatus?: boolean
@@ -121,6 +122,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
   const [detectedReasoningParser, setDetectedReasoningParser] = useState<string | undefined>(undefined)
   const [detectedSupportsThinking, setDetectedSupportsThinking] = useState<boolean | undefined>(undefined)
+  const [detectedSupportsAdaptiveThinking, setDetectedSupportsAdaptiveThinking] = useState<boolean | undefined>(undefined)
   const [detectedSupportsInstructMode, setDetectedSupportsInstructMode] = useState<boolean | undefined>(undefined)
   const [detectedReasoningEfforts, setDetectedReasoningEfforts] = useState<Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'> | undefined>(undefined)
   const [detectedDefaultReasoningEffort, setDetectedDefaultReasoningEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined>(undefined)
@@ -262,6 +264,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setDetectedReasoningParser(undefined)
     setDetectedSupportsThinking(undefined)
     setDetectedSupportsInstructMode(undefined)
+    setDetectedSupportsAdaptiveThinking(undefined)
     setDetectedReasoningEfforts(undefined)
     setDetectedDefaultReasoningEffort(undefined)
     setThinkingBudgetSupported(undefined)
@@ -286,6 +289,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       setDetectedReasoningParser(detected?.reasoningParser)
       setDetectedSupportsThinking(detected?.supportsThinking)
       setDetectedSupportsInstructMode(detected?.supportsInstructMode)
+      setDetectedSupportsAdaptiveThinking(detected?.supportsAdaptiveThinking)
       setDetectedHonorsEnableThinking(detected?.honorsEnableThinking)
       setDetectedNativeMtpSupported((detected as any)?.nativeMtp?.supported === true)
       setDetectedNativeMtpDefaultMode((detected as any)?.nativeMtp?.defaultMode)
@@ -341,7 +345,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     enableThinking: boolean | undefined,
     reasoningEffort?: ChatOverrides['reasoningEffort']
   ) => {
-    setOverrides(prev => ({ ...prev, enableThinking, reasoningEffort }))
+    setOverrides(prev => ({ ...prev, enableThinking, reasoningEffort, thinkingMode: undefined }))
     setDirty(true)
   }
 
@@ -686,9 +690,9 @@ function statusToneClass(status: string): string {
                   disabled={!thinkingSupported}
                   onClick={() => updateThinkingMode(undefined, undefined)}
                   data-vmlx-control="chat-thinking-auto"
-                  data-vmlx-state={displayedEnableThinking == null ? 'selected' : 'unselected'}
+                  data-vmlx-state={displayedEnableThinking == null && displayedOverrides.thinkingMode !== 'adaptive' ? 'selected' : 'unselected'}
                   className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                    displayedEnableThinking == null
+                    displayedEnableThinking == null && displayedOverrides.thinkingMode !== 'adaptive'
                       ? 'bg-primary text-primary-foreground'
                       : thinkingSupported ? 'hover:bg-accent text-muted-foreground' : 'text-muted-foreground opacity-50 cursor-not-allowed'
                   }${thinkingDisabledClass}`}
@@ -708,6 +712,20 @@ function statusToneClass(status: string): string {
                 >
                   {t('chat.settings.thinkingOn')}
                 </button>
+                {detectedSupportsAdaptiveThinking === true && (
+                  <button
+                    disabled={!thinkingSupported}
+                    onClick={() => {
+                      setOverrides(prev => ({ ...prev, thinkingMode: 'adaptive', enableThinking: undefined, reasoningEffort: undefined }))
+                      setDirty(true)
+                    }}
+                    data-vmlx-control="chat-thinking-adaptive"
+                    data-vmlx-state={displayedOverrides.thinkingMode === 'adaptive' ? 'selected' : 'unselected'}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${displayedOverrides.thinkingMode === 'adaptive' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground'}`}
+                  >
+                    {t('chat.settings.thinkingAdaptive')}
+                  </button>
+                )}
                 {thinkingOffSupported && (
                   <button
                     disabled={!thinkingSupported}
@@ -724,6 +742,9 @@ function statusToneClass(status: string): string {
                   </button>
                 )}
               </div>
+              )}
+              {detectedSupportsAdaptiveThinking === true && (
+                <p className="text-xs text-muted-foreground mt-1.5">{t('chat.settings.thinkingAdaptiveHelp')}</p>
               )}
               {enableThinkingHonored && (
                 <p className="text-xs text-muted-foreground mt-1.5">

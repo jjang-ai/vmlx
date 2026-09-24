@@ -423,6 +423,8 @@
       "defaultsUnavailable": "샘플러 기본값을 불러오지 못했습니다. 임의의 값을 표시하지 않도록 컨트롤을 숨겼습니다.",
       "remoteReasoningUnknown": "이 엔드포인트는 추론 기능 정보를 제공하지 않았습니다. Auto는 기본값을 유지합니다. 직접 선택한 설정은 제공자에게 전송되며 미지원 설정은 거부될 수 있습니다. On에는 지원되는 추론 수준이 필요합니다.",
       "enableThinking": "사고 활성화",
+      "thinkingAdaptive": "적응형",
+      "thinkingAdaptiveHelp": "적응형은 모델이 추론 여부를 결정합니다. 자동은 서버 및 모델 기본값을 따릅니다.",
       "thinkingAuto": "자동",
       "thinkingOn": "켜기",
       "thinkingOff": "끄기",

@@ -20,6 +20,7 @@ export interface ChatSettingsDetectedConfig {
   toolParser?: string
   reasoningParser?: string
   supportsThinking?: boolean
+  supportsAdaptiveThinking?: boolean
   supportsInstructMode?: boolean
   /** Does the family's chat template actually READ `enable_thinking`?
    * Distinct from supportsThinking (does it reason at all). Muse reasons but

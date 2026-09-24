@@ -30,6 +30,7 @@ declare global {
           toolParser?: string;
           reasoningParser?: string;
           supportsThinking?: boolean;
+          supportsAdaptiveThinking?: boolean;
           supportsInstructMode?: boolean;
           supportedReasoningEfforts?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
           defaultReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';

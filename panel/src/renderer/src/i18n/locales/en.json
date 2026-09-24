@@ -423,6 +423,8 @@
       "defaultsUnavailable": "Sampler defaults could not be loaded. Controls are hidden instead of showing invented values.",
       "remoteReasoningUnknown": "This endpoint did not advertise reasoning capabilities. Auto keeps its default. Explicit choices are sent to the provider, which may reject unsupported settings; On requires a supported effort level.",
       "enableThinking": "Enable Thinking",
+      "thinkingAdaptive": "Adaptive",
+      "thinkingAdaptiveHelp": "Adaptive explicitly lets the model decide when to think. Auto inherits server and model defaults.",
       "thinkingAuto": "Auto",
       "thinkingOn": "On",
       "thinkingOff": "Off",

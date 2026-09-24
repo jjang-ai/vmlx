@@ -140,6 +140,7 @@ interface ModelConfig {
   toolParser?: string
   reasoningParser?: string
   supportsThinking?: boolean
+  supportsAdaptiveThinking?: boolean
   supportsInstructMode?: boolean
   /** Does this family's chat template actually READ `enable_thinking`?
    *
@@ -173,6 +174,7 @@ export interface DetectedConfig {
   toolParser?: string
   reasoningParser?: string
   supportsThinking?: boolean
+  supportsAdaptiveThinking?: boolean
   supportsInstructMode?: boolean
   /** Does this family's chat template actually READ `enable_thinking`?
    *
@@ -451,7 +453,7 @@ registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningPar
 // The engine's typed paged serializer preserves K/V/idx_keys and absolute offsets,
 // so M3 uses the paged L1 + block-disk L2 path by default. Generic KV q4/q8 stays
 // disabled because only the native M3 codec understands the full sparse state.
-registerFamily('minimax_m3', { cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
+registerFamily('minimax_m3', { supportsAdaptiveThinking: true, cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
 
 // openPangu-2.0-Flash: 92B MoE (6B active) MLA + DSA/SWA hybrid + 3 stateful
 // causal convs + mHC hyper-connections. Mirrors the engine registry entry
@@ -1625,6 +1627,7 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
     reasoningParser: config.reasoningParser,
     supportsThinking: config.supportsThinking,
     supportsInstructMode: config.supportsInstructMode,
+    supportsAdaptiveThinking: config.supportsAdaptiveThinking,
     honorsEnableThinking: config.honorsEnableThinking,
     supportedReasoningEfforts: config.supportedReasoningEfforts,
     defaultReasoningEffort: config.defaultReasoningEffort,

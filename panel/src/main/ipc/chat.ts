@@ -1079,6 +1079,7 @@ export function registerChatHandlers(
       let thinkingBudgetSupported: boolean | undefined;
       let supportsThinkingBudget: boolean | undefined;
       let supportsInstructMode: boolean | undefined;
+      let supportsAdaptiveThinking: boolean | undefined;
       let supportsThinking: boolean | undefined;
       let supportedReasoningEfforts: ReasoningEffort[] | undefined;
       let remoteReasoningFormat: RemoteReasoningFormat | undefined;
@@ -1155,6 +1156,7 @@ export function registerChatHandlers(
             );
             supportsThinkingBudget = detected.supportsThinkingBudget;
             supportsInstructMode = detected.supportsInstructMode;
+            supportsAdaptiveThinking = detected.supportsAdaptiveThinking;
             supportsThinking = detected.supportsThinking;
             supportedReasoningEfforts = detected.supportedReasoningEfforts;
             remoteReasoningFormat = detected.remoteReasoningFormat;
@@ -2431,6 +2433,8 @@ export function registerChatHandlers(
             // not permission for the panel to force thinking on.
             applyReasoningRequestFields(obj, {
               enableThinking: effectiveEnableThinkingOverride,
+              thinkingMode: overrides?.thinkingMode,
+              supportsAdaptiveThinking,
               reasoningEffort: overrides?.reasoningEffort,
               isRemote,
               sessionHasReasoningParser,
@@ -2503,6 +2507,8 @@ export function registerChatHandlers(
             // provider or local engine can apply the model's native policy.
             applyReasoningRequestFields(obj, {
               enableThinking: effectiveEnableThinkingOverride,
+              thinkingMode: overrides?.thinkingMode,
+              supportsAdaptiveThinking,
               reasoningEffort: overrides?.reasoningEffort,
               isRemote,
               sessionHasReasoningParser,

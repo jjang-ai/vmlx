@@ -423,6 +423,8 @@
       "defaultsUnavailable": "サンプラー既定値を読み込めませんでした。架空の値を表示しないよう、コントロールを非表示にしています。",
       "remoteReasoningUnknown": "このエンドポイントは推論機能を公開していません。Auto は既定値を維持します。明示した設定はプロバイダーに送信され、未対応の場合は拒否されることがあります。On には対応する推論レベルが必要です。",
       "enableThinking": "思考を有効化",
+      "thinkingAdaptive": "適応型",
+      "thinkingAdaptiveHelp": "適応型ではモデルが思考するタイミングを決めます。自動はサーバーとモデルの既定値を使用します。",
       "thinkingAuto": "自動",
       "thinkingOn": "オン",
       "thinkingOff": "オフ",

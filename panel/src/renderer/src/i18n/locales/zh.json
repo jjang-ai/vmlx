@@ -423,6 +423,8 @@
       "defaultsUnavailable": "无法加载采样器默认值。控件已隐藏，以免显示虚构值。",
       "remoteReasoningUnknown": "此端点未声明推理能力。Auto 保留默认值。明确选择的设置会发送给服务提供方，不支持的设置可能被拒绝；On 需要选择受支持的推理级别。",
       "enableThinking": "启用思考",
+      "thinkingAdaptive": "自适应",
+      "thinkingAdaptiveHelp": "自适应明确允许模型决定何时思考。自动继承服务器和模型默认设置。",
       "thinkingAuto": "自动",
       "thinkingOn": "开启",
       "thinkingOff": "关闭",

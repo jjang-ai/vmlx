@@ -28,6 +28,7 @@ export interface RemoteDetectedConfig {
   supportsThinking?: boolean
   supportsTools?: boolean
   remoteReasoningFormat?: RemoteReasoningFormat
+  supportsAdaptiveThinking?: boolean
   supportsInstructMode?: boolean
   supportedReasoningEfforts?: Array<'low' | 'medium' | 'high' | 'xhigh' | 'max'>
   defaultReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -206,6 +207,9 @@ export function detectedConfigFromRemoteCapabilities(
   if (reasoningParser) detected.reasoningParser = reasoningParser
   if (typeof capabilities.supports_thinking === 'boolean') {
     detected.supportsThinking = capabilities.supports_thinking
+  }
+  if (Array.isArray(capabilities.native_thinking_modes)) {
+    detected.supportsAdaptiveThinking = capabilities.native_thinking_modes.includes('adaptive')
   }
   if (typeof capabilities.supports_instruct_mode === 'boolean') {
     detected.supportsInstructMode = capabilities.supports_instruct_mode

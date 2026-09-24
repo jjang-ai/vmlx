@@ -423,6 +423,8 @@
       "defaultsUnavailable": "No se pudieron cargar los valores predeterminados del muestreador. Los controles se ocultan en vez de mostrar valores inventados.",
       "remoteReasoningUnknown": "Este endpoint no anunció capacidades de razonamiento. Auto conserva su valor predeterminado. Las opciones explícitas se envían al proveedor, que puede rechazar ajustes no compatibles; Activado requiere un nivel de esfuerzo compatible.",
       "enableThinking": "Activar pensamiento",
+      "thinkingAdaptive": "Adaptativo",
+      "thinkingAdaptiveHelp": "Adaptativo permite al modelo decidir cuándo razonar. Auto hereda los valores predeterminados del servidor y del modelo.",
       "thinkingAuto": "Auto",
       "thinkingOn": "Activado",
       "thinkingOff": "Desactivado",

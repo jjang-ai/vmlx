@@ -165,6 +165,7 @@ export interface ChatOverrides {
   maxToolIterations?: number;
   builtinToolsEnabled?: boolean;
   workingDirectory?: string;
+  thinkingMode?: 'adaptive';
   enableThinking?: boolean; // tri-state: undefined=Auto, true=On, false=Off
   reasoningEffort?: string; // a canonical REASONING_EFFORT_LEVELS value; undefined=Auto
   hideToolStatus?: boolean;
@@ -484,6 +485,9 @@ class DatabaseManager {
         this.db.exec(
           "ALTER TABLE chat_overrides ADD COLUMN shell_enabled INTEGER DEFAULT 1",
         );
+      }
+      if (!overrideColumns.find((c) => c.name === "thinking_mode")) {
+        this.db.exec("ALTER TABLE chat_overrides ADD COLUMN thinking_mode TEXT");
       }
       if (!overrideColumns.find((c) => c.name === "reasoning_effort")) {
         this.db.exec(
@@ -1714,12 +1718,12 @@ class DatabaseManager {
       (chat_id, temperature, top_p, top_k, min_p, max_tokens, max_thinking_tokens, repeat_penalty,
        frequency_penalty, presence_penalty,
        system_prompt, stop_sequences, wire_api, max_tool_iterations,
-       builtin_tools_enabled, working_directory, enable_thinking, reasoning_effort,
+       builtin_tools_enabled, working_directory, enable_thinking, reasoning_effort, thinking_mode,
        hide_tool_status,
        web_search_enabled, brave_search_enabled, fetch_url_enabled, file_tools_enabled,
        search_tools_enabled, shell_enabled, tool_result_max_chars,
        git_enabled, utility_tools_enabled)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
       // enable_thinking tri-state: undefined/null → NULL (Auto), true → 1, false → 0
       const enableThinkingVal =
@@ -1747,6 +1751,7 @@ class DatabaseManager {
         overrides.workingDirectory,
         enableThinkingVal,
         overrides.reasoningEffort || null,
+        overrides.thinkingMode || null,
         overrides.hideToolStatus ? 1 : 0,
         overrides.webSearchEnabled === false ? 0 : 1,
         overrides.braveSearchEnabled ? 1 : 0,
@@ -1795,6 +1800,7 @@ class DatabaseManager {
       workingDirectory: row.working_directory,
       enableThinking,
       reasoningEffort: row.reasoning_effort || undefined,
+      thinkingMode: row.thinking_mode === "adaptive" ? "adaptive" : undefined,
       hideToolStatus: row.hide_tool_status === 1,
       webSearchEnabled: row.web_search_enabled !== 0,
       braveSearchEnabled: row.brave_search_enabled === 1,

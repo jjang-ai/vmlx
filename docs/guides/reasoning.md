@@ -66,6 +66,11 @@ For a model that advertises `adaptive`, Chat Completions and Responses accept
 decision about when to think. Omitting the control still uses the server and
 model defaults.
 
+MLX Studio shows an **Adaptive** option in Chat Settings only when the detected
+runtime advertises support. Saving it preserves the choice through tool
+continuations. **Auto** inherits defaults; **On** requests thinking each turn;
+**Off** selects the supported direct-answer mode. Reset clears the override.
+
 MiniMax-M3 supports native enabled, disabled and adaptive modes. An explicit
 native mode overrides inherited server defaults. Conflicting per-request
 boolean controls return an error, as does selecting a native mode unsupported
