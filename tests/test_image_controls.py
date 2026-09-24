@@ -203,7 +203,18 @@ def test_strict_rejection_is_typed_on_every_transport_lane():
     assert src.count("except (MediaControlsUnmeetableError, MediaInputError) as e:") == 2
     assert src.count("        MediaControlsUnmeetableError,\n        MediaInputError,\n        PromptTooLongError,") == 1
     assert src.count('"code": type(e).code,') == 2
-    assert "return _OllamaJR(status_code=int(result.status_code), content={\"error\": _msg})" in src
+    # The shared Ollama error helper replaced the inline branch. Exercise
+    # its typed rejection rather than pinning the removed local alias.
+    import json
+    rejection = server._media_controls_unmeetable_response_from_error(
+        MediaControlsUnmeetableError("processor floor exceeds requested size")
+    )
+    translated = server._ollama_returned_error_response(rejection)
+    original = json.loads(rejection.body)["error"]
+    assert translated.status_code == rejection.status_code == 400
+    assert json.loads(translated.body) == {
+        "error": f"{original['code']}: {original['message']}"
+    }
     assert src.count('**({"code": _e["code"]} if _e.get("code") else {})') == 2  # anthropic + responses JSON passthroughs
     assert src.count('**({"code": err["code"]} if err.get("code") else {})') == 1  # anthropic non-omni envelope
     assert src.count('**({"code": error["code"]} if error.get("code") else {})') == 1  # omni-to-responses error event

@@ -356,15 +356,20 @@ class TestCleanMediaBoundaryMatchesFetchContract:
         tokens = [1] * 10 + [99] * 720                # media runs to the end and starts in the first block -> none
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 0
 
-    def test_qwen_family_refuses_any_boundary_inside_the_media_span(self):
+    @pytest.mark.parametrize("family,pre_media_boundary", [
+        ("qwen3_5", 64), ("qwen3_5_moe", 64), ("qwen4_exp", 0),
+    ])
+    def test_qwen_family_refuses_any_boundary_inside_the_media_span(self, family, pre_media_boundary):
         import types
         fake, fn = self._gen()
-        fake._model_type = "qwen4_exp"
+        fake._model_type = family
         # two videos with text between; N-1 aligned boundary (768) lands between them → still inside the span for Qwen
         tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 40 + [2] * 20    # span 100..940, N-1=959 -> 896 inside the span -> exact 959
         assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 959
-        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 60               # media to the end -> pre-media 64
-        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == 64
+        tokens = [1] * 100 + [99] * 300 + [3] * 500 + [99] * 60
+        # Only qwen3_5 variants implement restoration of a text prefix with
+        # media remaining. Flash-Next must decline this unusable checkpoint.
+        assert fn(fake, types.SimpleNamespace(request_id="r"), tokens) == pre_media_boundary
 
     def test_other_families_keep_a_boundary_between_whole_media_items(self):
         import types
@@ -679,14 +684,23 @@ def test_take_drains_the_registry_for_the_noted_request_id_even_without_an_open_
         rd._REGISTRY.clear()
 
 
-def test_server_notes_the_engine_request_id_before_every_engine_hand_off():
-    import re
+def test_server_notes_the_engine_request_id_before_nonstream_engine_hand_offs():
+    import ast
 
     from vmlx_engine import server
     from pathlib import Path
 
     src = Path(server.__file__).read_text()
-    hand_offs = [m.start() for m in re.finditer(r"request_id=response_id[,)]?\n", src)]
+    lines = src.splitlines(keepends=True)
+    hand_offs = [
+        sum(map(len, lines[:node.lineno - 1]))
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_await_chat_with_disconnect_abort"
+        and any(kw.arg == "request_id" and isinstance(kw.value, ast.Name)
+                and kw.value.id == "response_id" for kw in node.keywords)
+    ]
     assert hand_offs, "no engine hand-off found"
     for pos in hand_offs:
         window = src[max(0, pos - 4000):pos]

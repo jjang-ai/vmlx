@@ -576,6 +576,9 @@ def video_control_kwargs(source: Any) -> dict[str, Any]:
     if not image.is_unset:
         out.update(image.as_request_kwargs())
         out["image_controls"] = image
+    image_budget = source.get("image_token_budget") if isinstance(source, Mapping) else getattr(source, "image_token_budget", None)
+    if image_budget is not None:
+        out["image_token_budget"] = image_budget
     strict = source.get("media_controls_strict") if isinstance(source, Mapping) else getattr(source, "media_controls_strict", None)
     if strict:
         out["media_controls_strict"] = True

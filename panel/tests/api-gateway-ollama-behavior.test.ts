@@ -661,14 +661,15 @@ describe("Ollama gateway request translation behavior", () => {
       video_fps: 2, video_max_frames: 8, video_max_pixels: 200000,
       video_min_pixels: 65536, video_total_pixels: 1000000,
       video_resized_height: 256, video_resized_width: 256,
-      video_token_budget: 512, image_max_pixels: 0,
+      video_token_budget: 512, image_token_budget: 1120, image_max_pixels: 0,
       image_min_pixels: 65536, image_resized_height: 256,
       image_resized_width: 256, media_controls_strict: false,
     };
     await postJson(`http://127.0.0.1:${started.port}/api/${lane}`, {
       model: "text-model", stream: false, prompt: "Hello",
       messages: [{ role: "user", content: "Hello" }],
-      options: { ...controls, media_controls_strict: true, image_max_pixels: 200000 },
+      options: { ...controls, image_token_budget: 280, media_controls_strict: true, image_max_pixels: 200000 },
+      image_token_budget: 1120,
       image_max_pixels: 0, media_controls_strict: false,
       video_fps: null,
     });

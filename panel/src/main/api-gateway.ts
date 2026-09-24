@@ -1747,7 +1747,7 @@ export class ApiGateway extends EventEmitter {
     const fields = [
       "video_fps", "video_max_frames", "video_max_pixels", "video_min_pixels",
       "video_total_pixels", "video_resized_height", "video_resized_width",
-      "video_token_budget", "image_max_pixels", "image_min_pixels",
+      "video_token_budget", "image_token_budget", "image_max_pixels", "image_min_pixels",
       "image_resized_height", "image_resized_width", "media_controls_strict",
     ];
     for (const field of fields) {

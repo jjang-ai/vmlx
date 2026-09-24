@@ -20,9 +20,15 @@ vmlx-engine supports vision-language models for image and video understanding.
 vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
 ```
 
-Models with "VL", "Vision", or "mllm" in the name are auto-detected as multimodal.
+Model configuration and runtime capabilities determine multimodal routing. A model's name alone does not establish image, video, or audio support.
 
 ## Image Analysis
+
+### Image token budget
+
+For compatible Gemma 4 processors, `image_token_budget` selects 70, 140, 280, 560, or 1120 visual soft tokens. It is separate from the response's output-token limit. Omit it to keep the processor default; other values are rejected.
+
+This vMLX extension is accepted by Chat Completions, Responses, Anthropic Messages, and templated Ollama chat/generate requests, including the MLX Studio gateway. Ollama accepts it at the top level or in `options`; a non-null top-level value takes precedence. With the OpenAI SDK, send it in `extra_body={"image_token_budget": 1120}`. Unsupported processors report a warning, or reject the request when `media_controls_strict` is enabled.
 
 ### Via OpenAI SDK
 

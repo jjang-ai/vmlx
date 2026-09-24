@@ -43,6 +43,7 @@ from .models import (
     Message,
     StreamOptions,
     ToolDefinition,
+    _validate_image_token_budget,
 )
 
 
@@ -112,6 +113,7 @@ class AnthropicRequest(BaseModel):
     skip_prefix_cache: bool | None = None
     # vMLX extension: per-request video preprocessing controls, same names
     # and validation as the chat/responses dialects.
+    image_token_budget: int | None = None
     video_fps: float | None = None
     video_max_frames: int | None = None
     video_max_pixels: int | None = None
@@ -125,6 +127,11 @@ class AnthropicRequest(BaseModel):
     image_resized_height: int | None = None
     image_resized_width: int | None = None
     media_controls_strict: bool | None = None
+
+    @field_validator("image_token_budget")
+    @classmethod
+    def validate_image_token_budget(cls, value):
+        return _validate_image_token_budget(value)
 
     @model_validator(mode="after")
     def validate_video_controls(self):
@@ -306,6 +313,7 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         repetition_penalty=req.repetition_penalty,
         cache_salt=req.cache_salt,
         skip_prefix_cache=req.skip_prefix_cache,
+        image_token_budget=req.image_token_budget,
         chat_template_kwargs=chat_template_kwargs,
         # Forward reasoning_effort: explicit top-level field first (parity
         # with the chat/responses/ollama dialects), then the ct_kwargs copy

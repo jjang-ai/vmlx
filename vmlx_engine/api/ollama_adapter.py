@@ -229,7 +229,7 @@ def _apply_ollama_video_controls(body: dict, req: dict) -> None:
     from ..image_controls import IMAGE_CONTROL_FIELDS
 
     opts = body.get("options") if isinstance(body.get("options"), dict) else {}
-    for field in (*VIDEO_CONTROL_FIELDS, *IMAGE_CONTROL_FIELDS, "media_controls_strict"):
+    for field in (*VIDEO_CONTROL_FIELDS, *IMAGE_CONTROL_FIELDS, "image_token_budget", "media_controls_strict"):
         value = body.get(field)
         if value is None:
             value = opts.get(field)
