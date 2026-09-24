@@ -1,0 +1,6 @@
+# Repository tests depend on development-only fixtures and release evidence.
+# Keep them in Git; the installable source archive contains the runtime package.
+prune tests
+prune docs/internal
+prune build
+global-exclude __pycache__ *.py[cod] .DS_Store
