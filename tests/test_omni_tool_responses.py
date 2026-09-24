@@ -86,3 +86,39 @@ def test_nonstream_native_response_stores_media_and_call_for_previous_id(monkeyp
     history = saved[0][0][1]
     assert history[0]['content'][0]['type'] == 'image_url'
     assert history[-1]['tool_calls'][0]['id'] == 'call_one'
+
+
+def test_previous_id_tool_result_with_repeated_request_instructions(monkeypatch):
+    from fastapi.testclient import TestClient
+    from tests.test_ollama_reasoning_parity import _run_streaming_ollama_chat
+    from vmlx_engine import server, omni_multimodal as omni
+    from vmlx_engine.omni_native_tools import prepare_native_tools
+    _run_streaming_ollama_chat(monkeypatch, family_name='nemotron_h', model_type='nemotron_h',
+        body={'model': 'test-model', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True})
+    monkeypatch.setattr(server, '_model_path', '/native-omni')
+    monkeypatch.setattr(omni, 'is_omni_multimodal_bundle', lambda p: True)
+    monkeypatch.setattr(omni, 'omni_multimodal_component_status', lambda p: {
+        'bundle_compatible': True, 'modalities': ['text', 'image']})
+    stored = {}; dispatched = []
+    monkeypatch.setattr(server, '_responses_store_history', lambda identifier, messages, **kw: stored.update({identifier: messages}))
+    monkeypatch.setattr(server, '_responses_get_history', lambda identifier: stored.get(identifier))
+    async def dispatch(request, *args, **kwargs):
+        messages = [m.model_dump(exclude_none=True) for m in request.messages]
+        prepare_native_tools(request.tools, request.tool_choice, messages)
+        dispatched.append(messages)
+        message = {'role': 'assistant', 'content': 'done'}
+        if len(dispatched) == 1:
+            message = {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': 'call_one', 'type': 'function', 'function': {'name': 'read_file', 'arguments': '{"path":"first.txt"}'}}]}
+        return {'choices': [{'message': message, 'finish_reason': 'tool_calls' if len(dispatched) == 1 else 'stop'}]}
+    monkeypatch.setattr(omni, 'dispatch_omni_chat_completion', dispatch)
+    common = {'model': 'test-model', 'stream': False, 'instructions': 'Read the requested files.'}
+    with TestClient(server.app) as client:
+        first = client.post('/v1/responses', json={**common, 'input': [{'role': 'user', 'content': [
+            {'type': 'input_image', 'image_url': 'data:image/png;base64,AA=='}]}]})
+        assert first.status_code == 200, first.text
+        second = client.post('/v1/responses', json={**common, 'previous_response_id': first.json()['id'],
+            'input': [{'type': 'function_call_output', 'call_id': 'call_one', 'output': 'file contents'}]})
+        assert second.status_code == 200, second.text
+    assert len(dispatched) == 2
+    assert [m['role'] for m in dispatched[-1]] == ['system', 'user', 'assistant', 'tool']

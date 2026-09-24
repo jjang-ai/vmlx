@@ -23458,13 +23458,7 @@ async def create_response(
                 request.previous_response_id,
             )
     messages = _canonicalize_mimo_v26_tool_history(messages)
-    if _native_omni_resp:
-        from .omni_native_tools import prepare_native_tools
-        # Validate before generic orphan coercion can erase a malformed native
-        # call/result relationship. Current catalog validation happens later.
-        messages = prepare_native_tools(None, None, messages).messages
-        history_messages = prepare_native_tools(None, None, history_messages).messages
-    elif _preserve_mm:
+    if _preserve_mm and not _native_omni_resp:
         messages = _coerce_orphan_tool_messages_for_template(messages)
     if engine.is_mllm and _should_coerce_zaya_vl_tool_history(request.model):
         messages = _coerce_zaya_vl_tool_history_for_template(messages)
@@ -23509,6 +23503,13 @@ async def create_response(
         history_messages,
         preserve_native_order=_preserves_native_system_order(request.model),
     )
+    if _native_omni_resp:
+        from .omni_native_tools import prepare_native_tools
+        # Chained request instructions initially follow the saved assistant
+        # call. Normalize their system position before checking result batches;
+        # generic orphan coercion must not erase malformed native history.
+        messages = prepare_native_tools(None, None, messages).messages
+        history_messages = prepare_native_tools(None, None, history_messages).messages
     _responses_max_prompt_tokens = _effective_max_prompt_tokens(request)
 
     # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
