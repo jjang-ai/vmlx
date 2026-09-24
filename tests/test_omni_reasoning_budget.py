@@ -112,9 +112,19 @@ def test_omni_cache_controls_survive_protocol_adapters(monkeypatch, path):
     monkeypatch.setattr(server, "_model_path", "/not-loaded-omni")
     monkeypatch.setattr("vmlx_engine.omni_multimodal.is_omni_multimodal_bundle", lambda path: True)
     monkeypatch.setattr("vmlx_engine.omni_multimodal.omni_multimodal_component_status", lambda path: {"bundle_compatible": True, "modalities": ["text", "image"]})
+    from types import SimpleNamespace
+    monkeypatch.setattr(server._engine, "_scheduler_config", SimpleNamespace(
+        enable_block_disk_cache=True, block_disk_cache_dir="/tmp/selected-native-pool",
+        block_disk_cache_max_gb=1.25, cache_ttl_minutes=12,
+    ), raising=False)
     captured = []
     async def dispatch(request, *args, **kwargs):
         captured.append((request.skip_prefix_cache, request.cache_salt))
+        assert kwargs["disk_cache_enabled"] is True
+        assert kwargs["disk_cache_policy"] == {
+            "root": "/tmp/selected-native-pool", "max_size_bytes": int(1.25 * 1024**3),
+            "ttl_minutes": 0.0,
+        }
         return JSONResponse({"id": "test", "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
     monkeypatch.setattr("vmlx_engine.omni_multimodal.dispatch_omni_chat_completion", dispatch)
     body = {"model": "test-model", "skip_prefix_cache": True, "cache_salt": "request-salt"}

@@ -437,6 +437,8 @@ def test_omni_session_l2_roundtrips_the_NATIVE_representation(tmp_path):
     dispatcher._last_signature = "media-prefix-a"
     dispatcher._session_l2_fingerprint = "bundle-a"
     dispatcher._session_l2_path = tmp_path / "latest.safetensors"
+    dispatcher._session_l2_policy = {"root": str(tmp_path), "max_size_bytes": 10000000}
+    dispatcher._session_l2_store = None
     dispatcher._session_l2_stats = {
         "stores": 0,
         "hits": 0,
@@ -469,6 +471,8 @@ def test_omni_session_l2_roundtrips_the_NATIVE_representation(tmp_path):
     restored._last_signature = None
     restored._session_l2_fingerprint = "bundle-a"
     restored._session_l2_path = dispatcher._session_l2_path
+    restored._session_l2_policy = dispatcher._session_l2_policy
+    restored._session_l2_store = None
     restored._session_l2_stats = {
         "stores": 0,
         "hits": 0,
@@ -510,6 +514,8 @@ def test_omni_session_l2_rejects_a_different_media_prefix(tmp_path):
     dispatcher._last_signature = None
     dispatcher._session_l2_fingerprint = "bundle-a"
     dispatcher._session_l2_path = tmp_path / "latest.safetensors"
+    dispatcher._session_l2_policy = {"root": str(tmp_path), "max_size_bytes": 10000000}
+    dispatcher._session_l2_store = None
     dispatcher._session_l2_stats = {
         "stores": 0,
         "hits": 0,

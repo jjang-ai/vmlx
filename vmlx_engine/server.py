@@ -4156,16 +4156,31 @@ def _loaded_omni_modalities() -> list[str] | None:
     return None
 
 
-def _loaded_block_disk_cache_enabled() -> bool:
-    """Return the effective loaded-engine L2 toggle for sidecar media caches."""
+def _loaded_disk_cache_config():
     engine = _engine
     config = getattr(engine, "_scheduler_config", None) if engine is not None else None
     if config is None and engine is not None:
-        scheduler = getattr(engine, "scheduler", None) or getattr(
-            engine, "_scheduler", None
-        )
+        scheduler = getattr(engine, "scheduler", None) or getattr(engine, "_scheduler", None)
         config = getattr(scheduler, "config", None)
-    return bool(getattr(config, "enable_block_disk_cache", False))
+    return config
+
+
+def _loaded_block_disk_cache_enabled() -> bool:
+    """Return the effective loaded-engine L2 toggle for sidecar media caches."""
+    return bool(getattr(_loaded_disk_cache_config(), "enable_block_disk_cache", False))
+
+
+def _loaded_omni_disk_cache_policy() -> dict[str, Any]:
+    config = _loaded_disk_cache_config()
+    return {
+        "root": str(Path(getattr(config, "block_disk_cache_dir", None) or
+                         Path.home() / ".cache" / "vmlx-engine" / "block-cache").expanduser()),
+        "max_size_bytes": int(float(getattr(config, "block_disk_cache_max_gb", 10.0)) * 1024**3),
+        # cache_ttl_minutes is a RAM-cache control; the app explicitly
+        # disables it in SSD-only mode. Do not turn a hidden/stale RAM value
+        # into an unexpected disk expiry. SSD retention needs its own control.
+        "ttl_minutes": 0.0,
+    }
 
 
 def _bundle_explicit_modality_flag(
@@ -13954,6 +13969,7 @@ async def health():
                 "session_l2": OmniMultimodalDispatcher.session_l2_status_for(
                     _omni_path,
                     enabled=_loaded_block_disk_cache_enabled(),
+                    disk_cache_policy=_loaded_omni_disk_cache_policy(),
                 ),
             }
     except Exception:
@@ -16731,6 +16747,7 @@ async def create_anthropic_message(
                 chat_req,
                 _omni_path,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
+                disk_cache_policy=_loaded_omni_disk_cache_policy(),
                 effective_max_tokens=_resolve_max_tokens(
                     chat_req.max_tokens, chat_req.model
                 ),
@@ -19941,6 +19958,7 @@ async def create_chat_completion(
                 request,
                 _omni_path,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
+                disk_cache_policy=_loaded_omni_disk_cache_policy(),
                 effective_max_tokens=_resolve_max_tokens(
                     request.max_tokens, request.model
                 ),
@@ -23779,6 +23797,7 @@ async def create_response(
                 _cc_req,
                 _omni_path_dispatch,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
+                disk_cache_policy=_loaded_omni_disk_cache_policy(),
                 effective_max_tokens=chat_kwargs["max_tokens"],
                 effective_temperature=chat_kwargs["temperature"],
                 effective_top_p=chat_kwargs["top_p"],

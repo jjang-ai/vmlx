@@ -752,24 +752,30 @@ class OmniMultimodalDispatcher:
         bundle_path: str | Path,
         *,
         disk_cache_enabled: Optional[bool] = None,
+        disk_cache_policy: Optional[Dict[str, Any]] = None,
     ) -> "OmniMultimodalDispatcher":
         bundle_path = str(Path(bundle_path).resolve())
         with cls._instance_lock:
-            if cls._instance is None or cls._instance.bundle_path != bundle_path:
+            if (cls._instance is None or cls._instance.bundle_path != bundle_path
+                    or (disk_cache_policy is not None and
+                        cls._instance._session_l2_policy != disk_cache_policy)):
                 if cls._instance is not None:
                     logger.info(
                         "OmniMultimodalDispatcher: rebinding from %s to %s",
                         cls._instance.bundle_path, bundle_path,
                     )
+                    cls._instance.close()
                 cls._instance = cls(
                     bundle_path,
                     disk_cache_enabled=bool(disk_cache_enabled),
+                    disk_cache_policy=disk_cache_policy,
                 )
             elif disk_cache_enabled is not None:
                 cls._instance._disk_cache_enabled = bool(disk_cache_enabled)
             return cls._instance
 
-    def __init__(self, bundle_path: str, *, disk_cache_enabled: bool = False):
+    def __init__(self, bundle_path: str, *, disk_cache_enabled: bool = False,
+                 disk_cache_policy: Optional[Dict[str, Any]] = None):
         self.bundle_path = bundle_path
         self._session = None
         self._lock = threading.Lock()
@@ -785,9 +791,11 @@ class OmniMultimodalDispatcher:
         )
         self._last_signature: Optional[str] = None
         self._disk_cache_enabled = bool(disk_cache_enabled)
+        self._session_l2_policy = dict(disk_cache_policy or {})
+        self._session_l2_store = None
         self._session_l2_fingerprint = self._bundle_fingerprint(bundle_path)
         self._session_l2_path = self._default_session_l2_path(
-            self._session_l2_fingerprint
+            self._session_l2_fingerprint, self._session_l2_policy
         )
         self._session_l2_stats: Dict[str, Any] = {
             "schema": _OMNI_SESSION_L2_SCHEMA,
@@ -832,14 +840,24 @@ class OmniMultimodalDispatcher:
         return digest.hexdigest()[:16]
 
     @staticmethod
-    def _default_session_l2_path(fingerprint: str) -> Path:
-        override = os.environ.get("VMLINUX_OMNI_SESSION_CACHE_DIR", "").strip()
-        root = (
-            Path(override).expanduser()
-            if override
-            else Path.home() / ".cache" / "vmlx-engine" / "omni-session"
-        )
-        return root / fingerprint / "latest.safetensors"
+    def _default_session_l2_path(fingerprint: str, policy=None) -> Path:
+        from .utils.omni_session_disk_store import SCHEMA
+        root = Path((policy or {}).get("root") or
+                    Path.home() / ".cache" / "vmlx-engine" / "block-cache").expanduser()
+        namespace = hashlib.sha256(f"{fingerprint}:{SCHEMA}".encode()).hexdigest()[:16]
+        return root / namespace / "native_sessions"
+
+    def _native_disk_store(self):
+        if self._session_l2_store is None:
+            from .utils.omni_session_disk_store import OmniSessionDiskStore
+            policy = self._session_l2_policy
+            self._session_l2_store = OmniSessionDiskStore(
+                root=policy.get("root") or Path.home() / ".cache" / "vmlx-engine" / "block-cache",
+                model_key=self._session_l2_fingerprint,
+                max_size_bytes=policy.get("max_size_bytes", 10 * 1024**3),
+                ttl_minutes=policy.get("ttl_minutes", 0),
+            )
+        return self._session_l2_store
 
     @classmethod
     def session_l2_status_for(
@@ -847,6 +865,7 @@ class OmniMultimodalDispatcher:
         bundle_path: str | Path,
         *,
         enabled: bool,
+        disk_cache_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         resolved = str(Path(bundle_path).resolve())
         with cls._instance_lock:
@@ -855,11 +874,13 @@ class OmniMultimodalDispatcher:
                 instance._disk_cache_enabled = bool(enabled)
                 return instance.session_l2_status()
         fingerprint = cls._bundle_fingerprint(resolved)
-        path = cls._default_session_l2_path(fingerprint)
+        path = cls._default_session_l2_path(fingerprint, disk_cache_policy)
         return {
             "schema": _OMNI_SESSION_L2_SCHEMA,
             "enabled": bool(enabled),
             "path": str(path),
+            "policy": dict(disk_cache_policy or {}),
+            "multiple_exact_snapshots": True,
             "exists": path.is_file(),
             "bytes": path.stat().st_size if path.is_file() else 0,
             "attention_codec": "native",
@@ -876,6 +897,9 @@ class OmniMultimodalDispatcher:
         path = self._session_l2_path
         status = dict(self._session_l2_stats)
         status["enabled"] = bool(self._disk_cache_enabled)
+        status["path"] = str(path)
+        status["policy"] = dict(self._session_l2_policy)
+        status["multiple_exact_snapshots"] = True
         status["exists"] = path.is_file()
         status["bytes"] = path.stat().st_size if path.is_file() else 0
         status["pending"] = self._executor._work_queue.qsize()
@@ -928,12 +952,9 @@ class OmniMultimodalDispatcher:
         ):
             return False
         started = time.monotonic()
-        path = self._session_l2_path
-        tmp_path = path.with_suffix(f".tmp-{os.getpid()}.safetensors")
         try:
             from mlx_lm.models.cache import save_prompt_cache
 
-            path.parent.mkdir(parents=True, exist_ok=True)
             metadata = {
                 "schema": _OMNI_SESSION_L2_SCHEMA,
                 "bundle_fingerprint": self._session_l2_fingerprint,
@@ -944,21 +965,12 @@ class OmniMultimodalDispatcher:
                     separators=(",", ":"),
                 ),
             }
-            save_prompt_cache(
-                str(tmp_path),
-                self._cache_for_persistence(),
-                metadata,
+            cache = self._cache_for_persistence()
+            path = self._native_disk_store().save(
+                self._last_signature,
+                lambda destination: save_prompt_cache(str(destination), cache, metadata),
             )
-            # Complete the file write before atomically publishing this
-            # request's snapshot. The owner job fences HTTP finalization.
-            with tmp_path.open("rb") as snapshot:
-                os.fsync(snapshot.fileno())
-            os.replace(tmp_path, path)
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            self._session_l2_path = path
             elapsed = time.monotonic() - started
             self._session_l2_stats["stores"] += 1
             self._session_l2_stats["last_store_seconds"] = round(elapsed, 6)
@@ -972,7 +984,6 @@ class OmniMultimodalDispatcher:
             )
             return True
         except Exception as exc:
-            tmp_path.unlink(missing_ok=True)
             self._session_l2_stats["last_error"] = str(exc)
             logger.warning("Omni session L2 persist failed: %s", exc)
             return False
@@ -1003,17 +1014,27 @@ class OmniMultimodalDispatcher:
             or self._backend != "stage1"
             or self._session is None
             or not prefix_signature
-            or not self._session_l2_path.is_file()
         ):
             return False
         started = time.monotonic()
         try:
             from mlx_lm.models.cache import load_prompt_cache
 
-            cache, metadata = load_prompt_cache(
-                str(self._session_l2_path),
-                return_metadata=True,
-            )
+            def read_native(path):
+                import mlx.core as mx
+                cache, metadata = load_prompt_cache(str(path), return_metadata=True)
+                # Materialize while eviction is fenced, then release the pool
+                # lock before decoding. The representation remains native.
+                mx.eval([entry.state for entry in cache])
+                return cache, metadata
+
+            store = self._native_disk_store()
+            restored = store.load(prefix_signature, read_native)
+            if restored is None:
+                self._session_l2_stats["misses"] += 1
+                return False
+            cache, metadata = restored
+            self._session_l2_path = store.last_path
             if metadata.get("schema") != _OMNI_SESSION_L2_SCHEMA:
                 raise ValueError("Omni session L2 schema mismatch")
             if metadata.get("bundle_fingerprint") != self._session_l2_fingerprint:
@@ -1049,6 +1070,18 @@ class OmniMultimodalDispatcher:
             self._session_l2_stats["last_error"] = str(exc)
             logger.warning("Omni session L2 restore rejected: %s", exc)
             return False
+
+    def close(self):
+        def release():
+            self.reset()
+            self._session = None
+            if self._session_l2_store is not None:
+                self._session_l2_store.close()
+                self._session_l2_store = None
+        try:
+            self.submit(release).result()
+        finally:
+            self._executor.shutdown(wait=True)
 
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future:
         """Submit work to the persistent Omni native-runtime owner thread."""
@@ -1428,6 +1461,7 @@ async def dispatch_omni_chat_completion(
     bundle_path: str,
     *,
     disk_cache_enabled: bool = False,
+    disk_cache_policy: Optional[Dict[str, Any]] = None,
     effective_max_tokens: Optional[int] = None,
     effective_temperature: Optional[float] = None,
     effective_top_p: Optional[float] = None,
@@ -1503,6 +1537,7 @@ async def dispatch_omni_chat_completion(
     dispatcher = OmniMultimodalDispatcher.get(
         bundle_path,
         disk_cache_enabled=disk_cache_enabled,
+        disk_cache_policy=disk_cache_policy,
     )
 
     # Protocol handlers resolve request/session/bundle defaults before this

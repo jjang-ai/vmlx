@@ -10,7 +10,7 @@ aggregate LRU trim for the whole configured block-cache root.
 Only finalized cache payloads are managed:
 
 * SQLite-indexed block ``.safetensors`` files, using index ``last_accessed``;
-* paired SSM companion ``.safetensors`` + ``.json`` records, using mtime; and
+* paired SSM companion and native session ``.safetensors`` + ``.json`` records, using mtime; and
 * old finalized orphan payloads inside known cache layout directories.
 
 Temporary/in-flight files are counted as physical usage but never deleted while
@@ -130,6 +130,7 @@ def ensure_managed_block_cache_namespace(
     recognized_types = {
         "blocks": "directory",
         "ssm_companion": "directory",
+        "native_sessions": "directory",
         "block_index.db": "file",
         "block_index.db-wal": "file",
         "block_index.db-shm": "file",
@@ -1326,7 +1327,7 @@ class GlobalDiskCacheBudget:
             if path.suffix not in {".safetensors", ".json"}:
                 continue
             relative_parts = path.relative_to(self.root).parts
-            if "blocks" not in relative_parts and "ssm_companion" not in relative_parts:
+            if not {"blocks", "ssm_companion", "native_sessions"}.intersection(relative_parts):
                 continue
             finalized_files.append(path)
 
@@ -1335,7 +1336,7 @@ class GlobalDiskCacheBudget:
             if data_path in referenced or data_path.suffix != ".safetensors":
                 continue
             relative_parts = data_path.relative_to(self.root).parts
-            if "ssm_companion" not in relative_parts:
+            if not {"ssm_companion", "native_sessions"}.intersection(relative_parts):
                 continue
             side_path = data_path.with_suffix(".json")
             if side_path not in finalized_set:
@@ -1349,7 +1350,7 @@ class GlobalDiskCacheBudget:
             referenced.add(side_path)
             candidates.append(
                 _BudgetCandidate(
-                    kind="ssm",
+                    kind="native_session" if "native_sessions" in relative_parts else "ssm",
                     size_bytes=max(0, data_stat.st_size) + max(0, side_stat.st_size),
                     last_accessed_ns=max(data_stat.st_mtime_ns, side_stat.st_mtime_ns),
                     paths=(data_path, side_path),
