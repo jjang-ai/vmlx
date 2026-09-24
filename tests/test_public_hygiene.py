@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 
-spec = importlib.util.spec_from_file_location("public_hygiene", Path(__file__).parents[1] / "scripts/check_public_hygiene.py")
+spec = importlib.util.spec_from_file_location("public_hygiene", Path(__file__).with_name("public_hygiene.py"))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 

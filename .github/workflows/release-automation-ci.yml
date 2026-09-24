@@ -2,15 +2,8 @@ name: Release automation CI
 
 on:
   push:
-    paths:
-      - ".github/**"
-      - "docs/development/release-automation.md"
-      - "tests/test_release_automation.py"
+    branches: [main]
   pull_request:
-    paths:
-      - ".github/**"
-      - "docs/development/release-automation.md"
-      - "tests/test_release_automation.py"
 
 permissions:
   contents: read
@@ -29,3 +22,7 @@ jobs:
         run: >-
           python -m pytest tests/test_release_automation.py -q
           -k "release_metadata_round_trip or website_deployer or workflows_are_manual or release_automation_excludes"
+      - name: Validate public document boundary
+        run: |
+          python -m pytest tests/test_public_hygiene.py -q
+          python tests/public_hygiene.py
