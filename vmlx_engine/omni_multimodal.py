@@ -595,6 +595,7 @@ def _build_omni_turn_prompt_with_thinking(
     is_first: bool = False,
     enable_thinking: Optional[bool] = None,
     video_prompt: Optional[str] = None,
+    template_options=None,
 ) -> str:
     """Build an OmniSession turn prompt while preserving the API thinking rail.
 
@@ -622,6 +623,7 @@ def _build_omni_turn_prompt_with_thinking(
     msg_content = media + user_text
     messages = [{"role": "user", "content": msg_content}]
     template_kwargs = {
+        **(template_options or {}),
         "tokenize": False,
         "add_generation_prompt": True,
     }
@@ -1296,7 +1298,7 @@ class OmniMultimodalDispatcher:
                 n_audio_tokens: int = 0,
                 is_first: bool = False,
             ) -> str:
-                return _build_omni_turn_prompt_with_thinking(
+                prompt = _build_omni_turn_prompt_with_thinking(
                     self.tokenizer,
                     user_text,
                     n_image_tokens=n_image_tokens,
@@ -1305,7 +1307,11 @@ class OmniMultimodalDispatcher:
                     is_first=is_first,
                     enable_thinking=getattr(self, "_vmlx_enable_thinking", None),
                     video_prompt=getattr(self, "_vmlx_video_prompt", None),
+                    template_options=getattr(self, "_vmlx_template_options", None),
                 )
+                from .omni_native_controls import record_prompt_rail
+                record_prompt_rail(self, prompt)
+                return prompt
 
         logger.info(
             "OmniMultimodalDispatcher: loading Stage-1 PyTorch-bridge OmniSession "
@@ -1327,6 +1333,8 @@ class OmniMultimodalDispatcher:
         enable_thinking: Optional[bool] = None,
         token_callback: Optional[Callable[[Optional[int], str], None]] = None,
         video_controls=None,
+        template_options=None,
+        prompt_rail_callback=None,
     ) -> Dict[str, Any]:
         """Run one OmniSession turn and return an OpenAI-shaped response."""
         # Native encoders synchronously consume these files during this turn.
@@ -1338,6 +1346,12 @@ class OmniMultimodalDispatcher:
         ) as request_scratch:
             scratch_dir = Path(request_scratch)
             self._ensure_session()
+            from .omni_native_controls import has_native_thinking_directive
+            template_options = dict(template_options or {})
+            template_sensitive = bool(template_options) or has_native_thinking_directive(messages)
+            self._session._vmlx_template_options = template_options
+            self._session._vmlx_prompt_rail_callback = prompt_rail_callback
+            self._session._vmlx_prompt_thinking_off = enable_thinking is False
             setattr(
                 self._session,
                 "_vmlx_enable_thinking",
@@ -1352,7 +1366,7 @@ class OmniMultimodalDispatcher:
             self._session._vmlx_video_prompt = None
             self._last_snapshot_skip_reason = None
             prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt, video_policy=video_policy)
-            if self._last_signature != prefix_hash and not force_reset:
+            if self._last_signature != prefix_hash and not force_reset and not template_sensitive:
                 self._try_restore_session_snapshot(prefix_hash)
             last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
             last_content = last_user.get("content", "")
@@ -1362,7 +1376,7 @@ class OmniMultimodalDispatcher:
             multi_clip = bool(native_video_spec) and sum(
                 part.get("type") in _VIDEO_TYPES for part in last_parts
             ) > 1
-            should_reset = force_reset or multi_clip or prefix_hash != self._last_signature
+            should_reset = force_reset or multi_clip or template_sensitive or prefix_hash != self._last_signature
             checkpoints = None
             if (should_reset and not force_reset and not cache_salt
                     and self._backend == "stage1"
@@ -1370,10 +1384,10 @@ class OmniMultimodalDispatcher:
                     and getattr(self._session, "_vmlx_prefill_checkpoints", False)):
                 from .omni_native_prefix import NativePrefillCheckpoints
                 checkpoints = NativePrefillCheckpoints(
-                    self, messages, video_policy, publish=enable_thinking is not False,
+                    self, messages, video_policy, publish=template_sensitive or enable_thinking is not False,
                 )
             full_history = getattr(self, "_backend", "stage1") == "stage1" and (
-                checkpoints is not None or multi_clip or (should_reset and len(messages) > 1)
+                checkpoints is not None or multi_clip or template_sensitive or (should_reset and len(messages) > 1)
             )
             if should_reset:
                 logger.info(
@@ -1447,12 +1461,15 @@ class OmniMultimodalDispatcher:
                     max_tokens=max_tokens, temperature=temperature, top_p=top_p,
                     token_callback=token_callback,
                     checkpoints=checkpoints,
+                    template_options=template_options,
                 )
                 cached_tokens = self._session._vmlx_restored_prefix_tokens
             else:
                 reply = self._session.turn(**turn_kwargs)
+            self._session._vmlx_prompt_rail_callback = None
+            prompt_thinking_off = self._session._vmlx_prompt_thinking_off
             reasoning, visible = _split_omni_reply(
-                reply, explicit_thinking_off=enable_thinking is False,
+                reply, explicit_thinking_off=prompt_thinking_off,
             )
             assistant = {"role": "assistant", "content": visible}
             if reasoning:
@@ -1462,7 +1479,12 @@ class OmniMultimodalDispatcher:
                 # The native decoder samples the last token without consuming
                 # it into KV/SSM state when the output cap is reached.
                 self._last_snapshot_skip_reason = "incomplete_generation"
-            elif self._backend == "stage1" and (reasoning or enable_thinking is not False):
+            elif self._backend == "stage1" and template_sensitive:
+                # Budget hints move to the latest user; directives and history
+                # controls can revise earlier tokens. Only exact-token prefill
+                # checkpoints are eligible, never completed-turn snapshots.
+                self._last_snapshot_skip_reason = "native_template_controls_require_exact_prefix"
+            elif self._backend == "stage1" and (reasoning or not prompt_thinking_off):
                 # This bridge currently uses the native default that truncates
                 # earlier thinking. Its post-decode state still contains those
                 # tokens, so it is not a prefix of the next rendered transcript.
@@ -1477,6 +1499,7 @@ class OmniMultimodalDispatcher:
         # deepseek_r1 reasoning-content split path handles it.
         return {
             "content": reply,
+            "prompt_thinking_off": prompt_thinking_off,
             "n_images": n_images,
             "has_audio": has_audio,
             "has_video": has_video,
@@ -1496,6 +1519,7 @@ class OmniMultimodalDispatcher:
         with self._lock:
             if self._session is not None:
                 self._session.reset()
+                self._session._vmlx_prompt_rail_callback = None
             self._last_signature = None
 
 
@@ -1779,6 +1803,9 @@ async def dispatch_omni_chat_completion(
             ),
         )
 
+    from .omni_native_controls import native_template_options
+    _template_options = native_template_options(request_template_kwargs)
+
     msgs_dump: list[dict] = []
     for m in (request.messages or []):
         if hasattr(m, "model_dump"):
@@ -1817,6 +1844,9 @@ async def dispatch_omni_chat_completion(
         disk_cache_enabled=disk_cache_enabled,
         disk_cache_policy=disk_cache_policy,
     )
+
+    if _template_options and dispatcher._backend != "stage1":
+        raise HTTPException(400, "Native Omni template options are supported only by the Stage-1 media runtime")
 
     # Protocol handlers resolve request/session/bundle defaults before this
     # bridge.  Do not replace an omitted request cap with the bridge's old
@@ -1863,7 +1893,7 @@ async def dispatch_omni_chat_completion(
         isinstance(_cache_salt, str) and bool(_cache_salt)
     )
 
-    def _run_chat(token_callback=None):
+    def _run_chat(token_callback=None, prompt_rail_callback=None):
         try:
             result = dispatcher.chat(
                 messages=msgs_dump,
@@ -1875,6 +1905,8 @@ async def dispatch_omni_chat_completion(
                 cache_salt=_cache_salt,
                 token_callback=token_callback,
                 video_controls=video_controls,
+                template_options=_template_options,
+                prompt_rail_callback=prompt_rail_callback,
             )
             if _bypass_cache:
                 dispatcher.reset()
@@ -1901,7 +1933,7 @@ async def dispatch_omni_chat_completion(
         elapsed = _time.time() - t_start
         reasoning_content, content = _split_omni_reply(
             result.get("content") or "",
-            explicit_thinking_off=_explicit_thinking_off,
+            explicit_thinking_off=result.get("prompt_thinking_off", _explicit_thinking_off),
         )
         prompt_tokens = int(result.get("prompt_tokens") or 0)
         completion_tokens = int(result.get("completion_tokens") or 0)
@@ -1954,6 +1986,9 @@ async def dispatch_omni_chat_completion(
             raise _OmniStreamCancelled("Omni client disconnected")
         _enqueue(("token", token_id, text_delta))
 
+    def _on_prompt_rail(off: bool) -> None:
+        _enqueue(("prompt_rail", off))
+
     def _on_done(future: Future) -> None:
         try:
             _enqueue(("done", future.result()))
@@ -1979,7 +2014,7 @@ async def dispatch_omni_chat_completion(
         splitter = _OmniIncrementalRailSplitter(
             explicit_thinking_off=_explicit_thinking_off
         )
-        future = dispatcher.submit(_run_chat, _on_token)
+        future = dispatcher.submit(_run_chat, _on_token, _on_prompt_rail)
         future.add_done_callback(_on_done)
         streamed_reasoning = ""
         streamed_content = ""
@@ -1988,6 +2023,9 @@ async def dispatch_omni_chat_completion(
             while True:
                 event = await event_queue.get()
                 kind = event[0]
+                if kind == "prompt_rail":
+                    splitter = _OmniIncrementalRailSplitter(explicit_thinking_off=event[1])
+                    continue
                 if kind == "token":
                     for rail, delta in splitter.feed(event[2]):
                         if not delta:
@@ -2063,7 +2101,7 @@ async def dispatch_omni_chat_completion(
             raw = (result or {}).get("content") or ""
             final_reasoning, final_content = _split_omni_reply(
                 raw,
-                explicit_thinking_off=_explicit_thinking_off,
+                explicit_thinking_off=(result or {}).get("prompt_thinking_off", _explicit_thinking_off),
             )
             if final_reasoning and not final_reasoning.startswith(
                 streamed_reasoning.strip()

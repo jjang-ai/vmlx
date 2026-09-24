@@ -11,7 +11,7 @@ from copy import deepcopy
 
 def run_full_history(session, messages, *, scratch_dir, extract_parts,
                      enable_thinking, max_tokens, temperature, top_p,
-                     token_callback=None, checkpoints=None):
+                     token_callback=None, checkpoints=None, template_options=None):
     import numpy as np
     from PIL import Image
 
@@ -80,7 +80,7 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
             item["content"] = media + "".join(texts)
         rendered.append(item)
 
-    kwargs = {"tokenize": False, "add_generation_prompt": True}
+    kwargs = {**(template_options or {}), "tokenize": False, "add_generation_prompt": True}
     if enable_thinking is not None:
         kwargs["enable_thinking"] = bool(enable_thinking)
     prompt = session.tokenizer.apply_chat_template(rendered, **kwargs)
@@ -93,8 +93,11 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
             session, messages, scratch_dir=scratch_dir, extract_parts=extract_parts,
             enable_thinking=enable_thinking, max_tokens=max_tokens,
             temperature=temperature, top_p=top_p, token_callback=token_callback,
-            checkpoints=checkpoints,
+            checkpoints=checkpoints, template_options=template_options,
         )
+    if hasattr(session, "_vmlx_prompt_rail_callback"):
+        from .omni_native_controls import record_prompt_rail
+        record_prompt_rail(session, prompt)
     session._ensure_cache()
     session._vmlx_restored_prefix_tokens = restored
     session._last_prompt_tokens = int(input_ids.shape[-1]) - restored
