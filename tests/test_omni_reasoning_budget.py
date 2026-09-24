@@ -93,3 +93,8 @@ def test_media_http_budget_rejection_survives_protocol_adapters(monkeypatch, pat
         client.close()
     assert response.status_code == 400, response.text
     assert "thinking-token budget" in response.text
+    if path == "/v1/messages":
+        payload = response.json()
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == "invalid_request_error"
+        assert "thinking-token budget" in payload["error"]["message"]

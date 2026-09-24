@@ -16794,8 +16794,21 @@ async def create_anthropic_message(
 
                 return _SR(_adapt_omni_stream(), media_type="text/event-stream")
             return cc
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        # Omni validates controls before streaming starts. Keep that rejection
+        # in the native Messages error envelope, rather than FastAPI's detail
+        # object, so SDKs can read the actual constraint and status.
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=exc.headers,
+            content={
+                "type": "error",
+                "error": {
+                    "type": "api_error" if exc.status_code >= 500 else "invalid_request_error",
+                    "message": str(exc.detail),
+                },
+            },
+        )
     except Exception as _omni_route_err:  # pragma: no cover
         logger.warning(
             "Omni multimodal dispatch failed in /v1/messages (%s); "
