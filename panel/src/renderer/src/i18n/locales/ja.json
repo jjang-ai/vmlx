@@ -991,7 +991,7 @@
       "vlmOffNote": "このセッションではマルチモーダル処理が明示的に無効になっています。",
       "omniBackend": "Omni バックエンド",
       "omniBackendTooltip": "Nemotron-Omni エンコーダーバックエンド。Stage 1 は正確性優先の PyTorch/MPS ブリッジです。Stage 2 は --omni-backend stage2 / VMLX_OMNI_BACKEND=stage2 に対応し、ネイティブ MLX RADIO + Parakeet ベンチマーク用です。",
-      "omniVideoControlsNote": "Omni 動画は FPS と最大フレーム数に対応しています。ピクセルおよび動画トークンの予算には対応していません。保存済みの上書き設定は、モデルのデフォルトを選んで解除してください。",
+      "omniVideoControlsNote": "Omni 動画は FPS と最大フレーム数に対応しています。ピクセルおよび動画トークンの予算には対応していません。保存済みの上書き設定は、{defaultOption}を選んで解除してください。",
       "omniStage1": "Stage 1 正確性",
       "omniStage2": "Stage 2 ネイティブ MLX",
       "imageTokenBudget": "画像トークンバジェット",

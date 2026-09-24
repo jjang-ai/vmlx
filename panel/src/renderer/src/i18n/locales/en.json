@@ -991,7 +991,7 @@
       "vlmOffNote": "Multimodal processing is explicitly disabled for this session.",
       "omniBackend": "Omni Backend",
       "omniBackendTooltip": "Nemotron-Omni encoder backend. Stage 1 is the correctness-first PyTorch/MPS bridge. Stage 2 maps to --omni-backend stage2 / VMLX_OMNI_BACKEND=stage2 for native MLX RADIO + Parakeet benchmarking.",
-      "omniVideoControlsNote": "Omni video supports FPS and maximum frames. Pixel and video-token budgets are unsupported. Clear any saved overrides by choosing Model default.",
+      "omniVideoControlsNote": "Omni video supports FPS and maximum frames. Pixel and video-token budgets are unsupported. Clear any saved overrides by choosing {defaultOption}.",
       "omniStage1": "Stage 1 correctness",
       "omniStage2": "Stage 2 native MLX",
       "imageTokenBudget": "Image Token Budget",

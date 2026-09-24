@@ -221,14 +221,9 @@ def _patch_omni_encoder_view_for_vendored_cradio() -> bool:
 def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
     """Inspect whether a Nemotron-Omni bundle has its media components.
 
-    Checks are intentionally header/config-only:
-      1. ``config.json`` exists and ``model_type`` is a Nemotron-H spelling
-      2. ``config_omni.json`` exists alongside (carries the NVLM/parakeet wrapper
-         metadata that ``OmniChat`` reads)
-      3. ``configuration_radio.py`` exists for the RADIO vision config
-      4. The safetensors index includes RADIO/vision keys
-      5. The safetensors index includes Parakeet/sound keys
-      6. The safetensors index includes the media projector keys
+    Cross-check indexed media tensors in their actual shard headers, including
+    encoder presence and both projector chains. This does not replace live
+    modality qualification of the complete model.
     """
     p = Path(model_path)
     status: dict[str, Any] = {
@@ -242,6 +237,8 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
         "has_radio_weights": False,
         "has_parakeet_weights": False,
         "has_media_projector": False,
+        "has_vision_projector": False,
+        "has_audio_projector": False,
         "modalities": [],
         "missing": [],
     }
@@ -276,30 +273,22 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
         sound_config = omni_data.get("sound_config")
         if isinstance(sound_config, dict):
             status["sound_config_model_type"] = sound_config.get("model_type")
-        keys = json.loads(idx.read_text()).get("weight_map", {}).keys()
-        key_list = [str(k) for k in keys]
-        status["has_radio_weights"] = any(
-            k.startswith("vision_model.radio_model.") for k in key_list
-        )
-        status["has_parakeet_weights"] = any(
-            k.startswith("sound_encoder.") or k.startswith("parakeet.")
-            for k in key_list
-        )
-        status["has_media_projector"] = any(
-            k.startswith("mlp1.")
-            or k.startswith("sound_projector.")
-            or k.startswith("projector.")
-            for k in key_list
-        )
-        if status["has_radio_weights"]:
+        from .omni_media_components import inspect_media_weights
+        status.update(inspect_media_weights(
+            p, json.loads(idx.read_text()).get("weight_map", {}), cfg_data, omni_data,
+        ))
+        if status["has_radio_weights"] and status["has_vision_projector"]:
+            from .omni_native_video import temporal_video_spec
+            status["temporal_video_spec"] = temporal_video_spec(p)
             status["modalities"].append("image")
-            # The current Stage-1 bridge calls processor.video_processor.
-            # Nemotron bundles with only the image processor can still process
-            # images, but advertising video turns into a runtime 500.
-            status["video_bridge_supported"] = bool(status["has_video_preprocessor_config"])
+            # Native temporal projection is independently verified from shards.
+            # Older image-only bundles retain the sampled-frame fallback.
+            status["video_bridge_supported"] = bool(
+                status["temporal_video_spec"] or status["has_video_preprocessor_config"]
+            )
             status["video_frame_fallback_supported"] = True
             status["modalities"].append("video")
-        if status["has_parakeet_weights"]:
+        if status["has_parakeet_weights"] and status["has_audio_projector"]:
             status["modalities"].append("audio")
         requirements = {
             # Either family spelling — nemotron_h_v2 is the same hybrid
@@ -310,14 +299,15 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
             "sound_config.model_type=parakeet": status["sound_config_model_type"] == "parakeet",
             "radio weights": status["has_radio_weights"],
             "parakeet weights": status["has_parakeet_weights"],
-            "media projector": status["has_media_projector"],
+            "vision projector": status["has_vision_projector"],
+            "audio projector": status["has_audio_projector"],
         }
         status["missing"].extend([name for name, ok in requirements.items() if not ok])
         status["modalities"] = ["text"] + sorted(set(status["modalities"]))
         status["bundle_compatible"] = not status["missing"]
         return status
     except Exception as e:  # pragma: no cover
-        status["missing"].append(f"inspect_error:{type(e).__name__}")
+        status["missing"].append(f"inspect_error:{type(e).__name__}:{e}")
         logger.debug(f"omni_multimodal_component_status({p}) check failed: {e}")
         return status
 

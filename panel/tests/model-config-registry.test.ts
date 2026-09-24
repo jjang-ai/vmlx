@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { loadLocalModelPaths } from './helpers/local-model-paths'
@@ -328,25 +328,76 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
         },
       },
     )
+    writeFileSync(join(dir, 'configuration_radio.py'), '# fixture')
     writeFileSync(join(dir, 'config_omni.json'), JSON.stringify({
       model_type: 'NemotronH_Nano_Omni_Reasoning_V3',
       sound_config: { model_type: 'parakeet', sampling_rate: 16000 },
       vision_config: { model_type: 'radio' },
     }))
+    const shapes: Record<string, number[]> = {
+      'vision_model.radio_model.model.patch_generator.embedder.weight': [4, 3],
+      'vision_model.radio_model.model.blocks.0.attn.qkv.weight': [12, 4],
+      'mlp1.0.weight': [4], 'mlp1.1.weight': [8, 4], 'mlp1.3.weight': [6, 8],
+      'sound_encoder.encoder.layers.0.weight': [3, 3],
+      'sound_encoder.encoder.layers.0.norm.num_batches_tracked': [],
+      'sound_projection.norm.weight': [3], 'sound_projection.linear1.weight': [5, 3],
+      'sound_projection.linear2.weight': [6, 5],
+    }
     writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
-      weight_map: {
-        'sound_encoder.layers.0.weight': 'model.safetensors',
-        'sound_projection.0.weight': 'model.safetensors',
-        'vision_model.encoder.weight': 'model.safetensors',
-        'mlp1.0.weight': 'model.safetensors',
-      },
+      weight_map: Object.fromEntries(Object.keys(shapes).map(key => [key, 'model.safetensors'])),
     }))
+    let offset = 0
+    writeSafetensorsHeader(join(dir, 'model.safetensors'), Object.fromEntries(Object.entries(shapes).map(([key, shape]) => {
+      const start = offset; offset += shape.reduce((a,b) => a*b, 1) * 2
+      return [key, {dtype: 'F16', shape, data_offsets: [start, offset]}]
+    })))
 
     const detected = detectModelConfigFromDir(dir)
 
     expect(detected.family).toBe('nemotron-h')
     expect(detected.isTurboQuant).toBe(true)
     expect(detected.isMultimodal).toBe(true)
+  })
+
+  it.each(['missing-shard', 'missing-tensor', 'truncated', 'empty-shape', 'wrong-width', 'audio-projector-missing', 'bad-temporal-shape'])('rejects Omni media with %s despite indexed component names', (fault) => {
+    const dir = makeModelDir({ model_type: 'nemotron_h', hidden_size: 6 }, {
+      weight_format: 'mxtq', modality: 'omni', capabilities: { family: 'nemotron_h', modality: 'omni' },
+    })
+    writeFileSync(join(dir, 'configuration_radio.py'), '# fixture')
+    writeFileSync(join(dir, 'config_omni.json'), JSON.stringify({
+      sound_config: { model_type: 'parakeet', hidden_size: 3 }, vision_config: {}, downsample_ratio: 1,
+    }))
+    const shapes: Record<string, number[]> = {
+      'vision_model.radio_model.model.patch_generator.embedder.weight': [4, 3],
+      'vision_model.radio_model.model.blocks.0.attn.qkv.weight': [12, 4],
+      'mlp1.0.weight': [4], 'mlp1.1.weight': [8, 4], 'mlp1.3.weight': [6, 8],
+      'sound_encoder.encoder.layers.0.weight': [3, 3],
+      'sound_projection.norm.weight': [3], 'sound_projection.linear1.weight': [5, 3],
+      'sound_projection.linear2.weight': [6, 5],
+    }
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({ weight_map: Object.fromEntries(Object.keys(shapes).map(key => [key, 'model.safetensors'])) }))
+    if (fault === 'missing-tensor') delete shapes['vision_model.radio_model.model.patch_generator.embedder.weight']
+    if (fault === 'empty-shape') shapes['mlp1.3.weight'] = [0, 8]
+    if (fault === 'wrong-width') shapes['sound_projection.linear2.weight'] = [7, 5]
+    if (fault === 'audio-projector-missing') {
+      for (const key of Object.keys(shapes)) if (key.startsWith('sound_projection.')) delete shapes[key]
+      writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({ weight_map: Object.fromEntries(Object.keys(shapes).map(key => [key, 'model.safetensors'])) }))
+    }
+    let offset = 0
+    const tensors = Object.fromEntries(Object.entries(shapes).map(([name, shape]) => {
+      const start = offset; offset += shape.reduce((a,b) => a*b, 1) * 2
+      return [name, {dtype: 'F16', shape, data_offsets: [start, offset]}]
+    }))
+    if (fault === 'bad-temporal-shape') {
+      const key = 'vision_model.radio_model.model.patch_generator.video_embedder.weight'
+      tensors[key] = {dtype: 'F16', shape: [5, 6], data_offsets: [offset, offset + 60]}
+      const index = JSON.parse(readFileSync(join(dir, 'model.safetensors.index.json'), 'utf8'))
+      index.weight_map[key] = 'model.safetensors'
+      writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify(index))
+    }
+    if (fault !== 'missing-shard') writeSafetensorsHeader(join(dir, 'model.safetensors'), tensors)
+    if (fault === 'truncated') writeFileSync(join(dir, 'model.safetensors'), 'bad')
+    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(false)
   })
 
   it('does not trust a Nemotron Omni metadata stamp without matching media tensors', () => {

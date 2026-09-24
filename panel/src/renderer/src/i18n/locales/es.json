@@ -991,7 +991,7 @@
       "vlmOffNote": "El procesamiento multimodal está desactivado explícitamente para esta sesión.",
       "omniBackend": "Backend Omni",
       "omniBackendTooltip": "Backend de codificadores de Nemotron-Omni. Stage 1 es el puente PyTorch/MPS con prioridad en la corrección. Stage 2 corresponde a --omni-backend stage2 / VMLX_OMNI_BACKEND=stage2 para el benchmarking nativo MLX RADIO + Parakeet.",
-      "omniVideoControlsNote": "El vídeo de Omni admite FPS y un máximo de fotogramas. No admite presupuestos de píxeles ni de tokens de vídeo. Selecciona el valor predeterminado del modelo para borrar las opciones guardadas.",
+      "omniVideoControlsNote": "El vídeo de Omni admite FPS y un máximo de fotogramas. No admite presupuestos de píxeles ni de tokens de vídeo. Selecciona {defaultOption} para borrar las opciones guardadas.",
       "omniStage1": "Stage 1 corrección",
       "omniStage2": "Stage 2 MLX nativo",
       "imageTokenBudget": "Presupuesto de tokens de imagen",

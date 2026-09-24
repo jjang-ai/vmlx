@@ -991,7 +991,7 @@
       "vlmOffNote": "이 세션에서는 멀티모달 처리가 명시적으로 비활성화되었습니다.",
       "omniBackend": "Omni 백엔드",
       "omniBackendTooltip": "Nemotron-Omni 인코더 백엔드입니다. Stage 1은 정확성 우선의 PyTorch/MPS 브리지입니다. Stage 2는 네이티브 MLX RADIO + Parakeet 벤치마킹을 위한 --omni-backend stage2 / VMLX_OMNI_BACKEND=stage2에 매핑됩니다.",
-      "omniVideoControlsNote": "Omni 동영상은 FPS와 최대 프레임 수를 지원합니다. 픽셀 및 동영상 토큰 예산은 지원하지 않습니다. 저장된 재정의가 있으면 모델 기본값을 선택하여 해제하세요.",
+      "omniVideoControlsNote": "Omni 동영상은 FPS와 최대 프레임 수를 지원합니다. 픽셀 및 동영상 토큰 예산은 지원하지 않습니다. 저장된 재정의가 있으면 {defaultOption}을 선택하여 해제하세요.",
       "omniStage1": "Stage 1 정확성",
       "omniStage2": "Stage 2 네이티브 MLX",
       "imageTokenBudget": "이미지 토큰 예산",

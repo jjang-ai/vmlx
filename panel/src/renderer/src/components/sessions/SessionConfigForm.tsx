@@ -1537,7 +1537,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={2}
               defaultValue={8}
             />
-            {omniBackendVisible && <div data-vmlx-section="omni-video-controls-note"><InfoNote text={t('sessions.config.omniVideoControlsNote')} /></div>}
+            {omniBackendVisible && <div data-vmlx-section="omni-video-controls-note"><InfoNote text={t('sessions.config.omniVideoControlsNote', { defaultOption: t('sessions.config.videoMaxPixelsDefault') })} /></div>}
             <Field settingKey="videoMaxPixels" label={t('sessions.config.videoMaxPixels')} tooltip={t('sessions.config.videoMaxPixelsTooltip')}>
               <select
                 className="cfg-input"

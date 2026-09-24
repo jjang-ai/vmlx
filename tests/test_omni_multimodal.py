@@ -46,19 +46,21 @@ def _write_omni_bundle(
         json.dumps({"sound_config": {"model_type": sound_model_type}})
     )
     (tmp_path / "configuration_radio.py").write_text("# radio config placeholder\n")
-    weight_map = {}
+    import numpy as np
+    from safetensors.numpy import save_file
+    shapes = {}
     if radio:
-        weight_map[
-            "vision_model.radio_model.model.blocks.0.attn.qkv.weight"
-        ] = "model.safetensors"
+        shapes["vision_model.radio_model.model.blocks.0.attn.qkv.weight"] = (12, 4)
+        shapes["vision_model.radio_model.model.patch_generator.embedder.weight"] = (4, 3)
     if parakeet:
-        weight_map[
-            "sound_encoder.encoder.layers.0.conv.depthwise_conv.weight"
-        ] = "model.safetensors"
+        shapes["sound_encoder.encoder.layers.0.conv.depthwise_conv.weight"] = (3, 3)
     if projector:
-        weight_map["mlp1.0.weight"] = "model.safetensors"
+        shapes.update({"mlp1.0.weight": (4,), "mlp1.1.weight": (8, 4), "mlp1.3.weight": (6, 8),
+                       "sound_projection.norm.weight": (3,), "sound_projection.linear1.weight": (5, 3),
+                       "sound_projection.linear2.weight": (6, 5)})
+    save_file({k: np.zeros(shape, dtype=np.float16) for k,shape in shapes.items()}, str(tmp_path / "model.safetensors"))
     (tmp_path / "model.safetensors.index.json").write_text(
-        json.dumps({"weight_map": weight_map})
+        json.dumps({"weight_map": {k: "model.safetensors" for k in shapes}})
     )
     if video_preprocessor:
         (tmp_path / "video_preprocessor_config.json").write_text(

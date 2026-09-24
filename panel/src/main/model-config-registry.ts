@@ -22,7 +22,7 @@ import { glmNativeSsdRuntimeEnabled } from '../shared/detectedFamilyNames'
 const MAX_SAFETENSORS_HEADER_BYTES = 64 * 1024 * 1024
 
 /** Read tensor names without materializing a safetensors payload. */
-function readSafetensorsHeaderKeys(filePath: string): string[] | undefined {
+function readSafetensorsHeader(filePath: string): { tensors: Record<string, any>; dataBytes: number } | undefined {
   let fd: number | undefined
   try {
     fd = openSync(filePath, 'r')
@@ -45,12 +45,18 @@ function readSafetensorsHeaderKeys(filePath: string): string[] | undefined {
     }
     const header = JSON.parse(buffer.toString('utf8').trim())
     if (!header || typeof header !== 'object' || Array.isArray(header)) return undefined
-    return Object.keys(header).filter(key => key !== '__metadata__')
+    return { tensors: header, dataBytes: fstatSync(fd).size - 8 - headerBytes }
   } catch {
     return undefined
   } finally {
     if (fd !== undefined) closeSync(fd)
   }
+}
+
+/** Read tensor names without changing the existing generic detection policy. */
+function readSafetensorsHeaderKeys(filePath: string): string[] | undefined {
+  const header = readSafetensorsHeader(filePath)
+  return header ? Object.keys(header.tensors).filter(key => key !== '__metadata__') : undefined
 }
 
 /**
@@ -1016,26 +1022,72 @@ function nemotronOmniArtifactHasMedia(
     parsedConfig?.text_config?.model_type,
     jangCfg?.capabilities?.family,
   ].map(value => String(value || '').toLowerCase())
-  if (!modelTypes.some(value => value === 'nemotron_h' || value === 'nemotron-h')) {
+  if (!modelTypes.some(value => value === 'nemotron_h' || value === 'nemotron-h' || value === 'nemotron_h_v2')) {
     return false
   }
 
   try {
+    if (!existsSync(join(modelPath, 'configuration_radio.py'))) return false
     const omni = JSON.parse(readFileSync(join(modelPath, 'config_omni.json'), 'utf-8'))
     const index = JSON.parse(readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf-8'))
     const weightMap = index?.weight_map
     if (!omni || typeof omni !== 'object' || !weightMap || typeof weightMap !== 'object') {
       return false
     }
-    const keys = Object.keys(weightMap)
-    const hasPrefix = (prefix: string): boolean => keys.some(key => key.startsWith(prefix))
-    const audioReady = omni.sound_config != null &&
-      hasPrefix('sound_encoder.') &&
-      hasPrefix('sound_projection.')
-    const visionReady = omni.vision_config != null &&
-      hasPrefix('vision_model.') &&
-      hasPrefix('mlp1.')
-    return audioReady || visionReady
+    const headers = new Map<string, NonNullable<ReturnType<typeof readSafetensorsHeader>>>()
+    const tensors = new Map<string, any>()
+    for (const [name, shard] of Object.entries(weightMap)) {
+      if (!/^(vision_model|sound_encoder|parakeet|mlp1|sound_projection|sound_projector|projector)\./.test(name)) continue
+      if (typeof shard !== 'string' || shard.startsWith('/') || shard.split('/').includes('..')) return false
+      let header = headers.get(shard)
+      if (!header) {
+        header = readSafetensorsHeader(join(modelPath, shard))
+        if (!header) return false
+        headers.set(shard, header)
+      }
+      const tensor = header.tensors[name]
+      const shape = tensor?.shape
+      const offsets = tensor?.data_offsets
+      const width: Record<string, number> = { F16: 2, BF16: 2, F32: 4, F64: 8, I64: 8, I32: 4, I16: 2, I8: 1, U8: 1, U16: 2, U32: 4, U64: 8, BOOL: 1 }
+      if (!Array.isArray(shape) || (name.endsWith('.weight') && !shape.length) || !shape.every(value => Number.isSafeInteger(value) && value > 0)
+        || !Array.isArray(offsets) || offsets.length !== 2 || !offsets.every(Number.isSafeInteger)
+        || offsets[0] < 0 || offsets[1] > header.dataBytes || offsets[1] <= offsets[0]
+        || !width[tensor.dtype] || offsets[1] - offsets[0] !== shape.reduce((a, b) => a * b, 1) * width[tensor.dtype]) return false
+      if (name.endsWith('.weight') && !['F16', 'BF16', 'F32'].includes(tensor.dtype)) return false
+      tensors.set(name, tensor)
+    }
+    const shape = (name: string, rank: number): number[] | undefined => {
+      const tensor = tensors.get(name)
+      return tensor && ['F16', 'BF16', 'F32'].includes(tensor.dtype) && tensor.shape.length === rank ? tensor.shape : undefined
+    }
+    if (parsedConfig?.hidden_size != null && omni.llm_config?.hidden_size != null && parsedConfig.hidden_size !== omni.llm_config.hidden_size) return false
+    const hidden = parsedConfig?.hidden_size ?? omni.llm_config?.hidden_size
+    const image = shape('vision_model.radio_model.model.patch_generator.embedder.weight', 2)
+    const videoKey = 'vision_model.radio_model.model.patch_generator.video_embedder.weight'
+    if (Object.prototype.hasOwnProperty.call(weightMap, videoKey)) {
+      const video = shape(videoKey, 2)
+      if (!video || !image || video[0] !== image[0] || video[1] % image[1]) return false
+      const temporal = video[1] / image[1]
+      if (temporal < 1 || (omni.video_temporal_patch_size != null && omni.video_temporal_patch_size !== temporal)) return false
+    }
+    const vn = shape('mlp1.0.weight', 1), vi = shape('mlp1.1.weight', 2), vo = shape('mlp1.3.weight', 2)
+    const sn = shape('sound_projection.norm.weight', 1), si = shape('sound_projection.linear1.weight', 2), so = shape('sound_projection.linear2.weight', 2)
+    const keys = [...tensors.keys()]
+    const audioReady = omni.sound_config?.model_type === 'parakeet' && sn && si && so
+      && keys.some(key => /^(sound_encoder|parakeet)\./.test(key))
+      && sn[0] === si[1] && si[0] === so[1] && (hidden == null || so[0] === hidden)
+      && (omni.sound_config.hidden_size == null || sn[0] === omni.sound_config.hidden_size)
+      && (omni.sound_config.projection_hidden_size == null || si[0] === omni.sound_config.projection_hidden_size)
+    const factor = omni.downsample_ratio == null ? undefined : 1 / Number(omni.downsample_ratio)
+    const visionReady = image && vn && vi && vo
+      && keys.some(key => key.startsWith('vision_model.radio_model.model.blocks.'))
+      && vn[0] === vi[1] && vi[0] === vo[1] && (hidden == null || vo[0] === hidden)
+      && (omni.projector_hidden_size == null || vi[0] === omni.projector_hidden_size)
+      && (factor === undefined || (Number.isInteger(factor) && factor >= 1 && vi[1] === image[0] * factor ** 2))
+    // The current native bridge requires both encoders and both projectors.
+    // A partial artifact can carry media weights without being runtime-ready.
+    return Boolean(audioReady && visionReady)
+
   } catch {
     return false
   }
