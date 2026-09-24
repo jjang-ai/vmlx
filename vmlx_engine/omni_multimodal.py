@@ -1391,6 +1391,16 @@ async def dispatch_omni_chat_completion(
     from fastapi import HTTPException
     from starlette.responses import StreamingResponse
 
+    # This dispatch precedes the standard server thinking-policy resolver.
+    # Omni exposes a boolean enable_thinking control, not native mode kwargs.
+    # Reject explicit mode requests before constructing/loading a dispatcher.
+    native_mode = (getattr(request, "chat_template_kwargs", None) or {}).get("thinking_mode")
+    if native_mode in ("enabled", "disabled", "adaptive"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Omni does not support native thinking_mode={native_mode!r}; use enable_thinking",
+        )
+
     msgs_dump: list[dict] = []
     for m in (request.messages or []):
         if hasattr(m, "model_dump"):

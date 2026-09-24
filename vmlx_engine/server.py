@@ -1330,7 +1330,8 @@ _REASONING_STRENGTH_BY_EFFORT = {
 
 
 def _merge_ct_kwargs(
-    request_kwargs: dict | None, reasoning_effort: str | None = None
+    request_kwargs: dict | None, reasoning_effort: str | None = None,
+    *, enable_thinking: bool | None = None,
 ) -> dict:
     """Merge server-wide default chat_template_kwargs with per-request overrides.
 
@@ -1346,6 +1347,14 @@ def _merge_ct_kwargs(
     wins — a caller who names the kwarg directly meant it.
     """
     base = dict(_default_chat_template_kwargs) if _default_chat_template_kwargs else {}
+    request_mode = (request_kwargs or {}).get("thinking_mode")
+    if request_mode in ("enabled", "disabled", "adaptive"):
+        # Remove only the inherited boolean alias, never a caller conflict.
+        base.pop("enable_thinking", None)
+    elif enable_thinking is not None and base.get("thinking_mode") in (
+        "enabled", "disabled", "adaptive"
+    ):
+        base.pop("thinking_mode", None)
     if request_kwargs:
         base.update(request_kwargs)
     if (
@@ -3763,6 +3772,7 @@ def _log_resolved_sampling_kwargs(
                 "reasoning_effort",
                 "reasoning_strength",
                 "thinking_budget",
+                "thinking_mode",
                 "enable_thinking",
             )
             if key in ct_kwargs
@@ -4925,6 +4935,27 @@ def _resolve_enable_thinking(
     if not _family or str(_family).lower() == "unknown":
         _family = str(model_key or "")
     _family_l = str(_family).lower()
+
+    native_mode = ct_kwargs.get("thinking_mode")
+    if native_mode in ("enabled", "disabled", "adaptive"):
+        native_modes = (getattr(_mc, "architecture_hints", None) or {}).get(
+            "native_thinking_modes", []
+        )
+        if native_mode not in native_modes or getattr(_mc, "supports_thinking", None) is False:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{_family} does not support native thinking_mode={native_mode!r}",
+            )
+        native_value = {"enabled": True, "disabled": False, "adaptive": None}[native_mode]
+        for value in (request_value, ct_kwargs.get("enable_thinking")):
+            if value is not None and value is not native_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"native thinking_mode={native_mode!r} conflicts with enable_thinking",
+                )
+        # A native per-request mode outranks server defaults and effort's
+        # generic boolean opt-in. Adaptive must reach its template unchanged.
+        return native_value
 
     def _reject_unsupported_instruct_mode(source: str) -> None:
         if _mc is None or getattr(_mc, "supports_instruct_mode", None) is not False:
@@ -14963,6 +14994,7 @@ def _cache_contract_render_and_tokenize(
     ct_kwargs = _merge_ct_kwargs(
         dry_request.chat_template_kwargs,
         getattr(dry_request, "reasoning_effort", None),
+        enable_thinking=dry_request.enable_thinking,
     )
     resolved_thinking = _resolve_enable_thinking(
         request_value=dry_request.enable_thinking,
@@ -16546,6 +16578,9 @@ async def model_capabilities(model_id: str) -> dict:
         "supports_tools": bool(tool_parser),
         "tool_parser": tool_parser,
         "supports_thinking": supports_thinking,
+        "native_thinking_modes": list(
+            (getattr(cfg, "architecture_hints", None) or {}).get("native_thinking_modes", [])
+        ) if supports_thinking else [],
         # The panel gates its Max Thinking Tokens control on this key
         # (remoteModelCapabilities.ts reads `supports_thinking_budget` /
         # `thinking_budget_supported`, ChatSettings renders the field only when
@@ -16643,6 +16678,7 @@ async def create_anthropic_message(
         )
     try:
         anthropic_req = AnthropicRequest(**body)
+        chat_req = to_chat_completion(anthropic_req)
     except Exception as e:
         return JSONResponse(
             status_code=400,
@@ -16651,9 +16687,6 @@ async def create_anthropic_message(
                 "error": {"type": "invalid_request_error", "message": str(e)},
             },
         )
-
-    # Convert to chat completion request
-    chat_req = to_chat_completion(anthropic_req)
 
     # Resolve model name
     resolved_name = _resolve_model_name()
@@ -16818,6 +16851,7 @@ async def create_anthropic_message(
     _ct_kwargs = _merge_ct_kwargs(
         chat_req.chat_template_kwargs,
         getattr(chat_req, "reasoning_effort", None),
+        enable_thinking=chat_req.enable_thinking,
     )
     _msg_tool_choice = chat_req.tool_choice
     _msg_effective_tools = _request_tools_for_generation_prompt(chat_req)
@@ -17769,6 +17803,7 @@ async def ollama_chat(fastapi_request: Request):
     _ollama_ct_kwargs = _merge_ct_kwargs(
         chat_req.chat_template_kwargs,
         getattr(chat_req, "reasoning_effort", None),
+        enable_thinking=chat_req.enable_thinking,
     )
     _et = _resolve_enable_thinking(
         request_value=chat_req.enable_thinking,
@@ -20055,6 +20090,7 @@ async def create_chat_completion(
     _ct_kwargs = _merge_ct_kwargs(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
+        enable_thinking=request.enable_thinking,
     )
     _explicit_thinking_off = request.enable_thinking is False or (
         _ct_kwargs.get("enable_thinking") is False
@@ -23333,6 +23369,7 @@ async def create_response(
     _ct_kwargs = _merge_ct_kwargs(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
+        enable_thinking=request.enable_thinking,
     )
     _explicit_thinking_off = request.enable_thinking is False or (
         _ct_kwargs.get("enable_thinking") is False
@@ -25333,6 +25370,7 @@ async def stream_chat_completion(
     _ct_kwargs = _merge_ct_kwargs(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
+        enable_thinking=request.enable_thinking,
     )
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,
@@ -27964,6 +28002,7 @@ async def stream_responses_api(
     _ct_kwargs = _merge_ct_kwargs(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
+        enable_thinking=request.enable_thinking,
     )
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,

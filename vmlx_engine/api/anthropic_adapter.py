@@ -52,7 +52,7 @@ from .models import (
 
 
 class AnthropicThinking(BaseModel):
-    type: str = "enabled"  # "enabled" or "disabled"
+    type: Literal["enabled", "disabled", "adaptive"]
     budget_tokens: int | None = Field(default=None, strict=True, ge=1)
 
 
@@ -87,7 +87,7 @@ class AnthropicRequest(BaseModel):
     stream: bool = False
     tools: list[AnthropicToolInput | dict] | None = None
     tool_choice: dict | None = None
-    thinking: AnthropicThinking | dict | None = None
+    thinking: AnthropicThinking | None = None
     output_config: AnthropicOutputConfig | None = None
     metadata: dict | None = None
     # vMLX extension: per-request prompt/context admission cap. The engine
@@ -136,6 +136,18 @@ class AnthropicRequest(BaseModel):
     image_resized_height: int | None = None
     image_resized_width: int | None = None
     media_controls_strict: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_adaptive_controls(self):
+        if self.thinking and self.thinking.type == "adaptive":
+            if self.thinking.budget_tokens is not None:
+                raise ValueError("thinking.budget_tokens is not supported with adaptive thinking")
+            kwargs = self.chat_template_kwargs or {}
+            if self.enable_thinking is not None or kwargs.get("enable_thinking") is not None:
+                raise ValueError("adaptive thinking conflicts with enable_thinking")
+            if kwargs.get("thinking_mode") not in (None, "adaptive"):
+                raise ValueError("adaptive thinking conflicts with chat_template_kwargs.thinking_mode")
+        return self
 
     @model_validator(mode="after")
     def validate_native_effort_aliases(self):
@@ -297,6 +309,12 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
                     max_thinking_tokens = thinking["budget_tokens"]
         elif thinking.get("type") == "disabled":
             enable_thinking = False
+            _thinking_source_seen = True
+        elif thinking.get("type") == "adaptive":
+            enable_thinking = None
+            if chat_template_kwargs is None:
+                chat_template_kwargs = {}
+            chat_template_kwargs["thinking_mode"] = "adaptive"
             _thinking_source_seen = True
     # Explicit enable_thinking (highest prio)
     if req.enable_thinking is not None:

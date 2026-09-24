@@ -57,6 +57,21 @@ Budget enforcement depends on the loaded runtime's
 `supports_thinking_budget` capability. An accepted field alone does not prove
 that a model supports a thinking-token cap. Total output limits remain separate.
 
+### Native adaptive thinking
+
+The loaded model's `/v1/capabilities` response lists `native_thinking_modes`.
+For a model that advertises `adaptive`, Chat Completions and Responses accept
+`"thinking_mode": "adaptive"`; Anthropic Messages accepts
+`"thinking": {"type": "adaptive"}`. This explicitly selects the model's native
+decision about when to think. Omitting the control still uses the server and
+model defaults.
+
+MiniMax-M3 supports native enabled, disabled and adaptive modes. An explicit
+native mode overrides inherited server defaults. Conflicting per-request
+boolean controls return an error, as does selecting a native mode unsupported
+by the loaded family. Anthropic adaptive thinking does not accept the legacy
+`thinking.budget_tokens` field. A thinking block is optional in adaptive mode.
+
 ### Start the Server with Reasoning Parser
 
 The easiest way is to use `auto`, which detects the correct parser from the model name:

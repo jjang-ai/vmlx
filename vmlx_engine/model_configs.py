@@ -1433,6 +1433,9 @@ def register_all(registry=None):
             reasoning_parser="minimax_m3",
             think_in_template=False,
             supports_thinking=True,
+            architecture_hints={
+                "native_thinking_modes": ["enabled", "disabled", "adaptive"],
+            },
             priority=20,
         )
     )

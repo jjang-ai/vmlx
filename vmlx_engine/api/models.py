@@ -56,6 +56,27 @@ def _normalize_nested_reasoning_budget(obj):
             obj.max_thinking_tokens = budget
 
 
+def _normalize_adaptive_thinking_mode(obj) -> bool:
+    """Preserve explicit adaptive intent until model capability resolution."""
+    mode = str(obj.thinking_mode or "").strip().lower()
+    kwargs = dict(obj.chat_template_kwargs or {})
+    template_mode = kwargs.get("thinking_mode")
+    if mode != "adaptive" and template_mode != "adaptive":
+        return False
+    if mode not in ("", "adaptive") or template_mode not in (None, "adaptive"):
+        raise ValueError("adaptive thinking_mode conflicts with the template mode")
+    if obj.enable_thinking is not None or kwargs.get("enable_thinking") is not None:
+        raise ValueError("adaptive thinking_mode conflicts with enable_thinking")
+    for effort in (obj.reasoning_effort, (obj.reasoning or {}).get("effort"),
+                   kwargs.get("reasoning_effort")):
+        if _is_no_reasoning_effort(effort):
+            raise ValueError("adaptive thinking_mode conflicts with disabled reasoning effort")
+    kwargs["thinking_mode"] = "adaptive"
+    obj.chat_template_kwargs = kwargs
+    obj.thinking_mode = "adaptive"
+    return True
+
+
 def _normalize_prompt_context_aliases(obj):
     """Normalize vMLX max prompt/context aliases onto max_prompt_tokens."""
     if getattr(obj, "max_prompt_tokens", None) is not None:
@@ -363,6 +384,7 @@ class ChatCompletionRequest(BaseModel):
     def _normalize_reasoning_alias(self):
         _normalize_prompt_context_aliases(self)
         _normalize_nested_reasoning_budget(self)
+        adaptive = _normalize_adaptive_thinking_mode(self)
         # If caller sent `reasoning: {"effort": "..."}` and didn't set
         # `reasoning_effort`, lift real effort names up so downstream code
         # sees them. Treat explicit no-reasoning aliases (`none`, `off`, ...)
@@ -379,7 +401,7 @@ class ChatCompletionRequest(BaseModel):
                     self.enable_thinking = False
             elif isinstance(eff, str) and eff:
                 self.reasoning_effort = eff
-            elif self.enable_thinking is None:
+            elif self.enable_thinking is None and not adaptive:
                 # No effort but reasoning object present → opt-in to thinking
                 self.enable_thinking = True
         if _is_no_reasoning_effort(self.reasoning_effort):
@@ -388,7 +410,9 @@ class ChatCompletionRequest(BaseModel):
                 self.enable_thinking = False
         if self.thinking_mode is not None:
             mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
-            if mode in ("instruct", "instruction", "chat", "off", "none", "false"):
+            if mode == "adaptive":
+                pass  # Capability validation belongs to the loaded runtime.
+            elif mode in ("instruct", "instruction", "chat", "off", "none", "false"):
                 if self.enable_thinking is None:
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
@@ -410,7 +434,7 @@ class ChatCompletionRequest(BaseModel):
                     self.reasoning_effort = "max"
             else:
                 raise ValueError(
-                    "thinking_mode must be one of: instruct, reasoning, max"
+                    "thinking_mode must be one of: instruct, reasoning, max, adaptive"
                 )
         if self.top_logprobs is not None and self.logprobs is False:
             raise ValueError("top_logprobs requires logprobs=true")
@@ -1087,6 +1111,7 @@ class ResponsesRequest(BaseModel):
     def _normalize_reasoning_alias(self):
         _normalize_prompt_context_aliases(self)
         _normalize_nested_reasoning_budget(self)
+        adaptive = _normalize_adaptive_thinking_mode(self)
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
             if _is_no_reasoning_effort(eff):
@@ -1094,7 +1119,7 @@ class ResponsesRequest(BaseModel):
                     self.enable_thinking = False
             elif isinstance(eff, str) and eff:
                 self.reasoning_effort = eff
-            elif self.enable_thinking is None:
+            elif self.enable_thinking is None and not adaptive:
                 self.enable_thinking = True
         if _is_no_reasoning_effort(self.reasoning_effort):
             self.reasoning_effort = None
@@ -1102,7 +1127,9 @@ class ResponsesRequest(BaseModel):
                 self.enable_thinking = False
         if self.thinking_mode is not None:
             mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
-            if mode in ("instruct", "instruction", "chat", "off", "none", "false"):
+            if mode == "adaptive":
+                pass  # Capability validation belongs to the loaded runtime.
+            elif mode in ("instruct", "instruction", "chat", "off", "none", "false"):
                 if self.enable_thinking is None:
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
@@ -1124,7 +1151,7 @@ class ResponsesRequest(BaseModel):
                     self.reasoning_effort = "max"
             else:
                 raise ValueError(
-                    "thinking_mode must be one of: instruct, reasoning, max"
+                    "thinking_mode must be one of: instruct, reasoning, max, adaptive"
                 )
         return self
 
