@@ -43,7 +43,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from functools import lru_cache, partial
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -794,6 +794,7 @@ class OmniMultimodalDispatcher:
         bundle_path = str(Path(bundle_path).resolve())
         with cls._instance_lock:
             if (cls._instance is None or cls._instance.bundle_path != bundle_path
+                    or cls._instance._session_l2_fingerprint != cls._bundle_fingerprint(bundle_path)
                     or (disk_cache_policy is not None and
                         cls._instance._session_l2_policy != disk_cache_policy)):
                 if cls._instance is not None:
@@ -860,24 +861,10 @@ class OmniMultimodalDispatcher:
         )
 
     @staticmethod
-    @lru_cache(maxsize=8)
     def _bundle_fingerprint(bundle_path: str | Path) -> str:
-        """Bind a persisted Omni session to the exact model-side configuration."""
-        root = Path(bundle_path).resolve()
-        digest = hashlib.sha256(str(root).encode("utf-8"))
-        for name in (
-            "config.json",
-            "config_omni.json",
-            "jang_config.json",
-            "model.safetensors.index.json",
-        ):
-            path = root / name
-            digest.update(name.encode("utf-8"))
-            if path.is_file():
-                with path.open("rb") as handle:
-                    while chunk := handle.read(1024 * 1024):
-                        digest.update(chunk)
-        return digest.hexdigest()[:16]
+        """Bind native state to weights, tokenizer, processors and templates."""
+        from .omni_bundle_identity import bundle_fingerprint
+        return bundle_fingerprint(bundle_path)
 
     @staticmethod
     def _default_session_l2_path(fingerprint: str, policy=None) -> Path:
