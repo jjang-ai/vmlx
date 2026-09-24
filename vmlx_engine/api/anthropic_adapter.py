@@ -29,7 +29,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,13 @@ from .models import (
 class AnthropicThinking(BaseModel):
     type: str = "enabled"  # "enabled" or "disabled"
     budget_tokens: int | None = Field(default=None, strict=True, ge=1)
+
+
+class AnthropicOutputConfig(BaseModel):
+    """Supported native output controls; never silently discard a format."""
+
+    model_config = {"extra": "forbid"}
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
 
 
 class AnthropicToolInput(BaseModel):
@@ -81,6 +88,7 @@ class AnthropicRequest(BaseModel):
     tools: list[AnthropicToolInput | dict] | None = None
     tool_choice: dict | None = None
     thinking: AnthropicThinking | dict | None = None
+    output_config: AnthropicOutputConfig | None = None
     metadata: dict | None = None
     # vMLX extension: per-request prompt/context admission cap. The engine
     # treats this as a request-local cap and will not let it exceed the
@@ -128,6 +136,21 @@ class AnthropicRequest(BaseModel):
     image_resized_height: int | None = None
     image_resized_width: int | None = None
     media_controls_strict: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_native_effort_aliases(self):
+        native = self.output_config.effort if self.output_config else None
+        if native is not None:
+            # A native request must not silently change meaning because a
+            # legacy client also sent an extension or template override.
+            for field, value in (
+                ("reasoning_effort", self.reasoning_effort),
+                ("chat_template_kwargs.reasoning_effort",
+                 (self.chat_template_kwargs or {}).get("reasoning_effort")),
+            ):
+                if value is not None and value != native:
+                    raise ValueError(f"output_config.effort conflicts with {field}")
+        return self
 
     @field_validator("thinking", mode="before")
     @classmethod
@@ -318,12 +341,12 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         skip_prefix_cache=req.skip_prefix_cache,
         image_token_budget=req.image_token_budget,
         chat_template_kwargs=chat_template_kwargs,
-        # Forward reasoning_effort: explicit top-level field first (parity
-        # with the chat/responses/ollama dialects), then the ct_kwargs copy.
-        # Keeps the Anthropic → OpenAI conversion honest with the shared
-        # OpenAI-path auto-mapping block at server.py:5186 / :3122.
+        # Native effort is independent of the thinking token budget. Conflicts
+        # with extension aliases were rejected during request validation.
         reasoning_effort=(
-            req.reasoning_effort
+            req.output_config.effort
+            if req.output_config and req.output_config.effort is not None
+            else req.reasoning_effort
             if req.reasoning_effort is not None
             else (chat_template_kwargs or {}).get("reasoning_effort")
         ),

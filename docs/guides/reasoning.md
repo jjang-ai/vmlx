@@ -42,8 +42,16 @@ The budget becomes `max_thinking_tokens`; an explicit `max_thinking_tokens`
 takes precedence over that alias. Nested budgets must be positive integers.
 Anthropic-compatible `/v1/messages` uses
 `"thinking": {"type": "enabled", "budget_tokens": 4096}` and accepts
-`reasoning_effort` as a vMLX extension. An explicit effort is preserved even
-with a budget above 32,768 tokens.
+`"output_config": {"effort": "low"}` for native effort, or `reasoning_effort`
+as a vMLX extension. An explicit effort is preserved even with a budget above
+32,768 tokens. Native effort accepts `low`, `medium`, `high`, `xhigh` and `max`
+at the protocol boundary; use the subset advertised by the loaded model.
+Conflicting native effort and extension/template overrides return HTTP 400.
+
+Currently `/v1/messages` supports only `effort` inside `output_config`.
+Other fields, including `format`, return HTTP 400 rather than silently ignoring
+the requested constraint. Use Chat Completions `response_format` or Responses
+`text.format` for structured output; support depends on the runtime.
 
 Budget enforcement depends on the loaded runtime's
 `supports_thinking_budget` capability. An accepted field alone does not prove
