@@ -62,7 +62,7 @@ _AUDIO_TYPES = {"input_audio", "audio", "audio_url"}
 _VIDEO_TYPES = {"video_url", "video"}
 _CRADIO_CACHE_REPO = "C_hyphen_RADIOv2_hyphen_H"
 _CRADIO_CACHE_REVISION = "0d8f4c18c877166eda07ddae1386bcad256b7a6a"
-_OMNI_SESSION_L2_SCHEMA = "nemotron_omni_session_v1"
+_OMNI_SESSION_L2_SCHEMA = "nemotron_omni_session_v2"
 
 
 def _ensure_vendored_cradio_dynamic_module(
@@ -825,6 +825,7 @@ class OmniMultimodalDispatcher:
             thread_name_prefix="vmlx-omni-model",
         )
         self._last_signature: Optional[str] = None
+        self._last_snapshot_skip_reason: Optional[str] = None
         self._disk_cache_enabled = bool(disk_cache_enabled)
         self._session_l2_policy = dict(disk_cache_policy or {})
         self._session_l2_store = None
@@ -942,6 +943,7 @@ class OmniMultimodalDispatcher:
         status["pending"] = self._executor._work_queue.qsize()
         status["ram_mirror_policy"] = "disk_only" if self._backend == "stage1" else "native_session"
         status["resident_cache_layers"] = len(getattr(self._session, "_cache", None) or [])
+        status["last_snapshot_skip_reason"] = getattr(self, "_last_snapshot_skip_reason", None)
         status["video_representation"] = "native_temporal" if getattr(self, "_native_video_spec", None) else "sampled_images"
         return status
 
@@ -986,6 +988,7 @@ class OmniMultimodalDispatcher:
             or self._backend != "stage1"
             or self._session is None
             or not self._last_signature
+            or getattr(self, "_last_snapshot_skip_reason", None)
             or not getattr(self._session, "_cache", None)
         ):
             return False
@@ -1036,6 +1039,11 @@ class OmniMultimodalDispatcher:
         """
         if self._backend != "stage1":
             return
+        skip_reason = getattr(self, "_last_snapshot_skip_reason", None)
+        if skip_reason:
+            logger.info("Omni SSD snapshot skipped: %s; next request rebuilds supplied history", skip_reason)
+            self.reset()
+            return
         if getattr(self, "_disk_cache_enabled", False) and not self._persist_session_snapshot():
             raise RuntimeError(
                 "Omni SSD cache write failed: "
@@ -1074,7 +1082,11 @@ class OmniMultimodalDispatcher:
             cache, metadata = restored
             self._session_l2_path = store.last_path
             if metadata.get("schema") != _OMNI_SESSION_L2_SCHEMA:
-                raise ValueError("Omni session L2 schema mismatch")
+                # Older snapshots may contain reasoning that the next native
+                # template removes, or an unconsumed token at a length limit.
+                self._session_l2_stats["misses"] += 1
+                logger.info("Omni SSD snapshot ignored: older replay-eligibility schema")
+                return False
             if metadata.get("bundle_fingerprint") != self._session_l2_fingerprint:
                 raise ValueError("Omni session L2 bundle fingerprint mismatch")
             if metadata.get("signature") != prefix_signature:
@@ -1334,6 +1346,7 @@ class OmniMultimodalDispatcher:
             )
             self._session._vmlx_video_policy = video_policy
             self._session._vmlx_video_prompt = None
+            self._last_snapshot_skip_reason = None
             prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt, video_policy=video_policy)
             if self._last_signature != prefix_hash and not force_reset:
                 self._try_restore_session_snapshot(prefix_hash)
@@ -1428,7 +1441,17 @@ class OmniMultimodalDispatcher:
             assistant = {"role": "assistant", "content": visible}
             if reasoning:
                 assistant["reasoning_content"] = reasoning
-            self._last_signature = _conversation_signature(
+            finish_reason = str(getattr(self._session, "_last_finish_reason", "stop") or "stop")
+            if self._backend == "stage1" and finish_reason != "stop":
+                # The native decoder samples the last token without consuming
+                # it into KV/SSM state when the output cap is reached.
+                self._last_snapshot_skip_reason = "incomplete_generation"
+            elif self._backend == "stage1" and (reasoning or enable_thinking is not False):
+                # This bridge currently uses the native default that truncates
+                # earlier thinking. Its post-decode state still contains those
+                # tokens, so it is not a prefix of the next rendered transcript.
+                self._last_snapshot_skip_reason = "history_template_truncates_reasoning"
+            self._last_signature = None if self._last_snapshot_skip_reason else _conversation_signature(
                 messages + [assistant], enable_thinking, cache_salt,
                 video_policy=video_policy,
             )
