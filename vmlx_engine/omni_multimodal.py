@@ -374,11 +374,7 @@ def _decode_data_url(data_url: str) -> Tuple[bytes, str]:
 
 
 def _materialize_to_temp(data: bytes, suffix: str, scratch_dir: Path) -> Path:
-    """Write bytes to a temp file under scratch_dir keyed by content hash.
-
-    Caching by hash means repeated requests with the same media don't blow up
-    disk; the OmniChat encoders re-read but our PIL/soundfile decode is fast.
-    """
+    """Deduplicate media within the caller's request-owned scratch directory."""
     digest = hashlib.sha256(data).hexdigest()[:16]
     out = scratch_dir / f"{digest}{suffix}"
     if not out.exists():
@@ -1284,7 +1280,14 @@ class OmniMultimodalDispatcher:
         video_controls=None,
     ) -> Dict[str, Any]:
         """Run one OmniSession turn and return an OpenAI-shaped response."""
-        with self._lock:
+        # Native encoders synchronously consume these files during this turn.
+        # They are request inputs, not a persistent media cache: private child
+        # directories prevent cross-server races and clean up on errors and
+        # cooperative cancellation without deleting caller-owned local files.
+        with self._lock, tempfile.TemporaryDirectory(
+            prefix="request-", dir=self._scratch_dir,
+        ) as request_scratch:
+            scratch_dir = Path(request_scratch)
             self._ensure_session()
             setattr(
                 self._session,
@@ -1319,7 +1322,7 @@ class OmniMultimodalDispatcher:
 
             text, images, audio, video = _extract_parts(
                 messages,
-                self._scratch_dir,
+                scratch_dir,
                 rehydrate_history_media=should_reset,
                 video_controls=video_controls,
             )
@@ -1352,7 +1355,7 @@ class OmniMultimodalDispatcher:
                 and getattr(self, "_backend", "stage1") == "stage1"
             ):
                 reply = _run_omni_full_history(
-                    self._session, messages, scratch_dir=self._scratch_dir,
+                    self._session, messages, scratch_dir=scratch_dir,
                     extract_parts=partial(_extract_parts, video_controls=video_controls), enable_thinking=enable_thinking,
                     max_tokens=max_tokens, temperature=temperature, top_p=top_p,
                     token_callback=token_callback,

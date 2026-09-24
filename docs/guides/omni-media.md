@@ -37,6 +37,11 @@ reports reused tokens in `prompt_tokens_details.cached_tokens`; Responses
 preserves them in `input_tokens_details.cached_tokens`. A cache bypass reports
 zero reused tokens. These counts describe native decoder state, not cached
 encoder features or a media-file cache.
+Decoded uploads and sampled video frames live in a private per-request temporary
+directory. They are removed when the native turn returns, fails, or is
+cooperatively cancelled. Local input files are never removed. These temporary
+inputs are separate from persistent SSD model-state snapshots; a process crash
+can still leave temporary files for the operating system to clean up.
 Messages reports the uncached portion as `input_tokens` and reused tokens
 separately as `cache_read_input_tokens`; add them to recover the full input.
 
