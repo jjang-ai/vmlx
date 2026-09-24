@@ -2019,7 +2019,13 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             // be hidden on evidence, never on missing data.
             {
               const readsIt = bundleReadsEnableThinking(modelPath)
-              if (readsIt !== undefined) detected.honorsEnableThinking = readsIt
+              if (familyName === 'minimax_m3') {
+                // The server maps the public boolean to M3's native
+                // enabled/disabled thinking_mode, including VL preprocessing.
+                // Looking only for enable_thinking in Jinja hides working
+                // controls for a translated native dialect.
+                detected.honorsEnableThinking = true
+              } else if (readsIt !== undefined) detected.honorsEnableThinking = readsIt
             }
             if (configMarksTurboQuant(parsed)) {
               detected.isTurboQuant = true

@@ -49,7 +49,9 @@ describe('adaptive capability discovery', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adaptive-renamed-'))
     try {
       fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({model_type:'minimax_m3_vl'}))
+      fs.writeFileSync(path.join(dir, 'chat_template.jinja'), '{% if thinking_mode == "enabled" %}think{% elif thinking_mode == "adaptive" %}decide{% endif %}')
       expect(detectModelConfigFromDir(dir).supportsAdaptiveThinking).toBe(true)
+      expect(detectModelConfigFromDir(dir).honorsEnableThinking).toBe(true)
     } finally { fs.rmSync(dir, {recursive:true,force:true}) }
   })
 })
