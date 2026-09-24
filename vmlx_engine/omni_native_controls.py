@@ -1,6 +1,51 @@
 """Controls implemented by the native Omni tokenizer template."""
 
 
+def native_media_capability_contract(*, backend, modalities, disk_enabled, disk_policy):
+    """Describe this dispatcher's controls without constructing a model owner.
+
+    The caller supplies modalities from component admission. Stage-2 must not
+    inherit the Stage-1 template, tool or checkpoint contract.
+    """
+    stage1 = backend == "stage1"
+    return {
+        "backend": backend,
+        "selection": "media_in_conversation",
+        "modalities": list(modalities),
+        "supports_thinking": True,
+        "thinking_control": "enable_thinking",
+        "supports_thinking_budget": False,
+        "reasoning_efforts": [],
+        "chat_template_kwargs": {
+            "reasoning_budget": {
+                "type": "integer", "minimum": 0,
+                "description": "Soft prompt hint; total output limit still applies",
+                "enforced_token_cap": False,
+            },
+            "truncate_history_thinking": {"type": "boolean"},
+        } if stage1 else {},
+        "supports_tools": stage1,
+        "tool_choices": ["auto", "none"] if stage1 else ["none"],
+        "supports_structured_output": False,
+        "sampling_controls": ["temperature", "top_p", "max_tokens"],
+        "video_controls": ["video_fps", "video_max_frames"] if "video" in modalities else [],
+        "media_sources": ["local_file", "base64"],
+        "audio_output": False,
+        "cache": {
+            "type": "native_full_state_ssd",
+            "enabled": bool(disk_enabled),
+            "state": ["attention", "recurrent"],
+            "restore": "longest_exact_causal_prefix",
+            "arbitrary_suffix_reuse": False,
+            "checkpoint_boundaries": ["input_prefix", "complete_tool_result_batch"],
+            "write_fence": "before_output_and_tool_delivery",
+            "idle_resident_state": False,
+            "dtype_policy": "preserve_native",
+            "policy": dict(disk_policy),
+        } if stage1 else {"type": "unqualified", "enabled": False},
+    }
+
+
 def native_template_options(kwargs):
     """Validate prompt hints separately from enforced decoder budgets."""
     from fastapi import HTTPException

@@ -47,6 +47,25 @@ const DSV4_CAPABILITIES = {
 }
 
 describe('remote model capability hydration', () => {
+  it('honors a native-media hard-budget restriction over text defaults and legacy hints', () => {
+    const capabilities = {
+      family: 'nemotron_h', supports_thinking: true, supports_thinking_budget: false,
+      thinking_budget_supported: true,
+      modalities: ['text', 'audio', 'image', 'video'],
+      sampling_defaults: { temperature: 0.6, max_thinking_tokens: 128 },
+      request_routes: {
+        text: { supports_thinking_budget: true },
+        native_media: { supports_thinking_budget: false },
+      },
+    }
+    const defaults = generationDefaultsFromRemoteCapabilities(capabilities)
+    expect(defaults?.supportsThinkingBudget).toBe(false)
+    expect(defaults?.thinkingBudgetSupported).toBe(false)
+    expect(defaults?.maxThinkingTokens).toBeUndefined()
+    expect(defaults?.temperature).toBe(0.6)
+    expect(detectedConfigFromRemoteCapabilities(capabilities)?.supportsThinkingBudget).toBe(false)
+  })
+
   it('maps exact provider metadata without inventing parser or local context capacity', () => {
     const caps = capabilitiesFromOpenRouterModel({ id: 'vendor/exact-model',
       supported_parameters: ['tools', 'reasoning'], context_length: 1000000,

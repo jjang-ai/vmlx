@@ -16649,13 +16649,47 @@ async def model_capabilities(model_id: str) -> dict:
 
     _capability_compat_warnings = list(quantization_status.get("compat_warnings", []))
 
+    # Text and native media share an endpoint, not a decoder/cache contract.
+    # Flat capability flags must be safe for either advertised route; clients
+    # that select text explicitly can inspect its more permissive contract.
+    text_cache = {
+        "prefix": prefix_cache_enabled,
+        "type": cache_type,
+        "paged": paged_cache_enabled,
+        "block_disk_l2": block_disk_store is not None,
+        "block_disk_only": block_disk_only,
+        "dsv4_composite_state": dsv4_composite_state,
+        "native": native_cache or None,
+    }
+    text_supports_budget = family in _THINKING_BUDGET_CAP_FAMILIES
+    request_routes = {"text": {
+        "selection": "text_only_conversation",
+        "modalities": ["text"],
+        "supports_thinking_budget": text_supports_budget,
+        "supports_tools": bool(tool_parser),
+        "cache": text_cache,
+    }}
+    native_media = None
+    omni_modalities = _loaded_omni_modalities()
+    if omni_modalities is not None:
+        from .omni_multimodal import OmniMultimodalDispatcher
+        from .omni_native_controls import native_media_capability_contract
+
+        native_media = native_media_capability_contract(
+            backend=OmniMultimodalDispatcher._pick_backend(),
+            modalities=omni_modalities,
+            disk_enabled=_loaded_block_disk_cache_enabled(),
+            disk_policy=_loaded_omni_disk_cache_policy(),
+        )
+        request_routes["native_media"] = native_media
+
     return {
         "id": model_id,
         "loaded_model": _resolve_model_name(),
         "model_path": _model_path,
         "family": family,
         "compat_warnings": _capability_compat_warnings,
-        "supports_tools": bool(tool_parser),
+        "supports_tools": bool(tool_parser) and (native_media is None or native_media["supports_tools"]),
         "tool_parser": tool_parser,
         "supports_thinking": supports_thinking,
         "native_thinking_modes": list(
@@ -16669,7 +16703,7 @@ async def model_capabilities(model_id: str) -> dict:
         # REMOTE session the control simply never appeared, for every family
         # that honours a thinking budget. Locally the panel reads its registry
         # instead, which is why this went unnoticed.
-        "supports_thinking_budget": family in _THINKING_BUDGET_CAP_FAMILIES,
+        "supports_thinking_budget": text_supports_budget and native_media is None,
         "supports_instruct_mode": supports_instruct_mode,
         "reasoning_parser": reasoning_parser,
         "think_in_template": think_in_template,
@@ -16679,14 +16713,10 @@ async def model_capabilities(model_id: str) -> dict:
         "default_reasoning_effort": default_reasoning_effort,
         "modalities": modalities,
         "media": _loaded_media_capability_status(modalities),
+        **({"request_routes": request_routes} if native_media else {}),
         "cache": {
-            "prefix": prefix_cache_enabled,
-            "type": cache_type,
-            "paged": paged_cache_enabled,
-            "block_disk_l2": block_disk_store is not None,
-            "block_disk_only": block_disk_only,
-            "dsv4_composite_state": dsv4_composite_state,
-            "native": native_cache or None,
+            **text_cache,
+            **({"scope": "text", "native_media": native_media["cache"]} if native_media else {}),
         },
         "quantization": quantization_status,
         "acceleration": acceleration_status,
