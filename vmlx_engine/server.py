@@ -5072,6 +5072,31 @@ def _resolve_enable_thinking(
     return None
 
 
+def _resolve_omni_reasoning_request(request):
+    """Apply the shared thinking policy before the native media early return.
+
+    Chat and Messages enter the media bridge before the ordinary generation
+    setup. Resolve a request copy so server defaults and normalized template
+    booleans reach that bridge without changing shared defaults or callers.
+    """
+    kwargs = _merge_ct_kwargs(
+        request.chat_template_kwargs,
+        request.reasoning_effort,
+        enable_thinking=request.enable_thinking,
+    )
+    enabled = _resolve_enable_thinking(
+        request_value=request.enable_thinking,
+        ct_kwargs=kwargs,
+        tools_present=bool(request.tools),
+        model_key=_model_path or _model_name or request.model,
+        reasoning_effort=request.reasoning_effort,
+    )
+    return request.model_copy(update={
+        "enable_thinking": enabled,
+        "chat_template_kwargs": kwargs,
+    })
+
+
 # Global MCP manager
 _mcp_manager = None
 _mcp_policy = None
@@ -16761,7 +16786,7 @@ async def create_anthropic_message(
             # path can then re-wrap into Anthropic's content_block format.
             from .api.anthropic_adapter import to_anthropic_response
             cc = await dispatch_omni_chat_completion(
-                chat_req,
+                _resolve_omni_reasoning_request(chat_req),
                 _omni_path,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
                 disk_cache_policy=_loaded_omni_disk_cache_policy(),
@@ -19975,7 +20000,7 @@ async def create_chat_completion(
             )
         ):
             return await dispatch_omni_chat_completion(
-                request,
+                _resolve_omni_reasoning_request(request),
                 _omni_path,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
                 disk_cache_policy=_loaded_omni_disk_cache_policy(),
@@ -23827,7 +23852,7 @@ async def create_response(
                 **video_control_kwargs(request),
             )
             cc = await _omni_dispatch_resp(
-                _cc_req,
+                _resolve_omni_reasoning_request(_cc_req),
                 _omni_path_dispatch,
                 disk_cache_enabled=_loaded_block_disk_cache_enabled(),
                 disk_cache_policy=_loaded_omni_disk_cache_policy(),
