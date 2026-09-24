@@ -10209,6 +10209,12 @@ async function main() {
             };
             const requestedImageBudget = ${JSON.stringify(imageTokenBudgetOverride)};
             if (requestedImageBudget != null) {
+              const section = preDrawer?.querySelector('[data-vmlx-control="section-performance"]');
+              if (section?.getAttribute('data-vmlx-state') === 'closed') {
+                section.scrollIntoView({ block: 'center' });
+                section.click();
+                await new Promise((r) => setTimeout(r, 150));
+              }
               const input = preDrawer?.querySelector('[data-vmlx-control="setting-imageTokenBudget"]');
               if (!(input instanceof HTMLSelectElement) || input.disabled || !isVisible(input)) {
                 throw new Error('Visible image token budget control was not editable');
