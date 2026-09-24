@@ -18,6 +18,16 @@ The RADIO path does not enforce pixel, explicit-dimension or video-token
 budgets; requests containing those video controls return an error. Sampling
 failure also returns an error instead of switching to fixed native defaults.
 
+The native media route currently supports temperature, top-p, the total output
+limit, the thinking toggle and the documented temporal video controls. It
+rejects active tool schemas/tool-result history, structured-output constraints,
+custom stop strings, seeds, non-neutral extended sampling controls and explicit
+image pixel/token budgets. These constraints must not silently disappear when
+switching from a text request to a media request. A tool-capable bundle template
+does not imply that this separate native media route implements tool parsing.
+Unexpected native dispatch failures return an error through every API adapter;
+they never retry the same media request through a text-only fallback.
+
 With Block Disk Cache enabled, Stage-1 media requests store their native
 attention and recurrent state under the configured block-cache directory.
 These snapshots share the aggregate SSD limit with ordinary text-cache blocks

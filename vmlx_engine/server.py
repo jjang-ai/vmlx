@@ -16844,10 +16844,13 @@ async def create_anthropic_message(
             },
         )
     except Exception as _omni_route_err:  # pragma: no cover
-        logger.warning(
-            "Omni multimodal dispatch failed in /v1/messages (%s); "
-            "falling back to standard path",
-            _omni_route_err,
+        logger.exception("Omni multimodal dispatch failed in /v1/messages")
+        return JSONResponse(
+            status_code=500,
+            content={"type": "error", "error": {
+                "type": "api_error",
+                "message": f"Omni multimodal dispatch failed: {_omni_route_err}",
+            }},
         )
 
     engine = get_engine()
@@ -19987,10 +19990,8 @@ async def create_chat_completion(
     except HTTPException:
         raise
     except Exception as _omni_route_err:  # pragma: no cover
-        logger.warning(
-            "Omni multimodal dispatch failed (%s); falling back to standard path",
-            _omni_route_err,
-        )
+        logger.exception("Omni multimodal dispatch failed")
+        raise HTTPException(status_code=500, detail=f"Omni multimodal dispatch failed: {_omni_route_err}") from _omni_route_err
 
     # Reject empty prompts with a clear 400 instead of letting mlx-vlm
     # crash inside stream_generate with ValueError:
@@ -23813,6 +23814,16 @@ async def create_response(
                 chat_template_kwargs=_ct_kwargs,
                 skip_prefix_cache=request.skip_prefix_cache,
                 cache_salt=request.cache_salt,
+                tools=all_tools or None,
+                tool_choice=_tool_choice,
+                response_format=_response_text_format,
+                top_k=request.top_k,
+                min_p=request.min_p,
+                repetition_penalty=request.repetition_penalty,
+                frequency_penalty=request.frequency_penalty,
+                presence_penalty=request.presence_penalty,
+                seed=request.seed,
+                stop=request.stop,
                 **video_control_kwargs(request),
             )
             cc = await _omni_dispatch_resp(
@@ -23867,11 +23878,8 @@ async def create_response(
     except HTTPException:
         raise
     except Exception as _omni_resp_err:  # pragma: no cover
-        logger.warning(
-            "Omni dispatch failed in /v1/responses (%s); "
-            "falling back to text-only LLM path.",
-            _omni_resp_err,
-        )
+        logger.exception("Omni multimodal dispatch failed in /v1/responses")
+        raise HTTPException(status_code=500, detail=f"Omni multimodal dispatch failed: {_omni_resp_err}") from _omni_resp_err
 
     if request.stream:
         return StreamingResponse(

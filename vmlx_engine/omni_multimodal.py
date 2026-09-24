@@ -1533,6 +1533,55 @@ class _OmniIncrementalRailSplitter:
         return events
 
 
+def _validate_native_media_controls(request, messages):
+    """Reject constraints absent from the native media generation path.
+
+    The bundle template may support tools; that does not make the separate
+    native media dispatcher a tool/schema-capable runtime. Keep unsupported
+    requests out of the encoder and cache until those paths are implemented.
+    """
+    from fastapi import HTTPException
+
+    unsupported = []
+    choice = getattr(request, "tool_choice", None)
+    if (getattr(request, "tools", None) and choice != "none") or choice not in (None, "auto", "none"):
+        unsupported.append("tool calling")
+    if any(m.get("role") == "tool" or m.get("tool_calls") for m in messages):
+        unsupported.append("tool-result history")
+    response_format = getattr(request, "response_format", None)
+    if hasattr(response_format, "model_dump"):
+        response_format = response_format.model_dump(exclude_none=True)
+    if isinstance(response_format, dict) and isinstance(response_format.get("format"), dict):
+        # Responses clients send text.format; the bridge must retain that
+        # constraint even when the compatibility model adds type="text".
+        response_format = response_format["format"]
+    if response_format and response_format.get("type") not in (None, "text"):
+        unsupported.append("structured output (response_format)")
+    for field, neutral in (
+        ("top_k", 0), ("min_p", 0), ("repetition_penalty", 1),
+        ("frequency_penalty", 0), ("presence_penalty", 0),
+        ("logit_bias", {}), ("logprobs", False), ("top_logprobs", 0),
+    ):
+        value = getattr(request, field, None)
+        if value is not None and value != neutral:
+            unsupported.append(field)
+    if getattr(request, "seed", None) is not None:
+        unsupported.append("seed")
+    if getattr(request, "stop", None):
+        unsupported.append("stop")
+    if "image" in request_modalities(messages):
+        for field in ("image_token_budget", "image_max_pixels", "image_min_pixels",
+                      "image_resized_height", "image_resized_width"):
+            if getattr(request, field, None) is not None:
+                unsupported.append(field)
+    if unsupported:
+        raise HTTPException(status_code=400, detail=(
+            "Native Omni media does not support these request controls: "
+            + ", ".join(unsupported)
+            + ". They cannot be silently ignored. Omit them for this media route."
+        ))
+
+
 async def dispatch_omni_chat_completion(
     request,
     bundle_path: str,
@@ -1597,6 +1646,7 @@ async def dispatch_omni_chat_completion(
         else:
             msgs_dump.append(dict(m))
 
+    _validate_native_media_controls(request, msgs_dump)
     status = omni_multimodal_component_status(bundle_path)
     supported_modalities = set(status.get("modalities") or ["text"])
     requested_modalities = request_modalities(msgs_dump)
