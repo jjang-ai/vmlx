@@ -1147,10 +1147,32 @@ def test_anthropic_usage_reports_prefix_cache_reads():
     )
 
     usage = response["usage"]
-    assert usage["input_tokens"] == 507
+    assert usage["input_tokens"] == 251
     assert usage["output_tokens"] == 12
     assert usage["cache_read_input_tokens"] == 256
     assert usage["cache_creation_input_tokens"] == 0
+    assert sum(usage[k] for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")) == 507
+
+
+@pytest.mark.parametrize("cached", [0, 256, 507])
+def test_anthropic_stream_partitions_cached_and_uncached_input(cached):
+    import json
+    from vmlx_engine.api.anthropic_adapter import AnthropicStreamAdapter
+
+    adapter = AnthropicStreamAdapter(model="m")
+    adapter.process_chunk('data: ' + json.dumps({"choices": [{"delta": {"content": "ok"}}]}))
+    adapter.process_chunk('data: ' + json.dumps({
+        "choices": [{"delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 507, "completion_tokens": 12,
+                  "prompt_tokens_details": {"cached_tokens": cached}},
+    }))
+    events = [json.loads(line[6:]) for raw in adapter.finalize()
+              for line in raw.splitlines() if line.startswith('data: ')]
+    usage = next(e['usage'] for e in events if e['type'] == 'message_delta')
+    assert usage['input_tokens'] == 507 - cached
+    assert usage.get('cache_read_input_tokens', 0) == cached
+    assert usage.get('cache_creation_input_tokens', 0) == 0
+    assert usage['input_tokens'] + usage.get('cache_read_input_tokens', 0) == 507
 
 
 def test_anthropic_usage_omits_cache_fields_when_nothing_was_reused():

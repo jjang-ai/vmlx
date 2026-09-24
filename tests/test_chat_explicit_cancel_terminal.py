@@ -207,7 +207,7 @@ def _cancel_contract(upstream, frames, count, *, include_usage=True):
     assert len(errors) == 1
     assert errors[0]["error"]["type"] == "invalid_request_error"
     assert errors[0]["error"]["code"] == "request_cancelled"
-    assert errors[0]["usage"] == {"input_tokens": 64, "output_tokens": count,
+    assert errors[0]["usage"] == {"input_tokens": 32, "output_tokens": count,
                                    "cache_read_input_tokens": 32,
                                    "cache_creation_input_tokens": 0}
     assert not any(row.get("type") in {"message_delta", "message_stop"} for row in native)
@@ -325,7 +325,7 @@ async def test_native_messages_nonstream_explicit_cancel_returns_nonretryable_40
     assert body["error"]["type"] == "invalid_request_error"
     assert body["error"]["code"] == "request_cancelled"
     assert body["error"]["message"]
-    assert body["usage"] == {"input_tokens": 64, "output_tokens": len(parts),
+    assert body["usage"] == {"input_tokens": 32, "output_tokens": len(parts),
                              "cache_read_input_tokens": 32,
                              "cache_creation_input_tokens": 0}
     assert "content" not in body and "stop_reason" not in body

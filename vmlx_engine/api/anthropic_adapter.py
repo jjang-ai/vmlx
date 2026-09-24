@@ -672,6 +672,9 @@ def _anthropic_usage(usage: dict) -> dict:
     }
     cached = _cached_prompt_tokens(usage)
     if cached:
+        # Chat prompt_tokens includes reused tokens; Anthropic input_tokens
+        # is the uncached portion. The three input categories are disjoint.
+        out["input_tokens"] = max(0, out["input_tokens"] - cached)
         out["cache_read_input_tokens"] = cached
         out["cache_creation_input_tokens"] = 0
     return out
@@ -1054,13 +1057,12 @@ class AnthropicStreamAdapter:
         # message_delta with final usage (include input_tokens since message_start
         # emits 0 — prompt tokens aren't known until the final streaming chunk)
         usage = {"output_tokens": self._output_tokens}
-        if self._input_tokens > 0:
-            usage["input_tokens"] = self._input_tokens
-        if self._cached_tokens > 0:
-            # Anthropic clients read this to show how much of the prompt was
-            # served from cache; omitting it makes a reused prefix look cold.
-            usage["cache_read_input_tokens"] = self._cached_tokens
-            usage["cache_creation_input_tokens"] = 0
+        if self._input_tokens > 0 or self._cached_tokens > 0:
+            usage.update(_anthropic_usage({
+                "prompt_tokens": self._input_tokens,
+                "completion_tokens": self._output_tokens,
+                "prompt_tokens_details": {"cached_tokens": self._cached_tokens},
+            }))
         events.append(self._sse("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
