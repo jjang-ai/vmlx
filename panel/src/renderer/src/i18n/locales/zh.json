@@ -845,6 +845,7 @@
       "dsv4RamL1Note": "DSV4 使用 RAM 分页层作为 L1，Block Disk L2 作为持久化后备，其池编解码器由已加载的 bundle 派生。",
       "stepSsdOnlyNote": "Step full/sliding-KV 纯 SSD 模式可用：类型化 KV 块和轮转元数据保留在 Block Disk L2 中，不占 RAM 负载。Metal 余量紧张时，可能跳过长冷提示词的存储以避免不安全的第二次干净预填充；现有 SSD 块仍可复用。",
       "mixedSwaSsdOnlyNote": "原生 sliding/mixed-SWA 纯 SSD 模式将类型化 KV 块和轮转窗口元数据保存在 Block Disk L2 中，不保留 RAM 负载。",
+      "omniNativeSsdNote": "Omni 媒体请求将原生注意力状态和循环状态检查点保存到配置的 SSD 文件夹，并遵循共享容量上限。恢复时使用经过验证的最长提示前缀，包括完整的工具结果批次；新写入完成后才交付工具调用。不保留空闲 RAM 副本，保留原生状态类型。块大小适用于文本缓存，不适用于这些媒体检查点。",
       "hybridSsdOnlyNote": "混合/Mamba 纯 SSD 模式将注意力 KV 块保存在 Block Disk L2 中，并从类型化 SSD 存储或干净预填充恢复全精度 SSM/GDN 状态。",
       "glmNativeSsdNote": "GLM 在共享 SSD 池中存储精确的原生检查点，不在 RAM 中保留载荷，也不使用通用 KV 块。复用要求单个活动请求，并开启前缀缓存和 SSD。图像或视频复用要求完整匹配的媒体输入；实际可用性由运行中的引擎报告。关闭 SSD 将禁用复用。",
       "m3SsdOnlyNote": "MiniMax-M3 纯 SSD 模式在 Block Disk L2 中保留原生 MSA 的 keys、values、idx_keys 和绝对偏移，同时保持持久化 RAM 负载禁用。",

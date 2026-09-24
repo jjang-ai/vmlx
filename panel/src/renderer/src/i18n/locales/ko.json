@@ -845,6 +845,7 @@
       "dsv4RamL1Note": "DSV4는 RAM 페이지 계층을 L1로, Block Disk L2를 영구 폴백으로 사용하며 풀 코덱은 로드된 번들에서 파생됩니다.",
       "stepSsdOnlyNote": "Step full/sliding-KV SSD 전용 모드를 사용할 수 있습니다. 타입 KV 블록과 회전 메타데이터는 RAM 페이로드 없이 Block Disk L2에 유지됩니다. Metal 여유가 부족하면 안전하지 않은 두 번째 클린 프리필을 피하기 위해 긴 콜드 프롬프트 저장을 건너뛸 수 있으며, 기존 SSD 블록은 계속 재사용할 수 있습니다.",
       "mixedSwaSsdOnlyNote": "네이티브 sliding/mixed-SWA SSD 전용 모드는 RAM 페이로드를 유지하지 않고 타입 KV 블록과 회전 윈도우 메타데이터를 Block Disk L2에 저장합니다.",
+      "omniNativeSsdNote": "Omni 미디어 요청은 네이티브 어텐션 및 순환 상태 체크포인트를 설정된 SSD 폴더와 공유 용량 한도에 저장합니다. 완전한 도구 결과 배치를 포함하여 검증된 가장 긴 프롬프트 접두사를 복원하고, 새 쓰기를 완료한 뒤 도구 호출을 전달합니다. 유휴 RAM 복사본은 유지하지 않으며 네이티브 상태 형식을 보존합니다. 블록 크기는 텍스트 캐시에 적용되며 미디어 체크포인트에는 적용되지 않습니다.",
       "hybridSsdOnlyNote": "하이브리드/Mamba SSD 전용 모드는 어텐션 KV 블록을 Block Disk L2에 저장하고 전체 정밀도 SSM/GDN 상태를 타입 SSD 저장소 또는 클린 프리필에서 복원합니다.",
       "glmNativeSsdNote": "GLM은 공유 SSD 풀에 정확한 네이티브 체크포인트를 저장하며 RAM에 페이로드를 보관하거나 일반 KV 블록을 사용하지 않습니다. 재사용하려면 활성 요청이 1개이고 접두사 캐시와 SSD가 켜져 있어야 합니다. 이미지·비디오는 전체 미디어 입력이 일치해야 재사용되며 실제 가용성은 실행 중인 엔진이 보고합니다. SSD를 끄면 재사용도 꺼집니다.",
       "m3SsdOnlyNote": "MiniMax-M3 SSD 전용 모드는 영구 RAM 페이로드를 비활성화한 채 네이티브 MSA keys, values, idx_keys, 절대 오프셋을 Block Disk L2에 보존합니다.",

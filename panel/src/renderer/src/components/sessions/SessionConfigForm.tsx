@@ -566,7 +566,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   )
   const nativeMtpDetected = detectedNativeMtp !== undefined
   const nativeMtpSupported = !!detectedNativeMtp?.supported
-  const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive
+  const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive && config.isMultimodal !== false && !effectiveSmeltActive
+  const nativeOmniStage1 = omniBackendVisible && (config.omniBackend || 'stage1') === 'stage1'
   const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'auto'
   const nativeMtpDepth = config.nativeMtpDepthOverride === true
     ? resolveFixedNativeMtpDepth(config.nativeMtpDepth, detectedNativeMtp?.depth)
@@ -1074,7 +1075,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={blockDiskOnly
           ? t('sessions.config.dsv4SsdOnlyNote')
           : t('sessions.config.dsv4RamL1Note')} />}
-        {architectureBlockDiskOnlySupported && !nativeGlmSsdActive && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={mixedSwaBlockDiskOnlySupported
+        {nativeOmniStage1 && cachePolicy.blockDiskCacheChecked && <div data-vmlx-section="omni-native-ssd-note"><InfoNote text={t('sessions.config.omniNativeSsdNote')} /></div>}
+        {architectureBlockDiskOnlySupported && !nativeGlmSsdActive && !nativeOmniStage1 && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={mixedSwaBlockDiskOnlySupported
           ? stepMixedSwaBlockDiskOnly
             ? t('sessions.config.stepSsdOnlyNote')
             : t('sessions.config.mixedSwaSsdOnlyNote')
@@ -1200,7 +1202,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && !prefixOff && hy3Active && <PerformanceHint text={t('sessions.config.hy3AutoHint')} />}
         {!effectivelyNoBatching && !prefixOff && qwenHybridTqActive && !mixedSwaCacheActive && <PerformanceHint text={bonsaiActive ? t('sessions.config.bonsaiHybridHint') : t('sessions.config.qwenHybridHint')} />}
         {!effectivelyNoBatching && !prefixOff && qwenFullTqActive && <PerformanceHint text={t('sessions.config.qwenFullKvHint')} />}
-        {!effectivelyNoBatching && !prefixOff && isMambaCache && !qwenHybridTqActive && !mixedSwaCacheActive && !dsv4Active && !m3Active && !openPanguExactTypedCache && <PerformanceHint text={t('sessions.config.hybridStatefulHint')} />}
+        {!effectivelyNoBatching && !prefixOff && isMambaCache && !qwenHybridTqActive && !mixedSwaCacheActive && !dsv4Active && !m3Active && !nativeOmniStage1 && !openPanguExactTypedCache && <PerformanceHint text={t('sessions.config.hybridStatefulHint')} />}
         {!effectivelyNoBatching && dsv4Active && <PerformanceHint text={t('sessions.config.dsv4KvQuantHint')} />}
         {!effectivelyNoBatching && m3Active && <PerformanceHint text={t('sessions.config.m3KvQuantHint')} />}
         {!effectivelyNoBatching && openPanguExactTypedCache && <PerformanceHint text={t('sessions.config.openPanguKvQuantHint')} />}
