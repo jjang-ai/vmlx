@@ -924,13 +924,22 @@ class OmniMultimodalDispatcher:
                 self._cache_for_persistence(),
                 metadata,
             )
+            # Complete the file write before atomically publishing this
+            # request's snapshot. The owner job fences HTTP finalization.
+            with tmp_path.open("rb") as snapshot:
+                os.fsync(snapshot.fileno())
             os.replace(tmp_path, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
             elapsed = time.monotonic() - started
             self._session_l2_stats["stores"] += 1
             self._session_l2_stats["last_store_seconds"] = round(elapsed, 6)
             self._session_l2_stats["last_error"] = None
             logger.info(
-                "OmniMultimodalDispatcher: persisted q4-KV/native-SSM session "
+                "OmniMultimodalDispatcher: persisted native-representation session "
                 "signature=%s bytes=%d in %.3fs",
                 self._last_signature,
                 path.stat().st_size,
@@ -943,14 +952,25 @@ class OmniMultimodalDispatcher:
             logger.warning("Omni session L2 persist failed: %s", exc)
             return False
 
-    def schedule_session_l2_persist(self) -> Optional[Future]:
-        """Queue persistence behind decode so HTTP terminal dispatch is not blocked."""
+    def finish_request_cache(self) -> None:
+        """Finish this request's SSD snapshot on the native model owner thread.
+
+        Decode and persistence belong to one submitted job. Enqueuing a second
+        job after decode could allow another queued request to replace the
+        session state before its snapshot is written. Token deltas can stream
+        while decoding; the terminal event waits for this boundary.
+        """
         if (
             not getattr(self, "_disk_cache_enabled", False)
             or self._backend != "stage1"
         ):
-            return None
-        return self.submit(self._persist_session_snapshot)
+            return
+        if not self._persist_session_snapshot():
+            self.reset()
+            raise RuntimeError(
+                "Omni SSD cache write failed: "
+                + str(self._session_l2_stats.get("last_error") or "no snapshot produced")
+            )
 
     def _try_restore_session_snapshot(self, prefix_signature: str) -> bool:
         if (
@@ -1486,7 +1506,7 @@ async def dispatch_omni_chat_completion(
     t_start = _time.time()
 
     def _run_chat(token_callback=None):
-        return dispatcher.chat(
+        result = dispatcher.chat(
             messages=msgs_dump,
             max_tokens=int(_max_tokens),
             temperature=float(_temperature),
@@ -1494,6 +1514,8 @@ async def dispatch_omni_chat_completion(
             enable_thinking=_enable_thinking,
             token_callback=token_callback,
         )
+        dispatcher.finish_request_cache()
+        return result
 
     if not getattr(request, "stream", False):
         loop = asyncio.get_running_loop()
@@ -1508,7 +1530,6 @@ async def dispatch_omni_chat_completion(
                 status_code=500, detail=f"Omni multimodal generation failed: {e}"
             )
 
-        dispatcher.schedule_session_l2_persist()
         elapsed = _time.time() - t_start
         reasoning_content, content = _split_omni_reply(
             result.get("content") or "",
@@ -1566,7 +1587,6 @@ async def dispatch_omni_chat_completion(
     def _on_done(future: Future) -> None:
         try:
             _enqueue(("done", future.result()))
-            dispatcher.schedule_session_l2_persist()
         except _OmniStreamCancelled as exc:
             dispatcher.reset()
             _enqueue(("cancelled", exc))

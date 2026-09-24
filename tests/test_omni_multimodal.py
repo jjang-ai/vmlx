@@ -298,7 +298,7 @@ async def test_omni_stream_emits_generation_time_reasoning_content_and_usage(
         def reset(self):
             pass
 
-        def schedule_session_l2_persist(self):
+        def finish_request_cache(self):
             self.persist_calls += 1
             return None
 
