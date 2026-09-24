@@ -599,6 +599,10 @@ const mcpConfigPath = process.env.VMLINUX_REAL_UI_MCP_CONFIG
   || process.env.VMLX_REAL_UI_MCP_CONFIG
   || ''
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
+const imageTokenBudgetOverride = envNumber('VMLINUX_REAL_UI_IMAGE_TOKEN_BUDGET')
+if (imageTokenBudgetOverride != null && ![70, 140, 280, 560, 1120].includes(imageTokenBudgetOverride)) {
+  throw new Error('Image token budget proof override must be 70, 140, 280, 560 or 1120')
+}
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
 const checkAudio = envBool('VMLINUX_REAL_UI_CHECK_AUDIO', false)
 // Flip the reasoning mode mid-conversation (after turn 1). Default OFF so
@@ -10167,6 +10171,7 @@ async function main() {
           if (
             ${JSON.stringify(forceSsdOnlyLane)}
             || ${JSON.stringify(blockDiskCacheMaxPercentOverride)} != null
+            || ${JSON.stringify(imageTokenBudgetOverride)} != null
           ) {
             const preDrawer = document.querySelector(
               '[data-vmlx-surface="server-settings"]'
@@ -10202,6 +10207,17 @@ async function main() {
                 ? Number(percentSetting().getAttribute('data-setting-value'))
                 : null,
             };
+            const requestedImageBudget = ${JSON.stringify(imageTokenBudgetOverride)};
+            if (requestedImageBudget != null) {
+              const input = preDrawer?.querySelector('[data-vmlx-control="setting-imageTokenBudget"]');
+              if (!(input instanceof HTMLSelectElement) || input.disabled || !isVisible(input)) {
+                throw new Error('Visible image token budget control was not editable');
+              }
+              input.scrollIntoView({ block: 'center' });
+              Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(input, String(requestedImageBudget));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              await new Promise((r) => setTimeout(r, 150));
+            }
             if (${JSON.stringify(forceSsdOnlyLane)} && blockPre && !blockPre.checked && !blockPre.disabled) {
               blockPre.scrollIntoView({ block: 'center' });
               blockPre.click();
@@ -10257,6 +10273,9 @@ async function main() {
               persistedAfterSave = JSON.parse(reread?.config || '{}');
             } catch (_) {
               persistedAfterSave = null;
+            }
+            if (requestedImageBudget != null && persistedAfterSave?.imageTokenBudget !== requestedImageBudget) {
+              throw new Error('Visible image budget selection did not reach saved session settings');
             }
             ssdOnlyLaneSelection = {
               requested: true,
@@ -11851,6 +11870,7 @@ async function main() {
         requestedMidConvReasoningEffort: midConvReasoningEffortOverride,
         reasoningExpectation,
         requestedServerCacheControls: checkServerCacheControls,
+        requestedImageTokenBudget: imageTokenBudgetOverride,
         requestedBlockDiskCacheMaxPercent: blockDiskCacheMaxPercentOverride,
         requestedMedia: checkMedia,
         requestedVideo: checkVideo,
@@ -12885,6 +12905,7 @@ async function main() {
       requestedMidConvReasoningEffort: midConvReasoningEffortOverride,
       reasoningExpectation,
       requestedServerCacheControls: checkServerCacheControls,
+      requestedImageTokenBudget: imageTokenBudgetOverride,
       requestedBlockDiskCacheMaxPercent: blockDiskCacheMaxPercentOverride,
       expectedDsv4PoolQuant: expectDsv4PoolQuant,
       requestedMedia: checkMedia,
