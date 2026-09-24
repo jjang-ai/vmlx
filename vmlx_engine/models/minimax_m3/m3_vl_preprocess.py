@@ -35,6 +35,15 @@ def m3_vl_enabled() -> bool:
     return os.environ.get("VMLX_M3_VL", "").strip().lower() in _TRUE
 
 
+def configure_m3_vl_environment(*, has_vision: bool, force_text_only: bool) -> bool:
+    """Resolve M3's startup gate without overriding an explicit text-only mode."""
+    if force_text_only:
+        os.environ.pop("VMLX_M3_VL", None)
+    elif has_vision:
+        os.environ["VMLX_M3_VL"] = "1"
+    return m3_vl_enabled()
+
+
 def is_m3_vl_model(model: Any) -> bool:
     """True iff `model` is a MiniMax-M3 build that carries a vision stack.
 

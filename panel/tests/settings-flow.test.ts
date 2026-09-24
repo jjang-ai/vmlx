@@ -363,15 +363,14 @@ function buildCommandPreview(
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const m3Active = detectedFamily === 'minimax_m3'
     const effectiveSmelt = !!config.smelt && !dsv4Active
-    // Mirror buildArgs (sessions.ts): user Force-Off (isMultimodal===false) beats
-    // detected VL; m3Active stands in for m3VlRoute (registry sets it for every
-    // minimax_m3 bundle) so M3 emits NEITHER --is-mllm NOR --text-only.
+    // M3 native media bypasses generic MLLM loading; explicit Force Off wins.
     const userForceTextOnly = config.isMultimodal === false
+    const m3MediaActive = m3Active && !userForceTextOnly && !detected?.forceTextOnly
     const omniBackendActive = detectedFamily === 'nemotron-h' &&
         detected?.isMultimodal === true &&
         !userForceTextOnly &&
         !detected?.forceTextOnly
-    const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly || userForceTextOnly || m3Active || omniBackendActive ? false
+    const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly || userForceTextOnly || m3MediaActive || omniBackendActive ? false
         : detected?.isMultimodal ? true
             : config.isMultimodal === true ? true
                 : false
@@ -423,7 +422,7 @@ function buildCommandPreview(
     if (!dsv4Active && completionBatchSize != null) parts.push('--completion-batch-size', completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
-    else if (!dsv4Active && !effectiveSmelt && !m3Active && !omniBackendActive && detected?.isMultimodal && (userForceTextOnly || detected?.forceTextOnly)) {
+    else if (!dsv4Active && !effectiveSmelt && !m3MediaActive && !omniBackendActive && detected?.isMultimodal && (userForceTextOnly || detected?.forceTextOnly)) {
         parts.push('--text-only')
     }
     const dflash2Speculative = /dflash2/i.test(config.speculativeModel || '')

@@ -3386,7 +3386,8 @@ export class SessionManager extends EventEmitter {
     // MiniMax-M3 VL route: the engine wires M3 vision through the text runtime only when
     // VMLX_M3_VL is truthy. Scope strictly to M3 so no other family's env changes.
     if (freshDetectedFamily === 'minimax_m3') {
-      spawnEnv.VMLX_M3_VL = '1'
+      if (config.isMultimodal === false) delete spawnEnv.VMLX_M3_VL
+      else spawnEnv.VMLX_M3_VL = '1'
     }
     // Qwen3.5/3.6 hybrid affine-JANG VLM (for example Ornith): select the
     // vMLX-owned qwen3_5_family runtime, whose router-gate and 1D text-RoPE
@@ -5202,11 +5203,9 @@ export class SessionManager extends EventEmitter {
       detected.isMultimodal === true &&
       !userForceTextOnly &&
       !detected.forceTextOnly
-    // MiniMax-M3 VL route: vision is handled in-engine via SingleBatchGenerator behind
-    // VMLX_M3_VL=1, so M3 must emit NEITHER --is-mllm NOR --text-only. Forcing isVLM=false
-    // suppresses --is-mllm (the unpublished mlx_vlm.minimax_m3_vl path that crashes), and
-    // excluding m3VlRoute from the --text-only branch keeps images flowing to the engine.
-    const m3VlRoute = !!detected.m3VlRoute
+    // M3 media uses the text runtime, but an explicit Force Off must still
+    // emit --text-only so native admission and capability reporting agree.
+    const m3VlRoute = !!detected.m3VlRoute && !userForceTextOnly && !detected.forceTextOnly
     const isVLM = dsv4Active || effectiveSmelt || detected.forceTextOnly || userForceTextOnly || m3VlRoute || omniBackendActive ? false
       : detected.isMultimodal ? true
         : config.isMultimodal === true ? true

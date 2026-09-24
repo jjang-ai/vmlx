@@ -1291,8 +1291,12 @@ def serve_command(args):
             _m3_arch = " ".join(str(a) for a in (_m3_c.get("architectures") or [])).lower()
             if _m3_mt in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in _m3_arch:
                 _m3_has_vl = _m3_mt == "minimax_m3_vl" or bool(_m3_c.get("vision_config"))
+                from .models.minimax_m3.m3_vl_preprocess import configure_m3_vl_environment
+                _m3_vl_active = configure_m3_vl_environment(
+                    has_vision=_m3_has_vl,
+                    force_text_only=bool(getattr(args, "force_text_only", False)),
+                )
                 if _m3_has_vl:
-                    _m3_os.environ["VMLX_M3_VL"] = "1"
                     if getattr(args, "is_mllm", False):
                         args.is_mllm = False
                         logger.warning(
@@ -1343,7 +1347,7 @@ def serve_command(args):
                     "tool_parser=%s, reasoning_parser=%s, jit=%s, msa_per_step_sync=ON",
                     _m3_mt or "minimaxm3",
                     "OFF" if not getattr(args, "use_paged_cache", False) else "ON(!)",
-                    "ON" if _m3_os.environ.get("VMLX_M3_VL") else "off",
+                    "ON" if _m3_vl_active else "off",
                     getattr(args, "tool_call_parser", None) or "none",
                     getattr(args, "reasoning_parser", None) or "auto/none",
                     "OFF(forced)" if _m3_jit_forced_off else "off",
