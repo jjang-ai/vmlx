@@ -998,6 +998,7 @@ class OmniMultimodalDispatcher:
 
             metadata = {
                 "schema": _OMNI_SESSION_L2_SCHEMA,
+                "kind": "completed_turn",
                 "bundle_fingerprint": self._session_l2_fingerprint,
                 "signature": self._last_signature,
                 "history_json": json.dumps(
@@ -1016,6 +1017,7 @@ class OmniMultimodalDispatcher:
             self._session_l2_stats["stores"] += 1
             self._session_l2_stats["last_store_seconds"] = round(elapsed, 6)
             self._session_l2_stats["last_error"] = None
+            self._session_l2_stats["last_snapshot_kind"] = "completed_turn"
             logger.info(
                 "OmniMultimodalDispatcher: persisted native-representation session "
                 "signature=%s bytes=%d in %.3fs",
@@ -1041,7 +1043,7 @@ class OmniMultimodalDispatcher:
             return
         skip_reason = getattr(self, "_last_snapshot_skip_reason", None)
         if skip_reason:
-            logger.info("Omni SSD snapshot skipped: %s; next request rebuilds supplied history", skip_reason)
+            logger.info("Omni post-generation SSD snapshot skipped: %s; earlier valid prompt checkpoints remain usable", skip_reason)
             self.reset()
             return
         if getattr(self, "_disk_cache_enabled", False) and not self._persist_session_snapshot():
@@ -1273,6 +1275,8 @@ class OmniMultimodalDispatcher:
         native_video_spec = self._native_video_spec
 
         class _ThinkingAwareOmniSession(OmniSession):
+            _vmlx_prefill_checkpoints = True
+
             def _extract_video_embeddings(self, video_path):
                 if not native_video_spec:
                     return super()._extract_video_embeddings(video_path)
@@ -1359,8 +1363,17 @@ class OmniMultimodalDispatcher:
                 part.get("type") in _VIDEO_TYPES for part in last_parts
             ) > 1
             should_reset = force_reset or multi_clip or prefix_hash != self._last_signature
+            checkpoints = None
+            if (should_reset and not force_reset and not cache_salt
+                    and self._backend == "stage1"
+                    and getattr(self, "_disk_cache_enabled", False)
+                    and getattr(self._session, "_vmlx_prefill_checkpoints", False)):
+                from .omni_native_prefix import NativePrefillCheckpoints
+                checkpoints = NativePrefillCheckpoints(
+                    self, messages, video_policy, publish=enable_thinking is not False,
+                )
             full_history = getattr(self, "_backend", "stage1") == "stage1" and (
-                multi_clip or (should_reset and len(messages) > 1)
+                checkpoints is not None or multi_clip or (should_reset and len(messages) > 1)
             )
             if should_reset:
                 logger.info(
@@ -1377,6 +1390,7 @@ class OmniMultimodalDispatcher:
             # Count the logical attention offset BEFORE decode, not allocated
             # KV capacity, recurrent-state size, or the post-generation offset.
             cached_tokens = 0
+            self._session._vmlx_restored_prefix_tokens = 0
             if not should_reset and getattr(self, "_backend", "stage1") == "stage1":
                 cache = getattr(self._session, "_cache", None)
                 if cache:
@@ -1432,7 +1446,9 @@ class OmniMultimodalDispatcher:
                                           native_video=bool(native_video_spec)), enable_thinking=enable_thinking,
                     max_tokens=max_tokens, temperature=temperature, top_p=top_p,
                     token_callback=token_callback,
+                    checkpoints=checkpoints,
                 )
+                cached_tokens = self._session._vmlx_restored_prefix_tokens
             else:
                 reply = self._session.turn(**turn_kwargs)
             reasoning, visible = _split_omni_reply(

@@ -11,14 +11,16 @@ from copy import deepcopy
 
 def run_full_history(session, messages, *, scratch_dir, extract_parts,
                      enable_thinking, max_tokens, temperature, top_p,
-                     token_callback=None):
+                     token_callback=None, checkpoints=None):
     import numpy as np
     from PIL import Image
 
-    rendered = []
+    candidate = checkpoints.find() if checkpoints is not None else None
+    source_count = candidate["source_count"] if candidate else 0
+    rendered = deepcopy(candidate["rendered"]) if candidate else []
     visual_groups = []
     audio_groups = []
-    for message in messages:
+    for message in messages[source_count:]:
         item = deepcopy(message)
         content = item.get("content")
         if isinstance(content, list):
@@ -83,12 +85,36 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
         kwargs["enable_thinking"] = bool(enable_thinking)
     prompt = session.tokenizer.apply_chat_template(rendered, **kwargs)
     input_ids = session.tokenizer(prompt, return_tensors="np")["input_ids"]
+    restored = checkpoints.accept(input_ids) if checkpoints is not None else 0
+    if restored is None:
+        # A native template may revise earlier turns (e.g. move a budget hint).
+        # Re-encode the supplied media instead of using incompatible RNN state.
+        return run_full_history(
+            session, messages, scratch_dir=scratch_dir, extract_parts=extract_parts,
+            enable_thinking=enable_thinking, max_tokens=max_tokens,
+            temperature=temperature, top_p=top_p, token_callback=token_callback,
+            checkpoints=checkpoints,
+        )
     session._ensure_cache()
-    session._last_prompt_tokens = int(input_ids.shape[-1])
-    embeds = session.mlx_model.backbone.embeddings(session.mx.array(input_ids))
+    session._vmlx_restored_prefix_tokens = restored
+    session._last_prompt_tokens = int(input_ids.shape[-1]) - restored
+    suffix_ids = input_ids[:, restored:]
+    embeds = session.mlx_model.backbone.embeddings(session.mx.array(suffix_ids))
     visuals = np.concatenate(visual_groups, axis=0)[None, ...] if visual_groups else None
     audio = np.concatenate(audio_groups, axis=0)[None, ...] if audio_groups else None
-    embeds = session._inject_embeddings(input_ids, embeds, visuals, None, audio)
+    embeds = session._inject_embeddings(suffix_ids, embeds, visuals, None, audio)
+    if checkpoints is not None and checkpoints.publish_enabled:
+        boundary_prompt = session.tokenizer.apply_chat_template(
+            rendered, **{**kwargs, "add_generation_prompt": False},
+        )
+        boundary_ids = session.tokenizer(boundary_prompt, return_tensors="np")["input_ids"]
+        boundary = int(boundary_ids.shape[-1])
+        if (restored <= boundary < input_ids.shape[-1]
+                and input_ids[0, :boundary].tolist() == boundary_ids[0].tolist()):
+            from .omni_native_prefix import prefill_state
+            prefill_state(session, embeds[:, :boundary - restored])
+            checkpoints.publish(boundary_ids, rendered)
+            embeds = embeds[:, boundary - restored:]
     reply = session._decode_turn(
         embeds, max_tokens=max_tokens, temperature=temperature, top_p=top_p,
         token_callback=token_callback,
