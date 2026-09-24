@@ -16196,6 +16196,19 @@ async def clear_cache(
             except Exception:
                 pass
 
+    if clear_prefix_l2 or cache_type == "multimodal":
+        from .omni_multimodal import OmniMultimodalDispatcher, is_omni_multimodal_bundle
+        omni_path = _model_path or _model_name
+        if omni_path and is_omni_multimodal_bundle(omni_path):
+            try:
+                await OmniMultimodalDispatcher.clear_disk_cache_for(
+                    omni_path, disk_cache_policy=_loaded_omni_disk_cache_policy(),
+                )
+                cleared.append("omni_session_disk")
+            except Exception:
+                logger.exception("Native Omni SSD clear did not finish")
+                skipped.append("omni_session_disk:clear_failed")
+
     # Clear multimodal caches
     if cache_type in ("multimodal", "all"):
         try:
@@ -16213,11 +16226,15 @@ async def clear_cache(
 
     if not cleared:
         if skipped:
+            failed = any(tier.endswith(":clear_failed") for tier in skipped)
             return {
-                "status": "busy",
+                "status": "clear_failed" if failed else "busy",
                 "cache_type": cache_type,
                 "skipped": skipped,
-                "detail": "cache tiers are in use by live requests; retry when idle",
+                "detail": (
+                    "cache clearing failed; inspect server logs before retrying"
+                    if failed else "cache tiers are in use by live requests; retry when idle"
+                ),
             }
         return {"status": "no_caches_found", "cache_type": cache_type}
     result = {"status": "cleared", "caches": cleared, "cache_type": cache_type}

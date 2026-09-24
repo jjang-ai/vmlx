@@ -1071,6 +1071,43 @@ class OmniMultimodalDispatcher:
             logger.warning("Omni session L2 restore rejected: %s", exc)
             return False
 
+    def _clear_native_disk_cache(self):
+        # Run behind any queued decode+publication on the native owner thread.
+        self.reset()
+        return self._native_disk_store().clear()
+
+    @classmethod
+    async def clear_disk_cache_for(cls, bundle_path, *, disk_cache_policy):
+        import asyncio
+        resolved = str(Path(bundle_path).resolve())
+        future = None
+        with cls._instance_lock:
+            instance = cls._instance
+            if (instance is not None and instance.bundle_path == resolved
+                    and instance._session_l2_policy == disk_cache_policy):
+                future = instance.submit(instance._clear_native_disk_cache)
+        if future is not None:
+            return await asyncio.wrap_future(future)
+
+        # A restarted server may have disk entries without a native session.
+        # Clear them without loading encoders or decoder weights.
+        fingerprint = cls._bundle_fingerprint(resolved)
+        directory = cls._default_session_l2_path(fingerprint, disk_cache_policy)
+        if not directory.is_dir():
+            return 0
+
+        def clear_unloaded():
+            from .utils.omni_session_disk_store import OmniSessionDiskStore
+            store = OmniSessionDiskStore(
+                root=disk_cache_policy["root"], model_key=fingerprint,
+                max_size_bytes=disk_cache_policy["max_size_bytes"],
+            )
+            try:
+                return store.clear()
+            finally:
+                store.close()
+        return await asyncio.to_thread(clear_unloaded)
+
     def close(self):
         def release():
             self.reset()

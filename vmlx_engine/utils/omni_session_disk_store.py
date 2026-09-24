@@ -125,5 +125,27 @@ class OmniSessionDiskStore:
             self.last_path = data
             return value
 
+    def clear(self):
+        """Remove this model's finalized snapshots, preserving other namespaces."""
+        with self.budget.exclusive_mutation_guard() as locked:
+            if not locked:
+                raise OSError("native SSD clear lock unavailable")
+            removed = 0
+            for path in self.directory.iterdir():
+                if (path.suffix not in {".json", ".safetensors"}
+                        or len(path.stem) != 64
+                        or any(c not in "0123456789abcdef" for c in path.stem)):
+                    continue
+                if path.is_symlink():
+                    raise OSError("native SSD clear refused a symlink")
+                removed += path.stat().st_size
+                path.unlink()
+            self._fsync_directory(self.directory)
+            result = self.budget.account_finalized_write_locked(-removed)
+            if not result.accounted:
+                raise OSError(result.error or "native SSD clear accounting failed")
+            self.last_path = None
+            return removed
+
     def close(self):
         self.budget.close()
