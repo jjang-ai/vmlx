@@ -103,6 +103,17 @@ class NemotronToolParser(ToolParser):
                             else raw
                         )
                         continue
+                    # The native template applies ``| string`` to scalar
+                    # None, including nullable numbers/booleans/containers.
+                    # Resolve only an explicit non-string nullable hint;
+                    # unresolved or mixed string schemas must not guess.
+                    hinted_types = hint.get("type") if isinstance(hint, dict) else None
+                    if (raw.strip() == "None"
+                            and isinstance(hinted_types, (str, list, tuple))
+                            and "string" not in hinted_types
+                            and self._schema_allows_null(hint)):
+                        arguments[param_name] = None
+                        continue
                     # The native template stringifies scalar booleans as
                     # True/False, while mappings and sequences use JSON.
                     if raw.strip() in ("True", "False") and XMLFunctionToolParser._schema_is_boolean_or_null(hint):

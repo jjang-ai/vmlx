@@ -88,3 +88,38 @@ def test_nemotron_native_boolean_and_json_envelope_are_distinct():
     # JSON-native calls retain generated types, even when they violate schema.
     text = '<tool_call><function=set_flag>{"flag":"False","text":123}</function></tool_call>'
     assert json.loads(p.extract_tool_calls(text, request).tool_calls[0]["arguments"]) == {"flag": "False", "text": 123}
+
+
+@pytest.mark.parametrize('prop', [
+    {'type': ['integer', 'null']}, {'type': ['number', 'null']},
+    {'type': ['boolean', 'null']}, {'type': ['array', 'null']},
+    {'type': ['object', 'null']}, {'type': 'null'},
+    {'anyOf': [{'type': 'integer'}, {'type': 'null'}]},
+    {'$ref': '#/$defs/nullable'},
+])
+def test_nemotron_native_none_roundtrips_nullable_nonstring_parameters(prop):
+    request = {'tools': [{'type': 'function', 'function': {'name': 'record', 'parameters': {
+        '$defs': {'nullable': {'type': ['integer', 'null']}}, 'properties': {'value': prop},
+    }}}]}
+    parser = NemotronToolParser()
+    raw = '<tool_call><function=record><parameter=value>\nNone\n</parameter></function></tool_call>'
+    result = parser.extract_tool_calls(raw, request)
+    assert json.loads(result.tool_calls[0]['arguments']) == {'value': None}
+    streamed = parser.extract_tool_calls_streaming('', raw, '</tool_call>', request=request)
+    assert json.loads(streamed['tool_calls'][0]['function']['arguments']) == {'value': None}
+    # JSON-native envelopes retain their actual generated types.
+    raw = '<tool_call><function=record>{"value":"None"}</function></tool_call>'
+    assert json.loads(parser.extract_tool_calls(raw, request).tool_calls[0]['arguments']) == {'value': 'None'}
+
+
+@pytest.mark.parametrize('prop', [
+    {'type': 'string'}, {'type': 'integer'}, {},
+    {'type': ['string', 'integer', 'null']},
+    {'$ref': 'https://example.invalid/unavailable-schema'},
+])
+def test_nemotron_none_is_not_guessed_for_strings_or_unresolved_schemas(prop):
+    request = {'tools': [{'type': 'function', 'function': {'name': 'record', 'parameters': {
+        'properties': {'value': prop},
+    }}}]}
+    raw = '<tool_call><function=record><parameter=value>None</parameter></function></tool_call>'
+    assert json.loads(NemotronToolParser().extract_tool_calls(raw, request).tool_calls[0]['arguments']) == {'value': 'None'}
