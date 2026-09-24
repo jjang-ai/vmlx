@@ -306,6 +306,10 @@ MLX_VLM_VERSION="0.5.0"
 MFLUX_VERSION="0.19.0"
 OPENCV_VERSION="4.13.0.92"
 MLX_AUDIO_VERSION="0.4.6"
+# Keep the downloader/tokenizer dependency on the version qualified with the
+# bundled runtime. A lower bound silently upgraded it during a source-only
+# rebuild, invalidating the retained dependency comparison.
+HUGGINGFACE_HUB_VERSION="1.32.0"
 # The MCP SDK was installed as an unpinned "mcp>=1.0.0", so every re-bundle took
 # whatever PyPI had latest — which is how the shipped bundle silently moved to a
 # MAJOR version (2.0.0) while uv.lock still records 1.26.0. Nothing broke,
@@ -364,7 +368,7 @@ echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install --only-binary=:all: \
   "mlx==$MLX_VERSION" "mlx-lm==$MLX_LM_VERSION" "mlx-vlm==$MLX_VLM_VERSION" \
-  "transformers>=4.40.0,<5.13" "tokenizers>=0.19.0" "huggingface-hub>=0.23.0" \
+  "transformers>=4.40.0,<5.13" "tokenizers>=0.19.0" "huggingface-hub==$HUGGINGFACE_HUB_VERSION" \
   "numpy>=1.24.0" "pillow>=10.0.0" \
   "opencv-python==$OPENCV_VERSION" \
   "fastapi>=0.100.0" "uvicorn>=0.23.0" \
