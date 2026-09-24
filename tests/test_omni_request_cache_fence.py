@@ -115,3 +115,29 @@ async def test_omni_write_failure_is_not_a_successful_completion(monkeypatch, st
             await dispatch_omni_chat_completion(request, "/test", disk_cache_enabled=True)
         assert error.value.status_code == 500
     assert dispatcher.resets == 1
+
+
+@pytest.mark.parametrize("disk_enabled", [False, True])
+def test_native_payload_is_released_only_after_its_write(disk_enabled):
+    session = SimpleNamespace(_cache=[object()], _history_text=[{"role": "user", "content": "history"}])
+    order = []
+    d = OmniMultimodalDispatcher.__new__(OmniMultimodalDispatcher)
+    d._backend = 'stage1'
+    d._disk_cache_enabled = disk_enabled
+    d._lock = threading.Lock()
+    d._session = session
+    d._last_signature = 'boundary'
+    def persist():
+        assert session._cache and session._history_text
+        order.append('persisted')
+        return True
+    def reset():
+        order.append('released')
+        session._cache = None
+        session._history_text = []
+    session.reset = reset
+    d._persist_session_snapshot = persist
+    d.finish_request_cache()
+    assert order == (['persisted', 'released'] if disk_enabled else ['released'])
+    assert session._cache is None and session._history_text == []
+    assert d._last_signature is None

@@ -98,3 +98,36 @@ def test_media_http_budget_rejection_survives_protocol_adapters(monkeypatch, pat
         assert payload["type"] == "error"
         assert payload["error"]["type"] == "invalid_request_error"
         assert "thinking-token budget" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+def test_omni_cache_controls_survive_protocol_adapters(monkeypatch, path):
+    from fastapi.testclient import TestClient
+    from starlette.responses import JSONResponse
+    from tests.test_ollama_reasoning_parity import _run_streaming_ollama_chat
+    from vmlx_engine import server
+
+    _run_streaming_ollama_chat(monkeypatch, family_name="nemotron_h", model_type="nemotron_h",
+        body={"model": "test-model", "messages": [{"role": "user", "content": "Hello"}], "stream": True})
+    monkeypatch.setattr(server, "_model_path", "/not-loaded-omni")
+    monkeypatch.setattr("vmlx_engine.omni_multimodal.is_omni_multimodal_bundle", lambda path: True)
+    monkeypatch.setattr("vmlx_engine.omni_multimodal.omni_multimodal_component_status", lambda path: {"bundle_compatible": True, "modalities": ["text", "image"]})
+    captured = []
+    async def dispatch(request, *args, **kwargs):
+        captured.append((request.skip_prefix_cache, request.cache_salt))
+        return JSONResponse({"id": "test", "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
+    monkeypatch.setattr("vmlx_engine.omni_multimodal.dispatch_omni_chat_completion", dispatch)
+    body = {"model": "test-model", "skip_prefix_cache": True, "cache_salt": "request-salt"}
+    if path.endswith("responses"):
+        body["input"] = [{"role": "user", "content": [{"type": "input_text", "text": "Describe."}, {"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}]
+    elif path.endswith("messages"):
+        body["messages"] = [{"role": "user", "content": [{"type": "text", "text": "Describe."}, {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}]}]
+    else:
+        body["messages"] = [{"role": "user", "content": [{"type": "text", "text": "Describe."}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}]
+    client = TestClient(server.app)
+    try:
+        response = client.post(path, json=body)
+    finally:
+        client.close()
+    assert response.status_code == 200, response.text
+    assert captured == [(True, "request-salt")]

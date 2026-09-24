@@ -336,6 +336,8 @@ async def test_omni_stream_emits_generation_time_reasoning_content_and_usage(
         top_p = 1
         chat_template_kwargs = {}
         enable_thinking = True
+        skip_prefix_cache = True
+        cache_salt = "isolated-request"
 
     response = await dispatch_omni_chat_completion(
         _Request(),
@@ -374,6 +376,9 @@ async def test_omni_stream_emits_generation_time_reasoning_content_and_usage(
     assert captured["max_tokens"] == 16_384
     assert captured["temperature"] == 0.6
     assert captured["top_p"] == 0.95
+
+    assert captured["force_reset"] is True
+    assert captured["cache_salt"] == "isolated-request"
 
 
 def test_omni_dispatcher_uses_one_persistent_native_runtime_owner_thread():
@@ -632,7 +637,7 @@ def test_omni_conversation_signature_salts_audio_bytes():
     assert _hash_user_texts(orange) != _hash_user_texts(blue)
 
 
-def test_omni_dispatcher_resets_when_replayed_prefix_media_changes(tmp_path):
+def test_omni_dispatcher_resets_when_replayed_prefix_media_changes(tmp_path, monkeypatch):
     class _Session:
         def __init__(self):
             self.reset_count = 0
@@ -677,8 +682,19 @@ def test_omni_dispatcher_resets_when_replayed_prefix_media_changes(tmp_path):
         {"role": "assistant", "content": "READY"},
         {"role": "user", "content": "Repeat the marker."},
     ]
+    # This fixture has no encoders. Capture the full-history handoff while
+    # preserving the original changed-media extraction assertion below.
+    replayed = []
+    def replay(session, messages, **kwargs):
+        replayed.append(messages)
+        text, images, audio, video = _extract_parts(
+            messages, tmp_path, rehydrate_history_media=True,
+        )
+        return session.turn(text=text, images=images, audio=audio, video=video)
+    monkeypatch.setattr("vmlx_engine.omni_multimodal._run_omni_full_history", replay)
     dispatcher.chat(changed_media_history)
 
+    assert replayed == [changed_media_history]
     assert dispatcher._session.reset_count == 2
     assert dispatcher._session.turns[-1]["audio"] is not None
     assert dispatcher._session.turns[-1]["audio"].read_bytes() == b"BLUE"

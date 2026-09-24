@@ -625,7 +625,7 @@ def _media_part_identity(part: Dict[str, Any]) -> Optional[str]:
         src = part.get("image_url") or part.get("image") or {}
     elif ptype in _AUDIO_TYPES:
         kind = "audio"
-        src = part.get("input_audio") or part.get("audio") or {}
+        src = part.get("input_audio") or part.get("audio") or part.get("audio_url") or {}
     elif ptype in _VIDEO_TYPES:
         kind = "video"
         src = part.get("video_url") or part.get("video") or {}
@@ -709,6 +709,29 @@ def _hash_user_texts(texts: List[str]) -> str:
         h.update(t.encode("utf-8"))
         h.update(b"\x00")  # separator so [a,b] != [ab]
     return h.hexdigest()[:16]
+
+
+def _conversation_signature(messages, enable_thinking, cache_salt=None):
+    """Bind retained native state to every supplied role, not user text alone."""
+    canonical = []
+    for message in messages:
+        item = {k: v for k, v in message.items() if v is not None}
+        content = item.get("content")
+        if isinstance(content, list):
+            item["content"] = [
+                {"media_identity": _media_part_identity(part)}
+                if _media_part_identity(part) is not None else part
+                for part in content
+            ]
+        canonical.append(item)
+    payload = json.dumps(
+        {"messages": canonical, "enable_thinking": enable_thinking, "cache_salt": cache_salt},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+from .omni_native_prompt import run_full_history as _run_omni_full_history
 
 
 class OmniMultimodalDispatcher:
@@ -856,6 +879,8 @@ class OmniMultimodalDispatcher:
         status["exists"] = path.is_file()
         status["bytes"] = path.stat().st_size if path.is_file() else 0
         status["pending"] = self._executor._work_queue.qsize()
+        status["ram_mirror_policy"] = "disk_only" if self._backend == "stage1" else "native_session"
+        status["resident_cache_layers"] = len(getattr(self._session, "_cache", None) or [])
         return status
 
     def _cache_block_types(self) -> List[str]:
@@ -960,17 +985,17 @@ class OmniMultimodalDispatcher:
         session state before its snapshot is written. Token deltas can stream
         while decoding; the terminal event waits for this boundary.
         """
-        if (
-            not getattr(self, "_disk_cache_enabled", False)
-            or self._backend != "stage1"
-        ):
+        if self._backend != "stage1":
             return
-        if not self._persist_session_snapshot():
-            self.reset()
+        if getattr(self, "_disk_cache_enabled", False) and not self._persist_session_snapshot():
             raise RuntimeError(
                 "Omni SSD cache write failed: "
                 + str(self._session_l2_stats.get("last_error") or "no snapshot produced")
             )
+        # Keep model/encoder weights resident, but never retain reusable KV/SSM
+        # payloads between requests. A following request restores its matching
+        # SSD snapshot or rebuilds the complete supplied history on a miss.
+        self.reset()
 
     def _try_restore_session_snapshot(self, prefix_signature: str) -> bool:
         if (
@@ -1161,6 +1186,7 @@ class OmniMultimodalDispatcher:
         temperature: float = 0.6,
         top_p: float = 0.95,
         force_reset: bool = False,
+        cache_salt: Optional[str] = None,
         enable_thinking: Optional[bool] = None,
         token_callback: Optional[Callable[[Optional[int], str], None]] = None,
     ) -> Dict[str, Any]:
@@ -1172,15 +1198,8 @@ class OmniMultimodalDispatcher:
                 "_vmlx_enable_thinking",
                 None if enable_thinking is None else bool(enable_thinking),
             )
-            # Cumulative-prefix signature: hash all USER texts EXCLUDING the
-            # current (last) one. If it matches the hash we stored after the
-            # previous turn (= hash of all user texts including the one we
-            # just answered), this is the next turn of the same conversation.
-            user_turns = _user_turn_signatures(messages)
-            prefix_hash = _hash_user_texts(user_turns[:-1])
-            current_hash = _hash_user_texts(user_turns)
-
-            if self._last_signature is None and not force_reset:
+            prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt)
+            if self._last_signature != prefix_hash and not force_reset:
                 self._try_restore_session_snapshot(prefix_hash)
             should_reset = force_reset or prefix_hash != self._last_signature
             if should_reset:
@@ -1193,7 +1212,6 @@ class OmniMultimodalDispatcher:
                 logger.info(
                     "OmniMultimodalDispatcher: continuing conversation (prefix matches)"
                 )
-            self._last_signature = current_hash
 
             text, images, audio, video = _extract_parts(
                 messages,
@@ -1224,7 +1242,27 @@ class OmniMultimodalDispatcher:
                 turn_kwargs["enable_thinking"] = (
                     True if enable_thinking is None else bool(enable_thinking)
                 )
-            reply = self._session.turn(**turn_kwargs)
+            if (
+                should_reset and len(messages) > 1
+                and getattr(self, "_backend", "stage1") == "stage1"
+            ):
+                reply = _run_omni_full_history(
+                    self._session, messages, scratch_dir=self._scratch_dir,
+                    extract_parts=_extract_parts, enable_thinking=enable_thinking,
+                    max_tokens=max_tokens, temperature=temperature, top_p=top_p,
+                    token_callback=token_callback,
+                )
+            else:
+                reply = self._session.turn(**turn_kwargs)
+            reasoning, visible = _split_omni_reply(
+                reply, explicit_thinking_off=enable_thinking is False,
+            )
+            assistant = {"role": "assistant", "content": visible}
+            if reasoning:
+                assistant["reasoning_content"] = reasoning
+            self._last_signature = _conversation_signature(
+                messages + [assistant], enable_thinking, cache_salt,
+            )
 
         # The OmniChat reasoning parser writes <think>…</think> inline in
         # ``reply``; we hand the raw text back so the standard server-side
@@ -1249,7 +1287,7 @@ class OmniMultimodalDispatcher:
         with self._lock:
             if self._session is not None:
                 self._session.reset()
-            self._last_signature = ""
+            self._last_signature = None
 
 
 # ── HTTP-shape adapter ────────────────────────────────────────────────
@@ -1506,16 +1544,22 @@ async def dispatch_omni_chat_completion(
     t_start = _time.time()
 
     def _run_chat(token_callback=None):
-        result = dispatcher.chat(
-            messages=msgs_dump,
-            max_tokens=int(_max_tokens),
-            temperature=float(_temperature),
-            top_p=float(_top_p),
-            enable_thinking=_enable_thinking,
-            token_callback=token_callback,
-        )
-        dispatcher.finish_request_cache()
-        return result
+        try:
+            result = dispatcher.chat(
+                messages=msgs_dump,
+                max_tokens=int(_max_tokens),
+                temperature=float(_temperature),
+                top_p=float(_top_p),
+                enable_thinking=_enable_thinking,
+                force_reset=bool(getattr(request, "skip_prefix_cache", False)),
+                cache_salt=getattr(request, "cache_salt", None),
+                token_callback=token_callback,
+            )
+            dispatcher.finish_request_cache()
+            return result
+        except Exception:
+            dispatcher.reset()
+            raise
 
     if not getattr(request, "stream", False):
         loop = asyncio.get_running_loop()
