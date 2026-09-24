@@ -450,6 +450,25 @@ def _convert_user_message(msg: dict) -> Message | list[Message]:
                 continue
             block_type = block.get("type", "text")
 
+            if block_type in {"image", "video", "video_url", "audio", "input_audio"}:
+                # These Messages media extensions use the native source
+                # envelope. A Chat-style payload here used to silently lose
+                # its media and continue as a successful text-only request.
+                source = block.get("source")
+                if not isinstance(source, dict):
+                    raise ValueError(
+                        f"{block_type} requires a source object with type base64 or url"
+                    )
+                source_type = source.get("type")
+                payload_key = {"base64": "data", "url": "url"}.get(source_type)
+                if payload_key is None:
+                    raise ValueError(f"{block_type}.source.type must be base64 or url")
+                payload = source.get(payload_key)
+                if not isinstance(payload, str) or not payload.strip():
+                    raise ValueError(
+                        f"{block_type}.source.{payload_key} must be a nonempty string"
+                    )
+
             if block_type == "tool_result":
                 # Convert to tool response message
                 result_content = block.get("content", "")
