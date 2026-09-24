@@ -25,6 +25,8 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
             texts = []
             visual_tokens = 0
             audio_tokens = 0
+            visual_fragments = []
+            has_temporal_video = False
             for part in content:
                 if part.get("type") == "text":
                     texts.append(part.get("text") or "")
@@ -47,11 +49,18 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
                     flat = embeds.reshape(-1, embeds.shape[-1])
                     visual_groups.append(flat)
                     visual_tokens += len(flat)
+                    visual_fragments.append("<img>" + "<image>" * len(flat) + "</img>\n")
                 if video is not None:
                     embeds = session._extract_video_embeddings(str(video))
                     flat = embeds.reshape(-1, embeds.shape[-1])
                     visual_groups.append(flat)
                     visual_tokens += len(flat)
+                    video_prompt = getattr(session, "_vmlx_video_prompt", None)
+                    if video_prompt is not None:
+                        if video_prompt.count("<image>") != len(flat):
+                            raise ValueError("Native video prompt and embedding token counts disagree")
+                        has_temporal_video = True
+                    visual_fragments.append(video_prompt or "<img>" + "<image>" * len(flat) + "</img>\n")
                 if audio is not None:
                     embeds = session._extract_audio_embeddings(str(audio))
                     flat = embeds.reshape(-1, embeds.shape[-1])
@@ -60,7 +69,9 @@ def run_full_history(session, messages, *, scratch_dir, extract_parts,
             # Preserve the reference session's media-first turn layout. Across
             # turns, every embedding remains at its original causal position.
             media = ""
-            if visual_tokens:
+            if has_temporal_video:
+                media += "".join(visual_fragments)
+            elif visual_tokens:
                 media += "<img>" + "<image>" * visual_tokens + "</img>\n"
             if audio_tokens:
                 media += "<sound>" + "<so_embedding>" * audio_tokens + "</sound>\n"

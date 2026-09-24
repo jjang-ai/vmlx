@@ -382,17 +382,22 @@ def _materialize_to_temp(data: bytes, suffix: str, scratch_dir: Path) -> Path:
     return out
 
 
-def _omni_video_policy(video_controls=None):
+def _omni_video_policy(video_controls=None, *, temporal_patch_size=None):
     from .video_controls import VideoControls
 
     controls = video_controls or VideoControls()
-    return {
+    policy = {
         "pipeline": "radio-frame-fallback-v2",
         "fps": controls.fps if controls.fps is not None else float(os.environ.get("VMLINUX_OMNI_VIDEO_FPS", "1")),
         "max_frames": controls.max_frames if controls.max_frames is not None else int(os.environ.get("VMLINUX_OMNI_VIDEO_MAX_FRAMES", "4")),
         "dedup_mad": float(os.environ.get("VMLINUX_OMNI_VIDEO_DEDUP_MAD", "8")),
         "contact_sheet": os.environ.get("VMLINUX_OMNI_VIDEO_CONTACT_SHEET", "1") != "0",
     }
+    if temporal_patch_size is not None:
+        policy.update(pipeline="radio-temporal-v1", temporal_patch_size=temporal_patch_size)
+        policy.pop("dedup_mad")
+        policy.pop("contact_sheet")
+    return policy
 
 
 def _extract_omni_video_frames(video_path: Path, scratch_dir: Path, *, video_controls=None) -> List[Path]:
@@ -468,6 +473,7 @@ def _extract_parts(
     *,
     rehydrate_history_media: bool = False,
     video_controls=None,
+    native_video: bool = False,
 ) -> Tuple[str, List[Path], Optional[Path], Optional[Path]]:
     """Walk all messages, collect text + write media to temp files.
 
@@ -545,6 +551,11 @@ def _extract_parts(
                         else:
                             video_path = None
                         if video_path is not None:
+                            if native_video:
+                                if cur_video is not None:
+                                    raise ValueError("Native incremental video requires one clip per turn")
+                                cur_video = video_path
+                                continue
                             frame_paths = _extract_omni_video_frames(
                                 video_path,
                                 scratch_dir,
@@ -583,6 +594,7 @@ def _build_omni_turn_prompt_with_thinking(
     n_audio_tokens: int = 0,
     is_first: bool = False,
     enable_thinking: Optional[bool] = None,
+    video_prompt: Optional[str] = None,
 ) -> str:
     """Build an OmniSession turn prompt while preserving the API thinking rail.
 
@@ -599,7 +611,12 @@ def _build_omni_turn_prompt_with_thinking(
     if n_video_tokens > 0:
         # Nemotron-Omni's tokenizer has no real printable <video> token.  The
         # bundle processor reuses image placeholders for video frame embeds.
-        media += "<img>" + ("<image>" * n_video_tokens) + "</img>\n"
+        if video_prompt is not None:
+            if video_prompt.count("<image>") != n_video_tokens:
+                raise ValueError("Native video prompt and embedding token counts disagree")
+            media += video_prompt
+        else:
+            media += "<img>" + ("<image>" * n_video_tokens) + "</img>\n"
     if n_audio_tokens > 0:
         media += "<sound>" + ("<so_embedding>" * n_audio_tokens) + "</sound>\n"
     msg_content = media + user_text
@@ -831,6 +848,8 @@ class OmniMultimodalDispatcher:
         self._scratch_dir = Path(tempfile.gettempdir()) / "vmlx-omni-media"
         self._scratch_dir.mkdir(exist_ok=True)
         self._backend = self._pick_backend()
+        from .omni_native_video import temporal_video_spec
+        self._native_video_spec = temporal_video_spec(bundle_path) if self._backend == "stage1" else None
         self._device = self._pick_device() if self._backend == "stage1" else "metal"
         logger.info(
             "OmniMultimodalDispatcher: bundle=%s, backend=%s, device=%s, scratch=%s",
@@ -923,6 +942,7 @@ class OmniMultimodalDispatcher:
         status["pending"] = self._executor._work_queue.qsize()
         status["ram_mirror_policy"] = "disk_only" if self._backend == "stage1" else "native_session"
         status["resident_cache_layers"] = len(getattr(self._session, "_cache", None) or [])
+        status["video_representation"] = "native_temporal" if getattr(self, "_native_video_spec", None) else "sampled_images"
         return status
 
     def _cache_block_types(self) -> List[str]:
@@ -1238,8 +1258,20 @@ class OmniMultimodalDispatcher:
                 cradio_status,
             )
         from jang_tools.nemotron_omni_session import OmniSession
+        native_video_spec = self._native_video_spec
 
         class _ThinkingAwareOmniSession(OmniSession):
+            def _extract_video_embeddings(self, video_path):
+                if not native_video_spec:
+                    return super()._extract_video_embeddings(video_path)
+                from .omni_native_video import encode_temporal_video
+                embeds, self._vmlx_video_prompt = encode_temporal_video(
+                    self, video_path,
+                    controls=self._vmlx_video_policy,
+                    temporal_patch_size=native_video_spec["temporal_patch_size"],
+                )
+                return embeds
+
             def _build_turn_prompt(
                 self,
                 user_text: str,
@@ -1256,6 +1288,7 @@ class OmniMultimodalDispatcher:
                     n_audio_tokens=n_audio_tokens,
                     is_first=is_first,
                     enable_thinking=getattr(self, "_vmlx_enable_thinking", None),
+                    video_prompt=getattr(self, "_vmlx_video_prompt", None),
                 )
 
         logger.info(
@@ -1294,11 +1327,28 @@ class OmniMultimodalDispatcher:
                 "_vmlx_enable_thinking",
                 None if enable_thinking is None else bool(enable_thinking),
             )
-            video_policy = _omni_video_policy(video_controls)
+            native_video_spec = getattr(self, "_native_video_spec", None)
+            video_policy = _omni_video_policy(
+                video_controls,
+                temporal_patch_size=(native_video_spec or {}).get("temporal_patch_size"),
+            )
+            self._session._vmlx_video_policy = video_policy
+            self._session._vmlx_video_prompt = None
             prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt, video_policy=video_policy)
             if self._last_signature != prefix_hash and not force_reset:
                 self._try_restore_session_snapshot(prefix_hash)
-            should_reset = force_reset or prefix_hash != self._last_signature
+            last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
+            last_content = last_user.get("content", "")
+            last_parts = last_content if isinstance(last_content, list) else []
+            # OmniSession.turn accepts one video. The full transcript assembler
+            # preserves multiple clips, including their separate frame labels.
+            multi_clip = bool(native_video_spec) and sum(
+                part.get("type") in _VIDEO_TYPES for part in last_parts
+            ) > 1
+            should_reset = force_reset or multi_clip or prefix_hash != self._last_signature
+            full_history = getattr(self, "_backend", "stage1") == "stage1" and (
+                multi_clip or (should_reset and len(messages) > 1)
+            )
             if should_reset:
                 logger.info(
                     "OmniMultimodalDispatcher: cache reset (prefix=%r != last=%r)",
@@ -1320,17 +1370,29 @@ class OmniMultimodalDispatcher:
                     backbone = self._session.mlx_model.backbone
                     cached_tokens = int(cache[backbone.fa_idx].offset)
 
-            text, images, audio, video = _extract_parts(
-                messages,
-                scratch_dir,
-                rehydrate_history_media=should_reset,
-                video_controls=video_controls,
-            )
+            if full_history:
+                # The assembler resolves each part exactly once. Do not run the
+                # incremental collector over earlier clips or flatten them.
+                text = last_content if isinstance(last_content, str) else "".join(
+                    part.get("text", "") for part in last_parts if part.get("type") == "text"
+                )
+                images, audio, video = [], None, None
+                n_images = sum(part.get("type") in _IMAGE_TYPES for part in last_parts)
+                has_audio = any(part.get("type") in _AUDIO_TYPES for part in last_parts)
+                has_video = any(part.get("type") in _VIDEO_TYPES for part in last_parts)
+            else:
+                text, images, audio, video = _extract_parts(
+                    messages if getattr(self, "_backend", "stage1") == "stage2" else [last_user],
+                    scratch_dir, rehydrate_history_media=should_reset,
+                    video_controls=video_controls,
+                    native_video=bool(native_video_spec),
+                )
+                n_images, has_audio, has_video = len(images), bool(audio), bool(video)
             logger.info(
                 "OmniMultimodalDispatcher: turn — text=%dch, images=%d, audio=%s, video=%s",
-                len(text or ""), len(images),
-                "yes" if audio else "no",
-                "yes" if video else "no",
+                len(text or ""), n_images,
+                "yes" if has_audio else "no",
+                "yes" if has_video else "no",
             )
             turn_kwargs: Dict[str, Any] = {
                 "text": text or "",
@@ -1350,13 +1412,11 @@ class OmniMultimodalDispatcher:
                 turn_kwargs["enable_thinking"] = (
                     True if enable_thinking is None else bool(enable_thinking)
                 )
-            if (
-                should_reset and len(messages) > 1
-                and getattr(self, "_backend", "stage1") == "stage1"
-            ):
+            if full_history:
                 reply = _run_omni_full_history(
                     self._session, messages, scratch_dir=scratch_dir,
-                    extract_parts=partial(_extract_parts, video_controls=video_controls), enable_thinking=enable_thinking,
+                    extract_parts=partial(_extract_parts, video_controls=video_controls,
+                                          native_video=bool(native_video_spec)), enable_thinking=enable_thinking,
                     max_tokens=max_tokens, temperature=temperature, top_p=top_p,
                     token_callback=token_callback,
                 )
@@ -1378,9 +1438,9 @@ class OmniMultimodalDispatcher:
         # deepseek_r1 reasoning-content split path handles it.
         return {
             "content": reply,
-            "n_images": len(images),
-            "has_audio": bool(audio),
-            "has_video": bool(video),
+            "n_images": n_images,
+            "has_audio": has_audio,
+            "has_video": has_video,
             "prompt_tokens": int(
                 getattr(self._session, "_last_prompt_tokens", 0) or 0
             ) + cached_tokens,
