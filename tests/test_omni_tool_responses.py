@@ -47,3 +47,42 @@ async def test_native_responses_preserves_tools_and_continuation(monkeypatch, st
     assert [(item['call_id'], item['name'], item['arguments']) for item in output] == [
         (call['id'], call['function']['name'], call['function']['arguments']) for call in calls]
     assert response['status'] == 'completed'
+
+
+@pytest.mark.parametrize('bad_arguments', [None, '{', '[]', '{"x":1,"x":2}'])
+def test_nonstream_native_response_stores_media_and_call_for_previous_id(monkeypatch, bad_arguments):
+    from fastapi.testclient import TestClient
+    from tests.test_ollama_reasoning_parity import _run_streaming_ollama_chat
+    from vmlx_engine import server, omni_multimodal as omni
+    _run_streaming_ollama_chat(monkeypatch, family_name='nemotron_h', model_type='nemotron_h',
+        body={'model': 'test-model', 'messages': [{'role': 'user', 'content': 'hello'}], 'stream': True})
+    monkeypatch.setattr(server, '_model_path', '/native-omni')
+    monkeypatch.setattr(omni, 'is_omni_multimodal_bundle', lambda p: True)
+    monkeypatch.setattr(omni, 'omni_multimodal_component_status', lambda p: {
+        'bundle_compatible': True, 'modalities': ['text', 'image']})
+    saved = []
+    monkeypatch.setattr(server, '_responses_store_history', lambda *a, **kw: saved.append((a, kw)))
+    async def dispatch(*args, **kwargs):
+        assert bad_arguments is None, 'malformed history reached native generation'
+        return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'call_one', 'type': 'function', 'function': {'name': 'read_file', 'arguments': '{"path":"first.txt"}'}}
+        ]}, 'finish_reason': 'tool_calls'}]}
+    monkeypatch.setattr(omni, 'dispatch_omni_chat_completion', dispatch)
+    inputs = [{'role': 'user', 'content': [{'type': 'input_image', 'image_url': 'data:image/png;base64,AA=='}]}]
+    if bad_arguments is not None:
+        inputs += [{'type': 'function_call', 'call_id': 'old', 'name': 'read_file', 'arguments': bad_arguments},
+                   {'type': 'function_call_output', 'call_id': 'old', 'output': 'old result'}]
+    with TestClient(server.app) as client:
+        response = client.post('/v1/responses', json={'model': 'test-model', 'stream': False,
+            'input': inputs})
+    if bad_arguments is not None:
+        # Pydantic rejects malformed/non-object JSON at the request boundary;
+        # native history admission additionally rejects duplicate JSON keys.
+        assert response.status_code in (400, 422), response.text
+        assert not saved
+        return
+    assert response.status_code == 200, response.text
+    assert saved and saved[0][0][0] == response.json()['id']
+    history = saved[0][0][1]
+    assert history[0]['content'][0]['type'] == 'image_url'
+    assert history[-1]['tool_calls'][0]['id'] == 'call_one'

@@ -22093,6 +22093,7 @@ def _responses_input_to_messages(
     instructions: str | None = None,
     preserve_multimodal: bool = False,
     preserve_native_roles: bool = False,
+    strict_tool_arguments: bool = False,
 ) -> list[dict]:
     """Convert Responses API input to chat messages format.
 
@@ -22290,7 +22291,13 @@ def _responses_input_to_messages(
             # Parse arguments to dict — chat templates (Qwen3, Llama, etc.)
             # call .items() on arguments, so they must be a mapping, not a string
             args_raw = item.get("arguments", "{}")
-            if isinstance(args_raw, str):
+            if strict_tool_arguments:
+                from .omni_native_tools import _object_arguments
+                try:
+                    args_parsed = _object_arguments(args_raw)
+                except (TypeError, ValueError) as error:
+                    raise HTTPException(400, f"Invalid native tool history arguments: {error}") from error
+            elif isinstance(args_raw, str):
                 try:
                     args_parsed = json.loads(args_raw)
                 except (json.JSONDecodeError, TypeError):
@@ -23394,6 +23401,7 @@ async def create_response(
     # for omni bundles too, otherwise input_image gets collapsed to text and the
     # encoder never sees the image.
     _preserve_mm = bool(engine.is_mllm)
+    _native_omni_resp = False
     if not _preserve_mm:
         _resp_modalities_for_preserve = _responses_input_requested_modalities(request.input)
         if _m3_vl_response_media_supported(engine, _resp_modalities_for_preserve):
@@ -23404,6 +23412,7 @@ async def create_response(
             _omni_path_resp = _model_path or _model_name
             if _omni_path_resp and is_omni_multimodal_bundle(_omni_path_resp):
                 _preserve_mm = True
+                _native_omni_resp = True
         except Exception:
             pass
     # Responses ``instructions`` are request-scoped. OpenAI's chaining
@@ -23416,12 +23425,14 @@ async def create_response(
         None,
         preserve_multimodal=_preserve_mm,
         preserve_native_roles=_preserves_native_developer_role(request.model),
+        strict_tool_arguments=_native_omni_resp,
     )
     messages = _responses_input_to_messages(
         request.input,
         request.instructions,
         preserve_multimodal=_preserve_mm,
         preserve_native_roles=_preserves_native_developer_role(request.model),
+        strict_tool_arguments=_native_omni_resp,
     )
     if request.previous_response_id:
         previous_messages = _responses_get_history(request.previous_response_id)
@@ -23447,7 +23458,13 @@ async def create_response(
                 request.previous_response_id,
             )
     messages = _canonicalize_mimo_v26_tool_history(messages)
-    if _preserve_mm:
+    if _native_omni_resp:
+        from .omni_native_tools import prepare_native_tools
+        # Validate before generic orphan coercion can erase a malformed native
+        # call/result relationship. Current catalog validation happens later.
+        messages = prepare_native_tools(None, None, messages).messages
+        history_messages = prepare_native_tools(None, None, history_messages).messages
+    elif _preserve_mm:
         messages = _coerce_orphan_tool_messages_for_template(messages)
     if engine.is_mllm and _should_coerce_zaya_vl_tool_history(request.model):
         messages = _coerce_zaya_vl_tool_history_for_template(messages)
@@ -23949,6 +23966,16 @@ async def create_response(
                     cc_dict,
                     resolved_name,
                 )
+                if _resp_payload.get("status") == "completed":
+                    _native_output = _resp_payload.get("output") or []
+                    _responses_store_history(
+                        _resp_payload["id"],
+                        (history_messages if history_messages is not None else messages)
+                        + _responses_output_to_assistant_messages(_native_output),
+                        reasoning_only=bool(_native_output) and all(
+                            item.get("type") == "reasoning" for item in _native_output
+                        ),
+                    )
                 return _JR2(content=_resp_payload)
             return cc
     except HTTPException:
