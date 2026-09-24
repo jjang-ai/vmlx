@@ -1904,10 +1904,16 @@ async def dispatch_omni_chat_completion(
                 tool_context=tool_contract.active,
             )
             if tool_contract.active:
-                _, visible = _split_omni_reply(
-                    result.get("content") or "",
+                # Use the streaming rail state machine for completed tool
+                # responses too. Searching globally for think tags corrupts
+                # literal code/string arguments after the reasoning rail.
+                rails = _OmniIncrementalRailSplitter(
                     explicit_thinking_off=result.get("prompt_thinking_off", _explicit_thinking_off),
-                )
+                ).feed(result.get("content") or "", final=True)
+                visible = "".join(text for rail, text in rails if rail == "content").strip()
+                result["parsed_reasoning"] = "".join(
+                    text for rail, text in rails if rail == "reasoning"
+                ).strip() or None
                 output = NativeToolOutput(tool_contract)
                 safe = output.feed(visible)
                 tail, calls = output.finish(result.get("finish_reason") or "stop")
@@ -1943,6 +1949,7 @@ async def dispatch_omni_chat_completion(
             explicit_thinking_off=result.get("prompt_thinking_off", _explicit_thinking_off),
         )
         content = result.get("visible_content", content)
+        reasoning_content = result.get("parsed_reasoning", reasoning_content)
         prompt_tokens = int(result.get("prompt_tokens") or 0)
         completion_tokens = int(result.get("completion_tokens") or 0)
         finish_reason = str(result.get("finish_reason") or "stop")
@@ -2147,6 +2154,7 @@ async def dispatch_omni_chat_completion(
                 explicit_thinking_off=(result or {}).get("prompt_thinking_off", _explicit_thinking_off),
             )
             final_content = (result or {}).get("visible_content", final_content)
+            final_reasoning = (result or {}).get("parsed_reasoning", final_reasoning)
             if final_reasoning and not final_reasoning.startswith(
                 streamed_reasoning.strip()
             ):

@@ -161,22 +161,27 @@ def test_history_can_reference_a_previous_catalog():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stream', [False, True])
-async def test_http_calls_follow_durable_owner_and_ignore_reasoning_examples(monkeypatch, stream):
+@pytest.mark.parametrize('prefix,off,value', [
+    ('<think>Example: <function=wrong>{}</function></think>', False, '007'),
+    ('', True, '<think>literal code</think>'),
+    ('Example: <function=wrong>{}</function></think>', False, '<think>literal code</think>'),
+])
+async def test_http_calls_follow_durable_owner_and_ignore_reasoning_examples(monkeypatch, stream, prefix, off, value):
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
     import threading
     from vmlx_engine import omni_multimodal as omni
     from vmlx_engine.api.models import ChatCompletionRequest
-    raw = '<think>Example: <function=wrong>{}</function></think>I will record it. <function=record>{"value":"007"}</function>'
+    raw = prefix + 'I will record it. <function=record>' + json.dumps({'value': value}) + '</function>'
     entered, release, durable = threading.Event(), threading.Event(), threading.Event()
     class Dispatcher:
         _backend = 'stage1'
         def chat(self, **kwargs):
             assert kwargs['tools'] == catalog() and kwargs['tool_context'] is True
-            if kwargs['prompt_rail_callback']: kwargs['prompt_rail_callback'](False)
+            if kwargs['prompt_rail_callback']: kwargs['prompt_rail_callback'](off)
             if kwargs['token_callback']:
                 for index, char in enumerate(raw): kwargs['token_callback'](index, char)
-            return {'content': raw, 'prompt_thinking_off': False, 'finish_reason': 'stop',
+            return {'content': raw, 'prompt_thinking_off': off, 'finish_reason': 'stop',
                     'prompt_tokens': 90, 'completion_tokens': 40, 'cached_tokens': 60}
         def finish_request_cache(self):
             entered.set()
@@ -214,13 +219,13 @@ async def test_http_calls_follow_durable_owner_and_ignore_reasoning_examples(mon
         deltas = [c.get('delta', {}) for p in response for c in p.get('choices', [])]
         calls = [call for d in deltas for call in d.get('tool_calls', [])]
         assert ''.join(d.get('content', '') for d in deltas) == 'I will record it. '
-        assert 'wrong' in ''.join(d.get('reasoning_content', '') for d in deltas)
+        assert ('wrong' in ''.join(d.get('reasoning_content', '') for d in deltas)) is not off
         assert response[-1]['choices'][0]['finish_reason'] == 'tool_calls'
     else:
         calls = response['choices'][0]['message']['tool_calls']
         assert response['choices'][0]['finish_reason'] == 'tool_calls'
     assert len(calls) == 1 and calls[0]['function']['name'] == 'record'
-    assert json.loads(calls[0]['function']['arguments']) == {'value': '007'}
+    assert json.loads(calls[0]['function']['arguments']) == {'value': value}
 
 
 def test_tool_result_batch_boundaries_and_catalog_are_bound_to_keys():
