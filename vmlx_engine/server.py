@@ -22771,10 +22771,11 @@ def _adapt_omni_chat_completion_to_responses_payload(
     message = choice.get("message") or {}
     visible_text = message.get("content") or ""
     reasoning_text = message.get("reasoning_content") or ""
+    tool_calls = message.get("tool_calls") or []
     finish_reason = choice.get("finish_reason")
     terminal = _responses_terminal_state(
         finish_reason,
-        reasoning_only_no_content=bool(reasoning_text and not visible_text),
+        reasoning_only_no_content=bool(reasoning_text and not visible_text and not tool_calls),
     )
     usage = chat_completion.get("usage") or {}
 
@@ -22791,7 +22792,7 @@ def _adapt_omni_chat_completion_to_responses_payload(
                 "content": [],
             }
         )
-    if visible_text or not reasoning_text:
+    if visible_text or (not reasoning_text and not tool_calls):
         output.append(
             {
                 "type": "message",
@@ -22807,6 +22808,14 @@ def _adapt_omni_chat_completion_to_responses_payload(
                 ],
             }
         )
+
+    for call in tool_calls:
+        function = call["function"]
+        output.append({
+            "id": f"fc_{uuid.uuid4().hex[:12]}", "type": "function_call",
+            "status": terminal.item_status, "call_id": call["id"],
+            "name": function["name"], "arguments": function["arguments"],
+        })
 
     payload = {
         "id": f"resp_{uuid.uuid4().hex[:12]}",
@@ -22827,7 +22836,7 @@ def _adapt_omni_chat_completion_to_responses_payload(
     if terminal.incomplete_details:
         payload["incomplete_details"] = terminal.incomplete_details
     reasoning_only_warnings = _current_response_warnings_for_reasoning_only(
-        bool(reasoning_text and not visible_text),
+        bool(reasoning_text and not visible_text and not tool_calls),
         finish_reason,
     )
     if reasoning_only_warnings:
@@ -22853,6 +22862,7 @@ async def _adapt_omni_chat_stream_to_responses(
     reasoning_item_finished = False
     reasoning_item: dict | None = None
     output_items_by_index: dict[int, dict] = {}
+    tool_items: dict[int, tuple[int, dict]] = {}
     created_at = int(time.time())
     seq = 0
 
@@ -23015,6 +23025,7 @@ async def _adapt_omni_chat_stream_to_responses(
 
     async def _handle_payload(payload: dict) -> AsyncIterator[str]:
         nonlocal reasoning_text, content_text, finish_reason, usage, stream_failed
+        nonlocal next_output_index
         if isinstance(payload.get("error"), dict):
             stream_failed = True
             error = payload["error"]
@@ -23069,6 +23080,34 @@ async def _adapt_omni_chat_stream_to_responses(
                         "delta": content_delta,
                     },
                 )
+            for call in delta.get("tool_calls") or []:
+                if reasoning_item_started and not reasoning_item_finished:
+                    for event in _finish_reasoning_item_events(reasoning_text):
+                        yield event
+                call_index = int(call.get("index", 0))
+                function = call.get("function") or {}
+                if call_index not in tool_items:
+                    output_index = next_output_index
+                    next_output_index += 1
+                    item = {
+                        "id": f"fc_{uuid.uuid4().hex[:12]}", "type": "function_call",
+                        "status": "in_progress", "call_id": call["id"],
+                        "name": function["name"], "arguments": "",
+                    }
+                    tool_items[call_index] = (output_index, item)
+                    yield _sse("response.output_item.added", {
+                        "type": "response.output_item.added", "output_index": output_index,
+                        "item": dict(item),
+                    })
+                output_index, item = tool_items[call_index]
+                arguments = function.get("arguments") or ""
+                if arguments:
+                    item["arguments"] += arguments
+                    yield _sse("response.function_call_arguments.delta", {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": item["id"], "output_index": output_index,
+                        "delta": arguments,
+                    })
             if choice.get("finish_reason"):
                 finish_reason = str(choice["finish_reason"])
         chat_usage = payload.get("usage")
@@ -23127,7 +23166,7 @@ async def _adapt_omni_chat_stream_to_responses(
 
     reasoning_text = reasoning_text.strip()
     content_text = content_text.strip()
-    if reasoning_text and not content_text:
+    if reasoning_text and not content_text and not tool_items:
         reasoning_only_warning = _current_response_warnings_for_reasoning_only(
             True,
             finish_reason,
@@ -23143,7 +23182,7 @@ async def _adapt_omni_chat_stream_to_responses(
 
     terminal = _responses_terminal_state(
         finish_reason,
-        reasoning_only_no_content=bool(reasoning_text and not content_text),
+        reasoning_only_no_content=bool(reasoning_text and not content_text and not tool_items),
     )
     if reasoning_text:
         for event in _finish_reasoning_item_events(
@@ -23151,7 +23190,7 @@ async def _adapt_omni_chat_stream_to_responses(
             status=terminal.item_status,
         ):
             yield event
-    if content_text or not reasoning_text:
+    if content_text or message_item_started or (not reasoning_text and not tool_items):
         for event in _start_message_item_events():
             yield event
         message_item = {
@@ -23201,6 +23240,18 @@ async def _adapt_omni_chat_stream_to_responses(
             raise RuntimeError("Omni message item finalized before allocation")
         output_items_by_index[message_output_index] = message_item
 
+    for output_index, item in tool_items.values():
+        item["status"] = terminal.item_status
+        yield _sse("response.function_call_arguments.done", {
+            "type": "response.function_call_arguments.done", "item_id": item["id"],
+            "output_index": output_index, "arguments": item["arguments"],
+        })
+        yield _sse("response.output_item.done", {
+            "type": "response.output_item.done", "output_index": output_index,
+            "item": item,
+        })
+        output_items_by_index[output_index] = item
+
     output_items = [
         output_items_by_index[index] for index in sorted(output_items_by_index)
     ]
@@ -23224,7 +23275,7 @@ async def _adapt_omni_chat_stream_to_responses(
             response_id,
             (history_messages or [])
             + _responses_output_to_assistant_messages(output_items),
-            reasoning_only=bool(reasoning_text and not content_text),
+            reasoning_only=bool(reasoning_text and not content_text and not tool_items),
         )
     yield _sse(
         terminal.event_type,
