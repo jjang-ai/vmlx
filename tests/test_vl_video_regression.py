@@ -5475,7 +5475,8 @@ class TestMs68CollectionErrorVsEmpty:
         # retry handler and labels it with the retry copy — so scope the label
         # check to the handler's onClick site instead of anywhere in the file,
         # and pin the English catalog entry the key resolves to.
-        onclick_idx = src.find("retryCollectionFetch(collectionTab)")
+        error_idx = src.index("collectionErrors[collectionKey] ? (")
+        onclick_idx = src.find("onClick={retryCollectionFetch}", error_idx)
         assert onclick_idx != -1, (
             "error fallback must invoke the retry handler on click"
         )
@@ -5489,25 +5490,30 @@ class TestMs68CollectionErrorVsEmpty:
 
     def test_error_ui_distinct_from_empty(self):
         src = (REPO_ROOT / "panel/src/renderer/src/components/sessions/DownloadTab.tsx").read_text()
-        assert "Failed to load" in src, (
+        assert "t('sessions.download.feedLoadFailed')" in src, (
             "error fallback must say 'Failed to load' — otherwise the UX "
             "is identical to the empty-collection case"
         )
         # Error must show the actual exception message (so users can
         # diagnose rate-limit, 404 slug, etc.)
-        assert "collectionErrors[collectionTab]" in src
+        assert "{collectionErrors[collectionKey]}" in src
+        assert src.index("collectionErrors[collectionKey] ? (") < src.index("displayModels.length === 0 ? (")
+        catalog = json.loads((REPO_ROOT / "panel/src/renderer/src/i18n/locales/en.json").read_text())
+        assert "Failed to load" in catalog["sessions"]["download"]["feedLoadFailed"]
+        assert catalog["sessions"]["download"]["feedLoadFailed"] != catalog["sessions"]["download"]["noFeedModels"]
 
     def test_failure_path_records_error(self):
         """The catch branch of the fetch must populate collectionErrors,
         not just log to console."""
         src = (REPO_ROOT / "panel/src/renderer/src/components/sessions/DownloadTab.tsx").read_text()
-        # Both catch sites (mount effect + handleCollectionTabChange)
-        # must set the error state, not just log.
-        setError = src.count("setCollectionErrors(prev => ({")
-        assert setError >= 2, (
-            f"setCollectionErrors must be called on fetch failure in at "
-            f"least 2 sites (mount effect + tab switch); found {setError}"
-        )
+        # Mount, tab changes and Retry share one refresh effect. Scope this
+        # source contract to its catch branch, not the number of setters.
+        refresh = src[src.index("const refresh = async () => {"):]
+        catch = refresh[refresh.index("} catch (err) {"):refresh.index("} finally {")]
+        assert "if (!cancelled) setCollectionErrors" in catch
+        assert "[key]: String(err instanceof Error ? err.message : err)" in catch
+        assert "[collectionTab, collectionKey, modelType, feedSort, feedRefresh, searchQuery]" in refresh
+        assert "const retryCollectionFetch = () => setFeedRefresh(value => value + 1)" in src
 
 
 class TestVmlx94MxMetalDeprecation:
@@ -8079,35 +8085,32 @@ class TestL2DiskPersistenceAcrossRestart:
             finally:
                 store2.shutdown()
 
-    def test_turboquant_quantized_kv_persists_with_meta(self):
-        """The TurboQuant-specific quantized_kv tuple with
+    def test_affine_quantized_kv_persists_with_meta(self):
+        """The native MLX affine quantized_kv tuple with
         (packed, scales, biases) and a meta dict (bits, group_size)
         must survive shutdown + reload without metadata loss.
 
         Regression guard for 686aae56 — safetensors __metadata__
-        collision was silently dropping TQ blocks on restart."""
-        import tempfile, time, hashlib
+        collision was silently dropping quantized blocks on restart."""
+        import tempfile, hashlib
         import mlx.core as mx
         from vmlx_engine.block_disk_store import BlockDiskStore
         with tempfile.TemporaryDirectory() as d:
             store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
             try:
-                k_packed = mx.zeros((4, 8, 16), dtype=mx.uint32)
-                k_scales = mx.ones((4, 8, 1))
-                k_biases = mx.zeros((4, 8, 1))
-                v_packed = mx.zeros((4, 8, 16), dtype=mx.uint32)
-                v_scales = mx.ones((4, 8, 1))
-                v_biases = mx.zeros((4, 8, 1))
+                values = mx.arange(1 * 2 * 32 * 64, dtype=mx.float32).reshape(1, 2, 32, 64)
+                keys = mx.quantize(mx.sin(values).astype(mx.float16), group_size=64, bits=3)
+                vals = mx.quantize(mx.cos(values).astype(mx.float16), group_size=64, bits=3)
                 meta = {"bits": 3, "group_size": 64}
                 cache_data = [(
                     "quantized_kv",
-                    (k_packed, k_scales, k_biases),
-                    (v_packed, v_scales, v_biases),
+                    keys,
+                    vals,
                     meta,
                 )]
-                bh = hashlib.sha256(b"tq_persist").digest()
-                store1.write_block_async(bh, cache_data, token_count=32)
-                time.sleep(2.0)
+                bh = hashlib.sha256(b"affine_quantized_persist").digest()
+                assert store1.write_block_async(bh, cache_data, token_count=32)
+                assert store1.wait_for_blocks([bh], timeout=5.0) == {bh}
             finally:
                 store1.shutdown()
             # === simulated restart ===
@@ -8115,7 +8118,7 @@ class TestL2DiskPersistenceAcrossRestart:
             try:
                 read = store2.read_block(bh)
                 assert read is not None, (
-                    "TurboQuant block lost across restart — likely "
+                    "Affine quantized block lost across restart — likely "
                     "__metadata__ safetensors collision (686aae56)"
                 )
                 layer = read[0]
@@ -8133,6 +8136,10 @@ class TestL2DiskPersistenceAcrossRestart:
                 # Keys tuple intact
                 assert len(layer[1]) == 3, "keys tuple length lost"
                 assert len(layer[2]) == 3, "values tuple length lost"
+                for original, restored in zip((*keys, *vals), (*layer[1], *layer[2])):
+                    assert restored.dtype == original.dtype
+                    assert restored.shape == original.shape
+                    assert bool(mx.array_equal(restored, original))
             finally:
                 store2.shutdown()
 
@@ -10866,15 +10873,6 @@ class TestGenPrefixEchoSuppression:
         the FIRST response's gen_prefix_tokens field, not a global."""
         src = Path(self.SCHED).read_text()
         assert 'getattr(response, "gen_prefix_tokens"' in src
-
-    def test_suppression_does_not_fire_without_gen_prefix(self):
-        """When no gen-prefix was captured (e.g. non-thinking model, no
-        template prefix), the suppressor must pass-through immediately."""
-        src = Path(self.SCHED).read_text()
-        # The _gen_prefix check must guard the whole block
-        assert "if _gen_prefix:" in src, (
-            "empty _gen_prefix must short-circuit the suppressor"
-        )
 
 
 class TestCleanOutputTextDegradedGemma4:

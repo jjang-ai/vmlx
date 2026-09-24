@@ -151,6 +151,19 @@ def test_error_sentinel_is_not_generated_or_detokenized(code, after_token):
         assert output.error_source == "declared_context"
 
 
+@pytest.mark.parametrize("prefix", [None, []])
+def test_suppression_does_not_fire_without_gen_prefix(prefix):
+    scheduler = _scheduler("empty-prefix")
+    response = _response("empty-prefix", 0)
+    response.gen_prefix_tokens = prefix
+    outputs, finished = scheduler._process_batch_responses([response])
+    assert not finished
+    assert outputs[0].new_token_ids == [0]
+    assert outputs[0].output_token_ids == [0]
+    assert outputs[0].new_text == "A"
+    assert scheduler.running["empty-prefix"]._gen_prefix_tokens == []
+
+
 def test_error_sentinel_does_not_mutate_pending_generation_prefix():
     scheduler = _scheduler("error-prefix")
     request = scheduler.running["error-prefix"]
