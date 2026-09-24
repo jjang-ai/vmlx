@@ -6,6 +6,18 @@ are derived from the bundle components and reported in `/health` under
 `omni_multimodal`. Audio output and native media tool combinations require
 separate support; do not infer them from text-only tool support.
 
+Native video sampling honors request-local `video_fps` and `video_max_frames`,
+including the values saved in MLX Studio's server settings. If omitted, the
+native defaults are 1 FPS and 4 frames (overridable through
+`VMLINUX_OMNI_VIDEO_FPS` and `VMLINUX_OMNI_VIDEO_MAX_FRAMES`). The frame ceiling
+applies before deduplication and contact-sheet assembly. Logs report sampled,
+capped and retained frame counts. Different sampling policies have separate
+frame and conversation-cache identities.
+
+The RADIO path does not enforce pixel, explicit-dimension or video-token
+budgets; requests containing those video controls return an error. Sampling
+failure also returns an error instead of switching to fixed native defaults.
+
 With Block Disk Cache enabled, Stage-1 media requests store their native
 attention and recurrent state under the configured block-cache directory.
 These snapshots share the aggregate SSD limit with ordinary text-cache blocks

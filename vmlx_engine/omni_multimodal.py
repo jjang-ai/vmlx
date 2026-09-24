@@ -43,7 +43,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -386,20 +386,41 @@ def _materialize_to_temp(data: bytes, suffix: str, scratch_dir: Path) -> Path:
     return out
 
 
-def _extract_omni_video_frames(video_path: Path, scratch_dir: Path) -> List[Path]:
+def _omni_video_policy(video_controls=None):
+    from .video_controls import VideoControls
+
+    controls = video_controls or VideoControls()
+    return {
+        "pipeline": "radio-frame-fallback-v2",
+        "fps": controls.fps if controls.fps is not None else float(os.environ.get("VMLINUX_OMNI_VIDEO_FPS", "1")),
+        "max_frames": controls.max_frames if controls.max_frames is not None else int(os.environ.get("VMLINUX_OMNI_VIDEO_MAX_FRAMES", "4")),
+        "dedup_mad": float(os.environ.get("VMLINUX_OMNI_VIDEO_DEDUP_MAD", "8")),
+        "contact_sheet": os.environ.get("VMLINUX_OMNI_VIDEO_CONTACT_SHEET", "1") != "0",
+    }
+
+
+def _extract_omni_video_frames(video_path: Path, scratch_dir: Path, *, video_controls=None) -> List[Path]:
     """Sample an Omni video into image files for the RADIO image encoder."""
     try:
         from PIL import Image
         import numpy as np
         from .models.mllm import extract_video_frames_smart
 
+        policy = _omni_video_policy(video_controls)
         frames = extract_video_frames_smart(
             str(video_path),
-            fps=float(os.environ.get("VMLINUX_OMNI_VIDEO_FPS", "1")),
-            max_frames=int(os.environ.get("VMLINUX_OMNI_VIDEO_MAX_FRAMES", "4")),
+            fps=policy["fps"],
+            max_frames=policy["max_frames"],
         )
+        from .video_controls import subsample_frames_evenly
+        sampled_count = len(frames)
+        # The shared sampler rounds up to its temporal patch minimum. RADIO
+        # consumes independent images, so the requested ceiling still wins.
+        frames = subsample_frames_evenly(frames, min(len(frames), policy["max_frames"]))
+        if not frames:
+            raise ValueError("video contains no readable frames")
         deduped = []
-        threshold = float(os.environ.get("VMLINUX_OMNI_VIDEO_DEDUP_MAD", "8"))
+        threshold = policy["dedup_mad"]
         for frame in frames:
             if not deduped:
                 deduped.append(frame)
@@ -410,10 +431,16 @@ def _extract_omni_video_frames(video_path: Path, scratch_dir: Path) -> List[Path
             if delta >= threshold:
                 deduped.append(frame)
         out: List[Path] = []
-        digest = hashlib.sha256(str(video_path).encode("utf-8")).hexdigest()[:10]
+        with video_path.open("rb") as source:
+            content_hash = hashlib.file_digest(source, "sha256").hexdigest()
+        digest = hashlib.sha256(json.dumps(
+            {"content": content_hash, "policy": policy}, sort_keys=True,
+        ).encode("utf-8")).hexdigest()
+        logger.info("Omni video preprocessing: fps=%s max_frames=%s sampled=%d capped=%d retained=%d contact_sheet=%s",
+                    policy["fps"], policy["max_frames"], sampled_count, len(frames), len(deduped), policy["contact_sheet"])
         if (
             len(deduped) > 1
-            and os.environ.get("VMLINUX_OMNI_VIDEO_CONTACT_SHEET", "1") != "0"
+            and policy["contact_sheet"]
         ):
             images = [Image.fromarray(frame).convert("RGB") for frame in deduped]
             width = sum(img.width for img in images)
@@ -434,12 +461,9 @@ def _extract_omni_video_frames(video_path: Path, scratch_dir: Path) -> List[Path
             out.append(frame_path)
         return out
     except Exception as exc:
-        logger.warning(
-            "Omni video frame fallback failed for %s; trying native video path: %s",
-            video_path,
-            exc,
-        )
-        return []
+        # The native video method has fixed sampling defaults. Falling through
+        # to it would silently discard the caller's frame policy.
+        raise ValueError(f"Omni video frame preprocessing failed: {exc}") from exc
 
 
 def _extract_parts(
@@ -447,6 +471,7 @@ def _extract_parts(
     scratch_dir: Path,
     *,
     rehydrate_history_media: bool = False,
+    video_controls=None,
 ) -> Tuple[str, List[Path], Optional[Path], Optional[Path]]:
     """Walk all messages, collect text + write media to temp files.
 
@@ -527,6 +552,7 @@ def _extract_parts(
                             frame_paths = _extract_omni_video_frames(
                                 video_path,
                                 scratch_dir,
+                                video_controls=video_controls,
                             )
                             if frame_paths:
                                 cur_images.extend(frame_paths)
@@ -651,12 +677,8 @@ def _media_part_identity(part: Dict[str, Any]) -> Optional[str]:
     path = Path(source).expanduser()
     try:
         if path.is_file():
-            stat = path.stat()
-            identity = (
-                f"{path.resolve()}:{stat.st_size}:"
-                f"{getattr(stat, 'st_mtime_ns', int(stat.st_mtime * 1e9))}"
-            )
-            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            with path.open("rb") as source_file:
+                digest = hashlib.file_digest(source_file, "sha256").hexdigest()
             return f"{kind}:file:{digest}"
     except OSError:
         pass
@@ -711,21 +733,21 @@ def _hash_user_texts(texts: List[str]) -> str:
     return h.hexdigest()[:16]
 
 
-def _conversation_signature(messages, enable_thinking, cache_salt=None):
+def _conversation_signature(messages, enable_thinking, cache_salt=None, *, video_policy=None):
     """Bind retained native state to every supplied role, not user text alone."""
     canonical = []
     for message in messages:
         item = {k: v for k, v in message.items() if v is not None}
         content = item.get("content")
         if isinstance(content, list):
-            item["content"] = [
-                {"media_identity": _media_part_identity(part)}
-                if _media_part_identity(part) is not None else part
-                for part in content
-            ]
+            item["content"] = []
+            for part in content:
+                identity = _media_part_identity(part)
+                item["content"].append({"media_identity": identity} if identity is not None else part)
         canonical.append(item)
+    policy = {"video_policy": video_policy or _omni_video_policy()} if "video" in request_modalities(messages) else {}
     payload = json.dumps(
-        {"messages": canonical, "enable_thinking": enable_thinking, "cache_salt": cache_salt},
+        {"messages": canonical, "enable_thinking": enable_thinking, "cache_salt": cache_salt, **policy},
         ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -1259,6 +1281,7 @@ class OmniMultimodalDispatcher:
         cache_salt: Optional[str] = None,
         enable_thinking: Optional[bool] = None,
         token_callback: Optional[Callable[[Optional[int], str], None]] = None,
+        video_controls=None,
     ) -> Dict[str, Any]:
         """Run one OmniSession turn and return an OpenAI-shaped response."""
         with self._lock:
@@ -1268,7 +1291,8 @@ class OmniMultimodalDispatcher:
                 "_vmlx_enable_thinking",
                 None if enable_thinking is None else bool(enable_thinking),
             )
-            prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt)
+            video_policy = _omni_video_policy(video_controls)
+            prefix_hash = _conversation_signature(messages[:-1], enable_thinking, cache_salt, video_policy=video_policy)
             if self._last_signature != prefix_hash and not force_reset:
                 self._try_restore_session_snapshot(prefix_hash)
             should_reset = force_reset or prefix_hash != self._last_signature
@@ -1297,6 +1321,7 @@ class OmniMultimodalDispatcher:
                 messages,
                 self._scratch_dir,
                 rehydrate_history_media=should_reset,
+                video_controls=video_controls,
             )
             logger.info(
                 "OmniMultimodalDispatcher: turn — text=%dch, images=%d, audio=%s, video=%s",
@@ -1328,7 +1353,7 @@ class OmniMultimodalDispatcher:
             ):
                 reply = _run_omni_full_history(
                     self._session, messages, scratch_dir=self._scratch_dir,
-                    extract_parts=_extract_parts, enable_thinking=enable_thinking,
+                    extract_parts=partial(_extract_parts, video_controls=video_controls), enable_thinking=enable_thinking,
                     max_tokens=max_tokens, temperature=temperature, top_p=top_p,
                     token_callback=token_callback,
                 )
@@ -1342,6 +1367,7 @@ class OmniMultimodalDispatcher:
                 assistant["reasoning_content"] = reasoning
             self._last_signature = _conversation_signature(
                 messages + [assistant], enable_thinking, cache_salt,
+                video_policy=video_policy,
             )
 
         # The OmniChat reasoning parser writes <think>…</think> inline in
@@ -1571,6 +1597,14 @@ async def dispatch_omni_chat_completion(
     status = omni_multimodal_component_status(bundle_path)
     supported_modalities = set(status.get("modalities") or ["text"])
     requested_modalities = request_modalities(msgs_dump)
+    from .video_controls import VideoControls
+    video_controls = VideoControls.from_request(request)
+    if "video" in requested_modalities and video_controls.has_pixel_controls:
+        raise HTTPException(status_code=400, detail=(
+            "Native Omni video supports video_fps and video_max_frames. "
+            "Pixel, resized-dimension and video-token budgets are not supported "
+            "by its RADIO frame processor."
+        ))
     unsupported = sorted(requested_modalities - supported_modalities)
     if unsupported:
         raise HTTPException(
@@ -1637,6 +1671,7 @@ async def dispatch_omni_chat_completion(
                 force_reset=bool(getattr(request, "skip_prefix_cache", False)),
                 cache_salt=getattr(request, "cache_salt", None),
                 token_callback=token_callback,
+                video_controls=video_controls,
             )
             dispatcher.finish_request_cache()
             return result

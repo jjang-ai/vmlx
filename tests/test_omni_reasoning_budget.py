@@ -120,6 +120,9 @@ def test_omni_cache_controls_survive_protocol_adapters(monkeypatch, path):
     captured = []
     async def dispatch(request, *args, **kwargs):
         captured.append((request.skip_prefix_cache, request.cache_salt))
+        assert request.video_fps == 3
+        assert request.video_max_frames == 2
+        assert request.video_token_budget == 4096
         assert kwargs["disk_cache_enabled"] is True
         assert kwargs["disk_cache_policy"] == {
             "root": "/tmp/selected-native-pool", "max_size_bytes": int(1.25 * 1024**3),
@@ -127,7 +130,8 @@ def test_omni_cache_controls_survive_protocol_adapters(monkeypatch, path):
         }
         return JSONResponse({"id": "test", "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
     monkeypatch.setattr("vmlx_engine.omni_multimodal.dispatch_omni_chat_completion", dispatch)
-    body = {"model": "test-model", "skip_prefix_cache": True, "cache_salt": "request-salt"}
+    body = {"model": "test-model", "skip_prefix_cache": True, "cache_salt": "request-salt",
+            "video_fps": 3, "video_max_frames": 2, "video_token_budget": 4096}
     if path.endswith("responses"):
         body["input"] = [{"role": "user", "content": [{"type": "input_text", "text": "Describe."}, {"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}]
     elif path.endswith("messages"):

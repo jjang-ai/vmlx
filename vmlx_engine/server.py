@@ -23813,6 +23813,7 @@ async def create_response(
                 chat_template_kwargs=_ct_kwargs,
                 skip_prefix_cache=request.skip_prefix_cache,
                 cache_salt=request.cache_salt,
+                **video_control_kwargs(request),
             )
             cc = await _omni_dispatch_resp(
                 _cc_req,
