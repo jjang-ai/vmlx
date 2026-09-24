@@ -373,3 +373,14 @@ trace_err*.txt
 /test_build_args.ts
 
 panel/build_dmg.sh
+
+# Private working documents and proof receipts
+/docs/plans/
+/docs/runtime/
+/docs/superpowers/
+/reports/
+**/HANDOFF.md
+**/PLAN.md
+**/AUDIT_CHECKLIST.md
+**/INVESTIGATION_LOG.md
+/ralph_runner/PROMPT.md

@@ -160,63 +160,6 @@ Check cold/warm cache reuse, reuse after restart, cancellation followed by a
 new request, incompatible native ABI fallback, and clean installed-wheel
 execution. Record any skipped tests and untested device/OS combinations.
 
-## Recorded qualification status (2026-09-09)
+## Qualification scope
 
-This historical section covers the five original flags, not the newer
-`SPARSE_FUSED_PREFILL` experiment or its changed native artifact.
-
-**Qualified for review: correctness, serving, recovery and packaging checks pass.** The shipped candidate uses
-16-row expert-aligned MoE tiles. Later tile-size and routing experiments are
-excluded. All five features default to off.
-
-All 34 same-weight numerical comparisons were bit-exact: KL, logit RMS and
-maximum absolute error were zero, with 100% top-1 agreement. All 1,101 relevant
-regression tests passed without skips or failures. Serving passed 26/26 MTP
-quality checks and cold/warm/restarted cache checks (two cases each).
-Request-matched cache telemetry showed zero cold reuse and positive reuse
-for warm and restarted requests. Cancellation cleared in 57 ms, followed by
-a successful request.
-
-Host: M4 Max, 128 GiB, CRACK JANG4M, MLX 0.32.2, mlx-lm 0.31.3,
-mlx-vlm 0.5.0, Python 3.12.13. Measured upstream engine:
-`ca3dc2d8264647b79937e6002e5e47a32f239ced` (vMLX 1.6.56).
-Latest checked upstream `f9aa51b26db4bb79490353920ae35afc36330a3d` has
-identical inference-engine and runtime dependency files.
-
-| Prompt tokens | Baseline prefill | Candidate prefill | Change | Baseline decode | Candidate decode | Change |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1024 | 564.9 | 581.0 | +2.8% | 48.7 | 50.0 | +2.7% |
-| 4096 | 696.1 | 701.6 | +0.8% | 49.0 | 48.6 | -0.8% |
-| 8192 | 672.6 | 696.6 | +3.6% | 47.4 | 51.5 | +8.6% |
-| 16384 | 650.8 | 693.2 | +6.5% | 40.8 | 49.4 | +20.9% |
-| 32768 | 562.1 | 628.4 | +11.8% | 35.4 | 48.2 | +36.0% |
-
-Units are API tokens/second, means of three uncached trials with exactly 2048
-output tokens. The baseline is from the preceding same-host campaign. Its
-entire paired 1K cohort was repeated after a numerical probe overlapped the
-original baseline cohort; that decision preceded candidate timing. All current
-candidate trials were retained. No additional API comparison was run for this
-revision beyond the recorded candidate qualification.
-
-All fifteen candidate decode trials exceeded 40 tokens/s. Two 1K prefill
-trials were below 600 tokens/s (598.2 and 541.7); the third reached 603.1.
-All larger prompt trials exceeded 600 tokens/s. These observations are not a
-guaranteed throughput floor. The JSON includes all candidate trials, ranges,
-standard deviations and source hashes.
-
-Prior extended no-MTP controls passed 28/30 in both versions: all admitted
-checks through 64K passed, with two matching approximately 131K memory-capacity
-rejections. Those controls were not rerun for aligned MoE. The current
-same-weight numerical matrix covers the new path against stock execution.
-
-Native source and binaries are unchanged from the qualified extension, which
-built and executed from clean installed wheels on Python 3.11, 3.12 and 3.14
-with source/build locations hidden. The main engine was qualified on Python
-3.12. Other GPU families and macOS versions remain unmeasured. Production
-configuration is unchanged. The final main wheel was checked against the tested
-source bytes and imported from an isolated installation; default-off behavior
-and qualified MLX header resolution passed. The committed regression manifest
-collects exactly the 1,101 test IDs in the passing JUnit receipt.
-
-Machine-readable evidence:
-[`qwen4-prefill-qualification-results.json`](qwen4-prefill-qualification-results.json).
+These paths are experimental and default off. Run the numerical and end-to-end protocols above on the target device before enabling them. A component benchmark does not establish application-level performance or model quality.

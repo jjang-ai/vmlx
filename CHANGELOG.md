@@ -2045,7 +2045,7 @@ Live-verified 14/14 on `DeepSeek-V4-Flash-JANGTQ2` (74 GB on disk, 38 GB residen
   - Added `bun`, `bunx`, `deno` (alternative JS runtimes used by newer MCP servers).
   - Added `python3.10` through `python3.13` (explicit version-pinned entries for MCP configs that hardcode a Python minor version).
   - HTTP/SSE transport is already supported at the engine level (`vmlx_engine/mcp/client.py::MCPTransport.SSE`, `MCPServerConfig.url`) — remaining work is a UI for url-based server configs (v2).
-- **Kimi K2.6 runtime support** — full `research/KIMI-K2.6-VMLX-INTEGRATION.md` §1 compliance:
+- **Kimi K2.6 runtime support** — runtime integration:
   - **Registry** (`vmlx_engine/model_configs.py`): `kimi_k25` family with `is_mllm=True`, `tool_parser="kimi"` (alias of `kimi_k2`/`moonshot`), `reasoning_parser="deepseek_r1"`, `think_in_template=True`, `cache_type="kv"`.
   - **mlx_vlm dispatch** (`vmlx_engine/__init__.py`): `MODEL_REMAPPING["kimi_k25"] → "kimi_vl"` + `prompt_utils.MODEL_CONFIG["kimi_k25"]` installed at import time, so `apply_chat_template` + `get_model_and_args` route Kimi K2.6 through the existing `kimi_vl` module (same MoonViT-27-block + PatchMergerMLP architecture as Moonlight).
   - **Loader routing** (`vmlx_engine/utils/jang_loader.py::_load_jang_v2_vlm`): detects `model_type=="kimi_k25"` and delegates to `jang_tools.load_jangtq_kimi_vlm.load_jangtq_kimi_vlm_model`, which applies the Kimi-specific **lower VL wired_limit** (52% vs 70%) and the **vision/language command-buffer split** that prevents Metal's ~60 s watchdog from killing the first VL forward on 191 GB 2-bit MoE bundles.

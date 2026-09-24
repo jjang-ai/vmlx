@@ -1,0 +1,17 @@
+name: Public document boundary
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  public-documents:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s .github/tests -p 'test_public_hygiene.py'
+      - run: python .github/scripts/check_public_hygiene.py
