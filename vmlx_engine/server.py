@@ -22794,6 +22794,8 @@ def _adapt_omni_chat_completion_to_responses_payload(
             "input_tokens": usage.get("prompt_tokens", 0),
             "output_tokens": usage.get("completion_tokens", 0),
             "total_tokens": usage.get("total_tokens", 0),
+            **({"input_tokens_details": dict(usage["prompt_tokens_details"])}
+               if isinstance(usage.get("prompt_tokens_details"), dict) else {}),
         },
     }
     if terminal.incomplete_details:
@@ -23054,6 +23056,8 @@ async def _adapt_omni_chat_stream_to_responses(
                     chat_usage.get("total_tokens")
                     or prompt_tokens + completion_tokens
                 ),
+                **({"input_tokens_details": dict(chat_usage["prompt_tokens_details"])}
+                   if isinstance(chat_usage.get("prompt_tokens_details"), dict) else {}),
             }
 
     async for raw in chat_stream.body_iterator:

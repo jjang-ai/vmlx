@@ -19,6 +19,13 @@ restores an exact matching conversation snapshot or rebuilds the supplied
 history. Different conversations have separate snapshots. This does not imply
 arbitrary suffix reuse or token-level truncation of recurrent state.
 
+Stage-1 prompt usage includes both the restored native attention offset and
+the newly prefetched tokens, including media placeholders. Chat Completions
+reports reused tokens in `prompt_tokens_details.cached_tokens`; Responses
+preserves them in `input_tokens_details.cached_tokens`. A cache bypass reports
+zero reused tokens. These counts describe native decoder state, not cached
+encoder features or a media-file cache.
+
 Snapshots preserve the model's actual tensor representation. A JANG weight bit
 width is not a KV-cache bit width. Full-precision recurrent state may be needed
 alongside smaller attention tensors; the disk writer does not apply an extra

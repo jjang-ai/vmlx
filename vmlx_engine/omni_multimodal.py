@@ -1283,6 +1283,16 @@ class OmniMultimodalDispatcher:
                     "OmniMultimodalDispatcher: continuing conversation (prefix matches)"
                 )
 
+            # The native session reports only this turn's new prefill length.
+            # Count the logical attention offset BEFORE decode, not allocated
+            # KV capacity, recurrent-state size, or the post-generation offset.
+            cached_tokens = 0
+            if not should_reset and getattr(self, "_backend", "stage1") == "stage1":
+                cache = getattr(self._session, "_cache", None)
+                if cache:
+                    backbone = self._session.mlx_model.backbone
+                    cached_tokens = int(cache[backbone.fa_idx].offset)
+
             text, images, audio, video = _extract_parts(
                 messages,
                 self._scratch_dir,
@@ -1344,7 +1354,8 @@ class OmniMultimodalDispatcher:
             "has_video": bool(video),
             "prompt_tokens": int(
                 getattr(self._session, "_last_prompt_tokens", 0) or 0
-            ),
+            ) + cached_tokens,
+            "cached_tokens": cached_tokens,
             "completion_tokens": int(
                 getattr(self._session, "_last_completion_tokens", 0) or 0
             ),
@@ -1680,6 +1691,8 @@ async def dispatch_omni_chat_completion(
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
+                **({"prompt_tokens_details": {"cached_tokens": result["cached_tokens"]}}
+                   if "cached_tokens" in result else {}),
             },
         }
 
@@ -1857,6 +1870,8 @@ async def dispatch_omni_chat_completion(
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens,
+                    **({"prompt_tokens_details": {"cached_tokens": result["cached_tokens"]}}
+                       if "cached_tokens" in (result or {}) else {}),
                 },
             }
             yield f"data: {_json.dumps(final)}\n\n"
