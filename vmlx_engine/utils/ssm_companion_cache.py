@@ -620,10 +620,11 @@ class SSMCompanionCache:
         disk_written = False
         if self._disk is not None:
             try:
-                self._disk.store(
+                # True means accepted by the bounded write queue, not durable.
+                # Queue/budget/closing refusals return False without raising.
+                disk_written = bool(self._disk.store(
                     key, stored_states, is_complete, token_ids, num_tokens
-                )
-                disk_written = True
+                ))
             except Exception as e:
                 logger.debug("SSM disk write-through failed: %s", e)
         # The store-side identity, in the same units as "SSM disk HIT": a
@@ -778,6 +779,48 @@ class SSMCompanionCache:
             if not mapping:
                 del self._length_index[length]
 
+    def _lookup_prefix_hashes(
+        self,
+        token_ids: List[int],
+        lengths: List[int],
+        cache_extra_keys: Optional[Any] = None,
+    ) -> Dict[int, Tuple[str, str]]:
+        """Share only token-prefix work; resolve causal salts per boundary.
+
+        Returns (family hash, schema-v2 entry key), preserving both existing
+        namespaces byte-for-byte. No hash state survives this lookup.
+        """
+        family = hashlib.sha256(self._model_key.encode() + b"\x00[")
+        entry = hashlib.sha256(self._model_key.encode() + b"\x00schema-v2\x00[")
+        previous = 0
+        result = {}
+        for length in sorted(set(lengths)):
+            if length < 0:
+                result[length] = (
+                    self._prefix_hash(token_ids, length, cache_extra_keys),
+                    self._key(token_ids, length, cache_extra_keys),
+                )
+                continue
+            # Legacy slicing clamps oversized lengths. Retain it for direct
+            # callers; production candidate lengths are positive boundaries.
+            end = min(max(0, length), len(token_ids))
+            if end > previous:
+                chunk = json.dumps(
+                    token_ids[previous:end], separators=(",", ":")
+                ).encode()[1:-1]
+                if previous:
+                    family.update(b",")
+                    entry.update(b",")
+                family.update(chunk)
+                entry.update(chunk)
+            suffix = b"]" + self._extra_key_bytes(cache_extra_keys, length)
+            family_digest, entry_digest = family.copy(), entry.copy()
+            family_digest.update(suffix)
+            entry_digest.update(suffix)
+            result[length] = (family_digest.hexdigest(), entry_digest.hexdigest())
+            previous = end
+        return result
+
     def fetch(
         self,
         token_ids: List[int],
@@ -806,6 +849,13 @@ class SSMCompanionCache:
         if num_tokens <= 0:
             return None
         key = self._key(token_ids, num_tokens, cache_extra_keys=cache_extra_keys)
+        return self._fetch_by_key(token_ids, num_tokens, cache_extra_keys, key)
+
+    def _fetch_by_key(
+        self, token_ids: List[int], num_tokens: int,
+        cache_extra_keys: Optional[Any], key: str,
+    ) -> SSMCompanionEntry:
+        """Common validated restore path for exact and batched-prefix keys."""
         entry = self._store.get(key)
         if entry is None:
             logger.info(
@@ -905,7 +955,7 @@ class SSMCompanionCache:
         first ``checkpoint_len`` tokens match the query's first
         ``checkpoint_len`` tokens before accepting it.
 
-        Safety: this method delegates to ``fetch`` for the actual state
+        Safety: this method shares ``fetch``'s restore body for actual state
         retrieval, so the same deep-copy + materialization discipline
         applies — callers get independent buffers, never shared refs.
         """
@@ -956,8 +1006,8 @@ class SSMCompanionCache:
         # L1 supplies boundaries learned in this process. L2 supplies
         # sidecar-derived boundaries so a fresh process can discover a shorter
         # typed-state checkpoint when the block cache selected a longer shared
-        # prefix. These are candidates only: fetch() recomputes the complete
-        # model/prefix key and performs all disk record validation.
+        # prefix. These are candidates only: exact model/prefix keys and the
+        # common fetch restore path still perform all disk record validation.
         disk_candidate_lengths: List[int] = []
         if self._disk is not None:
             try:
@@ -990,19 +1040,38 @@ class SSMCompanionCache:
                 store_size=len(self._store),
             )
             return None
-        # Compute the prefix_hash for each candidate length against the
-        # query's own tokens and compare. First match wins.
+        native_hashers = (
+            getattr(self._key, "__func__", None) is SSMCompanionCache._key
+            and getattr(self._prefix_hash, "__func__", None)
+            is SSMCompanionCache._prefix_hash
+        )
+        lookup_hashes = (
+            self._lookup_prefix_hashes(token_ids, candidate_lengths, cache_extra_keys)
+            if native_hashers else None
+        )
+        # Compute each exact family/entry digest once. Descending selection,
+        # disk validation, deep copies and telemetry remain unchanged.
         for n in candidate_lengths:
-            query_ph = self._prefix_hash(
-                token_ids, n, cache_extra_keys=cache_extra_keys
-            )
+            if lookup_hashes is not None:
+                query_ph, query_key = lookup_hashes[n]
+            else:
+                query_ph = self._prefix_hash(token_ids, n, cache_extra_keys=cache_extra_keys)
             stored_key = self._length_index.get(n, {}).get(query_ph)
             disk_candidate = n in disk_candidate_set
             if stored_key is None and not disk_candidate:
                 continue
-            # Delegate to fetch() so deep-copy discipline is uniform.
+            # Use the same restore body as fetch(), without serializing the
+            # overlapping token prefix for a second time. Custom fetch hooks
+            # retain their existing call contract.
             attempted_candidate_lengths.append(n)
-            result = self.fetch(token_ids, n, cache_extra_keys=cache_extra_keys)
+            if (
+                getattr(self.fetch, "__func__", None) is SSMCompanionCache.fetch
+                and lookup_hashes is not None
+                and os.environ.get("VMLX_CACHE_HASH_DEBUG") != "1"
+            ):
+                result = self._fetch_by_key(token_ids, n, cache_extra_keys, query_key)
+            else:
+                result = self.fetch(token_ids, n, cache_extra_keys=cache_extra_keys)
             if result is None:
                 # deepcopy failed — treat as miss per existing contract
                 continue
