@@ -21294,7 +21294,31 @@ _responses_was_reasoning_only: set[str] = set()
 
 
 def _clone_response_messages(messages: list[dict]) -> list[dict]:
-    """JSON-deep-copy response history so later request mutation cannot leak."""
+    """Copy JSON containers while sharing immutable media/text payloads."""
+    active: set[int] = set()
+
+    def copy_json(value):
+        kind = type(value)
+        if kind in (str, int, float, bool, type(None)):
+            return value
+        if kind not in (list, dict) or id(value) in active:
+            raise ValueError("Use legacy JSON normalization")
+        active.add(id(value))
+        try:
+            if kind is list:
+                return [copy_json(item) for item in value]
+            if any(type(key) is not str for key in value):
+                raise ValueError("Use legacy JSON key normalization")
+            return {key: copy_json(item) for key, item in value.items()}
+        finally:
+            active.remove(id(value))
+
+    try:
+        return copy_json(messages)
+    except Exception:
+        # Preserve existing normalization and fallback for non-JSON types,
+        # subclasses, non-string keys and cycles rather than changing callers.
+        pass
     try:
         return json.loads(json.dumps(messages))
     except Exception:
