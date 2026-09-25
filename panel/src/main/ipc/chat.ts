@@ -2987,10 +2987,9 @@ export function registerChatHandlers(
           // Live generation TPS from rolling window (real-time speed of incoming tokens).
           // Cumulative TPS (tokenCount / generationMs) is used for final saved metrics only.
           const streamTps = liveTps;
-          // Cumulative generation time for elapsed display
-          const genSec = generationMs / 1000;
-          const wallSec = (now - (firstTokenTime || fetchStartTime)) / 1000;
-          const elapsed = genSec > 0.05 ? genSec : wallSec;
+          // Elapsed display shares the final whole-turn clock. Generation-only
+          // timing remains separate for TPS; follow-up fetches do not reset it.
+          const elapsed = Math.max(0, (now - startTime) / 1000);
           // TTFT measured from fetchStartTime (excludes health check and message building overhead)
           const ttft = Math.max(
             0,
@@ -3496,7 +3495,7 @@ export function registerChatHandlers(
                         cacheDetail,
                         tokensPerSecond: _hbTps,
                         ttft: ttft.toFixed(2),
-                        elapsed: ((now - fetchStartTime) / 1000).toFixed(1),
+                        elapsed: Math.max(0, (now - startTime) / 1000).toFixed(1),
                         ...remoteMetricFields(),
                       },
                     });
@@ -4366,7 +4365,7 @@ export function registerChatHandlers(
                     ttft: firstTokenTime
                       ? ((firstTokenTime - fetchStartTime) / 1000).toFixed(2)
                       : "0",
-                    elapsed: (generationMs / 1000).toFixed(1),
+                    elapsed: Math.max(0, (Date.now() - startTime) / 1000).toFixed(1),
                     ...remoteMetricFields(),
                   },
                 });
