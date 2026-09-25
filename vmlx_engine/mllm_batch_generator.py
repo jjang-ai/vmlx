@@ -19260,6 +19260,43 @@ class MLLMBatchGenerator:
                 return None
         except Exception:
             return None
+        delta_position_ids = None
+        try:
+            prefix_has_media = self._tokens_contain_media_placeholders(
+                list(token_list[:ck_len])
+            )
+            if prefix_has_media:
+                # Reconstruct this request's compressed 3-axis positions from
+                # processed IDs/grids. Cached module attributes may be stale.
+                from copy import copy
+
+                full_ids = getattr(req, "input_ids", None)
+                if (
+                    full_ids is None or getattr(full_ids, "ndim", 0) != 2
+                    or int(full_ids.shape[0]) != 1
+                    or int(full_ids.shape[1]) < len(token_list)
+                    or full_ids[0, :len(token_list)].tolist() != list(token_list)
+                ):
+                    return None
+                position_request = copy(req)
+                if str(getattr(self, "_model_type", "")) not in {
+                    "qwen4_exp", "qwen4_exp_text", "qwen3_5", "qwen3_5_text",
+                    "qwen3_5_moe", "qwen3_5_moe_text",
+                } or not self._mrope_tail_position_ids(
+                    position_request, full_ids, ck_len
+                ):
+                    return None
+                positions = getattr(position_request, "_mrope_full_position_ids", None)
+                if (
+                    positions is None or positions.ndim != 3
+                    or tuple(positions.shape[:2]) != (3, 1)
+                    or int(positions.shape[-1]) != int(full_ids.shape[1])
+                ):
+                    return None
+                delta_position_ids = positions[..., ck_len:fetch_num]
+        except Exception as exc:
+            logger.info("Companion delta declined: media positions unavailable: %s", exc)
+            return None
         try:
             from .utils.cache_extent import cache_offset
         except Exception:
@@ -19284,8 +19321,43 @@ class MLLMBatchGenerator:
             # silently emptied dots3 answers.
             if int(cache_offset(layer) or 0) < ck_len:
                 return None
+            from .models.minimax_m3.cache import (
+                MiniMaxM3SparseCache, clone_minimax_m3_sparse,
+            )
+            from mlx_lm.models.cache import KVCache
+
+            if isinstance(layer, MiniMaxM3SparseCache):
+                # Capacity can exceed initialized index length. Never convert
+                # unwritten padding into a valid sparse-attention prefix.
+                index_keys = getattr(layer, "idx_keys", None)
+                if (
+                    index_keys is None
+                    or any(int(value.shape[-2]) < int(cache_offset(layer) or 0)
+                           for value in (keys, values, index_keys))
+                    or int(getattr(layer, "_idx_offset", 0) or 0) != int(cache_offset(layer) or 0)
+                    or int(layer._idx_offset) < ck_len
+                    or not _validate_prompt_cache([layer], source="companion-delta-source")
+                ):
+                    return None
+                clone = clone_minimax_m3_sparse(layer, length=ck_len)
+                if (
+                    clone is None or int(clone.offset) != ck_len
+                    or int(clone._idx_offset) != ck_len
+                    or not _validate_prompt_cache([clone], source="companion-delta-slice")
+                ):
+                    return None
+                sliced.append(clone)
+                continue
+            if type(layer) is not KVCache:
+                # Other typed/windowed caches need their own exact slice ABI.
+                return None
             seq_axis = 1 if keys.ndim == 3 else 2
-            if int(keys.shape[seq_axis]) < ck_len:
+            if (
+                int(keys.shape[seq_axis]) < ck_len
+                or values.ndim != keys.ndim
+                or int(values.shape[seq_axis]) < ck_len
+                or not _validate_prompt_cache([layer], source="companion-delta-source")
+            ):
                 return None
             try:
                 clone = type(layer)()
@@ -19300,6 +19372,8 @@ class MLLMBatchGenerator:
                 clone.keys = keys[..., :ck_len, :]
                 clone.values = values[..., :ck_len, :]
             clone.offset = ck_len
+            if not _validate_prompt_cache([clone], source="companion-delta-slice"):
+                return None
             sliced.append(clone)
 
         logger.info(
@@ -19312,11 +19386,13 @@ class MLLMBatchGenerator:
             ck_len,
         )
         try:
-            derived = self._prefill_for_clean_ssm(
+            derived = self._prefill_for_clean_path_dependent_cache(
                 list(token_list[:fetch_num]),
                 sliced,
                 ck_len,
                 cache_extra_keys=cache_extra_keys,
+                require_base=True,
+                delta_position_ids=delta_position_ids,
             )
         except Exception as exc:
             logger.info(
@@ -19348,8 +19424,6 @@ class MLLMBatchGenerator:
         # transient is the whole problem, so release it here rather than let a
         # guard decline work because of it.
         try:
-            import mlx.core as mx
-
             # Force the recurrent state to be REAL before dropping its parents.
             # These are lazy graphs until evaluated; freeing the attention
             # buffers first would only re-materialise them on the next eval.
@@ -19455,6 +19529,9 @@ class MLLMBatchGenerator:
         base_cache: Optional[List[Any]] = None,
         base_token_count: int = 0,
         cache_extra_keys: Optional[Any] = None,
+        *,
+        require_base: bool = False,
+        delta_position_ids: Optional[Any] = None,
     ) -> Optional[List[Any]]:
         """Run a clean prompt-only prefill matching a path-dependent cache key.
 
@@ -19496,6 +19573,17 @@ class MLLMBatchGenerator:
         if not tokens or self.language_model is None:
             return None
         seq_len = len(tokens)
+        if require_base and not (
+            base_cache is not None and 0 < int(base_token_count) < seq_len
+        ):
+            return None
+        if delta_position_ids is not None and (
+            not require_base
+            or getattr(delta_position_ids, "ndim", 0) != 3
+            or tuple(delta_position_ids.shape[:2]) != (3, 1)
+            or int(delta_position_ids.shape[-1]) != seq_len - int(base_token_count)
+        ):
+            return None
         try:
             resume_at = 0
             fresh_cache = None
@@ -19559,11 +19647,16 @@ class MLLMBatchGenerator:
                 else:
                     logger.info(
                         "MLLM clean prefill: reconstructed base does not match the "
-                        "hybrid layer layout; re-deriving the whole prompt instead"
-                        "%s",
+                        "hybrid layer layout; %s%s",
+                        "declining required delta" if require_base else "re-deriving the whole prompt instead",
                         " (splice declined)" if _HYBRID_BASE_SPLICE else "",
                     )
 
+            if require_base and (
+                fresh_cache is None or resume_at != int(base_token_count)
+            ):
+                logger.info("Companion delta declined: exact base splice unavailable; no full-prefix replay")
+                return None
             if fresh_cache is None:
                 cache_model = getattr(self, "_cache_model", None)
                 fresh_cache = (
@@ -19633,9 +19726,15 @@ class MLLMBatchGenerator:
             # resume_at is non-zero only when a caller-supplied base already
             # covers that prefix, so those tokens are never re-forwarded.
             for _start in range(resume_at, seq_len, chunk_size):
+                forward_kwargs = {"cache": fresh_cache}
+                if delta_position_ids is not None:
+                    local_start = _start - resume_at
+                    forward_kwargs["position_ids"] = delta_position_ids[
+                        ..., local_start:local_start + chunk_size
+                    ]
                 _ = self.language_model(
                     mx.array([tokens[_start:_start + chunk_size]]),
-                    cache=fresh_cache,
+                    **forward_kwargs,
                 )
                 materialize.clear()
                 for c in fresh_cache:
