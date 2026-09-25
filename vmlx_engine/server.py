@@ -23502,7 +23502,11 @@ async def create_response(
     )
     messages = _responses_input_to_messages(
         request.input,
-        request.instructions,
+        (
+            None
+            if _preserves_native_system_order(request.model)
+            else request.instructions
+        ),
         preserve_multimodal=_preserve_mm,
         preserve_native_roles=_preserves_native_developer_role(request.model),
         strict_tool_arguments=_native_omni_resp,
@@ -23531,6 +23535,12 @@ async def create_response(
                 len(previous_messages),
                 request.previous_response_id,
             )
+    # Native-order templates need request-scoped instructions before restored
+    # history. Keep authored system/developer messages in their native order and
+    # instructions out of history_messages. Generic templates retain their
+    # existing base-then-current instruction merging order.
+    if request.instructions and _preserves_native_system_order(request.model):
+        messages = [{"role": "system", "content": request.instructions}] + messages
     messages = _canonicalize_mimo_v26_tool_history(messages)
     if _preserve_mm and not _native_omni_resp:
         messages = _coerce_orphan_tool_messages_for_template(messages)
@@ -23579,9 +23589,8 @@ async def create_response(
     )
     if _native_omni_resp:
         from .omni_native_tools import prepare_native_tools
-        # Chained request instructions initially follow the saved assistant
-        # call. Normalize their system position before checking result batches;
-        # generic orphan coercion must not erase malformed native history.
+        # Validate native result adjacency after assembling request instructions
+        # and history; generic orphan coercion must not erase malformed history.
         messages = prepare_native_tools(None, None, messages).messages
         history_messages = prepare_native_tools(None, None, history_messages).messages
     _responses_max_prompt_tokens = _effective_max_prompt_tokens(request)
