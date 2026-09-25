@@ -6,8 +6,8 @@ bundle behaves differently depending on whether it loaded through the text path
 (``mllm_batch_generator.py``).  That divergence is not hypothetical: the server
 advertised ``stochastic=rejection-sampling-acceptance`` on /health while the
 MLLM path implemented exact-match only, so every ``--is-mllm`` bundle had to pin
-temperature to 0 to keep acceptance from collapsing.  This module exists so the
-rule lives in exactly one place.
+temperature to 0 to keep acceptance from collapsing. This module provides the
+MLLM acceptance rule and distribution transforms shared with the text path.
 
 Acceptance rule (Leviathan & Chen 2023): accept draft x with probability
 min(1, p_target(x) / p_draft(x)).  Under greedy decode this degenerates to exact
@@ -91,9 +91,11 @@ def accepted_count(
 ) -> int:
     """Count leading accepted drafts for one verify cycle.
 
-    Matching tokens are always accepted.  When ``stochastic`` is set and both
-    sides exposed a distribution, a mismatched draft still gets its
-    min(1, p_target/p_draft) chance instead of ending the cycle outright.
+    With stochastic distributions, every draft gets its
+    min(1, p_target/p_draft) chance, even if an independent target draw
+    matches it. Accepting matches first would add extra proposal mass that
+    the positive target-minus-proposal residual cannot correct. Exact-match
+    acceptance applies only without the stochastic distribution contract.
 
     ``filtered`` declares that the caller already ran :func:`accept_lp_for` over
     the rows; otherwise it is applied here so the ratio matches the sampling
@@ -102,16 +104,14 @@ def accepted_count(
     accepted = 0
     for idx, draft_id in enumerate(draft_ids):
         draft_id = int(draft_id)
-        if idx < len(target_ids) and int(target_ids[idx]) == draft_id:
-            accepted += 1
-            continue
-        if not stochastic:
-            break
         target_lp = target_lps[idx] if idx < len(target_lps) else None
         draft_lp = draft_lps[idx] if idx < len(draft_lps) else None
-        if target_lp is None or draft_lp is None:
+        if not stochastic or target_lp is None or draft_lp is None:
             # Greedy and compact-top-k samplers expose no distribution; for
             # them exact match already is the correct acceptance test.
+            if idx < len(target_ids) and int(target_ids[idx]) == draft_id:
+                accepted += 1
+                continue
             break
         if not filtered:
             target_lp = accept_lp_for(sampler, target_lp)

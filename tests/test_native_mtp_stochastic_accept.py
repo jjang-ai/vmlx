@@ -71,6 +71,55 @@ class TestStochasticArm:
     def test_matching_draft_still_accepted(self):
         assert _accepted([3], [3, 9], draft_lps=[None], target_lps=[None]) == 1
 
+    def test_matching_sampled_token_still_requires_probability_check(self):
+        from vmlx_engine.native_mtp_acceptance import accepted_count
+
+        class Sampler:
+            draws = 0
+
+            def _vmlx_random_uniform(self):
+                self.draws += 1
+                return 0.75
+
+        sampler = Sampler()
+        accepted = accepted_count(
+            [0], [0],
+            [mx.log(mx.array([0.8, 0.2]))],
+            [mx.log(mx.array([0.4, 0.6]))],
+            stochastic=True, sampler=sampler, filtered=True,
+        )
+        assert accepted == 0
+        assert sampler.draws == 1
+
+    def test_independent_target_draw_does_not_bias_sampled_marginal(self):
+        from vmlx_engine.native_mtp_acceptance import accepted_count, residual_sample
+
+        class Sampler:
+            def __init__(self, draw):
+                self.draw = draw
+
+            def _vmlx_random_uniform(self):
+                return self.draw
+
+        target, proposal = [0.4, 0.6], [0.8, 0.2]
+        p, q = mx.log(mx.array(target)), mx.log(mx.array(proposal))
+        # The positive residual has support only at token 1. Exercise the
+        # production correction once; enumerate acceptance without RNG noise.
+        correction, _ = residual_sample(p, q)
+        assert correction == 1
+        marginal = [0.0, 0.0]
+        for draft in range(2):
+            for independently_sampled_target in range(2):
+                for step in range(20):
+                    accepted = accepted_count(
+                        [draft], [independently_sampled_target], [q], [p],
+                        stochastic=True, filtered=True,
+                        sampler=Sampler((step + 0.5) / 20),
+                    )
+                    emitted = draft if accepted else correction
+                    marginal[emitted] += proposal[draft] * target[independently_sampled_target] / 20
+        assert marginal == pytest.approx(target, abs=1e-12)
+
     def test_mismatch_accepted_when_target_prefers_the_draft(self):
         """p_target/p_draft >= 1 accepts deterministically, no draw needed."""
         assert (
