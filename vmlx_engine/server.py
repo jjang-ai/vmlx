@@ -22005,7 +22005,9 @@ def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
     ]
 
 
-def _responses_get_history(response_id: str | None) -> list[dict]:
+def _responses_get_history(
+    response_id: str | None, *, required: bool = False
+) -> list[dict]:
     """Return template-safe replayable history for a chained turn.
 
     The STORE keeps the reasoning-only assistant turn for fidelity (the
@@ -22022,6 +22024,15 @@ def _responses_get_history(response_id: str | None) -> list[dict]:
     with _responses_history_lock:
         history = _responses_history.get(response_id)
         if history is None:
+            if required:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "previous_response_id was not found in local response history. "
+                        "It may have expired or been lost when the server restarted. "
+                        "Resend the complete conversation without previous_response_id."
+                    ),
+                )
             return []
         _responses_history.move_to_end(response_id)
         history = _clone_response_messages(history)
@@ -23497,7 +23508,11 @@ async def create_response(
         strict_tool_arguments=_native_omni_resp,
     )
     if request.previous_response_id:
-        previous_messages = _responses_get_history(request.previous_response_id)
+        # Resolve existence and copy atomically: eviction must not turn an
+        # explicitly chained request into a fresh, context-free generation.
+        previous_messages = _responses_get_history(
+            request.previous_response_id, required=True
+        )
         _enforce_text_only_override(
             "/v1/responses", _messages_requested_modalities(previous_messages)
         )
@@ -23514,12 +23529,6 @@ async def create_response(
             logger.debug(
                 "Responses API restored %d history message(s) from %s",
                 len(previous_messages),
-                request.previous_response_id,
-            )
-        else:
-            logger.info(
-                "Responses API previous_response_id=%s not found in local history; "
-                "continuing with request input only",
                 request.previous_response_id,
             )
     messages = _canonicalize_mimo_v26_tool_history(messages)
