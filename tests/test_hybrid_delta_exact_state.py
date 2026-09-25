@@ -168,3 +168,45 @@ def test_invalid_position_length_never_forwards_or_stores(owner):
     assert strict_call(owner, [99, 1, 2, 3], [KVCache()], 2, mx.zeros((3, 1, 1))) is None
     assert owner.language_model.calls == []
     owner._store_companion_from_clean_pass.assert_not_called()
+
+
+@pytest.mark.parametrize("family", ["qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"])
+@pytest.mark.parametrize("input_rank", [1, 2])
+def test_qwen35_text_delta_passes_absolute_full_request_positions(owner, family, input_rank):
+    owner._model_type = family
+    capture, tokens, request = setup_derive(owner, sparse(), media=False)
+    if input_rank == 1:
+        request.input_ids = request.input_ids[0]
+    original_ids = request.input_ids
+    def full_text_positions(req, ids, ck):
+        assert req is not request
+        assert ids.tolist() == [tokens]
+        assert ck == 4
+        req._mrope_full_position_ids = mx.broadcast_to(mx.arange(len(tokens))[None, None, :], (3, 1, len(tokens)))
+        return True
+    owner._mrope_tail_position_ids = full_text_positions
+    owner._derive_hybrid_companion_delta(request, tokens, 6, 4, object())
+    capture.assert_called_once()
+    positions = capture.call_args.kwargs.get("delta_position_ids")
+    assert positions is not None, "Qwen3.5 reset path would regenerate gap-only positions 0,1"
+    assert positions.tolist() == [[[4, 5]]] * 3
+    assert request.input_ids is original_ids
+    assert not hasattr(request, "_mrope_full_position_ids")
+
+
+def test_qwen35_text_delta_without_current_plan_declines(owner):
+    owner._model_type = "qwen3_5"
+    capture, tokens, request = setup_derive(owner, sparse(), media=False)
+    owner._mrope_tail_position_ids = lambda *args: False
+    owner._derive_hybrid_companion_delta(request, tokens, 6, 4, object())
+    capture.assert_not_called()
+
+
+def test_qwen4_text_offset_path_remains_unchanged(owner):
+    capture, tokens, request = setup_derive(owner, sparse(), media=False)
+    def must_not_plan(*args):
+        raise AssertionError("Qwen4 pure-text offset path must remain unchanged")
+    owner._mrope_tail_position_ids = must_not_plan
+    owner._derive_hybrid_companion_delta(request, tokens, 6, 4, object())
+    capture.assert_called_once()
+    assert capture.call_args.kwargs.get("delta_position_ids") is None

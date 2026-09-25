@@ -19265,12 +19265,24 @@ class MLLMBatchGenerator:
             prefix_has_media = self._tokens_contain_media_placeholders(
                 list(token_list[:ck_len])
             )
-            if prefix_has_media:
+            # The pinned Qwen3.5 language model rebuilds zero-based positions
+            # when clean prefill clears its module state, even for a text-only
+            # gap after a nonzero checkpoint. Qwen4's pure-text fallback uses
+            # the cache offset correctly; preserve that already-qualified path.
+            needs_text_positions = str(getattr(self, "_model_type", "")) in {
+                "qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text",
+            }
+            if prefix_has_media or needs_text_positions:
                 # Reconstruct this request's compressed 3-axis positions from
                 # processed IDs/grids. Cached module attributes may be stale.
                 from copy import copy
 
                 full_ids = getattr(req, "input_ids", None)
+                # Text-only tokenization yields [tokens], while the media
+                # processor yields [batch, tokens]. Normalize a view without
+                # changing the request used by the main prefill path.
+                if getattr(full_ids, "ndim", 0) == 1:
+                    full_ids = full_ids[None, :]
                 if (
                     full_ids is None or getattr(full_ids, "ndim", 0) != 2
                     or int(full_ids.shape[0]) != 1
