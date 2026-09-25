@@ -666,7 +666,6 @@ function SessionViewLoadBar({ sessionId, sessionStatus }: { sessionId: string; s
       {formatModelBytes(progress?.modelBytes) && (
         <p className="text-[10px] text-muted-foreground/80 mt-0.5">
           {t('sessions.card.modelFiles')} {formatModelBytes(progress?.modelBytes)}
-          {progress?.lazyResident ? t('sessions.card.lazyResidentNote') : ''}
         </p>
       )}
       {residentLoad && (

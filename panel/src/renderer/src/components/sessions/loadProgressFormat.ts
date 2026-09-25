@@ -23,11 +23,12 @@ export function formatModelBytes(bytes?: number): string | null {
 
 export function formatResidentLoad(progress?: LoadProgressLike): string | null {
   if (!progress?.residentMb || progress.residentMb <= 0) return null
-  const resident = `${(progress.residentMb / 1024).toFixed(1)} GB`
+  // The monitor emits MiB; convert back to bytes before formatting decimal GB.
+  const resident = formatModelBytes(progress.residentMb * 1048576)!
   // residentPercent is normalized against the family's EXPECTED resident
   // bytes, so the denominator shown must be the same quantity — dividing the
-  // displayed pair by bundle size made the percent look wrong for
-  // expert-streaming families (25 GB / 96 GB tagged "37%").
+  // displayed pair by bundle size would compare the measurement against a
+  // different denominator from the estimated residency used for the percent.
   const total = formatModelBytes(progress.expectedResidentBytes ?? progress.modelBytes)
   const pct = progress.residentPercent != null ? ` (${progress.residentPercent.toFixed(1)}%)` : ''
   return total ? `${resident} / ${total}${pct}` : `${resident}${pct}`
