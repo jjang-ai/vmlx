@@ -4276,7 +4276,9 @@ def extract_video_frames_smart(
     fps: float = DEFAULT_FPS,
     max_frames: int = MAX_FRAMES,
     resize: tuple[int, int] | None = None,
-) -> list[np.ndarray]:
+    *,
+    return_metadata: bool = False,
+):
     """
     Extract frames from video with smart sampling.
 
@@ -4287,7 +4289,10 @@ def extract_video_frames_smart(
         resize: Optional (width, height) to resize frames
 
     Returns:
-        List of frame arrays (RGB format)
+        List of RGB arrays; with return_metadata, (frames, metadata) where
+        metadata follows successful decoder reads, not requested FPS.
+        timestamp_seconds is nominal source frame index / reported FPS,
+        not decoder presentation timestamps (VFR timing is not guaranteed).
     """
     try:
         import cv2
@@ -4299,7 +4304,9 @@ def extract_video_frames_smart(
         raise ValueError(f"Cannot open video: {video_path}")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    reported_fps = cap.get(cv2.CAP_PROP_FPS)
+    timestamp_fps = reported_fps if reported_fps and np.isfinite(reported_fps) and reported_fps > 0 else None
+    video_fps = reported_fps or 30.0
 
     # Calculate number of frames to extract
     nframes = smart_nframes(
@@ -4318,6 +4325,7 @@ def extract_video_frames_smart(
     )
 
     frames = []
+    metadata = []
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
@@ -4332,10 +4340,11 @@ def extract_video_frames_smart(
             frame = cv2.resize(frame, resize)
 
         frames.append(frame)
+        metadata.append({"frame_index": int(idx), "timestamp_seconds": float(idx / timestamp_fps) if timestamp_fps else None})
 
     cap.release()
 
-    return frames
+    return (frames, metadata) if return_metadata else frames
 
 
 def save_frames_to_temp(frames: list[np.ndarray]) -> list[str]:

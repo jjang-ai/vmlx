@@ -213,6 +213,34 @@ def _drain_request_diagnostics(request_id: str | None) -> None:
         return
 
 
+class _VideoFrameMetadataError(ValueError):
+    """Refuse frame metadata that cannot be paired with decoded pixels."""
+
+
+def _ordered_qwen_frame_fallback_message(message: dict) -> dict:
+    """Keep factual frame metadata adjacent to native media placeholders."""
+    ordered = []
+    for part in message.get("content", []):
+        if not isinstance(part, dict):
+            raise _VideoFrameMetadataError("Invalid part in Qwen video frame fallback")
+        kind = part.get("type")
+        if kind in {"image", "image_url", "input_image"}:
+            ordered.append({"type": "image"})
+        elif kind in {"video", "video_url", "input_video"}:
+            ordered.append({"type": "video"})
+        elif kind in {"audio", "audio_url", "input_audio"}:
+            ordered.append({"type": "audio"})
+        elif kind in {"text", "input_text"}:
+            ordered.append({"type": "text", "text": part.get("text", "")})
+        else:
+            raise _VideoFrameMetadataError("Unsupported part in Qwen video frame fallback")
+    normalized = {key: value for key, value in message.items()
+                  if key != "_vmlx_qwen_video_frame_metadata"}
+    normalized["role"] = message.get("role", "user")
+    normalized["content"] = ordered
+    return normalized
+
+
 def _bound_video_fallback_frames(
     frames: list[Any],
     *,
@@ -1069,6 +1097,7 @@ class BatchedEngine(BaseEngine):
                 continue
 
             new_content: list[Any] = []
+            qwen_frame_metadata = False
             for part in content:
                 item = part
                 if hasattr(item, "model_dump"):
@@ -1109,11 +1138,19 @@ class BatchedEngine(BaseEngine):
                             f"{family}|{video_path}|{controls_key}|edge={frame_max_long_edge}"
                             f"|cap={per_video_frame_cap}"
                         )
-                    frames = extract_video_frames_smart(
-                        video_path,
-                        fps=fps,
-                        max_frames=max_frames,
-                    )
+                    qwen_fallback = family in {"qwen3_5", "qwen3_5_moe"}
+                    frame_metadata = None
+                    if qwen_fallback:
+                        frames, frame_metadata = extract_video_frames_smart(
+                            video_path, fps=fps, max_frames=max_frames,
+                            return_metadata=True,
+                        )
+                    else:
+                        frames = extract_video_frames_smart(
+                            video_path, fps=fps, max_frames=max_frames,
+                        )
+                    if qwen_fallback and len(frames) != len(frame_metadata or []):
+                        raise _VideoFrameMetadataError("Qwen decoded-frame metadata lost alignment")
                     sampled = len(frames)
                     first_shape = getattr(frames[0], "shape", None) if frames else None
                     plan = plan_fallback_frames(
@@ -1126,7 +1163,14 @@ class BatchedEngine(BaseEngine):
                         pixel_floor=image_floor,
                         pixel_ceiling=image_ceiling,
                     )
-                    frames = subsample_frames_evenly(frames, plan.num_frames)
+                    if frame_metadata is None:
+                        frames = subsample_frames_evenly(frames, plan.num_frames)
+                    else:
+                        selected = subsample_frames_evenly(
+                            list(range(len(frames))), plan.num_frames
+                        )
+                        frames = [frames[index] for index in selected]
+                        frame_metadata = [frame_metadata[index] for index in selected]
                     video_bounds = controls.fallback_bounds(
                         default_long_edge=frame_max_long_edge,
                         num_frames=len(frames),
@@ -1184,8 +1228,8 @@ class BatchedEngine(BaseEngine):
                         frame_paths,
                         cache_key=fallback_cache_key,
                     )
-                except MediaControlsUnmeetableError:
-                    raise  # strict mode: the request is rejected, never re-routed
+                except (MediaControlsUnmeetableError, _VideoFrameMetadataError):
+                    raise  # Never send frames with untrustworthy metadata.
                 except Exception as exc:
                     logger.warning(
                         "%s video frame fallback failed; using native video path: %s",
@@ -1195,13 +1239,30 @@ class BatchedEngine(BaseEngine):
                     new_content.append(item)
                     continue
 
-                for frame_path in frame_paths:
+                if qwen_fallback:
+                    if len(frame_paths) != len(frame_metadata or []):
+                        raise _VideoFrameMetadataError("Qwen video frame metadata lost alignment")
+                    qwen_frame_metadata = True
+                    clip = converted_videos + 1
+                    new_content.append({"type": "text", "text": f"\n[Video {clip}: {len(frame_paths)} sampled frames]\n"})
+                for frame_number, frame_path in enumerate(frame_paths):
+                    if qwen_fallback:
+                        metadata = frame_metadata[frame_number]
+                        timestamp = metadata["timestamp_seconds"]
+                        time_label = f"{timestamp:.3f}s" if timestamp is not None else "unavailable"
+                        new_content.append({"type": "text", "text": (
+                            f"\n[Video {clip}, frame {frame_number + 1}/{len(frame_paths)}, "
+                            f"source frame {metadata['frame_index']}, "
+                            f"nominal time {time_label}]\n"
+                        )})
                     new_content.append(
                         {
                             "type": "image_url",
                             "image_url": {"url": frame_path},
                         }
                     )
+                if qwen_fallback:
+                    new_content.append({"type": "text", "text": f"\n[End video {clip}]\n"})
                 changed = True
                 converted_videos += 1
                 converted_frames += len(frame_paths)
@@ -1209,6 +1270,8 @@ class BatchedEngine(BaseEngine):
             if changed:
                 out_msg = dict(msg)
                 out_msg["content"] = new_content
+                if qwen_frame_metadata:
+                    out_msg["_vmlx_qwen_video_frame_metadata"] = True
                 rewritten.append(out_msg)
             else:
                 rewritten.append(msg)
@@ -2214,6 +2277,12 @@ class BatchedEngine(BaseEngine):
                         if role == "tool" or message.get("tool_calls"):
                             built.append(message)
                             continue
+                        if message.get("_vmlx_qwen_video_frame_metadata"):
+                            # Only our Qwen frame fallback carries interleaved
+                            # transport metadata. Generic formatters regroup
+                            # images ahead of text and destroy its association.
+                            built.append(_ordered_qwen_frame_fallback_message(message))
+                            continue
                         text = extract_text_from_content(
                             message.get("content", "")
                         )
@@ -2261,8 +2330,20 @@ class BatchedEngine(BaseEngine):
                             direct_messages = normalizer._normalize_mimo_audio_messages_for_template(
                                 direct_messages,
                             )
+                        if any(message.get("_vmlx_qwen_video_frame_metadata")
+                               for message in messages_arg) and len(direct_messages) != len(messages_arg):
+                            raise _VideoFrameMetadataError("Qwen fallback message alignment changed")
                         if direct_messages:
+                            # Mixed native-video/frame-fallback requests take
+                            # this normalizer, which otherwise regroups text.
+                            for index, original in enumerate(messages_arg):
+                                if original.get("_vmlx_qwen_video_frame_metadata"):
+                                    if len(direct_messages) != len(messages_arg):
+                                        raise _VideoFrameMetadataError("Qwen fallback message alignment changed")
+                                    direct_messages[index] = _ordered_qwen_frame_fallback_message(original)
                             return direct_messages
+                    except _VideoFrameMetadataError:
+                        raise
                     except Exception:
                         pass
                     return messages_arg
@@ -2391,6 +2472,8 @@ class BatchedEngine(BaseEngine):
                         num_images=num_images,
                         add_generation_prompt=not skip_generation_prompt,
                     )
+            except _VideoFrameMetadataError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
                 # Fall through to standard template
