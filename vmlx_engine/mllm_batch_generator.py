@@ -1252,6 +1252,44 @@ def _media_chunk_boundaries(
     return bounds
 
 
+def _bounded_mimo_media_plan(seq_len, configured_step, heads, cached_tokens,
+                             active_bytes, limit_bytes, runs, clean_boundaries,
+                             *, allow_oversized_merged_runs=False):
+    """Conservative admission geometry, not a measured kernel allocation."""
+    headroom = int(limit_bytes) - int(active_bytes)
+    if active_bytes <= 0 or limit_bytes <= 0 or headroom <= 0:
+        raise PrefillAdmissionError("MiMo media prefill requires positive measured Metal headroom")
+    context = max(1, int(cached_tokens) + int(seq_len))
+    step = max(1, min(int(configured_step), _TIGHT_PROJECTED_STEP_CAP,
+                     max_prefill_chunk_tokens(heads, context,
+                                              budget_bytes=headroom // 4,
+                                              bytes_per_score=4)))
+    # Only the native causal LM may slice already-merged oversized runs.
+    # Short runs retain their previous edges; cache checkpoints never move
+    # inside any media item, even when its LM forward is split.
+    if any(a < edge < b for edge in clean_boundaries for a, b in runs):
+        raise PrefillAdmissionError("MiMo media clean checkpoint would split a protected span")
+    protected_runs = [
+        (a, b) for a, b in runs
+        if not allow_oversized_merged_runs or b - a <= step
+    ]
+    bounds = sorted(set(_media_chunk_boundaries(seq_len, step, protected_runs)) |
+                    set(clean_boundaries))
+    start = 0
+    for end in bounds:
+        if not start < end <= seq_len or end - start > step:
+            raise PrefillAdmissionError(
+                f"MiMo media prefill protected span [{start}:{end}) exceeds "
+                f"conservative {step}-token budget; active={active_bytes} limit={limit_bytes}"
+            )
+        if any(a < end < b for a, b in protected_runs):
+            raise PrefillAdmissionError("MiMo media clean checkpoint would split a protected span")
+        start = end
+    if start != seq_len:
+        raise PrefillAdmissionError("MiMo media prefill plan does not cover the full input")
+    return step, bounds
+
+
 def _media_placeholder_runs(
     token_ids: Optional[List[int]], media_ids: set
 ) -> List[Tuple[int, int]]:
@@ -13252,7 +13290,17 @@ class MLLMBatchGenerator:
         straight back to the one-shot call.
         """
         _raise_if_prefill_cancelled(request)
-        one_shot = lambda: self.model(input_ids, **kwargs)
+        bounded_mimo = bool(getattr(self.model, "_mimo_v26_runtime", False)) and bool(
+            getattr(self, "_tight_memory_prefill_drain", False)
+        )
+
+        def one_shot():
+            if bounded_mimo:
+                raise PrefillAdmissionError(
+                    "Tight-memory MiMo media prefill requires bounded execution; "
+                    "one-shot fallback is unavailable"
+                )
+            return self.model(input_ids, **kwargs)
 
         if os.environ.get("VMLX_DISABLE_MEDIA_CHUNKED_PREFILL") in (
             "1", "true", "True", "yes", "on"
@@ -13340,10 +13388,10 @@ class MLLMBatchGenerator:
             and bool(getattr(self, "_tight_memory_prefill_drain", False))
         )
         min_chunk_seq = _MEDIA_PREFILL_CHUNK_MIN_SEQ
-        if bounded_glm:
+        if bounded_glm or bounded_mimo:
             chunk = max(1, min(int(self.prefill_step_size), _TIGHT_PROJECTED_STEP_CAP))
             min_chunk_seq = chunk
-        if clean_boundary <= 0 and glm_native_boundary <= 0 and (
+        if not bounded_mimo and clean_boundary <= 0 and glm_native_boundary <= 0 and (
             chunk <= 0 or seq_len <= max(chunk, min_chunk_seq)
         ):
             return one_shot()
@@ -13351,6 +13399,8 @@ class MLLMBatchGenerator:
         try:
             features = get_embeds(input_ids, **kwargs)
         except Exception as exc:
+            if bounded_mimo:
+                raise
             logger.info(
                 "media chunked prefill unavailable for %s (embedding merge "
                 "failed: %s); using the one-shot forward",
@@ -13363,6 +13413,8 @@ class MLLMBatchGenerator:
         if embeds is None:
             embeds = features if hasattr(features, "shape") else None
         if embeds is None or getattr(embeds, "ndim", 0) < 2:
+            if bounded_mimo:
+                raise PrefillAdmissionError("MiMo bounded media prefill requires merged embeddings")
             return one_shot()
 
         # Per-chunk extras that are NOT derivable from the cache offset.
@@ -13392,11 +13444,36 @@ class MLLMBatchGenerator:
         if glm_native_boundary > 0:
             bounds = sorted(set(bounds) | {glm_native_boundary})
 
+        if bounded_mimo:
+            if token_list is None or not media_ids:
+                raise PrefillAdmissionError("MiMo bounded media prefill requires protected token spans")
+            # Complete the encoder independently before measuring LM headroom.
+            mx.eval(embeds)
+            active, limit = get_effective_metal_working_set_bytes(mx)
+            chunk, bounds = _bounded_mimo_media_plan(
+                seq_len, self.prefill_step_size,
+                _infer_attention_heads_for_hybrid_oom_guard(lm),
+                int(getattr(request, "_cached_tokens", 0) or 0),
+                active, limit, runs, clean_boundaries,
+                allow_oversized_merged_runs=True,
+            )
+            logger.info(
+                "MiMo bounded media plan request=%s active_bytes=%d limit_bytes=%d "
+                "target=%d span_widths=%s", request.request_id, active, limit, chunk,
+                [end - begin for begin, end in zip([0] + bounds[:-1], bounds)],
+            )
+
         # Verify the invariant the wrapper asked for instead of trusting it.
         _split_run = None
         _prev = 0
+        # The native causal LM may cut only oversized, fully merged runs.
+        # Its planner already checked clean checkpoints against ALL runs.
+        forward_protected_runs = (
+            [(a, b) for a, b in runs if b - a <= chunk]
+            if bounded_mimo else runs
+        )
         for _end in bounds[:-1]:
-            for _rs, _re in runs:
+            for _rs, _re in forward_protected_runs:
                 if _rs < _end < _re:
                     _split_run = (_rs, _re, _end)
                     break
@@ -13414,13 +13491,17 @@ class MLLMBatchGenerator:
             return one_shot()
 
         logger.info(
-            "media chunked prefill for %s: %d tokens in %d chunks (step %d, "
-            "media spans kept whole%s), peak now scales with the chunk "
-            "instead of the whole prompt",
+            "media chunked prefill for %s: %d tokens in %d chunks (target step %d, "
+            "%s%s)",
             getattr(request, "request_id", "?"),
             seq_len,
             len(bounds),
             chunk,
+            (
+                "oversized merged media spans split for native causal attention"
+                if bounded_mimo and any(b - a > chunk for a, b in runs)
+                else "media spans kept whole"
+            ),
             "; wrapper requested span protection" if _protect_media_spans else "",
         )
 
@@ -13439,9 +13520,28 @@ class MLLMBatchGenerator:
                     "media-prefill-begin request=%s span=%d:%d active_bytes=%d",
                     request.request_id, start, end, int(mx.get_active_memory()),
                 )
-            if bounded_glm:
+            if bounded_glm or bounded_mimo:
                 active, limit = get_effective_metal_working_set_bytes(mx)
-                if prefill_valve_enabled():
+                if bounded_mimo:
+                    # Recheck live headroom before every actual span. The score
+                    # geometry is a conservative floor, not attribution of OOM.
+                    heads = max(1, _infer_attention_heads_for_hybrid_oom_guard(lm))
+                    ctx = int(getattr(request, "_cached_tokens", 0) or 0) + end
+                    projected = heads * (end - start) * max(1, ctx) * 4
+                    hybrid_chunk_valve_check(
+                        active, limit, projected, ctx, ctx,
+                        prefill_valve_min_margin_bytes(), chunk_start=start, chunk_end=end,
+                        model_label="MiMo media prefill",
+                    )
+                    hybrid_chunk_valve_check(
+                        active, limit, observed_transient, observed_context, ctx,
+                        prefill_valve_min_margin_bytes(), chunk_start=start, chunk_end=end,
+                        model_label="MiMo media prefill measured projection",
+                        observed_chunk_tokens=observed_width,
+                        next_chunk_tokens=max(observed_width, end - start),
+                        chunk_scaled=True,
+                    )
+                elif prefill_valve_enabled():
                     hybrid_chunk_valve_check(
                         active, limit, observed_transient, observed_context,
                         end, prefill_valve_min_margin_bytes(),
@@ -13487,20 +13587,23 @@ class MLLMBatchGenerator:
             # clean-boundary snapshot is submitted. Never interrupt Metal from
             # the HTTP thread or turn a cancellation into a full-prefill retry.
             _raise_if_prefill_cancelled(request)
-            if bounded_glm:
+            if bounded_glm or bounded_mimo:
                 peak = int(mx.get_peak_memory())
                 transient = max(0, peak - active)
-                if start > 0 and replace_chunk_transient_observation(
-                    "glm5_next", transient, end-start,
+                if (bounded_mimo or start > 0) and replace_chunk_transient_observation(
+                    "mimo_v2" if bounded_mimo else "glm5_next", transient, end-start,
                     observed_transient, observed_width,
                 ):
                     observed_transient, observed_context, observed_width = (
-                        transient, end, end-start
+                        transient,
+                        (int(getattr(request, "_cached_tokens", 0) or 0) + end) if bounded_mimo else end,
+                        end-start
                     )
                 logger.info(
-                    "GLM media prefill chunk request=%s span=%d:%d "
-                    "active_bytes=%d peak_bytes=%d transient_bytes=%d",
-                    request.request_id, start, end, active, peak, transient,
+                    "%s media prefill chunk request=%s span=%d:%d "
+                    "active_bytes=%d limit_bytes=%d peak_bytes=%d transient_bytes=%d",
+                    "MiMo" if bounded_mimo else "GLM",
+                    request.request_id, start, end, active, limit, peak, transient,
                 )
             if end == glm_native_boundary:
                 self._store_glm_native_boundary(request, cache)
