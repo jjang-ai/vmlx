@@ -60,7 +60,32 @@ export function toolCapabilityNames(
 }
 
 function messageText(content: unknown): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    // Database media rows store content parts as JSON. Decode only the known
+    // content-array shape; quoted policy and nested attachment data are not
+    // current-user instructions.
+    try {
+      const parts: unknown = JSON.parse(content);
+      const contentTypes = new Set([
+        "text", "input_text", "image_url", "input_image", "video_url",
+        "input_video", "input_audio", "audio_url",
+      ]);
+      if (
+        Array.isArray(parts) && parts.length > 0 &&
+        parts.every((part) => part && typeof part === "object" &&
+          contentTypes.has(part.type))
+      ) {
+        return parts
+          .filter((part) => part.type === "text" || part.type === "input_text")
+          .map((part) => typeof part.text === "string" ? part.text : "")
+          .filter(Boolean)
+          .join("\n");
+      }
+    } catch {
+      // Plain text and malformed JSON retain their original meaning.
+    }
+    return content;
+  }
   if (!Array.isArray(content)) return "";
   return content
     .map((part) => {
