@@ -48,6 +48,33 @@ from .cache_key import (
 
 logger = logging.getLogger(__name__)
 
+
+def _cleanup_phase_start():
+    """Opt-in host timing only; never evaluate or retain cache payloads."""
+    if os.environ.get("VMLX_CACHE_CLEANUP_PHASE_TRACE", "").lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        return None
+    try:
+        return time.perf_counter()
+    except Exception:
+        return None
+
+
+def _cleanup_phase_finish(start, site, request_id, succeeded, collected=None):
+    if start is None:
+        return
+    # Diagnostics must not replace a cleanup exception or alter serving flow.
+    try:
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        logger.info(
+            "VMLX_CACHE_CLEANUP_PHASE site=%s request_id=%s ms=%.3f completed=%s collected=%s",
+            site, request_id, elapsed_ms, succeeded, collected,
+        )
+    except Exception:
+        pass
+
+
 _CACHE_HASH_DEBUG = os.environ.get("VMLX_CACHE_HASH_DEBUG", "") == "1"
 
 # Bump this when the token->cache-state contract changes for paged prefix
@@ -4861,6 +4888,8 @@ class BlockAwarePrefixCache:
         cache_type: str = "assistant",
         cache_extra_keys: Optional[Any] = None,
         store_cumulative_state: bool = True,
+        *,
+        defer_post_fence_gc: bool = False,
     ) -> Optional[BlockTable]:
         """Store cache data and deterministically terminate any begun L2 fence."""
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
@@ -4892,8 +4921,35 @@ class BlockAwarePrefixCache:
                 try:
                     import gc as _gc
 
-                    _gc.collect()
-                    mx.clear_cache()
+                    # Only the idle MLLM terminal wrapper guarantees a later
+                    # collection after its cache-owning frame has unwound.
+                    if not defer_post_fence_gc:
+                        _cleanup_phase_t0 = _cleanup_phase_start()
+                        _cleanup_phase_ok = False
+                        _cleanup_phase_collected = None
+                        try:
+                            _cleanup_phase_collected = _gc.collect()
+                            _cleanup_phase_ok = True
+                        finally:
+                            _cleanup_phase_finish(
+                                _cleanup_phase_t0,
+                                "store_post_fence_gc",
+                                request_id,
+                                _cleanup_phase_ok,
+                                _cleanup_phase_collected,
+                            )
+                    _cleanup_phase_t0 = _cleanup_phase_start()
+                    _cleanup_phase_ok = False
+                    try:
+                        mx.clear_cache()
+                        _cleanup_phase_ok = True
+                    finally:
+                        _cleanup_phase_finish(
+                            _cleanup_phase_t0,
+                            "store_post_fence_mlx_clear",
+                            request_id,
+                            _cleanup_phase_ok,
+                        )
                 except Exception as clear_error:  # noqa: BLE001
                     logger.debug(
                         "Could not clear settled SSD-only MLX writer buffers: %s",
@@ -5975,7 +6031,20 @@ class BlockAwarePrefixCache:
         np_sources = None
         try:
             import gc as _gc
-            _gc.collect()
+            _cleanup_phase_t0 = _cleanup_phase_start()
+            _cleanup_phase_ok = False
+            _cleanup_phase_collected = None
+            try:
+                _cleanup_phase_collected = _gc.collect()
+                _cleanup_phase_ok = True
+            finally:
+                _cleanup_phase_finish(
+                    _cleanup_phase_t0,
+                    "store_views_gc",
+                    request_id,
+                    _cleanup_phase_ok,
+                    _cleanup_phase_collected,
+                )
         except Exception:
             pass
 
@@ -6046,12 +6115,36 @@ class BlockAwarePrefixCache:
             cache_data = None
             try:
                 import gc as _gc
-                _gc.collect()
+                _cleanup_phase_t0 = _cleanup_phase_start()
+                _cleanup_phase_ok = False
+                _cleanup_phase_collected = None
+                try:
+                    _cleanup_phase_collected = _gc.collect()
+                    _cleanup_phase_ok = True
+                finally:
+                    _cleanup_phase_finish(
+                        _cleanup_phase_t0,
+                        "store_tensor_gc",
+                        request_id,
+                        _cleanup_phase_ok,
+                        _cleanup_phase_collected,
+                    )
             except Exception:
                 pass
             if HAS_MLX:
                 try:
-                    mx.clear_cache()
+                    _cleanup_phase_t0 = _cleanup_phase_start()
+                    _cleanup_phase_ok = False
+                    try:
+                        mx.clear_cache()
+                        _cleanup_phase_ok = True
+                    finally:
+                        _cleanup_phase_finish(
+                            _cleanup_phase_t0,
+                            "store_tensor_mlx_clear",
+                            request_id,
+                            _cleanup_phase_ok,
+                        )
                 except Exception:
                     pass
 

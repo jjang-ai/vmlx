@@ -211,7 +211,11 @@ from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
     get_metal_ws_guard_threshold,
 )
-from .prefix_cache import runtime_cache_fingerprint
+from .prefix_cache import (
+    runtime_cache_fingerprint,
+    _cleanup_phase_start,
+    _cleanup_phase_finish,
+)
 from .utils.cache_extent import cache_offset, logical_truncate_target
 
 logger = logging.getLogger(__name__)
@@ -3900,7 +3904,9 @@ class MLLMScheduler:
             except Exception:
                 pass
 
-    def _cleanup_finished(self, finished_ids: Set[str]) -> None:
+    def _cleanup_finished(
+        self, finished_ids: Set[str], *, _defer_post_fence_gc: bool = False
+    ) -> None:
         """Clean up finished requests and store KV cache for future prefix reuse.
 
         For each finished request, this method:
@@ -4577,6 +4583,8 @@ class MLLMScheduler:
                                                 _paged_store_kwargs[
                                                     "store_cumulative_state"
                                                 ] = False
+                                            if _defer_post_fence_gc:
+                                                _paged_store_kwargs["defer_post_fence_gc"] = True
                                             stored_table = (
                                                 self.block_aware_cache.store_cache(
                                                     request_id,
@@ -5045,7 +5053,18 @@ class MLLMScheduler:
 
         # Clear Metal memory cache when all requests done (vision tensors are large)
         if finished_ids and not self.running:
-            clear_mlx_memory_cache(log=logger)
+            _cleanup_phase_t0 = _cleanup_phase_start()
+            _cleanup_phase_ok = False
+            try:
+                clear_mlx_memory_cache(log=logger)
+                _cleanup_phase_ok = True
+            finally:
+                _cleanup_phase_finish(
+                    _cleanup_phase_t0,
+                    "terminal_inner_mlx_clear",
+                    "terminal_batch",
+                    _cleanup_phase_ok,
+                )
         _trace_mark("clear_memory_s")
         if trace_enabled and finished_ids:
             logger.info(
@@ -5062,33 +5081,60 @@ class MLLMScheduler:
         self, finished_ids: Set[str]
     ) -> None:
         """Run deferred terminal cleanup with the normal scheduler lock held."""
-        with self._queue_lock:
-            self._cleanup_finished(finished_ids)
-        # _cleanup_finished() releases every persistent request/cache owner, but
-        # its own frame still holds the just-stored ``raw``/``cache_to_store``
-        # locals when its in-function clear runs.  The batch generator has the
-        # same ordering constraint: its final response closure owns the cache
-        # until scheduler cleanup consumes it.  Clearing at either earlier site
-        # therefore cannot return those newly freed buffers to Metal.
-        #
-        # The deferred wrapper is the first point where both cache-owning frames
-        # are gone, and it still executes on the model's single step executor.
-        # A connected Muse image -> video SSD hit measured a fully settled
-        # +105.8 MiB process-RSS ratchet (including +34.5 MiB MLX cache) despite
-        # every retained cache tier reporting 0 B.  Reclaim after the frame
-        # returns so SSD-only serving does not accumulate one allocator step per
-        # completed multimodal turn.
-        if finished_ids and not self.running:
-            try:
-                import gc as _gc
+        defer_gc = False
+        cleanup_succeeded = False
+        try:
+            with self._queue_lock:
+                # No surviving request or second store may run before repayment.
+                defer_gc = len(finished_ids) == 1 and set(self.running) == finished_ids
+                if defer_gc:
+                    self._cleanup_finished(finished_ids, _defer_post_fence_gc=True)
+                else:
+                    self._cleanup_finished(finished_ids)
+            cleanup_succeeded = True
+        finally:
+            # The successful inner frame is gone here. On failure its traceback
+            # may still own locals, but repayment must not depend on bookkeeping
+            # having removed the request from running. Preserve that exception.
+            if defer_gc or (cleanup_succeeded and finished_ids and not self.running):
+                try:
+                    try:
+                        import gc as _gc
 
-                _gc.collect()
-            except Exception as gc_error:  # noqa: BLE001
-                logger.debug(
-                    "Could not collect released MLLM terminal cache refs: %s",
-                    gc_error,
-                )
-            clear_mlx_memory_cache(log=logger)
+                        _cleanup_phase_t0 = _cleanup_phase_start()
+                        _cleanup_phase_ok = False
+                        _cleanup_phase_collected = None
+                        try:
+                            _cleanup_phase_collected = _gc.collect()
+                            _cleanup_phase_ok = True
+                        finally:
+                            _cleanup_phase_finish(
+                                _cleanup_phase_t0,
+                                "terminal_outer_gc",
+                                "terminal_batch",
+                                _cleanup_phase_ok,
+                                _cleanup_phase_collected,
+                            )
+                    except Exception as gc_error:  # noqa: BLE001
+                        logger.debug(
+                            "Could not collect released MLLM terminal cache refs: %s",
+                            gc_error,
+                        )
+                    _cleanup_phase_t0 = _cleanup_phase_start()
+                    _cleanup_phase_ok = False
+                    try:
+                        clear_mlx_memory_cache(log=logger)
+                        _cleanup_phase_ok = True
+                    finally:
+                        _cleanup_phase_finish(
+                            _cleanup_phase_t0,
+                            "terminal_outer_mlx_clear",
+                            "terminal_batch",
+                            _cleanup_phase_ok,
+                        )
+                except Exception:
+                    if cleanup_succeeded:
+                        raise
 
     def step(self, *, defer_finished_cleanup: bool = False) -> MLLMSchedulerOutput:
         """Execute one scheduling step -- the core generation loop tick.
