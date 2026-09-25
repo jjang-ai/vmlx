@@ -902,6 +902,13 @@ function readJangChatMetadata(
           ['chat', 'direct', 'instruct', 'off', 'no_think'].includes(mode),
         )
       }
+      // DSV4's selected Python encoder owns chat/thinking; the server maps
+      // enable_thinking to that native dialect rather than a Jinja variable.
+      if (next.family === 'deepseek-v4' && chat.encoder === 'encoding_dsv4'
+          && modes?.includes('chat') && modes.includes('thinking')) {
+        next.honorsEnableThinking = true
+      }
+
 
       // Effort levels: prefer an explicit `reasoning_effort_levels`, but fall
       // back to the model's own `modes` list when those modes ARE effort
