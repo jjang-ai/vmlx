@@ -68,6 +68,40 @@ def _hash_tokens(tokens: List[int], cache_extra_keys: Any = None) -> str:
     )
 
 
+def _hash_token_prefixes_with_marker(
+    tokens: List[int], lengths: Iterable[int], cache_extra_marker: Optional[str]
+) -> Dict[int, str]:
+    """Hash overlapping prefixes without serializing the shared tokens again.
+
+    Each digest is byte-identical to the existing compact-JSON cache key,
+    including its closing bracket and optional discriminator. Only the
+    unclosed JSON prefix is shared; copying the hash state preserves every
+    existing on-disk key and N-1 payload identity.
+    """
+    suffix = b"]"
+    if cache_extra_marker is not None:
+        suffix += b"\0vmlx-cache-extra-v1\0" + cache_extra_marker.encode(
+            "utf-8", "surrogatepass"
+        )
+    state = hashlib.sha256(b"[")
+    previous = 0
+    result = {}
+    for length in sorted(set(lengths)):
+        if not 0 <= length <= len(tokens):
+            raise ValueError("cache prefix length is outside the token sequence")
+        if length > previous:
+            if previous:
+                state.update(b",")
+            state.update(
+                json.dumps(tokens[previous:length], separators=(",", ":")).encode()[1:-1]
+            )
+        digest = state.copy()
+        digest.update(suffix)
+        result[length] = digest.hexdigest()
+        previous = length
+    return result
+
+
 def _runtime_cache_fingerprint() -> str:
     try:
         from .prefix_cache import runtime_cache_fingerprint
@@ -960,6 +994,7 @@ class DiskCacheManager:
             return None, []
 
         prefix_hash_by_len: Dict[int, str] = {}
+        expanded_prefix_hashes = False
         attempted_load = False
         for stored_hash, num_tokens, stored_payload_hash in rows:
             try:
@@ -976,6 +1011,27 @@ class DiskCacheManager:
                 )
                 prefix_hash_by_len[n] = prefix_hash
             if stored_hash != prefix_hash:
+                # Preserve the cheap longest exact-hit path. Once it misses,
+                # many candidate lengths otherwise serialize/hash the same
+                # long conversation repeatedly (quadratic growing-chat work).
+                if not expanded_prefix_hashes and len(rows) >= 4:
+                    lengths = set()
+                    for _, candidate_length, _ in rows:
+                        try:
+                            candidate_length = int(candidate_length)
+                        except (TypeError, ValueError):
+                            continue
+                        if 0 < candidate_length <= len(full_tokens):
+                            lengths.add(candidate_length)
+                            if candidate_length - 1 >= min_tokens:
+                                lengths.add(candidate_length - 1)
+                    if len(lengths) >= 4:
+                        prefix_hash_by_len.update(
+                            _hash_token_prefixes_with_marker(
+                                full_tokens, lengths, extra_marker
+                            )
+                        )
+                    expanded_prefix_hashes = True
                 # The persisted cache owns N-1 tokens even though its exact
                 # lookup key includes the rendered generation sentinel at N.
                 # If the current prompt shares that whole payload but changes
