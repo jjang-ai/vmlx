@@ -138,11 +138,12 @@ METAL_FUNC float tq_act(float g, float u, float lim) {
   return (g / (1.0f + metal::fast::exp(-g))) * u;
 }
 // FUSED=false: y = x W^T for one weight.  FUSED=true: y = act(x Wg^T, x Wu^T).
-template <typename T, int bits, bool FUSED>
+template <typename T, int bits, bool FUSED, bool EXPERT_ALIGNED = false>
 METAL_FUNC void tq_gather_qmm_nax(
     const device T* x, const device uint32_t* wg, const device half* sg, const device uint32_t* wu, const device half* su,
     const device uint32_t* indices, device T* y, const int M, const int N, const int K, const float lim,
-    threadgroup T* Wg, threadgroup T* Wu, uint3 tid, uint simd_group_id, uint simd_lane_id) {
+    threadgroup T* Wg, threadgroup T* Wu, uint3 tid, uint simd_group_id, uint simd_lane_id,
+    const device int* expert_offsets = nullptr, const device int* tile_offsets = nullptr, const int E = 0) {
   constexpr int BM = 64, BK = 64, BN = 64, WM = 2, WN = 2;
   constexpr int pack_factor = get_pack_factor<bits, 8>();
   constexpr int bytes_per_pack = get_bytes_per_pack<bits>();
@@ -150,8 +151,22 @@ METAL_FUNC void tq_gather_qmm_nax(
   using loader_w_t = TQBlockLoader<T, BN, BK, BK_padded, WM * WN * SIMD_SIZE, bits>;
   const int K_w = K * bytes_per_pack / pack_factor; const int K_it = K / BK;
   const size_t stride_w = size_t(N) * K_w;
-  const int y_row = tid.y * BM; const int y_col = tid.x * BN;
-  const short tgp_bm = short(min(BM, M - y_row));
+  int y_row = tid.y * BM;
+  int row_end = M;
+  if constexpr (EXPERT_ALIGNED) {
+    // Uniform exit before any dereference or barrier; the grid is an upper bound.
+    if (int(tid.y) >= tile_offsets[E]) return;
+    int lo = 0, hi = E;
+    // Upper bound skips repeated offsets belonging to empty experts.
+    while (lo < hi) {
+      int mid = (lo + hi) / 2;
+      if (tile_offsets[mid + 1] <= int(tid.y)) lo = mid + 1; else hi = mid;
+    }
+    y_row = expert_offsets[lo] + (int(tid.y) - tile_offsets[lo]) * BM;
+    row_end = expert_offsets[lo + 1];
+  }
+  const int y_col = tid.x * BN;
+  const short tgp_bm = short(min(BM, row_end - y_row));
   const short tgp_bn = short(min(BN, N - y_col));
   auto wgl = (const device uint8_t*)wg; auto wul = (const device uint8_t*)wu;
   x += size_t(y_row) * K; y += size_t(y_row) * N + y_col;
@@ -159,7 +174,7 @@ METAL_FUNC void tq_gather_qmm_nax(
   constexpr short SM = BM / WM, SN = BN / WN, SK = 32;
   constexpr short TM = SM / 16, TN = SN / 16, TK = SK / 16;
   const short tm = SM * (simd_group_id / WN); const short tn = SN * (simd_group_id % WN);
-  const short sgp_sm = short(min(int(SM), max(0, M - (y_row + tm))));
+  const short sgp_sm = short(min(int(SM), max(0, row_end - (y_row + tm))));
   const short sgp_sn = short(min(int(SN), max(0, N - (y_col + tn))));
   uint32_t index; short offset; uint32_t index_next = indices[y_row]; short offset_next = 0; int n = 0;
   while (n < tgp_bm) {
@@ -238,6 +253,45 @@ def _nax_kernel(bits: int, fused: bool, tname: str):
         name=f"jangtq2i_qmm_nax_b{bits}_{'fused' if fused else 'single'}_{tname}",
         input_names=["x", "wg", "sg", "wu", "su", "indices", "meta", "lim"],
         output_names=["y"], header=_nax_header(), source=src)
+
+
+@functools.lru_cache(maxsize=None)
+def _expert_nax_kernel(bits: int, fused: bool, tname: str):
+    src = f'''
+  constexpr int BK_padded = (64 + 16 / sizeof({tname}));
+  threadgroup {tname} Wg[64 * BK_padded];
+  threadgroup {tname} Wu[{'64' if fused else '1'} * BK_padded];
+  tq_gather_qmm_nax<{tname}, {bits}, {'true' if fused else 'false'}, true>(
+      x, wg, sg, wu, su, indices, y, meta[0], meta[1], meta[2], lim[0], Wg, Wu,
+      threadgroup_position_in_grid, simdgroup_index_in_threadgroup, thread_index_in_simdgroup,
+      expert_offsets, tile_offsets, meta[3]);
+'''
+    return mx.fast.metal_kernel(
+        name=f"jangh_expert_qmm_nax_b{bits}_{fused}_{tname}",
+        input_names=["x", "wg", "sg", "wu", "su", "indices", "expert_offsets", "tile_offsets", "meta", "lim"],
+        output_names=["y"], header=_nax_header(), source=src)
+
+
+def expert_tile_plan(idx_sorted, experts):
+    """GPU-only offsets shared by gate/up and down; no host synchronization."""
+    starts = mx.searchsorted(idx_sorted, mx.arange(experts + 1, dtype=mx.uint32)).astype(mx.int32)
+    counts = (starts[1:] - starts[:-1] + BM - 1) // BM
+    tiles = mx.concatenate([mx.zeros((1,), dtype=mx.int32), mx.cumsum(counts).astype(mx.int32)])
+    return starts, tiles
+
+
+def gather_qmm_expert_sorted(x, packed, scales, idx, bits, plan, *, packed_u=None, scales_u=None, limit=0.0):
+    """Internal NAX route, admitted only for qualified geometry by the switch."""
+    M, width = x.shape
+    experts, columns = packed.shape[:2]
+    fused = packed_u is not None
+    starts, tiles = plan
+    return _expert_nax_kernel(bits, fused, _TNAME[x.dtype])(
+        inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,
+                idx, starts, tiles, mx.array([M, columns, width, experts], dtype=mx.int32),
+                _consts(float(limit), dtype=mx.float32)],
+        grid=(((columns + BN - 1) // BN) * 128, (M + BM - 1) // BM + experts, 1),
+        threadgroup=(128, 1, 1), output_shapes=[(M, columns)], output_dtypes=[x.dtype])[0]
 
 
 # ------------------------------------------------------------------ prefill fallback (no NAX: M1-M4, macOS < 26.2)

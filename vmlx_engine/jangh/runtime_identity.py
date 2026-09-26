@@ -7,6 +7,9 @@ from pathlib import Path
 # Freeze diagnostic routing controls alongside persisted-state identity.
 DECODE_ROT = os.environ.get("JANGTQ2_DECODE_ROT", "host").strip().lower()
 PREFILL = os.environ.get("JANGTQ2_PREFILL", "").strip().lower()
+EXPERT_TILES = os.environ.get("JANGH_EXPERT_TILES", "0").strip()
+if EXPERT_TILES not in {"0", "1"}:
+    raise ValueError("JANGH_EXPERT_TILES must be 0 or 1")
 if DECODE_ROT not in {"host", "kernel"}:
     raise ValueError("JANGTQ2_DECODE_ROT must be host or kernel")
 if PREFILL not in {"", "steel", "nax"}:
@@ -22,4 +25,5 @@ def runtime_identity() -> str:
     return (
         "jangh=" + digest.hexdigest()
         + ";decode_rot=" + DECODE_ROT + ";prefill=" + (PREFILL or "auto")
+        + ";expert_tiles=" + EXPERT_TILES
     )

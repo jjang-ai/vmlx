@@ -42,3 +42,16 @@ def test_invalid_route_rejected(monkeypatch):
     monkeypatch.setenv("JANGTQ2_DECODE_ROT", "typo")
     with pytest.raises(ValueError, match="DECODE_ROT"):
         load(SOURCE)
+
+
+def test_expert_tiles_identity_is_frozen_and_separate(monkeypatch):
+    import pytest
+    monkeypatch.setenv('JANGH_EXPERT_TILES', '0')
+    baseline = load(SOURCE)
+    first = baseline.runtime_identity()
+    monkeypatch.setenv('JANGH_EXPERT_TILES', '1')
+    assert baseline.runtime_identity() == first
+    assert load(SOURCE).runtime_identity() != first
+    monkeypatch.setenv('JANGH_EXPERT_TILES', 'auto')
+    with pytest.raises(ValueError, match='EXPERT_TILES'):
+        load(SOURCE)

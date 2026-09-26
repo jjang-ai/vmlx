@@ -28,7 +28,7 @@ SORT_THRESHOLD = 64
 ROTATIONS = ("none", "hadamard32")
 # Where decode applies the Hadamard-32: "host" = once per activation row (x once per token, h once per expert-token)
 # then the unrotated fast kernels; "kernel" = in-register inside every threadgroup (redundant: measured 1.05-1.15x).
-from .runtime_identity import DECODE_ROT
+from .runtime_identity import DECODE_ROT, EXPERT_TILES
 
 
 class TQSwitchLinear(nn.Module):
@@ -82,12 +82,31 @@ class TQSwitchGLU(nn.Module):
             return rotate_rows(h, d), False
         return h, d.rotated
 
+    def _use_expert_tiles(self, x, kk):
+        g, u, d = self.gate_proj, self.up_proj, self.down_proj
+        return (
+            EXPERT_TILES == "1" and x.dtype == mx.bfloat16 and x.shape[-1] == 4096 and kk == 8
+            and (g.input_dims, g.output_dims, g.num_experts) == (4096, 2048, 288)
+            and (u.input_dims, u.output_dims, u.num_experts) == (4096, 2048, 288)
+            and (d.input_dims, d.output_dims, d.num_experts) == (2048, 4096, 288)
+            and g.bits == u.bits and g.bits in (2, 3) and d.bits in (2, 3)
+            and g.rotated and u.rotated and d.rotated and K.nax_available()
+        )
+
     def _prefill(self, x, idx, kk):
         g, u, d = self.gate_proj, self.up_proj, self.down_proj
         order = mx.argsort(idx)
         inv = mx.argsort(order)
         idx_s = idx[order]
         xs = rotate_rows(x, g)[order // kk]
+        if self._use_expert_tiles(x, kk):
+            plan = K.expert_tile_plan(idx_s, g.num_experts)
+            h = K.gather_qmm_expert_sorted(
+                xs, g.tq2_packed, g.tq2_scales, idx_s, g.bits, plan,
+                packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit)
+            y = K.gather_qmm_expert_sorted(
+                rotate_rows(h, d), d.tq2_packed, d.tq2_scales, idx_s, d.bits, plan)
+            return y[inv]
         h = K.gather_qmm_sorted(xs, g.tq2_packed, g.tq2_scales, g._cb, idx_s, g.bits,
                                 packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit)
         y = K.gather_qmm_sorted(rotate_rows(h, d), d.tq2_packed, d.tq2_scales, d._cb, idx_s, d.bits)
