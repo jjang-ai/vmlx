@@ -13294,7 +13294,18 @@ class MLLMBatchGenerator:
             getattr(self, "_tight_memory_prefill_drain", False)
         )
 
+        bounded_glm = (
+            os.environ.get("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "0") == "1"
+            and getattr(self.language_model, "model_type", "")
+            in {"glm5_next", "glm5_next_text"}
+            and bool(getattr(self, "_tight_memory_prefill_drain", False))
+        )
+
         def one_shot():
+            if bounded_glm:
+                raise PrefillAdmissionError(
+                    "Bounded GLM media prefill cannot use an unbounded one-shot fallback"
+                )
             if bounded_mimo:
                 raise PrefillAdmissionError(
                     "Tight-memory MiMo media prefill requires bounded execution; "
@@ -13382,16 +13393,11 @@ class MLLMBatchGenerator:
         # The generic 8192-token crossover is too late for a nearly resident
         # GLM-5.3: connected image prompts can OOM below it. Qualification-only
         # opt-in; other families and ordinary-headroom requests are unchanged.
-        bounded_glm = (
-            os.environ.get("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "0") == "1"
-            and getattr(lm, "model_type", "") in {"glm5_next", "glm5_next_text"}
-            and bool(getattr(self, "_tight_memory_prefill_drain", False))
-        )
         min_chunk_seq = _MEDIA_PREFILL_CHUNK_MIN_SEQ
         if bounded_glm or bounded_mimo:
             chunk = max(1, min(int(self.prefill_step_size), _TIGHT_PROJECTED_STEP_CAP))
             min_chunk_seq = chunk
-        if not bounded_mimo and clean_boundary <= 0 and glm_native_boundary <= 0 and (
+        if not bounded_mimo and not bounded_glm and clean_boundary <= 0 and glm_native_boundary <= 0 and (
             chunk <= 0 or seq_len <= max(chunk, min_chunk_seq)
         ):
             return one_shot()
@@ -13401,6 +13407,10 @@ class MLLMBatchGenerator:
         except Exception as exc:
             if bounded_mimo:
                 raise
+            if bounded_glm:
+                raise PrefillAdmissionError(
+                    "Bounded GLM media prefill requires successful embedding merge"
+                ) from exc
             logger.info(
                 "media chunked prefill unavailable for %s (embedding merge "
                 "failed: %s); using the one-shot forward",
@@ -13481,6 +13491,10 @@ class MLLMBatchGenerator:
                 break
             _prev = _end
         if _split_run is not None:
+            if bounded_glm:
+                raise PrefillAdmissionError(
+                    "Bounded GLM media prefill checkpoint would split a protected media span"
+                )
             logger.info(
                 "media chunked prefill declined for %s: a chunk boundary at "
                 "%d would split the media run [%d, %d). Falling back to the "
@@ -13489,6 +13503,14 @@ class MLLMBatchGenerator:
                 _split_run[2], _split_run[0], _split_run[1],
             )
             return one_shot()
+
+        if bounded_glm and any(
+            end - begin > chunk
+            for begin, end in zip([0] + bounds[:-1], bounds)
+        ):
+            raise PrefillAdmissionError(
+                "Bounded GLM media prefill cannot split an oversized protected media span"
+            )
 
         logger.info(
             "media chunked prefill for %s: %d tokens in %d chunks (target step %d, "

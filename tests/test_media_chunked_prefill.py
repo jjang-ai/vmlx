@@ -277,7 +277,8 @@ class TestMediaForwardFallbacks:
         assert completed == ([0, 4096, 8192, 9000] if clean_boundary else [0, 4096, 8192])
         assert request._prefill_tokens_done == 9001
 
-    def test_bounded_glm_materializes_each_chunk_and_keeps_guard(self, monkeypatch):
+    @pytest.mark.parametrize("seq_len,forwards", [(2500, 3), (500, 1)])
+    def test_bounded_glm_materializes_each_chunk_and_keeps_guard(self, monkeypatch, seq_len, forwards):
         from types import SimpleNamespace
         import vmlx_engine.mllm_batch_generator as mllm
 
@@ -294,7 +295,7 @@ class TestMediaForwardFallbacks:
         gen._tight_memory_prefill_drain = True
         gen._media_placeholder_token_ids = lambda: set()
         gen.model.get_input_embeddings = lambda ids, **kw: SimpleNamespace(
-            inputs_embeds=_FakeIds(2500)
+            inputs_embeds=_FakeIds(seq_len)
         )
         monkeypatch.setenv("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "1")
         monkeypatch.setattr(mllm, "get_effective_metal_working_set_bytes", lambda mx: (100, 1000))
@@ -305,13 +306,55 @@ class TestMediaForwardFallbacks:
         monkeypatch.setattr(mllm.mx, "clear_cache", lambda: events.append("clear"))
         monkeypatch.setattr(mllm.mx, "reset_peak_memory", lambda: None)
         monkeypatch.setattr(mllm.mx, "get_peak_memory", lambda: 200)
-        gen._media_forward(SimpleNamespace(request_id="glm"), _FakeIds(2500), 2500, [object()], {})
-        assert events.count("forward") == 3
-        assert events.count("guard") == events.count("state") == 3
+        gen._media_forward(SimpleNamespace(request_id="glm"), _FakeIds(seq_len), seq_len, [object()], {})
+        assert events.count("forward") == forwards
+        assert events.count("guard") == events.count("state") == forwards
         assert events[0] == "eval"
         for i, event in enumerate(events):
             if event == "forward":
                 assert events[i-1] == "guard" and events[i+1] == "state"
+
+    @pytest.mark.parametrize("failure", [
+        "no_cache", "no_seam", "disabled", "merge_error", "no_embeddings",
+        "oversized_span",
+    ])
+    def test_bounded_glm_never_falls_back_to_unbounded_forward(self, monkeypatch, failure):
+        from types import SimpleNamespace
+        import vmlx_engine.mllm_batch_generator as mllm
+
+        calls = []
+        class LM:
+            model_type = "glm5_next"
+            def __call__(self, ids, inputs_embeds=None, cache=None):
+                calls.append("language-forward")
+                raise AssertionError("unadmitted forward")
+        gen = self._gen(_OneShotModel(calls), LM())
+        gen._tight_memory_prefill_drain = True
+        gen._native_media_clean_boundary = lambda *args: 0
+        gen._media_placeholder_token_ids = lambda: {99}
+        ids = mllm.mx.array([[99] * 2500])
+        gen.model.get_input_embeddings = lambda *a, **kw: SimpleNamespace(
+            inputs_embeds=ids[..., None]
+        )
+        cache = [object()]
+        monkeypatch.setenv("VMLX_GLM5_BOUNDED_MEDIA_PREFILL", "1")
+        monkeypatch.delenv("VMLX_DISABLE_MEDIA_CHUNKED_PREFILL", raising=False)
+        if failure == "no_cache":
+            cache = None
+        elif failure == "no_seam":
+            gen.model.get_input_embeddings = None
+        elif failure == "disabled":
+            monkeypatch.setenv("VMLX_DISABLE_MEDIA_CHUNKED_PREFILL", "1")
+        elif failure == "merge_error":
+            def fail(*a, **kw):
+                raise ValueError("merge failed")
+            gen.model.get_input_embeddings = fail
+        elif failure == "no_embeddings":
+            gen.model.get_input_embeddings = lambda *a, **kw: None
+        with pytest.raises(mllm.PrefillAdmissionError, match="GLM"):
+            gen._media_forward(SimpleNamespace(request_id="bounded-glm-refusal"),
+                               ids, 2500, cache, {})
+        assert calls == []
 
     def _gen(self, model, lm):
         from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
