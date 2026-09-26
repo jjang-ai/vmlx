@@ -43,6 +43,10 @@ class ModelConfig(BaseModelConfig):
     video_end_token_id: int = 154833
     tie_word_embeddings: bool = False
     eos_token_id: list[int] | int | None = None
+    # JANGTQ v2 campaign: carried so the model can install TQ experts and alias per-module quant keys.
+    # None for every other bundle (mlx_vlm reads quantization from this attribute when present -> same value).
+    jangtq: dict | None = None
+    quantization: dict | None = None
 
     @classmethod
     def from_dict(cls, params):

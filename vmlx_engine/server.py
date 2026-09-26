@@ -10170,6 +10170,13 @@ def _find_routed_down_layer_bit_plan(
 
 
 def _weight_matmul_dispatch_status(codec: str) -> dict:
+    if codec == "jangtq2_codebook":
+        return {
+            "primary": "vmlx_jangtq2_custom_kernels",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": False,
+            "reason": "mixed_bundle_jangtq2_experts_with_mlx_quantized_nonexperts",
+        }
     if codec == "turboquant_codebook":
         return {
             "primary": "jang_tools_turboquant_custom_kernels",
@@ -10870,6 +10877,37 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
             "prestacked_bundle": has_prestacked_bundle,
         },
     }
+    # The global affine default describes non-experts, not TQ2 routed
+    # weights. Report the actual per-module mixture without inventing a
+    # single target width or claiming runtime dispatch was measured here.
+    declaration = cfg.get("jangtq")
+    if isinstance(declaration, dict) and type(declaration.get("version")) is int and declaration["version"] == 2:
+        modules = {
+            key: value for key, value in q_cfg.items()
+            if isinstance(value, dict) and isinstance(value.get("mode"), str)
+        }
+        tq_modules = {key: value for key, value in modules.items() if value["mode"] == "jangtq2"}
+        if tq_modules:
+            widths = sorted({value["bits"] for value in tq_modules.values()
+                             if type(value.get("bits")) is int})
+            modes = sorted({value["mode"] for value in modules.values()})
+            result.update({
+                "codec": "jangtq2_codebook",
+                "weight_format": "jangtq2",
+                "backend": "vmlx_jangtq2",
+                "target_bits": None,
+                "group_size": None,
+                "routed_expert_bits": widths[0] if len(widths) == 1 else None,
+                "routed_expert_bit_widths": widths,
+                "routed_expert_bits_label": "/".join(map(str, widths)) + "-bit",
+                "mixed_precision": len(modes) > 1 or len(widths) > 1,
+                "module_quantization_modes": modes,
+                "jangtq2_projection_count": len(tq_modules),
+                "jangtq2_rotation": declaration.get("rotation", "none"),
+                "jangtq2_codebook_family": declaration.get("codebook_family"),
+                "quantization_metadata_source": "config.quantization",
+                "weight_matmul_dispatch": _weight_matmul_dispatch_status("jangtq2_codebook"),
+            })
     return {k: v for k, v in result.items() if v is not None}
 
 
@@ -11176,7 +11214,13 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
     na_status = _mlx_metal_na_status()
     host = _host_supports_metal_na()
 
-    if codec == "turboquant_codebook":
+    if codec == "jangtq2_codebook":
+        # Codec capability, not evidence of a particular dispatched kernel.
+        kernel_type = "jangtq2_codebook"
+        active = False
+        metal_na_capable = True
+        reason = "custom_decode_with_nax_or_steel_prefill_route_not_observed"
+    elif codec == "turboquant_codebook":
         mpp_nax = _jangtq_mpp_nax_runtime_status(host)
         active = bool(mpp_nax.get("active"))
         kernel_type = (
@@ -11220,6 +11264,10 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         },
         "host": host,
     }
+    if codec == "jangtq2_codebook":
+        result["dispatch_observed"] = False
+        result["prefill_backends"] = ["nax", "steel"]
+        result["decode_backend"] = "custom_metal"
     if codec == "turboquant_codebook":
         result["jangtq_acceleration"] = mpp_nax
     result["family_runtime"] = _family_acceleration_contract(

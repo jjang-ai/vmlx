@@ -4471,7 +4471,12 @@ def _load_jang_v2_vlm(
         for cand in candidates:
             v = _qcfg_overrides.get(cand)
             if isinstance(v, dict) and "bits" in v and "group_size" in v:
-                return {"bits": int(v["bits"]), "group_size": int(v["group_size"])}
+                # JANGTQ v2 campaign fix: carry the per-module MODE (mixed affine + mxfp8 bundles). Dropping it
+                # built every module in the global mode and silently mis-decoded mxfp8 modules.
+                o = {"bits": int(v["bits"]), "group_size": int(v["group_size"])}
+                if v.get("mode"):
+                    o["mode"] = str(v["mode"])
+                return o
         return None
 
     def get_class_predicate(p, m):
@@ -4499,6 +4504,14 @@ def _load_jang_v2_vlm(
         if override is not None:
             return override
         return True
+
+    # JANGTQ v2 campaign: swap routed experts for TQSwitchGLU BEFORE quantization (fail closed on mismatch).
+    from vmlx_engine.jangtq2.contract import validate_format
+    _is_jangtq2 = validate_format(config)
+    if _is_jangtq2:
+        from vmlx_engine.jangtq2.install import install_jangtq2
+
+        install_jangtq2(model, config)
 
     nn.quantize(
         model,
@@ -4557,6 +4570,7 @@ def _load_jang_v2_vlm(
     }
     _gemma_ple_pending: dict[str, dict[str, mx.array]] = {}
     _affine1_expanded_count = 0
+    _jangtq2_loaded_keys = set()
     for sf in _iter_shards_with_progress(weight_files):
         shard_weights = mx.load(str(sf))
         if _ternary_packed_modules:
@@ -4891,9 +4905,18 @@ def _load_jang_v2_vlm(
             model, shard_weights, block_size,
             quantization_overrides=_declared_hadamard_quant,
         )
+        if _is_jangtq2:
+            from vmlx_engine.jangtq2.payload import validate_payload
+
+            _jangtq2_loaded_keys.update(validate_payload(model, shard_weights.items()))
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
+
+    if _is_jangtq2:
+        from vmlx_engine.jangtq2.payload import validate_complete_payload
+
+        validate_complete_payload(model, _jangtq2_loaded_keys)
 
     if _ternary_packed_modules:
         if _ternary_packed_expanded_count != len(_ternary_packed_modules):

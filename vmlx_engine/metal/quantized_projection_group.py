@@ -48,7 +48,10 @@ class QuantizedProjectionGroup(nn.Module):
         )
         self.weight = mx.concatenate([linear.weight for linear in linears], axis=0)
         self.scales = mx.concatenate([linear.scales for linear in linears], axis=0)
-        self.biases = mx.concatenate([linear.biases for linear in linears], axis=0)
+        # MX modes (mxfp8/mxfp4/nvfp4) carry no biases; their scales are per output row too, so row
+        # concatenation is exact exactly as for affine (JANGTQ v2 campaign generalization).
+        self.biases = (mx.concatenate([linear.biases for linear in linears], axis=0)
+                       if self.mode == "affine" else None)
 
         splits: list[int] = []
         offset = 0
@@ -86,7 +89,7 @@ class QuantizedProjectionGroup(nn.Module):
                 x,
                 self.weight[start:end],
                 scales=self.scales[start:end],
-                biases=self.biases[start:end],
+                biases=(self.biases[start:end] if self.biases is not None else None),
                 transpose=True,
                 group_size=self.group_size,
                 bits=self.bits,
@@ -116,19 +119,26 @@ def quantized_projection_group_reason(
 
     first = linears[0]
     first_input_dims, _ = _quantized_linear_dimensions(first)
+    mx_modes = ("mxfp8", "mxfp4", "nvfp4")
+    is_affine = str(first.mode) == "affine"
+    if not is_affine and str(first.mode) not in mx_modes:
+        return f"unsupported quantization mode {first.mode}"
     for linear in linears:
+        biases = getattr(linear, "biases", None)
         if linear.weight.ndim != 2:
             return "packed weight is not rank two"
         if linear.scales.ndim != 2:
             return "scales are not rank two"
-        if linear.biases is None:
-            return "affine biases are missing"
-        if linear.biases.shape != linear.scales.shape:
-            return "affine metadata shapes differ"
-        if (
-            linear.weight.shape[0] != linear.scales.shape[0]
-            or linear.weight.shape[0] != linear.biases.shape[0]
-        ):
+        if is_affine:
+            if biases is None:
+                return "affine biases are missing"
+            if biases.shape != linear.scales.shape:
+                return "affine metadata shapes differ"
+            if linear.weight.shape[0] != biases.shape[0]:
+                return "output-row counts differ within a projection"
+        elif biases is not None:
+            return "MX-mode projection unexpectedly carries biases"
+        if linear.weight.shape[0] != linear.scales.shape[0]:
             return "output-row counts differ within a projection"
         input_dims, _ = _quantized_linear_dimensions(linear)
         if int(linear.weight.shape[-1]) * 32 != input_dims * int(linear.bits):
@@ -147,9 +157,9 @@ def quantized_projection_group_reason(
             return "packed weight dtypes differ"
         if linear.scales.dtype != first.scales.dtype:
             return "scale dtypes differ"
-        if linear.biases.dtype != first.biases.dtype:
+        if is_affine and linear.biases.dtype != first.biases.dtype:
             return "affine bias dtypes differ"
-    if activation_dtype is not None and (
+    if is_affine and activation_dtype is not None and (
         first.scales.dtype != activation_dtype
         or first.biases.dtype != activation_dtype
     ):
@@ -167,13 +177,16 @@ def cached_quantized_projection_group(
 
     linears = tuple(linears)
     source_key = tuple(
-        (id(linear.weight), id(linear.scales), id(linear.biases))
+        (id(linear.weight), id(linear.scales), id(getattr(linear, "biases", None)))
         for linear in linears
     )
     cached = getattr(owner, cache_attr, None)
     if cached is None or cached[0] != source_key:
         group = QuantizedProjectionGroup(linears)
-        mx.eval(group.weight, group.scales, group.biases)
+        mx.eval(
+            group.weight, group.scales,
+            *(() if group.biases is None else (group.biases,)),
+        )
         cached = (source_key, group)
         setattr(owner, cache_attr, cached)
     return cached[1]

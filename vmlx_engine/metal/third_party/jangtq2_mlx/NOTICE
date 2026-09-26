@@ -1,0 +1,7 @@
+JANGTQ2 Metal kernels in vmlx_engine/jangtq2/kernels.py adapt Apple MLX
+quantized matrix-vector, matrix-matrix, and Steel/NAX kernel layouts.
+Copyright 2023-2024 Apple Inc. Distributed under the MIT license.
+Source: https://github.com/ml-explore/mlx/tree/v0.32.2/mlx/backend/metal/kernels
+Changes: odd-cubic codebook weight decoding, per-row scales, expert routing,
+fused gate/up and router-weighted down projections, and integer extent clamping.
+MLX headers are loaded from the installed MLX package at runtime.

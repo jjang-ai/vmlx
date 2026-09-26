@@ -95,8 +95,26 @@ class Model(nn.Module):
         super().__init__()
         self.config = config
         self.model_type = config.model_type
+        from ...jangtq2.contract import (
+            alias_runtime_quant_keys, projection_contract, validate_format,
+        )
+
+        tq_config = {
+            "jangtq": config.jangtq,
+            "quantization": config.quantization,
+            "text_config": {"swiglu_limit": config.text_config.swiglu_limit},
+        }
+        self._jangtq2 = validate_format(tq_config)
+        if self._jangtq2:
+            # Reject malformed declarations before constructing expert arrays.
+            projection_contract(tq_config)
+            alias_runtime_quant_keys(config.quantization)
         self.vision_tower = VisionModel(config.vision_config)
         self.language_model = LanguageModel(config.text_config)
+        if self._jangtq2:
+            from ...jangtq2.install import install_jangtq2
+
+            install_jangtq2(self, tq_config)
 
     def get_input_embeddings(
         self,
@@ -215,6 +233,22 @@ class Model(nn.Module):
                 key = "language_model." + key
             sanitized[key] = value
         return self.vision_tower.sanitize(sanitized)
+
+    def load_weights(self, file_or_weights, strict=True):
+        # Generic MLX strict loading checks shape but permits dtype replacement.
+        # Sharded loading may also disable strict shape checks.
+        if not self._jangtq2:
+            return super().load_weights(file_or_weights, strict=strict)
+        from os import PathLike
+
+        if isinstance(file_or_weights, (str, PathLike)):
+            weights = list(mx.load(str(file_or_weights)).items())
+        else:
+            weights = list(file_or_weights)
+        from ...jangtq2.payload import validate_payload
+
+        validate_payload(self, weights)
+        return super().load_weights(weights, strict=strict)
 
     def prepare_acceleration(self):
         return self.language_model.prepare_acceleration()

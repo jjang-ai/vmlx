@@ -1993,7 +1993,11 @@ class MoEBlock(nn.Module):
             w = w * self.scaling
         else:
             idx, w = route
-        if self._exact_moe_decode:
+        if getattr(self.switch_mlp, "is_jangtq2", False):
+            # JANGTQ v2: fused gate/up/SwiGLU + router-weighted down (decode) / sorted NAX (prefill)
+            routed = self.switch_mlp.routed(x, idx, w)
+            pair_fused = True
+        elif self._exact_moe_decode:
             routed = glm5_exact_moe_output(self.switch_mlp, x, idx, w, enabled=True)
             pair_fused = routed is not None
         else:

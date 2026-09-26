@@ -407,7 +407,9 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               <InfoCard
                 label={t('sessions.performance.metalNa')}
                 value={
-                  health.acceleration.metal_na_active_on_host
+                  health.acceleration.kernel_type === 'jangtq2_codebook'
+                    ? 'Custom decode; NAX/Steel prefill (route not observed)'
+                    : health.acceleration.metal_na_active_on_host
                     ? t('sessions.performance.statusActive')
                     : health.acceleration.kernel_type === 'turboquant_codebook'
                       ? t('sessions.performance.notUsedByJangtq')
