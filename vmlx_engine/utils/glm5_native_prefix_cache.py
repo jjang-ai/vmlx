@@ -162,13 +162,27 @@ class Glm5NativePrefixCache:
         """Longest exact stored boundary; never rewind a longer native state."""
         started = time.perf_counter()
         self._last_activity = time.monotonic()
-        found = self.lookup.fetch_longest_prefix(
-            list(tokens), max_len=len(tokens) - 1, cache_extra_keys=extra_keys,
-        )
-        if found is not None:
+        token_ids = list(tokens)
+        ceiling = len(token_ids) - 1
+        found = None
+        while ceiling > 0:
+            found = self.lookup.fetch_longest_prefix(
+                token_ids, max_len=ceiling, cache_extra_keys=extra_keys,
+            )
+            if found is None:
+                break
             boundary, layers, complete = found
-            if not complete or not self._valid_boundary(layers, boundary):
+            # The transport validates its record, while this facade owns the
+            # architecture's exact state boundary. A rejected longest record
+            # must not hide a shorter valid checkpoint with the same identity.
+            if type(boundary) is not int or not 0 < boundary <= ceiling:
                 found = None
+                break
+            if complete and self._valid_boundary(layers, boundary):
+                break
+            ceiling = boundary - 1
+            found = None
+            del layers  # Release a large rejected payload before the next read.
         boundary = found[0] if found is not None else 0
         key = self.lookup._key(tokens, boundary, cache_extra_keys=extra_keys) if boundary else None
         self.last_fetch = {
