@@ -125,6 +125,12 @@ def ensure_thinking_off_sentinel(
             # already-open thought when their native contract supports it.
             if tools_present and is_minimax:
                 return prompt
+            # GLM5-next renders an empty historical rail as <think></think>.
+            # Preserve that exact form for its explicit-off adapter, including
+            # tool turns; R1-style whitespace changes the model's continuation.
+            # Other GLM families need their own template qualification.
+            if fam == "glm5_next":
+                return prompt[: last_open + len("<think>")] + "</think>"
             return prompt[: last_open + len("<think>")] + "\n</think>\n\n"
         return prompt
 
