@@ -10894,7 +10894,10 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
             result.update({
                 "codec": "jangtq2_codebook",
                 "weight_format": "jangtq2",
-                "backend": "vmlx_jangtq2",
+                "backend": "vmlx_jangtq2",  # legacy machine-readable identifier
+                "runtime_component": "jangh",
+                "runtime_component_label": "JANGH",
+                "serialized_weight_format": "jangtq2",
                 "target_bits": None,
                 "group_size": None,
                 "routed_expert_bits": widths[0] if len(widths) == 1 else None,
@@ -11265,6 +11268,7 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         "host": host,
     }
     if codec == "jangtq2_codebook":
+        result["runtime_component"] = "jangh"
         result["dispatch_observed"] = False
         result["prefill_backends"] = ["nax", "steel"]
         result["decode_backend"] = "custom_metal"

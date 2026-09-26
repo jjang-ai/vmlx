@@ -175,7 +175,7 @@ def _resolve_runtime_cache_fingerprint() -> str:
         parts.append(f"{package}_wheel={identity}")
     # Routed-expert kernels are vendored and can change independently of the
     # installed package version. Bind their source in wheels as well as checkouts.
-    from .jangtq2.runtime_identity import runtime_identity as jangtq2_identity
+    from .jangh.runtime_identity import runtime_identity as jangtq2_identity
 
     parts.append(jangtq2_identity())
     source_id = _resolve_source_checkout_id()

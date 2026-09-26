@@ -1,1 +1,1 @@
-"""JANGTQ v2 routed-expert format and runtime kernels."""
+"""Legacy JANGTQ v2 import namespace; implementation lives in JANGH."""

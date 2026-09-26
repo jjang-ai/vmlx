@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 
-_PATH = Path(__file__).resolve().parents[1] / "vmlx_engine/jangtq2/contract.py"
+_PATH = Path(__file__).resolve().parents[1] / "vmlx_engine/jangh/contract.py"
 _SPEC = importlib.util.spec_from_file_location("jangtq2_contract_under_test", _PATH)
 contract = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(contract)

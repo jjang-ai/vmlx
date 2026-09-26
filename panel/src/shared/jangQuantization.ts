@@ -38,6 +38,9 @@ export function formatJangQuantizationLabel(config: {
   const routedAverageBits = numberOrUndefined(quant.routed_avg_bits)
   const explicitBits = actualBits ?? targetBits ?? containerBits
 
+  // Canonical component name for the existing v2 serialized ABI.
+  if (format === 'jangtq2' || weightFormat === 'jangtq2') return 'JANGH'
+
   if (weightFormat === 'mxtq' || format === 'mxtq' || format === 'jangtq') {
     const bits = explicitBits ?? jangtqBitsFromProfile(profile)
     const suffix = bits === 1 ? ', unsupported' : ''

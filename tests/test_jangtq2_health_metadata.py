@@ -34,6 +34,9 @@ def test_tq2_mixed_metadata_does_not_report_affine_default_as_whole_model():
     result = status(config)
     assert result["codec"] == "jangtq2_codebook"
     assert result["weight_format"] == "jangtq2"
+    assert result["serialized_weight_format"] == "jangtq2"
+    assert result["runtime_component"] == "jangh"
+    assert result["runtime_component_label"] == "JANGH"
     assert result["mixed_precision"] is True
     assert "target_bits" not in result
     assert "group_size" not in result

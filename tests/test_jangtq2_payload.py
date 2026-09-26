@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 import pytest
 
-PATH = Path(__file__).parents[1] / "vmlx_engine/jangtq2/payload.py"
+PATH = Path(__file__).parents[1] / "vmlx_engine/jangh/payload.py"
 spec = importlib.util.spec_from_file_location("tq_payload", PATH)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

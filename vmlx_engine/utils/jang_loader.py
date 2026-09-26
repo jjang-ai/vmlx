@@ -4506,12 +4506,12 @@ def _load_jang_v2_vlm(
         return True
 
     # JANGTQ v2 campaign: swap routed experts for TQSwitchGLU BEFORE quantization (fail closed on mismatch).
-    from vmlx_engine.jangtq2.contract import validate_format
+    from vmlx_engine.jangh.contract import validate_format
     _is_jangtq2 = validate_format(config)
     if _is_jangtq2:
-        from vmlx_engine.jangtq2.install import install_jangtq2
+        from vmlx_engine.jangh.install import install_jangh
 
-        install_jangtq2(model, config)
+        install_jangh(model, config)
 
     nn.quantize(
         model,
@@ -4906,7 +4906,7 @@ def _load_jang_v2_vlm(
             quantization_overrides=_declared_hadamard_quant,
         )
         if _is_jangtq2:
-            from vmlx_engine.jangtq2.payload import validate_payload
+            from vmlx_engine.jangh.payload import validate_payload
 
             _jangtq2_loaded_keys.update(validate_payload(model, shard_weights.items()))
         model.load_weights(list(shard_weights.items()), strict=False)
@@ -4914,7 +4914,7 @@ def _load_jang_v2_vlm(
         gc.collect()
 
     if _is_jangtq2:
-        from vmlx_engine.jangtq2.payload import validate_complete_payload
+        from vmlx_engine.jangh.payload import validate_complete_payload
 
         validate_complete_payload(model, _jangtq2_loaded_keys)
 

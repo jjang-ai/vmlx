@@ -8,10 +8,10 @@ const end = source.indexOf('\n                }', begin)
 const render = new Function('health', 't', `return (${source.slice(begin, end)})`)
 
 describe('Metal acceleration label', () => {
-  it('describes TQ2 backends without claiming an observed NAX dispatch', () => {
+  it('describes JANGH backends from the legacy codec without claiming an observed NAX dispatch', () => {
     expect(render({ acceleration: { kernel_type: 'jangtq2_codebook', metal_na_capable: true,
       metal_na_active_on_host: false } }, (key: string) => key))
-      .toBe('Custom decode; NAX/Steel prefill (route not observed)')
+      .toBe('JANGH custom decode; NAX/Steel prefill (route not observed)')
   })
   it('retains affine active and unsupported labels', () => {
     expect(render({ acceleration: { kernel_type: 'affine_quantized_matmul',

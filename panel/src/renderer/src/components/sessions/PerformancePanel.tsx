@@ -212,6 +212,8 @@ interface HealthData {
   quantization?: {
     codec?: string
     weight_format?: string
+    runtime_component_label?: string
+    serialized_weight_format?: string
     backend?: string
     profile?: string
     group_size?: number
@@ -408,7 +410,7 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 label={t('sessions.performance.metalNa')}
                 value={
                   health.acceleration.kernel_type === 'jangtq2_codebook'
-                    ? 'Custom decode; NAX/Steel prefill (route not observed)'
+                    ? 'JANGH custom decode; NAX/Steel prefill (route not observed)'
                     : health.acceleration.metal_na_active_on_host
                     ? t('sessions.performance.statusActive')
                     : health.acceleration.kernel_type === 'turboquant_codebook'
@@ -871,7 +873,7 @@ export function formatWeightQuant(
   const q = health.quantization
   const qf = health.quantization_format
   if (q?.mixed_precision) {
-    const label = q.profile || q.weight_format?.toUpperCase() || 'Mixed precision'
+    const label = q.runtime_component_label || q.profile || q.weight_format?.toUpperCase() || 'Mixed precision'
     return `${label} mixed${q.actual_bits != null ? ` (${q.actual_bits} bpw)` : ''}`
   }
   const bits =
@@ -884,6 +886,7 @@ export function formatWeightQuant(
     qf?.target_bits
   const group = q?.group_size ?? qf?.block_size
 
+  if (q?.runtime_component_label) return `${q.runtime_component_label}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
   if (q?.profile) return `${q.profile}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
   if (q?.weight_format) return `${q.weight_format.toUpperCase()}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
   if (q?.codec === 'turboquant_codebook') {

@@ -69,3 +69,12 @@ describe('JANG quantization labels', () => {
     })).toBe('JANGTQ_K')
   })
 })
+
+
+describe('JANGH legacy bundle identity', () => {
+  it('names v2 separately while retaining original JANGTQ', () => {
+    expect(formatJangQuantizationLabel({ format: 'jangtq2' })).toBe('JANGH')
+    expect(formatJangQuantizationLabel({ weight_format: 'jangtq2' })).toBe('JANGH')
+    expect(formatJangQuantizationLabel({ format: 'jangtq' })).toBe('JANGTQ')
+  })
+})

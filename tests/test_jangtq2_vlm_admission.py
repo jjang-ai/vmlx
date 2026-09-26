@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_PATH = ROOT / "vmlx_engine/jangtq2/contract.py"
+CONTRACT_PATH = ROOT / "vmlx_engine/jangh/contract.py"
 SPEC = importlib.util.spec_from_file_location("vlm_admission_contract", CONTRACT_PATH)
 contract = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(contract)
@@ -66,11 +66,11 @@ def constructor():
     real_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
-        if "jangtq2.install" in name or "jangtq2.kernels" in name or name.startswith("mlx"):
+        if "jangh.install" in name or "jangh.kernels" in name or name.startswith("mlx"):
             raise AssertionError("heavy runtime import during rejected/ordinary admission: " + name)
         return real_import(name, *args, **kwargs)
 
-    with patch.dict(sys.modules, {"vmlx_engine.jangtq2.contract": contract}), \
+    with patch.dict(sys.modules, {"vmlx_engine.jangh.contract": contract}), \
             patch("builtins.__import__", guarded_import):
         yield env["Model"], calls
 

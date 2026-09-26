@@ -38,3 +38,12 @@ describe('Performance panel mixed weight labels', () => {
     expect(formatWeightQuant(health,t)).toBe('MXFP8 8-bit g32')
   })
 })
+
+
+describe('JANGH component labels', () => {
+  it('prefers the component name while preserving legacy serialized format', () => {
+    const health = {quantization:{runtime_component_label:'JANGH',weight_format:'jangtq2',mixed_precision:true,config_bits:8}} as Parameters<typeof formatWeightQuant>[0]
+    expect(formatWeightQuant(health, key => key)).toBe('JANGH mixed')
+    expect(health.quantization!.weight_format).toBe('jangtq2')
+  })
+})
