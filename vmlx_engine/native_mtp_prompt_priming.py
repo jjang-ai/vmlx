@@ -416,6 +416,7 @@ def prepare_prompt(
         snapshot = restore(
             list(tokens),
             cached_tokens,
+            request_id=request_id,
             extra_keys=extra_keys,
             extra_key_token_start=extra_key_token_start,
             extra_key_ranges=extra_key_ranges,

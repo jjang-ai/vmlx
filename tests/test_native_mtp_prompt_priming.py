@@ -211,6 +211,56 @@ def test_warm_sidecar_continues_only_the_uncached_tail():
     assert warm.calls[-1] == [8]
 
 
+
+def test_refaulted_sidecar_restores_native_history_and_folds_only_suffix():
+    from vmlx_engine.paged_cache import PagedCacheManager, compute_block_hash
+
+    sidecar = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+    sidecar.block_size = 2
+    sidecar._chained_prefix_index_hash = False
+    sidecar._mtp_prefix_snapshots = OrderedDict()
+    sidecar._mtp_prefix_snapshot_lock = threading.RLock()
+    sidecar._prefix_index = {}
+    first = compute_block_hash(None, [1, 2], extra_keys=None)
+    last = compute_block_hash(first, [3], extra_keys=None)
+    table = SimpleNamespace(block_ids=[20, 21], num_tokens=3)
+    sidecar.paged_cache = SimpleNamespace(
+        _lock=threading.RLock(),
+        allocated_blocks={
+            20: SimpleNamespace(block_hash=first, token_count=2, ref_count=1),
+            21: SimpleNamespace(block_hash=last, token_count=1, ref_count=1),
+        },
+        compute_block_hash=PagedCacheManager.compute_block_hash,
+        get_block_table=lambda request_id: table if request_id == "warm" else None,
+    )
+    sidecar._request_tables = {"warm": SimpleNamespace(block_table=table)}
+    source = _Host()
+    prepare_prompt(source, request_id="source", prompt_tokens=[1, 2, 3, 4],
+                   cached_tokens=0, prefix_cache=sidecar)
+    backbone = [_Cache(offset=4)]
+    capture_prefill(source, mx.array([[1, 2, 3, 4]]),
+                    mx.arange(8).reshape(1, 4, 2), backbone)
+    backbone[0].offset = 5
+    assert take_primed(source, backbone, mx.array([5])) is not None
+
+    # The old global index was pruned; only the refaulted request owns blocks.
+    assert not sidecar._prefix_index
+    warm = _Host()
+    assert prepare_prompt(warm, request_id="warm", prompt_tokens=[1, 2, 3, 4, 6, 7],
+                          cached_tokens=3, prefix_cache=sidecar)
+    backbone = [_Cache(offset=6)]
+    capture_prefill(warm, mx.array([[4, 6, 7]]), mx.ones((1, 3, 2)), backbone)
+    assert warm.calls == [[4, 6, 7]]
+    backbone[0].offset = 7
+    restored = take_primed(warm, backbone, mx.array([8]))
+    assert restored is not None
+    assert restored[0][0].offset == restored[1] == 6
+    assert warm.calls == [[4, 6, 7], [8]]
+    # A different caller cannot borrow that history merely by naming the tokens.
+    assert not prepare_prompt(_Host(), request_id="other", prompt_tokens=[1, 2, 3, 4],
+                              cached_tokens=3, prefix_cache=sidecar)
+
+
 def test_warm_backbone_without_sidecar_does_not_invent_tail_only_history():
     host = _Host()
     sidecar = _SidecarStore()

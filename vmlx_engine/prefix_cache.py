@@ -9041,7 +9041,7 @@ class BlockAwarePrefixCache:
         extra_key_token_start: Optional[int] = None,
         extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None,
     ) -> Optional[Any]:
-        """Return the ordinary block/partial-index key for an MTP sidecar.
+        """Return the full scoped block-chain identity for an MTP sidecar.
 
         Complex legacy range arguments are intentionally rejected.  Current
         vMLX callers pass the canonical scoped ``cache_extra_keys`` object as
@@ -9056,28 +9056,13 @@ class BlockAwarePrefixCache:
             or extra_key_ranges is not None
         ):
             return None
-        if boundary_tokens % self.block_size != 0:
-            # The engine's exact-repeat fast path indexes the predecessor's
-            # N-1 terminal partial block without flooring it.  Reuse that same
-            # in-memory key; the restore path below still verifies every live
-            # block id/hash before trusting the sidecar.
-            return (
-                "partial_index",
-                (
-                    self._prefix_index_key(
-                        tokens[:boundary_tokens],
-                        cache_extra_keys=extra_keys,
-                    )
-                    if hasattr(self, "_chained_prefix_index_hash")
-                    else self._prefix_index_hash(
-                        tokens[:boundary_tokens],
-                        cache_extra_keys=extra_keys,
-                    )
-                ),
-            )
+        # Bind the opaque head snapshot to the complete scoped block chain,
+        # including a terminal partial block. Legacy partial-index keys are
+        # truncated and their numeric block IDs may be recycled on SSD refault;
+        # neither is an independent identity for an MTP history snapshot.
         parent_hash = None
         for start in range(0, boundary_tokens, self.block_size):
-            end = start + self.block_size
+            end = min(start + self.block_size, boundary_tokens)
             parent_hash = compute_block_hash(
                 parent_hash,
                 tokens[start:end],
@@ -9085,7 +9070,11 @@ class BlockAwarePrefixCache:
                     extra_keys, start, end
                 ),
             )
-        return ("block_hash", parent_hash)
+        key_kind = (
+            "block_hash" if boundary_tokens % self.block_size == 0
+            else "partial_block_hash"
+        )
+        return (key_kind, parent_hash)
 
     def store_mtp_prefix_snapshot(
         self,
@@ -9125,11 +9114,48 @@ class BlockAwarePrefixCache:
                 snapshots.popitem(last=False)
         return True
 
+    def _mtp_request_owns_boundary(
+        self,
+        request_id: Optional[str],
+        tokens: List[int],
+        *,
+        cache_extra_keys: Optional[Any] = None,
+    ) -> bool:
+        """Validate refaulted ownership without reviving stale index IDs."""
+        manager = self.paged_cache
+        lock = getattr(manager, "_lock", None)
+        if not request_id or lock is None:
+            return False
+        with lock:
+            entries = getattr(self, "_request_tables", {})
+            entry = entries.get(request_id)
+            table = getattr(entry, "block_table", None)
+            if (
+                table is None
+                or manager.get_block_table(request_id) is not table
+                or table.num_tokens != len(tokens)
+            ):
+                return False
+            block_ids = list(table.block_ids)
+            if not self._prefix_index_blocks_are_current(
+                tokens, block_ids, cache_extra_keys=cache_extra_keys
+            ):
+                return False
+            if any(
+                int(getattr(manager.allocated_blocks.get(block_id), "ref_count", 0))
+                <= 0
+                for block_id in block_ids
+            ):
+                return False
+            # release_cache removes this entry before releasing its refs.
+            return entries.get(request_id) is entry
+
     def restore_mtp_prefix_snapshot(
         self,
         tokens: List[int],
         boundary_tokens: int,
         *,
+        request_id: Optional[str] = None,
         extra_keys: Optional[Any] = None,
         extra_key_token_start: Optional[int] = None,
         extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None,
@@ -9153,6 +9179,7 @@ class BlockAwarePrefixCache:
         if tip is None:
             return miss("invalid_key")
         key_kind, key_value = tip
+        recovered_index_rejection = None
         if key_kind == "block_hash":
             block_map = getattr(
                 self.paged_cache, "cached_block_hash_to_block", None
@@ -9160,19 +9187,31 @@ class BlockAwarePrefixCache:
             if block_map is None or block_map.get_block(key_value) is None:
                 return miss("backbone_tip_missing")
         else:
-            prefix_entry = getattr(self, "_prefix_index", {}).get(key_value)
-            if prefix_entry is None or len(prefix_entry) < 2:
-                return miss("partial_index_missing")
-            indexed_tokens, block_ids = prefix_entry[:2]
             expected = list(tokens[: int(boundary_tokens)])
-            if list(indexed_tokens) != expected:
-                return miss("partial_tokens_mismatch")
-            if not self._prefix_index_blocks_are_current(
-                expected,
-                list(block_ids),
-                cache_extra_keys=extra_keys,
+            index_key = (
+                self._prefix_index_key(expected, cache_extra_keys=extra_keys)
+                if hasattr(self, "_chained_prefix_index_hash")
+                else self._prefix_index_hash(expected, cache_extra_keys=extra_keys)
+            )
+            prefix_entry = getattr(self, "_prefix_index", {}).get(index_key)
+            rejection = None
+            if prefix_entry is None or len(prefix_entry) < 2:
+                rejection = "partial_index_missing"
+            elif list(prefix_entry[0]) != expected:
+                rejection = "partial_tokens_mismatch"
+            elif not self._prefix_index_blocks_are_current(
+                expected, list(prefix_entry[1]), cache_extra_keys=extra_keys
             ):
-                return miss("partial_chain_stale")
+                rejection = "partial_chain_stale"
+            if rejection is not None:
+                # A refault may replace the old index's pool IDs. The snapshot
+                # key above independently binds its full scoped token chain;
+                # accept only an exact, currently pinned request table here.
+                if not self._mtp_request_owns_boundary(
+                    request_id, expected, cache_extra_keys=extra_keys
+                ):
+                    return miss(rejection)
+                recovered_index_rejection = rejection
         lock = getattr(self, "_mtp_prefix_snapshot_lock", None)
         snapshots = getattr(self, "_mtp_prefix_snapshots", None)
         if lock is None or snapshots is None:
@@ -9182,6 +9221,11 @@ class BlockAwarePrefixCache:
             if entry is None or int(entry[0]) != int(boundary_tokens):
                 return miss("snapshot_missing_or_boundary_mismatch")
             snapshots.move_to_end(tip)
+            if recovered_index_rejection is not None:
+                logger.info(
+                    "Native MTP sidecar refault restored: boundary=%d index_reason=%s",
+                    boundary_tokens, recovered_index_rejection,
+                )
             return entry[1]
 
     def get_stats(self) -> Dict[str, Any]:
