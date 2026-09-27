@@ -401,9 +401,17 @@ def prepare_prompt(
     if cached_tokens <= 0:
         return False
 
+    def restore_miss(reason: str) -> bool:
+        _record(host, reason, cached_tokens=cached_tokens)
+        logger.info(
+            "Native MTP prompt restore miss: request=%s boundary=%d reason=%s",
+            request_id, cached_tokens, reason,
+        )
+        return False
+
     restore = getattr(prefix_cache, "restore_mtp_prefix_snapshot", None)
     if not callable(restore):
-        return False
+        return restore_miss("restore_unavailable")
     try:
         snapshot = restore(
             list(tokens),
@@ -414,14 +422,14 @@ def prepare_prompt(
         )
     except Exception:
         logger.debug("native MTP sidecar lookup failed closed", exc_info=True)
-        return False
+        return restore_miss("restore_exception")
     if not isinstance(snapshot, NativeMTPPrefixSnapshot):
-        return False
+        return restore_miss("restore_snapshot_missing_or_type")
     if snapshot.boundary_tokens != cached_tokens or cached_tokens < 2:
-        return False
+        return restore_miss("restore_boundary_mismatch")
     restored = _cache_at_offset(snapshot.mtp_cache, cached_tokens - 1)
     if restored is None or snapshot.pending_hidden is None:
-        return False
+        return restore_miss("restore_offset_or_hidden_mismatch")
     pending = snapshot.pending_hidden + 0
     setattr(
         host,

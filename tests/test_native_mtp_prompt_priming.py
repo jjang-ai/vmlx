@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import logging
 from collections import OrderedDict
 from types import SimpleNamespace
 
@@ -299,7 +300,8 @@ def test_block_cache_sidecar_is_aligned_bounded_and_requires_live_tip():
     assert cache.restore_mtp_prefix_snapshot([1, 2, 3, 4], 4) is None
 
 
-def test_partial_n_minus_one_sidecar_uses_live_prefix_index_chain():
+def test_partial_n_minus_one_sidecar_uses_live_prefix_index_chain(caplog):
+    caplog.set_level(logging.INFO, logger="vmlx_engine.prefix_cache")
     cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
     cache.block_size = 2
     cache._mtp_prefix_snapshots = OrderedDict()
@@ -319,6 +321,8 @@ def test_partial_n_minus_one_sidecar_uses_live_prefix_index_chain():
 
     cache._prefix_index_blocks_are_current = lambda *args, **kwargs: False
     assert cache.restore_mtp_prefix_snapshot(tokens, 3) is None
+    assert "boundary=3 reason=partial_chain_stale" in caplog.text
+    assert "[1, 2, 3" not in caplog.text
 
 
 def test_native_mtp_stats_expose_prompt_priming_provenance():
@@ -364,3 +368,23 @@ def test_prime_stats_distinguishes_armed_plan_from_captured_context():
             "cached_tokens": 0,
         },
     }
+
+
+def test_prompt_restore_miss_records_reason_without_fabricating_history(caplog):
+    caplog.set_level(logging.INFO, logger="vmlx_engine.native_mtp_prompt_priming")
+    host = _Host()
+    assert not prepare_prompt(
+        host,
+        request_id="missing-sidecar",
+        prompt_tokens=[11, 22, 33, 44],
+        cached_tokens=3,
+        prefix_cache=_SidecarStore(),
+    )
+    stats = prime_stats(host)
+    assert not stats["active"]
+    assert stats["last"] == {
+        "reason": "restore_snapshot_missing_or_type", "cached_tokens": 3
+    }
+    assert "request=missing-sidecar boundary=3" in caplog.text
+    assert "[11, 22" not in caplog.text
+    assert not host.calls

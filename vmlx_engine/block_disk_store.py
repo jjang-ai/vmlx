@@ -4959,7 +4959,11 @@ def _deserialize_block(
             continue
 
         # Determine this layer's type: prefer per-layer tag, fallback to global dtype
-        layer_type = layer_types.get(str(i), _infer_layer_type(data, i, dtype))
+        layer_type = (
+            layer_types[str(i)]
+            if str(i) in layer_types
+            else _infer_layer_type(data, i, dtype)
+        )
 
         if layer_type == "kv":
             keys = data.get(f"layer_{i}_keys")

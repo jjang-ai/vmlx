@@ -9135,6 +9135,14 @@ class BlockAwarePrefixCache:
         extra_key_ranges: Optional[list[tuple[int, tuple[Any, ...]]]] = None,
     ) -> Any:
         """Restore an MTP sidecar only while its exact backbone tip is live."""
+        def miss(reason: str) -> None:
+            # One scalar diagnostic per lookup; never expose token or key data.
+            logger.info(
+                "Native MTP sidecar miss: boundary=%d reason=%s",
+                boundary_tokens, reason,
+            )
+            return None
+
         tip = self._mtp_prefix_snapshot_key(
             tokens,
             boundary_tokens,
@@ -9143,36 +9151,36 @@ class BlockAwarePrefixCache:
             extra_key_ranges=extra_key_ranges,
         )
         if tip is None:
-            return None
+            return miss("invalid_key")
         key_kind, key_value = tip
         if key_kind == "block_hash":
             block_map = getattr(
                 self.paged_cache, "cached_block_hash_to_block", None
             )
             if block_map is None or block_map.get_block(key_value) is None:
-                return None
+                return miss("backbone_tip_missing")
         else:
             prefix_entry = getattr(self, "_prefix_index", {}).get(key_value)
             if prefix_entry is None or len(prefix_entry) < 2:
-                return None
+                return miss("partial_index_missing")
             indexed_tokens, block_ids = prefix_entry[:2]
             expected = list(tokens[: int(boundary_tokens)])
             if list(indexed_tokens) != expected:
-                return None
+                return miss("partial_tokens_mismatch")
             if not self._prefix_index_blocks_are_current(
                 expected,
                 list(block_ids),
                 cache_extra_keys=extra_keys,
             ):
-                return None
+                return miss("partial_chain_stale")
         lock = getattr(self, "_mtp_prefix_snapshot_lock", None)
         snapshots = getattr(self, "_mtp_prefix_snapshots", None)
         if lock is None or snapshots is None:
-            return None
+            return miss("snapshot_store_unavailable")
         with lock:
             entry = snapshots.get(tip)
             if entry is None or int(entry[0]) != int(boundary_tokens):
-                return None
+                return miss("snapshot_missing_or_boundary_mismatch")
             snapshots.move_to_end(tip)
             return entry[1]
 
