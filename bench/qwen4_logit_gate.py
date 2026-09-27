@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import importlib
 import json
 import os
 import sys
@@ -86,7 +87,6 @@ def main():
     import numpy as np
 
     from vmlx_engine.models.mllm import MLXMultimodalLM
-    from vmlx_engine.models.qwen4_exp import language as language_impl
     from vmlx_engine.utils.qwen4_prefill_checkpoints import (
         coalesce_qwen4_prefill_checkpoints,
     )
@@ -99,6 +99,10 @@ def main():
     instance = MLXMultimodalLM(a.model, enable_cache=False)
     instance.load()
     lm = getattr(instance.model, "language_model", instance.model)
+    # The loader registers this source under mlx_vlm.models.qwen4_exp.
+    # Observe the loaded class's module, not a second import of the same file.
+    language_impl = importlib.import_module(type(lm).__module__)
+    assert callable(getattr(language_impl, "qwen4_verify_sdpa", None))
     tokenizer = getattr(instance.processor, "tokenizer", instance.processor)
     assert hasattr(lm, "make_cache")
     text = "A bounded cache stores keys and values, evicts the oldest entry, and updates recency after a lookup. "
@@ -304,6 +308,8 @@ def main():
                                   "require_exact": a.require_exact,
                                   "verify_dispatch_required_min_context": 8192},
                         "rows": rows,
+                        "language_module": language_impl.__name__,
+                        "language_source": language_impl.__file__,
                         "attention_diagnostics": attention_rows,
                         "all_passed": all(r["passed"] for r in rows),
                     },
