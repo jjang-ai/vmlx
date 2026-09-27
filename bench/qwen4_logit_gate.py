@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,42 @@ FLAGS = [
 SPARSE_FUSED_FLAG = "VMLX_QWEN4_SPARSE_FUSED_PREFILL"
 
 
+@contextmanager
+def observe_verifier(module):
+    """Observe actual dispatch without materializing tensors or changing math."""
+    original = module.qwen4_verify_sdpa
+    observed = {"dispatches": 0, "shapes": []}
+
+    def call(q, k, v, mask, **kwargs):
+        result = original(q, k, v, mask, **kwargs)
+        if result is not None:
+            observed["dispatches"] += 1
+            shape = dict(rows=q.shape[2], context=k.shape[2], dtype=str(q.dtype))
+            if shape not in observed["shapes"] and len(observed["shapes"]) < 32:
+                observed["shapes"].append(shape)
+        return result
+
+    module.qwen4_verify_sdpa = call
+    try:
+        yield observed
+    finally:
+        module.qwen4_verify_sdpa = original
+
+
+def qualification_passes(row, *, require_exact=False):
+    return bool(
+        row["mean_kl"] <= 0.01
+        and row["max_kl"] <= 0.05
+        and row["logit_rms"] <= 0.1
+        and (not require_exact or row["exact_logits"])
+        and (
+            row["arm"] != "verify"
+            or row["context"] < 8192
+            or row["verifier_dispatches"] > 0
+        )
+    )
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
@@ -37,6 +74,8 @@ def main():
     p.add_argument("--arms", default="gdn,verify,direct,checkpoints,aligned_moe,combined")
     p.add_argument("--prefill-step-size", type=int, default=4096)
     p.add_argument("--continuation-step-size", type=int, default=4)
+    p.add_argument("--require-exact", action="store_true",
+                   help="Also reject any unequal full-model logits")
     p.add_argument("--attention-fixture", type=Path,
                    help="For sparse_oracle, save the first real attention inputs for component diagnosis")
     a = p.parse_args()
@@ -47,6 +86,7 @@ def main():
     import numpy as np
 
     from vmlx_engine.models.mllm import MLXMultimodalLM
+    from vmlx_engine.models.qwen4_exp import language as language_impl
     from vmlx_engine.utils.qwen4_prefill_checkpoints import (
         coalesce_qwen4_prefill_checkpoints,
     )
@@ -215,7 +255,8 @@ def main():
             try:
                 if label == "sparse_oracle":
                     sparse_impl._call = stock_from_blocks
-                got = forward(tokens, flags, tail)
+                with observe_verifier(language_impl) as verifier:
+                    got = forward(tokens, flags, tail)
             finally:
                 sparse_impl._call = original_call
 
@@ -242,6 +283,9 @@ def main():
                 "rows": len(ref),
                 "aligned_moe_dispatches": dispatches,
                 "sparse_fused_dispatches": sparse_dispatches,
+                "verifier_dispatches": verifier["dispatches"],
+                "verifier_shapes": verifier["shapes"],
+                "exact_logits": bool(np.array_equal(ref, got)),
                 "prefill_step_size": a.prefill_step_size,
                 "continuation_step_size": a.continuation_step_size,
                 "mean_kl": float(np.mean(kl)),
@@ -251,16 +295,14 @@ def main():
                 "top1_agreement": float(np.mean(ref.argmax(-1) == got.argmax(-1))),
                 "wall_s": time.monotonic() - start,
             }
-            row["passed"] = (
-                row["mean_kl"] <= 0.01
-                and row["max_kl"] <= 0.05
-                and row["logit_rms"] <= 0.1
-            )
+            row["passed"] = qualification_passes(row, require_exact=a.require_exact)
             rows.append(row)
             a.output.write_text(
                 json.dumps(
                     {
-                        "gates": {"mean_kl": 0.01, "max_kl": 0.05, "logit_rms": 0.1},
+                        "gates": {"mean_kl": 0.01, "max_kl": 0.05, "logit_rms": 0.1,
+                                  "require_exact": a.require_exact,
+                                  "verify_dispatch_required_min_context": 8192},
                         "rows": rows,
                         "attention_diagnostics": attention_rows,
                         "all_passed": all(r["passed"] for r in rows),
