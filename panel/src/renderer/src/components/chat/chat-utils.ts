@@ -119,6 +119,7 @@ export interface MessageMetrics {
   cachedTokens?: number;
   cacheDetail?: string;
   tokensPerSecond: string;
+  ppMetricSource?: string
   ppSpeed?: string;
   ttft: string;
   totalTime?: string;
@@ -151,15 +152,13 @@ export function getMetricsItems(
         ? t('chat.metrics.remoteUsageUnavailable') : t('chat.metrics.tpsTitle'),
   });
 
-  // Cache-hit TTFT includes restoration, not just the uncached token tail.
-  // Dividing a tiny tail by that window looks like a prefill slowdown.
-  // Keep the stored metric, but show cache counts and TTFT instead here.
-  const hasCacheHit = Number.isFinite(metrics.cachedTokens) && (metrics.cachedTokens ?? 0) > 0;
-  if (metrics.ppSpeed && !hasCacheHit) {
+  // Legacy stored rates used TTFT. Never relabel historical estimates as
+  // measured engine prefill, including after a chat reload.
+  if (metrics.ppSpeed && metrics.ppMetricSource === 'engine-prefill') {
     items.push({
-      label: t('chat.metrics.ppsLabel', { speed: metrics.ppSpeed }),
+      label: t('chat.metrics.measuredPrefillLabel', { speed: metrics.ppSpeed }),
       value: metrics.ppSpeed,
-      title: t('chat.metrics.ppsTitle'),
+      title: t('chat.metrics.measuredPrefillTitle'),
     });
   }
 

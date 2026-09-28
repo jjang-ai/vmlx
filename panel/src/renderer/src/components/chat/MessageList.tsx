@@ -8,6 +8,7 @@ interface MessageMetrics {
   promptTokens?: number
   cachedTokens?: number
   tokensPerSecond: string
+  ppMetricSource?: string
   ppSpeed?: string
   ttft: string
   totalTime?: string

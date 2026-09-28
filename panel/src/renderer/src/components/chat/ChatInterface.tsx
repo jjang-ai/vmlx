@@ -15,6 +15,7 @@ interface MessageMetrics {
   cachedTokens?: number
   cacheDetail?: string  // e.g. "paged", "paged+ssm(23)+tq", "disk"
   tokensPerSecond: string
+  ppMetricSource?: string
   ppSpeed?: string
   ttft: string
   totalTime?: string

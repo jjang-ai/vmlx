@@ -297,6 +297,7 @@ class RequestOutput:
     # Producer clock before queueing, stream coalescing and SSD durability.
     # Append to preserve positional compatibility; not a GPU-kernel timer.
     generated_at: float = field(default_factory=lambda: time.perf_counter())
+    prefill_usage: dict | None = None
 
     @property
     def usage(self) -> Dict[str, int]:

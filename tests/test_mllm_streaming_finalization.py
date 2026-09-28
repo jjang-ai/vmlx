@@ -111,6 +111,19 @@ def test_coalesced_terminal_flush_is_appended_to_burst_delta():
     assert outputs[0].output_text == "A]"
 
 
+@pytest.mark.parametrize("coalesced", [False, True])
+def test_prefill_receipt_survives_single_and_coalesced_outputs(coalesced):
+    scheduler = _scheduler("prefill-receipt")
+    receipt = {"tokens": 7, "seconds": 0.25, "scope": "model_prefill_and_prompt_state"}
+    first = _response("prefill-receipt", 0)
+    first.prefill_usage = receipt
+    responses = [first]
+    if coalesced:
+        responses.append(_response("prefill-receipt", 99, "stop"))
+    outputs, _ = scheduler._process_batch_responses(responses)
+    assert outputs[0].prefill_usage == receipt
+
+
 @pytest.mark.parametrize("code", ["prompt_too_long", "media_controls_unmeetable", "media_input_invalid", None])
 @pytest.mark.parametrize("after_token", [False, True])
 def test_error_sentinel_is_not_generated_or_detokenized(code, after_token):

@@ -42,6 +42,7 @@ class GenerationOutput:
     error_code: str | None = None
     # Optional scheduler production timestamp; preserve across terminal fences.
     generated_at: float | None = None
+    prefill_usage: dict | None = None
 
 
 class BaseEngine(ABC):

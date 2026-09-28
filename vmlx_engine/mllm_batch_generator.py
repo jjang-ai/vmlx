@@ -7839,6 +7839,8 @@ class MLLMBatchResponse:
     error_max_prompt_tokens: Optional[int] = None
     error_source: Optional[str] = None
 
+    prefill_usage: Optional[Dict[str, Any]] = None
+
 
 @dataclass
 class MLLMBatch:
@@ -16061,6 +16063,11 @@ class MLLMBatchGenerator:
                             type(req_cache[0]).__name__ if req_cache else None,
                             _cache_in_offset,
                         )
+                    # Timing starts after cache lookup/restoration. Completion uses
+                    # the existing logits evaluation below: no new GPU fence.
+                    _prefill_started = time.perf_counter()
+                    _prefill_token_count = _mllm_input_ids_token_count(req.input_ids)
+                    req._prefill_usage = None
                     self._prepare_native_mtp_prompt_priming(req)
                     logits = self._run_vision_encoding(req, cache=req_cache)
                     _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
@@ -16244,6 +16251,9 @@ class MLLMBatchGenerator:
                         if trace is not None:
                             trace.start("forward")
                         self._prepare_native_mtp_prompt_priming(req)
+                        _prefill_started = time.perf_counter()
+                        _prefill_token_count = _mllm_input_ids_token_count(req.input_ids)
+                        req._prefill_usage = None
                         logits = self._run_vision_encoding(req, cache=req_cache)
                         _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                         if trace is not None:
@@ -16352,6 +16362,11 @@ class MLLMBatchGenerator:
                     if trace is not None:
                         trace.start("logits_eval")
                     mx.eval(last_logits)
+                    req._prefill_usage = {
+                        "tokens": _prefill_token_count,
+                        "seconds": time.perf_counter() - _prefill_started,
+                        "scope": "model_prefill_and_prompt_state",
+                    }
                     if trace is not None:
                         trace.stop("logits_eval")
                         trace.start("clear_cache")
@@ -16835,6 +16850,7 @@ class MLLMBatchGenerator:
                             ).make_cache()
                         except Exception:
                             req_cache = [KVCache() for _ in self.language_model.layers]
+                        req._prefill_usage = None
                         logits = self._run_vision_encoding(req, cache=req_cache)
                         _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                         per_request_caches.append(req_cache)
@@ -16893,6 +16909,7 @@ class MLLMBatchGenerator:
                                     req_cache = cache_model.make_cache()
                                 else:
                                     req_cache = [KVCache() for _ in self.language_model.layers]
+                                req._prefill_usage = None
                                 logits = self._run_vision_encoding(req, cache=req_cache)
                                 _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                                 per_request_caches.append(req_cache)
@@ -19423,6 +19440,7 @@ class MLLMBatchGenerator:
                             else req.input_ids.tolist() if req.input_ids is not None
                             else [])
                     ),
+                    prefill_usage=getattr(req, '_prefill_usage', None),
                     cached_tokens=getattr(req, '_cached_tokens', 0),
                     cache_detail=getattr(req, '_cache_detail', "") or "",
                     cache_execution=dict(

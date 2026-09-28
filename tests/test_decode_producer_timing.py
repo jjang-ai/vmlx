@@ -59,6 +59,7 @@ async def test_batched_adapters_preserve_scheduler_timestamp(mllm):
             yield RequestOutput(
                 request_id=request_id, output_text="AB", new_text="AB",
                 completion_tokens=12, generated_at=12.0, finished=True,
+                prefill_usage={"tokens": 7, "seconds": 0.25, "scope": "model_prefill_and_prompt_state"},
             )
 
     engine = BatchedEngine.__new__(BatchedEngine)
@@ -70,6 +71,7 @@ async def test_batched_adapters_preserve_scheduler_timestamp(mllm):
     assert len(outputs) == 1
     assert outputs[0].generated_at == 12.0
     assert outputs[0].completion_tokens == 12
+    assert outputs[0].prefill_usage["tokens"] == 7
 
 
 @pytest.mark.asyncio
@@ -87,6 +89,7 @@ async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypa
             yield GenerationOutput(
                 text="A", new_text="A", prompt_tokens=20, completion_tokens=4,
                 generated_at=10.0, finished=False,
+                prefill_usage={"tokens": 20, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"},
             )
             # Delivery occurs now, but generation was observed at t=12 before
             # the scheduler's terminal cleanup. Do not timestamp this in server.
@@ -121,6 +124,8 @@ async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypa
         terminal = [p for p in payloads if p.get("type") == "response.completed"][-1]
         assert terminal["response"]["usage"]["output_tokens"] == 12
         private = [p for p in payloads if p.get("type") == "response.usage"][-1]
+        assert private["usage"]["vmlx_prefill"] == {"tokens": 20, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"}
+        assert "vmlx_prefill" not in terminal["response"]["usage"]
         assert private["usage"]["vmlx_decode"]["tokens"] == 8
         assert private["usage"]["vmlx_decode"]["seconds"] == 2.0
     else:

@@ -3452,6 +3452,8 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                prefill_usage=next((getattr(resp, "prefill_usage", None)
+                    for resp in reversed(burst) if getattr(resp, "prefill_usage", None)), None),
                 cached_tokens=max(
                     int(getattr(resp, "cached_tokens", 0) or 0) for resp in burst
                 ),
@@ -3666,6 +3668,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                prefill_usage=getattr(response, 'prefill_usage', None),
                 cached_tokens=getattr(response, 'cached_tokens', 0),
                 cache_detail=getattr(response, 'cache_detail', "") or "",
             )

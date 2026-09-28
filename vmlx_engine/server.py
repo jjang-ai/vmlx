@@ -28364,6 +28364,7 @@ async def stream_responses_api(
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
+    _prefill_usage = None
     _cache_detail: str | None = None
     _decode_first_ts: float | None = None
     _decode_first_count = 1
@@ -28676,6 +28677,8 @@ async def stream_responses_api(
                     _decode_first_ts = _decode_last_ts
                     _decode_first_count = completion_tokens
                 _decode_last_count = completion_tokens
+            if getattr(output, "prefill_usage", None) is not None:
+                _prefill_usage = output.prefill_usage
             _chunk_cached = int(getattr(output, "cached_tokens", 0) or 0)
             if _chunk_cached > 0:
                 _cached = _chunk_cached
@@ -29135,6 +29138,8 @@ async def stream_responses_api(
                     last_token_ts=_decode_last_ts,
                     first_token_count=_decode_first_count,
                 )
+                if _prefill_usage is not None:
+                    usage_obj["vmlx_prefill"] = _prefill_usage
                 if _decode_usage is not None:
                     usage_obj["vmlx_decode"] = _decode_usage
                 if _cached > 0 or _cache_detail:
@@ -29772,6 +29777,7 @@ async def stream_responses_api(
                         int(getattr(answer_output, "completion_tokens", 0) or 0)
                         or _ans_ct
                     )
+                    _prefill_usage = getattr(answer_output, "prefill_usage", None)
                     _ans_raw += getattr(answer_output, "new_text", "") or ""
                     if incremental_usage_extension:
                         # The first pass already established authoritative
@@ -29791,6 +29797,7 @@ async def stream_responses_api(
                             last_token_ts=_decode_last_ts,
                             first_token_count=_decode_first_count,
                         )
+                        _answer_usage["vmlx_prefill"] = _prefill_usage
                         if _answer_decode_usage is not None:
                             _answer_usage["vmlx_decode"] = _answer_decode_usage
                         # The answer pass is a continuation of the same
@@ -30315,6 +30322,8 @@ async def stream_responses_api(
             last_token_ts=_decode_last_ts,
             first_token_count=_decode_first_count,
         )
+        if _prefill_usage is not None:
+            _terminal_private_usage["vmlx_prefill"] = _prefill_usage
         if _terminal_decode_usage is not None:
             _terminal_private_usage["vmlx_decode"] = _terminal_decode_usage
         yield _sse(

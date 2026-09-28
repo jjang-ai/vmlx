@@ -8,64 +8,33 @@ import {
 } from '../src/shared/chatMetrics'
 
 describe('chat prefill TPS', () => {
-  it('uses only the uncached prompt tail', () => {
-    expect(
-      calculatePrefillTps({
-        promptTokens: 939,
-        cachedTokens: 832,
-        ttftSeconds: 0.18,
-        serverUsageKnown: true,
-      }),
-    ).toBe('594.4')
+  const base = {}
+  it('uses the engine processed-token window independently of queueing and cache restore', () => {
+    expect(calculatePrefillTps({ ...base, prefillUsage: {
+      tokens: 107, seconds: 0.2, scope: 'model_prefill_and_prompt_state',
+    } })).toBe('535.0')
   })
-
-  it('clamps cache counts and rejects requests with no uncached prefill', () => {
-    expect(
-      calculatePrefillTps({
-        promptTokens: 128,
-        cachedTokens: 256,
-        ttftSeconds: 0.25,
-        serverUsageKnown: true,
-      }),
-    ).toBeUndefined()
+  it('does not invent prefill throughput from usage and TTFT', () => {
+    expect(calculatePrefillTps(base)).toBeUndefined()
   })
-
-  it('does not report a rate before authoritative server usage', () => {
-    expect(
-      calculatePrefillTps({
-        promptTokens: 939,
-        cachedTokens: 0,
-        ttftSeconds: 0.18,
-        serverUsageKnown: false,
-      }),
-    ).toBeUndefined()
+  it.each([
+    { tokens: 0, seconds: 1 }, { tokens: -1, seconds: 1 },
+    { tokens: 10, seconds: 0 }, { tokens: 10, seconds: Infinity },
+    { tokens: 1.5, seconds: 1 }, { tokens: '10', seconds: 1 },
+  ])('rejects invalid measured receipts %j', receipt => {
+    expect(calculatePrefillTps({ ...base, prefillUsage: {
+      ...receipt, scope: 'model_prefill_and_prompt_state',
+    } })).toBeUndefined()
   })
-
-  it('rejects invalid token counts and TTFT', () => {
-    expect(
-      calculatePrefillTps({
-        promptTokens: Number.NaN,
-        cachedTokens: 0,
-        ttftSeconds: 0.18,
-        serverUsageKnown: true,
-      }),
-    ).toBeUndefined()
-    expect(
-      calculatePrefillTps({
-        promptTokens: 100,
-        cachedTokens: 0,
-        ttftSeconds: 0.001,
-        serverUsageKnown: true,
-      }),
-    ).toBeUndefined()
+  it('rejects unknown timing definitions', () => {
+    expect(calculatePrefillTps({ ...base, prefillUsage: {
+      tokens: 107, seconds: 0.2, scope: 'ttft',
+    } })).toBeUndefined()
   })
-
-  it('routes live, final, and abort prefill metrics through the shared helper', () => {
+  it('routes live, final, and abort through the measured receipt', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
-    expect(source.match(/calculatePrefillTps\(\{/g)).toHaveLength(3)
-    expect(source).not.toMatch(/promptTokens\s*\/\s*ttft/)
-    expect(source).not.toMatch(/promptTokens\s*\/\s*abortTtft/)
-    expect(source).toContain('finalStreamCachedTokens')
+    expect(source.match(/prefillUsage: currentPrefillUsage/g)).toHaveLength(3)
+    expect(source).toContain('currentPrefillUsage = undefined;')
   })
 })
 

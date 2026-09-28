@@ -377,11 +377,19 @@ describe('Metrics Display Items', () => {
     expect(items[1].label).toBe('42.5 t/s')
   })
 
-  it('labels the cold-input rate as input divided by TTFT', () => {
+  it('labels only engine-measured prefill, including cached-tail processing', () => {
+    for (const cachedTokens of [0, 170]) {
+      const items = getMetricsItems({ ...baseMetrics, cachedTokens,
+        ppSpeed: '120.0', ppMetricSource: 'engine-prefill' }, false, t)
+      const rate = items.find(i => i.value === '120.0')
+      expect(rate?.label).toBe('120.0 prefill tok/s')
+      expect(rate?.title).toBe(en.chat.metrics.measuredPrefillTitle)
+    }
+  })
+
+  it('does not relabel a historical cold TTFT-derived metric', () => {
     const items = getMetricsItems({ ...baseMetrics, ppSpeed: '120.0' }, false, t)
-    const rate = items.find(i => i.value === '120.0')
-    expect(rate?.label).toBe('120.0 input tok/s (input ÷ TTFT)')
-    expect(rate?.title).toBe(en.chat.metrics.ppsTitle)
+    expect(items.some(i => i.value === '120.0')).toBe(false)
   })
 
   it('omits the derived rate after a cache hit while retaining cache and TTFT', () => {

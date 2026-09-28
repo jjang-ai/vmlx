@@ -6,10 +6,7 @@ export interface FinalDecodeTpsInput {
 }
 
 export interface PrefillTpsInput {
-  promptTokens: number
-  cachedTokens: number
-  ttftSeconds: number
-  serverUsageKnown: boolean
+  prefillUsage?: unknown
 }
 
 export interface ServerDecodePass {
@@ -76,31 +73,16 @@ export function summarizeServerDecodePasses(
   }
 }
 
-/**
- * Calculate prompt-processing throughput for the uncached prefill only.
- *
- * Prompt and cache counts must come from authoritative server usage for the
- * same HTTP pass whose TTFT is supplied. Client-estimated prompt counts and
- * exchange-wide tool-loop totals cannot be paired truthfully with one pass's
- * TTFT, so no rate is returned until server usage is known.
- */
-export function calculatePrefillTps({
-  promptTokens,
-  cachedTokens,
-  ttftSeconds,
-  serverUsageKnown,
-}: PrefillTpsInput): string | undefined {
-  if (!serverUsageKnown) return undefined
-  if (!Number.isFinite(promptTokens) || promptTokens <= 0) return undefined
-  if (!Number.isFinite(ttftSeconds) || ttftSeconds <= 0.001) return undefined
-
-  const safeCachedTokens = Number.isFinite(cachedTokens)
-    ? Math.min(Math.max(cachedTokens, 0), promptTokens)
-    : 0
-  const uncachedPromptTokens = Math.max(promptTokens - safeCachedTokens, 0)
-  if (uncachedPromptTokens <= 0) return undefined
-
-  return (uncachedPromptTokens / ttftSeconds).toFixed(1)
+/** Engine-measured model prefill, never prompt tokens divided by TTFT. */
+export function calculatePrefillTps({ prefillUsage }: PrefillTpsInput): string | undefined {
+  if (!prefillUsage || typeof prefillUsage !== 'object') return undefined
+  const receipt = prefillUsage as Record<string, unknown>
+  if (receipt.scope !== 'model_prefill_and_prompt_state') return undefined
+  const tokens = receipt.tokens
+  const seconds = receipt.seconds
+  if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens <= 0 ||
+      typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return undefined
+  return (tokens / seconds).toFixed(1)
 }
 
 /**

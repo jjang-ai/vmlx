@@ -57,6 +57,7 @@ export interface MessageMetrics {
   cachedTokens?: number;
   cacheDetail?: string;
   tokensPerSecond: string;
+  ppMetricSource?: string
   ppSpeed?: string;
   ttft: string;
   totalTime?: string;
