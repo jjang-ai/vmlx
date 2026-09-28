@@ -4971,6 +4971,7 @@ def _load_jang_v2_vlm(
         precision = configure_hadamard_activation_precision(
             model, config,
             enabled=os.environ.get("VMLX_BONSAI_FP16_ACTIVATIONS", "1") != "0",
+            prefill_only=os.environ.get("VMLX_BONSAI_FP16_PREFILL_ONLY") == "1",
         )
         if precision:
             logger.info(

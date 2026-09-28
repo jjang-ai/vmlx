@@ -21,6 +21,7 @@ cast back to the activation dtype).
 
 from __future__ import annotations
 
+import itertools
 import math
 import os
 from collections.abc import Mapping
@@ -32,6 +33,7 @@ import mlx.nn as nn
 SUPPORTED_BLOCKS = (512, 1024, 2048, 4096)
 CONTRACT = "prism.hadamard.v1"
 TRANSFORM = "normalized-sylvester-walsh-hadamard"
+_PREFILL_DQ_CALLS = itertools.count(1)
 
 
 class HadamardSpec:
@@ -129,9 +131,52 @@ class HadamardQuantizedLinear(nn.QuantizedLinear):
 
     def __call__(self, x):
         activation_dtype = getattr(self, "hadamard_activation_dtype", None)
+        if getattr(self, "hadamard_prefill_only", False):
+            activation_dtype = mx.float16 if math.prod(x.shape[:-1]) >= 2048 else None
         if activation_dtype is not None:
             x = x.astype(activation_dtype)
         x = hadamard_activation(x, self.hadamard_block, self.signs, compute_dtype=self.hadamard_compute_dtype)
+        if os.environ.get("VMLX_BONSAI_FP16_QMM") == "1" and self.scales.dtype == mx.float16:
+            lowered = x.astype(mx.float16)
+            rows = math.prod(lowered.shape[:-1])
+            if getattr(self, "_bonsai_ane_hybrid", False):
+                from vmlx_engine.metal.bonsai_ane_prefill import maybe_apply
+
+                accelerated = maybe_apply(self, lowered)
+                if accelerated is not None:
+                    return accelerated.astype(activation_dtype or mx.float32)
+            if (
+                os.environ.get("VMLX_BONSAI_PREFILL_DQ_GEMM") == "1"
+                and rows >= 2048
+                and self.bits == 2
+                and self.group_size == 128
+            ):
+                dense = mx.dequantize(
+                    self.weight, self.scales, self.biases,
+                    group_size=128, bits=2, mode="affine", dtype=mx.float16,
+                )
+                out = mx.matmul(lowered, dense.T)
+                if "bias" in self:
+                    out = out + self.bias
+                cadence = int(os.environ.get("VMLX_BONSAI_PREFILL_DQ_EVAL_EVERY", "8"))
+                if not 1 <= cadence <= 32:
+                    raise ValueError("Bonsai prefill dequant eval cadence must be 1..32")
+                if next(_PREFILL_DQ_CALLS) % cadence == 0:
+                    mx.eval(out)
+            else:
+                out = None
+                if (
+                    os.environ.get("VMLX_BONSAI_TERNARY_VERIFY") == "1"
+                    and getattr(self, "hadamard_exact_ternary", False)
+                ):
+                    from vmlx_engine.metal.bonsai_ternary_verify import (
+                        maybe_ternary_verify,
+                    )
+
+                    out = maybe_ternary_verify(lowered, self)
+                if out is None:
+                    out = super().__call__(lowered)
+            return out.astype(activation_dtype or mx.float32)
         out = super().__call__(x)
         return out.astype(activation_dtype) if activation_dtype is not None else out
 
@@ -142,6 +187,8 @@ class HadamardQuantizedEmbedding(nn.QuantizedEmbedding):
     def __call__(self, x):
         out = super().__call__(x)
         activation_dtype = getattr(self, "hadamard_activation_dtype", None)
+        if getattr(self, "hadamard_prefill_only", False):
+            activation_dtype = mx.float16 if x.size >= 2048 else None
         if activation_dtype is not None:
             out = out.astype(activation_dtype)
         return hadamard_activation(out, self.hadamard_block, self.signs, inverse=True, compute_dtype=self.hadamard_compute_dtype)
@@ -162,7 +209,19 @@ class _HadamardActivationConv1d(nn.Conv1d):
         return super().__call__(x).astype(mx.float16)
 
 
-def configure_hadamard_activation_precision(model, config, *, enabled=True):
+class _HadamardPrefillOnlyRMSNorm(nn.RMSNorm):
+    def __call__(self, x):
+        out = super().__call__(x)
+        return out.astype(mx.float16) if math.prod(x.shape[:-1]) >= 2048 else out
+
+
+class _HadamardPrefillOnlyConv1d(nn.Conv1d):
+    def __call__(self, x):
+        out = super().__call__(x)
+        return out.astype(mx.float16) if math.prod(x.shape[:-1]) >= 2048 else out
+
+
+def configure_hadamard_activation_precision(model, config, *, enabled=True, prefill_only=False):
     """Scope FP16 activations to the declared Qwen Hadamard language graph.
 
     This is a numerical execution policy, NOT an SSD serialization cast.
@@ -172,6 +231,15 @@ def configure_hadamard_activation_precision(model, config, *, enabled=True):
     """
     if config.get("model_type") != "qwen3_5" or hadamard_spec_from_config(config) is None:
         return {}
+    if prefill_only and not enabled:
+        raise ValueError("Hadamard FP16 prefill-only policy requires enabled activation precision")
+    if (
+        os.environ.get("VMLX_BONSAI_FP16_QMM") != "1"
+        and any(os.environ.get(name) == "1" for name in (
+            "VMLX_BONSAI_PREFILL_DQ_GEMM", "VMLX_BONSAI_TERNARY_VERIFY",
+        ))
+    ):
+        raise ValueError("Bonsai prefill DQ GEMM and ternary verification require FP16 QMM")
     language = getattr(model, "language_model", None)
     if language is None:
         raise ValueError("Qwen Hadamard activation policy requires its language graph")
@@ -182,7 +250,27 @@ def configure_hadamard_activation_precision(model, config, *, enabled=True):
         raise ValueError("Qwen Hadamard activation policy requires installed wrappers")
     if enabled and any(module.scales.dtype != mx.float16 for module in packed):
         raise ValueError("FP16 Hadamard activation policy requires FP16 affine scales")
-    signature = "qwen-hadamard-fp16-v1" if enabled else "qwen-hadamard-native-v1"
+    signature = (
+        "qwen-hadamard-fp16-prefill-only-v1" if prefill_only
+        else "qwen-hadamard-fp16-v1" if enabled else "qwen-hadamard-native-v1"
+    )
+    numerical_flags = (
+        ("fused-hadamard", "VMLX_BONSAI_FUSED_HADAMARD"),
+        ("qmm-fp16", "VMLX_BONSAI_FP16_QMM"),
+        ("dq-gemm", "VMLX_BONSAI_PREFILL_DQ_GEMM"),
+        ("ternary-verify", "VMLX_BONSAI_TERNARY_VERIFY"),
+        ("gdn-fp32", "VMLX_BONSAI_GDN_FP32"),
+        ("ane-prefill", "VMLX_BONSAI_ANE_PREFILL"),
+    )
+    for label, variable in numerical_flags:
+        if os.environ.get(variable) == "1":
+            signature += f"+{label}"
+    if os.environ.get("VMLX_BONSAI_ANE_PREFILL") == "1":
+        signature += (
+            f"-cpu{os.environ.get('VMLX_BONSAI_ANE_CPU_FRACTION', '0.1')}"
+            f"-down{os.environ.get('VMLX_BONSAI_ANE_DOWN_CPU_FRACTION', '0.2')}"
+            f"-gdn{os.environ.get('VMLX_BONSAI_ANE_GDN', '1')}"
+        )
     previous = getattr(model, "_vmlx_hadamard_activation_precision", None)
     if previous is not None and previous != signature:
         raise ValueError("Hadamard activation policy cannot change on a loaded model")
@@ -191,12 +279,30 @@ def configure_hadamard_activation_precision(model, config, *, enabled=True):
         for _, module in modules:
             if isinstance(module, (HadamardQuantizedLinear, HadamardQuantizedEmbedding)):
                 module.hadamard_activation_dtype = mx.float16
+                module.hadamard_prefill_only = prefill_only
+                if isinstance(module, HadamardQuantizedLinear) and os.environ.get(
+                    "VMLX_BONSAI_TERNARY_VERIFY"
+                ) == "1":
+                    module.hadamard_exact_ternary = bool(
+                        module.bits == 2
+                        and module.group_size == 128
+                        and module.scales.dtype == mx.float16
+                        and module.biases.dtype == mx.float16
+                        and mx.all(module.biases == -module.scales).item()
+                        and mx.all(
+                            (module.weight & (module.weight >> 1) & 0x55555555) == 0
+                        ).item()
+                    )
                 counts["projections"] += 1
             elif type(module) is nn.RMSNorm:
-                module.__class__ = _HadamardActivationRMSNorm
+                module.__class__ = (
+                    _HadamardPrefillOnlyRMSNorm if prefill_only else _HadamardActivationRMSNorm
+                )
                 counts["norms"] += 1
             elif type(module) is nn.Conv1d:
-                module.__class__ = _HadamardActivationConv1d
+                module.__class__ = (
+                    _HadamardPrefillOnlyConv1d if prefill_only else _HadamardActivationConv1d
+                )
                 counts["convolutions"] += 1
     for owner in (model, language, getattr(language, "model", None)):
         if owner is not None:

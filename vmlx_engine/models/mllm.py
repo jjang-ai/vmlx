@@ -4537,6 +4537,11 @@ class MLXMultimodalLM:
                         "ungrouped/unfused: %s",
                         exc,
                     )
+            if os.environ.get("VMLX_BONSAI_ANE_PREFILL") == "1":
+                from ..metal.bonsai_ane_prefill import install as install_bonsai_ane_prefill
+
+                receipt = install_bonsai_ane_prefill(self.model)
+                logger.info("Bonsai ANE prefill: %s", receipt)
             self._loaded = True
 
         from .mimo_v26_contract import read_mimo_v26_contract

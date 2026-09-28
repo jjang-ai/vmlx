@@ -482,6 +482,17 @@ def _patch_gated_delta_net(qlang: Any) -> None:
         lengths=None,
     ):
         batch_size, seq_len = qkv_chunk.shape[:2]
+        if (
+            os.environ.get("VMLX_BONSAI_GDN_FP32") == "1"
+            and lengths is None and ssm_mask is None and not self.training
+        ):
+            from vmlx_engine.metal.bonsai_gdn_recur import step as bonsai_gdn_recur_step
+
+            fused_recur = bonsai_gdn_recur_step(
+                self, qkv_chunk, a_chunk, b_chunk, conv_state, ssm_state
+            )
+            if fused_recur is not None:
+                return fused_recur
         fused_conv = None
         fused_enabled = getattr(self, "_fused_gdn_conv", None)
         if fused_enabled is None:

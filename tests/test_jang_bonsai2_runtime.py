@@ -268,3 +268,82 @@ def test_fp16_policy_rejects_unqualified_scale_precision_before_mutation():
         configure_hadamard_activation_precision(m, cfg)
     assert not hasattr(m, "_vmlx_hadamard_activation_precision")
     assert type(m.language_model.norm) is nn.RMSNorm
+
+
+def test_fp16_prefill_only_keeps_decode_fp32_and_separates_cache_identity():
+    from vmlx_engine.prefix_cache import compute_model_cache_key
+
+    model, cfg = precision_fixture()
+    result = configure_hadamard_activation_precision(model, cfg, prefill_only=True)
+    assert result["signature"] == "qwen-hadamard-fp16-prefill-only-v1"
+    lang = model.language_model
+    assert lang.projection(mx.ones((1, 2, 512), mx.float32)).dtype == mx.float32
+    assert lang.projection(mx.ones((1, 2048, 512), mx.float32)).dtype == mx.float16
+    assert lang.embedding(mx.array([[1, 2]])).dtype == mx.float16
+    assert lang.embedding(mx.zeros((1, 2048), mx.int32)).dtype == mx.float16
+    assert lang.norm(mx.ones((1, 2, 512), mx.float16)).dtype == mx.float32
+    assert lang.norm(mx.ones((1, 2048, 512), mx.float16)).dtype == mx.float16
+    assert lang.conv(mx.ones((1, 3, 32), mx.float16)).dtype == mx.float32
+    assert lang.conv(mx.ones((1, 2048, 32), mx.float16)).dtype == mx.float16
+
+    full, _ = precision_fixture()
+    configure_hadamard_activation_precision(full, cfg)
+    assert compute_model_cache_key(model, model_path="same-bundle") != compute_model_cache_key(
+        full, model_path="same-bundle"
+    )
+    with pytest.raises(ValueError, match="cannot change"):
+        configure_hadamard_activation_precision(model, cfg)
+
+
+def test_bonsai_prefill_dequant_gemm_tracks_fp16_qmm(monkeypatch):
+    model, cfg = precision_fixture()
+    configure_hadamard_activation_precision(model, cfg, prefill_only=True)
+    x = ((mx.arange(2048 * 512, dtype=mx.float32) % 97) - 48).reshape(1, 2048, 512)
+    x = x * 0.015625
+    monkeypatch.setenv("VMLX_BONSAI_FP16_QMM", "1")
+    monkeypatch.delenv("VMLX_BONSAI_PREFILL_DQ_GEMM", raising=False)
+    packed = model.language_model.projection(x)
+    monkeypatch.setenv("VMLX_BONSAI_PREFILL_DQ_GEMM", "1")
+    dense = model.language_model.projection(x)
+    mx.eval(packed, dense)
+    assert packed.dtype == dense.dtype == mx.float16
+    assert bool(mx.allclose(packed, dense, atol=0.03, rtol=0.01).item())
+
+
+def test_bonsai_ane_and_precision_flags_separate_prefix_cache_identity(monkeypatch):
+    from vmlx_engine.prefix_cache import compute_model_cache_key
+
+    config_model, cfg = precision_fixture()
+    configure_hadamard_activation_precision(config_model, cfg, prefill_only=True)
+    stock_key = compute_model_cache_key(config_model, model_path="same-bundle")
+    monkeypatch.setenv("VMLX_BONSAI_FP16_QMM", "1")
+    monkeypatch.setenv("VMLX_BONSAI_PREFILL_DQ_GEMM", "1")
+    portable, _ = precision_fixture()
+    configure_hadamard_activation_precision(portable, cfg, prefill_only=True)
+    portable_key = compute_model_cache_key(portable, model_path="same-bundle")
+    monkeypatch.setenv("VMLX_BONSAI_ANE_PREFILL", "1")
+    ane, _ = precision_fixture()
+    configure_hadamard_activation_precision(ane, cfg, prefill_only=True)
+    ane_key = compute_model_cache_key(ane, model_path="same-bundle")
+    assert len({stock_key, portable_key, ane_key}) == 3
+
+
+def test_bonsai_fused_rotation_separates_prefix_cache_identity(monkeypatch):
+    from vmlx_engine.prefix_cache import compute_model_cache_key
+
+    stock, cfg = precision_fixture()
+    configure_hadamard_activation_precision(stock, cfg)
+    monkeypatch.setenv("VMLX_BONSAI_FUSED_HADAMARD", "1")
+    fused, _ = precision_fixture()
+    configure_hadamard_activation_precision(fused, cfg)
+    assert compute_model_cache_key(stock, model_path="same-bundle") != compute_model_cache_key(
+        fused, model_path="same-bundle"
+    )
+
+
+def test_bonsai_derived_kernels_require_fp16_qmm_before_mutation(monkeypatch):
+    monkeypatch.setenv("VMLX_BONSAI_PREFILL_DQ_GEMM", "1")
+    model, cfg = precision_fixture()
+    with pytest.raises(ValueError, match="require FP16 QMM"):
+        configure_hadamard_activation_precision(model, cfg, prefill_only=True)
+    assert not hasattr(model, "_vmlx_hadamard_activation_precision")
