@@ -25687,6 +25687,10 @@ async def stream_chat_completion(
     # Check if we should include usage in the final chunk
     include_usage = request.stream_options and request.stream_options.include_usage
 
+    _prefill_usage = None
+    _headers = getattr(fastapi_request, "headers", {}) or {}
+    _prefill_usage_extension = str(_headers.get("x-vmlx-stream-usage", "")).strip().lower() == "incremental"
+
     def _dump_chat_chunk(obj, *, terminal_usage: bool = False) -> str:
         """Serialize one Chat SSE chunk with OpenAI-compatible usage shape.
 
@@ -25703,6 +25707,8 @@ async def stream_chat_completion(
         if include_usage and not terminal_usage:
             payload["usage"] = None
         if terminal_usage:
+            if _prefill_usage_extension and _prefill_usage is not None and payload.get("usage"):
+                payload["usage"]["vmlx_prefill"] = _prefill_usage
             # Attach the context-clamp record on the one terminal usage
             # chunk (mirrors the non-stream surface; pops so the registry
             # never leaks). `exhausted` = the clamped budget was consumed.
@@ -26166,6 +26172,8 @@ async def stream_chat_completion(
                     _decode_first_ts = _decode_last_ts
                     _decode_first_count = completion_tokens
                 _decode_last_count = completion_tokens
+            if getattr(output, "prefill_usage", None) is not None:
+                _prefill_usage = output.prefill_usage
             if hasattr(output, "cached_tokens") and output.cached_tokens:
                 cached_tokens = output.cached_tokens
             _detail = getattr(output, "cache_detail", "") or None
@@ -27446,6 +27454,7 @@ async def stream_chat_completion(
                 _ans_ct = (
                     int(getattr(answer_output, "completion_tokens", 0) or 0) or _ans_ct
                 )
+                _prefill_usage = getattr(answer_output, "prefill_usage", None)
                 _ans_raw += getattr(answer_output, "new_text", "") or ""
                 if _buffer_answer_pass:
                     # Accumulate only; emit after we confirm clean completion.

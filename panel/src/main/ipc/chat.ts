@@ -2568,12 +2568,12 @@ export function registerChatHandlers(
         // Remote internet providers use Electron's net.fetch for certificates
         // and proxies; loopback model servers use Node streaming for SSE.
         const useNodeStreamingFetch = !isRemote || isLoopbackUrl(apiUrl);
-        // `response.usage` is a vMLX-only incremental telemetry extension.
+        // Prefill timing and `response.usage` are private local telemetry.
         // Negotiate it out-of-band only with a local engine.  The public
         // Responses request body must not send Chat's non-standard
         // stream_options.include_usage to OpenAI-compatible remote providers.
-        const vmlxResponsesUsageHeaders: Record<string, string> =
-          useResponsesApi && !isRemote
+        const vmlxUsageHeaders: Record<string, string> =
+          !isRemote
             ? { "X-vMLX-Stream-Usage": "incremental" }
             : {};
         // Inference begins HERE — arm the inactivity watchdog now, not at
@@ -2585,7 +2585,7 @@ export function registerChatHandlers(
               headers: {
                 "Content-Type": "application/json",
                 ...authHeaders,
-                ...vmlxResponsesUsageHeaders,
+                ...vmlxUsageHeaders,
                 ...nextLocalRequestCorrelationHeaders(),
               },
               body: requestBody,
@@ -2596,7 +2596,7 @@ export function registerChatHandlers(
               headers: {
                 "Content-Type": "application/json",
                 ...authHeaders,
-                ...vmlxResponsesUsageHeaders,
+                ...vmlxUsageHeaders,
                 ...nextLocalRequestCorrelationHeaders(),
               },
               body: requestBody,
@@ -3382,6 +3382,7 @@ export function registerChatHandlers(
 
               // Update usage BEFORE emitting delta so metrics use real server counts
               if (parsed.usage) {
+                if ("vmlx_prefill" in parsed.usage) currentPrefillUsage = parsed.usage.vmlx_prefill;
                 remoteMetrics?.recordUsage(parsed.usage);
                 if (parsed.usage.completion_tokens != null) {
                   tokenCount = parsed.usage.completion_tokens;
@@ -3801,7 +3802,7 @@ export function registerChatHandlers(
               // negotiation. Omitting it only on tool follow-ups left the
               // final footer with first-pass token/decode counts paired to
               // final-pass TTFT/prefill throughput.
-              ...vmlxResponsesUsageHeaders,
+              ...vmlxUsageHeaders,
               ...nextLocalRequestCorrelationHeaders(),
               ...(!isRemote && plannedDirectAnswerPass && !finalAnswerRecovery
                 ? { "X-vMLX-Tool-Choice-Fulfilled": "1" }

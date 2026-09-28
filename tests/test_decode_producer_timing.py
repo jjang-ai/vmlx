@@ -76,7 +76,8 @@ async def test_batched_adapters_preserve_scheduler_timestamp(mllm):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("dialect", ["chat", "responses"])
-async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypatch, caplog, dialect):
+@pytest.mark.parametrize("telemetry", [True, False])
+async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypatch, caplog, dialect, telemetry):
     import json
     from unittest.mock import AsyncMock
     import vmlx_engine.server as server
@@ -105,7 +106,7 @@ async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypa
     monkeypatch.setattr(server, "_tool_call_parser", None)
     options = dict(model="timing-test", stream=True, stream_options=StreamOptions(include_usage=True))
     messages = [{"role": "user", "content": "hi"}]
-    http = SimpleNamespace(headers={"x-vmlx-stream-usage": "incremental"}, is_disconnected=AsyncMock(return_value=False))
+    http = SimpleNamespace(headers={"x-vmlx-stream-usage": "incremental"} if telemetry else {}, is_disconnected=AsyncMock(return_value=False))
     if dialect == "responses":
         request = ResponsesRequest(input="hi", **options)
         iterator = server.stream_responses_api(Engine(), messages, request, fastapi_request=http)
@@ -123,11 +124,18 @@ async def test_stream_uses_producer_window_and_preserves_terminal_usage(monkeypa
     if dialect == "responses":
         terminal = [p for p in payloads if p.get("type") == "response.completed"][-1]
         assert terminal["response"]["usage"]["output_tokens"] == 12
-        private = [p for p in payloads if p.get("type") == "response.usage"][-1]
-        assert private["usage"]["vmlx_prefill"] == {"tokens": 20, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"}
-        assert "vmlx_prefill" not in terminal["response"]["usage"]
-        assert private["usage"]["vmlx_decode"]["tokens"] == 8
-        assert private["usage"]["vmlx_decode"]["seconds"] == 2.0
+        if telemetry:
+            private = [p for p in payloads if p.get("type") == "response.usage"][-1]
+            assert private["usage"]["vmlx_prefill"] == {"tokens": 20, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"}
+            assert "vmlx_prefill" not in terminal["response"]["usage"]
+            assert private["usage"]["vmlx_decode"]["tokens"] == 8
+            assert private["usage"]["vmlx_decode"]["seconds"] == 2.0
+        else:
+            assert not [p for p in payloads if p.get("type") == "response.usage"]
     else:
         assert [p["usage"]["completion_tokens"] for p in payloads if p.get("usage")][-1] == 12
+        last_usage = [p["usage"] for p in payloads if p.get("usage")][-1]
+        assert ("vmlx_prefill" in last_usage) is telemetry
+        if telemetry:
+            assert last_usage["vmlx_prefill"]["seconds"] == 0.5
         assert sum(event.count("data: [DONE]") for event in events) == 1
