@@ -22,6 +22,7 @@ cast back to the activation dtype).
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -107,6 +108,12 @@ def hadamard_activation(x: mx.array, block: int, signs: mx.array, *, inverse: bo
         raise ValueError("Hadamard signs must match the activation width exactly")
     if shape[-1] % block:
         raise ValueError(f"Hadamard block {block} does not divide activation width {shape[-1]}")
+    if compute_dtype == mx.float32 and os.environ.get("VMLX_BONSAI_FUSED_HADAMARD") == "1":
+        from vmlx_engine.metal.bonsai_hadamard_rotation import rotate
+
+        fused = rotate(x, signs, block, inverse=inverse)
+        if fused is not None:
+            return fused
     x = x.astype(compute_dtype)
     s = signs.astype(compute_dtype)
     if not inverse:

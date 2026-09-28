@@ -598,6 +598,16 @@ vmlx serve ./my-model-JANG_3M --continuous-batching --use-paged-cache
 
 Pre-quantized JANG models are available at [JANGQ-AI on HuggingFace](https://huggingface.co/JANGQ-AI).
 
+### Bonsai Signed-Hadamard Rotation
+
+Compatible JANG/Bonsai bundles with 1024-column signed-Hadamard blocks can use an optional fused Metal rotation:
+
+```bash
+VMLX_BONSAI_FUSED_HADAMARD=1 vmlx serve ./my-bonsai-JANG-model
+```
+
+The default is the existing MLX transform. The fused path checks exact forward and inverse results on the current GPU before first use and falls back to MLX for unsupported shapes or devices. The bundle must still declare its signed-Hadamard contract and contain its sign vectors. The kernel is adapted from [MTPLX](https://github.com/youssofal/MTPLX) under Apache-2.0.
+
 ### Smelt Mode (Partial Expert Loading)
 
 For MoE models that don't fit in RAM, **Smelt** loads only a subset of experts per layer from SSD and keeps the backbone resident. Routing is biased toward the resident experts, so response quality stays coherent while RAM usage drops. Trade-off: throughput scales inversely with expert % loaded, because expert swaps hit SSD on the hot path.
