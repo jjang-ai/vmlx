@@ -138,6 +138,7 @@ _KERNEL_S_SRC = """
 _SUPPORTED_BLOCK_T = (16, 32, 48)
 _kernel_by_tb: dict = {}
 _attribution_logged = False
+_mlx_fast_gdn_dispatches = 0
 
 
 def _normalize_block_t(block_t, input_dtype=None) -> int:
@@ -241,14 +242,17 @@ def gated_delta_blocked_prefill(
 def qwen4_blocked_gated_delta_update(
     q, k, v, a, b, A_log, dt_bias, state=None, mask=None, use_kernel=True
 ):
-    """Opt-in prefill dispatch; decode, verification and masked calls stay stock."""
+    """Select an opt-in Qwen4 prefill recurrence or retain mlx-lm's path."""
     from mlx_lm.models.gated_delta import compute_g, gated_delta_update
 
     enabled = os.environ.get("VMLX_QWEN4_GDN_BLOCKED_PREFILL", "0").lower() in {
         "1", "true", "yes", "on"
     }
-    eligible = (
-        enabled and use_kernel and mask is None
+    fast_enabled = os.environ.get("VMLX_QWEN4_MLX_FAST_GDN", "0").lower() in {
+        "1", "true", "yes", "on"
+    }
+    common_eligible = (
+        use_kernel and mask is None
         and mx.default_device() == mx.gpu and mx.metal.is_available()
         and q.ndim == 4 and v.ndim == 4 and q.shape[1] >= 16
         and k.shape == q.shape and v.shape[:2] == q.shape[:2]
@@ -256,9 +260,34 @@ def qwen4_blocked_gated_delta_update(
         and a.shape == b.shape == v.shape[:3]
         and A_log.shape == dt_bias.shape == (v.shape[2],)
     )
-    if eligible:
+    expected_state = (
+        (q.shape[0], v.shape[2], v.shape[3], q.shape[3])
+        if common_eligible else None
+    )
+    if (
+        fast_enabled and common_eligible
+        and q.shape[2:] == (16, 128)
+        and v.shape[2:] == (48, 128)
+        and q.dtype in (mx.float16, mx.bfloat16)
+        and (state is None or state.shape == expected_state)
+    ):
+        if not hasattr(mx.fast, "gated_delta_update"):
+            raise RuntimeError(
+                "VMLX_QWEN4_MLX_FAST_GDN requires MLX with "
+                "mx.fast.gated_delta_update"
+            )
+        global _mlx_fast_gdn_dispatches
+        _mlx_fast_gdn_dispatches += 1
+        if _mlx_fast_gdn_dispatches == 1:
+            logging.getLogger(__name__).info(
+                "Qwen4 upstream MLX fast GDN active (MLX %s)", mx.__version__
+            )
+        return mx.fast.gated_delta_update(
+            q, k, v, compute_g(A_log, a, dt_bias), mx.sigmoid(b),
+            initial_state=state,
+        )
+    if enabled and common_eligible:
         g = compute_g(A_log, a, dt_bias)
-        expected_state = (q.shape[0], v.shape[2], v.shape[3], q.shape[3])
         if (blocked_prefill_eligible(q, v, g, mask, state)
                 and v.shape[2] > 0 and v.shape[3] > 0
                 and (state is None or state.shape == expected_state)):

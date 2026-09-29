@@ -4,6 +4,7 @@ import sys
 from setuptools import setup
 
 from mlx import extension
+import mlx.core as mx
 
 
 if __name__ == "__main__":
@@ -43,6 +44,7 @@ if __name__ == "__main__":
         },
         zip_safe=False,
         python_requires=">=3.11",
-        # This extension uses MLX's private C++ ABI; runtime must match build.
-        install_requires=["mlx==0.32.2"],
+        # This extension uses MLX's private C++ ABI; package metadata must
+        # require the exact MLX version used to build the native module.
+        install_requires=[f"mlx=={mx.__version__}"],
     )
