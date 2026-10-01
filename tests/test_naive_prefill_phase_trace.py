@@ -61,9 +61,14 @@ def owner(monkeypatch, enabled=True, family="naive_n05_flash", fail=None):
 
     ns = dict(
         os=os,
+        QuantizedEmbedding=type("QuantizedEmbedding", (), {}),
         time=SimpleNamespace(perf_counter=clock),
         logger=SimpleNamespace(info=lambda *args: logs.append(args)),
         mx=SimpleNamespace(
+            uint32="uint32",
+            float16="float16",
+            bfloat16="bfloat16",
+            float32="float32",
             eval=lambda state: event("state_eval"),
             clear_cache=lambda: event("clear"),
             get_active_memory=lambda: 10,
@@ -81,6 +86,7 @@ def owner(monkeypatch, enabled=True, family="naive_n05_flash", fail=None):
         ROOT / "utils/single_batch_generator.py",
         {
             "_naive_prefill_phase_trace_enabled",
+            "_naive_prefill_attention_geometry",
             "_log_naive_prefill_phase",
             "_prefill",
             "_start_request",

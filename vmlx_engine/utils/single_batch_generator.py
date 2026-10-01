@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence, Union
 
 import mlx.core as mx
+from mlx.nn import QuantizedEmbedding
 from mlx_lm.generate import SequenceStateMachine
 from mlx_lm.models import cache as mlx_cache
 from mlx_lm.models.cache import TokenBuffer
@@ -27,6 +28,7 @@ from mlx_lm.models.cache import TokenBuffer
 from .mamba_cache import _should_capture_generation_logprobs
 from .memory_limits import get_effective_metal_working_set_bytes
 from .prefill_admission import (
+    max_prefill_chunk_tokens,
     prefill_keep_alloc_enabled as _prefill_keep_alloc_enabled,
     prefill_valve_check as _prefill_valve_check,
     prefill_valve_enabled as _prefill_valve_enabled,
@@ -34,6 +36,62 @@ from .prefill_admission import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _naive_prefill_attention_geometry(model: Any) -> Optional[tuple[int, int]]:
+    """Read known native attention geometry without evaluating model/cache arrays.
+
+    This bounds one attention-score buffer, not the full transient working set.
+    Unknown embedding storage cannot establish hidden-state dtype.
+    The separate observed-peak admission valve remains authoritative.
+    """
+    if getattr(model, "model_type", None) != "naive_n05_flash":
+        return None
+    embedding = getattr(getattr(model, "model", None), "embed_tokens", None)
+    weight = getattr(embedding, "weight", None)
+    dtype_owner = weight
+    if type(embedding) is QuantizedEmbedding:
+        # Native affine dequantize (without a dtype override) returns the
+        # promoted scales/biases dtype. Equal floating dtypes make that output
+        # contract explicit without constructing a dequantization graph.
+        scales = getattr(embedding, "scales", None)
+        biases = getattr(embedding, "biases", None)
+        if (
+            getattr(embedding, "mode", None) != "affine"
+            or getattr(weight, "dtype", None) != mx.uint32
+            or getattr(scales, "dtype", None) != getattr(biases, "dtype", None)
+            or getattr(scales, "itemsize", None) != getattr(biases, "itemsize", None)
+            or getattr(scales, "shape", None) != getattr(biases, "shape", None)
+        ):
+            return None
+        dtype_owner = scales
+    if getattr(dtype_owner, "dtype", None) not in (mx.float16, mx.bfloat16, mx.float32):
+        return None
+    itemsize = getattr(dtype_owner, "itemsize", None)
+    if type(itemsize) is not int or itemsize not in (2, 4):
+        return None
+    layers = getattr(model, "layers", None)
+    if not isinstance(layers, (list, tuple)) or not layers:
+        return None
+    heads = []
+    for layer in layers:
+        is_swa = getattr(layer, "is_swa", None)
+        if type(is_swa) is not bool:
+            return None
+        if is_swa:
+            continue
+        attention = getattr(layer, "self_attn", None)
+        count = getattr(attention, "n_heads", None)
+        if type(count) is not int or count <= 0:
+            return None
+        # The FP32 search score must also fit the same per-buffer budget.
+        index_heads = getattr(getattr(attention, "indexer", None), "n_heads", None)
+        if type(index_heads) is not int or index_heads <= 0:
+            return None
+        if index_heads * 4 > count * itemsize:
+            return None
+        heads.append(count)
+    return (max(heads), itemsize) if heads else None
+
 
 def _naive_prefill_phase_trace_enabled(model: Any) -> bool:
     """Opt-in wall timings only; never add a device completion boundary."""
@@ -657,6 +715,7 @@ class SingleBatchGenerator:
         if not tokens:
             return
         _phase_trace = _naive_prefill_phase_trace_enabled(self.model)
+        _attention_geometry = _naive_prefill_attention_geometry(self.model)
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
         # Admission control. DSV4 has had a prefill valve for a while — it
         # projects the next chunk's peak and rejects BEFORE submitting GPU work,
@@ -686,6 +745,27 @@ class SingleBatchGenerator:
         pos = 0
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
+            if _attention_geometry is not None:
+                _heads, _hidden_bytes = _attention_geometry
+                # Later projections may promote the embedding's dtype. Native
+                # MLX attention here uses at most FP32, so bound score storage
+                # conservatively at four bytes, not the embedding itemsize.
+                _score_bytes = 4
+                # Use the proposed end context conservatively. Recomputing it
+                # after narrowing could choose a larger, unbounded chunk again.
+                _next_context = len(req.context_tokens) + n
+                _bounded_n = min(n, max_prefill_chunk_tokens(
+                    _heads, _next_context, bytes_per_score=_score_bytes,
+                ))
+                if _bounded_n < n:
+                    logger.info(
+                        "NAIVE_PREFILL_CHUNK_BOUND uid=%s proposed=%d bounded=%d "
+                        "prior_context=%d next_context_bound=%d heads=%d "
+                        "hidden_bytes=%d budget_score_bytes=%d",
+                        req.uid, n, _bounded_n, len(req.context_tokens),
+                        _next_context, _heads, _hidden_bytes, _score_bytes,
+                    )
+                n = _bounded_n
             chunk = tokens[pos : pos + n]
             if _phase_trace:
                 _chunk_t0 = time.perf_counter()
