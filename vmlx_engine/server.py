@@ -8818,6 +8818,7 @@ async def _await_chat_with_disconnect_abort(
     endpoint: str,
     poll_interval: float = 0.25,
     hard_timeout: bool = False,
+    raw_generate: bool = False,
 ):
     """Await non-streaming engine.chat while aborting scheduler work on disconnect.
 
@@ -8835,7 +8836,9 @@ async def _await_chat_with_disconnect_abort(
     chat_kwargs = dict(chat_kwargs)
     chat_kwargs.pop("request_id", None)
     task = asyncio.create_task(
-        engine.chat(messages=messages, request_id=request_id, **chat_kwargs)
+        engine.generate(request_id=request_id, **chat_kwargs)
+        if raw_generate
+        else engine.chat(messages=messages, request_id=request_id, **chat_kwargs)
     )
     started = time.perf_counter()
     last_progress: int | None = None
@@ -18604,12 +18607,9 @@ async def ollama_generate(fastapi_request: Request):
         comp_req = validate_ollama_request(CompletionRequest, openai_req)
         prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
         _ollama_raw_max_prompt_tokens = _effective_max_prompt_tokens(comp_req)
-        # create_completion takes only the CompletionRequest — no
-        # fastapi_request arg (unlike create_chat_completion which uses
-        # it for disconnect detection). Pre-session regression from
-        # v1.3.12 where the call passed 2 args causing TypeError.
+        # Preserve the receive channel for non-stream disconnect cancellation.
         _ollama_started_ns = time.perf_counter_ns()
-        result = await create_completion(comp_req)
+        result = await create_completion(comp_req, fastapi_request)
         error_response = _ollama_returned_error_response(result)
         if error_response is not None:
             return error_response
@@ -19814,7 +19814,7 @@ async def list_voices(model: str = "kokoro"):
         Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
-async def create_completion(request: CompletionRequest):
+async def create_completion(request: CompletionRequest, fastapi_request: Request = None):
     """Create a text completion."""
     engine = get_engine()
     _reject_unsupported_logprobs_request(
@@ -19849,6 +19849,7 @@ async def create_completion(request: CompletionRequest):
     cache_detail: str | None = None
 
     for i, prompt in enumerate(prompts):
+        prompt_request_id = f"cmpl-{uuid.uuid4().hex}"
         try:
             gen_kwargs = {
                 "prompt": prompt,
@@ -19907,12 +19908,15 @@ async def create_completion(request: CompletionRequest):
                     request.model,
                     enable_thinking=decision.enable_thinking,
                 )
-                output = await asyncio.wait_for(
-                    engine.chat(
-                        messages=[{"role": "user", "content": chat_prompt}],
-                        **chat_kwargs,
-                    ),
+                output = await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=[{"role": "user", "content": chat_prompt}],
+                    chat_kwargs=chat_kwargs,
                     timeout=timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=prompt_request_id,
+                    endpoint="Completions",
+                    hard_timeout=True,
                 )
             elif _is_loaded_mimo_v2_model(request.model) or bool(
                 getattr(engine, "is_mllm", False)
@@ -19932,22 +19936,34 @@ async def create_completion(request: CompletionRequest):
                     gen_kwargs,
                     bundle_path=_model_path or _model_name or request.model or "",
                 )
-                output = await asyncio.wait_for(
-                    engine.chat(
-                        messages=[{"role": "user", "content": prompt}],
-                        **chat_kwargs,
-                    ),
+                output = await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=[{"role": "user", "content": prompt}],
+                    chat_kwargs=chat_kwargs,
                     timeout=timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=prompt_request_id,
+                    endpoint="Completions",
+                    hard_timeout=True,
                 )
             else:
-                output = await asyncio.wait_for(
-                    engine.generate(**gen_kwargs),
+                output = await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=[],
+                    chat_kwargs=gen_kwargs,
                     timeout=timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=prompt_request_id,
+                    endpoint="Completions",
+                    hard_timeout=True,
+                    raw_generate=True,
                 )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
             )
+        except HTTPException:
+            raise
         except PromptTooLongError as e:
             return _prompt_too_long_response_from_error(e)
         except PrefillAdmissionError as e:
