@@ -127,20 +127,32 @@ class _TargetAdapter:
         self._target = language_model
         self.model = language_model.model
         self.gdn_states: list[Any] = []
+        # Rollback state is needed only for a speculative verification step.
+        # Capturing it during chunked prefill retains every chunk's graph.
+        self.capture_gdn_states = False
 
     @property
     def layers(self):
         return self.model.layers
 
     def __call__(self, inputs, cache=None):
+        self.gdn_states.clear()
         hidden = self.model(
             inputs,
             cache=cache,
-            gdn_sink=self.gdn_states,
+            gdn_sink=self.gdn_states if self.capture_gdn_states else None,
             return_unnormed=True,
         )
         hidden = self.model.norm(hidden)
         return self._target.lm_head(hidden)
+
+    def release_request_state(self) -> None:
+        self.capture_gdn_states = False
+        self.gdn_states.clear()
+        # Layer hooks keep this list by reference; preserve the list itself.
+        hidden_states = self.__dict__.get("_hidden_states")
+        if hidden_states is not None:
+            hidden_states[:] = [None] * len(hidden_states)
 
     def __getattr__(self, name: str):
         return getattr(self._target, name)
@@ -149,12 +161,15 @@ class _TargetAdapter:
 class _VLMGDNStateCapture:
     def __init__(self, adapter: _TargetAdapter):
         self.adapter = adapter
+        self.adapter.gdn_states.clear()
+        self.adapter.capture_gdn_states = True
 
     def clear(self) -> None:
         self.adapter.gdn_states.clear()
 
     def close(self) -> None:
-        return None
+        self.adapter.capture_gdn_states = False
+        self.adapter.gdn_states.clear()
 
     def rollback(self, cache, accepted, trim) -> None:
         block_size = int(trim) + int(accepted) + 1
@@ -295,6 +310,13 @@ class _DFlash2SessionStore:
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+
+    def discard_model(self, model_key: Any) -> None:
+        """Drop this model's checkpoints after a failed or cancelled request."""
+        with self._lock:
+            self._entries[:] = [
+                entry for entry in self._entries if entry["model_key"] != model_key
+            ]
 
 
 _SESSION_STORE = _DFlash2SessionStore()
@@ -762,20 +784,30 @@ def stream_dflash2_generate(
     import dflash.model_mlx as runtime
 
     adapter = _adapter_for(model)
-    with runtime.wired_limit(adapter, [runtime.generation_stream]):
-        yield from _stream_generate_resumable(
-            model,
-            adapter,
-            draft,
-            tokenizer,
-            prompt,
-            # Qwen3.8's published/runtime-validated DFlash2 lane is block 5.
-            # The checkpoint's training maximum is larger, but using it as
-            # the serving block makes four-row verification become seq8 and
-            # cuts throughput roughly in half on M5 Max.
-            block_size=min(5, int(draft.config.block_size)),
-            max_tokens=int(max_tokens),
-            temperature=float(temperature),
-            top_p=float(top_p),
-            top_k=int(top_k),
-        )
+    adapter.release_request_state()
+    try:
+        with runtime.wired_limit(adapter, [runtime.generation_stream]):
+            yield from _stream_generate_resumable(
+                model,
+                adapter,
+                draft,
+                tokenizer,
+                prompt,
+                # Qwen3.8's published/runtime-validated DFlash2 lane is block 5.
+                # The checkpoint's training maximum is larger, but using it as
+                # the serving block makes four-row verification become seq8 and
+                # cuts throughput roughly in half on M5 Max.
+                block_size=min(5, int(draft.config.block_size)),
+                max_tokens=int(max_tokens),
+                temperature=float(temperature),
+                top_p=float(top_p),
+                top_k=int(top_k),
+            )
+    except BaseException:
+        # Includes GeneratorExit on client disconnect. Partial boundary
+        # checkpoints and old turns must not pin memory after an OOM.
+        _SESSION_STORE.discard_model((id(model), id(draft)))
+        raise
+    finally:
+        # Covers prefill/setup failures too, before a capture object exists.
+        adapter.release_request_state()
