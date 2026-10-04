@@ -114,7 +114,7 @@ def test_buffer_is_bounded_and_prompt_window_does_not_truncate_parked_history(
         _ar(host, backbone, token)
         ctx = getattr(host, priming._CTX_ATTR)
         assert len(ctx.pending_pairs) < priming._PARK_FOLD_BLOCK
-    assert [len(call) for call in host.calls] == [2, 32, 32]
+    assert [len(call) for call in host.calls] == [2] + [1] * 64
     backbone[0].offset += 1
     assert priming.take_primed(host, backbone, mx.array([74]))[1] == 74
     assert head[0].pairs[6:] == [(token * 10 - 10, token) for token in range(7, 75)]

@@ -323,13 +323,15 @@ def park_after_confirmed(
 def _flush_parked(host: Any, ctx: _PrimeContext) -> None:
     if not ctx.pending_pairs:
         return
-    hidden = mx.concatenate([pair[0] for pair in ctx.pending_pairs], axis=1)
-    tokens = mx.concatenate([pair[1] for pair in ctx.pending_pairs], axis=1)
-    host.mtp_forward(hidden, tokens, ctx.mtp_cache)
-    ctx.folded += int(tokens.shape[1])
+    # These pairs came from singleton AR forwards. Replay that same native
+    # head shape: native projection/rotary arithmetic can depend on row count
+    # and therefore change persisted QSA state. Work stays at this fold seam.
+    for hidden, tokens in ctx.pending_pairs:
+        host.mtp_forward(hidden, tokens, ctx.mtp_cache)
+        ctx.folded += int(tokens.shape[1])
+        if not _head_at_offset(ctx.mtp_cache, ctx.folded):
+            raise ValueError("parked MTP fold did not advance every head layer")
     ctx.pending_pairs.clear()
-    if not _head_at_offset(ctx.mtp_cache, ctx.folded):
-        raise ValueError("parked MTP fold did not advance every head layer")
     arrays = _snapshot_arrays(
         NativeMTPPrefixSnapshot(ctx.folded, ctx.mtp_cache, ctx.pending_hidden)
     )
