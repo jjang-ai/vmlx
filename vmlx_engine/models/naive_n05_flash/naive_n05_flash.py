@@ -24,11 +24,21 @@ from typing import Any, List, Optional
 import mlx.core as mx
 import mlx.nn as nn
 
-from vmlx_engine.utils.naive_prefill_policy import naive_use_padded_prefill
+from vmlx_engine.utils.naive_prefill_policy import naive_dsa_sparse_kernel, naive_dsa_stock_subchunk, naive_use_padded_prefill
 
 from .base import BaseModelArgs, create_attention_mask
 from .cache import CacheList, KVCache, RotatingKVCache
 from .switch_layers import SwitchGLU
+import os
+from vmlx_engine.jangt.router import router_tail
+from vmlx_engine.utils.gpu_keepalive import touch_global as _touch_keepalive
+_FUSED_ROUTER = os.environ.get("N05_FUSED_ROUTER", "1") != "0"
+from vmlx_engine.jangt.swa_blocked import swa_blocked_attention
+from vmlx_engine.jangt.dsa_sparse import dsa_sparse_attention_kernel
+DSA_SPARSE_MIN_LK = 4096               # dense masked SDPA is faster below (2.5k keys: 19.7 vs 23.4 ms)
+_SWA_BLOCKED = os.environ.get("N05_SWA_BLOCKED", "1") != "0"
+SWA_BLOCKED_MIN_L = 512                 # below this the dense masked SDPA is as fast (measured: L=130 0.30 vs 0.43 ms)
+
 
 
 @dataclass
@@ -68,6 +78,7 @@ class ModelArgs(BaseModelArgs):
     hybrid_layer_pattern: List[int] = field(default_factory=list)
     moe_layer_freq: List[int] = field(default_factory=list)
     jangtq: Optional[dict] = None
+    jangt: Optional[dict] = None          # JANGT trellis experts (mixed with JANGH per group)
     quantization: Optional[dict] = None
 
 
@@ -129,8 +140,13 @@ class Indexer(nn.Module):
 
     def scores(self, x, rope, offset, cache):
         B, L, _ = x.shape
-        q = rope(self.wq(x).reshape(B, L, self.n_heads, self.head_dim).transpose(0, 2, 1, 3), offset=offset)
-        k = rope(self.k_norm(self.wk(x))[:, None], offset=offset)             # (B,1,L,128)
+        if getattr(self, "_fused", None) is not None:                          # jangt/attn_fuse.py: one bf16 matmul
+            y = self._fused(x); a, b = self._split
+            yq, yk, yw = y[..., :a], y[..., a:b], y[..., b:]
+        else:
+            yq, yk, yw = self.wq(x), self.wk(x), self.weights_proj(x)
+        q = rope(yq.reshape(B, L, self.n_heads, self.head_dim).transpose(0, 2, 1, 3), offset=offset)
+        k = rope(self.k_norm(yk)[:, None], offset=offset)                     # (B,1,L,128)
         # The FP8 round trip is per key vector, so it is applied ONCE, before the key enters the cache (as the
         # reference does), not to the whole history on every decode step. Cached keys are fp32: an e4m3 value times
         # its fp32 scale is not representable in bf16.
@@ -140,9 +156,21 @@ class Indexer(nn.Module):
             q, k = q.astype(mx.float32), k.astype(mx.float32)
         if cache is not None:
             k, _ = cache.update_and_fetch(k, mx.zeros((B, 1, L, 0), dtype=k.dtype))
-        w = (self.weights_proj(x) * (self.n_heads ** -0.5)).astype(mx.float32)
-        s = mx.maximum(q @ k.swapaxes(-1, -2), 0.0)                             # (B,H,L,Lk)
-        return mx.sum(s * w.swapaxes(-1, -2)[..., None], axis=1)                # (B,L,Lk)
+        w = (yw * (self.n_heads ** -0.5)).astype(mx.float32)
+        Lk = k.shape[2]
+        # query sub-chunks bound the (B, H, qc, Lk) fp32 intermediate to <= ~1 GiB, independent of the prefill chunk
+        # size (an unchunked 4096-token chunk at 32k history would materialize 8.6 GB). Same math per element: exact.
+        qc = max(1, min(L, (1 << 30) // max(1, B * self.n_heads * Lk * 4)))
+        if qc >= L:
+            s = mx.maximum(q @ k.swapaxes(-1, -2), 0.0)                         # (B,H,L,Lk)
+            return mx.sum(s * w.swapaxes(-1, -2)[..., None], axis=1)            # (B,L,Lk)
+        kt = k.swapaxes(-1, -2); wt = w.swapaxes(-1, -2)[..., None]              # (B,1,128,Lk), (B,H,L,1)
+        outs = []
+        for a in range(0, L, qc):
+            sc_ = mx.maximum(q[:, :, a:a + qc] @ kt, 0.0)
+            outs.append(mx.sum(sc_ * wt[:, :, a:a + qc], axis=1))
+            mx.eval(outs[-1])                                                   # free the sub-chunk intermediate now
+        return mx.concatenate(outs, axis=1)
 
 
 class Attention(nn.Module):
@@ -165,6 +193,17 @@ class Attention(nn.Module):
         self.indexer = None if is_swa else Indexer(a)
 
     def _full_sdpa(self, q, k, v, mask, sinks):
+        # DSA top-k chunks (array mask): MLX's padded fused kernel is 2.0-2.7x SLOWER than the stock kernel when an
+        # array mask is present (2048-query chunk: 4k keys 37 vs 18 ms, 8k 159 vs 59, 16k 258 vs 100; 2026-10-09).
+        # Stock arithmetic, queries sub-chunked so the materialized score tensor stays <= 2 GiB. Per-row reductions
+        # are unchanged, so the output equals the unchunked stock path. Identity: naive_prefill_policy.
+        if naive_dsa_stock_subchunk() and isinstance(mask, mx.array) and q.shape[2] > 8 and sinks is None:
+            qc = max(64, min(q.shape[2], (2 << 30) // max(1, q.shape[1] * k.shape[2] * 4)))
+            if qc >= q.shape[2]:
+                return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask, sinks=sinks)
+            return mx.concatenate([mx.fast.scaled_dot_product_attention(q[:, :, s:s + qc], k, v, scale=self.scale,
+                                                                        mask=mask[..., s:s + qc, :], sinks=sinks)
+                                   for s in range(0, q.shape[2], qc)], axis=2)
         # MLX's full fused kernel requires equal Q/V head widths. Native
         # 192/128 attention otherwise materializes a history-sized score
         # tensor. Zero-padding V preserves QK, scale, mask and softmax;
@@ -193,17 +232,27 @@ class Attention(nn.Module):
         B, L, _ = x.shape
         kv_cache, idx_cache = (cache[0], cache[1]) if (cache is not None and not self.is_swa) else (cache, None)
         off = kv_cache.offset if kv_cache is not None else 0
-        q = self.rope(self.q_proj(x).reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3), offset=off)
-        k = self.rope(self.k_proj(x).reshape(B, L, self.n_kv, -1).transpose(0, 2, 1, 3), offset=off)
-        v = self.v_proj(x).reshape(B, L, self.n_kv, -1).transpose(0, 2, 1, 3)
-        if self.a.attention_value_scale is not None:
+        if getattr(self, "_qkv", None) is not None:                             # jangt/attn_fuse.py: one quantized matmul,
+            y = self._qkv(x); a, b = self._qkv_split                            # value scale folded into the v rows
+            yq, yk, yv = y[..., :a], y[..., a:b], y[..., b:]
+        else:
+            yq, yk, yv = self.q_proj(x), self.k_proj(x), self.v_proj(x)
+        q = self.rope(yq.reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3), offset=off)
+        k = self.rope(yk.reshape(B, L, self.n_kv, -1).transpose(0, 2, 1, 3), offset=off)
+        v = yv.reshape(B, L, self.n_kv, -1).transpose(0, 2, 1, 3)
+        if self.a.attention_value_scale is not None and not getattr(self, "_value_folded", False):
             v = v * self.a.attention_value_scale
         if kv_cache is not None:
             k, v = kv_cache.update_and_fetch(k, v)
-        sinks = self.attention_sink_bias.astype(q.dtype) if self.attention_sink_bias is not None else None
+        sinks = getattr(self, "_sinks_bf16", None)
+        if sinks is None or sinks.dtype != q.dtype:
+            sinks = self.attention_sink_bias.astype(q.dtype) if self.attention_sink_bias is not None else None
         if self.is_swa:
             Lk = k.shape[2]
-            if self.n_heads * L * Lk * 4 <= SDPA_SINKS_SAFE_BYTES:
+            if _SWA_BLOCKED and L >= SWA_BLOCKED_MIN_L:
+                # exact blocked window attention: 2W-key slab per W-query block (jangt/swa_blocked.py)
+                o = swa_blocked_attention(q, k, v, self.scale, sinks, self.a.sliding_window)
+            elif self.n_heads * L * Lk * 4 <= SDPA_SINKS_SAFE_BYTES:
                 o = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask, sinks=sinks)
             else:
                 # large prefill chunk: MLX's blocked SDPA mishandles sinks (see note above). The cached keys of a
@@ -226,6 +275,12 @@ class Attention(nn.Module):
                 causal = qpos >= kpos
                 sc = mx.where(causal[None], sc, -mx.inf)
                 sel = mx.argpartition(-sc, kth=topk - 1, axis=-1)[..., :topk]
+                if (sinks is None and Lk >= DSA_SPARSE_MIN_LK and naive_dsa_sparse_kernel()
+                        and q.dtype == mx.bfloat16 and topk % 32 == 0):
+                    # per-query sparse kernel: O(L x top_k) instead of dense masked O(L x Lk); ~30 ms per 2048-query
+                    # chunk at any Lk vs 63/125/250 ms dense at 8k/16k/32k, same fp32-oracle error (jangt/dsa_sparse.py)
+                    o = dsa_sparse_attention_kernel(q, k, v, sel, self.scale, off)
+                    return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
                 keep = mx.put_along_axis(mx.zeros(sc.shape, dtype=mx.bool_), sel, mx.array(True), axis=-1)
                 o = self._full_sdpa(q, k, v, (keep & causal[None])[:, None], sinks)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
@@ -259,14 +314,20 @@ class MoE(nn.Module):
 
     def __call__(self, x):
         logits = x.astype(mx.float32) @ self.gate.weight.astype(mx.float32).T
-        scores = mx.sigmoid(logits)
-        choice = scores + self.gate.e_score_correction_bias.astype(mx.float32)
-        idx = mx.argpartition(-choice, kth=self.k - 1, axis=-1)[..., : self.k]
-        w = mx.take_along_axis(scores, idx, axis=-1)
-        if self.norm:
-            w = w / (mx.sum(w, axis=-1, keepdims=True) + 1e-20)
-        w = w * self.scaling
-        if getattr(self.switch_mlp, "is_jangtq2", False):
+        if _FUSED_ROUTER:
+            # one kernel for sigmoid + bias choice + top-k + normalize + scale (vmlx_engine/jangt/router.py)
+            idx, w = router_tail(logits.reshape(-1, logits.shape[-1]), self.gate.e_score_correction_bias, self.k, bool(self.norm),
+                                 float(self.scaling))
+            idx, w = idx.reshape(*logits.shape[:-1], self.k), w.reshape(*logits.shape[:-1], self.k)
+        else:
+            scores = mx.sigmoid(logits)
+            choice = scores + self.gate.e_score_correction_bias.astype(mx.float32)
+            idx = mx.argpartition(-choice, kth=self.k - 1, axis=-1)[..., : self.k]
+            w = mx.take_along_axis(scores, idx, axis=-1)
+            if self.norm:
+                w = w / (mx.sum(w, axis=-1, keepdims=True) + 1e-20)
+            w = w * self.scaling
+        if getattr(self.switch_mlp, "is_jangtq2", False) or getattr(self.switch_mlp, "is_jangt", False):
             return self.switch_mlp.routed(x, idx, w).astype(x.dtype)
         y = self.switch_mlp(x, idx)
         return mx.sum(y * w[..., None].astype(y.dtype), axis=-2).astype(x.dtype)
@@ -323,12 +384,18 @@ class Model(nn.Module):
         self.model = NaiveModel(args)
         self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
         jt = args.jangtq or {}
-        if jt:
+        if args.jangt:
+            # JANGT bundles: every routed stack is a JTMixedSwitchGLU (each group JANGT or JANGH); the jangtq block
+            # still declares the JANGH codebooks used by the JANGH groups.
+            from vmlx_engine.jangt.switch import install_jangt
+            self.jangt_modules = install_jangt(self, {"jangt": args.jangt, "quantization": args.quantization})
+        elif jt:
             if int(jt.get("version", 0)) != 2 or jt.get("codebook_family") != "odd-cubic":
                 raise ValueError(f"JANGH: unsupported jangtq block {jt}")
             self.jangh_modules = _install_jangh_experts(self, args)
 
     def __call__(self, inputs, cache=None, input_embeddings=None):
+        _touch_keepalive()                     # refresh the GPU keep-alive idle timer (utils/gpu_keepalive.py)
         return self.lm_head(self.model(inputs, cache, input_embeddings))
 
     def sanitize(self, weights):

@@ -8,10 +8,13 @@ def expected_payload(model):
             expected[f"{path}.tq2_packed"] = ((1, module.output_dims, module.input_dims * module.bits // 32), "uint32")
             expected[f"{path}.tq2_scales"] = ((1, module.output_dims), "float16")
             continue
-        if not getattr(module, "is_jangtq2", False):
+        mixed = getattr(module, "is_jangt", False)                  # JANGT mixed stack: only its JANGH projections
+        if not getattr(module, "is_jangtq2", False) and not mixed:
             continue
         for projection in ("gate_proj", "up_proj", "down_proj"):
             linear = getattr(module, projection)
+            if mixed and not hasattr(linear, "tq2_packed"):
+                continue
             # Generic text loaders may already have bound shard arrays. Their
             # shapes are not an independent oracle for validating that shard.
             shapes = {

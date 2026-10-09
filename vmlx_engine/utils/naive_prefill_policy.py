@@ -59,8 +59,27 @@ NAIVE_PADDED_PREFILL_IDENTITY = "naive_padded_prefill_v1"
 def naive_padded_prefill_identity() -> str | None:
     """Cache-identity fragment: states made under different prefill arithmetic are never mixed."""
     mode = naive_padded_prefill_mode()
+    sub = ("+dsa_stock_subchunk_v1" if naive_dsa_stock_subchunk() else "") + \
+        ("+dsa_sparse_kernel_v1" if naive_dsa_sparse_kernel() else "")
     if mode == "on":
-        return NAIVE_PADDED_PREFILL_IDENTITY
+        return NAIVE_PADDED_PREFILL_IDENTITY + sub
     if mode == "auto":
-        return f"naive_padded_prefill_auto_v1:{naive_padded_prefill_auto_bytes()}"
-    return None
+        return f"naive_padded_prefill_auto_v1:{naive_padded_prefill_auto_bytes()}" + sub
+    return ("naive_stock" + sub) if sub else None
+
+
+def naive_dsa_stock_subchunk() -> bool:
+    """OPT-IN (VMLX_NAIVE_DSA_STOCK_SUBCHUNK=1): DSA top-k (array-mask) prefill chunks use STOCK SDPA, query-sub-chunked
+    to <= 2 GiB of scores, instead of the padded fused kernel. Standalone the padded kernel is 2.0-2.7x slower with an
+    array mask, but end to end the gain measured only +2-4% (16k/24k, 2026-10-09, gap unexplained) and stock is LESS
+    accurate (6.9e-4 vs the padded path's < 4.9e-4 bf16 unit roundoff against the fp32 oracle in
+    tests/test_naive_padded_prefill.py). Default OFF. Part of the cache identity."""
+    return os.environ.get("VMLX_NAIVE_DSA_STOCK_SUBCHUNK", "0").strip().lower() in _ON
+
+
+def naive_dsa_sparse_kernel() -> bool:
+    """DSA top-k prefill chunks with >= 4096 keys use the per-query sparse kernel (vmlx_engine/jangt/dsa_sparse.py):
+    O(L x top_k), ~30 ms per 2048-query chunk at any history vs 63/125/250 ms dense at 8k/16k/32k, with the same error
+    against an fp32 oracle as the padded dense path (1.7e-3, bf16 output rounding; 2026-10-09). Default ON;
+    VMLX_NAIVE_DSA_SPARSE_KERNEL=0 restores dense. Part of the cache identity."""
+    return os.environ.get("VMLX_NAIVE_DSA_SPARSE_KERNEL", "1").strip().lower() not in _OFF
