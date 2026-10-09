@@ -626,6 +626,12 @@ describe('tool auto-continue policy', () => {
       ),
     ).toBe(true)
     expect(requestsNoToolCalls('Without using any tools, answer directly.')).toBe(true)
+    expect(requestsNoToolCalls('Now solve this without tools: what is the probability?')).toBe(true)
+    expect(requestsNoToolCalls('Please answer the question without using any tools.')).toBe(true)
+    expect(requestsNoToolCalls('Respond without tools, using the history.')).toBe(true)
+    expect(requestsNoToolCalls('Explain why someone says "solve this without tools".')).toBe(false)
+    expect(requestsNoToolCalls('Solve this without tools unless a file is missing.')).toBe(false)
+    expect(requestsNoToolCalls('Can this model solve this without tools?')).toBe(false)
     expect(
       requestsNoToolCalls(
         '[FOLLOW] Without calling any tool, recall the previous result.',

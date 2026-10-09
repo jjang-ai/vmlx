@@ -473,5 +473,10 @@ export function requestsNoToolCalls(text: string): boolean {
     /(?:^|[.!?;:\]\n])\s*(?:please\s+)?(?:do not|don['’]?t|dont|never)\s+(?:call|use)\s+(?:(?:a|the|any|another|additional|more)\s+)?tools?\b(?!\s+unless)/i
   const explicitWithoutTools =
     /(?:^|[.!?;:\]\n])\s*(?:please\s+)?without\s+(?:(?:using|calling)\s+)?(?:any\s+)?tools?\b/i
-  return explicitProhibition.test(text) || explicitWithoutTools.test(text)
+  // Imperative phrasing can put the restriction after the verb, as in
+  // "Now solve this without tools:". Do not match quotations, explanations
+  // about the phrase, or conditional permission to use tools.
+  const imperativeWithoutTools =
+    /(?:^|[.!?;:\]\n])\s*(?:please\s+)?(?:now\s+)?(?:answer|respond|solve|calculate|compute|work\s+(?:this|it)\s+out)(?:\s+(?:this|that|it|directly|the\s+(?:question|problem)))?\s+without\s+(?:(?:using|calling)\s+)?(?:any\s+)?tools?\b(?!\s+(?:unless|if|when))/i
+  return explicitProhibition.test(text) || explicitWithoutTools.test(text) || imperativeWithoutTools.test(text)
 }
