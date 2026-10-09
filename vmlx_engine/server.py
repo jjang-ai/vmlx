@@ -109,6 +109,7 @@ from .api.models import (
     InputTokensDetails,
     ModelsResponse,
     PromptTokensDetails,
+    CompletionTokensDetails,
     ResponsesFunctionCall,
     ResponsesObject,
     ResponsesOutputMessage,
@@ -1496,7 +1497,7 @@ def _strip_think_markers_keep_spacing(text: str) -> str:
     return _THINK_MARKER_RE.sub(_replacement, text)
 
 
-def _strip_think_for_tool_parse(text: str) -> str:
+def _strip_think_for_tool_parse(text: str, *, preserve_whitespace: bool = False) -> str:
     """Strip residual think tags before tool call parsing.
 
     Handles <think>...</think>, <mm:think>...</mm:think>, and
@@ -1518,7 +1519,7 @@ def _strip_think_for_tool_parse(text: str) -> str:
                 _, _, stripped = text.partition(end_tag)
                 break
     stripped = _strip_think_markers_keep_spacing(stripped)
-    return stripped.strip()
+    return stripped if preserve_whitespace else stripped.strip()
 
 
 def _jangtq_bits_from_profile(profile: Any) -> int | None:
@@ -1904,6 +1905,7 @@ def _select_responses_visible_text(
     raw_text: str | None,
     tool_calls: list | None,
     suppress_tools: bool,
+    preserve_whitespace: bool = False,
 ) -> str:
     """Select non-stream Responses text without reviving suppressed markup.
 
@@ -1913,7 +1915,7 @@ def _select_responses_visible_text(
     control payload and makes non-stream behavior disagree with SSE.
     """
     if cleaned_text:
-        return clean_output_text(cleaned_text)
+        return clean_output_text(cleaned_text, preserve_whitespace=preserve_whitespace)
     if suppress_tools or tool_calls:
         return ""
     if raw_text and _has_tool_marker_or_partial_suffix(raw_text):
@@ -1921,7 +1923,7 @@ def _select_responses_visible_text(
         # rejected.  Never revive those rejected bytes as visible Responses
         # output; valid calls arrive through ``tool_calls`` above.
         return ""
-    return clean_output_text(raw_text) if raw_text else ""
+    return clean_output_text(raw_text, preserve_whitespace=preserve_whitespace) if raw_text else ""
 
 
 def _responses_messages_have_tool_result_after_latest_user(messages: list[dict]) -> bool:
@@ -9821,6 +9823,20 @@ def load_model(
         )
 
 
+def _record_reasoning_token_usage(output, parser, tokenizer):
+    from .reasoning.usage import count_reasoning_tokens
+    ids = _output_token_ids_for_reasoning(output)
+    if ids is not None:
+        output.reasoning_tokens = count_reasoning_tokens(ids, parser, tokenizer)
+
+
+def _reasoning_usage_details(output):
+    count = getattr(output, "reasoning_tokens", None)
+    if type(count) is int and 0 <= count <= getattr(output, "completion_tokens", 0):
+        return CompletionTokensDetails(reasoning_tokens=count)
+    return None
+
+
 def get_usage(output: GenerationOutput) -> Usage:
     """Extract usage metrics from GenerationOutput."""
     total_prompt_tokens = (
@@ -9832,6 +9848,7 @@ def get_usage(output: GenerationOutput) -> Usage:
     cached = getattr(output, "cached_tokens", 0)
     detail = getattr(output, "cache_detail", "") or None
     return Usage(
+        completion_tokens_details=_reasoning_usage_details(output),
         prompt_tokens=total_prompt_tokens,
         completion_tokens=total_completion_tokens,
         total_tokens=total_prompt_tokens + total_completion_tokens,
@@ -9850,6 +9867,7 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
     cached = getattr(output, "cached_tokens", 0)
     detail = getattr(output, "cache_detail", "") or None
     return ResponsesUsage(
+        output_tokens_details=_reasoning_usage_details(output),
         input_tokens=_pt,
         output_tokens=_ct,
         total_tokens=_pt + _ct,
@@ -20912,6 +20930,7 @@ async def create_chat_completion(
     reasoning_text = None
     _private_tool_candidate = None
     content_for_parsing = output.text
+    request_parser = None
     if _reasoning_parser:
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
@@ -21007,6 +21026,7 @@ async def create_chat_completion(
         # special tokens that clean_output_text strips for display.
         _raw_for_parse = getattr(output, "raw_text", "") or output.text
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
+        _record_reasoning_token_usage(output, request_parser, engine.tokenizer)
         if _is_dsv4:
             token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
                 _output_token_ids_for_reasoning(output),
@@ -21043,9 +21063,15 @@ async def create_chat_completion(
         # same cleaner that the engine applies to `output.text` for display,
         # but AFTER the parser has done its structural extraction.
         if content_for_parsing:
-            content_for_parsing = clean_output_text(content_for_parsing)
+            content_for_parsing = clean_output_text(
+                content_for_parsing,
+                preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+            )
         if reasoning_text:
-            reasoning_text = clean_output_text(reasoning_text)
+            reasoning_text = clean_output_text(
+                reasoning_text,
+                preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+            )
 
     _ns_visible_answer_finish_reason: str | None = None
 
@@ -21242,7 +21268,10 @@ async def create_chat_completion(
             except Exception as _nse:
                 logger.error("non-stream chat visible answer pass failed: %s", _nse)
 
-    _cc_parse_text = _strip_think_for_tool_parse(content_for_parsing)
+    _cc_parse_text = _strip_think_for_tool_parse(
+        content_for_parsing,
+        preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+    )
 
     # Parse tool calls from output using configured parser (skip when tool_choice="none").
     # Capture dropped-call / schema-validation diagnostics so the JSON reply
@@ -21396,7 +21425,10 @@ async def create_chat_completion(
     finish_reason = _ns_visible_answer_finish_reason or output.finish_reason
     if tool_calls and _normalize_responses_finish_reason(finish_reason) != "length":
         finish_reason = "tool_calls"
-    response_content = clean_output_text(cleaned_text) if cleaned_text else None
+    response_content = clean_output_text(
+        cleaned_text,
+        preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+    ) if cleaned_text else None
     if response_content:
         response_content = _finalize_visible_text_for_request(response_content, request, minimum_partial=4)
     response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
@@ -23175,6 +23207,8 @@ def _adapt_omni_chat_completion_to_responses_payload(
             "total_tokens": usage.get("total_tokens", 0),
             **({"input_tokens_details": dict(usage["prompt_tokens_details"])}
                if isinstance(usage.get("prompt_tokens_details"), dict) else {}),
+            **({"output_tokens_details": dict(usage["completion_tokens_details"])}
+               if isinstance(usage.get("completion_tokens_details"), dict) else {}),
         },
     }
     if terminal.incomplete_details:
@@ -23467,6 +23501,8 @@ async def _adapt_omni_chat_stream_to_responses(
                 ),
                 **({"input_tokens_details": dict(chat_usage["prompt_tokens_details"])}
                    if isinstance(chat_usage.get("prompt_tokens_details"), dict) else {}),
+            **({"output_tokens_details": dict(chat_usage["completion_tokens_details"])}
+               if isinstance(chat_usage.get("completion_tokens_details"), dict) else {}),
             }
 
     async for raw in chat_stream.body_iterator:
@@ -24474,6 +24510,7 @@ async def create_response(
     reasoning_text = None
     _private_tool_candidate = None
     content_for_parsing = output.text
+    request_parser = None
     if _reasoning_parser:
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
@@ -24583,6 +24620,7 @@ async def create_response(
                 f"tail={(_raw_for_parse or '')[-200:]!r}"
             )
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
+        _record_reasoning_token_usage(output, request_parser, engine.tokenizer)
         if _is_dsv4_resp_msgs:
             logger.info(
                 f"DSV4 (/v1/responses) parser: reasoning_len="
@@ -24628,9 +24666,15 @@ async def create_response(
         # split. Applied AFTER extract_reasoning so parser still sees the
         # special tokens it needs for detection.
         if content_for_parsing:
-            content_for_parsing = clean_output_text(content_for_parsing)
+            content_for_parsing = clean_output_text(
+                content_for_parsing,
+                preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+            )
         if reasoning_text:
-            reasoning_text = clean_output_text(reasoning_text)
+            reasoning_text = clean_output_text(
+                reasoning_text,
+                preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+            )
 
     # Reasoning-runaway backstop (non-streaming responses): mirror the
     # streaming bounded thinking-off answer pass for degraded reasoners.
@@ -24818,7 +24862,10 @@ async def create_response(
             except Exception as _nse:
                 logger.error("non-stream responses visible answer pass failed: %s", _nse)
 
-    parse_text = _strip_think_for_tool_parse(content_for_parsing)
+    parse_text = _strip_think_for_tool_parse(
+        content_for_parsing,
+        preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
+    )
 
     # Parse tool calls (skip when tool_choice="none"); capture dropped-call /
     # schema-validation diagnostics for the response `warnings` field.
@@ -25012,6 +25059,7 @@ async def create_response(
         raw_text=content_for_parsing,
         tool_calls=tool_calls,
         suppress_tools=_suppress_tools,
+        preserve_whitespace=bool(getattr(request_parser, "preserve_native_whitespace", False)),
     )
     if final_text:
         final_text = _finalize_visible_text_for_request(final_text, request, minimum_partial=4)
@@ -25866,6 +25914,9 @@ async def stream_chat_completion(
         if include_usage and not terminal_usage:
             payload["usage"] = None
         if terminal_usage:
+            details = _reasoning_usage_details(last_output)
+            if details is not None and payload.get("usage"):
+                payload["usage"]["completion_tokens_details"] = details.model_dump()
             if _prefill_usage_extension and payload.get("usage"):
                 if _prefill_usage is not None:
                     payload["usage"]["vmlx_prefill"] = _prefill_usage
@@ -26304,6 +26355,8 @@ async def stream_chat_completion(
 
             delta_text = output.new_text
             last_output = output
+            if output.finished:
+                _record_reasoning_token_usage(output, request_parser, engine.tokenizer)
 
             # Track token counts from output (updated each chunk)
             if hasattr(output, "prompt_tokens") and output.prompt_tokens:
@@ -28806,6 +28859,8 @@ async def stream_responses_api(
                 break
 
             last_output = output
+            if output.finished:
+                _record_reasoning_token_usage(output, request_parser, engine.tokenizer)
             delta_text = output.new_text
 
             # Track token counts from output BEFORE any continue statements
@@ -30442,6 +30497,8 @@ async def stream_responses_api(
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            **({"output_tokens_details": _reasoning_usage_details(last_output).model_dump()}
+               if _reasoning_usage_details(last_output) is not None else {}),
             **(
                 {
                     "input_tokens_details": (

@@ -43,6 +43,7 @@ class GenerationOutput:
     # Optional scheduler production timestamp; preserve across terminal fences.
     generated_at: float | None = None
     prefill_usage: dict | None = None
+    reasoning_tokens: int | None = None
 
 
 class BaseEngine(ABC):

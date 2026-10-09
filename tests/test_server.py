@@ -7435,3 +7435,34 @@ class TestOrphanParameterMarkerScope:
             assert not any(e.get('item', {}).get('type') == 'function_call' for e in events)
         assert actual_reasoning.strip() == reasoning
         assert visible.strip() == 'Done.'
+
+
+def test_reasoning_usage_maps_real_counts_to_chat_and_responses():
+    from vmlx_engine.engine.base import GenerationOutput
+    from vmlx_engine.server import get_usage, _get_responses_usage
+    output = GenerationOutput(text='answer', prompt_tokens=10, completion_tokens=8, reasoning_tokens=5)
+    assert get_usage(output).model_dump()['completion_tokens_details'] == {'reasoning_tokens':5}
+    assert _get_responses_usage(output).model_dump()['output_tokens_details'] == {'reasoning_tokens':5}
+    assert get_usage(output).total_tokens == 18
+
+
+def test_reasoning_usage_does_not_invent_unavailable_or_invalid_counts():
+    from vmlx_engine.engine.base import GenerationOutput
+    from vmlx_engine.server import get_usage
+    for count in [None,-1,True,9]:
+        output = GenerationOutput(text='answer', completion_tokens=8, reasoning_tokens=count)
+        assert 'completion_tokens_details' not in get_usage(output).model_dump(exclude_none=True)
+
+
+def test_responses_native_whitespace_selection():
+    from vmlx_engine.server import _select_responses_visible_text
+    args = dict(cleaned_text="\n\nAnswer.\n", raw_text=None, tool_calls=None, suppress_tools=False)
+    assert _select_responses_visible_text(**args, preserve_whitespace=True) == "\n\nAnswer.\n"
+    assert _select_responses_visible_text(**args) == "Answer."
+
+
+def test_native_whitespace_survives_tool_preparation():
+    from vmlx_engine.server import _strip_think_for_tool_parse
+    text = "\n\nAnswer.\n"
+    assert _strip_think_for_tool_parse(text, preserve_whitespace=True) == text
+    assert _strip_think_for_tool_parse(text) == "Answer."

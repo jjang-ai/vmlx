@@ -651,6 +651,12 @@ class PromptTokensDetails(BaseModel):
     cache_detail: str | None = None
 
 
+class CompletionTokensDetails(BaseModel):
+    """Generated tokens inside reasoning spans, excluding delimiter tokens."""
+
+    reasoning_tokens: int = 0
+
+
 class Usage(BaseModel):
     """Token usage statistics."""
 
@@ -658,6 +664,7 @@ class Usage(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
     prompt_tokens_details: PromptTokensDetails | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -1326,6 +1333,7 @@ class ResponsesUsage(BaseModel):
     output_tokens: int = 0
     total_tokens: int = 0
     input_tokens_details: InputTokensDetails | None = None
+    output_tokens_details: CompletionTokensDetails | None = None
 
 
 class ResponsesObject(BaseModel):

@@ -53,7 +53,7 @@ def strip_marker_tokens_delta(text: str) -> str:
     return text
 
 
-def clean_output_text(text: str) -> str:
+def clean_output_text(text: str, *, preserve_whitespace: bool = False) -> str:
     """
     Clean model output by removing special tokens.
 
@@ -77,7 +77,9 @@ def clean_output_text(text: str) -> str:
     # so we can still see the `<channel|>` endmarker — if we strip
     # channel markers first, the degraded block has no delimiter and
     # we'd collapse reasoning into content.
-    text = re.sub(r"^\s*thought\n.*?<channel\|>", "", text, flags=re.DOTALL).lstrip()
+    text = re.sub(r"^\s*thought\n.*?<channel\|>", "", text, flags=re.DOTALL)
+    if not preserve_whitespace:
+        text = text.lstrip()
 
     # Now strip special tokens (including `<|channel>` SOC that may still
     # be there with the degraded form's `thought\n` visible right after).
@@ -92,9 +94,7 @@ def clean_output_text(text: str) -> str:
     if text.startswith("thought\n"):
         text = text[len("thought\n"):]
 
-    text = text.strip()
-
-    return text
+    return text if preserve_whitespace else text.strip()
 
 
 # =============================================================================

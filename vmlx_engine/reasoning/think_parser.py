@@ -323,7 +323,9 @@ class BaseThinkingReasoningParser(ReasoningParser):
         # Case 3: Only start tag (incomplete reasoning, no end yet)
         if self.start_token in text:
             _, _, reasoning = text.partition(self.start_token)
-            return reasoning.strip() or None, None
+            if not getattr(self, "preserve_native_whitespace", False):
+                reasoning = reasoning.strip()
+            return reasoning or None, None
 
         # Case 4a: No tags but think_in_prompt (special-token-eaten path)
         if self._think_in_prompt:
