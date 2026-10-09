@@ -10982,8 +10982,13 @@ class TestStreamingWhitespacePreservation:
         """Non-stream builders operate on the complete output and SHOULD
         use clean_output_text (which does .strip()). Verify the split."""
         src = Path(self.SERVER).read_text()
-        # Both chat_completions and responses non-stream paths have post-parse clean
-        assert src.count("content_for_parsing = clean_output_text(content_for_parsing)") == 2
+        # Both chat_completions and responses non-stream paths have post-parse clean. Whitespace preservation is an
+        # explicit per-parser opt-in (preserve_native_whitespace, Naive think_xml); every other parser still strips.
+        import re
+        calls = re.findall(r"content_for_parsing = clean_output_text\(\s*content_for_parsing\b([^)]*)\)", src)
+        assert len(calls) == 2
+        for extra in calls:
+            assert extra.strip() in ("", ",") or "preserve_native_whitespace" in extra, extra
 
     def test_clean_output_text_still_strips(self):
         """The whole-output variant still does `.strip()` — important for

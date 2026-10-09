@@ -21,7 +21,9 @@ def test_terminal_receipt_is_negotiated_and_excludes_initial_burst(monkeypatch, 
     monkeypatch.setitem(__import__('sys').modules, 'vmlx_engine.context_limits', context)
     ns = dict(json=json, math=math, include_usage=True, response_id='test',
               _prefill_usage_extension=telemetry, _prefill_usage=None,
-              _decode_first_ts=10., _decode_last_ts=12., _decode_first_count=first_count)
+              _decode_first_ts=10., _decode_last_ts=12., _decode_first_count=first_count,
+              # the serializer reads reasoning-token usage from the stream's last output (None: no reasoning span)
+              _reasoning_usage_details=lambda _output: None, last_output=None)
     exec(compile(ast.Module(body=[snapshot, serializer], type_ignores=[]), '<production-chat-serializer>', 'exec'), ns)
     dump = ns['_dump_chat_chunk']
     assert json.loads(dump({'choices': [{'delta': {'content': 'x'}}]}))['usage'] is None

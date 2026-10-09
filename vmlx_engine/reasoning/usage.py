@@ -9,7 +9,15 @@ zero. Call once on completed output, outside the decode loop.
 def count_reasoning_tokens(token_ids, parser, tokenizer):
     if token_ids is None or parser is None:
         return None
-    tags = parser.reasoning_tag_token_seqs(tokenizer)
+    # Accounting is optional metadata: a parser without the token-delimiter contract (duck-typed parsers, test
+    # doubles) or a tag lookup that fails must omit the count, never abort the stream that is reporting it.
+    tag_fn = getattr(parser, "reasoning_tag_token_seqs", None)
+    if not callable(tag_fn):
+        return None
+    try:
+        tags = tag_fn(tokenizer) or {}
+    except Exception:
+        return None
     starts, ends = tags.get('start') or [], tags.get('end') or []
     if not starts or not ends:
         return None
