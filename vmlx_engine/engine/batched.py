@@ -12,6 +12,7 @@ For MLLM models, this engine supports a hybrid approach:
 This is necessary because BatchGenerator only supports token IDs, not pixel_values.
 """
 
+from vmlx_engine.utils.gpu_keepalive import touch_global as _gpu_keepalive_touch
 import asyncio
 import hashlib
 import importlib
@@ -1684,6 +1685,8 @@ class BatchedEngine(BaseEngine):
             self._processor = None
             self._mllm_instance = None
             self._loaded = False
+            from ..utils.gpu_keepalive import stop_global
+            stop_global()
             self._shutdown_step_executor()
             logger.info("BatchedEngine stopped")
 
@@ -2614,6 +2617,7 @@ class BatchedEngine(BaseEngine):
         Returns:
             GenerationOutput with complete text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
 
@@ -2792,6 +2796,7 @@ class BatchedEngine(BaseEngine):
         Yields:
             GenerationOutput with incremental text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
 

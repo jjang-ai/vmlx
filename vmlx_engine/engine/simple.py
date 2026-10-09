@@ -6,6 +6,7 @@ This engine wraps mlx-lm directly with zero overhead for optimal
 performance when serving a single user at a time.
 """
 
+from vmlx_engine.utils.gpu_keepalive import touch_global as _gpu_keepalive_touch
 import asyncio
 import functools
 import logging
@@ -517,6 +518,8 @@ class SimpleEngine(BaseEngine):
         # The process-wide direct-model executor intentionally survives model
         # teardown.  A later SimpleEngine reuses the same MLX-owning worker;
         # shutting it down here recreates the Stream(gpu,0) reload crash.
+        from ..utils.gpu_keepalive import stop_global
+        stop_global()
         self._model_executor = None
         logger.info("SimpleEngine stopped")
 
@@ -564,6 +567,7 @@ class SimpleEngine(BaseEngine):
         Returns:
             GenerationOutput with complete text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
         # SimpleEngine has no prefix cache — eat the bypass kwarg so it
@@ -640,6 +644,7 @@ class SimpleEngine(BaseEngine):
         Yields:
             GenerationOutput with incremental text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
         # SimpleEngine has no prefix cache — eat the bypass kwarg so it
