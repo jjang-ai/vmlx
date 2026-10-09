@@ -78,3 +78,9 @@ describe('JANGH legacy bundle identity', () => {
     expect(formatJangQuantizationLabel({ format: 'jangtq' })).toBe('JANGTQ')
   })
 })
+
+
+it('distinguishes mixed JANGT payload metadata from plain JANGH', () => {
+  expect(formatJangQuantizationLabel({format: 'jangtq2', jangt: {version: 1, code: 'v2_halfbits'}})).toBe('JANGT')
+  expect(formatJangQuantizationLabel({format: 'jangtq2'})).toBe('JANGH')
+})
