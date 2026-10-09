@@ -1657,6 +1657,13 @@ def _set_wired_limit_for_model(weight_files):
             f"  Wired limit set to {target / 1e9:.0f} GB "
             f"(model {total_bytes / 1e9:.0f} GB)"
         )
+        # >= 1.5 s of GPU idle with a large resident model costs the next call a 0.6-1.2 s wake penalty (measured
+        # 2026-10-09, Naive B97 on M5 Max: TTFT 0.39 s -> 1.0-1.6 s). utils/gpu_keepalive.py removes it.
+        try:
+            from vmlx_engine.utils.gpu_keepalive import touch_global
+            touch_global()
+        except Exception as _e:
+            logger.warning(f"  GPU keep-alive not started: {_e}")
     except Exception as e:
         logger.warning(f"  Could not set wired limit: {e}")
 
