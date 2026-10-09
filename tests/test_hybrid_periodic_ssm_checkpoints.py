@@ -720,3 +720,218 @@ def test_process_prompts_publishes_clean_checkpoints_first_and_keeps_periodic_ou
     # upstream fallback (deferred clean re-derive) still runs afterwards.
     fallback_store = src.index("if _periodic_checkpoints:", handoff)
     assert src.index("if _media_context_for_ssm:", fallback_store) > fallback_store
+
+
+# ---------------------------------------------------------------------------
+# Review hardening: the opt-in feature must never fail a turn
+# ---------------------------------------------------------------------------
+
+
+def test_store_consumes_snapshot_list_and_survives_a_raising_backpressure_hook(caplog):
+    """A broken waiter costs its entry, not the request.
+
+    ``_store_periodic_ssm_checkpoints`` runs inside the per-request prefill
+    ``try`` of ``_process_prompts``; an escaping exception there is handled as
+    a prefill failure for a turn that already sampled its first token.
+    """
+    import logging
+
+    class _BrokenWaiterCache(_RecordingCache):
+        def wait_for_disk_room(self, layers, timeout=5.0):
+            raise RuntimeError("accounting exploded")
+
+    gen = _bare_generator()
+    gen._ssm_state_cache = _BrokenWaiterCache()
+    req = SimpleNamespace(request_id="r4")
+    snapshots = _checkpoints(40960, 43008)
+    with caplog.at_level(logging.INFO, logger="vmlx_engine.mllm_batch_generator"):
+        assert gen._store_periodic_ssm_checkpoints(req, snapshots, None) == []
+    assert snapshots == []  # references released, not held until return
+    assert not [c for c in gen._ssm_state_cache.calls if c[0] == "store"]
+    assert any("stored 0/2 at []" in r.getMessage() for r in caplog.records)
+
+
+def test_companion_disk_room_estimate_failure_is_a_refusal_not_an_exception(tmp_path):
+    from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+    from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
+
+    class _ExplodingLayer:
+        @property
+        def resident_nbytes(self):
+            raise RuntimeError("no accounting")
+
+    disk = SSMCompanionDiskStore(directory=tmp_path / "ssm", budget_bytes=1 << 30)
+    try:
+        cache = SSMCompanionCache(max_entries=0, disk_store=disk)
+        assert cache.wait_for_disk_room([_ExplodingLayer()], timeout=0.05) is False
+    finally:
+        disk.shutdown(timeout=10)
+
+
+def test_planning_failure_degrades_to_upstream_boundaries(monkeypatch):
+    monkeypatch.setenv(ENV_INTERVAL, "2048")
+    gen = _bare_generator()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("planner exploded")
+
+    gen._periodic_ssm_capture_boundaries = _boom
+    req = _request()
+    req._periodic_ssm_checkpoint_abs = (40960,)
+    assert gen._ssm_capture_boundaries_for(req, 71743, False, 71737) == [71680, 71737]
+    assert req._periodic_ssm_checkpoint_abs == ()
+
+
+# ---------------------------------------------------------------------------
+# End to end on the target family: tiny real qwen4_exp (GDN + QSA + PLE)
+# ---------------------------------------------------------------------------
+
+
+def test_tiny_qwen4_exp_chunked_prefill_periodic_checkpoints_resume_exactly(
+    monkeypatch, tmp_path
+):
+    """Qwen3.8-Flash-Next's own layer mix, through the real chunked lane.
+
+    The model this feature targets is qwen4_exp: GatedDeltaNet ArraysCache
+    layers (one carrying the 4-entry PLE n-gram/conv aux state) plus QSA
+    MiniMaxM3SparseCache attention layers. Pins, on that family:
+
+    * periodic keys stay on the ABSOLUTE grid for a cold prefill and for a
+      resumed prefill whose restored prefix is NOT block-aligned (100);
+    * every captured periodic state equals a one-shot prefill of its prefix;
+    * after an SSD round trip and a simulated restart, a prompt diverging
+      at 450 finds the 384 checkpoint through the disk length scan, and the
+      resumed turn (QSA KV sliced to 384 + restored recurrent state) matches
+      a cold prefill of the diverged prompt.
+    """
+    from copy import deepcopy
+
+    import numpy as np
+
+    from tests.test_qwen4_exp_runtime import _randomize, _tiny_args
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+    from vmlx_engine.models.minimax_m3.cache import (
+        MiniMaxM3SparseCache,
+        clone_minimax_m3_sparse,
+    )
+    from vmlx_engine.models.qwen4_exp.language import LanguageModel
+    from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+    from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
+
+    monkeypatch.setenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", "1")
+    monkeypatch.setenv(ENV_INTERVAL, "128")
+    monkeypatch.setenv(ENV_TAIL, "384")
+    args = _tiny_args()
+    lm = LanguageModel(args)
+    _randomize(lm)
+    mx.eval(lm.parameters())
+
+    class _VLM:
+        def __init__(self):
+            self.language_model = lm
+            self.config = {
+                "model_type": "qwen4_exp",
+                "text_config": {"model_type": "qwen4_exp_text"},
+            }
+
+    gen = MLLMBatchGenerator(
+        model=_VLM(), processor=object(), prefill_step_size=64,
+        enable_prefix_cache=False,
+    )
+    assert gen._is_hybrid
+    kv_positions = set(gen._hybrid_kv_positions)
+    template = lm.make_cache()
+    assert {i for i, c in enumerate(template) if isinstance(c, MiniMaxM3SparseCache)} == kv_positions
+    assert any(
+        len(c.cache) == 4 for i, c in enumerate(template) if i not in kv_positions
+    ), "tiny qwen4_exp must exercise the PLE aux recurrent state"
+    gen.block_aware_cache = SimpleNamespace(block_size=64)
+    gen._periodic_ckpt_config_interval = None
+
+    rng = np.random.default_rng(5)
+    prompt = rng.integers(8, args.vocab_size, size=(600,)).tolist()
+    gpl = 5
+
+    def _prefill(base, store):
+        gen._ssm_state_cache = store
+        live = lm.make_cache()
+        if base:
+            lm(mx.array([prompt[:base]]), cache=live)
+            mx.eval([c.state for c in live])
+        req = MLLMBatchRequest(
+            uid=0, request_id=f"qwen4-periodic-{base}", prompt="",
+            input_ids=mx.array([prompt[base:]], dtype=mx.int32), temperature=0.0,
+        )
+        req._original_token_ids = list(prompt[:-gpl])  # gpl-stripped, as served
+        req._gen_prompt_len = gpl
+        req._cached_tokens = base
+        gen._run_vision_encoding_inner(req, cache=live)
+        return req, live
+
+    def _recurrent_at(length):
+        cache = lm.make_cache()
+        lm(mx.array([prompt[:length]]), cache=cache)
+        return [c for i, c in enumerate(cache) if i not in kv_positions]
+
+    def _assert_states_equal(got_layers, want_layers):
+        assert len(got_layers) == len(want_layers)
+        for got, want in zip(got_layers, want_layers):
+            assert len(got.cache) == len(want.cache)
+            for a, b in zip(got.cache, want.cache):
+                assert (a is None) == (b is None)
+                if a is not None:
+                    assert a.shape == b.shape
+                    assert mx.allclose(
+                        a.astype(mx.float32), b.astype(mx.float32), atol=1e-5, rtol=1e-5
+                    ).item()
+
+    disk = SSMCompanionDiskStore(directory=tmp_path / "ssm", budget_bytes=1 << 30)
+    store = SSMCompanionCache(max_entries=0, disk_store=disk)
+    # clean = 600-1-5 = 594 absolute in both runs; tail 384 -> grid from 256.
+    cold_req, cold_live = _prefill(0, store)
+    assert [int(cp[0]) for cp in cold_req._inline_ssm_checkpoints] == [256, 384, 512, 576, 594]
+    assert cold_req._periodic_ssm_checkpoint_abs == (256, 384, 512)
+    resumed_req, _ = _prefill(100, store)
+    # Local block alignment of the clean boundary gives 548 here (upstream
+    # behaviour); the periodic keys stay on the absolute 128 grid.
+    assert resumed_req._periodic_ssm_checkpoint_abs == (256, 384, 512)
+    for req in (cold_req, resumed_req):
+        for boundary, tokens, layers in req._inline_ssm_checkpoints:
+            if boundary in req._periodic_ssm_checkpoint_abs:
+                assert tokens == prompt[:boundary]
+                _assert_states_equal(layers, _recurrent_at(boundary))
+
+    _, periodic = gen._split_periodic_ssm_checkpoints(
+        cold_req, cold_req._inline_ssm_checkpoints
+    )
+    assert gen._store_periodic_ssm_checkpoints(cold_req, periodic, None) == [256, 384, 512]
+    assert disk.wait_for_pending(timeout=30)
+    disk.shutdown(timeout=30)
+
+    prompt2 = prompt[:450] + rng.integers(8, args.vocab_size, size=(150,)).tolist()
+    assert prompt2[450:] != prompt[450:]
+    disk2 = SSMCompanionDiskStore(directory=tmp_path / "ssm", budget_bytes=1 << 30)
+    try:
+        fresh = SSMCompanionCache(max_entries=0, disk_store=disk2)
+        hit = fresh.fetch_longest_prefix(prompt2, 448)
+        assert hit is not None
+        ck_len, ck_states, ck_complete = hit
+        assert (ck_len, ck_complete) == (384, True)
+        assert fresh.last_prefix_lookup["source"] == "partial_boundary_disk_l2"
+        _assert_states_equal(ck_states, _recurrent_at(384))
+
+        resumed = []
+        recurrent = iter(ck_states)
+        for idx, layer in enumerate(cold_live):
+            if idx in kv_positions:
+                clone = clone_minimax_m3_sparse(layer, length=ck_len)
+                assert clone is not None and int(clone.offset) == ck_len
+                resumed.append(clone)
+            else:
+                resumed.append(deepcopy(next(recurrent)))
+        warm = lm(mx.array([prompt2[ck_len:]]), cache=resumed).logits[:, -1, :]
+        cold = lm(mx.array([prompt2]), cache=lm.make_cache()).logits[:, -1, :]
+        mx.eval(warm, cold)
+        assert float(mx.max(mx.abs(warm - cold)).item()) < 1e-4
+    finally:
+        disk2.shutdown(timeout=30)

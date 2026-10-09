@@ -10522,9 +10522,25 @@ class MLLMBatchGenerator:
             boundaries = capped
 
         result = sorted(set(boundaries))
-        periodic = self._periodic_ssm_capture_boundaries(
-            request, seq_len, has_images, clean_boundary, result
-        )
+        # Opt-in extra: it runs inside the prefill, so a planning failure
+        # must degrade to the upstream boundaries, never fail the forward.
+        try:
+            periodic = self._periodic_ssm_capture_boundaries(
+                request, seq_len, has_images, clean_boundary, result
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Hybrid periodic SSM checkpoint planning failed for %s; "
+                "capturing only the upstream boundaries: %s",
+                getattr(request, "request_id", "?"),
+                exc,
+            )
+            try:
+                request._periodic_ssm_checkpoint_abs = ()  # type: ignore[attr-defined]
+                request._periodic_ssm_checkpoint_plan = None  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            periodic = []
         if periodic:
             result = sorted(set(result) | set(periodic))
         return result
@@ -10674,6 +10690,15 @@ class MLLMBatchGenerator:
           companions.
 
         Returns the absolute positions that were accepted.
+
+        ``checkpoints`` is CONSUMED (emptied): each Metal snapshot is released
+        as soon as its entry is published or skipped, instead of staying alive
+        in the caller's local list until ``_process_prompts`` returns.
+
+        Nothing here may raise: this runs inside the per-request prefill
+        ``try`` of ``_process_prompts``, whose handler would turn an exception
+        into a failed (or retried) prefill for a turn that already sampled its
+        first token.
         """
         plan = dict(getattr(request, "_periodic_ssm_checkpoint_plan", None) or {})
         try:
@@ -10683,18 +10708,37 @@ class MLLMBatchGenerator:
             pass
         state_cache = getattr(self, "_ssm_state_cache", None)
         if state_cache is None or not checkpoints:
+            if isinstance(checkpoints, list):
+                checkpoints.clear()
             return []
         request_id = getattr(request, "request_id", "?")
         ordered = sorted(checkpoints, key=lambda cp: int(cp[0]), reverse=True)
+        if isinstance(checkpoints, list):
+            checkpoints.clear()
+        total = len(ordered)
         waiter = getattr(state_cache, "wait_for_disk_room", None)
         deadline = time.monotonic() + _PERIODIC_SSM_STORE_WAIT_BUDGET_S
         stored: List[int] = []
         skipped: List[int] = []
-        for boundary, tokens, layers in ordered:
+        while ordered:
+            boundary, tokens, layers = ordered.pop(0)
             boundary = int(boundary)
             if callable(waiter):
                 remaining = deadline - time.monotonic()
-                if remaining <= 0 or not waiter(layers, timeout=remaining):
+                try:
+                    has_room = remaining > 0 and bool(
+                        waiter(layers, timeout=remaining)
+                    )
+                except Exception as exc:  # noqa: BLE001 - never fail the turn
+                    logger.warning(
+                        "Hybrid periodic SSM checkpoint backpressure failed for "
+                        "%s at %d: %s",
+                        request_id,
+                        boundary,
+                        exc,
+                    )
+                    has_room = False
+                if not has_room:
                     skipped.append(boundary)
                     continue
             try:
@@ -10736,7 +10780,7 @@ class MLLMBatchGenerator:
             "(interval=%s tail=%s max=%s source=%s cached=%s clean=%s, SSD L2 only)%s",
             request_id,
             len(stored),
-            len(ordered),
+            total,
             stored,
             plan.get("interval", "?"),
             plan.get("tail", "?"),

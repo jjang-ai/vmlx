@@ -704,10 +704,14 @@ class SSMCompanionCache:
         waiter = getattr(self._disk, "wait_for_pending_room", None)
         if self._disk is None or not callable(waiter):
             return True
-        # store() reserves the frozen size: tensor bytes plus a safetensors
-        # header, the JSON sidecar and a fixed per-entry slack.
-        estimate = self._estimate_state_nbytes(ssm_states) + _DISK_ROOM_SLACK_BYTES
         try:
+            # store() reserves the frozen size: tensor bytes plus a safetensors
+            # header, the JSON sidecar and a fixed per-entry slack. Estimated
+            # inside the guard: a layer whose accounting attributes raise must
+            # cost this one entry, never the caller's request.
+            estimate = (
+                self._estimate_state_nbytes(ssm_states) + _DISK_ROOM_SLACK_BYTES
+            )
             return bool(waiter(estimate, timeout=timeout))
         except Exception as exc:  # noqa: BLE001 - backpressure is best-effort
             logger.debug("SSM disk room wait failed: %s", exc)
