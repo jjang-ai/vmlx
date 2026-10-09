@@ -142,6 +142,9 @@ Create `mcp.json`:
 | `VLLM_MLX_TEST_MODEL` | Default model for tests |
 | `HF_TOKEN` | HuggingFace authentication token |
 | `OPENAI_API_KEY` | Set to any value for SDK compatibility |
+| `VMLX_HYBRID_CHECKPOINT_INTERVAL` | Hybrid (SSM/GDN + attention) models: also capture an SSM companion checkpoint every N prompt tokens (absolute multiples of N, rounded up to the paged block size) so a later prompt that diverges before the prompt end can resume from the nearest checkpoint below the divergence. `0`/unset = off (default). Recommended `2048` for long chats that are edited near the end. Requires the block disk cache (checkpoints are written to the SSM companion SSD tier only). Fallback when unset: `hybrid.checkpoint_interval_tokens` from the vMLX config file, only when `hybrid.ssm_recompute: checkpoint` |
+| `VMLX_HYBRID_CHECKPOINT_TAIL` | Only place those checkpoints inside the last N tokens before the prompt end (default `32768`; `<= 0` = whole prompt) |
+| `VMLX_HYBRID_CHECKPOINT_MAX` | At most N periodic checkpoints per request (default `16`, max `64`, `<= 0` = off); extra candidates are thinned evenly across the window |
 
 ## Example Configurations
 

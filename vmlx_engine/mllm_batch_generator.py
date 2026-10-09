@@ -4370,6 +4370,19 @@ from .utils.ssm_companion_cache import (  # noqa: F401
     normalize_ssm_telemetry_request_id,
     sanitize_ssm_prefix_lookup,
 )
+from .utils.hybrid_periodic_checkpoints import (
+    PeriodicCheckpointPolicy,
+    config_checkpoint_interval,
+    plan_periodic_checkpoints,
+    resolve_periodic_checkpoint_policy,
+)
+
+# Tail-periodic hybrid checkpoints are published after the prefill, before the
+# first token is returned. The SSD writer normally keeps pace (measured ~15 ms
+# producer cost per 115 MB synthetic 36-layer state), so this only bounds a
+# stalled writer: once spent, the remaining checkpoints (farthest from the
+# prompt end, since publication goes nearest-first) are skipped, not queued.
+_PERIODIC_SSM_STORE_WAIT_BUDGET_S = 10.0
 
 
 def _ssm_telemetry_attr(value: Any, name: str, default: Any = None) -> Any:
@@ -7998,7 +8011,8 @@ def _release_cancelled_prefill_request(request: Any) -> None:
         "_media_clean_prefix_cache", "_media_repair_ssm_checkpoint",
         "_media_clean_capture_boundaries", "_inline_ssm_capture",
         "_inline_ssm_checkpoints", "_mixed_swa_boundary", "_dots3_media_boundary",
-        "_qwen_media_tail_full_input_ids",
+        "_qwen_media_tail_full_input_ids", "_periodic_ssm_checkpoint_abs",
+        "_periodic_ssm_checkpoint_plan",
     ):
         if hasattr(request, attr):
             setattr(request, attr, None)
@@ -9913,7 +9927,12 @@ class MLLMBatchGenerator:
             request._inline_ssm_layers = ssm_layers  # type: ignore[attr-defined]
             request._inline_ssm_boundary = key_boundary  # type: ignore[attr-defined]
             request._inline_ssm_tokens = checkpoint_tokens  # type: ignore[attr-defined]
-            logger.info(
+            # Tail-periodic checkpoints are summarised by ONE line at store
+            # time; per-capture lines for them would add up to 16 per request.
+            _periodic = key_boundary in (
+                getattr(request, "_periodic_ssm_checkpoint_abs", None) or ()
+            )
+            (logger.debug if _periodic else logger.info)(
                 "vmlx#109: captured clean SSM at prefill boundary for %s "
                 "(%d layers, key=%d tokens, is_complete=True — no re-derive needed)",
                 getattr(request, "request_id", "?"),
@@ -10502,7 +10521,232 @@ class MLLMBatchGenerator:
                     capped.append(aligned)
             boundaries = capped
 
-        return sorted(set(boundaries))
+        result = sorted(set(boundaries))
+        periodic = self._periodic_ssm_capture_boundaries(
+            request, seq_len, has_images, clean_boundary, result
+        )
+        if periodic:
+            result = sorted(set(result) | set(periodic))
+        return result
+
+    def _periodic_ssm_checkpoint_policy(self) -> PeriodicCheckpointPolicy:
+        """Env-first policy; the config-system interval is looked up once."""
+
+        def _config_interval() -> Optional[int]:
+            if not hasattr(self, "_periodic_ckpt_config_interval"):
+                try:
+                    value = config_checkpoint_interval()
+                except Exception as exc:  # noqa: BLE001 - optional fallback
+                    logger.debug("hybrid checkpoint config lookup failed: %s", exc)
+                    value = None
+                self._periodic_ckpt_config_interval = value
+            return self._periodic_ckpt_config_interval
+
+        return resolve_periodic_checkpoint_policy(config_interval=_config_interval)
+
+    def _periodic_ssm_capture_boundaries(
+        self,
+        request: "MLLMBatchRequest",
+        seq_len: int,
+        has_images: bool,
+        clean_boundary: int,
+        base_boundaries: List[int],
+    ) -> List[int]:
+        """Tail-periodic clean checkpoints (VMLX_HYBRID_CHECKPOINT_INTERVAL).
+
+        Returns LOCAL offsets that are not already in ``base_boundaries`` and
+        records their ABSOLUTE positions on the request, so the store side can
+        publish them SSD-only and keep them out of the scheduler handoff. Off
+        unless an interval is configured; see
+        ``vmlx_engine/utils/hybrid_periodic_checkpoints.py`` for the policy.
+        """
+        try:
+            request._periodic_ssm_checkpoint_abs = ()  # type: ignore[attr-defined]
+            request._periodic_ssm_checkpoint_plan = None  # type: ignore[attr-defined]
+        except Exception:
+            return []
+        # Only where the existing clean capture runs: hybrid text prefill with
+        # a gen-prompt suffix (clean_boundary > 0), prefix cache not bypassed.
+        # Anything past the clean boundary absorbed the suffix and would be
+        # gpl-contaminated, so it is never a candidate.
+        if has_images or int(clean_boundary or 0) <= 0:
+            return []
+        if getattr(request, "_bypass_prefix_cache", False):
+            return []
+        # The checkpoints exist only to be found later through the companion
+        # L2 (fetch_longest_prefix scans disk candidate lengths). Without that
+        # tier they would just split chunks and evict RAM companions.
+        state_cache = getattr(self, "_ssm_state_cache", None)
+        if state_cache is None or getattr(state_cache, "disk_enabled", False) is not True:
+            return []
+        block_size = int(
+            getattr(getattr(self, "block_aware_cache", None), "block_size", 0) or 0
+        )
+        if block_size <= 0:
+            return []
+        all_tokens = getattr(request, "_original_token_ids", None)
+        if not all_tokens:
+            return []
+        try:
+            base = int(getattr(request, "_cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            return []
+        if base < 0 or base + int(clean_boundary) > len(all_tokens):
+            return []
+        policy = self._periodic_ssm_checkpoint_policy()
+        if not policy.enabled:
+            return []
+        try:
+            # The state at position p covers tokens [0, p): never let a
+            # checkpoint absorb a media placeholder (text lanes carry no
+            # pixels, so such a state could not be reproduced anyway).
+            safe_limit = self._media_safe_capture_limit(list(all_tokens))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("periodic SSM checkpoints skipped: media scan failed: %s", exc)
+            return []
+        planned = plan_periodic_checkpoints(
+            base_tokens=base,
+            seq_len=int(seq_len),
+            upper_local=int(clean_boundary),
+            interval=policy.interval,
+            tail=policy.tail,
+            max_count=policy.max_count,
+            block_size=block_size,
+            safe_abs_limit=safe_limit,
+        )
+        existing = {int(b) for b in base_boundaries}
+        periodic = [b for b in planned if b not in existing]
+        if not periodic:
+            return []
+        request._periodic_ssm_checkpoint_abs = tuple(base + b for b in periodic)  # type: ignore[attr-defined]
+        request._periodic_ssm_checkpoint_plan = {  # type: ignore[attr-defined]
+            "interval": policy.interval,
+            "tail": policy.tail,
+            "max": policy.max_count,
+            "source": policy.source,
+            "cached_tokens": base,
+            "clean_boundary": base + int(clean_boundary),
+        }
+        logger.debug(
+            "Hybrid periodic SSM checkpoint plan for %s: %s (cached=%d clean=%d)",
+            getattr(request, "request_id", "?"),
+            list(request._periodic_ssm_checkpoint_abs),
+            base,
+            base + int(clean_boundary),
+        )
+        return periodic
+
+    @staticmethod
+    def _split_periodic_ssm_checkpoints(
+        request: Any,
+        checkpoints: Optional[List[Any]],
+    ) -> Tuple[List[Any], List[Any]]:
+        """Split inline checkpoints into (clean/required, tail-periodic)."""
+        items = list(checkpoints or [])
+        periodic_abs = set(getattr(request, "_periodic_ssm_checkpoint_abs", None) or ())
+        if not periodic_abs:
+            return items, []
+        base: List[Any] = []
+        periodic: List[Any] = []
+        for checkpoint in items:
+            (periodic if int(checkpoint[0]) in periodic_abs else base).append(checkpoint)
+        return base, periodic
+
+    def _store_periodic_ssm_checkpoints(
+        self,
+        request: Any,
+        checkpoints: List[Any],
+        cache_extra_keys: Optional[Any],
+    ) -> List[int]:
+        """Publish tail-periodic checkpoints to the SSM companion L2.
+
+        Order and admission are chosen so no budget can discard the most
+        useful entries first:
+
+        * callers publish the clean/required checkpoints BEFORE this, so the
+          terminal companions see exactly the upstream write pipeline;
+        * periodic entries go nearest-the-prompt-end first (the longest
+          prefixes a later turn can resume from), each waiting for room in the
+          bounded SSD write pipeline instead of being refused by its pending
+          byte budget; only a stalled writer past the total wait budget skips
+          the farthest ones;
+        * they are L2-only (``retain_in_ram=False``), so they never evict RAM
+          companions.
+
+        Returns the absolute positions that were accepted.
+        """
+        plan = dict(getattr(request, "_periodic_ssm_checkpoint_plan", None) or {})
+        try:
+            request._periodic_ssm_checkpoint_abs = ()
+            request._periodic_ssm_checkpoint_plan = None
+        except Exception:
+            pass
+        state_cache = getattr(self, "_ssm_state_cache", None)
+        if state_cache is None or not checkpoints:
+            return []
+        request_id = getattr(request, "request_id", "?")
+        ordered = sorted(checkpoints, key=lambda cp: int(cp[0]), reverse=True)
+        waiter = getattr(state_cache, "wait_for_disk_room", None)
+        deadline = time.monotonic() + _PERIODIC_SSM_STORE_WAIT_BUDGET_S
+        stored: List[int] = []
+        skipped: List[int] = []
+        for boundary, tokens, layers in ordered:
+            boundary = int(boundary)
+            if callable(waiter):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not waiter(layers, timeout=remaining):
+                    skipped.append(boundary)
+                    continue
+            try:
+                state_cache.store(
+                    tokens,
+                    boundary,
+                    layers,
+                    is_complete=True,
+                    cache_extra_keys=cache_extra_keys,
+                    retain_in_ram=False,
+                )
+                # store() keeps its None return; the L2 admission result
+                # (queued vs refused) is reported on the cache instead.
+                accepted = getattr(state_cache, "last_store_accepted", None)
+            except Exception as exc:  # noqa: BLE001 - one entry must not stop the rest
+                logger.warning(
+                    "Hybrid periodic SSM checkpoint store failed for %s at %d: %s",
+                    request_id,
+                    boundary,
+                    exc,
+                )
+                skipped.append(boundary)
+                continue
+            if accepted is False:
+                skipped.append(boundary)
+            else:
+                stored.append(boundary)
+            logger.debug(
+                "vmlx#109: stored periodic SSM checkpoint for %s (%d layers, "
+                "%d-token key, accepted=%s)",
+                request_id,
+                len(layers),
+                boundary,
+                accepted is not False,
+            )
+        stored.sort()
+        logger.info(
+            "Hybrid periodic SSM checkpoints for %s: stored %d/%d at %s "
+            "(interval=%s tail=%s max=%s source=%s cached=%s clean=%s, SSD L2 only)%s",
+            request_id,
+            len(stored),
+            len(ordered),
+            stored,
+            plan.get("interval", "?"),
+            plan.get("tail", "?"),
+            plan.get("max", "?"),
+            plan.get("source", "?"),
+            plan.get("cached_tokens", "?"),
+            plan.get("clean_boundary", "?"),
+            f"; skipped {sorted(skipped)}" if skipped else "",
+        )
+        return stored
 
     def _media_safe_capture_limit(self, token_ids: Optional[List[int]]) -> int:
         """Highest token index whose prefix contains no media placeholder.
@@ -16571,6 +16815,8 @@ class MLLMBatchGenerator:
                             req._inline_ssm_boundary = 0
                         if hasattr(req, "_inline_ssm_checkpoints"):
                             req._inline_ssm_checkpoints = None
+                        if hasattr(req, "_periodic_ssm_checkpoint_abs"):
+                            req._periodic_ssm_checkpoint_abs = ()
                         # Same hardening for the mixed-SWA boundary snapshot:
                         # it may have been taken over the corrupt restored
                         # cache the retry is discarding.
@@ -16922,6 +17168,16 @@ class MLLMBatchGenerator:
                             _inline_checkpoints = [
                                 (_inline_boundary, _inline_tokens, _inline_layers)
                             ]
+                    # Tail-periodic checkpoints (VMLX_HYBRID_CHECKPOINT_*)
+                    # are published AFTER the clean/required ones below, SSD
+                    # only, and never handed to the scheduler: the terminal
+                    # companions keep their upstream admission order and RAM
+                    # standing, and the periodic Metal snapshots are released
+                    # here instead of being held through decode.
+                    (
+                        _inline_checkpoints,
+                        _periodic_checkpoints,
+                    ) = self._split_periodic_ssm_checkpoints(req, _inline_checkpoints)
                     if _inline_checkpoints:
                         try:
                             for _inline_boundary, _inline_tokens, _inline_layers in _inline_checkpoints:
@@ -16944,6 +17200,9 @@ class MLLMBatchGenerator:
                                 "vmlx#109 inline store failed for %s: %s",
                                 req.request_id, e,
                             )
+                        self._store_periodic_ssm_checkpoints(
+                            req, _periodic_checkpoints, _ssm_extra_keys
+                        )
                         # Hand the boundary snapshot to the prefix-cache store
                         # before dropping it. Without this the scheduler's
                         # path-dependent store finds nothing and falls back to
@@ -16974,6 +17233,16 @@ class MLLMBatchGenerator:
                         req._inline_ssm_tokens = None
                         req._inline_ssm_checkpoints = None
                         continue
+                    if _periodic_checkpoints:
+                        # The clean-boundary capture itself did not land, so
+                        # keep the upstream fallback below (deferred clean
+                        # re-derive for gpl>0) and publish what did.
+                        self._store_periodic_ssm_checkpoints(
+                            req, _periodic_checkpoints, _ssm_extra_keys
+                        )
+                        req._inline_ssm_layers = None
+                        req._inline_ssm_tokens = None
+                        req._inline_ssm_checkpoints = None
                     if _media_context_for_ssm:
                         # Token IDs and a media salt identify a cache entry;
                         # they cannot reconstruct its media-conditioned state.
@@ -17176,6 +17445,8 @@ class MLLMBatchGenerator:
                         req._inline_ssm_boundary = 0
                     if hasattr(req, "_inline_ssm_checkpoints"):
                         req._inline_ssm_checkpoints = None
+                    if hasattr(req, "_periodic_ssm_checkpoint_abs"):
+                        req._periodic_ssm_checkpoint_abs = ()
                     # Same hardening for the mixed-SWA boundary snapshot: it
                     # may reference the discarded cache state.
                     if hasattr(req, "_mixed_swa_boundary"):

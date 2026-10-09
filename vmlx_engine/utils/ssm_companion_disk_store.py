@@ -754,6 +754,39 @@ class SSMCompanionDiskStore:
         data_path, side_path = self._entry_paths(str(key))
         return data_path.is_file() and side_path.is_file()
 
+    def wait_for_pending_room(self, nbytes: int, timeout: float = 5.0) -> bool:
+        """Wait until one more payload of ``nbytes`` fits the write pipeline.
+
+        ``store()`` refuses, rather than waits, when the pending-write byte
+        budget or the bounded queue is full, so a producer that publishes a
+        burst of entries (the tail-periodic hybrid checkpoints) loses its
+        LAST entries to the budget. Calling this first turns the burst into
+        backpressure instead. Returns True when the payload fits (or when
+        nothing is pending, the same exclusive admission ``store()`` grants
+        an oversized payload); False on timeout or when the writer is gone.
+        """
+
+        amount = max(1, int(nbytes))
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._write_condition:
+            while True:
+                if not self._accepting_writes or not self._writer_thread.is_alive():
+                    return False
+                fits = (
+                    self._pending_write_bytes <= 0
+                    or self._pending_write_bytes + amount
+                    <= self._max_pending_write_bytes
+                )
+                if fits and not self._write_queue.full():
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                # The writer notifies after every job, but a few refusal
+                # paths release their reservation without notifying; a short
+                # slice keeps those from parking the caller until the deadline.
+                self._write_condition.wait(timeout=min(remaining, 0.05))
+
     def wait_for_pending(self, timeout: float = 5.0) -> bool:
         """Wait for all writes queued before this call to settle."""
 
