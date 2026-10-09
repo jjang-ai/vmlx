@@ -113,6 +113,10 @@ logger = logging.getLogger(__name__)
 # Type alias for the per-fetch return value: (states, is_complete) or None
 SSMCompanionEntry = Optional[Tuple[List[Any], bool]]
 
+# Upper bound on what SSMCompanionDiskStore reserves beyond the raw tensor
+# bytes (safetensors header, JSON sidecar, 64 KiB + 1 KiB/tensor slack).
+_DISK_ROOM_SLACK_BYTES = 1024 * 1024
+
 SSM_PREFIX_LOOKUP_MAX_CANDIDATES = 20
 SSM_PREFIX_LOOKUP_MAX_ATTEMPTS = 21
 SSM_TELEMETRY_REQUEST_ID_MAX_CHARS = 128
@@ -431,6 +435,9 @@ class SSMCompanionCache:
         # live under different prefix_hashes.  vmlx#91.
         self._length_index: Dict[int, Dict[str, str]] = {}
         self.last_prefix_lookup: Optional[Dict[str, Any]] = None
+        # Outcome of the most recent store(): retained in L1 or accepted by
+        # the L2 write queue. None until the first store.
+        self.last_store_accepted: Optional[bool] = None
 
     @property
     def size(self) -> int:
@@ -575,6 +582,7 @@ class SSMCompanionCache:
         ssm_states: List[Any],
         is_complete: bool = True,
         cache_extra_keys: Optional[Any] = None,
+        retain_in_ram: bool = True,
     ) -> None:
         """Store SSM layer states for a prompt prefix.
 
@@ -585,6 +593,16 @@ class SSMCompanionCache:
                 ArraysCache / BatchMambaCache extracted to single-sequence form).
             is_complete: True (default) when stored at a complete prefix
                 boundary; False for partial / mid-stream snapshots.
+            retain_in_ram: False publishes to the L2 disk tier only, never
+                into the L1 LRU. Bulk producers (tail-periodic hybrid
+                checkpoints) use it so they cannot evict the terminal
+                companions an append-only next turn restores from; the disk
+                candidate-length scan still finds them. Without an L2 tier
+                nothing is stored.
+
+        The outcome is left in ``self.last_store_accepted``: True when the
+        entry was retained in L1 or accepted by the L2 write queue (queued,
+        not yet durable), False otherwise. The return value stays None.
 
         LRU semantics: re-storing the same key moves it to the end (most
         recently used). Eviction removes the least recently used entry once
@@ -599,9 +617,11 @@ class SSMCompanionCache:
               Pure-attention models should not be storing into the SSM
               companion at all; this guard catches accidental misuse.
         """
+        self.last_store_accepted = False
         if num_tokens <= 0 or not ssm_states:
             return
-        if not self.ram_enabled and self._disk is None:
+        retain = self.ram_enabled and bool(retain_in_ram)
+        if not retain and self._disk is None:
             # A zero-sized cache without L2 is fully disabled. Avoid even the
             # transient clone/materialisation cost in that configuration.
             return
@@ -627,6 +647,7 @@ class SSMCompanionCache:
                 ))
             except Exception as e:
                 logger.debug("SSM disk write-through failed: %s", e)
+        self.last_store_accepted = disk_written
         # The store-side identity, in the same units as "SSM disk HIT": a
         # fetch can be bound to the publication that wrote it by (N, hash)
         # instead of by token count alone (S5 audit: length is eligibility,
@@ -640,10 +661,12 @@ class SSMCompanionCache:
             disk_written,
         )
 
-        if not self.ram_enabled:
+        if not retain:
             logger.debug(
-                "SSM companion stored to L2 only: retained RAM disabled "
-                "(N=%d, %.1fMB)",
+                "SSM companion stored to L2 only: %s (N=%d, %.1fMB)",
+                "retained RAM disabled"
+                if not self.ram_enabled
+                else "caller requested L2-only",
                 num_tokens,
                 stored_nbytes / (1024 * 1024),
             )
@@ -669,6 +692,30 @@ class SSMCompanionCache:
         # Record in length index so fetch_longest_prefix can locate it.
         self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
         self._evict_if_needed()
+        self.last_store_accepted = True
+
+    def wait_for_disk_room(self, ssm_states: List[Any], timeout: float = 5.0) -> bool:
+        """Wait until the L2 write pipeline can admit an entry of this size.
+
+        True immediately when there is no L2 tier or it has no backpressure
+        hook; False when the wait timed out or the writer is gone (a
+        subsequent ``store`` would be refused by the pending-write budget).
+        """
+        waiter = getattr(self._disk, "wait_for_pending_room", None)
+        if self._disk is None or not callable(waiter):
+            return True
+        try:
+            # store() reserves the frozen size: tensor bytes plus a safetensors
+            # header, the JSON sidecar and a fixed per-entry slack. Estimated
+            # inside the guard: a layer whose accounting attributes raise must
+            # cost this one entry, never the caller's request.
+            estimate = (
+                self._estimate_state_nbytes(ssm_states) + _DISK_ROOM_SLACK_BYTES
+            )
+            return bool(waiter(estimate, timeout=timeout))
+        except Exception as exc:  # noqa: BLE001 - backpressure is best-effort
+            logger.debug("SSM disk room wait failed: %s", exc)
+            return False
 
     def has_complete(
         self,
