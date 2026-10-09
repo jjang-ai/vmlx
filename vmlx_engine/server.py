@@ -14395,6 +14395,12 @@ async def admin_soft_sleep():
         try:
             import mlx.core as mx
 
+            # Explicit standby must stop the heartbeat even though weights stay
+            # resident. The next generation request restarts it on wake.
+            from .utils.gpu_keepalive import stop_global
+
+            stop_global()
+
             scheduler = _get_scheduler()
             if scheduler is not None:
                 if hasattr(scheduler, "deep_reset"):

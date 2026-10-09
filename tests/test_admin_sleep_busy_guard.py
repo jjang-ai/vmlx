@@ -32,12 +32,14 @@ def test_soft_sleep_refuses_while_request_running():
     with (
         patch.object(server, "_standby_state", "active"),
         patch.object(server, "_get_scheduler", return_value=scheduler),
+        patch("vmlx_engine.utils.gpu_keepalive.stop_global") as stop_heartbeat,
     ):
         res = _run(server.admin_soft_sleep())
 
     assert res.status_code == 409
     assert b'"busy"' in res.body
     scheduler.deep_reset.assert_not_called()
+    stop_heartbeat.assert_not_called()
 
 
 def test_deep_sleep_refuses_while_request_waiting():
@@ -45,12 +47,14 @@ def test_deep_sleep_refuses_while_request_waiting():
     with (
         patch.object(server, "_standby_state", "active"),
         patch.object(server, "_get_scheduler", return_value=scheduler),
+        patch("vmlx_engine.utils.gpu_keepalive.stop_global") as stop_heartbeat,
     ):
         res = _run(server.admin_deep_sleep())
 
     assert res.status_code == 409
     assert b'"busy"' in res.body
     scheduler.deep_reset.assert_not_called()
+    stop_heartbeat.assert_not_called()
 
 
 def test_soft_sleep_proceeds_when_idle():
@@ -58,11 +62,13 @@ def test_soft_sleep_proceeds_when_idle():
     with (
         patch.object(server, "_standby_state", "active"),
         patch.object(server, "_get_scheduler", return_value=scheduler),
+        patch("vmlx_engine.utils.gpu_keepalive.stop_global") as stop_heartbeat,
     ):
         res = _run(server.admin_soft_sleep())
 
     assert res == {"status": "soft_sleep"}
     scheduler.deep_reset.assert_called_once()
+    stop_heartbeat.assert_called_once()
 
 
 def test_busy_guard_tolerates_stats_failure():
