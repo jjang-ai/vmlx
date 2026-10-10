@@ -11,7 +11,8 @@ _OBSERVED = False
 
 
 def fused_glm5_hc_place_requested() -> bool:
-    value = os.environ.get("VMLX_GLM5_FUSED_HC_PLACE", "0").strip().lower()
+    # default on since 2026-10-10: +1.3% GLM decode, KL 0.005 (inside the split-order floor 0.002-0.005)
+    value = os.environ.get("VMLX_GLM5_FUSED_HC_PLACE", "1").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
 
 

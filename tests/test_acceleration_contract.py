@@ -286,12 +286,14 @@ def test_runtime_attestation_distinguishes_installed_from_observed(monkeypatch):
     assert rows["startup_warmup"]["state"] == "active_observed"
     assert rows["kda_conv_state"]["state"] == "installed_unobserved"
     # kda_substitution is requested by default since 2026-10-08 (10, not 9);
-    # this payload does not attest it, so it counts as unattested (7, not 6).
+    # 2026-10-10 adds six default-on GLM decode kernels (hc_place, mhc_v3,
+    # kda_fused_decode, router_tail, router_logits, mla_decode_attn): 16.
+    # This payload attests none of them, so they count as unattested (13).
     assert contract["summary"] == {
-        "requested": 10,
+        "requested": 16,
         "installed": 3,
         "observed": 1,
-        "source_only_or_unattested": 7,
+        "source_only_or_unattested": 13,
     }
 
 
