@@ -104,9 +104,17 @@ class GLMDFlashTarget:
 
 def load_glm_drafter(path: str, quantize_bits: int = 8, group_size: int = 64):
     """incoai DFlash2 drafter from its original files; affine `quantize_bits` at load (0 = keep BF16)."""
-    from dflash.model_mlx import load_draft
+    from pathlib import Path
 
-    draft = load_draft(path)
+    import dflash.model_mlx as runtime
+
+    original = runtime.snapshot_download
+    if Path(path).expanduser().is_dir():                   # local files: never resolve as a Hub repo id
+        runtime.snapshot_download = lambda model_id, **_kw: model_id
+    try:
+        draft = runtime.load_draft(str(Path(path).expanduser()))
+    finally:
+        runtime.snapshot_download = original
     if quantize_bits:
         quantize_draft(draft, quantize_bits, group_size)
     return draft
