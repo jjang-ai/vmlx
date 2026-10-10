@@ -194,6 +194,17 @@ BMM_COMBINE = os.environ.get("JANGT_BMM_COMBINE", "1") != "0"
 FUSED_GU_PREFILL = os.environ.get("JANGT_FUSED_GU_PREFILL", "1") != "0"
 
 
+def contract_key(path: str) -> str:
+    """Module path of a routed MLP -> its per-module contract prefix, always "model.layers.<L>.mlp.switch_mlp".
+    Wrappers prefix the decoder ("language_model.model.layers..." in the GLM VLM): splitting at the first "model."
+    hit the one inside "language_model." and produced "model.model.layers..." (2026-10-10: GLM JANGHT bundle refused
+    to load)."""
+    i = path.find("model.layers.")
+    if i >= 0:
+        return path[i:] + ".switch_mlp"
+    return "model." + path.split("model.", 1)[1] + ".switch_mlp" if "model." in path else path + ".switch_mlp"
+
+
 def install_jangt(model: nn.Module, config: dict) -> int:
     """Replace every routed SwitchGLU with a JTMixedSwitchGLU per the per-module contract (fail closed). config:
     {"jangt", "quantization", optional "swiglu_limit" (clamped SwiGLU, GLM-5.3 = 10; absent/0 = plain SwiGLU)}.
@@ -210,7 +221,7 @@ def install_jangt(model: nn.Module, config: dict) -> int:
         sw = getattr(mod, "switch_mlp", None)
         if not isinstance(sw, SwitchGLU) or "mtp" in path:
             continue
-        key = "model." + path.split("model.", 1)[1] + ".switch_mlp" if "model." in path else path + ".switch_mlp"
+        key = contract_key(path)
         ents = {p: quant.get(f"{key}.{p}") for p in ("gate_proj", "up_proj", "down_proj")}
         if any(v is None for v in ents.values()):
             raise ValueError(f"jangt: incomplete routed contract for {key}")
