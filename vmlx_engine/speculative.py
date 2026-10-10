@@ -178,6 +178,31 @@ def external_speculative_incompatibility_reason(
     return None
 
 
+def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
+    """(target model_type, drafter bits at load) for a drafter shipped inside a bundle (<bundle>/dflash2).
+
+    The bundle's jang_config.json may declare ``drafter.runtime_quantization`` (e.g. "affine 8-bit g64 at load": the
+    GLM-5.3-Flash JANGT bundle ships the CC BY-NC-ND drafter unmodified and asks for 8-bit). Default 4-bit: the
+    measured Qwen3.8 setting (R2-21 section 4, no acceptance change vs bf16 codebooks).
+    """
+    import re
+
+    root = Path(draft_path).expanduser().parent
+    target_type, bits = None, 4
+    try:
+        target_type = json.loads((root / "config.json").read_text()).get("model_type")
+    except Exception:
+        pass
+    try:
+        rq = (json.loads((root / "jang_config.json").read_text()).get("drafter") or {}).get("runtime_quantization", "")
+        m = re.search(r"(\d+)-bit", str(rq))
+        if m and int(m.group(1)) in (4, 8):
+            bits = int(m.group(1))
+    except Exception:
+        pass
+    return target_type, bits
+
+
 def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
     """Load the draft model for speculative decoding.
 
@@ -216,10 +241,14 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             from .patches.mlx_lm_mtp import set_mtp_active
             from .patches.mlx_vlm_mtp import apply_mlx_vlm_mtp_patch
 
-            # DFlash2 reuses the Qwen text-RoPE and hybrid rollback hooks from
-            # the native-MTP adapter even though its own external draft wins.
-            set_mtp_active(True)
-            apply_mlx_vlm_mtp_patch()
+            target_type, draft_bits = _bundled_dflash2_target(resolved_draft)
+            if target_type != "glm5_next":
+                # DFlash2 reuses the Qwen text-RoPE and hybrid rollback hooks from
+                # the native-MTP adapter even though its own external draft wins.
+                # (glm5_next has its own adapter, vmlx_engine/glm_dflash2.py; activating MTP there would make the
+                # target build an MTP head its bundle does not ship.)
+                set_mtp_active(True)
+                apply_mlx_vlm_mtp_patch()
 
             original_download = dflash_runtime.snapshot_download
             if Path(resolved_draft).is_dir():
@@ -231,8 +260,9 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
-            nn.quantize(draft_model, group_size=64, bits=4)
+            nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
+            logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
             draft_tokenizer = None
             _spec_kind = "dflash2"
             config.num_tokens = resolve_num_draft_tokens(
