@@ -56,3 +56,24 @@ def test_install_finds_entries_under_a_vlm_wrapper():
          for p in ("gate_proj", "up_proj", "down_proj")}
     n = install_jangt(m, {"jangt": {"version": 1, "code": "v2_halfbits", "state_bits": 12}, "quantization": q})
     assert n == 1 and isinstance(m.language_model.model.layers[0].mlp.switch_mlp, JTMixedSwitchGLU)
+
+
+def test_compute_dtype_cast_keeps_jangt_format_tensors():
+    """MLA / large-expert models get bf16 compute (_set_jang_compute_dtype). JANGT format tensors must keep their
+    contract dtypes: the NAX prefill kernel takes float scales and did not compile on bf16 ones (2026-10-10)."""
+    import mlx.core as mx
+    import mlx.nn as nn
+    from vmlx_engine.jangt.switch import JTSwitchLinear
+    from vmlx_engine.utils.jang_loader import _set_jang_compute_dtype
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.jt = JTSwitchLinear(256, 64, 2, 2, 2, True)
+            self.dense = nn.Linear(8, 8)
+
+    m = M()
+    _set_jang_compute_dtype(m, mx.bfloat16, {"model_type": "glm5_next"})
+    assert m.dense.weight.dtype == mx.bfloat16
+    assert m.jt.jt_scale.dtype == mx.float32 and m.jt.jt_su.dtype == mx.float32 and m.jt.jt_cs.dtype == mx.float32
+    assert m.jt.jt_wout.dtype == mx.float16 and m.jt.jt_packed.dtype == mx.uint32

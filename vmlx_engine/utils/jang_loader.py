@@ -310,6 +310,7 @@ def _set_jang_compute_dtype(
     """Cast compute weights while preserving format and native FP32 state parameters."""
     import mlx.nn as nn
     from vmlx_engine.jangh.switch import TQSwitchLinear
+    from vmlx_engine.jangt.switch import JTSwitchLinear
 
     glm_fp32 = (
         {"A_log", "dt_bias", "e_score_correction_bias", "hc_base", "hc_scale"}
@@ -322,6 +323,9 @@ def _set_jang_compute_dtype(
         filter_fn=lambda module, key, value: (
             nn.Module.valid_parameter_filter(module, key, value)
             and not (isinstance(module, TQSwitchLinear) and key == "tq2_scales")
+            # JANGT trellis units: jt_scale / jt_su / jt_cs fp32 and jt_wout fp16 are format, not compute weights; the
+            # NAX prefill kernel takes float scales and failed to compile on bf16 ones (GLM JANGHT, 2026-10-10)
+            and not isinstance(module, JTSwitchLinear)
             and not (key in glm_fp32 and value.dtype == mx.float32)
         ),
     )
@@ -4612,7 +4616,10 @@ def _load_jang_v2_vlm(
 
     # JANGTQ v2 campaign: swap routed experts for TQSwitchGLU BEFORE quantization (fail closed on mismatch).
     from vmlx_engine.jangh.contract import validate_format
-    _is_jangtq2 = validate_format(config)
+    # A JANGT bundle (config "jangt" block: routed stacks mix trellis and JANGH units) also carries a jangtq block for
+    # its JANGH units, but its model class already installed JTMixedSwitchGLU (glm5_next/vlm.py); validating it as
+    # all-JANGH fails closed on the first trellis stack (2026-10-10, GLM-5.3-Flash JANGHT).
+    _is_jangtq2 = False if config.get("jangt") else validate_format(config)
     if _is_jangtq2:
         from vmlx_engine.jangh.install import install_jangh
 
