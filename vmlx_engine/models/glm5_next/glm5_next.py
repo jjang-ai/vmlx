@@ -108,6 +108,7 @@ from vmlx_engine.metal.glm5_dsa_select import (
     glm5_dsa_select_requested,
 )
 from vmlx_engine.metal.glm5_kda_fused_decode import fused_kda_decode_requested, glm5_kda_fused_decode
+from vmlx_engine.metal.glm5_mla_decode_attn import glm5_mla_decode_attn, mla_decode_attn_requested
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -1780,12 +1781,16 @@ class MLAAttention(nn.Module):
                 total=total,
             )
             if T == 1:
-                attended = mx.fast.scaled_dot_product_attention(
-                    q_eff.astype(mx.float32),
-                    latent.astype(mx.float32),
-                    latent.astype(mx.float32),
-                    scale=self.scale,
-                ).astype(q.dtype)
+                # bf16 latent read in place, fp32 accumulation (metal/glm5_mla_decode_attn); stock: fp32 copies + SDPA
+                attended = (glm5_mla_decode_attn(q_eff, latent, self.scale)
+                            if mla_decode_attn_requested() else None)
+                if attended is None:
+                    attended = mx.fast.scaled_dot_product_attention(
+                        q_eff.astype(mx.float32),
+                        latent.astype(mx.float32),
+                        latent.astype(mx.float32),
+                        scale=self.scale,
+                    ).astype(q.dtype)
             else:
                 attended = mx.fast.scaled_dot_product_attention(
                     q_eff,
@@ -1813,13 +1818,18 @@ class MLAAttention(nn.Module):
                 q_positions,
                 pool_keys=pool_keys,
             )
-            attended = self._gather_absorbed_attention(
-                q_eff,
-                latent,
-                indices,
-                valid,
-                past=past,
-            )
+            attended = None
+            if T == 1 and mla_decode_attn_requested():
+                # selected rows read by index (no gathered copy, no mask tensor), fp32 accumulation
+                attended = glm5_mla_decode_attn(q_eff, latent, self.scale, indices, valid, past)
+            if attended is None:
+                attended = self._gather_absorbed_attention(
+                    q_eff,
+                    latent,
+                    indices,
+                    valid,
+                    past=past,
+                )
         values = mx.matmul(
             attended,
             w_v[None].swapaxes(-1, -2).astype(attended.dtype),
