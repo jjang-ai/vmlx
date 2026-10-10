@@ -108,7 +108,8 @@ class Model(nn.Module):
         }
         # JANGT bundles carry a jangtq block too (codebooks of their JANGH groups) but their routed stacks follow the
         # JANGT contract: never validate them as all-JANGH.
-        self._jangt = bool(config.jangt)
+        jangt = getattr(config, "jangt", None)       # absent on config-like objects that predate JANGT
+        self._jangt = bool(jangt)
         self._jangtq2 = False if self._jangt else validate_format(tq_config)
         if self._jangt:
             alias_runtime_quant_keys(config.quantization)
@@ -121,7 +122,7 @@ class Model(nn.Module):
         if self._jangt:
             from ...jangt.switch import install_jangt
 
-            self.jangt_modules = install_jangt(self, {"jangt": config.jangt, "quantization": config.quantization,
+            self.jangt_modules = install_jangt(self, {"jangt": jangt, "quantization": config.quantization,
                                                       "swiglu_limit": config.text_config.swiglu_limit})
             logger.info("glm5_next: %d routed stacks installed as JANGT/JANGH mixed modules", self.jangt_modules)
         if self._jangtq2:
