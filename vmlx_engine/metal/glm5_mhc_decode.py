@@ -186,6 +186,16 @@ _EPILOGUE_SOURCE = """
     }
 """
 
+# v3 (2026-10-10): SIMD-parallel 4x4 Sinkhorn (see glm5_mhc_norm.py); requires H == 4.
+_EPILOGUE_SOURCE_V3 = _EPILOGUE_SOURCE.replace('    if (tid == 0u) {\n        float scale_pre = float(hc_scale[0]);\n        float scale_post = float(hc_scale[1]);\n        float scale_comb = float(hc_scale[2]);\n        float epsilon = float(sink_eps[0]);\n\n        for (uint index = 0u; index < H; ++index) {\n            float pre_x = float(mix[mix_base + index]) * scale_pre +\n                float(hc_base[index]);\n            pre_values[index] = 1.0f / (1.0f + metal::exp(-pre_x)) + epsilon;\n            float post_x = float(mix[mix_base + H + index]) * scale_post +\n                float(hc_base[H + index]);\n            post_values[index] = 2.0f / (1.0f + metal::exp(-post_x));\n        }\n\n        for (uint row = 0u; row < H; ++row) {\n            float row_max = -INFINITY;\n            for (uint col = 0u; col < H; ++col) {\n                uint index = row * H + col;\n                float item = float(mix[mix_base + 2u * H + index]) * scale_comb +\n                    float(hc_base[2u * H + index]);\n                matrix[index] = item;\n                row_max = metal::max(row_max, item);\n            }\n            float row_sum = 0.0f;\n            for (uint col = 0u; col < H; ++col) {\n                uint index = row * H + col;\n                float item = metal::exp(matrix[index] - row_max);\n                matrix[index] = item;\n                row_sum += item;\n            }\n            for (uint col = 0u; col < H; ++col) {\n                uint index = row * H + col;\n                matrix[index] = matrix[index] / row_sum + epsilon;\n            }\n        }\n\n        for (uint col = 0u; col < H; ++col) {\n            float col_sum = 0.0f;\n            for (uint row = 0u; row < H; ++row) {\n                col_sum += matrix[row * H + col];\n            }\n            for (uint row = 0u; row < H; ++row) {\n                uint index = row * H + col;\n                matrix[index] /= col_sum + epsilon;\n            }\n        }\n\n        for (uint iteration = 1u; iteration < ITERS; ++iteration) {\n            for (uint row = 0u; row < H; ++row) {\n                float row_sum = 0.0f;\n                for (uint col = 0u; col < H; ++col) {\n                    row_sum += matrix[row * H + col];\n                }\n                for (uint col = 0u; col < H; ++col) {\n                    uint index = row * H + col;\n                    matrix[index] /= row_sum + epsilon;\n                }\n            }\n            for (uint col = 0u; col < H; ++col) {\n                float col_sum = 0.0f;\n                for (uint row = 0u; row < H; ++row) {\n                    col_sum += matrix[row * H + col];\n                }\n                for (uint row = 0u; row < H; ++row) {\n                    uint index = row * H + col;\n                    matrix[index] /= col_sum + epsilon;\n                }\n            }\n        }\n    }\n', '    // v3 (2026-10-10): the H x H = 4 x 4 Sinkhorn runs on 16 lanes of SIMD group 0 (lane = matrix element,\n    // row sums over lane bits 0-1, column sums over bits 2-3) instead of one thread; lanes 16-31 mirror 0-15.\n    // Same formulas, pairwise instead of serial summation order. The serial version cost ~30 us per call in a\n    // dependent decode chain (x90 per token).\n    if (simdgroup_index_in_threadgroup == 0u) {\n        uint lane = thread_index_in_simdgroup;\n        float scale_pre = float(hc_scale[0]);\n        float scale_post = float(hc_scale[1]);\n        float scale_comb = float(hc_scale[2]);\n        float epsilon = float(sink_eps[0]);\n        if (lane < H) {\n            float pre_x = float(mix[mix_base + lane]) * scale_pre + float(hc_base[lane]);\n            pre_values[lane] = 1.0f / (1.0f + metal::exp(-pre_x)) + epsilon;\n            float post_x = float(mix[mix_base + H + lane]) * scale_post + float(hc_base[H + lane]);\n            post_values[lane] = 2.0f / (1.0f + metal::exp(-post_x));\n        }\n        uint e = lane & 15u;\n        float item = float(mix[mix_base + 2u * H + e]) * scale_comb + float(hc_base[2u * H + e]);\n        float m = metal::max(item, simd_shuffle_xor(item, 1u));\n        m = metal::max(m, simd_shuffle_xor(m, 2u));\n        float ex = metal::exp(item - m);\n        float rs = ex + simd_shuffle_xor(ex, 1u);\n        rs = rs + simd_shuffle_xor(rs, 2u);\n        float v = ex / rs + epsilon;\n        float cs = v + simd_shuffle_xor(v, 4u);\n        cs = cs + simd_shuffle_xor(cs, 8u);\n        v = v / (cs + epsilon);\n        for (uint iteration = 1u; iteration < ITERS; ++iteration) {\n            rs = v + simd_shuffle_xor(v, 1u);\n            rs = rs + simd_shuffle_xor(rs, 2u);\n            v = v / (rs + epsilon);\n            cs = v + simd_shuffle_xor(v, 4u);\n            cs = cs + simd_shuffle_xor(cs, 8u);\n            v = v / (cs + epsilon);\n        }\n        if (lane < 16u) matrix[lane] = v;\n    }\n', 1)
+assert _EPILOGUE_SOURCE_V3 != _EPILOGUE_SOURCE
+
+
+def glm5_mhc_v3_requested() -> bool:
+    """v3 (default on): 1024-thread projection + SIMD-parallel Sinkhorn epilogue for every fused mHC decode/verify
+    path. GLM decode 27.6 -> 32.1 tok/s (+16.5%, docs/internal/speedups). ``VMLX_GLM5_MHC_V3=0`` restores v2."""
+    return os.environ.get("VMLX_GLM5_MHC_V3", "1").strip().lower() not in {"", "0", "false", "off", "no"}
+
 
 def fused_glm5_mhc_requested() -> bool:
     value = os.environ.get("VMLX_GLM5_FUSED_MHC", "1").strip().lower()
@@ -215,14 +225,14 @@ def _projection_kernel() -> Any:
     )
 
 
-@lru_cache(maxsize=1)
-def _epilogue_kernel() -> Any:
+@lru_cache(maxsize=2)
+def _epilogue_kernel(v3: bool = False) -> Any:
     return mx.fast.metal_kernel(
-        name="vmlx_glm5_mhc_epilogue",
+        name="vmlx_glm5_mhc_epilogue" + ("_v3" if v3 else ""),
         input_names=["streams", "mix", "hc_base", "hc_scale", "sink_eps"],
         output_names=["post", "comb", "collapsed"],
         header=_HEADER,
-        source=_EPILOGUE_SOURCE,
+        source=_EPILOGUE_SOURCE_V3 if v3 else _EPILOGUE_SOURCE,
     )
 
 
@@ -274,22 +284,24 @@ def glm5_mhc_decode(
     ):
         return None
 
+    v3 = streams_count == 4 and glm5_mhc_v3_requested()
+    pt = 1024 if v3 else _PROJECTION_THREADS
     mix = _projection_kernel()(
         inputs=[streams, hc_fn, _scalar(float(rms_eps))],
         template=[
             ("FEATURES", features),
             ("MIX_SIZE", mix_size),
             ("ROWS", rows),
-            ("PROJECTION_THREADS", _PROJECTION_THREADS),
-            ("PROJECTION_SIMDGROUPS", _PROJECTION_SIMDGROUPS),
+            ("PROJECTION_THREADS", pt),
+            ("PROJECTION_SIMDGROUPS", pt // 32),
         ],
-        grid=(_PROJECTION_THREADS * mix_size * rows, 1, 1),
-        threadgroup=(_PROJECTION_THREADS, 1, 1),
+        grid=(pt * mix_size * rows, 1, 1),
+        threadgroup=(pt, 1, 1),
         output_shapes=[(rows, mix_size)],
         output_dtypes=[mx.float32],
     )[0]
     output = tuple(
-        _epilogue_kernel()(
+        _epilogue_kernel(v3)(
             inputs=[streams, mix, hc_base, hc_scale, _scalar(float(sink_eps))],
             template=[
                 ("T", streams.dtype),
