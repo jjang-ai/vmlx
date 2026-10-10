@@ -107,6 +107,7 @@ from vmlx_engine.metal.glm5_dsa_select import (
     glm5_dsa_select,
     glm5_dsa_select_requested,
 )
+from vmlx_engine.metal.glm5_kda_fused_decode import fused_kda_decode_requested, glm5_kda_fused_decode
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -1134,6 +1135,27 @@ class KDAAttention(nn.Module):
         def run_segment(seg, cq0, ck0, cv0, s0):
             seg_t = seg.shape[1]
             q, k, v = self._project_qkv(seg)
+            if (seg_t == 1 and s0 is not None and n_confirmed == 0 and not self._exact_output_norm
+                    and fused_kda_decode_requested()):
+                # One dispatch for conv + l2norm + gates + recurrent update + gated RMSNorm (metal/glm5_kda_fused_decode)
+                grouped = self.lowrank_group.decode(seg) if self.lowrank_group is not None else None
+                if grouped is not None:
+                    f_raw, gate_raw, b_raw = grouped
+                elif self.lowrank_group is not None:
+                    f_raw = self.lowrank_group.decay(seg)
+                    gate_raw = self.lowrank_group.output_gate(seg)
+                    b_raw = self.lowrank_group.beta(seg)
+                else:
+                    f_raw = self.f_b_proj(self.f_a_proj(seg))
+                    gate_raw = self.g_b_proj(self.g_a_proj(seg))
+                    b_raw = self.b_proj(seg)
+                fused = glm5_kda_fused_decode(
+                    q, k, v, cq0, ck0, cv0, self.q_conv1d, self.k_conv1d, self.v_conv1d,
+                    f_raw, self.dt_bias, self.A_log, b_raw, gate_raw, self.o_norm, s0,
+                    heads=H, key_dim=K, lower_bound=self.lower_bound, rms_eps=self.rms_eps)
+                if fused is not None:
+                    gated, s1, cq1, ck1, cv1 = fused
+                    return self.o_proj(gated.reshape(B, seg_t, H * K)), cq1, ck1, cv1, s1
             fused_conv = glm5_kda_conv_decode(
                 q,
                 k,
