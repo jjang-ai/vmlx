@@ -2944,7 +2944,7 @@ class BatchedEngine(BaseEngine):
                 raw_text=output.output_text,
                 # Export exact IDs once, at completion, for API usage accounting.
                 # Copying cumulative IDs on every delta would add quadratic work.
-                tokens=list(output.output_token_ids) if output.finished else [],
+                tokens=list(getattr(output, "output_token_ids", None) or []) if output.finished else [],
                 logprobs=getattr(output, "logprobs", None),
                 generated_at=getattr(output, "generated_at", None),
                 new_text=output.new_text,
