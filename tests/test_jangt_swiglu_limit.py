@@ -45,9 +45,10 @@ def _reference(m, x2, idx2, limit):
     e = idx2.reshape(-1)
     g = mx.sum(rows[:, None, :] * Wg[e], axis=-1)
     u = mx.sum(rows[:, None, :] * Wu[e], axis=-1)
+    g_raw = g
     if limit > 0:
         g, u = mx.minimum(g, limit), mx.clip(u, -limit, limit)
-    return g * mx.sigmoid(g) * u, g
+    return g * mx.sigmoid(g) * u, g_raw
 
 
 def _inputs(T, seed=1):
