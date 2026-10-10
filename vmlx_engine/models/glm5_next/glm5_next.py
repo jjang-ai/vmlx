@@ -1771,7 +1771,8 @@ class MLAAttention(nn.Module):
             packed = cache.update_packed(packed)
 
         total = int(latent.shape[2])
-        if T > 1 and total <= self.index_topk:
+        small_slab = (1 < T <= 16 and cache is not None and mla_decode_attn_requested())
+        if T > 1 and total <= self.index_topk and not small_slab:
             self._log_mla_path_once(
                 "compact-cache/materialized-dense-prefill",
                 query_tokens=T,
@@ -1781,6 +1782,17 @@ class MLAAttention(nn.Module):
 
         w_k, w_v = self._kb_factors()
         q_eff = mx.matmul(q, w_k[None].astype(q.dtype))
+        if small_slab and total <= self.index_topk:
+            # speculative-verify slab (2..16 rows): absorbed attention per row, row t attends latent[: past + t + 1]
+            # (causal), instead of expanding kv_b over the whole cached context (the prefill path)
+            rows = [glm5_mla_decode_attn(q_eff[:, :, t:t + 1], latent[:, :, : past + t + 1], self.scale)
+                    for t in range(T)]
+            if all(r_ is not None for r_ in rows):
+                self._log_mla_path_once("absorbed-dense-verify-slab", query_tokens=T, total=total)
+                attended = mx.concatenate(rows, axis=2)
+                values = mx.matmul(attended, w_v[None].swapaxes(-1, -2).astype(attended.dtype))
+                values = values.transpose(0, 2, 1, 3).reshape(B, T, self.n_heads * self.vd)
+                return self.o_proj(values)
         if total <= self.index_topk:
             self._log_mla_path_once(
                 "absorbed-dense-decode",
@@ -1829,6 +1841,10 @@ class MLAAttention(nn.Module):
             if T == 1 and mla_decode_attn_requested():
                 # selected rows read by index (no gathered copy, no mask tensor), fp32 accumulation
                 attended = glm5_mla_decode_attn(q_eff, latent, self.scale, indices, valid, past)
+            elif small_slab:
+                rows = [glm5_mla_decode_attn(q_eff[:, :, t:t + 1], latent, self.scale, indices[:, t:t + 1],
+                                             valid[:, t:t + 1], past + t) for t in range(T)]
+                attended = mx.concatenate(rows, axis=2) if all(r_ is not None for r_ in rows) else None
             if attended is None:
                 attended = self._gather_absorbed_attention(
                     q_eff,
