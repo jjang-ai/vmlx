@@ -97,7 +97,7 @@ def _kernel(K, W: int, fused: bool, tname: str):
                                 output_names=["y"], header=header, source=src)
 
 
-def gather_qmm_sorted_jt(x, P: dict, idx_sorted, Pu: dict | None = None):
+def gather_qmm_sorted_jt(x, P: dict, idx_sorted, Pu: dict | None = None, limit: float = 0.0):
     """x (M, K_in) bf16 rows sorted by expert, ROTATED basis; P = unit projection dict (packed (E,N,W), scale (E,N)).
     Returns (M, N) x.dtype. Outlier columns are NOT included (caller adds them)."""
     M, Kin = x.shape; E, N, W = P["packed"].shape
@@ -107,7 +107,7 @@ def gather_qmm_sorted_jt(x, P: dict, idx_sorted, Pu: dict | None = None):
     fused = Pu is not None
     k = _kernel(P["K"], W, fused, JK._TNAME[x.dtype])
     return k(inputs=[x, P["packed"], P["scale"], Pu["packed"] if fused else P["packed"], Pu["scale"] if fused else P["scale"], idx,
-                     mx.array([M, N, Kin], dtype=mx.int32), mx.array([0.0], dtype=mx.float32)],
+                     mx.array([M, N, Kin], dtype=mx.int32), mx.array([float(limit)], dtype=mx.float32)],
              grid=(((N + 63) // 64) * 128, (M + 63) // 64, 1), threadgroup=(128, 1, 1),
              output_shapes=[(M, N)], output_dtypes=[x.dtype])[0]
 
@@ -165,8 +165,8 @@ def _kernel_out(K, W: int, NO: int, tname: str):
                                 output_names=["y"], header=header, source=src)
 
 
-def gather_gate_up_sorted_jt(x, xo, Pg: dict, Pu: dict, idx_sorted):
-    """h = silu(g) * u for expert-sorted rows in ONE NAX pass. x (M, D) bf16 ROTATED rows; xo (M, NO) fp32 raw-basis
+def gather_gate_up_sorted_jt(x, xo, Pg: dict, Pu: dict, idx_sorted, limit: float = 0.0):
+    """h = act(g, u) for expert-sorted rows in ONE NAX pass (act = SwiGLU, clamped at `limit` when > 0 like JANGH tq_act). x (M, D) bf16 ROTATED rows; xo (M, NO) fp32 raw-basis
     outlier activations (NO = Pg n_out; gate and up share the layer-wide columns). Returns (M, I) bf16."""
     M, Kin = x.shape; E, N, W = Pg["packed"].shape; NO = int(Pg["n_out"])
     idx = idx_sorted.astype(mx.uint32).reshape(-1)
@@ -174,6 +174,6 @@ def gather_gate_up_sorted_jt(x, xo, Pg: dict, Pu: dict, idx_sorted):
         idx = mx.concatenate([idx, mx.broadcast_to(idx[-1:], (8 - idx.size,))])
     k = _kernel_out(Pg["K"], W, NO, JK._TNAME[x.dtype])
     return k(inputs=[x, Pg["packed"], Pg["scale"], Pu["packed"], Pu["scale"], idx, mx.array([M, N, Kin], dtype=mx.int32),
-                     mx.array([0.0], dtype=mx.float32), xo.astype(mx.float32), Pg["_wout32"], Pu["_wout32"]],
+                     mx.array([float(limit)], dtype=mx.float32), xo.astype(mx.float32), Pg["_wout32"], Pu["_wout32"]],
              grid=(((N + 63) // 64) * 128, (M + 63) // 64, 1), threadgroup=(128, 1, 1),
              output_shapes=[(M, N)], output_dtypes=[x.dtype])[0]

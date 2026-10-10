@@ -61,10 +61,11 @@ class JTSwitchLinear(nn.Module):
 class JTMixedSwitchGLU(nn.Module):
     is_jangt = True
 
-    def __init__(self, D: int, I: int, E: int, gu: dict, dn: dict, n_out_gu: int, n_out_dn: int):
+    def __init__(self, D: int, I: int, E: int, gu: dict, dn: dict, n_out_gu: int, n_out_dn: int, limit: float = 0.0):
         super().__init__()
         from vmlx_engine.jangh.switch import TQSwitchLinear
         self.D, self.I, self.E = D, I, E
+        self.limit = float(limit)          # clamped SwiGLU (GLM-5.3: 10); 0 = plain SwiGLU (N0.5)
         self.gu_fmt, self.dn_fmt = gu["mode"], dn["mode"]
         if gu["mode"] == "jangt":
             self.gate_proj = JTSwitchLinear(D, I, E, gu["kbits"], n_out_gu, False)
@@ -104,11 +105,11 @@ class JTMixedSwitchGLU(nn.Module):
     def _decode_h(self, x2, idx2):
         if self.gu_fmt == "jangt":
             U = self._unit()
-            return MK.gather_gate_up_swiglu_v3(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32)
+            return MK.gather_gate_up_swiglu_v3(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32, limit=self.limit)
         from vmlx_engine.jangh import kernels as K
         g, u = self.gate_proj, self.up_proj
         return K.gather_qmv(K.h32_rows(x2, mx.float32), g.tq2_packed, g.tq2_scales, g._cb, idx2.reshape(-1).astype(mx.uint32),
-                            g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=0.0)
+                            g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit)
 
     def _decode_down(self, h, idx2, w2, out_dtype):
         if self.dn_fmt == "jangt":
@@ -143,13 +144,15 @@ class JTMixedSwitchGLU(nn.Module):
                 # one NAX pass: both weight tiles + outlier columns in the epilogue (jangt/prefill.py)
                 from vmlx_engine.jangt.prefill import gather_gate_up_sorted_jt
                 xo = x2[:, U["gu_cols"]].astype(mx.float32)[tok]
-                h_s = gather_gate_up_sorted_jt(xr.astype(mx.bfloat16)[tok], xo, U["gate"], U["up"], idx_s).astype(mx.float32)
+                h_s = gather_gate_up_sorted_jt(xr.astype(mx.bfloat16)[tok], xo, U["gate"], U["up"], idx_s, limit=self.limit).astype(mx.float32)
             elif FUSED_GU_PREFILL and U["gate"]["n_out"] == 0:
                 from vmlx_engine.jangt.prefill import gather_qmm_sorted_jt      # no outliers: plain fused SwiGLU pass
-                h_s = gather_qmm_sorted_jt(xr.astype(mx.bfloat16)[tok], U["gate"], idx_s, U["up"]).astype(mx.float32)
+                h_s = gather_qmm_sorted_jt(xr.astype(mx.bfloat16)[tok], U["gate"], idx_s, U["up"], limit=self.limit).astype(mx.float32)
             else:
                 xs_r, xs_x = xr[tok], x2[tok]
                 g = self._jt_mm(xs_r, xs_x, idx_s, U["gate"]); u = self._jt_mm(xs_r, xs_x, idx_s, U["up"])
+                if self.limit > 0:
+                    g = mx.minimum(g, self.limit); u = mx.clip(u, -self.limit, self.limit)
                 h_s = g * mx.sigmoid(g) * u
                 if ROUND_H_CONTROL:                                             # A/B control only: the fused kernels store bf16 h
                     h_s = h_s.astype(mx.bfloat16).astype(mx.float32)
@@ -157,7 +160,7 @@ class JTMixedSwitchGLU(nn.Module):
             from vmlx_engine.jangh import kernels as K
             gp, upr = self.gate_proj, self.up_proj
             h_s = K.gather_qmm_sorted(K.h32_rows(x2, x2.dtype)[tok], gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
-                                      packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=0.0).astype(mx.float32)
+                                      packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit).astype(mx.float32)
         if self.dn_fmt == "jangt":
             U = self._unit()
             y_s = self._jt_mm(MK.rotate_rows(h_s, U["sv_dn"], idx_s), h_s, idx_s, U["down"])
@@ -192,17 +195,20 @@ FUSED_GU_PREFILL = os.environ.get("JANGT_FUSED_GU_PREFILL", "1") != "0"
 
 
 def install_jangt(model: nn.Module, config: dict) -> int:
-    """Replace every routed SwitchGLU with a JTMixedSwitchGLU per the per-module contract (fail closed)."""
+    """Replace every routed SwitchGLU with a JTMixedSwitchGLU per the per-module contract (fail closed). config:
+    {"jangt", "quantization", optional "swiglu_limit" (clamped SwiGLU, GLM-5.3 = 10; absent/0 = plain SwiGLU)}.
+    Paths containing "mtp" are skipped (MTP heads are not part of the JANGT contract)."""
     from mlx_lm.models.switch_layers import SwitchGLU
     jt = config.get("jangt") or {}
     if int(jt.get("version", 0)) != 1 or jt.get("code") != "v2_halfbits" or int(jt.get("state_bits", 0)) != 12:
         raise ValueError(f"jangt: unsupported jangt block {jt}")
     quant = config.get("quantization") or {}
     n_out = jt.get("outlier_columns", {})
+    limit = float(config.get("swiglu_limit", 0.0) or 0.0)
     count = 0
     for path, mod in list(model.named_modules()):
         sw = getattr(mod, "switch_mlp", None)
-        if not isinstance(sw, SwitchGLU):
+        if not isinstance(sw, SwitchGLU) or "mtp" in path:
             continue
         key = "model." + path.split("model.", 1)[1] + ".switch_mlp" if "model." in path else path + ".switch_mlp"
         ents = {p: quant.get(f"{key}.{p}") for p in ("gate_proj", "up_proj", "down_proj")}
@@ -215,6 +221,6 @@ def install_jangt(model: nn.Module, config: dict) -> int:
                 raise ValueError(f"jangt: unsupported mode {v} for {key}")
         E, I, D = sw.gate_proj.weight.shape
         mod.switch_mlp = JTMixedSwitchGLU(D, I, E, ents["gate_proj"], ents["down_proj"],
-                                          int(n_out.get(f"{key}.gate_proj", 0)), int(n_out.get(f"{key}.down_proj", 0)))
+                                          int(n_out.get(f"{key}.gate_proj", 0)), int(n_out.get(f"{key}.down_proj", 0)), limit)
         count += 1
     return count

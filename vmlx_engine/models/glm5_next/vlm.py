@@ -106,13 +106,24 @@ class Model(nn.Module):
             "quantization": config.quantization,
             "text_config": {"swiglu_limit": config.text_config.swiglu_limit},
         }
-        self._jangtq2 = validate_format(tq_config)
+        # JANGT bundles carry a jangtq block too (codebooks of their JANGH groups) but their routed stacks follow the
+        # JANGT contract: never validate them as all-JANGH.
+        self._jangt = bool(config.jangt)
+        self._jangtq2 = False if self._jangt else validate_format(tq_config)
+        if self._jangt:
+            alias_runtime_quant_keys(config.quantization)
         if self._jangtq2:
             # Reject malformed declarations before constructing expert arrays.
             projection_contract(tq_config)
             alias_runtime_quant_keys(config.quantization)
         self.vision_tower = VisionModel(config.vision_config)
         self.language_model = LanguageModel(config.text_config)
+        if self._jangt:
+            from ...jangt.switch import install_jangt
+
+            self.jangt_modules = install_jangt(self, {"jangt": config.jangt, "quantization": config.quantization,
+                                                      "swiglu_limit": config.text_config.swiglu_limit})
+            logger.info("glm5_next: %d routed stacks installed as JANGT/JANGH mixed modules", self.jangt_modules)
         if self._jangtq2:
             from ...jangh.install import install_jangh
             from ...jangh.runtime_identity import GLM_FUSED_TILES

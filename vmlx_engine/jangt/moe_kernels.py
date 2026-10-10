@@ -151,7 +151,7 @@ def _gu_kernel(kin: int, N: int, K, L: int, n_out: int, xdt: str, odt: str, RS: 
       float G0 = simd_sum(g0[r]), G1 = simd_sum(g1[r]), U0 = simd_sum(u0[r]), U1 = simd_sum(u1[r]);
       if (lane == 0u) {{
         float g = ((G0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (G1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sg[(size_t)e * {N}u + row0 + r];
-        float u = ((U0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (U1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * su_[(size_t)e * {N}u + row0 + r];{outl}
+        float u = ((U0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (U1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * su_[(size_t)e * {N}u + row0 + r];{outl}{clamp}
         out[(size_t)ts * {N}u + row0 + r] = {odt}((g / (1.0f + metal::fast::exp(-g))) * u);
       }}
     }}
@@ -446,7 +446,7 @@ def _xload3() -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str):
+def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float = 0.0):
     mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
     # outlier columns: lane j < n_out owns column j for the simdgroup's 4 rows, one simd_sum per row (the first
     # version looped them on lane 0: -21 us per layer, 515 -> 389 GB/s)
@@ -458,6 +458,8 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str):
                                                    ou[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
     {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og[r] = simd_sum(og[r]); ou[r] = simd_sum(ou[r]); }}"""
     outl = "" if n_out == 0 else " g += og[r]; u += ou[r];"
+    # clamped SwiGLU (GLM-5.3: silu(min(g, L)) * clip(u, -L, L), the JANGH tq_act rule); limit 0 = plain SwiGLU (N0.5)
+    clamp = "" if not limit > 0 else f" g = metal::min(g, {float(limit)}f); u = metal::clamp(u, {-float(limit)}f, {float(limit)}f);"
     src = f"""
     uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
     uint row0 = threadgroup_position_in_grid.y * 8u + sgi * 4u; uint ts = threadgroup_position_in_grid.z;
@@ -490,7 +492,8 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str):
     }}
     """
     ins = ["xr", "x", "idx", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
-    return mx.fast.metal_kernel(name=f"jt4_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}", input_names=ins, output_names=["out"], source=src)
+    lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
+    return mx.fast.metal_kernel(name=f"jt4_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}", input_names=ins, output_names=["out"], source=src)
 
 
 @functools.lru_cache(maxsize=None)
@@ -537,11 +540,11 @@ def _down_v3(kin: int, N: int, K, L: int, n_out: int, kslots: int, W: int, hdt: 
     return mx.fast.metal_kernel(name=f"jt4_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_s{kslots}_w{W}_{hdt}", input_names=ins, output_names=["out"], source=src)
 
 
-def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16):
+def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float = 0.0):
     T, kin = x.shape; k = idx.shape[1]; N = U["gate"]["scale"].shape[1]; n_out = U["gate"]["n_out"]; W = int(U["gate"]["packed"].shape[-1])
     ins = [xr, x, idx.reshape(-1).astype(mx.uint32), mx.array([k], dtype=mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
-    kern = _gu_v3(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype])
+    kern = _gu_v3(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype], float(limit))
     return kern(inputs=ins, grid=(64, N // 8, T * k), threadgroup=(64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
 
 

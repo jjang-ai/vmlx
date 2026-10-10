@@ -47,6 +47,8 @@ class ModelConfig(BaseModelConfig):
     # None for every other bundle (mlx_vlm reads quantization from this attribute when present -> same value).
     jangtq: dict | None = None
     quantization: dict | None = None
+    # JANGT campaign (2026-10-09): routed experts per unit JANGT (trellis) or JANGH; see vmlx_engine/jangt/switch.py
+    jangt: dict | None = None
 
     @classmethod
     def from_dict(cls, params):
