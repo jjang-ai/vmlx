@@ -7,7 +7,8 @@ _SRC = r"""
     uint t = threadgroup_position_in_grid.x;
     uint e = thread_position_in_threadgroup.x;
     uint lane = thread_index_in_simdgroup, sg = simdgroup_index_in_threadgroup;
-    threadgroup float bv[8]; threadgroup int bi[8]; threadgroup int win[TOPK]; threadgroup float wsc[TOPK];
+    // one slot per simdgroup: NE <= 1024 (was [8]: NE > 256 wrote out of bounds, GLM-5.3 has 288)
+    threadgroup float bv[32]; threadgroup int bi[32]; threadgroup int win[TOPK]; threadgroup float wsc[TOPK];
     float s = 1.0f / (1.0f + metal::exp(-logits[t * NE + e]));
     float c = s + bias[e];
     for (int r = 0; r < TOPK; ++r) {
@@ -47,3 +48,36 @@ def router_tail(logits, bias, k: int, norm: bool, scaling: float):
     return idx, w
 
 
+
+
+# Router logits for decode / short verify slabs (2026-10-10): x (T, D) bf16 . W (E, D) bf16 -> (T, E) fp32.
+# One simdgroup per (token, expert) row, each lane accumulates D/32 products in fp32 from coalesced 4-element loads,
+# simd_sum. Replaces x.astype(f32) @ W.astype(f32).T, which materialized a fp32 copy of the router weight per call
+# (GLM: 288 x 4096 per MoE layer, 42 layers). Summation order differs from MLX's fp32 GEMV (~1e-6 relative).
+_LOGITS_SRC = r"""
+    uint row = thread_position_in_grid.x / 32u;
+    uint lane = thread_index_in_simdgroup;
+    if (row >= T_ROWS * NE) return;
+    uint t = row / NE, e = row % NE;
+    device const T* xr = x + (size_t)t * D;
+    device const T* wr = w + (size_t)e * D;
+    float acc = 0.0f;
+    for (uint k = lane * 4u; k < D; k += 128u) {
+        acc += (float)xr[k] * (float)wr[k] + (float)xr[k + 1u] * (float)wr[k + 1u]
+             + (float)xr[k + 2u] * (float)wr[k + 2u] + (float)xr[k + 3u] * (float)wr[k + 3u];
+    }
+    acc = simd_sum(acc);
+    if (lane == 0u) logits[(size_t)t * NE + e] = acc;
+"""
+_KL = mx.fast.metal_kernel(name="jangt_router_logits", input_names=["x", "w"], output_names=["logits"], source=_LOGITS_SRC)
+
+
+def router_logits(x, weight):
+    """x (T, D), weight (E, D), same float dtype, D % 128 == 0 -> fp32 logits (T, E); None if not applicable."""
+    if x.ndim != 2 or weight.ndim != 2 or x.shape[1] != weight.shape[1] or x.shape[1] % 128 or x.dtype != weight.dtype:
+        return None
+    if x.dtype not in (mx.bfloat16, mx.float16) or x.shape[0] > 64:
+        return None
+    T, D = x.shape; E = weight.shape[0]
+    return _KL(inputs=[x, weight], template=[("T", x.dtype), ("T_ROWS", T), ("NE", E), ("D", D)],
+               grid=(32 * T * E, 1, 1), threadgroup=(256, 1, 1), output_shapes=[(T, E)], output_dtypes=[mx.float32])[0]

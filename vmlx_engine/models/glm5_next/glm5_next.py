@@ -2007,10 +2007,24 @@ class MoEBlock(nn.Module):
             logits = glm5_router_logits(
                 x, self.gate.weight, enabled=True, training=self.training
             )
+        if logits is None and os.environ.get("VMLX_GLM5_ROUTER_LOGITS", "1") == "1" and x.shape[-2] <= 64:
+            # wide bf16-load / fp32-accumulate GEMV, no per-call fp32 weight copy (jangt/router.py)
+            from vmlx_engine.jangt.router import router_logits
+            lg = router_logits(x.reshape(-1, x.shape[-1]), self.gate.weight)
+            if lg is not None:
+                logits = lg.reshape(*x.shape[:-1], lg.shape[-1])
         if logits is None:
             logits = x.astype(mx.float32) @ self.gate.weight.astype(mx.float32).T
         route = None
-        if self._compiled_router:
+        if os.environ.get("VMLX_GLM5_ROUTER_TAIL", "1") == "1" and logits.ndim == 3 and logits.shape[-1] % 32 == 0:
+            # one dispatch: sigmoid, +bias for the choice, top-k (ties -> lower id), unbiased weights, normalize, scale
+            # (jangt/router.py, shared with N0.5); replaces ~8 dependent launches per MoE layer (2.6 ms/token measured)
+            from vmlx_engine.jangt.router import router_tail
+            B_, T_, E_ = logits.shape
+            i_, w_ = router_tail(logits.reshape(B_ * T_, E_), self.e_score_correction_bias, self.k, self.norm_topk,
+                                 self.scaling)
+            route = (i_.reshape(B_, T_, self.k), w_.reshape(B_, T_, self.k))
+        if route is None and self._compiled_router:
             route = glm5_router_post(
                 logits, self.e_score_correction_bias.astype(mx.float32),
                 top_k=self.k, norm_topk=self.norm_topk, scaling=self.scaling,
