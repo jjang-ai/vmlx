@@ -16,6 +16,7 @@ Cache invariant (as upstream dflash): the last emitted token is sampled but neve
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -142,6 +143,8 @@ class SpecStats:
     decode_s: float = 0.0
     rounds: int = 0
     accepted: list = field(default_factory=list)
+    ar_steps: int = 0                       # adaptive mode: tokens produced by plain target steps
+    blocks: list = field(default_factory=list)   # block size used by each verify round
 
     @property
     def tok_per_round(self) -> float:
@@ -186,18 +189,97 @@ def generate_ar(target: GLMDFlashTarget, prompt_ids, max_tokens: int, eos: set, 
     tok = sampler(logits[:, -1:]); mx.eval(tok)
     st.prompt_tokens, st.prefill_s = prompt.size, time.perf_counter() - t0
     t1 = time.perf_counter(); n = 0
+    from vmlx_engine.metal.affine_moe_pair_decode import affine_moe_ar_scope
+    # pipelined like the served loop: the next step's graph is built (inside the productive-AR scope, which selects the
+    # AR-only kernels) and queued BEFORE the current token is read back
     while True:
+        if n + 1 < max_tokens:
+            with affine_moe_ar_scope():
+                logits = target.forward(tok.reshape(1, 1), cache, verify=False, taps=False)
+            nxt = sampler(logits[:, -1:]); mx.async_eval(nxt)
         t = int(tok.item()); n += 1; yield t
         if t in eos or n >= max_tokens:
             break
-        logits = target.forward(tok.reshape(1, 1), cache, verify=False, taps=False)
-        tok = sampler(logits[:, -1:]); mx.async_eval(tok)
+        tok = nxt
     st.tokens, st.decode_s = n, time.perf_counter() - t1
+
+
+class AdaptiveSpec:
+    """Online speculation policy (2026-10-10): draft only when it pays, at the block size that pays most.
+
+    Per draft position i (1-based) it keeps decayed counts of how often position i was reached (all earlier drafts
+    accepted) and accepted, i.e. the conditional acceptance p_i. Expected tokens of a b-token verify round:
+    E(b) = 1 + sum_{i<b} prod_{j<=i} p_j. Costs are measured: an EMA of the wall time of a round per block size (draft +
+    verify, synchronized by the acceptance read-back) and of one plain target step. Each decision picks
+    argmax_b E(b)/cost(b) if that beats 1/cost(AR) by `margin`, else an AR burst; after `probe_every` AR tokens one
+    round is forced at the best estimated block so p_i keeps tracking the text (code drafts well, prose does not).
+    Unmeasured block costs are interpolated linearly from the measured ones (prior: AR x (1 + 0.35 (b-1))).
+    """
+
+    def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
+                 probe_every: int = 24, margin: float = 0.03, ar_burst: int = 8):
+        self.bmax, self.bmin = int(bmax), int(bmin)
+        self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
+        self.n_try = [prior_n] * (self.bmax + 1)
+        self.n_acc = [prior_n * prior_p] * (self.bmax + 1)
+        self.t_ar = None
+        self.t_round: dict[int, float] = {}
+        self.ar_since_probe = 0
+
+    def p(self, i: int) -> float:
+        return self.n_acc[i] / max(self.n_try[i], 1e-9)
+
+    def expected(self, b: int) -> float:
+        e, c = 1.0, 1.0
+        for i in range(1, b):
+            c *= self.p(i); e += c
+        return e
+
+    def cost(self, b: int) -> float:
+        if b in self.t_round:
+            return self.t_round[b]
+        known = sorted(self.t_round)
+        if len(known) >= 2:
+            (b0, c0), (b1, c1) = (known[0], self.t_round[known[0]]), (known[-1], self.t_round[known[-1]])
+            slope = max((c1 - c0) / max(b1 - b0, 1), 0.0)
+            return max(c0 + slope * (b - b0), 1e-6)
+        base = self.t_ar if self.t_ar is not None else 1.0
+        if len(known) == 1:
+            k = known[0]
+            return self.t_round[k] * (1 + 0.35 * (b - 1)) / (1 + 0.35 * (k - 1))
+        return base * (1 + 0.35 * (b - 1))
+
+    def choose(self) -> tuple[str, int]:
+        cands = range(self.bmin, self.bmax + 1)
+        best = max(cands, key=lambda b: self.expected(b) / self.cost(b))
+        if self.t_ar is None:                       # need one AR measurement before comparing
+            return ("ar", self.ar_burst)
+        if not self.t_round:                        # and one round
+            return ("spec", best)
+        spec_rate = self.expected(best) / self.cost(best)
+        if spec_rate > (1.0 + self.margin) / self.t_ar or self.ar_since_probe >= self.probe_every:
+            self.ar_since_probe = 0
+            return ("spec", best)
+        return ("ar", self.ar_burst)
+
+    def update_spec(self, b: int, accepted: int, dt: float) -> None:
+        for i in range(1, self.bmax + 1):
+            self.n_try[i] *= self.decay; self.n_acc[i] *= self.decay
+        for i in range(1, b):
+            if i <= accepted + 1:
+                self.n_try[i] += 1.0
+            if i <= accepted:
+                self.n_acc[i] += 1.0
+        self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
+
+    def update_ar(self, dt_per_token: float, tokens: int) -> None:
+        self.t_ar = dt_per_token if self.t_ar is None else 0.7 * self.t_ar + 0.3 * dt_per_token
+        self.ar_since_probe += tokens
 
 
 def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int, eos: set, temperature: float = 0.0,
                     top_p: float = 1.0, top_k: int = 0, block_size: int | None = None, prefill_step: int = 2048,
-                    stats: SpecStats | None = None, controls=None):
+                    stats: SpecStats | None = None, controls=None, adaptive: bool = False):
     """Yields (new_tokens, drafted) per cycle: first the token sampled from the prompt (drafted 0), then each verify
     round's accepted drafts + bonus token (drafted = verify width - 1). Upstream dflash loop with GLM verify/rollback.
     controls: optional vmlx_engine.dflash2_sampling.DFlash2SamplingControls (min_p, logit_bias, penalties) applied to
@@ -231,10 +313,69 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
         yield [tokens[-1]], 0
         if tokens[-1] in eos:
             return
+        policy = AdaptiveSpec(bs0) if adaptive else None
+
+        def sample_row(lg, hist):
+            last = lg[:, -1:]
+            if controls is not None:
+                last = controls.process(last, hist)
+                return (runtime._sample_probs(controls.probabilities(runtime, last, temperature, top_p, top_k))
+                        if temperature > 0 else mx.argmax(last, axis=-1))
+            return sampler(last)
+
+        def ar_step(tok_arr):
+            from vmlx_engine.metal.affine_moe_pair_decode import affine_moe_ar_scope
+            with affine_moe_ar_scope():
+                lg = target.forward(tok_arr, cache, verify=False, taps=True)
+            return lg, target.hidden()
+
+        def ar_burst(k):
+            """k plain target steps (pipelined when no history-dependent controls); keeps the drafter's tap rows.
+            Invariant kept: the last emitted token is not forwarded (an extra step launched past EOS / max_tokens only
+            touches this generation's private cache)."""
+            emitted, rows = [], []
+            pipelined = controls is None
+            lg, h = ar_step(mx.array([[tokens[-1]]])); nx = sample_row(lg, history + tokens); mx.async_eval(nx, h)
+            for j in range(k):
+                launched = None
+                if pipelined and j + 1 < k:
+                    lg2, h2 = ar_step(nx.reshape(1, 1)); nx2 = sample_row(lg2, None); mx.async_eval(nx2, h2)
+                    launched = (nx2, h2)
+                t = int(nx.item()); emitted.append(t); rows.append(h)
+                if t in eos or n + len(emitted) >= max_tokens or j + 1 >= k:
+                    break
+                if launched is None:
+                    lg, h = ar_step(nx.reshape(1, 1)); nx = sample_row(lg, history + tokens + emitted)
+                    mx.async_eval(nx, h)
+                else:
+                    nx, h = launched
+            return emitted, rows
+
         while n < max_tokens:
-            bs = min(bs0, max_tokens - n + 1)
+            mode, b = policy.choose() if policy is not None else ("spec", bs0)
+            if mode == "ar":
+                ta = time.perf_counter()
+                new, rows = ar_burst(min(b, max_tokens - n))
+                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
+                hidden = mx.concatenate([hidden] + rows, axis=1)
+                if hidden_limit is not None and hidden.shape[1] > hidden_limit:
+                    drop = hidden.shape[1] - hidden_limit          # outside the drafter's sliding window anyway
+                    hidden = hidden[:, drop:]
+                    for c in dcache:
+                        c.offset += drop
+                st.ar_steps += len(new)
+                stop = next((i for i, t in enumerate(new) if t in eos), None)
+                if stop is not None:
+                    new = new[: stop + 1]
+                tokens.extend(new); n += len(new)
+                yield new, 0
+                if stop is not None:
+                    break
+                continue
+            bs = min(b, max_tokens - n + 1)
             if bs <= 1:
                 break
+            tr = time.perf_counter()
             block = mx.array([[tokens[-1]] + [mask_id] * (bs - 1)])
             if isinstance(draft, DFlash2DraftModel):
                 d_tok, d_idx, d_prob = draft.propose(block, hidden, dcache, temperature, logits_start=1)
@@ -267,7 +408,9 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
                 accepted = next((i for i in range(len(dl_)) if dl_[i] != tl_[i]), len(dl_))
                 bonus = tl_[accepted]
             new = (dl_[:accepted] + [bonus])[: max_tokens - n]
-            st.rounds += 1; st.accepted.append(accepted)
+            st.rounds += 1; st.accepted.append(accepted); st.blocks.append(bs)
+            if policy is not None:
+                policy.update_spec(bs, accepted, time.perf_counter() - tr)
             stop = next((i for i, t in enumerate(new) if t in eos), None)
             if stop is not None:
                 new = new[: stop + 1]
@@ -283,10 +426,11 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
 
 def generate_dflash2(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int, eos: set, temperature: float = 0.0,
                      top_p: float = 1.0, block_size: int | None = None, prefill_step: int = 2048,
-                     stats: SpecStats | None = None) -> Iterator[int]:
-    """DFlash2 speculative generation as a token iterator. Greedy output == generate_ar's."""
+                     stats: SpecStats | None = None, adaptive: bool = False) -> Iterator[int]:
+    """DFlash2 speculative generation as a token iterator. Greedy output == generate_ar's (also with adaptive=True:
+    AR bursts and verify rounds both emit the target's argmax)."""
     for new, _ in _dflash2_rounds(target, draft, prompt_ids, max_tokens, eos, temperature, top_p, 0, block_size,
-                                  prefill_step, stats):
+                                  prefill_step, stats, adaptive=adaptive):
         yield from new
 
 
@@ -332,7 +476,8 @@ def stream_glm_dflash2(model, tokenizer, draft, prompt: str, *, max_tokens: int,
     target = target_for(model, draft.config.target_layer_ids)
     st = SpecStats(); tic = time.perf_counter(); n = 0
     for new, drafted in _dflash2_rounds(target, draft, list(prompt_tokens), int(max_tokens), eos, float(temperature),
-                                        float(top_p), int(top_k), stats=st, controls=sampling_controls):
+                                        float(top_p), int(top_k), stats=st, controls=sampling_controls,
+                                        adaptive=os.environ.get("VMLX_GLM_DFLASH2_ADAPTIVE", "1") != "0"):
         if n == 0:
             tic = time.perf_counter()
         for t in new:

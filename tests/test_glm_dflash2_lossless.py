@@ -185,3 +185,59 @@ def test_taps_are_removed_on_close():
     t = GLMDFlashTarget(model, TAPS)
     t.close()
     assert all(type(l).__name__ != "_MeanStreamTap" for l in model.model.layers)
+
+
+class AlwaysWrongDraft(ScriptedDraft):
+    """Every draft is wrong: a cost-aware policy must stop paying for verify rounds."""
+
+    def __call__(self, block, hidden, cache, logits_start=1):
+        out = super().__call__(block, hidden, cache, logits_start)
+        return mx.roll(out, 1, axis=-1)
+
+
+@pytest.mark.parametrize("plen", [37, 39])
+def test_adaptive_is_lossless(plen):
+    model = _target()
+    target = GLMDFlashTarget(model, TAPS)
+    try:
+        prompt = list(range(5, 5 + plen))
+        ref, rows = _ar_logits(model, prompt, 40)
+        st = SpecStats()
+        got = list(generate_dflash2(target, ScriptedDraft(ref, 8), prompt, 40, eos=set(), stats=st, adaptive=True))
+        assert len(got) == 40
+        _check_vs_ar(got, ref, rows)
+        _check_teacher_forced(model, prompt, got)
+        assert st.ar_steps + sum(a_ + 1 for a_ in st.accepted) + 1 >= 40
+    finally:
+        target.close()
+
+
+def test_adaptive_falls_back_to_ar_when_drafts_fail():
+    model = _target(4)
+    target = GLMDFlashTarget(model, TAPS)
+    try:
+        prompt = list(range(5, 45))
+        ref, rows = _ar_logits(model, prompt, 64)
+        st = SpecStats()
+        got = list(generate_dflash2(target, AlwaysWrongDraft(ref, 8), prompt, 64, eos=set(), stats=st, adaptive=True))
+        _check_teacher_forced(model, prompt, got)
+        assert sum(st.accepted) == 0                         # no draft was ever accepted
+        assert st.ar_steps > 2 * st.rounds, (st.ar_steps, st.rounds)   # mostly plain steps, occasional probes
+    finally:
+        target.close()
+
+
+def test_adaptive_policy_prefers_large_blocks_for_good_drafts():
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+    p = AdaptiveSpec(8)
+    p.update_ar(0.030, 8)
+    for _ in range(30):
+        p.update_spec(8, 7, 0.060)                           # all 7 drafts accepted, round = 2x a step
+    mode, b = p.choose()
+    assert mode == "spec" and b == 8
+    q = AdaptiveSpec(8)
+    q.update_ar(0.030, 8)
+    for _ in range(30):
+        q.update_spec(4, 0, 0.060)                           # nothing accepted
+    q.ar_since_probe = 0
+    assert q.choose()[0] == "ar"
