@@ -109,6 +109,9 @@ from vmlx_engine.metal.glm5_dsa_select import (
 )
 from vmlx_engine.metal.glm5_kda_fused_decode import fused_kda_decode_requested, glm5_kda_fused_decode
 from vmlx_engine.metal.glm5_mla_decode_attn import glm5_mla_decode_attn, mla_decode_attn_requested
+from vmlx_engine.metal.glm5_mhc_prefill_fused import (
+    glm5_hc_place_prefill, glm5_mhc_mix_norm_prefill, mhc_prefill_fused_requested,
+)
 from vmlx_engine.metal.kda_step_decode import (
     fused_kda_step_requested,
     glm5_kda_step_decode,
@@ -1013,6 +1016,10 @@ def hc_place(
     fused_decode: bool = False,
 ) -> mx.array:
     """streams' = post⊗out + combᵀ @ residual   (all [B,S,·] shapes)."""
+    if residual.ndim == 4 and residual.shape[1] > 4 and mhc_prefill_fused_requested():
+        fused = glm5_hc_place_prefill(post, comb, out, residual)       # prefill / verify slabs
+        if fused is not None:
+            return fused
     fused = glm5_hc_place_decode(
         post, comb, out, residual, enabled=fused_decode
     )
@@ -2091,6 +2098,8 @@ class DecoderLayer(nn.Module):
     def __call__(self, streams: mx.array, cache=None, n_confirmed: int = 0):
         residual = streams
         fused_hc_norm = try_glm5_hc_norm(streams, self.attn_hc, self.input_layernorm)
+        if fused_hc_norm is None and streams.shape[1] > 4 and mhc_prefill_fused_requested():
+            fused_hc_norm = glm5_mhc_mix_norm_prefill(streams, self.attn_hc, self.input_layernorm)
         if fused_hc_norm is None:
             post, comb, x = self.attn_hc(streams)
             attn_input = self.input_layernorm(x)
@@ -2108,6 +2117,8 @@ class DecoderLayer(nn.Module):
 
         residual = streams
         fused_hc_norm = try_glm5_hc_norm(streams, self.ffn_hc, self.post_attention_layernorm)
+        if fused_hc_norm is None and streams.shape[1] > 4 and mhc_prefill_fused_requested():
+            fused_hc_norm = glm5_mhc_mix_norm_prefill(streams, self.ffn_hc, self.post_attention_layernorm)
         if fused_hc_norm is None:
             post, comb, x = self.ffn_hc(streams)
             x = self.post_attention_layernorm(x)
