@@ -8326,7 +8326,7 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
     except ImportError:
         _CacheList = None
     try:
-        from mlx_lm.generate import BatchRotatingKVCache
+        from mlx_lm.models.cache import BatchRotatingKVCache
     except ImportError:
         BatchRotatingKVCache = None
     from .models.minimax_m3.cache import (
@@ -8448,7 +8448,7 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
     except ImportError:
         _CacheList = None
     try:
-        from mlx_lm.generate import BatchRotatingKVCache
+        from mlx_lm.models.cache import BatchRotatingKVCache
     except ImportError:
         BatchRotatingKVCache = None
     from .models.minimax_m3.cache import (
