@@ -213,11 +213,16 @@ class AdaptiveSpec:
     verify, synchronized by the acceptance read-back) and of one plain target step. Each decision picks
     argmax_b E(b)/cost(b) if that beats 1/cost(AR) by `margin`, else an AR burst; after `probe_every` AR tokens one
     round is forced at the best estimated block so p_i keeps tracking the text (code drafts well, prose does not).
-    Unmeasured block costs are interpolated linearly from the measured ones (prior: AR x (1 + 0.35 (b-1))).
+    Unmeasured block costs are interpolated linearly from the measured ones (prior: AR x (1 + slope (b-1)); slope 0.22
+    = measured GLM verify cost per extra row after the 2026-10-10 verify kernels: 2 rows 1.18x, 4 rows 1.61x, 8 rows
+    2.55x an AR step). Every `explore_every` rounds the next round tries a neighbour of the best block (b+1, then
+    b-1) so the cost/acceptance tables are filled by measurement, not by the prior (with a 0.35 prior the policy
+    locked onto blocks 2-3 while block 4 was 6-12% faster).
     """
 
     def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
-                 probe_every: int = 24, margin: float = 0.03, ar_burst: int = 8):
+                 probe_every: int = 24, margin: float = 0.05, ar_burst: int = 8, slope: float = 0.22,
+                 explore_every: int = 6):
         self.bmax, self.bmin = int(bmax), int(bmin)
         self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
         self.n_try = [prior_n] * (self.bmax + 1)
@@ -225,6 +230,9 @@ class AdaptiveSpec:
         self.t_ar = None
         self.t_round: dict[int, float] = {}
         self.ar_since_probe = 0
+        self.slope, self.explore_every = slope, explore_every
+        self.rounds_since_explore = 0
+        self._explore_flip = False
 
     def p(self, i: int) -> float:
         return self.n_acc[i] / max(self.n_try[i], 1e-9)
@@ -246,8 +254,8 @@ class AdaptiveSpec:
         base = self.t_ar if self.t_ar is not None else 1.0
         if len(known) == 1:
             k = known[0]
-            return self.t_round[k] * (1 + 0.35 * (b - 1)) / (1 + 0.35 * (k - 1))
-        return base * (1 + 0.35 * (b - 1))
+            return self.t_round[k] * (1 + self.slope * (b - 1)) / (1 + self.slope * (k - 1))
+        return base * (1 + self.slope * (b - 1))
 
     def choose(self) -> tuple[str, int]:
         cands = range(self.bmin, self.bmax + 1)
@@ -257,12 +265,23 @@ class AdaptiveSpec:
         if not self.t_round:                        # and one round
             return ("spec", best)
         spec_rate = self.expected(best) / self.cost(best)
-        if spec_rate > (1.0 + self.margin) / self.t_ar or self.ar_since_probe >= self.probe_every:
+        # hysteresis: AR only when it is estimated at least `margin` faster than the best block (round costs carry
+        # read-back overhead that AR bursts hide; switching on a near-tie loses)
+        if spec_rate * (1.0 + self.margin) >= 1.0 / self.t_ar or self.ar_since_probe >= self.probe_every:
             self.ar_since_probe = 0
+            self.rounds_since_explore += 1
+            if self.rounds_since_explore >= self.explore_every:
+                self.rounds_since_explore = 0
+                self._explore_flip = not self._explore_flip
+                nb = best + 1 if self._explore_flip else best - 1
+                if self.bmin <= nb <= self.bmax:
+                    return ("spec", nb)
             return ("spec", best)
         return ("ar", self.ar_burst)
 
-    def update_spec(self, b: int, accepted: int, dt: float) -> None:
+    def update_spec(self, b: int, accepted: int, dt: float, after_ar: bool = False) -> None:
+        """after_ar: the round right after an AR burst feeds the drafter all of the burst's context rows and is
+        slower than a steady-state round; its acceptance counts, its time does not."""
         for i in range(1, self.bmax + 1):
             self.n_try[i] *= self.decay; self.n_acc[i] *= self.decay
         for i in range(1, b):
@@ -270,7 +289,8 @@ class AdaptiveSpec:
                 self.n_try[i] += 1.0
             if i <= accepted:
                 self.n_acc[i] += 1.0
-        self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
+        if not after_ar or b not in self.t_round:
+            self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
 
     def update_ar(self, dt_per_token: float, tokens: int) -> None:
         self.t_ar = dt_per_token if self.t_ar is None else 0.7 * self.t_ar + 0.3 * dt_per_token
@@ -351,9 +371,11 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
                     nx, h = launched
             return emitted, rows
 
+        after_ar = False
         while n < max_tokens:
             mode, b = policy.choose() if policy is not None else ("spec", bs0)
             if mode == "ar":
+                after_ar = True
                 ta = time.perf_counter()
                 new, rows = ar_burst(min(b, max_tokens - n))
                 policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
@@ -410,7 +432,8 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
             new = (dl_[:accepted] + [bonus])[: max_tokens - n]
             st.rounds += 1; st.accepted.append(accepted); st.blocks.append(bs)
             if policy is not None:
-                policy.update_spec(bs, accepted, time.perf_counter() - tr)
+                policy.update_spec(bs, accepted, time.perf_counter() - tr, after_ar=after_ar)
+            after_ar = False
             stop = next((i for i, t in enumerate(new) if t in eos), None)
             if stop is not None:
                 new = new[: stop + 1]
