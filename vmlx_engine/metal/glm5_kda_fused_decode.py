@@ -173,3 +173,138 @@ def glm5_kda_fused_decode(q, k, v, cq, ck, cv, wq, wk, wv, f_raw, dt_bias, A_log
 
 
 __all__ = ["fused_kda_decode_requested", "glm5_kda_fused_decode"]
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Multi-row variant for speculative-verify slabs (2026-10-10). Same math per position as the decode kernel, looped over
+# the T slab rows inside one threadgroup per head; the recurrent state stays in registers across rows and the state
+# after EVERY row is written (rollback needs each accepted-prefix boundary). Conv tails per row are slices of the padded
+# input and stay with the caller. Replaces short_conv_with_states + l2norm + gates + kda_recurrent_with_states + the
+# gated norm of the vectorized verify path (27 ms of a 4-row GLM verify forward, measured).
+@lru_cache(maxsize=8)
+def _kernel_verify(H: int, K: int, W: int, lower_bound: float, rms_eps: float):
+    assert K == 128 and W >= 2
+    C = H * K
+    src = f"""
+    const uint h = threadgroup_position_in_grid.x;
+    const uint tid = thread_index_in_threadgroup;
+    const uint lane = thread_index_in_simdgroup;
+    const uint sg = simdgroup_index_in_threadgroup;
+    const uint T_ = (uint)n_rows[0];
+    threadgroup float qv[{K}], kv[{K}], vv[{K}], eg[{K}];
+    threadgroup float red[16][3];
+    threadgroup float scal[4];
+    threadgroup float pA[4][{K}], pB[4][{K}];
+    threadgroup float ov[{K}];
+    const uint vi = tid % {K}u;
+    const uint ks = tid / {K}u;
+    const size_t sbase = (size_t)h * {K * K}u;
+    float S[32];
+    for (uint j = 0; j < 32u; ++j) S[j] = state[sbase + (size_t)(ks * 32u + j) * {K}u + vi];
+    for (uint t = 0; t < T_; ++t) {{
+        if (tid < {3 * K}u) {{
+            const uint which = tid / {K}u, i = tid % {K}u, c = h * {K}u + i;
+            device const T* tok = which == 0u ? q_tok : (which == 1u ? k_tok : v_tok);
+            device const T* st = which == 0u ? q_state : (which == 1u ? k_state : v_state);
+            device const T* wt = which == 0u ? q_w : (which == 1u ? k_w : v_w);
+            float acc = 0.0f;
+            for (uint tap = 0; tap < {W}u; ++tap) {{
+                // padded[t + tap] with padded = [state (W-1 rows), tok (T rows)]
+                const int pos = (int)t + (int)tap - {W - 1};
+                float val = pos < 0 ? (float)st[(size_t)(pos + {W - 1}) * {C}u + c] : (float)tok[(size_t)pos * {C}u + c];
+                acc += val * (float)wt[(size_t)c * {W}u + tap];
+            }}
+            float y = (float)(T)(acc / (1.0f + metal::exp(-acc)));
+            if (which == 0u) qv[i] = y; else if (which == 1u) kv[i] = y; else vv[i] = y;
+        }} else {{
+            const uint i = tid - {3 * K}u, c = h * {K}u + i;
+            float f = (float)f_raw[(size_t)t * {C}u + c] + (float)dt_bias[c];
+            float g = {float(lower_bound)!r}f * (1.0f / (1.0f + metal::exp(-(metal::exp((float)A_log[h]) * f))));
+            eg[i] = metal::exp(g);
+            if (i == 0u) scal[0] = 1.0f / (1.0f + metal::exp(-(float)b_raw[(size_t)t * {H}u + h]));
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid < {K}u) {{
+            float a = qv[tid], b = kv[tid];
+            float s0 = simd_sum(a * a), s1 = simd_sum(b * b), s2 = simd_sum(a * b);
+            if (lane == 0u) {{ red[sg][0] = s0; red[sg][1] = s1; red[sg][2] = s2; }}
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid == 0u) {{
+            float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+            for (uint j = 0; j < {K // 32}u; ++j) {{ s0 += red[j][0]; s1 += red[j][1]; s2 += red[j][2]; }}
+            float iq = metal::rsqrt(s0 + 1e-6f), ik = metal::rsqrt(s1 + 1e-6f);
+            scal[1] = iq * {float(K ** -0.5)!r}f; scal[2] = ik; scal[3] = s2 * iq * {float(K ** -0.5)!r}f * ik;
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float qs = scal[1], kn = scal[2], beta = scal[0];
+        float a_part = 0.0f, b_part = 0.0f;
+        for (uint j = 0; j < 32u; ++j) {{
+            const uint kk = ks * 32u + j;
+            S[j] *= eg[kk];
+            a_part += kv[kk] * kn * S[j];
+            b_part += qv[kk] * qs * S[j];
+        }}
+        pA[ks][vi] = a_part; pB[ks][vi] = b_part;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float kS = pA[0][vi] + pA[1][vi] + pA[2][vi] + pA[3][vi];
+        const float corr = vv[vi] - kS;
+        const size_t obase = (size_t)t * {H * K * K}u + sbase;
+        for (uint j = 0; j < 32u; ++j) {{
+            const uint kk = ks * 32u + j;
+            S[j] += beta * kv[kk] * kn * corr;
+            states_out[obase + (size_t)kk * {K}u + vi] = S[j];
+        }}
+        if (ks == 0u) ov[vi] = (pB[0][vi] + pB[1][vi] + pB[2][vi] + pB[3][vi]) + beta * corr * scal[3];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid < {K}u) {{
+            float o = ov[tid];
+            float s = simd_sum(o * o);
+            if (lane == 0u) red[sg][0] = s;
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid < {K}u) {{
+            float s = 0.0f;
+            for (uint j = 0; j < {K // 32}u; ++j) s += red[j][0];
+            float inv = metal::rsqrt(s / {float(K)}f + {float(rms_eps)!r}f);
+            const uint c = h * {K}u + tid;
+            float gte = (float)gate_raw[(size_t)t * {C}u + c];
+            gated[(size_t)t * {C}u + c] = (T)((float)o_norm[tid] * (ov[tid] * inv) * (1.0f / (1.0f + metal::exp(-gte))));
+        }}
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }}
+"""
+    return mx.fast.metal_kernel(
+        name=f"vmlx_glm5_kda_fused_verify_h{H}_k{K}_w{W}",
+        input_names=["q_tok", "k_tok", "v_tok", "q_state", "k_state", "v_state", "q_w", "k_w", "v_w",
+                     "f_raw", "dt_bias", "A_log", "b_raw", "gate_raw", "o_norm", "state", "n_rows"],
+        output_names=["gated", "states_out"], header="#include <metal_stdlib>\nusing namespace metal;\n",
+        source=src, ensure_row_contiguous=True)
+
+
+def glm5_kda_fused_verify(q, k, v, cq, ck, cv, wq, wk, wv, f_raw, dt_bias, A_log, b_raw, gate_raw, o_norm, state, *,
+                          heads: int, key_dim: int, lower_bound: float, rms_eps: float):
+    """q/k/v (1, T, H*K) raw projections; returns (gated (1,T,H*K), states (T, 1, H, K, K) f32) or None."""
+    if key_dim != 128 or state is None or cq is None or ck is None or cv is None:
+        return None
+    C = heads * key_dim
+    if q.ndim != 3 or q.shape[0] != 1 or q.shape[2] != C or k.shape != q.shape or v.shape != q.shape:
+        return None
+    T = int(q.shape[1])
+    if T < 1 or T > 64 or q.dtype not in (mx.bfloat16, mx.float16) or state.dtype != mx.float32 \
+            or tuple(state.shape) != (1, heads, key_dim, key_dim):
+        return None
+    if wq.ndim == 3:
+        wq, wk, wv = (w_.reshape(w_.shape[0], -1) for w_ in (wq, wk, wv))
+    W = int(wq.shape[1])
+    if tuple(cq.shape) != (1, W - 1, C) or cq.dtype != q.dtype or f_raw.size != T * C or gate_raw.size != T * C \
+            or b_raw.size != T * heads:
+        return None
+    gated, states = _kernel_verify(heads, key_dim, W, float(lower_bound), float(rms_eps))(
+        inputs=[q, k, v, cq, ck, cv, wq, wk, wv, f_raw, dt_bias, A_log, b_raw, gate_raw, o_norm, state,
+                mx.array([T], mx.int32)],
+        template=[("T", q.dtype)], grid=(heads * 512, 1, 1), threadgroup=(512, 1, 1),
+        output_shapes=[(1, T, C), (T, 1, heads, key_dim, key_dim)], output_dtypes=[q.dtype, mx.float32])
+    global _OBSERVED
+    _OBSERVED += 1
+    return gated, states

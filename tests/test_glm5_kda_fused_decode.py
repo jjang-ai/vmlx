@@ -72,3 +72,36 @@ def test_fused_path_is_taken(monkeypatch):
     n0 = F._OBSERVED
     _run(a, x[:, 3:], c, True, monkeypatch)
     assert F._OBSERVED == n0 + 1
+
+
+@pytest.mark.parametrize("T", [4, 7])
+def test_fused_verify_slab_matches_vectorized(monkeypatch, T):
+    """Verify slab (n_confirmed=1): output, final state and EVERY recorded rollback state match the vectorized path."""
+    from vmlx_engine.metal import glm5_kda_fused_decode as F
+    a = _layer(10 + T)
+    xs = (mx.random.normal((1, 6 + T, D)) * 2).astype(mx.bfloat16)
+    c0 = Glm5KDACache()
+    _run(a, xs[:, :6], c0, False, monkeypatch)
+    cs, cf = _copy(c0), _copy(c0)
+    monkeypatch.setenv("VMLX_GLM5_FUSED_KDA_DECODE", "0")
+    ys = a(xs[:, 6:], cache=cs, n_confirmed=1); mx.eval(ys, cs.cache)
+    monkeypatch.setenv("VMLX_GLM5_FUSED_KDA_DECODE", "1")
+    n0 = F._OBSERVED
+    yf = a(xs[:, 6:], cache=cf, n_confirmed=1); mx.eval(yf, cf.cache)
+    assert F._OBSERVED == n0 + 1                              # fail closed: the fused verify kernel ran
+    ys_, yf_ = np.array(ys.astype(mx.float32)), np.array(yf.astype(mx.float32))
+    assert np.max(np.abs(ys_ - yf_)) <= 8e-3 * np.max(np.abs(ys_)), np.max(np.abs(ys_ - yf_))
+    for i in range(4):
+        a_, b_ = np.array(cs.cache[i].astype(mx.float32)), np.array(cf.cache[i].astype(mx.float32))
+        assert np.max(np.abs(a_ - b_)) <= 1e-5 * max(np.max(np.abs(a_)), 1e-6)
+    ss, sf = cs._speculative_states, cf._speculative_states
+    assert len(ss) == len(sf) == T
+    for t in range(T):
+        for i in range(4):
+            a_, b_ = np.array(ss[t][i].astype(mx.float32)), np.array(sf[t][i].astype(mx.float32))
+            assert np.max(np.abs(a_ - b_)) <= 1e-5 * max(np.max(np.abs(a_)), 1e-6), (t, i)
+    # a partial rejection restores the same boundary in both
+    assert cs.rollback_speculative(2) and cf.rollback_speculative(2)
+    for i in range(4):
+        assert np.allclose(np.array(cs.cache[i].astype(mx.float32)), np.array(cf.cache[i].astype(mx.float32)),
+                           rtol=1e-5, atol=1e-6)

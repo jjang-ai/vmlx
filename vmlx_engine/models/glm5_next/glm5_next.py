@@ -107,7 +107,9 @@ from vmlx_engine.metal.glm5_dsa_select import (
     glm5_dsa_select,
     glm5_dsa_select_requested,
 )
-from vmlx_engine.metal.glm5_kda_fused_decode import fused_kda_decode_requested, glm5_kda_fused_decode
+from vmlx_engine.metal.glm5_kda_fused_decode import (
+    fused_kda_decode_requested, glm5_kda_fused_decode, glm5_kda_fused_verify,
+)
 from vmlx_engine.metal.glm5_mla_decode_attn import glm5_mla_decode_attn, mla_decode_attn_requested
 from vmlx_engine.metal.glm5_mhc_prefill_fused import (
     glm5_hc_place_prefill, glm5_mhc_mix_norm_prefill, mhc_prefill_fused_requested,
@@ -1125,6 +1127,36 @@ class KDAAttention(nn.Module):
                          else self.g_b_proj(self.g_a_proj(x)))
         return projected.reshape(*x.shape[:2], self.H, self.K)
 
+    def _fused_verify(self, x, cache, conv_q, conv_k, conv_v, state):
+        """Speculative-verify slab in one KDA dispatch (metal/glm5_kda_fused_decode._kernel_verify): per-row conv,
+        l2norm, gates, recurrent update (state after every row) and gated norm. None -> the vectorized MLX path."""
+        if (not fused_kda_decode_requested() or self._exact_output_norm or conv_q is None or state is None
+                or x.shape[0] != 1):
+            return None
+        B, T, _ = x.shape
+        H, K = self.H, self.K
+        q, k, v = self._project_qkv(x)
+        if self.lowrank_group is not None:
+            f_raw, gate_raw, b_raw = (self.lowrank_group.decay(x), self.lowrank_group.output_gate(x),
+                                      self.lowrank_group.beta(x))
+        else:
+            f_raw, gate_raw, b_raw = self.f_b_proj(self.f_a_proj(x)), self.g_b_proj(self.g_a_proj(x)), self.b_proj(x)
+        out = glm5_kda_fused_verify(q, k, v, conv_q, conv_k, conv_v, self.q_conv1d, self.k_conv1d, self.v_conv1d,
+                                    f_raw, self.dt_bias, self.A_log, b_raw, gate_raw, self.o_norm, state,
+                                    heads=H, key_dim=K, lower_bound=self.lower_bound, rms_eps=self.rms_eps)
+        if out is None:
+            return None
+        gated, states = out
+        W = int(self.q_conv1d.reshape(self.q_conv1d.shape[0], -1).shape[1])
+
+        def tails(raw, st):        # == short_conv_with_states: the conv tail after every row
+            padded = mx.concatenate([st.astype(raw.dtype), raw], axis=1)
+            return [mx.array(padded[:, t + 1: t + W]) for t in range(T)]
+        cq_s, ck_s, cv_s = tails(q, conv_q), tails(k, conv_k), tails(v, conv_v)
+        rec = [states[t] for t in range(T)]
+        cache.set_speculative_states(list(zip(cq_s, ck_s, cv_s, rec)))
+        return self.o_proj(gated.reshape(B, T, H * K)), cq_s[-1], ck_s[-1], cv_s[-1], rec[-1]
+
     def __call__(
         self,
         x: mx.array,
@@ -1268,7 +1300,11 @@ class KDAAttention(nn.Module):
             and isinstance(cache, Glm5KDACache)
             and 0 < n_confirmed < T
         ):
-            if self._vectorized_speculative_verify:
+            fused_v = (self._fused_verify(x, cache, conv_q, conv_k, conv_v, state)
+                       if self._vectorized_speculative_verify else None)
+            if fused_v is not None:
+                result, conv_q, conv_k, conv_v, state = fused_v
+            elif self._vectorized_speculative_verify:
                 # Compute every position-independent operation once over the
                 # full verify slab.  Only the true KDA recurrence stays
                 # sequential; it returns each accepted-prefix state for exact
