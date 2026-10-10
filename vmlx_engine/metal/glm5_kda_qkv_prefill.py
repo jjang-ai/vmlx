@@ -19,7 +19,9 @@ _FLOATS = (mx.float16, mx.bfloat16, mx.float32)
 
 
 def qkv_prefill_requested() -> bool:
-    return os.environ.get("VMLX_GLM5_KDA_QKV_PREFILL", "0") == "1"
+    # default on since 2026-10-10: GLM-5.3-Flash 4k cold prefill 468.9 -> 510.7 tok/s (+8.9%), prefill logits
+    # bit-identical (KL 0 on the last 256 positions). VMLX_GLM5_KDA_QKV_PREFILL=0 restores the stock convolutions.
+    return os.environ.get("VMLX_GLM5_KDA_QKV_PREFILL", "1") != "0"
 
 
 @lru_cache(maxsize=7)

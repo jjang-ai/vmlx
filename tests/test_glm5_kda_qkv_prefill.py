@@ -85,8 +85,10 @@ def test_three_dimensional_weights_and_cast_history():
         assert_exact(ref[1], got[1])
 
 
-def test_default_off_and_unsupported_geometry(monkeypatch):
+def test_default_on_and_unsupported_geometry(monkeypatch):
     monkeypatch.delenv("VMLX_GLM5_KDA_QKV_PREFILL", raising=False)
+    assert fused.qkv_prefill_requested()                     # default on since 2026-10-10
+    monkeypatch.setenv("VMLX_GLM5_KDA_QKV_PREFILL", "0")
     assert not fused.qkv_prefill_requested()
     monkeypatch.setenv("VMLX_GLM5_KDA_QKV_PREFILL", "1")
     assert fused.qkv_prefill_requested()
