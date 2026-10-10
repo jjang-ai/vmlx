@@ -10272,7 +10272,31 @@ class Scheduler:
                                             f"{request_id}, skipping paged cache store"
                                         )
                             else:
-                                if getattr(
+                                if (
+                                    getattr(self, "_mixed_attention_cache_model", False)
+                                    and self._model_type_for_runtime == "naive_n05_flash"
+                                    and snapshot_cache is not None
+                                ):
+                                    # SingleBatchGenerator cloned the exact N-1 native
+                                    # boundary (full-prompt key incl. the generation
+                                    # header) before consuming the final prompt token;
+                                    # the block-aware path already stores this same
+                                    # snapshot. Re-prefilling the whole prompt to rebuild
+                                    # it doubled cold prefill time with block-disk off.
+                                    # Without a snapshot (budget/headroom skip) the
+                                    # deferred clean re-prefill below still runs.
+                                    request._extracted_cache = snapshot_cache
+                                    request._extracted_cache_key_tokens = list(
+                                        request.prompt_token_ids[:-1]
+                                    )
+                                    request._extracted_cache_from_prompt_snapshot = True
+                                    logger.info(
+                                        "Naive prefix store using exact N-1 prompt "
+                                        "snapshot (%d layers, %d key tokens, object cache)",
+                                        len(snapshot_cache),
+                                        len(request._extracted_cache_key_tokens),
+                                    )
+                                elif getattr(
                                     self, "_mixed_attention_cache_model", False
                                 ):
                                     mixed_prompt_tokens = list(
