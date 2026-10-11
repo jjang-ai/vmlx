@@ -250,11 +250,14 @@ def test_block_disk_detaches_bfloat16_then_encodes_off_caller(
     save_inputs: list[dict] = []
     streamed_payloads: list[tuple[type, int]] = []
     original_save = store._stage_numpy_safetensors_file
-    original_write_all = store._write_all_fd
+    original_writev_all = store._writev_all_fd
 
-    def observed_write_all(fd, payload):
-        streamed_payloads.append((type(payload), memoryview(payload).nbytes))
-        return original_write_all(fd, payload)
+    def observed_writev_all(fd, payloads):
+        # Payload files are written with gathered writes of the original
+        # buffers (header bytes + zero-copy NumPy tensors).
+        for payload in payloads:
+            streamed_payloads.append((type(payload), memoryview(payload).nbytes))
+        return original_writev_all(fd, payloads)
 
     def observed_save(block_hash, tensors):
         save_threads.append(threading.current_thread().name)
@@ -268,7 +271,7 @@ def test_block_disk_detaches_bfloat16_then_encodes_off_caller(
         return staged_path
 
     monkeypatch.setattr(store, "_stage_numpy_safetensors_file", observed_save)
-    monkeypatch.setattr(store, "_write_all_fd", observed_write_all)
+    monkeypatch.setattr(store, "_writev_all_fd", observed_writev_all)
     block_hash = b"f" * 32
     fence_id = store.begin_write_fence("bf16-freeze")
     try:
