@@ -2837,6 +2837,10 @@ class BlockAwarePrefixCache:
         cache.release_cache(request_id)
     """
 
+    # reconstruct_cache cold-cache read-ahead window (blocks hinted ahead of the loop).
+    _READAHEAD_BLOCKS = 128
+
+
     def __init__(
         self,
         model: Any,
@@ -7512,10 +7516,51 @@ class BlockAwarePrefixCache:
         l2_readable_block_ids: set[int] = set()
         native_resident_block_ids: set[int] = set()
         reconstruction_succeeded = False
+        # Cold-cache read-ahead: blocks below are read one file at a time. Ask
+        # the OS to start reading the upcoming payload files (a sliding window
+        # of _READAHEAD_BLOCKS, refilled at half) so the SSD works ahead of the
+        # loop. Hint only — no data is loaded here, nothing changes on a warm
+        # page cache except a few microseconds per file.
+        _readahead_disk = getattr(self.paged_cache, "_disk_store", None)
+        _readahead = getattr(_readahead_disk, "advise_block_reads", None)
+        _readahead_hashes: List[Any] = []
+        if callable(_readahead):
+            for _ra_block_id in block_table.block_ids:
+                _ra_block = self.paged_cache.allocated_blocks.get(_ra_block_id)
+                _readahead_hashes.append(
+                    _ra_block.block_hash
+                    if _ra_block is not None
+                    and _ra_block.cache_data is None
+                    and _ra_block.block_hash is not None
+                    else None
+                )
+        _readahead_upto = 0
         try:
             # Collect cache data from all blocks
             all_block_data = []
-            for block_id in block_table.block_ids:
+            for _block_index, block_id in enumerate(block_table.block_ids):
+                if (
+                    _readahead_hashes
+                    and _readahead_upto < len(_readahead_hashes)
+                    and _readahead_upto - _block_index < self._READAHEAD_BLOCKS // 2
+                ):
+                    _ra_end = min(
+                        len(_readahead_hashes),
+                        max(_readahead_upto, _block_index) + self._READAHEAD_BLOCKS,
+                    )
+                    try:
+                        _readahead(
+                            [
+                                h
+                                for h in _readahead_hashes[
+                                    max(_readahead_upto, _block_index):_ra_end
+                                ]
+                                if h is not None
+                            ]
+                        )
+                    except Exception:
+                        pass
+                    _readahead_upto = _ra_end
                 block = self.paged_cache.allocated_blocks.get(block_id)
                 if not block:
                     logger.warning(f"Block {block_id} not found in allocated blocks")

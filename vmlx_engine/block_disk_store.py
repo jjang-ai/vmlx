@@ -470,6 +470,35 @@ def _load_block_validation_entries(file_path: Path) -> Optional[List[Tuple]]:
         return None
 
 
+_F_RDADVISE = 44  # <sys/fcntl.h>: struct radvisory { off_t ra_offset; int ra_count; }
+
+
+def _advise_file_read(path: Path) -> bool:
+    """Asynchronous OS read-ahead hint for one whole file; never raises."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        size = os.fstat(fd).st_size
+        if size <= 0:
+            return False
+        if sys.platform == "darwin":
+            import fcntl
+
+            fcntl.fcntl(fd, _F_RDADVISE, struct.pack("qi", 0, min(size, 2**31 - 1)))
+            return True
+        advise = getattr(os, "posix_fadvise", None)
+        if advise is not None:
+            advise(fd, 0, size, os.POSIX_FADV_WILLNEED)
+            return True
+        return False
+    except (OSError, ValueError):
+        return False
+    finally:
+        os.close(fd)
+
+
 def _stat_identity(st: os.stat_result) -> Tuple[int, int, int, int]:
     """Identity of one physical payload file that survives LRU touches.
 
@@ -1251,6 +1280,37 @@ class BlockDiskStore:
                 self.disk_misses += 1
                 self._note_miss("load_failed")
             return None
+
+    def advise_block_reads(self, block_hashes: List[bytes]) -> int:
+        """Ask the OS to start reading these blocks' payload files (best-effort).
+
+        A long-prefix restore reads its block files one at a time (queue depth
+        1). On a cold page cache that left the SSD mostly idle: 512 files /
+        1.84 GB loaded in 1.06 s sequentially vs 0.45 s after an up-front
+        read-ahead hint (box/max2 M5 Max, after `purge`, identical bytes).
+        This only issues an asynchronous read-ahead hint per file (F_RDADVISE on
+        macOS, POSIX_FADV_WILLNEED elsewhere); nothing is loaded into Python or
+        MLX, no lock is taken, and a file that disappears is simply skipped.
+        Returns the number of files advised.
+        """
+        hashes = [bytes(h).hex() for h in block_hashes if h]
+        if not hashes:
+            return 0
+        advised = 0
+        for start in range(0, len(hashes), 500):
+            chunk = hashes[start : start + 500]
+            try:
+                rows = self._read_conn.execute(
+                    "SELECT file_name FROM blocks WHERE block_hash IN (%s)"
+                    % ",".join("?" * len(chunk)),
+                    chunk,
+                ).fetchall()
+            except sqlite3.Error:
+                return advised
+            for (file_name,) in rows:
+                if _advise_file_read(self.cache_dir / file_name):
+                    advised += 1
+        return advised
 
     def read_block_validation_entries(
         self,
