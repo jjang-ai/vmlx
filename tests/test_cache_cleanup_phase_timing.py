@@ -48,6 +48,9 @@ def test_phase_trace_preserves_cleanup_order(monkeypatch, enabled, fail_gc, owne
         assert order == ['store', 'fence', 'gc'] + ([] if fail_gc else ['clear'])
     else:
         ns['clear_mlx_memory_cache'] = lambda **k: order.append('clear')
+        from vmlx_engine.mlx_memory import TerminalCollectionGate
+        ns['TerminalCollectionGate'] = TerminalCollectionGate
+        ns['mlx_active_memory_bytes'] = lambda: 1 << 30
         load_functions(ROOT/'mllm_scheduler.py', {'_cleanup_finished_after_terminal_dispatch'}, ns)
         obj = SimpleNamespace(_queue_lock=Lock(), _cleanup_finished=lambda ids: order.append('cleanup'), running=set())
         ns['_cleanup_finished_after_terminal_dispatch'](obj, {'req'})

@@ -203,7 +203,11 @@ from .mllm_batch_generator import (
     _model_uses_zaya_cache_contract,
 )
 from .errors import PromptTooLongError
-from .mlx_memory import clear_mlx_memory_cache
+from .mlx_memory import (
+    TerminalCollectionGate,
+    clear_mlx_memory_cache,
+    mlx_active_memory_bytes,
+)
 from .request import RequestOutput, RequestStatus, SamplingParams
 from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
@@ -5216,15 +5220,20 @@ class MLLMScheduler:
             # having removed the request from running. Preserve that exception.
             if defer_gc or (cleanup_succeeded and finished_ids and not self.running):
                 try:
-                    try:
-                        import gc as _gc
+                    import gc as _gc
 
+                    def _collect():
                         _cleanup_phase_t0 = _cleanup_phase_start()
                         _cleanup_phase_ok = False
                         _cleanup_phase_collected = None
                         try:
                             _cleanup_phase_collected = _gc.collect()
                             _cleanup_phase_ok = True
+                        except Exception as gc_error:  # noqa: BLE001
+                            logger.debug(
+                                "Could not collect released MLLM terminal cache refs: %s",
+                                gc_error,
+                            )
                         finally:
                             _cleanup_phase_finish(
                                 _cleanup_phase_t0,
@@ -5233,23 +5242,34 @@ class MLLMScheduler:
                                 _cleanup_phase_ok,
                                 _cleanup_phase_collected,
                             )
-                    except Exception as gc_error:  # noqa: BLE001
-                        logger.debug(
-                            "Could not collect released MLLM terminal cache refs: %s",
-                            gc_error,
-                        )
-                    _cleanup_phase_t0 = _cleanup_phase_start()
-                    _cleanup_phase_ok = False
-                    try:
-                        clear_mlx_memory_cache(log=logger)
-                        _cleanup_phase_ok = True
-                    finally:
-                        _cleanup_phase_finish(
-                            _cleanup_phase_t0,
-                            "terminal_outer_mlx_clear",
-                            "terminal_batch",
-                            _cleanup_phase_ok,
-                        )
+
+                    def _clear():
+                        _cleanup_phase_t0 = _cleanup_phase_start()
+                        _cleanup_phase_ok = False
+                        try:
+                            clear_mlx_memory_cache(log=logger)
+                            _cleanup_phase_ok = True
+                        finally:
+                            _cleanup_phase_finish(
+                                _cleanup_phase_t0,
+                                "terminal_outer_mlx_clear",
+                                "terminal_batch",
+                                _cleanup_phase_ok,
+                            )
+
+                    # The full collection runs only when MLX active memory grew
+                    # since the last repayment (or cleanup failed): it costs
+                    # 60-70 ms on the admission path and its audited garbage held
+                    # no MLX/NumPy buffers (mlx_memory.TerminalCollectionGate).
+                    gate = getattr(self, "_terminal_collection_gate", None)
+                    if gate is None:
+                        gate = self._terminal_collection_gate = TerminalCollectionGate()
+                    gate.repay(
+                        _collect,
+                        _clear,
+                        mlx_active_memory_bytes,
+                        force=not cleanup_succeeded,
+                    )
                 except Exception:
                     if cleanup_succeeded:
                         raise

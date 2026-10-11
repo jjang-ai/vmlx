@@ -57,6 +57,62 @@ def clear_mlx_memory_cache(
     return None
 
 
+
+class TerminalCollectionGate:
+    """Whether the post-terminal full ``gc.collect()`` has anything to reclaim.
+
+    After a finished request's cleanup frame returns, reference counting has
+    already freed every MLX buffer that is not held by a reference CYCLE; the
+    full collection (45-70 ms with a model loaded) matters only for cycles.
+    DEBUG_SAVEALL audits of that collection on Spark, Flash-Next, Naive and
+    Gemma-4 found cells/tuples/functions/sets and 0 MB of MLX or NumPy
+    buffers. MLX buffers held by cycles would show up as active memory above
+    the level measured after the previous repayment, so the collection runs
+    when active memory grew by more than ``slack_bytes`` since then (and on
+    the first repayment, and whenever the caller forces it). Python's own
+    generational collector keeps running either way.
+    """
+
+    def __init__(self, slack_bytes: int = 64 << 20) -> None:
+        self.slack_bytes = int(slack_bytes)
+        self.baseline: int | None = None
+        self.collected = 0
+        self.skipped = 0
+
+    def repay(self, collect, clear, active_bytes, *, force: bool = False) -> bool:
+        """Collect only if needed, then clear the allocator cache. True = collected.
+
+        Active memory excludes the allocator's free cache, so it is read before
+        any clearing; the clear always runs once."""
+        now = active_bytes()
+        if (
+            not force
+            and self.baseline is not None
+            and now is not None
+            and now <= self.baseline + self.slack_bytes
+        ):
+            clear()
+            self.baseline = min(self.baseline, now)
+            self.skipped += 1
+            return False
+        collect()
+        clear()
+        self.baseline = active_bytes()
+        self.collected += 1
+        return True
+
+
+def mlx_active_memory_bytes() -> int | None:
+    try:
+        import mlx.core as mx
+
+        getter = getattr(mx, "get_active_memory", None) or getattr(
+            getattr(mx, "metal", None), "get_active_memory", None
+        )
+        return int(getter()) if callable(getter) else None
+    except Exception:  # noqa: BLE001 - telemetry only; None forces a collection
+        return None
+
 # Serving-time bound on MLX's allocator cache.
 #
 # MLX keeps freed buffers in an allocator cache so it can hand them back without

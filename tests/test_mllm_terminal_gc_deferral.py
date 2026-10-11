@@ -10,8 +10,11 @@ import pytest
 from .test_cache_cleanup_phase_timing import ROOT, load_functions
 
 
-def namespace(order):
-    ns = dict(os=os, logger=SimpleNamespace(debug=lambda *a: None, warning=lambda *a: None), HAS_MLX=True, mx=SimpleNamespace(clear_cache=lambda: order.append('store_clear')), _cleanup_phase_start=lambda: None, _cleanup_phase_finish=lambda *a: None, clear_mlx_memory_cache=lambda **k: order.append('outer_clear'))
+def namespace(order, active=None):
+    from vmlx_engine.mlx_memory import TerminalCollectionGate
+
+    active = active if active is not None else [1 << 30]
+    ns = dict(os=os, logger=SimpleNamespace(debug=lambda *a: None, warning=lambda *a: None), HAS_MLX=True, mx=SimpleNamespace(clear_cache=lambda: order.append('store_clear')), _cleanup_phase_start=lambda: None, _cleanup_phase_finish=lambda *a: None, clear_mlx_memory_cache=lambda **k: order.append('outer_clear'), TerminalCollectionGate=TerminalCollectionGate, mlx_active_memory_bytes=lambda: active[0])
     load_functions(ROOT/'prefix_cache.py', {'store_cache'}, ns)
     load_functions(ROOT/'mllm_scheduler.py', {'_cleanup_finished_after_terminal_dispatch'}, ns)
     return ns
@@ -146,4 +149,36 @@ def test_outer_collection_failure_still_clears(monkeypatch):
         obj.running.clear()
     obj._cleanup_finished = cleanup
     ns['_cleanup_finished_after_terminal_dispatch'](obj, {'r'})
+    assert order == ['gc', 'outer_clear']
+
+
+def test_repayment_collects_only_after_mlx_memory_grew(monkeypatch):
+    order, active = [], [1 << 30]
+    ns = namespace(order, active)
+    monkeypatch.setattr(gc, 'collect', lambda: order.append('gc'))
+    obj = SimpleNamespace(_queue_lock=Lock(), running={})
+
+    def finish(fail=False):
+        def cleanup(ids, **kwargs):
+            if fail:
+                raise ValueError('cleanup failed')
+            obj.running.clear()
+        obj.running = {'r': object()}
+        obj._cleanup_finished = cleanup
+        if fail:
+            with pytest.raises(ValueError):
+                ns['_cleanup_finished_after_terminal_dispatch'](obj, {'r'})
+        else:
+            ns['_cleanup_finished_after_terminal_dispatch'](obj, {'r'})
+
+    finish()
+    assert order == ['gc', 'outer_clear']
+    order.clear(); active[0] += 8 << 20
+    finish()
+    assert order == ['outer_clear']
+    order.clear(); active[0] += 128 << 20
+    finish()
+    assert order == ['gc', 'outer_clear']
+    order.clear()
+    finish(fail=True)
     assert order == ['gc', 'outer_clear']

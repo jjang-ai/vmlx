@@ -11,10 +11,15 @@ import pytest
 from .test_cache_cleanup_phase_timing import ROOT, load_functions
 
 
-def owner_namespace(order):
+def owner_namespace(order, active=None):
+    from vmlx_engine.mlx_memory import TerminalCollectionGate
+
+    active = active if active is not None else [1 << 30]
     namespace = {
         "logger": SimpleNamespace(debug=lambda *args: None),
         "clear_mlx_memory_cache": lambda **kwargs: order.append("clear"),
+        "TerminalCollectionGate": TerminalCollectionGate,
+        "mlx_active_memory_bytes": lambda: active[0],
     }
     load_functions(
         ROOT / "scheduler.py", {"_cleanup_finished_after_terminal_dispatch"}, namespace
@@ -237,3 +242,51 @@ def test_non_deferred_cleanup_error_does_not_add_repayment(monkeypatch):
     with pytest.raises(ValueError):
         namespace["_cleanup_finished_after_terminal_dispatch"](obj, {"r"})
     assert order == []
+
+
+def _finish_one(namespace, obj, fail=False):
+    def cleanup(*args, **kwargs):
+        if fail:
+            raise ValueError("cleanup failed")
+        obj.running.clear()
+
+    obj.running = {"r": object()}
+    obj._cleanup_finished = cleanup
+    if fail:
+        with pytest.raises(ValueError):
+            namespace["_cleanup_finished_after_terminal_dispatch"](obj, {"r"})
+    else:
+        namespace["_cleanup_finished_after_terminal_dispatch"](obj, {"r"})
+
+
+def test_repayment_collects_only_after_mlx_memory_grew(monkeypatch):
+    """The full collection is skipped while MLX active memory stays within the slack of the level after the last
+    repayment, runs again once it grew past it, and always runs after a failed cleanup."""
+    order, active = [], [1 << 30]
+    namespace = owner_namespace(order, active)
+    monkeypatch.setattr(gc, "collect", lambda: order.append("gc"))
+    obj = SimpleNamespace(_model_type_for_runtime="qwen4", running={})
+    _finish_one(namespace, obj)                       # first repayment: no baseline yet
+    assert order == ["gc", "clear"]
+    order.clear(); active[0] += 8 << 20               # small drift: skipped
+    _finish_one(namespace, obj)
+    assert order == ["clear"]
+    order.clear(); active[0] += 128 << 20             # grew past the slack: collected
+    _finish_one(namespace, obj)
+    assert order == ["gc", "clear"]
+    order.clear()                                     # flat again but the cleanup failed: forced
+    _finish_one(namespace, obj, fail=True)
+    assert order == ["gc", "clear"]
+    gate = obj._terminal_collection_gate
+    assert (gate.collected, gate.skipped) == (3, 1)
+
+
+def test_unreadable_active_memory_always_collects(monkeypatch):
+    order = []
+    namespace = owner_namespace(order)
+    namespace["mlx_active_memory_bytes"] = lambda: None
+    monkeypatch.setattr(gc, "collect", lambda: order.append("gc"))
+    obj = SimpleNamespace(_model_type_for_runtime="qwen4", running={})
+    _finish_one(namespace, obj)
+    _finish_one(namespace, obj)
+    assert order.count("gc") == 2

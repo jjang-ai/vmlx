@@ -35,7 +35,11 @@ from .sampling import make_minimax_m3_sampler, make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
-from .mlx_memory import clear_mlx_memory_cache
+from .mlx_memory import (
+    TerminalCollectionGate,
+    clear_mlx_memory_cache,
+    mlx_active_memory_bytes,
+)
 from .paged_cache import PagedCacheManager
 from .prefix_cache import (
     BlockAwarePrefixCache,
@@ -12025,12 +12029,13 @@ class Scheduler:
         """Release text-request cache buffers after the cleanup frame returns."""
         # EngineCore serializes this wrapper on the model worker and gates
         # new admission until it returns. When the finishing request is the
-        # only one running, its terminal store defers every full collection to
-        # the single gc.collect() below (which then always runs): each extra
-        # collection cost 45-50 ms on the admission path and freed no MLX/NumPy
-        # buffers (see store_views_gc in prefix_cache._store_cache_impl). Direct step cleanup and
-        # concurrent running requests keep their default collections. Naive's
-        # prompt-checkpoint store still collects before its terminal store.
+        # only one running, its terminal stores (Naive's prompt checkpoint
+        # included) defer every full collection to the repayment below: each
+        # collection cost 45-70 ms on the admission path and freed no MLX/NumPy
+        # buffers (see store_views_gc in prefix_cache._store_cache_impl). The
+        # repayment itself runs only when MLX active memory grew since the last
+        # one (TerminalCollectionGate) or when cleanup failed. Direct step
+        # cleanup and concurrent running requests keep their default collections.
         defer_gc = (
             len(finished_ids) == 1
             and set(self.running) == finished_ids
@@ -12048,16 +12053,26 @@ class Scheduler:
             # repayment anyway and preserve the original cleanup exception.
             if defer_gc or (cleanup_succeeded and finished_ids and not self.running):
                 try:
-                    try:
-                        import gc as _gc
+                    import gc as _gc
 
-                        _gc.collect()
-                    except Exception as gc_error:  # noqa: BLE001
-                        logger.debug(
-                            "Could not collect released text terminal cache refs: %s",
-                            gc_error,
-                        )
-                    clear_mlx_memory_cache(log=logger)
+                    def _collect():
+                        try:
+                            _gc.collect()
+                        except Exception as gc_error:  # noqa: BLE001
+                            logger.debug(
+                                "Could not collect released text terminal cache refs: %s",
+                                gc_error,
+                            )
+
+                    gate = getattr(self, "_terminal_collection_gate", None)
+                    if gate is None:
+                        gate = self._terminal_collection_gate = TerminalCollectionGate()
+                    gate.repay(
+                        _collect,
+                        lambda: clear_mlx_memory_cache(log=logger),
+                        mlx_active_memory_bytes,
+                        force=not cleanup_succeeded,
+                    )
                 except Exception:
                     if cleanup_succeeded:
                         raise
