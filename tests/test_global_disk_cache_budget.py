@@ -1419,3 +1419,41 @@ def test_idle_rescan_interval_never_undercuts_the_reconcile_interval(tmp_path: P
         assert budget.janitor_status()["idle_rescan_interval_s"] == 2.0
     finally:
         budget._remove_lease()
+
+
+def test_lru_eviction_pass_reuses_one_connection_per_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each evicted block is still its own transaction, but the pass keeps one connection per index open
+    instead of connect/close per candidate (the close of the last WAL connection checkpoints)."""
+    root = tmp_path / "root"
+    namespace = ensure_managed_block_cache_namespace(root / "aaaaaaaaaaaa")
+    conn = sqlite3.connect(namespace / "block_index.db")
+    conn.execute(
+        "CREATE TABLE blocks (block_hash TEXT PRIMARY KEY, parent_hash TEXT, "
+        "ancestry_known INTEGER NOT NULL DEFAULT 1, file_name TEXT NOT NULL, last_accessed REAL NOT NULL)"
+    )
+    now = time.time()
+    for i in range(60):
+        name = f"b{i:04d}"
+        payload = namespace / "blocks" / name[:2] / f"{name}.safetensors"
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        payload.write_bytes(b"x" * 1000)
+        os.utime(payload, (now - 1000 + i, now - 1000 + i))
+        conn.execute("INSERT INTO blocks VALUES (?, NULL, 1, ?, ?)",
+                     (name, str(payload.relative_to(namespace)), now - 1000 + i))
+    conn.commit()
+    conn.close()
+    total = _physical_total(root)
+    opened = []
+    real_connect = sqlite3.connect
+    monkeypatch.setattr(budget_module.sqlite3, "connect",
+                        lambda *a, **k: (opened.append(a[0]), real_connect(*a, **k))[1])
+    budget = GlobalDiskCacheBudget(root, total - 50 * 1000, orphan_grace_seconds=0)
+    try:
+        result = budget.enforce(force=True)
+        assert result.compliant is True and result.evicted_entries >= 50
+        # scan + rescan open the index too; the eviction pass adds one connection, not one per block
+        assert len(opened) <= 6, opened
+        survivors = sorted(p.stem for p in (namespace / "blocks").rglob("*.safetensors"))
+        assert survivors == [f"b{i:04d}" for i in range(60 - len(survivors), 60)]   # LRU order kept
+    finally:
+        budget.close()

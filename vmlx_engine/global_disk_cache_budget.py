@@ -1428,14 +1428,27 @@ class GlobalDiskCacheBudget:
         total = sum(candidate.size_bytes for candidate in candidates)
         return candidates, total, protected_recent_orphans
 
-    def _evict_block_locked(self, candidate: _BudgetCandidate) -> int:
+    def _evict_block_locked(
+        self,
+        candidate: _BudgetCandidate,
+        connections: dict[Path, sqlite3.Connection] | None = None,
+    ) -> int:
+        """connections: per-database connections the caller keeps open for a
+        whole eviction pass (each candidate is still its own transaction).
+        Opening and closing a WAL connection per candidate cost ~0.14 ms
+        connect + ~0.12 ms close (the last close checkpoints) per block."""
         if (
             candidate.database is None
             or candidate.block_hash is None
             or not candidate.ancestry_known
         ):
             return 0
-        conn = sqlite3.connect(str(candidate.database), timeout=1.0)
+        owned = connections is None
+        conn = None if owned else connections.get(candidate.database)
+        if conn is None:
+            conn = sqlite3.connect(str(candidate.database), timeout=1.0)
+            if not owned:
+                connections[candidate.database] = conn
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -1519,7 +1532,12 @@ class GlobalDiskCacheBudget:
                 conn.rollback()
             return 0
         finally:
-            conn.close()
+            if owned:
+                conn.close()
+            elif conn.in_transaction:
+                # Never hand an open transaction to the next candidate.
+                with suppress(sqlite3.Error):
+                    conn.rollback()
 
     def _evict_invalid_block_set_locked(
         self,
@@ -2049,53 +2067,60 @@ class GlobalDiskCacheBudget:
                 )
 
             remaining_blocks = set(known_blocks)
-            while total > trim_target and eligible:
-                _, _, _, _, candidate = heapq.heappop(eligible)
-                if candidate.kind == "block":
-                    assert candidate.database is not None
-                    assert candidate.block_hash is not None
-                    key = (candidate.database, candidate.block_hash)
-                    if (
-                        key not in remaining_blocks
-                        or child_counts.get(key, 0) != 0
-                    ):
-                        continue
-                    freed = self._evict_block_locked(candidate)
-                    if freed <= 0:
-                        continue
-                    remaining_blocks.remove(key)
-                    if candidate.parent_hash is not None:
-                        parent_key = (
-                            candidate.database,
-                            candidate.parent_hash,
-                        )
-                        if parent_key in remaining_blocks:
-                            child_counts[parent_key] = max(
-                                0,
-                                child_counts.get(parent_key, 0) - 1,
+            # One connection per index for the whole pass (each candidate is
+            # still its own transaction): see _evict_block_locked.
+            eviction_connections: dict[Path, sqlite3.Connection] = {}
+            try:
+                while total > trim_target and eligible:
+                    _, _, _, _, candidate = heapq.heappop(eligible)
+                    if candidate.kind == "block":
+                        assert candidate.database is not None
+                        assert candidate.block_hash is not None
+                        key = (candidate.database, candidate.block_hash)
+                        if (
+                            key not in remaining_blocks
+                            or child_counts.get(key, 0) != 0
+                        ):
+                            continue
+                        freed = self._evict_block_locked(candidate, eviction_connections)
+                        if freed <= 0:
+                            continue
+                        remaining_blocks.remove(key)
+                        if candidate.parent_hash is not None:
+                            parent_key = (
+                                candidate.database,
+                                candidate.parent_hash,
                             )
-                            if child_counts[parent_key] == 0:
-                                _push(known_blocks[parent_key])
-                elif candidate.kind == "invalid_block_set":
-                    assert candidate.database is not None
-                    removed_count, freed = self._evict_invalid_block_set_locked(
-                        candidate.database,
-                        invalid_hashes.get(candidate.database, set()),
-                    )
-                    if removed_count <= 0:
+                            if parent_key in remaining_blocks:
+                                child_counts[parent_key] = max(
+                                    0,
+                                    child_counts.get(parent_key, 0) - 1,
+                                )
+                                if child_counts[parent_key] == 0:
+                                    _push(known_blocks[parent_key])
+                    elif candidate.kind == "invalid_block_set":
+                        assert candidate.database is not None
+                        removed_count, freed = self._evict_invalid_block_set_locked(
+                            candidate.database,
+                            invalid_hashes.get(candidate.database, set()),
+                        )
+                        if removed_count <= 0:
+                            continue
+                        total = max(0, total - freed)
+                        evicted_entries += removed_count
+                        evicted_bytes += freed
                         continue
+                    else:
+                        freed = self._evict_paths_locked(candidate)
+                        if freed <= 0:
+                            continue
                     total = max(0, total - freed)
-                    evicted_entries += removed_count
+                    evicted_entries += 1
                     evicted_bytes += freed
-                    continue
-                else:
-                    freed = self._evict_paths_locked(candidate)
-                    if freed <= 0:
-                        continue
-                total = max(0, total - freed)
-                evicted_entries += 1
-                evicted_bytes += freed
-
+            finally:
+                for _conn in eviction_connections.values():
+                    with suppress(sqlite3.Error):
+                        _conn.close()
         evict_s = time.perf_counter() - evict_started
         rescan_started = time.perf_counter()
         if evicted_entries:
