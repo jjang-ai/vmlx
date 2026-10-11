@@ -69,7 +69,7 @@ def execute_actual_two_store_region(obj, request, defer):
         node.lineno
         for node in assignments
         if any(
-            isinstance(target, ast.Name) and target.id == "naive_prompt"
+            isinstance(target, ast.Name) and target.id == "_terminal_store_kwargs"
             for target in node.targets
         )
     )
@@ -117,7 +117,7 @@ def execute_actual_two_store_region(obj, request, defer):
 
 
 @pytest.mark.parametrize("defer", [None, False, True])
-def test_actual_checkpoint_then_terminal_store_keeps_checkpoint_gc(defer):
+def test_actual_checkpoint_then_terminal_store_defers_both_for_sole_owner(defer):
     calls = []
 
     def store(request_id, tokens, state, **kwargs):
@@ -135,7 +135,7 @@ def test_actual_checkpoint_then_terminal_store_keeps_checkpoint_gc(defer):
         == "r"
     )
     assert calls == [
-        ("r:native-prompt", False),
+        ("r:native-prompt", bool(defer)),
         ("release", "r:native-prompt"),
         ("r", bool(defer)),
     ]

@@ -11560,24 +11560,28 @@ class Scheduler:
                                     and not self._mixed_attention_cache_model
                                 ):
                                     _paged_store_kwargs["store_cumulative_state"] = False
+                                # The sole terminal owner repays ONE collection after
+                                # the cleanup frame returns, so both stores below skip
+                                # their own full collections. The prompt checkpoint's
+                                # three used to run anyway (~50 ms each, ~150 ms per
+                                # Naive turn at the admission gate); a DEBUG_SAVEALL
+                                # audit of them found only closures/cells/sets and
+                                # 0 MB of MLX or NumPy buffers, so they reclaimed no
+                                # memory before the second store.
+                                _terminal_store_kwargs = dict(_paged_store_kwargs)
+                                if _defer_final_store_gc:
+                                    _terminal_store_kwargs["defer_post_fence_gc"] = True
                                 naive_prompt = getattr(request, "_naive_prompt_checkpoint", None)
                                 if naive_prompt is not None:
                                     checkpoint_id = request_id + ":native-prompt"
                                     try:
                                         self.block_aware_cache.store_cache(
                                             checkpoint_id, naive_prompt[0], naive_prompt[1],
-                                            **_paged_store_kwargs,
+                                            **_terminal_store_kwargs,
                                         )
                                     finally:
                                         self.block_aware_cache.release_cache(checkpoint_id)
                                         request._naive_prompt_checkpoint = None
-                                # The prompt checkpoint above must collect before
-                                # this second store. Only the sole Naive terminal
-                                # owner can repay the final collection after the
-                                # cleanup frame returns.
-                                _terminal_store_kwargs = dict(_paged_store_kwargs)
-                                if _defer_final_store_gc:
-                                    _terminal_store_kwargs["defer_post_fence_gc"] = True
                                 _stored_block_table = self.block_aware_cache.store_cache(
                                     request_id,
                                     store_tokens,
