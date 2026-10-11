@@ -44,7 +44,10 @@ describe('chat prefill TPS', () => {
     }
     expect(source).toContain('completedPrefillPasses.push(currentPrefillUsage)')
     expect(source).toContain('currentPrefillUsage = undefined;')
-    expect(source).toContain('firstPass ??= { promptTokens, cachedTokens, usageKnown: serverSendsUsage };')
+    expect(source).toContain('firstPass ??= { promptTokens, cachedTokens };')
+    // Not serverSendsUsage: tool execution resets it before sendFollowUp, which
+    // hid the cached chip on every tool turn (Spark pps row 2026-10-11).
+    expect(source).toContain('const counts = first.promptTokens > 0 ? {')
   })
 })
 

@@ -2073,17 +2073,16 @@ export function registerChatHandlers(
       ]);
       // First HTTP pass of the visible turn. TTFT belongs to it, so the cached
       // pp/s reuse indicator pairs ITS prompt/cached counts with that TTFT.
-      let firstPass:
-        | { promptTokens: number; cachedTokens: number; usageKnown: boolean }
-        | undefined;
+      // Prompt/cached counts only ever come from server usage, so a pass with
+      // promptTokens > 0 is server-counted. (serverSendsUsage tracks OUTPUT
+      // usage and is reset by tool execution before sendFollowUp runs.)
+      let firstPass: { promptTokens: number; cachedTokens: number } | undefined;
       // Footer prefill chips (REQUIRED next to t/s): cold pp/s from the engine
       // receipts, else the TTFT estimate on a turn without a cache hit; cached
       // pp/s (whole prompt over TTFT) whenever the first pass reused a prefix.
       const footerPrefillRates = (ttftSeconds: number) => {
-        const first = firstPass ?? {
-          promptTokens, cachedTokens, usageKnown: serverSendsUsage,
-        };
-        const counts = first.usageKnown ? {
+        const first = firstPass ?? { promptTokens, cachedTokens };
+        const counts = first.promptTokens > 0 ? {
           promptTokens: first.promptTokens,
           cachedTokens: Math.min(first.cachedTokens, first.promptTokens),
           ttftSeconds,
@@ -3821,7 +3820,7 @@ export function registerChatHandlers(
           finishServerDecodePass();
           completedPrefillPasses.push(currentPrefillUsage);
           currentPrefillUsage = undefined;
-          firstPass ??= { promptTokens, cachedTokens, usageKnown: serverSendsUsage };
+          firstPass ??= { promptTokens, cachedTokens };
           // Fold the finished stream's prompt/cached counts into the exchange
           // totals so the final metrics pair coherently (cached <= prompt).
           exchangePromptTokens += promptTokens;
