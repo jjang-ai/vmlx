@@ -5664,6 +5664,36 @@ class BlockAwarePrefixCache:
                 f"(out of {len(cache_data)} total)"
             )
 
+        # SSD-only + frugal plain/rotating KV: the per-block L1 payload is never
+        # kept (frugal skips the RAM mirror) and the disk payload is the NumPy
+        # mirror slice. _extract_block_tensor_slice would build a second, MLX
+        # copy of every block only to read its entry tags and discard it --
+        # including each terminal block's full sliding windows on mixed-SWA
+        # models. Build the mirror slice once and use it for both. Any other
+        # layer type (SSM/cumulative, CacheList, quantized, TQ, M3, DSV4, ZAYA)
+        # keeps the typed extractor, whose output those paths persist.
+        np_only_store = bool(
+            is_tensor_data
+            and HAS_MLX
+            and disk_store is not None
+            and _disk_only
+            and bool(getattr(self.paged_cache, "paged_frugal", _disk_only))
+            and not (
+                has_minimax_m3_cache_data
+                or has_dsv4_cache_data
+                or has_dsv4_delta_cache_data
+                or has_zaya_cca_cache_data
+            )
+            and cache_data
+            and all(
+                isinstance(layer_state, dict)
+                and layer_state.get("class_name") in ("KVCache", "RotatingKVCache")
+                and not layer_state.get("dsv4_block_records")
+                and idx in np_sources
+                for idx, layer_state in enumerate(cache_data)
+            )
+        )
+
         pending_disk_writes: list = []
         disk_only_fallbacks: dict = {}
         native_paged_holds: dict = {}
@@ -6019,15 +6049,24 @@ class BlockAwarePrefixCache:
             # Extract and store actual tensor slices for this block
             if is_tensor_data and HAS_MLX:
                 # is_last already computed above (for cumulative state checks)
-                block_kv_data = self._extract_block_tensor_slice(
-                    cache_data,
-                    global_start,
-                    global_end,
-                    is_last_block=is_last,
-                    np_sources=np_sources if np_sources else None,
-                    existing_tokens=existing_tokens,
-                    store_cumulative_state=store_cumulative_state,
-                )
+                if np_only_store:
+                    block_kv_data = _numpy_block_slice(
+                        cache_data, np_sources,
+                        global_start, global_end, is_last, existing_tokens,
+                        store_cumulative_state,
+                        self.block_size,
+                        preserve_bounded_ring=self._preserve_bounded_ring,
+                    )
+                else:
+                    block_kv_data = self._extract_block_tensor_slice(
+                        cache_data,
+                        global_start,
+                        global_end,
+                        is_last_block=is_last,
+                        np_sources=np_sources if np_sources else None,
+                        existing_tokens=existing_tokens,
+                        store_cumulative_state=store_cumulative_state,
+                    )
                 if block_kv_data:
                     if has_dsv4_delta_cache_data:
                         block.dsv4_native_interval = (
@@ -6114,11 +6153,14 @@ class BlockAwarePrefixCache:
                             for entry in block_kv_data
                         )
                         if (
-                            has_minimax_m3_cache_data
+                            np_only_store
+                            or has_minimax_m3_cache_data
                             or has_dsv4_delta_cache_data
                             or has_native_quantized
                             or has_native_cache_list
                         ):
+                            # np_only_store: block_kv_data already IS the
+                            # NumPy-mirror slice built just above.
                             np_block = block_kv_data
                         else:
                             np_block = _numpy_block_slice(
