@@ -5093,6 +5093,7 @@ class BlockAwarePrefixCache:
                 cache_extra_keys=cache_extra_keys,
                 store_cumulative_state=store_cumulative_state,
                 _write_fence=write_fence,
+                _defer_gc=defer_post_fence_gc,
             )
             self._settle_native_write_fence(request_id, write_fence)
             # SSD-only publication waits for the writer fence above, so every
@@ -5194,6 +5195,7 @@ class BlockAwarePrefixCache:
         store_cumulative_state: bool = True,
         *,
         _write_fence: Dict[str, Any],
+        _defer_gc: bool = False,
     ) -> Optional[BlockTable]:
         """
         Store computed cache for future reuse.
@@ -6280,13 +6282,22 @@ class BlockAwarePrefixCache:
         # these locals after the views are gone. Per-block payloads now own
         # their bytes; release the temporary bridges before writer admission.
         k_np = v_np = None
+        # A full gc.collect() walks the whole Python heap (45-70 ms on a loaded
+        # model) and runs on the next request's admission path. Measured with a
+        # DEBUG_SAVEALL audit on Spark (LLM lane) and Flash-Next (MLLM lane):
+        # the cyclic garbage here and at the tensor collection below is small
+        # closure/asyncio objects referencing NO MLX or NumPy buffers (<=0.1 MB
+        # within four references); the views/bridges above are freed by
+        # refcount. When the caller guarantees one collection after the
+        # cache-owning frame unwinds (defer_post_fence_gc), skip these.
         try:
             import gc as _gc
             _cleanup_phase_t0 = _cleanup_phase_start()
             _cleanup_phase_ok = False
             _cleanup_phase_collected = None
             try:
-                _cleanup_phase_collected = _gc.collect()
+                if not _defer_gc:
+                    _cleanup_phase_collected = _gc.collect()
                 _cleanup_phase_ok = True
             finally:
                 _cleanup_phase_finish(
@@ -6370,7 +6381,8 @@ class BlockAwarePrefixCache:
                 _cleanup_phase_ok = False
                 _cleanup_phase_collected = None
                 try:
-                    _cleanup_phase_collected = _gc.collect()
+                    if not _defer_gc:  # see store_views_gc above
+                        _cleanup_phase_collected = _gc.collect()
                     _cleanup_phase_ok = True
                 finally:
                     _cleanup_phase_finish(

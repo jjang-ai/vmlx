@@ -26,14 +26,18 @@ def owner_namespace(order):
     "model,running,finished,expected",
     [
         ("naive_n05_flash", {"r"}, {"r"}, True),
-        ("qwen4", {"r"}, {"r"}, False),
+        # Every family's sole terminal owner defers its store collections to the
+        # one collection after the cleanup frame (2026-10-11: the extra full
+        # collections freed no MLX/NumPy buffers and cost 45-70 ms each).
+        ("qwen4", {"r"}, {"r"}, True),
+        ("qwen4", {"r", "s"}, {"r"}, False),
         ("naive_n05_flash", {"r", "s"}, {"r"}, False),
         ("naive_n05_flash", {"r", "s"}, {"r", "s"}, False),
         ("naive_n05_flash", set(), {"r"}, False),
         ("naive_n05_flash", set(), set(), False),
     ],
 )
-def test_only_naive_sole_terminal_owner_defers(
+def test_sole_terminal_owner_defers(
     monkeypatch, model, running, finished, expected
 ):
     order = []
@@ -214,7 +218,9 @@ def test_outer_gc_failure_still_clears(monkeypatch):
     assert order == ["gc", "clear"]
 
 
-def test_other_family_cleanup_error_does_not_add_repayment(monkeypatch):
+def test_non_deferred_cleanup_error_does_not_add_repayment(monkeypatch):
+    """A cleanup that did not defer (another request still running) and failed
+    gets no extra repayment collection."""
     order = []
     namespace = owner_namespace(order)
     monkeypatch.setattr(gc, "collect", lambda: order.append("gc"))
@@ -225,7 +231,7 @@ def test_other_family_cleanup_error_does_not_add_repayment(monkeypatch):
 
     obj = SimpleNamespace(
         _model_type_for_runtime="qwen4",
-        running={"r": object()},
+        running={"r": object(), "s": object()},
         _cleanup_finished=cleanup,
     )
     with pytest.raises(ValueError):

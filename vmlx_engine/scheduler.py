@@ -12020,11 +12020,15 @@ class Scheduler:
     ) -> None:
         """Release text-request cache buffers after the cleanup frame returns."""
         # EngineCore serializes this wrapper on the model worker and gates
-        # new admission until it returns. Direct step cleanup keeps its default
-        # collections, as do other families and concurrent running requests.
+        # new admission until it returns. When the finishing request is the
+        # only one running, its terminal store defers every full collection to
+        # the single gc.collect() below (which then always runs): each extra
+        # collection cost 45-50 ms on the admission path and freed no MLX/NumPy
+        # buffers (see store_views_gc in prefix_cache._store_cache_impl). Direct step cleanup and
+        # concurrent running requests keep their default collections. Naive's
+        # prompt-checkpoint store still collects before its terminal store.
         defer_gc = (
-            getattr(self, "_model_type_for_runtime", "") == "naive_n05_flash"
-            and len(finished_ids) == 1
+            len(finished_ids) == 1
             and set(self.running) == finished_ids
         )
         cleanup_succeeded = False

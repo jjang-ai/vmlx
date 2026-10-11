@@ -142,8 +142,10 @@ def test_ssd_only_store_clears_mlx_after_writer_fence(monkeypatch):
         store_cumulative_state=True,
         *,
         _write_fence,
+        _defer_gc=False,
     ):
         events.append("store")
+        events.append(f"defer_gc={_defer_gc}")
         _write_fence["disk_only_fallbacks"] = {b"x" * 32: (None, None)}
         return "stored"
 
@@ -157,7 +159,12 @@ def test_ssd_only_store_clears_mlx_after_writer_fence(monkeypatch):
     result = BlockAwarePrefixCache.store_cache(manager, "req", [1], [])
 
     assert result == "stored"
-    assert events == ["store", "settle", "clear"]
+    assert events == ["store", "defer_gc=False", "settle", "clear"]
+    events.clear()
+    assert BlockAwarePrefixCache.store_cache(
+        manager, "req", [1], [], defer_post_fence_gc=True
+    ) == "stored"
+    assert events == ["store", "defer_gc=True", "settle", "clear"]
 
 
 def _wait_for_fence(
