@@ -659,12 +659,12 @@ def _stream_generate_resumable(
     import mlx.core as mx
     import dflash.model_mlx as runtime
 
-    # A disconnected consumer may not have awaited its terminal receipt.
-    # Settle QUEUED writes before another request can enqueue snapshots; the
-    # previous turn's write already in progress is not waited for (its entry
-    # is in the RAM session store, and the writer finishes it in order).
-    if _SESSION_SSD is not None:
-        _SESSION_SSD.wait_pending_writes(backlog_only=True)
+    # The SSD writer is never waited for here: every entry it holds is also in
+    # the RAM session store, SimpleEngine settles each terminal receipt itself
+    # (teardown and cache clears wait for all of them), and a snapshot that
+    # finds the writer backed up is kept RAM-only (DFlash2SessionSSD.put).
+    # Joining the queue here stalled the next request for 7-11 s whenever a
+    # queued write sat behind a shared-pool budget reconcile (27B, 2026-10-11).
 
     runtime._patch_model(adapter, draft.config.target_layer_ids)
     sampler = runtime.make_sampler(temperature, top_p, top_k)
