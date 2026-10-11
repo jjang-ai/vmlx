@@ -10,6 +10,7 @@ import asyncio
 import functools
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -18,6 +19,13 @@ from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_fo
 from ..api.utils import clean_output_text, is_mllm_model
 from ..errors import PromptTooLongError
 from ..mlx_memory import clear_mlx_memory_cache
+from ..utils.terminal_persistence import (
+    log_admission_wait,
+    settle_terminal_persistence,
+    strict_terminal_publish,
+    terminal_persistence_outputs,
+    with_admission_wait,
+)
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     model_type_of,
@@ -102,6 +110,9 @@ class SimpleEngine(BaseEngine):
         self._abort_requested = False
         self._current_request_id: str | None = None
         self._model_executor: ThreadPoolExecutor | None = None
+        # A published terminal's SSD write that the next generation awaits.
+        self._pending_persistence: asyncio.Task | None = None
+        self._pending_terminal_request_id: str | None = None
 
     def _ensure_model_executor(self) -> ThreadPoolExecutor:
         executor = getattr(self, "_model_executor", None)
@@ -504,8 +515,63 @@ class SimpleEngine(BaseEngine):
             except Exception:
                 pass
 
+    def _publish_terminal_early(self, receipt, request_id) -> None:
+        """Settle a published terminal's write receipt in the background.
+
+        The engine owns the settle task, so a reader that closes the stream
+        after the terminal cannot cancel it, and the next generation awaits it
+        before its prefix lookup.
+        """
+        dispatched_at = time.perf_counter()
+        self._pending_terminal_request_id = request_id
+
+        def _settled(record):
+            self._last_durability = record
+
+        async def _settle():
+            try:
+                await settle_terminal_persistence(
+                    receipt, request_id, _settled, dispatched_at
+                )
+            except Exception as e:
+                logger.warning(
+                    "Terminal persistence for %s did not settle: %s", request_id, e
+                )
+            finally:
+                if self._pending_terminal_request_id == request_id:
+                    self._pending_terminal_request_id = None
+
+        self._pending_persistence = asyncio.get_running_loop().create_task(_settle())
+
+    async def _await_prior_terminal_persistence(
+        self, request_id: str | None = None, timeout: float | None = None
+    ) -> float:
+        """The next generation's fence for a published terminal's write."""
+        task = getattr(self, "_pending_persistence", None)
+        if task is None or task.done():
+            return 0.0
+        started = time.perf_counter()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Terminal persistence still pending after %.1fs; continuing", timeout
+            )
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return time.perf_counter() - started
+            raise
+        except Exception:
+            pass
+        waited = time.perf_counter() - started
+        log_admission_wait(request_id, waited)
+        return waited
+
     async def stop(self) -> None:
         """Stop the engine and cleanup resources."""
+        # A published terminal's SSD write must land before teardown so a
+        # restart can restore it.
+        await self._await_prior_terminal_persistence(timeout=5.0)
         self._model = None
         self._loaded = False
         try:
@@ -578,6 +644,7 @@ class SimpleEngine(BaseEngine):
         )
 
         async with self._generation_lock:
+            _admission_wait = await self._await_prior_terminal_persistence(None)
             if request_seed is not None:
                 import mlx.core as mx
 
@@ -654,6 +721,7 @@ class SimpleEngine(BaseEngine):
         )
 
         async with self._generation_lock:
+            _admission_wait = await self._await_prior_terminal_persistence(None)
             if request_seed is not None:
                 import mlx.core as mx
 
@@ -840,6 +908,7 @@ class SimpleEngine(BaseEngine):
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
         async with self._generation_lock:
+            _admission_wait = await self._await_prior_terminal_persistence(None)
             if self._is_mllm:
                 if (
                     self._model_family_name() == "mimo_v2"
@@ -1095,6 +1164,7 @@ class SimpleEngine(BaseEngine):
                 mllm_kwargs["tools"] = template_tools
 
             async with self._generation_lock:
+                _admission_wait = await self._await_prior_terminal_persistence(request_id)
                 self._abort_requested = False
                 self._current_request_id = request_id
                 stream_iter = None
@@ -1183,13 +1253,17 @@ class SimpleEngine(BaseEngine):
                             finish_reason=chunk.finish_reason if finished else None,
                             cached_tokens=last_cached_tokens,
                             cache_detail=last_cache_detail,
-                            prefill_usage=last_prefill_usage,
+                            prefill_usage=with_admission_wait(
+                                last_prefill_usage, _admission_wait
+                            ),
                         )
 
                         receipt = getattr(chunk, "persistence_future", None)
-                        if finished and receipt is not None:
-                            from ..utils.terminal_persistence import terminal_persistence_outputs
-
+                        if finished and receipt is not None and not strict_terminal_publish():
+                            # Publish now; the next generation awaits the write.
+                            self._publish_terminal_early(receipt, request_id)
+                            yield output
+                        elif finished and receipt is not None:
                             self._pending_terminal_request_id = request_id
                             try:
                                 async for terminal_output in terminal_persistence_outputs(
@@ -1383,6 +1457,7 @@ class SimpleEngine(BaseEngine):
     async def clear_native_media_cache(self) -> bool:
         """Clear direct VLM prefix state without racing a model request."""
         async with self._generation_lock:
+            _admission_wait = await self._await_prior_terminal_persistence(None)
             if not self._is_mllm or self._model is None:
                 return False
             if getattr(self._model, "_cache_manager", None) is None:

@@ -141,14 +141,21 @@ KEY CLASSES
 """
 
 from .persistence_outcome import LEDGER as _PERSIST, format_outcome as _format_persistence_outcome
+from .utils.terminal_persistence import (
+    log_admission_wait as _log_admission_wait,
+    log_terminal_persistence_settled as _log_terminal_persistence_settled,
+    strict_terminal_publish as _strict_terminal_publish,
+    with_admission_wait as _with_admission_wait,
+)
 
 
 def _record_last_durability(stats, request_id, wait_ms, waited, outcome):
-    """Retain the terminal durability fence of the last completed generation
-    on the batch stats (published as ``last_durability`` in /health): the
-    request id, the wait the client saw, and the persistence ledger's outcome
-    (stored / already_durable / skipped / refused / failed / unknown) with its
-    retained token count and detail."""
+    """Retain the terminal persistence record of the last completed
+    generation on the batch stats (published as ``last_durability`` in
+    /health): the request id, how long the save took after the terminal was
+    dispatched (strict mode: the wait the client saw), and the persistence
+    ledger's outcome (stored / already_durable / skipped / refused / failed /
+    unknown) with its retained token count and detail."""
     if stats is None:
         return
     entry = outcome if isinstance(outcome, dict) else {}
@@ -160,6 +167,7 @@ def _record_last_durability(stats, request_id, wait_ms, waited, outcome):
         "detail": str(entry.get("detail") or "")[:200],
         "retained_tokens": entry.get("retained_tokens"),
         "durable": entry.get("durable"),
+        "published_early": not _strict_terminal_publish(),
         "at": time.time(),
     }
     try:
@@ -1319,11 +1327,14 @@ class MLLMScheduler:
         self._running = False
         self._processing_task: Optional[asyncio.Task] = None
         # See EngineCore's equivalent gate: terminal media/text output is
-        # dispatched before cache persistence for low-latency streaming, while
-        # new async requests wait until paged/TQ/typed companion state is fully
-        # committed.  Sync step-based callers retain synchronous cleanup.
+        # published before cache persistence, while new async requests wait
+        # until paged/TQ/typed companion state is fully committed.  Sync
+        # step-based callers retain synchronous cleanup.
         self._terminal_cleanup_complete = asyncio.Event()
         self._terminal_cleanup_complete.set()
+        self._terminal_dispatched_at: Optional[float] = None
+        # Admission wait per request, reported beside its engine prefill usage.
+        self._admission_waits_by_request: Dict[str, float] = {}
 
         # Statistics
         self.num_requests_processed = 0
@@ -5147,6 +5158,42 @@ class MLLMScheduler:
                 cleanup_trace.get("clear_memory_s", 0.0) * 1000.0,
             )
 
+    def _admission_wait_map(self) -> Dict[str, float]:
+        """Per-request admission waits (created lazily for partial test doubles)."""
+        waits = self.__dict__.get("_admission_waits_by_request")
+        if waits is None:
+            waits = self._admission_waits_by_request = {}
+        return waits
+
+    def _record_terminal_persistence(self, finished_ids, outputs) -> None:
+        """Report each published terminal's settled persistence outcome.
+
+        Runs after the gate reopens, with the same /health record the strict
+        reader used to write. ``wait_ms`` is the save duration after dispatch.
+        Strict mode reports from the reader's wait instead, and an aborted
+        partial output publishes no prefix, so neither is reported here.
+        """
+        if _strict_terminal_publish():
+            return
+        dispatched_at = getattr(self, "_terminal_dispatched_at", None)
+        persist_ms = (
+            (time.perf_counter() - dispatched_at) * 1000.0
+            if dispatched_at is not None
+            else 0.0
+        )
+        aborted = {
+            o.request_id
+            for o in (outputs or ())
+            if o.finished and o.finish_reason == "aborted"
+        }
+        stats = getattr(getattr(self, "batch_generator", None), "_stats", None)
+        for request_id in finished_ids:
+            if request_id in aborted:
+                continue
+            outcome = _PERSIST.take(request_id)
+            _log_terminal_persistence_settled(request_id, persist_ms, True, outcome)
+            _record_last_durability(stats, request_id, persist_ms, True, outcome)
+
     def _cleanup_finished_after_terminal_dispatch(
         self, finished_ids: Set[str]
     ) -> None:
@@ -5403,6 +5450,12 @@ class MLLMScheduler:
                     continue
                 queue = self.output_queues.get(req_output.request_id)
                 if queue is not None:
+                    if getattr(req_output, "prefill_usage", None) is not None:
+                        _admission_wait = self._admission_wait_map().get(req_output.request_id)
+                        if _admission_wait is not None:
+                            req_output.prefill_usage = _with_admission_wait(
+                                req_output.prefill_usage, _admission_wait
+                            )
                     try:
                         queue.put_nowait(req_output)
                     except asyncio.QueueFull:
@@ -5666,6 +5719,7 @@ class MLLMScheduler:
                         # Close admission before terminal dispatch: the client
                         # may immediately submit another turn from that event.
                         self._terminal_cleanup_complete.clear()
+                        self._terminal_dispatched_at = time.perf_counter()
                     # Dispatch outputs on the event loop (asyncio.Queue is not thread-safe)
                     dispatch_t0 = time.perf_counter() if trace_enabled else 0.0
                     self._dispatch_outputs(step_output)
@@ -5675,10 +5729,11 @@ class MLLMScheduler:
                     # Terminal cache persistence can take seconds for a long
                     # paged/TQ/SSM prefix. Dispatch the finished output and its
                     # sentinel first, then yield the event loop so SSE/WebSocket
-                    # consumers can flush the final visible delta. Cleanup still
+                    # consumers receive the terminal at once. Cleanup still
                     # runs on the model's single worker and completes before the
                     # next scheduler step, preserving MLX stream ownership and
-                    # cache/bookkeeping ordering.
+                    # cache/bookkeeping ordering; the next request waits for it
+                    # at admission.
                     if finished_ids:
                         await asyncio.sleep(0)
                         cleanup_t0 = time.perf_counter() if trace_enabled else 0.0
@@ -5690,6 +5745,9 @@ class MLLMScheduler:
                             )
                         finally:
                             self._terminal_cleanup_complete.set()
+                            self._record_terminal_persistence(
+                                finished_ids, step_output.outputs
+                            )
                         if trace_enabled:
                             cleanup_s = time.perf_counter() - cleanup_t0
                             step_output.trace_timings["cleanup_finished_s"] = (
@@ -5841,7 +5899,9 @@ class MLLMScheduler:
         # prior terminal request is still persisting paged/TQ/typed companion
         # cache state.  Event.wait() returns without yielding on the normal
         # open path, so this adds no steady-state scheduling round trip.
+        _admission_t0 = time.perf_counter()
         await self._terminal_cleanup_complete.wait()
+        _admission_wait = time.perf_counter() - _admission_t0
         request_id = self.add_request(
             prompt=prompt,
             images=images,
@@ -5855,6 +5915,11 @@ class MLLMScheduler:
 
         # Create output queue for streaming
         self.output_queues[request_id] = asyncio.Queue(maxsize=8192)
+        _waits = self._admission_wait_map()
+        _waits[request_id] = _admission_wait
+        while len(_waits) > 1024:
+            _waits.pop(next(iter(_waits)))
+        _log_admission_wait(request_id, _admission_wait)
 
         return request_id
 
@@ -5900,11 +5965,11 @@ class MLLMScheduler:
                     # An aborted row does not publish a new prefix. Its tensor
                     # cleanup remains on the worker; do not report a normal
                     # terminal durability/store receipt for this partial output.
-                elif output.finished:
-                    # Match EngineCore: image/video/audio and hybrid MLLM tool
-                    # turns must not publish their terminal event until typed,
-                    # paged, SSM-companion, and disk cleanup is durable. Token
-                    # deltas before this object remain fully streaming.
+                elif output.finished and _strict_terminal_publish():
+                    # Strict mode: image/video/audio and hybrid MLLM tool
+                    # turns hold their terminal event until typed, paged,
+                    # SSM-companion, and disk cleanup settles. By default it
+                    # is published at once and the next admission is the fence.
                     _durability_wait_started = time.perf_counter()
                     _durability_was_pending = (
                         not self._terminal_cleanup_complete.is_set()
@@ -5943,6 +6008,7 @@ class MLLMScheduler:
         finally:
             # Cleanup queue — runs on normal exit AND GeneratorExit (client disconnect)
             getattr(self, "_stream_abort_outputs", {}).pop(request_id, None)
+            self._admission_wait_map().pop(request_id, None)
             if request_id in self.output_queues:
                 del self.output_queues[request_id]
             # If the request is still running (client disconnected mid-stream),

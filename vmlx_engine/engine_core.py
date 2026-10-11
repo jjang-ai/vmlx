@@ -12,6 +12,12 @@ The design follows vLLM's engine architecture adapted for MLX.
 """
 
 from .persistence_outcome import LEDGER as _PERSIST, format_outcome as _format_persistence_outcome
+from .utils.terminal_persistence import (
+    log_admission_wait as _log_admission_wait,
+    log_terminal_persistence_settled as _log_terminal_persistence_settled,
+    strict_terminal_publish as _strict_terminal_publish,
+    with_admission_wait as _with_admission_wait,
+)
 import asyncio
 import logging
 import time
@@ -96,15 +102,20 @@ class EngineCore:
         self._stream_states: Dict[str, RequestStreamState] = {}
         self._finished_events: Dict[str, asyncio.Event] = {}
 
-        # Non-terminal deltas reach API/UI consumers immediately.  The engine
-        # loop queues the finished output before potentially slow cache
-        # persistence, then reopens this gate after paged/TQ/SSM/native cleanup.
-        # Public stream consumers hold that finished output at the gate so a
-        # completed tool call cannot be executed before its turn is durable;
-        # the same gate also prevents the next request from performing prefix
-        # lookup against a partially-written cache.
+        # The engine loop closes this gate before it dispatches a finished
+        # output, runs paged/TQ/SSM/native cache persistence on the model
+        # worker, then reopens it. The finished output is published at once
+        # (a client can execute the tool or render the answer while the save
+        # runs); the gate fences only the next request's admission, so its
+        # prefix lookup never sees a partially-written cache. The old
+        # hold-the-terminal behavior remains under VMLX_TERMINAL_PUBLISH=strict.
         self._terminal_cleanup_complete = asyncio.Event()
         self._terminal_cleanup_complete.set()
+        self._terminal_dispatched_at: Optional[float] = None
+        # Admission wait per request, reported beside its engine prefill usage.
+        self._admission_waits_by_request: Dict[str, float] = {}
+        # Post-terminal scheduler bookkeeping deferred until the gate reopens.
+        self._deferred_cleanup_tasks: set = set()
 
         # Engine state
         self._running = False
@@ -209,6 +220,7 @@ class EngineCore:
                         # as it receives that output, while cache persistence
                         # is intentionally still pending.
                         self._terminal_cleanup_complete.clear()
+                        self._terminal_dispatched_at = time.perf_counter()
 
                     # Periodic ghost request detection: find requests in
                     # scheduler.running that have no output collector.
@@ -242,6 +254,12 @@ class EngineCore:
                                 # Has a consumer — clear orphan tracking
                                 orphan_counts.pop(rid, None)
                                 orphan_first_seen.pop(rid, None)
+                                if req_output.prefill_usage is not None:
+                                    _admission_wait = self._admission_wait_map().get(rid)
+                                    if _admission_wait is not None:
+                                        req_output.prefill_usage = _with_admission_wait(
+                                            req_output.prefill_usage, _admission_wait
+                                        )
                                 # Optimized: skip stream_interval check when interval=1
                                 if use_simple_streaming:
                                     collector.put(req_output)
@@ -293,12 +311,10 @@ class EngineCore:
                         await asyncio.sleep(0)
 
                     # Cache/TQ/SSM persistence for a long prompt can take
-                    # seconds. The terminal object is already in the collector;
-                    # public stream consumers hold it on
+                    # seconds. The terminal object is already in the collector
+                    # and visible to its consumer; the next request waits on
                     # _terminal_cleanup_complete while cleanup runs on the same
-                    # model worker. Non-terminal deltas remain low-latency, but
-                    # tool completion and the next request cannot race a
-                    # partially-written cache.
+                    # model worker, so it cannot race a partially-written cache.
                     if finished_ids:
                         if not outputs:
                             await asyncio.sleep(0)
@@ -315,6 +331,7 @@ class EngineCore:
                                 )
                         finally:
                             self._terminal_cleanup_complete.set()
+                            self._record_terminal_persistence(finished_ids, outputs)
                 else:
                     # Idle: drain AT MOST ONE maintenance task (e.g. deferred
                     # SSM re-derive) per iteration, on the same executor as
@@ -560,8 +577,16 @@ class EngineCore:
         try:
             # Wait before creating request bookkeeping so a cancelled waiter
             # cannot leak a collector and prefix lookup cannot observe a stale
-            # partial cache entry.
+            # partial cache entry. This is the fence for a prior terminal's
+            # persistence; report how long it held this request.
+            _admission_t0 = time.perf_counter()
             await self._terminal_cleanup_complete.wait()
+            _admission_wait = time.perf_counter() - _admission_t0
+            _waits = self._admission_wait_map()
+            _waits[request_id] = _admission_wait
+            while len(_waits) > 1024:
+                _waits.pop(next(iter(_waits)))
+            _log_admission_wait(request_id, _admission_wait)
 
             # Setup output collector with stream_interval from config
             self._output_collectors[request_id] = RequestOutputCollector(
@@ -636,15 +661,72 @@ class EngineCore:
             except Exception:
                 pass
         self._stream_states.pop(request_id, None)
+        self._admission_wait_map().pop(request_id, None)
         event = self._finished_events.pop(request_id, None)
         if event:
             event.set()
+        if not self._terminal_cleanup_complete.is_set():
+            # A published terminal's cache cleanup may still be running on the
+            # model worker. Touch scheduler state only after it settles, the
+            # same order as when the terminal was held behind it.
+            try:
+                task = asyncio.get_running_loop().create_task(
+                    self._abort_unfinished_after_cleanup(request_id)
+                )
+            except RuntimeError:
+                task = None
+            if task is not None:
+                tasks = self.__dict__.setdefault("_deferred_cleanup_tasks", set())
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
+                return
+        self._abort_unfinished(request_id)
+
+    def _abort_unfinished(self, request_id: str) -> None:
         request = self.scheduler.get_request(request_id)
         if request is None or not RequestStatus.is_finished(request.status):
             self.scheduler.abort_request(request_id)
 
+    async def _abort_unfinished_after_cleanup(self, request_id: str) -> None:
+        await self._terminal_cleanup_complete.wait()
+        self._abort_unfinished(request_id)
+
+    def _admission_wait_map(self) -> Dict[str, float]:
+        """Per-request admission waits (created lazily for partial test doubles)."""
+        waits = self.__dict__.get("_admission_waits_by_request")
+        if waits is None:
+            waits = self._admission_waits_by_request = {}
+        return waits
+
+    def _record_terminal_persistence(self, finished_ids, outputs) -> None:
+        """Report each published terminal's settled persistence outcome.
+
+        Runs after the gate reopens. Strict mode reports from the stream
+        reader's wait instead, and an aborted partial output publishes no
+        prefix, so neither is reported here.
+        """
+        if _strict_terminal_publish():
+            return
+        dispatched_at = getattr(self, "_terminal_dispatched_at", None)
+        persist_ms = (
+            (time.perf_counter() - dispatched_at) * 1000.0
+            if dispatched_at is not None
+            else 0.0
+        )
+        aborted = {
+            o.request_id
+            for o in (outputs or ())
+            if o.finished and o.finish_reason == "aborted"
+        }
+        for request_id in finished_ids:
+            if request_id in aborted:
+                continue
+            _log_terminal_persistence_settled(
+                request_id, persist_ms, True, _PERSIST.take(request_id)
+            )
+
     async def _wait_for_terminal_persistence(self, request_id: str) -> None:
-        """Public JSON and streaming results share the same completion fence.
+        """Strict mode: public JSON and streaming results share the fence.
 
         Completion of this fence means cleanup settled, not that a store
         succeeded. Keep the actual stored/skipped/failed outcome in the log.
@@ -700,14 +782,10 @@ class EngineCore:
                         if output is None:
                             output = await collector.get()
 
-                    if output.finished:
-                        # The scheduler intentionally queues the terminal object
-                        # before synchronous prefix/TQ/SSM/native persistence so
-                        # its model-thread ownership is not lost.  Do not expose
-                        # that object to Chat/Responses/Electron until the
-                        # existing cleanup fence is durable: clients commonly
-                        # execute a parsed tool as soon as finish_reason or
-                        # response.completed arrives.
+                    if output.finished and _strict_terminal_publish():
+                        # Strict mode: hold the terminal until the cleanup
+                        # fence settles. By default it is published at once;
+                        # the next request's admission is the fence.
                         await self._wait_for_terminal_persistence(request_id)
 
                     yield output
@@ -777,10 +855,10 @@ class EngineCore:
                 raise RuntimeError(f"No output for request {request_id}")
 
             # The finished event is internal dispatch, before deferred SSD/KV
-            # cleanup. A JSON tool response is just as actionable as a streamed
-            # terminal; never publish it or remove its collector ahead of the
-            # same fence used by stream_outputs.
-            await self._wait_for_terminal_persistence(request_id)
+            # cleanup. Strict mode holds the JSON result behind the same fence
+            # as stream_outputs; by default the next admission is the fence.
+            if _strict_terminal_publish():
+                await self._wait_for_terminal_persistence(request_id)
             return final_output
         finally:
             # Always clean up request state to prevent permanent leaks

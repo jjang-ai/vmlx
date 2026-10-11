@@ -1,4 +1,7 @@
-"""Internal terminal dispatch is early; public terminal visibility is durable."""
+"""Terminals publish before cache cleanup; the next admission is the fence.
+
+VMLX_TERMINAL_PUBLISH=strict restores holding the terminal behind cleanup.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import pytest
 
 from vmlx_engine.engine_core import EngineCore
 from vmlx_engine.mllm_scheduler import MLLMScheduler, MLLMSchedulerOutput
+from vmlx_engine.persistence_outcome import LEDGER
 from vmlx_engine.request import RequestOutput
 from vmlx_engine.scheduler import Scheduler, SchedulerOutput
 
@@ -229,8 +233,56 @@ async def test_llm_request_admission_waits_for_terminal_cache_cleanup() -> None:
     assert pending_admissions == set()
 
 
+def _queued_terminal_engine() -> EngineCore:
+    engine = EngineCore.__new__(EngineCore)
+    engine._terminal_cleanup_complete = asyncio.Event()
+
+    class _Collector:
+        def __init__(self) -> None:
+            self._items = [RequestOutput(request_id="req", finished=True)]
+
+        def get_nowait(self):
+            return self._items.pop(0) if self._items else None
+
+        async def get(self):
+            raise AssertionError("terminal object was already queued")
+
+    engine._output_collectors = {"req": _Collector()}
+    engine._stream_states = {}
+    engine._finished_events = {}
+    return engine
+
+
 @pytest.mark.asyncio
-async def test_llm_stream_holds_terminal_until_cache_cleanup() -> None:
+async def test_llm_stream_publishes_terminal_before_cache_cleanup() -> None:
+    engine = _queued_terminal_engine()
+    aborted: list[str] = []
+    engine.scheduler = SimpleNamespace(
+        get_request=lambda _request_id: None,
+        abort_request=aborted.append,
+    )
+
+    stream = engine.stream_outputs("req")
+    output = await asyncio.wait_for(anext(stream), timeout=1.0)
+    assert output.finished is True
+    assert not engine._terminal_cleanup_complete.is_set()
+    await stream.aclose()
+
+    # Scheduler bookkeeping for the published request waits for the cleanup
+    # still running on the model worker, then runs exactly as before.
+    await asyncio.sleep(0)
+    assert aborted == []
+    engine._terminal_cleanup_complete.set()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert aborted == ["req"]
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_holds_terminal_until_cache_cleanup_in_strict_mode(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VMLX_TERMINAL_PUBLISH", "strict")
     engine = EngineCore.__new__(EngineCore)
     engine._terminal_cleanup_complete = asyncio.Event()
 
@@ -264,7 +316,74 @@ async def test_llm_stream_holds_terminal_until_cache_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mllm_stream_holds_terminal_until_cache_cleanup() -> None:
+async def test_mllm_stream_publishes_terminal_before_cache_cleanup() -> None:
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler._terminal_cleanup_complete = asyncio.Event()
+    scheduler.output_queues = {"req": asyncio.Queue()}
+    scheduler.running = {}
+    scheduler.output_queues["req"].put_nowait(
+        RequestOutput(request_id="req", finished=True)
+    )
+
+    stream = scheduler.stream_outputs("req")
+    output = await asyncio.wait_for(anext(stream), timeout=1.0)
+    assert output.finished is True
+    assert not scheduler._terminal_cleanup_complete.is_set()
+    await stream.aclose()
+
+
+def test_mllm_settled_persistence_records_outcome_after_dispatch() -> None:
+    import time as _time
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    stats = SimpleNamespace(last_durability=None)
+    scheduler.batch_generator = SimpleNamespace(_stats=stats)
+    scheduler._terminal_dispatched_at = _time.perf_counter() - 0.25
+    LEDGER.record("settle-a", "stored", "paged 4 blocks", retained_tokens=4281)
+    LEDGER.record("settle-b", "skipped", "partial output")
+
+    scheduler._record_terminal_persistence(
+        {"settle-a", "settle-b"},
+        [
+            RequestOutput(request_id="settle-a", finished=True, finish_reason="stop"),
+            RequestOutput(request_id="settle-b", finished=True, finish_reason="aborted"),
+        ],
+    )
+
+    record = stats.last_durability
+    assert record["request_id"] == "settle-a"
+    assert record["cache_outcome"] == "stored"
+    assert record["retained_tokens"] == 4281
+    assert record["published_early"] is True
+    assert record["wait_ms"] >= 250.0
+    assert LEDGER.peek("settle-a") is None
+    # An aborted partial publishes no prefix and gets no durability record.
+    assert LEDGER.peek("settle-b") is not None
+    LEDGER.take("settle-b")
+
+
+def test_mllm_dispatch_reports_admission_wait_beside_prefill_usage() -> None:
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.output_queues = {"req": asyncio.Queue()}
+    scheduler._admission_waits_by_request = {"req": 0.4}
+    usage = {"tokens": 4281, "seconds": 1.5, "scope": "model_prefill_and_prompt_state"}
+    step = MLLMSchedulerOutput(
+        outputs=[RequestOutput(request_id="req", prefill_usage=usage)]
+    )
+
+    scheduler._dispatch_outputs(step)
+
+    delivered = scheduler.output_queues["req"].get_nowait()
+    assert delivered.prefill_usage == {**usage, "admission_wait_seconds": 0.4}
+    # The prefill measurement itself is untouched: pp/s never absorbs the wait.
+    assert usage == {"tokens": 4281, "seconds": 1.5, "scope": "model_prefill_and_prompt_state"}
+
+
+@pytest.mark.asyncio
+async def test_mllm_stream_holds_terminal_until_cache_cleanup_in_strict_mode(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VMLX_TERMINAL_PUBLISH", "strict")
     scheduler = MLLMScheduler.__new__(MLLMScheduler)
     scheduler._terminal_cleanup_complete = asyncio.Event()
     scheduler.output_queues = {"req": asyncio.Queue()}
@@ -395,10 +514,13 @@ def test_direct_scheduler_steps_retain_synchronous_cleanup_default() -> None:
 
 
 def test_finished_stream_consumers_do_not_abort_deferred_cleanup() -> None:
-    llm_source = inspect.getsource(EngineCore._cleanup_request)
+    llm_source = inspect.getsource(EngineCore._abort_unfinished)
     mllm_source = inspect.getsource(MLLMScheduler.stream_outputs)
 
     assert "RequestStatus.is_finished(request.status)" in llm_source
+    assert "_abort_unfinished_after_cleanup" in inspect.getsource(
+        EngineCore._cleanup_request
+    )
     assert "RequestStatus.is_finished(request.status)" in mllm_source
 
 
