@@ -470,6 +470,23 @@ def _load_block_validation_entries(file_path: Path) -> Optional[List[Tuple]]:
         return None
 
 
+def _stat_identity(st: os.stat_result) -> Tuple[int, int, int, int]:
+    """Identity of one physical payload file that survives LRU touches.
+
+    NOT mtime/ctime: every block read does os.utime() (the cross-process LRU
+    signal), so mtime changes on each restore. Payloads are only ever replaced
+    by rename, which yields a new inode and creation time.
+    """
+    birth = getattr(st, "st_birthtime", None)
+    birth_ns = int(birth * 1e9) if birth is not None else 0
+    return (int(st.st_dev), int(st.st_ino), int(st.st_size), birth_ns)
+
+
+def _payload_identity(path: Path) -> Tuple[int, int, int, int]:
+    """_stat_identity of a payload file; raises OSError when it is gone."""
+    return _stat_identity(os.stat(path))
+
+
 def _cache_data_has_tq(cache_data: Any) -> bool:
     for entry in cache_data or []:
         if not isinstance(entry, (tuple, list)) or not entry:
@@ -686,6 +703,19 @@ class BlockDiskStore:
         # chain, so remove an incompatible record on read; otherwise it would
         # also prevent this Off run from writing a standard replacement.
         self._allow_tq_native = bool(allow_tq_native)
+        # Payload files this process has already proven to be plain (non-TQ) KV,
+        # keyed by hash -> _stat_identity() (device, inode, size, birth) of the file that
+        # was inspected or written. In the non-TQ mode above, has_block() loaded
+        # and deserialized the WHOLE payload on every call to look for a legacy
+        # TQ record; the store dedup loop calls it once per already-stored block
+        # of every turn, so a one-block tool-continuation store at 8k tokens
+        # re-read ~120 payloads (~1/3 of its 170 ms). Files are content-addressed
+        # and replaced only by rename, so an unchanged identity is the same bytes;
+        # any rewrite by another process changes it and is inspected again. The
+        # index/file checks still run first.
+        self._verified_plain_payloads: Dict[str, Tuple[int, int, int, int]] = {}
+        self._verified_plain_lock = threading.Lock()
+        self._verified_plain_max = 65536
 
         # SQLite index
         self._db_path = self.cache_dir / "block_index.db"
@@ -1073,14 +1103,19 @@ class BlockDiskStore:
         if row is None:
             return False
         file_path = self.cache_dir / row[0]
-        if not file_path.exists():
+        try:
+            identity = _payload_identity(file_path)
+        except OSError:
             return False
         if not self._allow_tq_native:
             # Allocation consults has_block() before read_block().  If an old
             # TQ record is reported as present here, the paged manager reuses
             # its hash slot and the Off run never gets a chance to write a
             # standard replacement after read_block() rejects it.  Inspect the
-            # typed payload in the explicit Off mode and evict it up front.
+            # typed payload in the explicit Off mode and evict it up front --
+            # once per exact file (see _verified_plain_payloads).
+            if self._payload_verified_plain(hash_hex, identity):
+                return True
             try:
                 data = mx.load(str(file_path))
                 if self._evict_incompatible_tq_block(
@@ -1088,6 +1123,7 @@ class BlockDiskStore:
                     file_path,
                     _deserialize_block(data, row[1]),
                 ):
+                    self._forget_verified_plain(hash_hex)
                     return False
             except Exception as exc:
                 logger.warning(
@@ -1096,7 +1132,28 @@ class BlockDiskStore:
                     exc,
                 )
                 return False
+            self._note_verified_plain(hash_hex, identity)
         return True
+
+    def _payload_verified_plain(
+        self, hash_hex: str, identity: Tuple[int, int, int, int]
+    ) -> bool:
+        with self._verified_plain_lock:
+            return self._verified_plain_payloads.get(hash_hex) == identity
+
+    def _note_verified_plain(
+        self, hash_hex: str, identity: Tuple[int, int, int, int]
+    ) -> None:
+        with self._verified_plain_lock:
+            payloads = self._verified_plain_payloads
+            payloads.pop(hash_hex, None)
+            payloads[hash_hex] = identity
+            while len(payloads) > self._verified_plain_max:
+                payloads.pop(next(iter(payloads)))
+
+    def _forget_verified_plain(self, hash_hex: str) -> None:
+        with self._verified_plain_lock:
+            self._verified_plain_payloads.pop(hash_hex, None)
 
     def _evict_incompatible_tq_block(
         self,
@@ -3892,7 +3949,8 @@ class BlockDiskStore:
                 pass
             raise
 
-        file_size = file_path.stat().st_size
+        file_stat = file_path.stat()
+        file_size = file_stat.st_size
         now = time.time()
 
         # A new row and its eviction pin become visible in one transaction.
@@ -3963,6 +4021,12 @@ class BlockDiskStore:
                 raise
         if replacing_existing:
             conn.commit()
+
+        if not self._allow_tq_native:
+            # write_block_async() refuses TQ cache data in this mode, so every
+            # payload that reaches the writer is plain KV: record the exact file
+            # so later dedup checks of this hash skip re-inspecting it.
+            self._note_verified_plain(hash_hex, _stat_identity(file_stat))
 
         with self._stats_lock:
             self.disk_writes += 1
