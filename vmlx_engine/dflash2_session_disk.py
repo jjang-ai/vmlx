@@ -258,8 +258,14 @@ class DFlash2SessionSSD:
             time.sleep(0.01)
         return not self._q.unfinished_tasks
 
-    def wait_pending_writes(self) -> None:
-        """Settle writes left by a disconnected request before the next one."""
+    def wait_pending_writes(self, backlog_only: bool = False) -> None:
+        """Settle writes left by a disconnected request before the next one.
+
+        backlog_only: wait only while snapshots are still queued behind the
+        writer (so the next request's own snapshots are not refused for a full
+        queue); a single write already in progress does not hold the request."""
+        if backlog_only and self._q.qsize() == 0:
+            return
         self._q.join()
 
     # ---- read ----------------------------------------------------------------

@@ -113,3 +113,63 @@ def test_published_terminal_write_survives_reader_close_and_stop_waits_for_it():
         await asyncio.wait_for(stopping, timeout=1.0)
         assert engine.get_stats()["last_durability"]["durable"]
     asyncio.run(run())
+
+
+def _ram_served_receipt():
+    receipt = Future()
+    receipt.vmlx_lookup_served_from_ram = True        # as dflash2_runtime._store_session marks it
+    return receipt
+
+
+def test_ram_served_terminal_write_does_not_hold_the_next_turn_but_stop_waits():
+    """A DFlash2 session entry is in the RAM session store before its SSD write
+    starts: the next turn is admitted at once, the write keeps settling in the
+    background, and teardown still waits for it."""
+    async def run():
+        receipt = _ram_served_receipt()
+        tool_chunk = SimpleNamespace(text="<tool_call>done</tool_call>", finish_reason="stop",
+                                     prompt_tokens=100, completion_tokens=7, cached_tokens=97,
+                                     cache_detail="dflash2-ram", persistence_future=receipt)
+        next_chunk = SimpleNamespace(text="answer", finish_reason="stop", prompt_tokens=120,
+                                     completion_tokens=3, cached_tokens=106, cache_detail="dflash2-ram")
+        engine = _engine_with_chunks([[tool_chunk], [next_chunk]])
+        stream = engine.stream_chat([], request_id="tool-a")
+        terminal = await asyncio.wait_for(anext(stream), timeout=1.0)
+        assert terminal.finished and not receipt.done()
+        await stream.aclose()
+
+        follow = engine.stream_chat([], request_id="tool-b")
+        answer = await asyncio.wait_for(anext(follow), timeout=1.0)   # not held by the pending write
+        assert answer.finished and answer.cached_tokens == 106
+        assert not receipt.done()
+        await follow.aclose()
+
+        stopping = asyncio.create_task(engine.stop())
+        await asyncio.sleep(0.05)
+        assert not stopping.done(), "stop returned before the RAM-served write reached disk"
+        receipt.set_result({"outcome": "stored", "durable": True, "retained_tokens": 106})
+        await asyncio.wait_for(stopping, timeout=1.0)
+        record = engine.get_stats()["last_durability"]
+        assert record["request_id"] == "tool-a" and record["durable"]
+    asyncio.run(run())
+
+
+def test_cache_clear_waits_for_ram_served_writes():
+    async def run():
+        receipt = _ram_served_receipt()
+        chunk = SimpleNamespace(text="final", finish_reason="stop", prompt_tokens=10,
+                                completion_tokens=2, cached_tokens=0, cache_detail="",
+                                persistence_future=receipt)
+        engine = _engine_with_chunks([[chunk]])
+        stream = engine.stream_chat([], request_id="final-a")
+        await anext(stream)
+        await stream.aclose()
+        waiting = asyncio.create_task(
+            engine._await_prior_terminal_persistence(None, include_background=True)
+        )
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+        assert await engine._await_prior_terminal_persistence("next") == 0.0
+        receipt.set_result({"outcome": "stored", "durable": True})
+        await asyncio.wait_for(waiting, timeout=1.0)
+    asyncio.run(run())

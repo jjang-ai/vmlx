@@ -112,6 +112,9 @@ class SimpleEngine(BaseEngine):
         self._model_executor: ThreadPoolExecutor | None = None
         # A published terminal's SSD write that the next generation awaits.
         self._pending_persistence: asyncio.Task | None = None
+        # Settle tasks whose receipts the next generation does not wait for
+        # (their entry is served from RAM); teardown and cache clears still do.
+        self._background_persistence: set[asyncio.Task] = set()
         self._pending_terminal_request_id: str | None = None
 
     def _ensure_model_executor(self) -> ThreadPoolExecutor:
@@ -541,15 +544,44 @@ class SimpleEngine(BaseEngine):
                 if self._pending_terminal_request_id == request_id:
                     self._pending_terminal_request_id = None
 
-        self._pending_persistence = asyncio.get_running_loop().create_task(_settle())
+        task = asyncio.get_running_loop().create_task(_settle())
+        if getattr(receipt, "vmlx_lookup_served_from_ram", False):
+            # DFlash2 session entries live in the RAM session store before
+            # their SSD write starts, so the next request's prefix lookup
+            # finds them without this write. Measured on Qwen3.8 27B DFlash2:
+            # 500-650 MB per turn snapshot, 55-90 ms the next tool call waited.
+            background = getattr(self, "_background_persistence", None)
+            if background is None:
+                background = self._background_persistence = set()
+            background.add(task)
+            task.add_done_callback(background.discard)
+            self._pending_persistence = None
+        else:
+            self._pending_persistence = task
 
     async def _await_prior_terminal_persistence(
-        self, request_id: str | None = None, timeout: float | None = None
+        self,
+        request_id: str | None = None,
+        timeout: float | None = None,
+        *,
+        include_background: bool = False,
     ) -> float:
-        """The next generation's fence for a published terminal's write."""
+        """The next generation's fence for a published terminal's write.
+
+        include_background: also settle writes whose entries are served from
+        RAM (teardown and cache clears need every write on disk)."""
+        tasks = []
         task = getattr(self, "_pending_persistence", None)
-        if task is None or task.done():
+        if task is not None and not task.done():
+            tasks.append(task)
+        if include_background:
+            tasks.extend(
+                t for t in list(getattr(self, "_background_persistence", ()) or ())
+                if not t.done()
+            )
+        if not tasks:
             return 0.0
+        task = asyncio.gather(*tasks, return_exceptions=True) if len(tasks) > 1 else tasks[0]
         started = time.perf_counter()
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
@@ -571,7 +603,7 @@ class SimpleEngine(BaseEngine):
         """Stop the engine and cleanup resources."""
         # A published terminal's SSD write must land before teardown so a
         # restart can restore it.
-        await self._await_prior_terminal_persistence(timeout=5.0)
+        await self._await_prior_terminal_persistence(timeout=5.0, include_background=True)
         self._model = None
         self._loaded = False
         try:
@@ -1457,7 +1489,9 @@ class SimpleEngine(BaseEngine):
     async def clear_native_media_cache(self) -> bool:
         """Clear direct VLM prefix state without racing a model request."""
         async with self._generation_lock:
-            _admission_wait = await self._await_prior_terminal_persistence(None)
+            _admission_wait = await self._await_prior_terminal_persistence(
+                None, include_background=True
+            )
             if not self._is_mllm or self._model is None:
                 return False
             if getattr(self._model, "_cache_manager", None) is None:

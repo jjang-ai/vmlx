@@ -523,7 +523,12 @@ def _store_session(entry: dict, ram_only: bool = False):
     _SESSION_STORE.put(entry)
     if _SESSION_SSD is not None and not ram_only:
         try:
-            return _SESSION_SSD.put(entry)
+            receipt = _SESSION_SSD.put(entry)
+            # The RAM store above already serves the next lookup of this
+            # entry, so the next request need not wait for the SSD copy
+            # (SimpleEngine still settles it before teardown and cache clears).
+            receipt.vmlx_lookup_served_from_ram = True
+            return receipt
         except Exception:
             logger.warning("DFlash2 SSD snapshot failed; RAM entry kept", exc_info=True)
             receipt = Future()
@@ -655,9 +660,11 @@ def _stream_generate_resumable(
     import dflash.model_mlx as runtime
 
     # A disconnected consumer may not have awaited its terminal receipt.
-    # Settle outstanding writes before another request can enqueue snapshots.
+    # Settle QUEUED writes before another request can enqueue snapshots; the
+    # previous turn's write already in progress is not waited for (its entry
+    # is in the RAM session store, and the writer finishes it in order).
     if _SESSION_SSD is not None:
-        _SESSION_SSD.wait_pending_writes()
+        _SESSION_SSD.wait_pending_writes(backlog_only=True)
 
     runtime._patch_model(adapter, draft.config.target_layer_ids)
     sampler = runtime.make_sampler(temperature, top_p, top_k)
