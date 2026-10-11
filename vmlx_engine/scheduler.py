@@ -3831,6 +3831,10 @@ class Scheduler:
                 completion_batch_size=1,
                 prefill_step_size=self.config.prefill_step_size,
                 prompt_snapshot_max_bytes=_prompt_snapshot_max_bytes,
+                mixed_swa_boundary_capture=self._mixed_swa_inline_capture_wanted(),
+                mixed_swa_capture_block_size=int(
+                    getattr(self.block_aware_cache, "block_size", 64) or 64
+                ),
             )
 
         return BatchGenerator(
@@ -10072,6 +10076,16 @@ class Scheduler:
                                                 "family": "Mixed-SWA",
                                                 "mode": "paged",
                                                 "key_tokens": list(mixed_key_tokens),
+                                                # Exact N-1 rotating windows
+                                                # captured by the generator;
+                                                # cleanup assembles from them
+                                                # instead of re-prefilling.
+                                                "boundary_capture": getattr(
+                                                    response,
+                                                    "mixed_swa_boundary",
+                                                    None,
+                                                ),
+                                                "live_cache": raw_cache,
                                             }
                                             cache_for_extract = None
                                         else:
@@ -10311,6 +10325,12 @@ class Scheduler:
                                             "family": "Mixed-SWA",
                                             "mode": "object",
                                             "key_tokens": list(mixed_key_tokens),
+                                            "boundary_capture": getattr(
+                                                response,
+                                                "mixed_swa_boundary",
+                                                None,
+                                            ),
+                                            "live_cache": raw_cache,
                                         }
                                         request._extracted_cache = None
                                     else:
@@ -10470,6 +10490,151 @@ class Scheduler:
 
         return outputs, finished_ids
 
+    def _mixed_swa_inline_capture_wanted(self) -> bool:
+        """Generator-side N-1 rotating capture for mixed-SWA prefix stores."""
+        if not getattr(self, "_mixed_attention_cache_model", False):
+            return False
+        if (
+            getattr(self, "block_aware_cache", None) is None
+            and getattr(self, "memory_aware_cache", None) is None
+        ):
+            return False
+        from .utils.mixed_swa_boundary import inline_boundary_enabled
+
+        return inline_boundary_enabled()
+
+    def _assemble_inline_mixed_swa_boundary(
+        self,
+        request_id: str,
+        deferred: Dict[str, Any],
+        key_tokens: List[int],
+        mode: str,
+        request: Optional[Request] = None,
+    ) -> Optional[List[Any]]:
+        """Exact N-1 boundary from the generator's capture, without a re-prefill.
+
+        Rotating layers come only from the capture taken right after the N-1
+        prefill; full-attention ``KVCache`` layers are append-only, so the live
+        cache is sliced to the boundary (the MLLM lane's proven assembler).
+        Declines (returns None) unless every layer is a plain ``KVCache`` or
+        ``RotatingKVCache`` and the capture boundary equals the store key, so a
+        lossy or exotic live layer can never be stored in place of the clean
+        full-precision re-prefill.
+        """
+        capture = deferred.pop("boundary_capture", None)
+        live_cache = deferred.pop("live_cache", None)
+        if capture is None or not live_cache:
+            if capture is None and live_cache:
+                logger.info(
+                    "Mixed-SWA inline boundary not available for %s: no "
+                    "generator capture (%s)",
+                    request_id,
+                    getattr(
+                        getattr(self, "batch_generator", None),
+                        "mixed_swa_boundary_last_reason",
+                        "capture disabled",
+                    ),
+                )
+            return None
+        from .utils.mixed_swa_boundary import (
+            compare_boundary_caches,
+            inline_boundary_enabled,
+            inline_boundary_verify_enabled,
+        )
+
+        if not inline_boundary_enabled():
+            return None
+        boundary = len(key_tokens)
+        try:
+            cap_boundary = int(capture[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if cap_boundary != boundary:
+            logger.info(
+                "Mixed-SWA inline boundary declined for %s: capture boundary=%d "
+                "!= store key=%d",
+                request_id,
+                cap_boundary,
+                boundary,
+            )
+            return None
+        try:
+            from types import SimpleNamespace
+
+            from mlx_lm.models.cache import KVCache, RotatingKVCache
+
+            from .mllm_scheduler import _assemble_mixed_swa_boundary_cache
+        except ImportError:
+            return None
+        exotic = sorted(
+            {
+                type(layer).__name__
+                for layer in live_cache
+                if type(layer) not in (KVCache, RotatingKVCache)
+            }
+        )
+        if exotic:
+            logger.info(
+                "Mixed-SWA inline boundary declined for %s: live layer classes "
+                "%s are not plain KV/rotating (keeping the clean re-prefill)",
+                request_id,
+                ",".join(exotic),
+            )
+            return None
+        holder = SimpleNamespace(request_id=request_id, _mixed_swa_boundary=capture)
+        assembled = _assemble_mixed_swa_boundary_cache(
+            None, holder, list(live_cache), boundary
+        )
+        if assembled is None:
+            return None
+        if mode == "object":
+            # The object store keeps cache objects; give it independent,
+            # boundary-sized arrays rather than views of the live buffers.
+            import mlx.core as mx
+
+            for layer in assembled:
+                if type(layer).__name__ == "KVCache":
+                    layer.keys = mx.contiguous(layer.keys)
+                    layer.values = mx.contiguous(layer.values)
+            mx.eval(*[a for layer in assembled for a in (layer.keys, layer.values)])
+        logger.info(
+            "Mixed-SWA %s store for %s: exact prompt-boundary cache assembled "
+            "inline (%d layers, boundary=%d) — skipped the clean re-prefill",
+            mode,
+            request_id,
+            len(assembled),
+            boundary,
+        )
+        if inline_boundary_verify_enabled():
+            # Reference = exactly what the replaced path would have stored:
+            # resume from the owned immutable checkpoint when one exists (the
+            # hit-turn path), otherwise a clean prefill from zero.
+            seed, seed_len = (
+                self._mixed_swa_deferred_seed(request, key_tokens)
+                if request is not None and mode == "paged"
+                else (None, 0)
+            )
+            if seed is not None:
+                reference = self._prefill_for_prompt_only_cache(
+                    list(key_tokens), base_cache=seed, base_token_count=seed_len
+                )
+            else:
+                reference = self._prefill_for_prompt_only_cache(list(key_tokens))
+            verdict = (
+                compare_boundary_caches(assembled, reference)
+                if reference is not None
+                else {"exact": False, "error": "reference_prefill_failed"}
+            )
+            logger.info(
+                "MIXED_SWA_INLINE_VERIFY request=%s boundary=%d reference=%s %s",
+                request_id,
+                boundary,
+                f"resume@{seed_len}" if seed is not None else "full",
+                "MATCH" if verdict.get("exact") else f"DIFF {verdict}",
+            )
+            del reference
+        return assembled
+
     def _mixed_swa_deferred_seed(self, request: Request, key_tokens: List[int]):
         """Refault the accepted immutable prefix, never the live decode cache.
 
@@ -10548,20 +10713,30 @@ class Scheduler:
             return
 
         try:
-            logger.info(
-                "%s %s prefix cleanup now running deferred clean "
-                "prompt-boundary re-prefill (%d cache-key tokens) after "
-                "terminal dispatch.",
-                family,
-                mode,
-                len(key_tokens),
+            inline_cache = (
+                self._assemble_inline_mixed_swa_boundary(
+                    request_id, deferred, key_tokens, mode, request=request
+                )
+                if family == "Mixed-SWA"
+                else None
             )
             seed, seed_len = (
                 self._mixed_swa_deferred_seed(request, key_tokens)
-                if family == "Mixed-SWA" and mode == "paged"
+                if family == "Mixed-SWA" and mode == "paged" and inline_cache is None
                 else (None, 0)
             )
-            if seed is not None:
+            if inline_cache is None:
+                logger.info(
+                    "%s %s prefix cleanup now running deferred clean "
+                    "prompt-boundary re-prefill (%d cache-key tokens) after "
+                    "terminal dispatch.",
+                    family,
+                    mode,
+                    len(key_tokens),
+                )
+            if inline_cache is not None:
+                clean_cache = inline_cache
+            elif seed is not None:
                 logger.info(
                     "Mixed-SWA clean-prefix resume for %s: checkpoint=%d target=%d suffix=%d",
                     request_id, seed_len, len(key_tokens), len(key_tokens) - seed_len,
@@ -12912,6 +13087,18 @@ class Scheduler:
                     ),
                     "prompt_snapshot_last_headroom_bytes": getattr(
                         self.batch_generator, "prompt_snapshot_last_headroom_bytes", 0
+                    ),
+                    "mixed_swa_boundary_capture": getattr(
+                        self.batch_generator, "mixed_swa_boundary_capture", False
+                    ),
+                    "mixed_swa_boundary_captures": getattr(
+                        self.batch_generator, "mixed_swa_boundary_captures", 0
+                    ),
+                    "mixed_swa_boundary_declines": getattr(
+                        self.batch_generator, "mixed_swa_boundary_declines", 0
+                    ),
+                    "mixed_swa_boundary_last_reason": getattr(
+                        self.batch_generator, "mixed_swa_boundary_last_reason", None
                     ),
                 }
             )

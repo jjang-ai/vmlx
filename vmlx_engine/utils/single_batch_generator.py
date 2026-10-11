@@ -140,6 +140,9 @@ class _Request:
     video_grid_thw: Any = None
     prefill_started: Optional[float] = None
     prefill_usage: Optional[dict] = None
+    # Mixed-SWA: (boundary, {layer_idx: RotatingKVCache snapshot}) captured at
+    # the exact N-1 prompt boundary before the final prompt token is consumed.
+    mixed_swa_boundary: Any = None
 
 
 @dataclass
@@ -154,6 +157,7 @@ class Response:
     all_tokens: Optional[list[int]]
     prompt_cache_snapshot: Optional[list[Any]] = None
     prefill_usage: Optional[dict] = None
+    mixed_swa_boundary: Any = None
 
 
 class SingleBatchGenerator:
@@ -174,6 +178,8 @@ class SingleBatchGenerator:
         prefill_step_size: int = 2048,
         max_kv_size: Optional[int] = None,
         prompt_snapshot_max_bytes: Optional[int] = None,
+        mixed_swa_boundary_capture: bool = False,
+        mixed_swa_capture_block_size: int = 64,
         stream=None,
     ):
         self.model = model
@@ -194,6 +200,15 @@ class SingleBatchGenerator:
         self.prompt_snapshot_headroom_skips = 0
         self.prompt_snapshot_last_headroom_bytes = 0
         self.prompt_snapshot_last_reason = None
+        # Mixed full/sliding-window caches: capture the rotating windows at the
+        # exact N-1 boundary so the scheduler can store it without re-running
+        # the whole prompt. Enabled by the scheduler only when a prefix cache
+        # will consume it.
+        self.mixed_swa_boundary_capture = bool(mixed_swa_boundary_capture)
+        self.mixed_swa_capture_block_size = max(1, int(mixed_swa_capture_block_size or 64))
+        self.mixed_swa_boundary_captures = 0
+        self.mixed_swa_boundary_declines = 0
+        self.mixed_swa_boundary_last_reason = None
         self.stop_tokens: set[Any] = set()
         stop_edges = []
         for seq in stop_tokens or []:
@@ -483,6 +498,32 @@ class SingleBatchGenerator:
                     )
                     return None
         return self._clone_prompt_cache_snapshot(cache)
+
+    def _capture_mixed_swa_boundary(self, req):
+        """Capture the rotating windows at the N-1 boundary (bounded copy).
+
+        Runs after the N-1 prefill and before the final prompt token, so each
+        ring already sits exactly at the store boundary. Declines leave the
+        scheduler's clean re-prefill in place.
+        """
+        from .mixed_swa_boundary import capture_rotating_boundary
+
+        try:
+            with self._stream_context():
+                capture, reason = capture_rotating_boundary(
+                    req.cache,
+                    block_size=self.mixed_swa_capture_block_size,
+                    log_id=str(req.uid),
+                )
+        except Exception as exc:
+            capture, reason = None, f"error:{type(exc).__name__}"
+            logger.warning("mixed-SWA boundary capture failed (non-fatal): %s", exc)
+        self.mixed_swa_boundary_last_reason = reason
+        if capture is None:
+            self.mixed_swa_boundary_declines += 1
+            return None
+        self.mixed_swa_boundary_captures += 1
+        return capture
 
     def _clone_naive_prompt_snapshot(self, req):
         # Mixed-SWA owns a full-prompt N-1 key, including the native generation
@@ -1013,6 +1054,7 @@ class SingleBatchGenerator:
             all_tokens=list(req.context_tokens),
             prompt_cache_snapshot=prompt_cache_snapshot or req.prompt_cache_snapshot,
             prefill_usage=req.prefill_usage,
+            mixed_swa_boundary=req.mixed_swa_boundary,
         )
         if req.finish_reason is not None:
             self._request = None
@@ -1138,6 +1180,8 @@ class SingleBatchGenerator:
                 self._prefill(_cold_tokens[-_tail:], req)
             else:
                 self._prefill(_cold_tokens, req)
+            if getattr(self, "mixed_swa_boundary_capture", False):
+                req.mixed_swa_boundary = self._capture_mixed_swa_boundary(req)
         uses_openpangu = self._cache_uses_openpangu(req.cache)
         uses_glm5_next = self._cache_uses_glm5_next(req.cache)
         # openPangu and GLM each own a path-dependent native state unit. Capture
