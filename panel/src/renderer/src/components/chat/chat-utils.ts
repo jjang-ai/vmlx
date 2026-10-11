@@ -121,6 +121,7 @@ export interface MessageMetrics {
   tokensPerSecond: string;
   ppMetricSource?: string
   ppSpeed?: string;
+  cachedPpSpeed?: string;
   ttft: string;
   totalTime?: string;
   elapsed?: string;
@@ -156,13 +157,29 @@ export function getMetricsItems(
           ? t('chat.metrics.estimatedRateTitle') : t('chat.metrics.tpsTitle'),
   });
 
-  // Legacy stored rates used TTFT. Never relabel historical estimates as
-  // measured engine prefill, including after a chat reload.
-  if (metrics.ppSpeed && metrics.ppMetricSource === 'engine-prefill') {
+  // REQUIRED by Eric: cold pp/s and the cached-reuse pp/s sit next to t/s.
+  // Both were removed twice before (9627e3b2 hid pp/s on cache hits, d3eca9d1
+  // hid it without an engine receipt). Never gate these chips away again;
+  // improve the measurement behind them instead. Pinned by tests/chat-ui.test.ts.
+  // Engine receipt = measured prefill. Anything else (remote servers, legacy
+  // rows) is the TTFT estimate, valid only without a cache hit (a hit's TTFT
+  // includes the restore); new rows never store an estimate on a hit.
+  const measured = metrics.ppMetricSource === 'engine-prefill';
+  if (metrics.ppSpeed && (measured || !((metrics.cachedTokens ?? 0) > 0))) {
     items.push({
-      label: t('chat.metrics.measuredPrefillLabel', { speed: metrics.ppSpeed }),
+      label: measured
+        ? t('chat.metrics.measuredPrefillLabel', { speed: metrics.ppSpeed })
+        : t('chat.metrics.ppsLabel', { speed: metrics.ppSpeed }),
       value: metrics.ppSpeed,
-      title: t('chat.metrics.measuredPrefillTitle'),
+      title: measured ? t('chat.metrics.measuredPrefillTitle') : t('chat.metrics.ppsTitle'),
+    });
+  }
+
+  if (metrics.cachedPpSpeed) {
+    items.push({
+      label: t('chat.metrics.cachedPpsLabel', { speed: metrics.cachedPpSpeed }),
+      value: metrics.cachedPpSpeed,
+      title: t('chat.metrics.cachedPpsTitle'),
     });
   }
 

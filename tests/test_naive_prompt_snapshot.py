@@ -772,7 +772,10 @@ def test_naive_prefill_receipt_ends_before_sampler_and_survives_terminal(monkeyp
     assert sampler_receipts[-1][1] == warm[0].prefill_usage
 
 
-def test_other_single_batch_family_does_not_emit_naive_prefill_receipt(monkeypatch):
+def test_every_single_batch_family_emits_prefill_receipt(monkeypatch):
+    """The chat footer's pp/s needs usage.vmlx_prefill from every family on this
+    generator, not only Naive (Spark, MiniMax, Laguna, ... showed no pp/s at all).
+    Cost: one materialization of the final prompt logits, never a decode fence."""
     from vmlx_engine.utils import single_batch_generator as sbg
     model = make_model()
     model.model_type = 'other-family'
@@ -786,7 +789,28 @@ def test_other_single_batch_family_does_not_emit_naive_prefill_receipt(monkeypat
         return original_eval(*values)
 
     monkeypatch.setattr(generator, '_eval_on_stream', evaluate)
-    generator.insert([[1, 2, 3]], max_tokens=[1])
+    generator.insert([[1, 2, 3]], max_tokens=[3])
     outputs, _ = generator.next()
-    assert outputs[0].prefill_usage is None
-    assert final_logits_evals == []
+    receipt = outputs[0].prefill_usage
+    assert receipt['tokens'] == 3 and receipt['seconds'] > 0
+    assert receipt['scope'] == 'model_prefill_and_prompt_state'
+    responses = list(outputs)
+    while generator._request is not None:
+        prompt, generated = generator.next()
+        responses.extend(prompt + generated)
+    assert all(r.prefill_usage == receipt for r in responses)
+    assert len(final_logits_evals) == 1
+
+
+def test_full_prompt_prefill_path_emits_prefill_receipt(monkeypatch):
+    """M3 MSA / VL prompts prefill in one full forward (_prefill_full_and_sample)."""
+    from vmlx_engine.utils import single_batch_generator as sbg
+    model = make_model()
+    model.model_type = 'minimax_m3'
+    generator = sbg.SingleBatchGenerator(model, prefill_step_size=4)
+    monkeypatch.setattr(generator, '_cache_uses_m3_msa', lambda cache: True)
+    generator.insert([list(range(1, 10))], max_tokens=[2])
+    outputs, _ = generator.next()
+    receipt = outputs[0].prefill_usage
+    assert receipt['tokens'] == 9 and receipt['seconds'] > 0
+    assert receipt['scope'] == 'model_prefill_and_prompt_state'

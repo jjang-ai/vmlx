@@ -97,7 +97,9 @@ import { mergeCacheDetails } from "../../shared/cacheMetrics";
 import { replayPersistedUserContentParts } from "../../shared/mediaHistoryReplay";
 import { hasPersistedUserMedia, resolveChatMediaPolicy } from "../../shared/chatMediaPolicy";
 import {
+  calculateCachedPromptTps,
   calculatePrefillTps,
+  estimateColdPrefillTps,
   summarizePrefillPasses,
   ExchangeFirstTokenClock,
   parseServerDecodeUsage,
@@ -2069,6 +2071,31 @@ export function registerChatHandlers(
       const exchangePrefillSpeed = () => summarizePrefillPasses([
         ...completedPrefillPasses, currentPrefillUsage,
       ]);
+      // First HTTP pass of the visible turn. TTFT belongs to it, so the cached
+      // pp/s reuse indicator pairs ITS prompt/cached counts with that TTFT.
+      let firstPass:
+        | { promptTokens: number; cachedTokens: number; usageKnown: boolean }
+        | undefined;
+      // Footer prefill chips (REQUIRED next to t/s): cold pp/s from the engine
+      // receipts, else the TTFT estimate on a turn without a cache hit; cached
+      // pp/s (whole prompt over TTFT) whenever the first pass reused a prefix.
+      const footerPrefillRates = (ttftSeconds: number) => {
+        const first = firstPass ?? {
+          promptTokens, cachedTokens, usageKnown: serverSendsUsage,
+        };
+        const counts = first.usageKnown ? {
+          promptTokens: first.promptTokens,
+          cachedTokens: Math.min(first.cachedTokens, first.promptTokens),
+          ttftSeconds,
+        } : undefined;
+        const measured = exchangePrefillSpeed();
+        const estimated = measured || !counts ? undefined : estimateColdPrefillTps(counts);
+        return {
+          ppSpeed: measured ?? estimated,
+          ppMetricSource: measured ? "engine-prefill" : estimated ? "ttft-estimate" : undefined,
+          cachedPpSpeed: counts ? calculateCachedPromptTps(counts) : undefined,
+        };
+      };
       const recordServerDecodeUsage = (usage: unknown) => {
         if (usage && typeof usage === "object" && "vmlx_prefill" in usage) {
           currentPrefillUsage = (usage as { vmlx_prefill?: unknown }).vmlx_prefill;
@@ -3008,7 +3035,7 @@ export function registerChatHandlers(
             0,
             exchangeFirstTokenClock.seconds(),
           );
-          const ppSpeed = exchangePrefillSpeed();
+          const prefillRates = footerPrefillRates(ttft);
 
           try {
             const win = getWindow();
@@ -3028,8 +3055,7 @@ export function registerChatHandlers(
                   cachedTokens,
                   cacheDetail,
                   tokensPerSecond: streamTps.toFixed(1),
-                  ppSpeed,
-                  ppMetricSource: ppSpeed ? "engine-prefill" : undefined,
+                  ...prefillRates,
                   ttft: ttft.toFixed(2),
                   elapsed: elapsed.toFixed(1),
                   ...remoteMetricFields(),
@@ -3795,6 +3821,7 @@ export function registerChatHandlers(
           finishServerDecodePass();
           completedPrefillPasses.push(currentPrefillUsage);
           currentPrefillUsage = undefined;
+          firstPass ??= { promptTokens, cachedTokens, usageKnown: serverSendsUsage };
           // Fold the finished stream's prompt/cached counts into the exchange
           // totals so the final metrics pair coherently (cached <= prompt).
           exchangePromptTokens += promptTokens;
@@ -4704,7 +4731,7 @@ export function registerChatHandlers(
           cachedTokens,
           finalStreamPromptTokens,
         );
-        const finalPpSpeed = exchangePrefillSpeed();
+        const finalPrefillRates = footerPrefillRates(ttft);
         const finalPassPpSpeed = calculatePrefillTps({ prefillUsage: currentPrefillUsage });
 
         // Release any withheld tail before the final content is assembled.
@@ -4844,8 +4871,7 @@ export function registerChatHandlers(
           cacheDetail: cacheDetail || undefined,
           tokensPerSecond: finalTpsLabel,
           decodeMetricSource,
-          ppSpeed: finalPpSpeed,
-          ppMetricSource: finalPpSpeed ? "engine-prefill" : undefined,
+          ...finalPrefillRates,
           ttft: ttft.toFixed(2),
           totalTime: totalTime.toFixed(1),
           ...remoteMetricFields(),
@@ -5040,8 +5066,7 @@ export function registerChatHandlers(
                 cacheDetail,
                 tokensPerSecond: finalTpsLabel,
                 decodeMetricSource,
-                ppSpeed: finalPpSpeed,
-          ppMetricSource: finalPpSpeed ? "engine-prefill" : undefined,
+          ...finalPrefillRates,
                 ttft: ttft.toFixed(2),
                 totalTime: totalTime.toFixed(1),
                 ...remoteMetricFields(),
@@ -5198,7 +5223,7 @@ export function registerChatHandlers(
               : 0;
           // Preserve first exchange TTFT even when interrupted during a later pass.
           const abortTtft = exchangeFirstTokenClock.seconds();
-          const abortPpSpeed = exchangePrefillSpeed();
+          const abortPrefillRates = footerPrefillRates(abortTtft);
 
           const abortMetrics = {
             tokenCount: abortTotalTokens,
@@ -5206,8 +5231,7 @@ export function registerChatHandlers(
             cachedTokens: cachedTokens || undefined,
             cacheDetail: cacheDetail || undefined,
             tokensPerSecond: abortTps.toFixed(1),
-            ppSpeed: abortPpSpeed,
-            ppMetricSource: abortPpSpeed ? "engine-prefill" : undefined,
+            ...abortPrefillRates,
             ttft: abortTtft.toFixed(2),
             totalTime: abortTotalTime.toFixed(1),
             ...remoteMetricFields(),

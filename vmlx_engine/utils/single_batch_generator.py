@@ -905,7 +905,7 @@ class SingleBatchGenerator:
                 sample_t0 = time.perf_counter()
             logits = logits[:, -1, :]
             if getattr(req, "prefill_started", None) is not None:
-                # Naive's initial prompt only: complete final-position logits
+                # The initial prompt only: complete final-position logits
                 # before sampling/lookahead, matching the MLLM receipt scope.
                 # The one-time materialization never fences steady decode.
                 (logits,) = self._eval_on_stream(logits)
@@ -1112,6 +1112,13 @@ class SingleBatchGenerator:
             # sample step touches it (prevents stale-stream resolution on the
             # worker thread). Mirrors the decode path's on-stream eval.
             (logits,) = self._eval_on_stream(logits)
+            if getattr(req, "prefill_started", None) is not None:
+                req.prefill_usage = {
+                    "tokens": len(tokens),
+                    "seconds": time.perf_counter() - req.prefill_started,
+                    "scope": "model_prefill_and_prompt_state",
+                }
+                req.prefill_started = None
             logits = logits[:, -1, :]
             input_tokens = mx.array([final_chunk[-1]], dtype=mx.int32)
             req.next_token, req.next_logprobs = self._sample_from_logits(
@@ -1130,6 +1137,13 @@ class SingleBatchGenerator:
         self._refresh_thread_stream()
         if req.cache is None:
             req.cache = self._make_new_cache()
+        # usage.vmlx_prefill (the chat footer's pp/s) for EVERY family on this
+        # generator, not only Naive. Lookup/restore and cache creation precede
+        # this producer clock. It covers chunk prefill and detached N-1 prompt
+        # state up to completed final-position logits, but neither the first
+        # sampler nor the following decode forward.
+        req.prefill_usage = None
+        req.prefill_started = time.perf_counter()
         # M3 MSA/VL: build prompt cache exactly like the clean reference runtime:
         # one full-prompt forward, then sample from the final-position logits.
         if (
@@ -1147,12 +1161,6 @@ class SingleBatchGenerator:
                 req,
                 prompt_cache_snapshot=prompt_cache_snapshot,
             )
-        if getattr(self.model, "model_type", None) == "naive_n05_flash":
-            # Lookup/restore and cache creation precede this producer clock.
-            # Include chunk prefill and detached N-1 prompt state, but neither
-            # the first sampler nor the following decode forward.
-            req.prefill_usage = None
-            req.prefill_started = time.perf_counter()
         if len(req.prompt_tokens) > 1:
             # A prefix-cache HIT restores the cached prefix and then computes
             # the remaining few positions in a SMALL forward, while a cold

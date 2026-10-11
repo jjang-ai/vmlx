@@ -637,7 +637,7 @@
       "remoteRateTitle": "Provider output tokens divided by total HTTP-request time. Includes prefill, network and buffered output; excludes time executing tools. Not isolated model decode speed.",
       "remoteUsageUnavailable": "Token usage is unavailable until the provider reports it for every request. Stream events are not tokens.",
       "tpsTitle": "Decode speed after first token; includes reasoning and tool-loop completion tokens",
-      "measuredPrefillLabel": "{speed} prefill tok/s",
+      "measuredPrefillLabel": "{speed} pp/s",
       "measuredPrefillTitle": "Engine-measured model prefill and prompt-state preparation, including vision encoding when present. Excludes request queueing, input preprocessing and prefix-cache lookup/restore. Not isolated GPU kernel throughput.",
       "ppsTitle": "Uncached prompt tokens divided by time to first token. That window includes queueing, media processing, cache restore and first-token compute, so it is not isolated prefill throughput.",
       "promptLabel": "{n} prompt",
@@ -648,7 +648,9 @@
       "elapsedTitle": "Elapsed time",
       "totalLabel": "{v}s total",
       "totalTitle": "Total request time",
-      "ppsLabel": "{speed} input tok/s (input ÷ TTFT)"
+      "ppsLabel": "~{speed} pp/s",
+      "cachedPpsLabel": "{speed} cached pp/s",
+      "cachedPpsTitle": "Prefix-cache reuse speed: the whole prompt, including the tokens restored from cache, divided by time to first token (first request of the turn). Compare it with pp/s to see what the cache saved."
     },
     "message": {
       "tokenCount": "{n} tokens"

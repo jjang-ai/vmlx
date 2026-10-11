@@ -377,22 +377,48 @@ describe('Metrics Display Items', () => {
     expect(items[1].label).toBe('42.5 t/s')
   })
 
-  it('labels only engine-measured prefill, including cached-tail processing', () => {
+  it('labels engine-measured prefill as pp/s, including cached-tail processing', () => {
     for (const cachedTokens of [0, 170]) {
       const items = getMetricsItems({ ...baseMetrics, cachedTokens,
         ppSpeed: '120.0', ppMetricSource: 'engine-prefill' }, false, t)
       const rate = items.find(i => i.value === '120.0')
-      expect(rate?.label).toBe('120.0 prefill tok/s')
+      expect(rate?.label).toBe('120.0 pp/s')
       expect(rate?.title).toBe(en.chat.metrics.measuredPrefillTitle)
     }
   })
 
-  it('does not relabel a historical cold TTFT-derived metric', () => {
-    const items = getMetricsItems({ ...baseMetrics, ppSpeed: '120.0' }, false, t)
-    expect(items.some(i => i.value === '120.0')).toBe(false)
+  // Eric REQUIRES cold pp/s and cached (reuse) pp/s next to t/s. Agents removed
+  // them twice (9627e3b2, d3eca9d1). These assertions fail if either chip
+  // disappears or moves away from t/s.
+  it('shows cold pp/s right after t/s on a cold turn, streaming and done', () => {
+    for (const streaming of [false, true]) {
+      const items = getMetricsItems({ ...baseMetrics, promptTokens: 4096,
+        ppSpeed: '812.4', ppMetricSource: 'engine-prefill' }, streaming, t)
+      expect(items[1].label).toBe('42.5 t/s')
+      expect(items[2].label).toBe('812.4 pp/s')
+      expect(items.some(i => i.label.includes('cached pp/s'))).toBe(false)
+    }
   })
 
-  it('omits the derived rate after a cache hit while retaining cache and TTFT', () => {
+  it('shows cold pp/s and cached pp/s side by side after t/s on a cache hit', () => {
+    for (const streaming of [false, true]) {
+      const items = getMetricsItems({ ...baseMetrics, promptTokens: 9000, cachedTokens: 8960,
+        ppSpeed: '310.0', ppMetricSource: 'engine-prefill', cachedPpSpeed: '25714.3', ttft: '0.35' }, streaming, t)
+      expect(items[1].label).toBe('42.5 t/s')
+      expect(items[2].label).toBe('310.0 pp/s')
+      expect(items[3].label).toBe('25714.3 cached pp/s')
+      expect(items[3].title).toBe(en.chat.metrics.cachedPpsTitle)
+    }
+  })
+
+  it('shows a TTFT-estimated cold pp/s (remote servers, legacy rows) with its own label', () => {
+    const items = getMetricsItems({ ...baseMetrics, ppSpeed: '120.0' }, false, t)
+    const rate = items.find(i => i.value === '120.0')
+    expect(rate?.label).toBe('~120.0 pp/s')
+    expect(rate?.title).toBe(en.chat.metrics.ppsTitle)
+  })
+
+  it('omits a legacy TTFT-derived rate after a cache hit while retaining cache and TTFT', () => {
     const metrics = { ...baseMetrics, promptTokens: 171, cachedTokens: 170, ppSpeed: '1.3', ttft: '0.80' }
     for (const streaming of [false, true]) {
       const items = getMetricsItems(metrics, streaming, t)

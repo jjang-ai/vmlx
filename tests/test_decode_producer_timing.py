@@ -179,3 +179,56 @@ def test_text_scheduler_forwards_prefill_receipt_through_terminal(monkeypatch, h
         outputs, finished = scheduler._process_batch_responses([response])
         assert outputs[0].prefill_usage == (receipt if has_receipt else None)
         assert outputs[0].finished is (finish is not None)
+
+
+@pytest.mark.parametrize('generator_receipt', [False, True])
+def test_text_scheduler_times_prefill_for_generators_without_a_receipt(monkeypatch, generator_receipt):
+    """Stock mlx_lm BatchGenerator (native-MTP text, max_num_seqs>1) and DSV4 emit no
+    usage.vmlx_prefill; the scheduler times insert -> first token so the chat footer
+    still shows pp/s. A generator's own receipt always wins."""
+    import time as _time
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler
+    request = Request(request_id='prefill-fallback', prompt=[1, 2, 3], sampling_params=SamplingParams(max_tokens=3))
+    request.prompt_token_ids = [1, 2, 3]
+    request.num_prompt_tokens = 3
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.config = SimpleNamespace(enable_prefix_cache=False)
+    scheduler.uid_to_request_id = {1: request.request_id}
+    scheduler.running = {request.request_id: request}
+    scheduler.batch_generator = None
+    scheduler.stop_tokens = {0}
+    scheduler._pld_spec_enabled = False
+    scheduler.total_completion_tokens = 0
+    scheduler.num_requests_processed = 0
+
+    class Detok:
+        text = ''
+        def add_token(self, token):
+            self.text += 'x'
+        def finalize(self):
+            pass
+
+    detok = Detok()
+    monkeypatch.setattr(Scheduler, '_get_detokenizer', lambda *args: detok)
+    monkeypatch.setattr(Scheduler, '_advance_request_state_machine', lambda *args: None)
+    monkeypatch.setattr(Scheduler, '_queue_dsv4_shadow_rekey', lambda *args: None)
+    # Two uncached tokens inserted after a one-token cache restore, 0.5 s before the first token.
+    request._vmlx_prefill_insert = (_time.perf_counter() - 0.5, 2)
+    own = {'tokens': 2, 'seconds': .25, 'scope': 'model_prefill_and_prompt_state'}
+    seen = []
+    for token, finish in [(3, None), (4, None), (0, 'stop')]:
+        response = SimpleNamespace(uid=1, token=token, finish_reason=finish)
+        if generator_receipt:
+            response.prefill_usage = own
+        outputs, _ = scheduler._process_batch_responses([response])
+        seen.append(outputs[0].prefill_usage)
+    if generator_receipt:
+        assert seen == [own, own, own]
+    else:
+        receipt = seen[0]
+        assert receipt['tokens'] == 2 and receipt['scope'] == 'model_prefill_and_prompt_state'
+        assert 0.5 <= receipt['seconds'] < 5.0
+        assert receipt['path'] == 'scheduler_first_token'
+        assert seen == [receipt, receipt, receipt]
+    assert request._vmlx_prefill_insert is None

@@ -635,7 +635,7 @@
       "remoteRateTitle": "공급자의 출력 토큰 수를 전체 HTTP 요청 시간으로 나눈 값입니다. 프리필, 네트워크 및 버퍼링을 포함하고 도구 실행 시간은 제외합니다. 모델만의 디코드 속도가 아닙니다.",
       "remoteUsageUnavailable": "공급자가 모든 요청의 사용량을 보고하기 전에는 토큰 수를 알 수 없습니다. 스트림 이벤트 수는 토큰 수가 아닙니다.",
       "tpsTitle": "첫 토큰 이후의 디코드 속도이며, 추론 및 도구 루프 완성 토큰을 포함합니다",
-      "measuredPrefillLabel": "{speed} 프리필 토큰/초",
+      "measuredPrefillLabel": "{speed} pp/s",
       "measuredPrefillTitle": "엔진에서 측정한 모델 프리필 및 프롬프트 상태 준비 속도이며, 해당하는 경우 비전 인코딩을 포함합니다. 요청 대기, 입력 전처리, 접두사 캐시 조회 및 복원은 제외합니다. GPU 커널만의 처리량은 아닙니다.",
       "ppsTitle": "미캐시 프롬프트 토큰 수를 첫 토큰까지의 시간으로 나눈 값입니다. 이 구간에는 대기, 미디어 처리, 캐시 복원, 첫 토큰 계산이 포함되므로 순수 프리필 처리량이 아닙니다.",
       "promptLabel": "프롬프트 {n}",
@@ -646,9 +646,11 @@
       "elapsedTitle": "경과 시간",
       "totalLabel": "총 {v}초",
       "totalTitle": "총 요청 시간",
-      "ppsLabel": "입력 {speed} 토큰/초 (입력 ÷ TTFT)",
+      "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "약 {speed} 토큰/초",
-      "estimatedRateTitle": "스트리밍 출력의 도착 시간을 기준으로 추정합니다. 하나 이상의 생성 단계에서 엔진 디코딩 시간을 제공하지 않았습니다."
+      "estimatedRateTitle": "스트리밍 출력의 도착 시간을 기준으로 추정합니다. 하나 이상의 생성 단계에서 엔진 디코딩 시간을 제공하지 않았습니다.",
+      "cachedPpsLabel": "{speed} pp/s (캐시 포함)",
+      "cachedPpsTitle": "접두사 캐시 재사용 속도: 캐시에서 복원된 토큰을 포함한 전체 프롬프트를 첫 토큰까지의 시간(이번 턴의 첫 요청)으로 나눈 값입니다. pp/s와 비교하면 캐시가 절약한 시간을 알 수 있습니다."
     },
     "message": {
       "tokenCount": "{n} 토큰"

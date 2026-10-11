@@ -635,7 +635,7 @@
       "remoteRateTitle": "提供方的输出 token 数除以 HTTP 请求总时长。包含预填充、网络和缓冲输出时间，不含工具执行时间。并非模型本身的纯解码速度。",
       "remoteUsageUnavailable": "在提供方报告每个请求的用量前，token 用量不可用。流式事件数不等于 token 数。",
       "tpsTitle": "首个 token 之后的解码速度；包含推理和工具循环的补全 token",
-      "measuredPrefillLabel": "{speed} 预填充令牌/秒",
+      "measuredPrefillLabel": "{speed} pp/s",
       "measuredPrefillTitle": "引擎测得的模型预填充和提示状态准备速度，包含适用时的视觉编码。不包含请求排队、输入预处理和前缀缓存查找/恢复。并非单独的 GPU 内核吞吐量。",
       "ppsTitle": "未缓存的提示令牌数除以到首个令牌的时间。该时间窗包含排队、媒体处理、缓存恢复和首个令牌计算，因此不是单独的预填充吞吐量。",
       "promptLabel": "提示词 {n}",
@@ -646,9 +646,11 @@
       "elapsedTitle": "已用时间",
       "totalLabel": "共 {v} 秒",
       "totalTitle": "请求总时间",
-      "ppsLabel": "{speed} 输入令牌/秒（输入 ÷ TTFT）",
+      "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "~{speed} 词元/秒",
-      "estimatedRateTitle": "根据流式输出的到达时间估算；一个或多个生成轮次未提供引擎解码耗时。"
+      "estimatedRateTitle": "根据流式输出的到达时间估算；一个或多个生成轮次未提供引擎解码耗时。",
+      "cachedPpsLabel": "{speed} pp/s（含缓存）",
+      "cachedPpsTitle": "前缀缓存复用速度：整个提示（包括从缓存恢复的令牌）除以到首个令牌的时间（本轮第一个请求）。与 pp/s 对比即可看出缓存节省了多少。"
     },
     "message": {
       "tokenCount": "{n} 个 token"

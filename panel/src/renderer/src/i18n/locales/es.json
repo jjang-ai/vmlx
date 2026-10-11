@@ -635,7 +635,7 @@
       "remoteRateTitle": "Tokens de salida del proveedor divididos por el tiempo total de las solicitudes HTTP. Incluye prefill, red y salida almacenada en búfer; excluye la ejecución de herramientas. No es la velocidad aislada de decodificación del modelo.",
       "remoteUsageUnavailable": "El uso de tokens no está disponible hasta que el proveedor lo informe para cada solicitud. Los eventos del flujo no son tokens.",
       "tpsTitle": "Velocidad de decodificación tras el primer token; incluye tokens de razonamiento y del bucle de herramientas",
-      "measuredPrefillLabel": "{speed} tokens/s de prellenado",
+      "measuredPrefillLabel": "{speed} pp/s",
       "measuredPrefillTitle": "Prellenado del modelo y preparación del estado del prompt medidos por el motor, incluida la codificación visual cuando corresponde. Excluye la cola de solicitudes, el preprocesamiento de entrada y la búsqueda/restauración de la caché de prefijos. No es el rendimiento aislado del kernel GPU.",
       "ppsTitle": "Tokens de prompt no cacheados divididos por el tiempo hasta el primer token. Esa ventana incluye cola, procesamiento de medios, restauración de caché y cómputo del primer token, así que no es un rendimiento de prefill aislado.",
       "promptLabel": "{n} de prompt",
@@ -646,9 +646,11 @@
       "elapsedTitle": "Tiempo transcurrido",
       "totalLabel": "{v}s en total",
       "totalTitle": "Tiempo total de la solicitud",
-      "ppsLabel": "{speed} tokens de entrada/s (entrada ÷ TTFT)",
+      "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "~{speed} tokens/s",
-      "estimatedRateTitle": "Estimación basada en los tiempos de llegada de la salida en streaming; el tiempo de decodificación del motor no estaba disponible para una o más etapas de generación."
+      "estimatedRateTitle": "Estimación basada en los tiempos de llegada de la salida en streaming; el tiempo de decodificación del motor no estaba disponible para una o más etapas de generación.",
+      "cachedPpsLabel": "{speed} pp/s con caché",
+      "cachedPpsTitle": "Velocidad de reutilización de la caché de prefijos: el prompt completo, incluidos los tokens restaurados de la caché, dividido por el tiempo hasta el primer token (primera solicitud del turno). Compárala con pp/s para ver lo que ahorró la caché."
     },
     "message": {
       "tokenCount": "{n} tokens"

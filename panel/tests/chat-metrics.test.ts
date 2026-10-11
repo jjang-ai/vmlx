@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
+  calculateCachedPromptTps,
   calculatePrefillTps,
+  estimateColdPrefillTps,
   summarizePrefillPasses,
   ExchangeFirstTokenClock,
   parseServerDecodeUsage,
@@ -33,11 +35,29 @@ describe('chat prefill TPS', () => {
       tokens: 107, seconds: 0.2, scope: 'ttft',
     } })).toBeUndefined()
   })
-  it('routes live, final, and abort through the measured receipt', () => {
+  it('routes live, final, and abort through the measured receipt and both footer chips', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
-    expect(source.match(/= exchangePrefillSpeed\(\)/g)).toHaveLength(3)
+    expect(source.match(/= exchangePrefillSpeed\(\)/g)).toHaveLength(1)
+    expect(source.match(/= footerPrefillRates\(/g)).toHaveLength(3)
+    for (const spread of ['...prefillRates,', '...finalPrefillRates,', '...abortPrefillRates,']) {
+      expect(source).toContain(spread)
+    }
     expect(source).toContain('completedPrefillPasses.push(currentPrefillUsage)')
     expect(source).toContain('currentPrefillUsage = undefined;')
+    expect(source).toContain('firstPass ??= { promptTokens, cachedTokens, usageKnown: serverSendsUsage };')
+  })
+})
+
+describe('footer pp/s chips (cold + cached reuse)', () => {
+  it('estimates cold pp/s from TTFT only without a cache hit', () => {
+    expect(estimateColdPrefillTps({ promptTokens: 4000, cachedTokens: 0, ttftSeconds: 5 })).toBe('800.0')
+    expect(estimateColdPrefillTps({ promptTokens: 4000, cachedTokens: 3990, ttftSeconds: 0.4 })).toBeUndefined()
+    expect(estimateColdPrefillTps({ promptTokens: 4000, ttftSeconds: 0 })).toBeUndefined()
+  })
+  it('reports cached pp/s as the whole prompt over TTFT on a cache hit only', () => {
+    expect(calculateCachedPromptTps({ promptTokens: 9000, cachedTokens: 8960, ttftSeconds: 0.36 })).toBe('25000.0')
+    expect(calculateCachedPromptTps({ promptTokens: 9000, cachedTokens: 0, ttftSeconds: 0.36 })).toBeUndefined()
+    expect(calculateCachedPromptTps({ promptTokens: 9000, cachedTokens: 10, ttftSeconds: 0 })).toBeUndefined()
   })
 })
 

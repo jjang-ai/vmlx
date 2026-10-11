@@ -9109,6 +9109,14 @@ class Scheduler:
                         insert_kwargs["gen_prompt_lens"] = [
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
                         ]
+                    # Producer-side pp/s clock for generators that emit no
+                    # usage.vmlx_prefill receipt of their own (stock mlx_lm
+                    # BatchGenerator: native-MTP text models, max_num_seqs>1;
+                    # DSV4). Cache lookup/restore precede it.
+                    request._vmlx_prefill_insert = (
+                        time.perf_counter(),
+                        len(tokens_to_process),
+                    )
                     uids = self.batch_generator.insert(
                         [tokens_to_process],
                         # Remaining budget, not the full cap: a cache-error
@@ -9199,6 +9207,10 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        request._vmlx_prefill_insert = (
+                            time.perf_counter(),
+                            len(tokens_to_process),
+                        )
                         uids = self.batch_generator.insert(
                             [tokens_to_process],
                             # Remaining budget, not the full cap (see the
@@ -9382,6 +9394,23 @@ class Scheduler:
             if hasattr(response, "token"):
                 is_first_token = request.num_computed_tokens == 0
                 request.append_output_token(response.token)
+                if is_first_token:
+                    _insert = getattr(request, "_vmlx_prefill_insert", None)
+                    request._vmlx_prefill_insert = None
+                    if (
+                        getattr(response, "prefill_usage", None) is None
+                        and isinstance(_insert, tuple)
+                    ):
+                        # The generator's own receipt (SingleBatchGenerator)
+                        # wins. Otherwise insert -> first sampled token: the
+                        # computed prompt tokens, their prefill and the first
+                        # sample, without lookup/restore or queueing.
+                        request._vmlx_prefill_usage = {
+                            "tokens": int(_insert[1]),
+                            "seconds": max(1e-9, time.perf_counter() - _insert[0]),
+                            "scope": "model_prefill_and_prompt_state",
+                            "path": "scheduler_first_token",
+                        }
                 if is_first_token and hasattr(request, "_schedule_time"):
                     _first_token_time = time.perf_counter()
                     ttft = _first_token_time - request._schedule_time
@@ -9600,7 +9629,10 @@ class Scheduler:
                 completion_tokens=request.num_output_tokens,
                 cached_tokens=request.cached_tokens,
                 cache_detail=_detail,
-                prefill_usage=getattr(response, "prefill_usage", None),
+                prefill_usage=(
+                    getattr(response, "prefill_usage", None)
+                    or getattr(request, "_vmlx_prefill_usage", None)
+                ),
                 logprobs=(
                     list(request.output_logprobs)
                     if request.sampling_params.logprobs

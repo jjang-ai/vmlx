@@ -73,6 +73,36 @@ export function summarizeServerDecodePasses(
   }
 }
 
+export interface PromptRateInput {
+  promptTokens?: number
+  cachedTokens?: number
+  ttftSeconds?: number
+}
+
+/**
+ * Cold pp/s when no engine receipt exists (remote servers, older engines): the
+ * uncached prompt over time to first token. Only for turns WITHOUT a cache hit;
+ * a hit's TTFT includes the restore, so a tiny tail over it reads as a slowdown.
+ */
+export function estimateColdPrefillTps({ promptTokens, cachedTokens, ttftSeconds }: PromptRateInput): string | undefined {
+  if (!Number.isFinite(promptTokens) || (promptTokens ?? 0) <= 0) return undefined
+  if (!Number.isFinite(ttftSeconds) || (ttftSeconds ?? 0) <= 0.001) return undefined
+  if ((cachedTokens ?? 0) > 0) return undefined
+  return ((promptTokens as number) / (ttftSeconds as number)).toFixed(1)
+}
+
+/**
+ * Cached pp/s (prefix-cache reuse indicator): the WHOLE prompt, restored tokens
+ * included, over time to first token. Shown only on a cache hit, next to the cold
+ * pp/s, so the reuse speedup is visible at a glance.
+ */
+export function calculateCachedPromptTps({ promptTokens, cachedTokens, ttftSeconds }: PromptRateInput): string | undefined {
+  if (!Number.isFinite(promptTokens) || (promptTokens ?? 0) <= 0) return undefined
+  if (!Number.isFinite(cachedTokens) || (cachedTokens ?? 0) <= 0) return undefined
+  if (!Number.isFinite(ttftSeconds) || (ttftSeconds ?? 0) <= 0.001) return undefined
+  return ((promptTokens as number) / (ttftSeconds as number)).toFixed(1)
+}
+
 /** Engine-measured model prefill, never prompt tokens divided by TTFT. */
 export function calculatePrefillTps({ prefillUsage }: PrefillTpsInput): string | undefined {
   if (!prefillUsage || typeof prefillUsage !== 'object') return undefined
