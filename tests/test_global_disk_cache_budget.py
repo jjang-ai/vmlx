@@ -311,14 +311,18 @@ def test_sqlite_sidecar_disappearing_during_discovery_is_ignored(
     sidecar = namespace / "block_index.db-shm"
     sidecar.write_bytes(b"transient")
     budget = GlobalDiskCacheBudget(root, 10_000_000)
-    original_resolve = Path.resolve
+    import vmlx_engine.global_disk_cache_budget as budget_module
 
-    def resolve_after_sidecar_cleanup(path: Path, *args, **kwargs) -> Path:
-        if path == sidecar:
+    original_lstat = os.lstat
+
+    # The discovery walk inspects each listed file with one lstat; the file
+    # vanishes between the directory listing and that inspection.
+    def lstat_after_sidecar_cleanup(path, *args, **kwargs):
+        if Path(path) == sidecar:
             sidecar.unlink(missing_ok=True)
-        return original_resolve(path, *args, **kwargs)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "resolve", resolve_after_sidecar_cleanup)
+    monkeypatch.setattr(budget_module.os, "lstat", lstat_after_sidecar_cleanup)
     try:
         result = budget.enforce(force=True)
         assert result.accounted is True
@@ -345,14 +349,16 @@ def test_same_named_nested_file_disappearance_remains_fail_closed(
     nested.parent.mkdir()
     nested.write_bytes(b"unknown")
     budget = GlobalDiskCacheBudget(root, 10_000_000)
-    original_resolve = Path.resolve
+    import vmlx_engine.global_disk_cache_budget as budget_module
 
-    def resolve_after_nested_cleanup(path: Path, *args, **kwargs) -> Path:
-        if path == nested:
+    original_lstat = os.lstat
+
+    def lstat_after_nested_cleanup(path, *args, **kwargs):
+        if Path(path) == nested:
             nested.unlink(missing_ok=True)
-        return original_resolve(path, *args, **kwargs)
+        return original_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "resolve", resolve_after_nested_cleanup)
+    monkeypatch.setattr(budget_module.os, "lstat", lstat_after_nested_cleanup)
     try:
         result = budget.enforce(force=True)
         assert result.accounted is False

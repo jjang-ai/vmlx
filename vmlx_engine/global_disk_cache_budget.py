@@ -1048,6 +1048,13 @@ class GlobalDiskCacheBudget:
         active_lease_ids = self._active_lease_ids_locked()
 
         all_files: set[Path] = set()
+        # lstat of every walked regular file, keyed by its canonical path. The
+        # walk starts at a resolved namespace and never descends into a
+        # symlinked directory, so a walked path is already canonical: one
+        # lstat proves it is a regular, non-symlink file inside the namespace.
+        # Index rows that name a walked file reuse it instead of re-resolving
+        # (realpath = one lstat per path component) and re-stat'ing it.
+        walked_stats: dict[Path, os.stat_result] = {}
         sqlite_transient_sidecars: set[Path] = set()
         for namespace in self._managed_namespace_dirs_locked():
             legacy_direct = bool(
@@ -1103,41 +1110,27 @@ class GlobalDiskCacheBudget:
                             }
                         ):
                             continue
-                        if path.is_symlink():
+                        try:
+                            resolved_stat = os.lstat(path)
+                        except FileNotFoundError as exc:
+                            if _is_sqlite_transient_sidecar(path, namespace):
+                                continue
+                            raise OSError(
+                                f"cannot inspect cache file {path}: {exc}"
+                            ) from exc
+                        except OSError as exc:
+                            raise OSError(
+                                f"cannot inspect cache file {path}: {exc}"
+                            ) from exc
+                        if stat.S_ISLNK(resolved_stat.st_mode):
                             raise OSError(f"refusing symlinked cache file: {path}")
-                        try:
-                            resolved = path.resolve(strict=True)
-                        except FileNotFoundError as exc:
-                            if _is_sqlite_transient_sidecar(path, namespace):
-                                continue
-                            raise OSError(
-                                f"cannot inspect cache file {path}: {exc}"
-                            ) from exc
-                        except OSError as exc:
-                            raise OSError(
-                                f"cannot inspect cache file {path}: {exc}"
-                            ) from exc
-                        if not resolved.is_relative_to(namespace):
-                            raise OSError(
-                                f"cache file escaped managed namespace: {path}"
-                            )
-                        try:
-                            resolved_stat = resolved.stat()
-                        except FileNotFoundError as exc:
-                            if _is_sqlite_transient_sidecar(path, namespace):
-                                continue
-                            raise OSError(
-                                f"cannot inspect cache file {path}: {exc}"
-                            ) from exc
-                        except OSError as exc:
-                            raise OSError(
-                                f"cannot inspect cache file {path}: {exc}"
-                            ) from exc
                         if not stat.S_ISREG(resolved_stat.st_mode):
                             raise OSError(
                                 f"cache file escaped managed namespace: {path}"
                             )
+                        resolved = path
                         all_files.add(resolved)
+                        walked_stats[resolved] = resolved_stat
                         if _is_sqlite_transient_sidecar(path, namespace):
                             sqlite_transient_sidecars.add(resolved)
 
@@ -1199,12 +1192,17 @@ class GlobalDiskCacheBudget:
                 relative = Path(str(file_name))
                 if relative.is_absolute() or ".." in relative.parts:
                     raise OSError(f"unsafe block index path in {database}")
-                resolved = self._safe_resolved_file(namespace / relative)
-                if resolved is None:
-                    continue
+                block_stat = walked_stats.get(namespace / relative)
+                if block_stat is not None:
+                    resolved = namespace / relative
+                else:
+                    resolved = self._safe_resolved_file(namespace / relative)
+                    if resolved is None:
+                        continue
                 referenced.add(resolved)
                 try:
-                    block_stat = resolved.stat()
+                    if block_stat is None:
+                        block_stat = resolved.stat()
                     size = block_stat.st_size
                 except OSError as exc:
                     raise OSError(f"cannot stat indexed block {resolved}: {exc}") from exc
