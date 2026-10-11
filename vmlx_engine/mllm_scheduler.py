@@ -145,6 +145,7 @@ from .utils.terminal_persistence import (
     log_admission_wait as _log_admission_wait,
     log_terminal_persistence_settled as _log_terminal_persistence_settled,
     strict_terminal_publish as _strict_terminal_publish,
+    sticky_prefill_usage as _sticky_prefill_usage,
     with_admission_wait as _with_admission_wait,
 )
 
@@ -5450,12 +5451,16 @@ class MLLMScheduler:
                     continue
                 queue = self.output_queues.get(req_output.request_id)
                 if queue is not None:
-                    if getattr(req_output, "prefill_usage", None) is not None:
-                        _admission_wait = self._admission_wait_map().get(req_output.request_id)
-                        if _admission_wait is not None:
-                            req_output.prefill_usage = _with_admission_wait(
-                                req_output.prefill_usage, _admission_wait
-                            )
+                    _admission_wait = self._admission_wait_map().get(req_output.request_id)
+                    if _admission_wait is not None:
+                        _receipts = self.__dict__.setdefault("_prefill_receipts", {})
+                        req_output.prefill_usage, _last = _sticky_prefill_usage(
+                            getattr(req_output, "prefill_usage", None),
+                            _admission_wait,
+                            _receipts.get(req_output.request_id),
+                        )
+                        if _last is not None:
+                            _receipts[req_output.request_id] = _last
                     try:
                         queue.put_nowait(req_output)
                     except asyncio.QueueFull:
@@ -6009,6 +6014,7 @@ class MLLMScheduler:
             # Cleanup queue — runs on normal exit AND GeneratorExit (client disconnect)
             getattr(self, "_stream_abort_outputs", {}).pop(request_id, None)
             self._admission_wait_map().pop(request_id, None)
+            self.__dict__.get("_prefill_receipts", {}).pop(request_id, None)
             if request_id in self.output_queues:
                 del self.output_queues[request_id]
             # If the request is still running (client disconnected mid-stream),

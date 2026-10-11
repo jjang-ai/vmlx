@@ -59,11 +59,34 @@ def with_admission_wait(prefill_usage, wait_s):
     that includes leftover persistence attributable instead of looking like
     slow prefill.
     """
-    if not isinstance(prefill_usage, dict) or wait_s is None:
+    if wait_s is None:
+        return prefill_usage
+    if prefill_usage is None:
+        # Lanes without an engine prefill receipt still report the wait. The
+        # distinct scope keeps every pp/s calculation (which requires the
+        # model_prefill_and_prompt_state scope) from using it.
+        return {"scope": "admission_only", "admission_wait_seconds": round(float(wait_s), 6)}
+    if not isinstance(prefill_usage, dict):
         return prefill_usage
     usage = dict(prefill_usage)
     usage["admission_wait_seconds"] = round(float(wait_s), 6)
     return usage
+
+
+def sticky_prefill_usage(prefill_usage, wait_s, last_receipt):
+    """Return ``(usage_to_attach, last_receipt)`` for one streamed output.
+
+    Servers keep the latest non-empty ``prefill_usage`` they see, so an output
+    without its own receipt must never carry an admission-only one after a
+    real receipt was published: that would erase the engine pp/s. Before any
+    real receipt exists, the admission-only receipt reports the wait.
+    """
+    if prefill_usage is not None:
+        annotated = with_admission_wait(prefill_usage, wait_s)
+        return annotated, annotated
+    if last_receipt is not None:
+        return last_receipt, last_receipt
+    return with_admission_wait(None, wait_s), None
 
 
 async def settle_terminal_persistence(receipt, request_id, on_settled, dispatched_at):

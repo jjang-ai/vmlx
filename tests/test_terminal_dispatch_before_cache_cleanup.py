@@ -591,3 +591,40 @@ def test_all_llm_terminal_response_paths_defer_clean_prompt_reprefill() -> None:
         assert f'"family": "{family}"' in source
     assert source.count('"mode": "paged"') == 4
     assert source.count('"mode": "object"') == 2
+
+
+def test_admission_wait_is_reported_even_without_a_prefill_receipt() -> None:
+    from vmlx_engine.utils.terminal_persistence import with_admission_wait
+
+    receipt = with_admission_wait(None, 0.4567891)
+    assert receipt == {"scope": "admission_only", "admission_wait_seconds": 0.456789}
+    # A real engine receipt keeps its own measurement and gains the wait.
+    usage = {"tokens": 10, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"}
+    assert with_admission_wait(usage, 0.1) == {**usage, "admission_wait_seconds": 0.1}
+    assert with_admission_wait(usage, None) is usage
+
+
+def test_llm_dispatch_attaches_admission_only_receipt() -> None:
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.output_queues = {"req": asyncio.Queue()}
+    scheduler._admission_waits_by_request = {"req": 0.25}
+    scheduler._dispatch_outputs(MLLMSchedulerOutput(outputs=[RequestOutput(request_id="req")]))
+    delivered = scheduler.output_queues["req"].get_nowait()
+    assert delivered.prefill_usage == {"scope": "admission_only", "admission_wait_seconds": 0.25}
+
+
+def test_later_outputs_keep_the_real_receipt_instead_of_admission_only() -> None:
+    """Servers keep the latest non-empty prefill_usage: a decode output after
+    the real receipt must not replace it with an admission-only one."""
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.output_queues = {"req": asyncio.Queue()}
+    scheduler._admission_waits_by_request = {"req": 0.2}
+    usage = {"tokens": 64, "seconds": 0.5, "scope": "model_prefill_and_prompt_state"}
+    scheduler._dispatch_outputs(MLLMSchedulerOutput(outputs=[RequestOutput(request_id="req")]))
+    scheduler._dispatch_outputs(MLLMSchedulerOutput(outputs=[RequestOutput(request_id="req", prefill_usage=usage)]))
+    scheduler._dispatch_outputs(MLLMSchedulerOutput(outputs=[RequestOutput(request_id="req")]))
+    q = scheduler.output_queues["req"]
+    before, real, after = q.get_nowait(), q.get_nowait(), q.get_nowait()
+    assert before.prefill_usage == {"scope": "admission_only", "admission_wait_seconds": 0.2}
+    assert real.prefill_usage == {**usage, "admission_wait_seconds": 0.2}
+    assert after.prefill_usage == real.prefill_usage

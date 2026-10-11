@@ -16,6 +16,7 @@ from .utils.terminal_persistence import (
     log_admission_wait as _log_admission_wait,
     log_terminal_persistence_settled as _log_terminal_persistence_settled,
     strict_terminal_publish as _strict_terminal_publish,
+    sticky_prefill_usage as _sticky_prefill_usage,
     with_admission_wait as _with_admission_wait,
 )
 import asyncio
@@ -254,12 +255,16 @@ class EngineCore:
                                 # Has a consumer — clear orphan tracking
                                 orphan_counts.pop(rid, None)
                                 orphan_first_seen.pop(rid, None)
-                                if req_output.prefill_usage is not None:
-                                    _admission_wait = self._admission_wait_map().get(rid)
-                                    if _admission_wait is not None:
-                                        req_output.prefill_usage = _with_admission_wait(
-                                            req_output.prefill_usage, _admission_wait
-                                        )
+                                _admission_wait = self._admission_wait_map().get(rid)
+                                if _admission_wait is not None:
+                                    _receipts = self.__dict__.setdefault("_prefill_receipts", {})
+                                    req_output.prefill_usage, _last = _sticky_prefill_usage(
+                                        req_output.prefill_usage,
+                                        _admission_wait,
+                                        _receipts.get(rid),
+                                    )
+                                    if _last is not None:
+                                        _receipts[rid] = _last
                                 # Optimized: skip stream_interval check when interval=1
                                 if use_simple_streaming:
                                     collector.put(req_output)
@@ -662,6 +667,7 @@ class EngineCore:
                 pass
         self._stream_states.pop(request_id, None)
         self._admission_wait_map().pop(request_id, None)
+        self.__dict__.get("_prefill_receipts", {}).pop(request_id, None)
         event = self._finished_events.pop(request_id, None)
         if event:
             event.set()
