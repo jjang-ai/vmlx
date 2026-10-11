@@ -2303,6 +2303,22 @@ def _mx_from_np_slice(view):
     return mx.array(np.ascontiguousarray(view))
 
 
+# np_sources encoding for BF16 positional layers: the NumPy mirror holds the raw
+# uint16 bits of the BF16 cache (zero-copy). The block store writes BF16 as the
+# same uint16 bits, so the stored bytes are unchanged.
+_BF16_BITS = "bf16_bits"
+
+
+def _mx_block_from_np_source(view, orig_dtype, encoding=None):
+    """Import one block slice of an np_sources mirror back into MLX at its model dtype."""
+    arr = _mx_from_np_slice(view)
+    if encoding == _BF16_BITS:
+        return arr.view(orig_dtype)
+    if orig_dtype is not None and arr.dtype != orig_dtype:
+        return arr.astype(orig_dtype)
+    return arr
+
+
 def _positional_layer_slice_bounds(
     layer_state, class_name, start_idx, end_idx, seq_len, existing_tokens=0,
 ):
@@ -2486,6 +2502,7 @@ def _numpy_block_slice(
         if idx in np_sources:
             np_k, np_v, *source_meta = np_sources[idx]
             orig_dtype = source_meta[0] if source_meta else None
+            encoding = source_meta[1] if len(source_meta) > 1 else None
             ndim = np_k.ndim
             if ndim == 4:
                 seq_len = np_k.shape[2]
@@ -2543,11 +2560,8 @@ def _numpy_block_slice(
                     block_slices.append(("rotating_kv_pending", cls))
                     continue
                 tk, tv, max_size, keep, offset, idx_state = terminal
-                tk = _mx_from_np_slice(tk)
-                tv = _mx_from_np_slice(tv)
-                if orig_dtype is not None and tk.dtype != orig_dtype:
-                    tk = tk.astype(orig_dtype)
-                    tv = tv.astype(orig_dtype)
+                tk = _mx_block_from_np_source(tk, orig_dtype, encoding)
+                tv = _mx_block_from_np_source(tv, orig_dtype, encoding)
                 block_slices.append((
                     "rotating_kv",
                     tk,
@@ -2579,11 +2593,8 @@ def _numpy_block_slice(
             # store loop, this reached ~159GB live Metal on an 11k-token
             # hybrid store (the disk-lane half of the machine-killer).
             if orig_dtype is not None:
-                ks = _mx_from_np_slice(ks)
-                vs = _mx_from_np_slice(vs)
-                if ks.dtype != orig_dtype:
-                    ks = ks.astype(orig_dtype)
-                    vs = vs.astype(orig_dtype)
+                ks = _mx_block_from_np_source(ks, orig_dtype, encoding)
+                vs = _mx_block_from_np_source(vs, orig_dtype, encoding)
             block_slices.append(("kv", ks, vs))
         else:
             # Cumulative / non-positional layer
@@ -5623,17 +5634,26 @@ class BlockAwarePrefixCache:
                             continue
                         if hasattr(keys, 'shape'):
                             k_np, v_np = keys, values
-                            # numpy doesn't support bfloat16 — cast through fp32
-                            # (NOT fp16, which silently clips). See the Gemma 4
-                            # multi-turn word-loop note above.
+                            encoding = None
+                            # NumPy has no bfloat16. Mirror BF16 as its raw
+                            # uint16 bits: a zero-copy view of the evaluated
+                            # cache buffer (never fp16, which clips). Block
+                            # slices are reinterpreted back to BF16 bit-exactly
+                            # by _mx_block_from_np_source(). This used to widen
+                            # the WHOLE cache to fp32 on every store -- one GPU
+                            # pass + sync per layer and a 2x host image, paid
+                            # again on each tool-continuation store even when it
+                            # adds one block.
                             if hasattr(k_np, 'dtype') and 'bfloat16' in str(k_np.dtype):
-                                k_np = k_np.astype(mx.float32)
-                                v_np = v_np.astype(mx.float32)
+                                k_np = k_np.view(mx.uint16)
+                                v_np = v_np.view(mx.uint16)
                                 mx.eval(k_np, v_np)
+                                encoding = _BF16_BITS
                             np_sources[idx] = (
                                 _readonly_numpy_buffer_view(k_np),
                                 _readonly_numpy_buffer_view(v_np),
                                 keys.dtype,
+                                encoding,
                             )
                     except Exception as _npe:
                         logger.debug(f"np_sources skip layer {idx}: {_npe}")
@@ -6734,7 +6754,8 @@ class BlockAwarePrefixCache:
                             if np_sources is not None and layer_idx in np_sources:
                                 import numpy as np
 
-                                np_k, np_v, orig_dtype = np_sources[layer_idx]
+                                np_k, np_v, orig_dtype, *src_rest = np_sources[layer_idx]
+                                encoding = src_rest[0] if src_rest else None
                                 if is_last_block:
                                     terminal = _rotating_terminal_window(
                                         np_k,
@@ -6754,11 +6775,8 @@ class BlockAwarePrefixCache:
                                         concatenate=np.concatenate,
                                     )
                                 tk, tv, max_size, keep, offset, idx_state = terminal
-                                tk = _mx_from_np_slice(tk)
-                                tv = _mx_from_np_slice(tv)
-                                if tk.dtype != orig_dtype:
-                                    tk = tk.astype(orig_dtype)
-                                    tv = tv.astype(orig_dtype)
+                                tk = _mx_block_from_np_source(tk, orig_dtype, encoding)
+                                tv = _mx_block_from_np_source(tv, orig_dtype, encoding)
                             else:
                                 if is_last_block:
                                     terminal = _rotating_terminal_window(
@@ -6831,17 +6849,14 @@ class BlockAwarePrefixCache:
                     # This avoids creating lazy MLX slices of evaluated parent
                     # arrays, which corrupts Metal command buffer state.
                     if np_sources is not None and layer_idx in np_sources:
-                        np_k, np_v, orig_dtype = np_sources[layer_idx]
+                        np_k, np_v, orig_dtype, *src_rest = np_sources[layer_idx]
+                        encoding = src_rest[0] if src_rest else None
                         if ndim == 4:
-                            ks = _mx_from_np_slice(np_k[:, :, slice_start:actual_end, :])
-                            vs = _mx_from_np_slice(np_v[:, :, slice_start:actual_end, :])
+                            ks = _mx_block_from_np_source(np_k[:, :, slice_start:actual_end, :], orig_dtype, encoding)
+                            vs = _mx_block_from_np_source(np_v[:, :, slice_start:actual_end, :], orig_dtype, encoding)
                         else:
-                            ks = _mx_from_np_slice(np_k[:, slice_start:actual_end, :])
-                            vs = _mx_from_np_slice(np_v[:, slice_start:actual_end, :])
-                        # Restore original dtype (e.g. bfloat16 → float16 → bfloat16)
-                        if ks.dtype != orig_dtype:
-                            ks = ks.astype(orig_dtype)
-                            vs = vs.astype(orig_dtype)
+                            ks = _mx_block_from_np_source(np_k[:, slice_start:actual_end, :], orig_dtype, encoding)
+                            vs = _mx_block_from_np_source(np_v[:, slice_start:actual_end, :], orig_dtype, encoding)
                     elif ndim == 4:
                         ks = keys[:, :, slice_start:actual_end, :]
                         vs = values[:, :, slice_start:actual_end, :]

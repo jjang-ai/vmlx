@@ -1,4 +1,9 @@
-"""Full-store conversion bridges must end before writer admission cleanup."""
+"""Full-store NumPy mirrors: no fp32 bridge for BF16, nothing outlives cleanup, bytes exact.
+
+BF16 positional sources used to be widened to an fp32 "bridge" copy of the whole
+cache on every store so NumPy could hold them. They are now mirrored as their raw
+uint16 bits (a zero-copy view), so no bridge exists at all; the stored payload
+must still round-trip bit-exactly."""
 
 import weakref
 
@@ -20,6 +25,7 @@ def test_full_store_releases_conversion_bridges_before_cleanup(tmp_path, monkeyp
     data = [{"state": pair, "meta_state": (256,), "class_name": "KVCache"}
             for pair in pairs]
     bridges = []
+    bits_views = []
     observations = []
     original_view = prefix_cache._readonly_numpy_buffer_view
     original_finish = prefix_cache._cleanup_phase_finish
@@ -27,6 +33,8 @@ def test_full_store_releases_conversion_bridges_before_cleanup(tmp_path, monkeyp
     def view(array):
         if dtype == mx.bfloat16 and array.dtype == mx.float32:
             bridges.append(weakref.ref(array))
+        if dtype == mx.bfloat16 and array.dtype == mx.uint16:
+            bits_views.append(array.shape)
         return original_view(array)
 
     def finish(start, site, request_id, succeeded, collected=None):
@@ -51,7 +59,8 @@ def test_full_store_releases_conversion_bridges_before_cleanup(tmp_path, monkeyp
     try:
         assert cache.store_cache("bridge-lifetime", list(range(256)), data) is not None
         assert observations == [0], "Conversion bridges outlived the full-cache views"
-        assert len(bridges) == (4 if dtype == mx.bfloat16 else 0)
+        assert len(bridges) == 0, "BF16 store built an fp32 bridge copy of the cache"
+        assert len(bits_views) == (4 if dtype == mx.bfloat16 else 0)
         assert len(hashes) == 1
         restored = store.read_block(hashes[0])
         assert restored is not None and len(restored) == 2
