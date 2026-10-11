@@ -745,6 +745,17 @@ class BlockDiskStore:
         self._verified_plain_payloads: Dict[str, Tuple[int, int, int, int]] = {}
         self._verified_plain_lock = threading.Lock()
         self._verified_plain_max = 65536
+        # Per-file results of the read-time checks that depend only on the
+        # immutable payload: hash -> (_stat_identity, header_ok, rotating
+        # offsets or None if unknown). A tool loop re-restores the same prefix
+        # blocks every turn; re-validating each header and re-probing each
+        # file's rotating windows cost ~70 ms per 32k restore. Any rewrite
+        # (rename) changes the identity and is checked again; the post-load
+        # validator still runs on every read.
+        self._payload_check_memo: Dict[
+            str, Tuple[Tuple[int, int, int, int], bool, Optional[Dict[int, int]]]
+        ] = {}
+        self._payload_check_lock = threading.Lock()
         # LRU touches (one per block read) are recorded here and applied by the
         # background writer in one transaction (see _queue_access_update).
         self._access_pending: Dict[str, List[float]] = {}
@@ -1188,6 +1199,27 @@ class BlockDiskStore:
         with self._verified_plain_lock:
             self._verified_plain_payloads.pop(hash_hex, None)
 
+    def _note_payload_checks(
+        self,
+        hash_hex: str,
+        identity: Tuple[int, int, int, int],
+        rotating_offsets: Optional[Dict[int, int]],
+    ) -> None:
+        with self._payload_check_lock:
+            memo = self._payload_check_memo
+            memo.pop(hash_hex, None)
+            memo[hash_hex] = (
+                identity,
+                True,
+                dict(rotating_offsets) if rotating_offsets is not None else None,
+            )
+            while len(memo) > self._verified_plain_max:
+                memo.pop(next(iter(memo)))
+
+    def _forget_payload_checks(self, hash_hex: str) -> None:
+        with self._payload_check_lock:
+            self._payload_check_memo.pop(hash_hex, None)
+
     def _evict_incompatible_tq_block(
         self,
         hash_hex: str,
@@ -1440,8 +1472,13 @@ class BlockDiskStore:
 
         file_path = self.cache_dir / file_name
 
-        if not file_path.exists():
+        try:
+            identity = _payload_identity(file_path)
+        except OSError:
+            identity = None
+        if identity is None:
             # Stale index entry — queue cleanup to background writer
+            self._forget_payload_checks(hash_hex)
             self._queue_index_cleanup(hash_hex)
             with self._stats_lock:
                 self.disk_misses += 1
@@ -1464,7 +1501,13 @@ class BlockDiskStore:
             except Exception:
                 reject_safetensors_or_warn = None
                 reject_or_warn = None
-            if reject_safetensors_or_warn is not None:
+            with self._payload_check_lock:
+                memo = self._payload_check_memo.get(hash_hex)
+            if memo is not None and memo[0] != identity:
+                memo = None
+            if reject_safetensors_or_warn is not None and not (
+                memo is not None and memo[1]
+            ):
                 if not reject_safetensors_or_warn(
                     str(file_path),
                     expected_num_layers=getattr(self, "_expected_num_layers", None),
@@ -1488,6 +1531,7 @@ class BlockDiskStore:
                         return None
                     # Queue index + file cleanup under the background writer's
                     # exclusive aggregate mutation transaction.
+                    self._forget_payload_checks(hash_hex)
                     self._queue_index_cleanup(hash_hex)
                     with self._stats_lock:
                         self.disk_misses += 1
@@ -1496,11 +1540,25 @@ class BlockDiskStore:
 
             omitted_rotating_layers: set[int] = set()
             selective_payload = None
-            if rotating_target_offset is not None:
+            rotating_offsets = memo[2] if memo is not None else None
+            if rotating_target_offset is not None and not (
+                # Known windows all at the target offset (or no rotating layer
+                # at all): the selective reader would omit nothing and return
+                # None, so skip re-opening the file to find that out.
+                rotating_offsets is not None
+                and all(
+                    offset == int(rotating_target_offset)
+                    for offset in rotating_offsets.values()
+                )
+            ):
+                probe: Dict[str, Any] = {}
                 selective_payload = _load_reconstruction_payload_without_stale_rotating(
                     file_path,
                     target_offset=int(rotating_target_offset),
+                    probe=probe,
                 )
+                if "rotating_offsets" in probe:
+                    rotating_offsets = probe["rotating_offsets"]
             if selective_payload is None:
                 data = mx.load(str(file_path))
             else:
@@ -1543,6 +1601,7 @@ class BlockDiskStore:
                     source=f"L2-disk:{hash_hex[:12]}",
                 ):
                     # Reject + queue cleanup so we don't try this entry again.
+                    self._forget_payload_checks(hash_hex)
                     self._queue_index_cleanup(hash_hex)
                     with self._stats_lock:
                         self.disk_misses += 1
@@ -1589,6 +1648,7 @@ class BlockDiskStore:
                 logger.debug(
                     f"Disk cache hit: {hash_hex[:12]} ({dtype}, {len(cache_data)} layers)"
                 )
+            self._note_payload_checks(hash_hex, identity, rotating_offsets)
             return cache_data
         except Exception as e:
             if self._read_failure_is_transient(file_path, e):
@@ -1604,6 +1664,7 @@ class BlockDiskStore:
                 return None
             logger.warning(f"Failed to load block {hash_hex[:12]}: {e}")
             # Corrupt file — queue removal
+            self._forget_payload_checks(hash_hex)
             self._queue_index_cleanup(hash_hex)
             with self._stats_lock:
                 self.disk_misses += 1
@@ -5061,6 +5122,7 @@ def _load_reconstruction_payload_without_stale_rotating(
     file_path: Path,
     *,
     target_offset: int,
+    probe: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[Dict[str, Any], set[int]]]:
     """Load a mixed-SWA block while omitting unusable rotating checkpoints.
 
@@ -5112,6 +5174,8 @@ def _load_reconstruction_payload_without_stale_rotating(
                 except (TypeError, ValueError):
                     return None
             if not rotating_layers:
+                if probe is not None:
+                    probe["rotating_offsets"] = {}
                 return None
 
             offset_arrays: Dict[int, Any] = {}
@@ -5129,6 +5193,10 @@ def _load_reconstruction_payload_without_stale_rotating(
                 if int(offset_array.reshape(-1)[0]) != int(target_offset):
                     omitted_layers.add(layer_idx)
 
+            if probe is not None:
+                probe["rotating_offsets"] = {
+                    idx: int(arr.reshape(-1)[0]) for idx, arr in offset_arrays.items()
+                }
             if not omitted_layers:
                 return None
 
@@ -5184,8 +5252,10 @@ def _load_reconstruction_payload_without_stale_rotating(
                     name: declared_dtypes[name]
                     for name in selected if name != meta_key
                 }
+                import numpy as np
+
                 selected[meta_key] = mx.array(
-                    list(json.dumps(decoded).encode("utf-8")), dtype=mx.uint8
+                    np.frombuffer(json.dumps(decoded).encode("utf-8"), dtype=np.uint8)
                 )
 
         return selected, omitted_layers
