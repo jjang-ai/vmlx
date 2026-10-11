@@ -716,6 +716,10 @@ class BlockDiskStore:
         self._verified_plain_payloads: Dict[str, Tuple[int, int, int, int]] = {}
         self._verified_plain_lock = threading.Lock()
         self._verified_plain_max = 65536
+        # LRU touches (one per block read) are recorded here and applied by the
+        # background writer in one transaction (see _queue_access_update).
+        self._access_pending: Dict[str, List[float]] = {}
+        self._access_lock = threading.Lock()
 
         # SQLite index
         self._db_path = self.cache_dir / "block_index.db"
@@ -1583,8 +1587,60 @@ class BlockDiskStore:
         return False
 
     def _queue_access_update(self, hash_hex: str) -> None:
-        """Queue an access time update for the background writer."""
-        self._try_enqueue_write_item(("__access__", hash_hex, time.time()))
+        """Record an LRU touch for the background writer (best-effort freshness).
+
+        A long-prefix restore touches every block it reads. Enqueueing one item
+        per touch woke the writer for each and applied each as its own exclusive
+        lock + UPDATE + COMMIT (~1 ms of writer time per block, competing with
+        the restoring thread for the GIL). Touches now only update this table
+        (latest timestamp + count per hash). The writer applies the whole table
+        in one transaction inside every batch it processes, on its idle wakeup
+        (<= 0.2 s) and before it exits. No queue item, so a touch can never
+        delay or reorder real work (cleanups, fences, writes).
+        """
+        now = time.time()
+        with self._access_lock:
+            record = self._access_pending.get(hash_hex)
+            if record is None:
+                self._access_pending[hash_hex] = [now, 1]
+            else:
+                record[0] = now
+                record[1] += 1
+
+    def _take_pending_access_rows(self) -> List[Tuple[float, int, str]]:
+        with self._access_lock:
+            pending, self._access_pending = self._access_pending, {}
+        return [(record[0], int(record[1]), hash_hex) for hash_hex, record in pending.items()]
+
+    _ACCESS_UPDATE_SQL = (
+        "UPDATE blocks SET last_accessed = ?, access_count = access_count + ? "
+        "WHERE block_hash = ?"
+    )
+
+    def _flush_pending_access(self, write_conn: Optional[sqlite3.Connection]) -> None:
+        """Writer thread only: apply recorded LRU touches outside any batch."""
+        if write_conn is None:
+            return
+        with self._access_lock:
+            if not self._access_pending:
+                return
+        rows = self._take_pending_access_rows()
+        try:
+            with self.global_budget.exclusive_mutation_guard() as locked:
+                if not locked:
+                    return
+                write_conn.executemany(self._ACCESS_UPDATE_SQL, rows)
+                write_conn.commit()
+        except Exception as access_error:  # noqa: BLE001 - LRU freshness only
+            logger.warning(
+                "Background writer access update failed (%d rows): %s",
+                len(rows),
+                access_error,
+            )
+            try:
+                write_conn.rollback()
+            except Exception:
+                pass
 
     def _queue_index_cleanup(self, hash_hex: str) -> None:
         """Queue a stale index entry cleanup for the background writer."""
@@ -2975,6 +3031,8 @@ class BlockDiskStore:
                     # Idle: every enqueued write has been processed and its
                     # fence settled, so an owed periodic budget rescan runs
                     # here, off every request's terminal durability barrier.
+                    # Recorded LRU touches are applied here too (<= 0.2 s old).
+                    self._flush_pending_access(write_conn)
                     self._run_deferred_budget_reconcile()
                     continue
 
@@ -2984,6 +3042,7 @@ class BlockDiskStore:
                         batch.append(self._write_queue.get_nowait())
                     except queue.Empty:
                         break
+
                 # Queue capacity is available as soon as items are dequeued;
                 # do not make bounded native producers wait for the entire
                 # serialization/publication batch to finish before retrying.
@@ -3024,7 +3083,10 @@ class BlockDiskStore:
                     item = None
         finally:
             if write_conn is not None:
-                write_conn.close()
+                try:
+                    self._flush_pending_access(write_conn)
+                finally:
+                    write_conn.close()
 
     _MAINTENANCE_QUIET_SECONDS = 1.0
 
@@ -3262,6 +3324,7 @@ class BlockDiskStore:
                     write_conn,
                     terminal_fences,
                 )
+                access_rows: List[Tuple[float, int, str]] = []
                 for idx, item in enumerate(batch):
                     if not item:
                         continue
@@ -3269,7 +3332,8 @@ class BlockDiskStore:
                     try:
                         if item[0] == "__access__":
                             _, hash_hex, ts = item
-                            self._update_access(write_conn, hash_hex, ts)
+                            if hash_hex:
+                                access_rows.append((ts, 1, hash_hex))
                         elif item[0] == "__cleanup__":
                             _, hash_hex, _ = item
                             net_payload_bytes -= self._cleanup_entry(
@@ -3392,6 +3456,27 @@ class BlockDiskStore:
                         # Drop loop references before eviction/fence accounting.
                         payload = None
                         item = None
+
+                access_rows.extend(self._take_pending_access_rows())
+                if access_rows:
+                    # One transaction for every LRU touch in the batch (same
+                    # rows, latest timestamps and total access counts as one
+                    # UPDATE+COMMIT per touch, which cost ~1 ms each on the
+                    # writer thread and competed with the restoring thread).
+                    try:
+                        write_conn.executemany(self._ACCESS_UPDATE_SQL, access_rows)
+                        write_conn.commit()
+                    except Exception as access_error:  # noqa: BLE001 - LRU freshness only
+                        logger.warning(
+                            "Background writer access update failed (%d rows): %s",
+                            len(access_rows),
+                            access_error,
+                        )
+                        try:
+                            write_conn.rollback()
+                        except Exception:
+                            pass
+                    access_rows = []
 
                 # A fence control sentinel may be deferred when the bounded
                 # data FIFO is full. Finalize it from the writer only after
@@ -4899,9 +4984,13 @@ def _serialize_block(
     # misses because _deserialize_block returns [] and the block is
     # treated as corrupt + cleanup-queued.
     if meta:
+        import numpy as np
+
         meta_bytes = json.dumps(meta).encode("utf-8")
+        # np.frombuffer, not list(meta_bytes): the metadata is ~6-7 KB per
+        # block and a Python int per byte cost ~0.3 ms per block on every store.
         tensors["__vmlx_block_meta__"] = mx.array(
-            list(meta_bytes), dtype=mx.uint8
+            np.frombuffer(meta_bytes, dtype=np.uint8)
         )
 
     num_layers = len(cache_data) if num_layers_with_data else 0
@@ -5071,7 +5160,15 @@ def _deserialize_block(
         meta_arr = data.get("__metadata__")
     if meta_arr is not None:
         try:
+            # Zero-copy view of the evaluated uint8 tensor. bytes(arr.tolist())
+            # built one Python int per byte (~6-7 KB per block): ~30 % of a
+            # long-prefix restore (512 blocks at 32k).
+            import numpy as np
+
+            meta_bytes = np.asarray(meta_arr).tobytes()
+        except Exception:
             meta_bytes = bytes(meta_arr.tolist())
+        try:
             meta = json.loads(meta_bytes.decode("utf-8"))
         except Exception:
             pass
