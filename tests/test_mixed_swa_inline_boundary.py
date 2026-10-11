@@ -284,3 +284,15 @@ def test_verify_mode_compares_against_a_real_reprefill(monkeypatch, caplog):
         out = scheduler._assemble_inline_mixed_swa_boundary("r", deferred, list(range(11)), "paged")
     assert out is not None
     assert "MIXED_SWA_INLINE_VERIFY request=r boundary=11 reference=full DIFF" in caplog.text
+
+
+def test_exact_n1_hit_logs_restored_boundary_not_a_stale_reason(caplog):
+    scheduler = _scheduler()
+    live, _ = _live_and_capture()
+    request = SimpleNamespace(request_id="r", cached_tokens=11)
+    deferred = {"boundary_capture": None, "live_cache": live}
+    with caplog.at_level("INFO"):
+        out = scheduler._assemble_inline_mixed_swa_boundary("r", deferred, list(range(11)), "paged", request=request)
+    assert out is None
+    assert "already restored from the prefix cache (cached=11 of 11 key tokens)" in caplog.text
+    assert "(captured)" not in caplog.text

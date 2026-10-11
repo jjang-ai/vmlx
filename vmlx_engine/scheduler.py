@@ -10525,16 +10525,24 @@ class Scheduler:
         live_cache = deferred.pop("live_cache", None)
         if capture is None or not live_cache:
             if capture is None and live_cache:
-                logger.info(
-                    "Mixed-SWA inline boundary not available for %s: no "
-                    "generator capture (%s)",
-                    request_id,
-                    getattr(
-                        getattr(self, "batch_generator", None),
-                        "mixed_swa_boundary_last_reason",
-                        "capture disabled",
-                    ),
-                )
+                cached = int(getattr(request, "cached_tokens", 0) or 0) if request is not None else 0
+                if cached >= len(key_tokens):
+                    # Exact N-1 hit: no N-1 prefill ran, so there was nothing
+                    # to capture; the checkpoint resume below has no prefill work.
+                    logger.info(
+                        "Mixed-SWA N-1 boundary for %s already restored from the "
+                        "prefix cache (cached=%d of %d key tokens); no capture needed",
+                        request_id,
+                        cached,
+                        len(key_tokens),
+                    )
+                else:
+                    logger.info(
+                        "Mixed-SWA inline boundary not available for %s: the "
+                        "generator did not capture this request (capture disabled "
+                        "or declined; see mixed_swa_boundary_last_reason)",
+                        request_id,
+                    )
             return None
         from .utils.mixed_swa_boundary import (
             compare_boundary_caches,
