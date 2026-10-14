@@ -55,8 +55,12 @@ class _TinyModel:
 class _TinyTokenizer:
     clean_up_tokenization_spaces = False
 
+    def encode(self, text, add_special_tokens=False):
+        # Keep generated token IDs readable while supporting text probes.
+        return [int(char) if char in "0123456789" else ord(char) for char in text]
+
     def decode(self, tokens):
-        return "".join(str(int(t)) for t in tokens)
+        return "".join(str(int(t)) if 0 <= int(t) <= 9 else chr(int(t)) for t in tokens)
 
 
 class TestSingleActiveBatchGenerator:
@@ -300,6 +304,43 @@ class TestSingleActiveBatchGenerator:
 
         assert prompt_responses[0].token == 3
         assert prompt_responses[0].finish_reason == "stop"
+
+    def test_single_active_generator_finishes_on_multi_token_stop(self):
+        from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+        generator = SingleBatchGenerator(
+            model=_TinyModel(), max_tokens=8, stop_tokens=[(3, 3)]
+        )
+        generator.insert([[1, 2]])
+
+        prompt_responses, _ = generator.next()
+        assert prompt_responses[0].finish_reason is None
+        _, generated = generator.next()
+        assert generated[0].finish_reason == "stop"
+        assert generated[0].match_sequence == (3, 3)
+        assert generator.next() == ([], [])
+
+    def test_single_active_generator_preserves_reasoning_and_tool_states(self):
+        from vmlx_engine.state_machine import SequenceStateMachine
+        from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+        state_machine = SequenceStateMachine({
+            "normal": [([3], "reasoning")],
+            "reasoning": [([3], "tool")],
+            "tool": [([3], None)],
+        })
+        generator = SingleBatchGenerator(model=_TinyModel(), max_tokens=8)
+        generator.insert([[1, 2]], state_machines=[state_machine])
+
+        prompt_responses, _ = generator.next()
+        assert prompt_responses[0].current_state == "reasoning"
+        assert prompt_responses[0].finish_reason is None
+        _, generated = generator.next()
+        assert generated[0].current_state == "tool"
+        assert generated[0].finish_reason is None
+        _, generated = generator.next()
+        assert generated[0].current_state is None
+        assert generated[0].finish_reason == "stop"
 
     def test_scheduler_step_uses_single_active_generator_end_to_end(self):
         request = Request(
