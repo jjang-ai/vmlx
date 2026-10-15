@@ -53,3 +53,18 @@ def test_short_caches_and_wide_calls_keep_the_existing_route():
     assert M._flash_decode(q, k, v, SCALE, None, None) is None        # one row under 32k keys
     q, k, v = _qkv(5, 8192, 4)
     assert M._flash_decode(q, k, v, SCALE, "causal", None) is None    # 5+ rows: grouped / NAX paths
+
+
+def test_fused_sorted_combine_matches_the_batched_matmul():
+    from vmlx_engine.metal.moe_combine import sorted_combine
+
+    for T in (2047, 64):
+        k, D = 8, 4096
+        idx = mx.random.randint(0, 256, (T, k), key=mx.random.key(T)).astype(mx.int32).reshape(-1)
+        order = mx.argsort(idx)
+        w2 = mx.random.uniform(shape=(T, k), key=mx.random.key(T + 1)).astype(mx.float32)
+        y_s = (0.1 * mx.random.normal((T * k, D), key=mx.random.key(T + 2))).astype(mx.bfloat16)
+        ref = (w2[:, None, :] @ y_s[mx.argsort(order)].reshape(T, k, -1).astype(mx.float32))[:, 0, :]
+        out = sorted_combine(y_s, order, w2, mx.float32)
+        assert out is not None and out.shape == (T, D) and out.dtype == mx.float32
+        assert (mx.abs(out - ref).max() / mx.abs(ref).max()).item() < 1e-6

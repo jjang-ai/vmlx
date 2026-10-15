@@ -222,6 +222,14 @@ class JTMixedSwitchGLU(nn.Module):
                 y_s = K.gather_qmm_expert_sorted(hr, d.tq2_packed, d.tq2_scales, idx_s, d.bits, plan)
             else:
                 y_s = K.gather_qmm_sorted(hr, d.tq2_packed, d.tq2_scales, d._cb, idx_s, d.bits)
+        if getattr(self, "_fused_combine", False) and os.environ.get("JANGT_FUSED_COMBINE", "1") != "0":
+            # opt-in per model (MiMo-V2.6 JANGHT sets it at build): one kernel gathers each token's k rows through the
+            # inverse permutation, weights and sums them in fp32 (metal/moe_combine.py): 2.9 -> 0.68 ms per 2048-token
+            # MiMo layer, rel 1e-7 vs the batched matmul below. Other JANGT models keep the batched matmul.
+            from vmlx_engine.metal.moe_combine import sorted_combine
+            y = sorted_combine(y_s, order, w2, mx.float32)
+            if y is not None:
+                return y
         if BMM_COMBINE:
             # unsort in the producer dtype (bf16 from JANGH down: half the gather bytes), then the routing-weighted sum
             # as ONE fp32 batched (1 x k) @ (k x D) matmul instead of broadcast-multiply + reduce: 3.6 -> 2.1 ms per

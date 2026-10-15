@@ -71,3 +71,17 @@ def test_expert_tiles_match_row_tiles(dn_mode, n_out, T, monkeypatch):
         h32 = _prefill(m, x, idx, w, monkeypatch, tiles=True, h32=True)
         # H32 epilogue: bf16 store, fp32 transform, bf16 store, as h32_rows on the stored activations
         assert np.max(np.abs(h32 - ref)) <= 1e-5 * scale
+
+
+@pytest.mark.parametrize("dn_mode", ["jangt", "jangh"])
+@pytest.mark.parametrize("T", [37, 200])
+def test_fused_combine_opt_in_equals_the_batched_matmul(dn_mode, T, monkeypatch):
+    """MiMo-V2.6 JANGHT opts its switches into metal/moe_combine.sorted_combine; the result must match the batched
+    matmul combine (fp32 class: only the k-term summation order may differ). Modules without the flag are untouched."""
+    m = _module(dn_mode, 3, 11)
+    x, idx, w = _inputs(T, 12)
+    base = _prefill(m, x, idx, w, monkeypatch, True, True)
+    object.__setattr__(m, "_fused_combine", True)
+    fused = _prefill(m, x, idx, w, monkeypatch, True, True)
+    scale = float(np.abs(base).max())
+    assert scale > 0 and float(np.abs(fused - base).max()) <= 1e-6 * scale

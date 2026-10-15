@@ -320,6 +320,8 @@ def build_mimo_v26_janght_model(bundle: str | Path):
     for layer in model.model.layers:
         if isinstance(layer.mlp, T.MoE):
             layer.mlp.__class__ = moe_cls
+            # fused routed combine in the sorted prefill (jangt/switch.py, metal/moe_combine.py); MiMo-only opt-in
+            object.__setattr__(layer.mlp.switch_mlp, "_fused_combine", True)
         layer.self_attn.__class__ = attn_cls
         if layer.self_attn.is_swa:
             layer.self_attn._window = int(args.sliding_window)
