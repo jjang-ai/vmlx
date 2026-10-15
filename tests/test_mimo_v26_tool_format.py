@@ -47,3 +47,17 @@ def test_parser_still_prefers_the_parameter_form():
     text = "<tool_call><function=lookup_inventory><parameter=item>amber-1-Z</parameter></function></tool_call>"
     result = parser.extract_tool_calls(text, None)
     assert json.loads(result.tool_calls[0]["arguments"]) == {"item": "amber-1-Z"}
+
+
+def test_chat_entry_points_keep_the_gpu_awake():
+    """SimpleEngine / BatchedEngine chat + stream_chat touch the GPU keep-alive (it was only touched by generate /
+    stream_generate, so every chat turn after >= 1.5 s idle paid the 0.65-1.25 s wake penalty on SimpleEngine lanes:
+    MiMo DFlash measured follow-up TTFT 1.03-1.37 s after 6 s idle vs 0.25 s back to back, allocator release on or off)."""
+    import inspect
+
+    from vmlx_engine.engine.batched import BatchedEngine
+    from vmlx_engine.engine.simple import SimpleEngine
+
+    for cls in (SimpleEngine, BatchedEngine):
+        for name in ("chat", "stream_chat"):
+            assert "_gpu_keepalive_touch()" in inspect.getsource(getattr(cls, name)), (cls.__name__, name)

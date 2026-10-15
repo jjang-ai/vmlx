@@ -2994,6 +2994,7 @@ class BatchedEngine(BaseEngine):
         Returns:
             GenerationOutput with assistant response
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py): chat routes too
         if not self._loaded:
             await self.start()
 
@@ -3182,6 +3183,7 @@ class BatchedEngine(BaseEngine):
         Yields:
             GenerationOutput with incremental text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py): chat routes too
         if not self._loaded:
             await self.start()
 

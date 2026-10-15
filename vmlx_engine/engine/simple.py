@@ -985,6 +985,7 @@ class SimpleEngine(BaseEngine):
         Returns:
             GenerationOutput with assistant response
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py): chat routes too
         if not self._loaded:
             await self.start()
 
@@ -1252,6 +1253,7 @@ class SimpleEngine(BaseEngine):
         Yields:
             GenerationOutput with incremental text
         """
+        _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py): chat routes too
         if not self._loaded:
             await self.start()
         # SimpleEngine has no prefix cache — eat the bypass kwarg so it
