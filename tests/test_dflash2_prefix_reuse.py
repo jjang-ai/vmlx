@@ -365,6 +365,30 @@ def test_system_end_cut_marks_the_first_tag_after_a_system_message():
     assert _system_end_cut(Tok(), [900, 11, 70, 901, 900, 11, 5, 901], 0) is None   # nothing after the systems
 
 
+def test_system_block_cuts_snapshot_each_leading_system_block():
+    """MiMo lanes snapshot after the tools block AND after the system prompt: a turn whose system prompt changed
+    (the app's differs between settings) still restores the tools block."""
+    from vmlx_engine.dflash2_runtime import _system_block_cuts
+    from vmlx_engine.dspark import session as dsession
+
+    class Tok:
+        def convert_tokens_to_ids(self, t):
+            return {"<|im_start|>": 900, "<|im_end|>": 901}.get(t, -1)
+
+        def encode(self, text, add_special_tokens=False):
+            return {"system": [11], "assistant": [14]}.get(text, [99])
+
+    two_systems = [900, 11, 70, 71, 901, 900, 11, 5, 6, 901, 900, 12, 8, 901, 900, 14]
+    assert _system_block_cuts(Tok(), two_systems, 0) == [5, 10]
+    assert _system_block_cuts(Tok(), two_systems, 5) == [10]           # the tools block is already restored
+    assert _system_block_cuts(Tok(), two_systems, 10) == []
+    one_system = [900, 11, 5, 6, 7, 901, 900, 12, 8, 901, 900, 14]
+    assert _system_block_cuts(Tok(), one_system, 0) == [6]
+    if dsession.reuse_enabled():
+        kinds = dsession.snapshot_cuts(Tok(), two_systems, 0)
+        assert [c for k, c in kinds if k == "system"] == [5, 10]
+
+
 def test_full_undo_rollback_restores_the_forward_start_on_mlx_vlm_targets():
     # An AR burst that launched one step past EOS rolls back with accepted=-1 (_checkpoint_correction(1, 0)).
     # mlx_vlm's rollback_speculative_cache would replay a zero-row GDN update whose lazy state fails at eval; the

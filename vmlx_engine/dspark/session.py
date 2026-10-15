@@ -69,16 +69,15 @@ def attach_ssd(target_path: str, drafter_path: str) -> None:
 
 
 def snapshot_cuts(tokenizer: Any, prompt: list, cache_len: int) -> list:
-    """[(kind, cut)] for this prompt: end of the system message, then before the last assistant generation tag."""
-    from ..dflash2_runtime import _assistant_tag_cut, _system_end_cut
+    """[(kind, cut)] for this prompt: the end of each leading system block (dflash2_runtime._system_block_cuts), then
+    before the last assistant generation tag."""
+    from ..dflash2_runtime import _assistant_tag_cut, _system_block_cuts
 
     if not reuse_enabled():
         return []
     boundary = _assistant_tag_cut(tokenizer, prompt, cache_len)
-    system = _system_end_cut(tokenizer, prompt, cache_len)
-    if system is not None and boundary is not None and system >= boundary:
-        system = None
-    return [(k, c) for k, c in (("system", system), ("boundary", boundary)) if c is not None]
+    systems = [c for c in _system_block_cuts(tokenizer, prompt, cache_len) if boundary is None or c < boundary]
+    return [("system", c) for c in systems] + ([("boundary", boundary)] if boundary is not None else [])
 
 
 def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, make_draft: Callable):

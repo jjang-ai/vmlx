@@ -681,29 +681,37 @@ def _assistant_tag_cut(tokenizer: Any, prompt_list: list[int], cache_len: int):
     return None
 
 
-def _system_end_cut(tokenizer: Any, prompt_list: list[int], cache_len: int):
-    """Index of the first <|im_start|> after the leading system message(s), or None
-    (no system message, or the cache already covers it).
+def _system_block_cuts(tokenizer: Any, prompt_list: list[int], cache_len: int) -> list[int]:
+    """Index of the first <|im_start|> after EACH of the consecutive leading system blocks, cache_len < cut <
+    len(prompt_list) (empty: no system message, or the cache already covers them).
 
-    Consecutive leading system blocks count as one: MiMo-V2.6's template renders the tools as their own first system
-    block and the conversation's system prompt as a second one, so stopping at the first block snapshotted only the
-    tool list (raw API row: 77 of 4,602 tokens reused by a new chat with the same tools + system prompt)."""
+    MiMo-V2.6's template renders the tools as their own first system block and the conversation's system prompt as a
+    second one. The end of the last block serves a new chat with the same tools AND system prompt (raw API: 77 ->
+    4,581 of 4,602 tokens reused); the end of the first serves a chat whose system prompt differs but whose tools do
+    not (in-app: a thinking-off image turn restored 3,737 tokens with the tools-only cut, 0 with only the last cut)."""
     try:
         tag = int(tokenizer.convert_tokens_to_ids("<|im_start|>"))
         role = list(tokenizer.encode("system", add_special_tokens=False))
     except Exception:
-        return None
+        return []
     if tag < 0 or not prompt_list or prompt_list[0] != tag or prompt_list[1:1 + len(role)] != role:
-        return None
-    pos = 0
+        return []
+    cuts, pos = [], 0
     while True:
         nxt = next((i for i in range(pos + 1, len(prompt_list)) if prompt_list[i] == tag), None)
         if nxt is None:
-            return None
-        if prompt_list[nxt + 1:nxt + 1 + len(role)] == role:
-            pos = nxt                                  # another system block follows: extend the cut past it
-            continue
-        return nxt if cache_len < nxt < len(prompt_list) else None
+            return []                                  # nothing after the system blocks: no snapshot to take
+        cuts.append(nxt)
+        if prompt_list[nxt + 1:nxt + 1 + len(role)] != role:
+            return [c for c in cuts if cache_len < c < len(prompt_list)]
+        pos = nxt                                      # another system block follows
+
+
+def _system_end_cut(tokenizer: Any, prompt_list: list[int], cache_len: int):
+    """End of the last consecutive leading system block (see _system_block_cuts), or None: the DFlash2 lane's single
+    system snapshot."""
+    cuts = _system_block_cuts(tokenizer, prompt_list, cache_len)
+    return cuts[-1] if cuts else None
 
 
 def _checkpoint_correction(cycle_committed: int, cycle_kept: int):
