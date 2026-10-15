@@ -19,7 +19,7 @@ def _qkv(L, T, seed, Hk=4):
     return q, k, v
 
 
-@pytest.mark.parametrize("L,T", [(1, 40001), (2, 5003), (3, 2049), (4, 33333)])
+@pytest.mark.parametrize("L,T", [(1, 40001), (2, 5003), (3, 2049), (4, 33333), (5, 9001), (8, 4099)])
 def test_matches_mlx_and_fp32(L, T):
     q, k, v = _qkv(L, T, L * 7 + T)
     mask = None if L == 1 else "causal"
@@ -34,7 +34,7 @@ def test_matches_mlx_and_fp32(L, T):
 def test_model_routes_decode_rows_to_flash_and_matches(monkeypatch):
     import vmlx_engine.models.mimo_v26_janght as M
 
-    for L, T in ((1, 40000), (2, 9000), (4, 3000)):
+    for L, T in ((1, 40000), (2, 9000), (4, 3000), (7, 5000)):
         q, k, v = _qkv(L, T, 100 + L)
         mask = None if L == 1 else "causal"
         monkeypatch.setattr(M, "_FLASH_DECODE", True)
@@ -51,8 +51,8 @@ def test_short_caches_and_wide_calls_keep_the_existing_route():
 
     q, k, v = _qkv(1, 8192, 3)
     assert M._flash_decode(q, k, v, SCALE, None, None) is None        # one row under 32k keys
-    q, k, v = _qkv(5, 8192, 4)
-    assert M._flash_decode(q, k, v, SCALE, "causal", None) is None    # 5+ rows: grouped / NAX paths
+    q, k, v = _qkv(9, 8192, 4)
+    assert M._flash_decode(q, k, v, SCALE, "causal", None) is None    # 9+ rows: grouped / NAX paths
 
 
 def test_fused_sorted_combine_matches_the_batched_matmul():

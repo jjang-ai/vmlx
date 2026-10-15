@@ -91,10 +91,11 @@ _NAX_ATTENTION = os.environ.get("VMLX_MIMO_NAX_ATTENTION", "1").strip().lower() 
 # simdgroup matrix products (metal/sdpa_flash_decode.py, oMLX port). MLX has no fused 192/128 vector kernel, so its
 # call materializes the scores: one row at 121k keys 1.84 ms per full layer vs 1.12 (x1.64; 9 layers = 6.5 ms per token),
 # two rows 3.47 vs 1.54, four rows 23.9 vs 3.11 (synthetic M5 Max, max |err| <= 1.2e-4 vs MLX). Crossovers measured:
-# one row from 32k keys, two rows from 4k, three-four rows from 2k (they also beat _grouped_few_rows).
+# one row from 32k keys, two rows from 4k, three-eight rows from 2k (they also beat _grouped_few_rows: 5-8 rows
+# x1.4-4.5 from 8k to 121k keys).
 # VMLX_MIMO_FLASH_DECODE=0 turns it off (A/B only).
 _FLASH_DECODE = os.environ.get("VMLX_MIMO_FLASH_DECODE", "1").strip().lower() not in {"0", "false", "off", "no"}
-_FLASH_MIN_KEYS = {1: 32768, 2: 4096, 3: 2048, 4: 2048}
+_FLASH_MIN_KEYS = {1: 32768, 2: 4096, 3: 2048, 4: 2048, 5: 2048, 6: 2048, 7: 2048, 8: 2048}
 
 
 def _flash_decode(q, k, v, scale, mask, sinks):
@@ -153,7 +154,7 @@ def _full_attention(q, k, v, scale, mask, sinks):
     T, dv = int(k.shape[2]), int(v.shape[3])
     causal = isinstance(mask, str) and mask == "causal"
     array_mask = isinstance(mask, mx.array) and mask.ndim >= 2 and tuple(mask.shape[-2:]) == (L, T)
-    if L <= 4:
+    if L <= 8:
         o = _flash_decode(q, k, v, scale, mask, sinks)
         if o is not None:
             _note_path(f"flash-decode-{L}row", mask)
@@ -297,7 +298,7 @@ def warm_attention_kernels(model) -> float:
                 outs.append(_full_attention(z(1, H, L, dq), z(1, KV, T, dq), z(1, KV, T, dv), sc, "causal", None))
             causal = (mx.arange(300)[:, None] + 1000) >= mx.arange(1300)[None]  # the batched lane's bool masks
             outs.append(_full_attention(z(1, H, 300, dq), z(1, KV, 1300, dq), z(1, KV, 1300, dv), sc, causal, None))
-            for L in (1, 2, 3, 4):                                      # flash decode rows (DFlash verify widths)
+            for L in range(1, 9):                                       # flash decode rows (DFlash verify widths)
                 T = max(_FLASH_MIN_KEYS.get(L, 4096), 4096) + 3
                 outs.append(_full_attention(z(1, H, L, dq), z(1, KV, T, dq), z(1, KV, T, dv), sc,
                                             None if L == 1 else "causal", None))

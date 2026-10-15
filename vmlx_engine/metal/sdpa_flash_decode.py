@@ -43,7 +43,10 @@ from typing import Optional
 
 import mlx.core as mx
 
-MAX_ROWS = 4
+# 8 in vMLX (oMLX: 4, its MTP verify width): the row count is a template parameter (G * ROWS / 8 bands, one simdgroup
+# each: 512 threads at 8 rows x GQA 16). MiMo DFlash verify rounds reach 8 rows; measured vs the grouped few-rows
+# path at 5 / 6 / 8 rows: x1.4-4.5 from 8k to 121k keys, max |err| 7e-5 vs fp32.
+MAX_ROWS = 8
 TILE_KEYS = 8
 
 # Pass 1: grid (KV heads, batch, splits) threadgroups of one simdgroup per
