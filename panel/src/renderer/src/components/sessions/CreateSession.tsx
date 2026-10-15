@@ -87,6 +87,8 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [remoteOrganization, setRemoteOrganization] = useState('')
   const [remoteConnecting, setRemoteConnecting] = useState(false)
 
+  const appliedStepRecommendationRef = useRef<number | undefined>(undefined)
+
   const applyModelDefaults = async (modelPath: string) => {
     const requestId = ++modelDefaultsRequestRef.current
     setDefaultsPending(true)
@@ -95,6 +97,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
       window.api.models.getGenerationDefaults(modelPath).catch(() => null),
     ]) as [any, any]
     if (!mountedRef.current || modelDefaultsRequestRef.current !== requestId) return false
+    const previousStepRecommendation = appliedStepRecommendationRef.current
+    appliedStepRecommendationRef.current = typeof detected?.recommendedPrefillStepSize === 'number'
+      ? detected.recommendedPrefillStepSize : undefined
     setConfig(current => {
       const prev = defaultsOnly ? { ...DEFAULT_CONFIG, port: current.port } : current
       const next: SessionConfig = {
@@ -110,6 +115,15 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         enableAutoToolChoice: undefined,
         toolCallParser: 'auto',
         reasoningParser: 'auto',
+        // A model-derived prefill chunk (registry recommendedPrefillStepSize) for this model; another model's
+        // recommendation never carries over: a value equal to the previously applied recommendation returns to the
+        // generic default, anything else the user typed is kept.
+        prefillStepSize: typeof detected?.recommendedPrefillStepSize === 'number'
+          ? detected.recommendedPrefillStepSize
+          : (previousStepRecommendation !== undefined
+              && prev.prefillStepSize === previousStepRecommendation
+              ? DEFAULT_CONFIG.prefillStepSize
+              : prev.prefillStepSize),
         dsv4PrefixCache: detected?.family === 'deepseek-v4' ? true : prev.dsv4PrefixCache,
         dsv4PoolQuant: detected?.family === 'deepseek-v4'
           ? (typeof detected?.dsv4PoolQuantDefault === 'boolean'
@@ -253,6 +267,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
           base.enableAutoToolChoice = undefined
           if (['deepseek-v4', 'minimax_m3', 'openpangu_v2'].includes(detected.family)) {
             base.timeout = 900
+          }
+          if (typeof detected.recommendedPrefillStepSize === 'number') {
+            base.prefillStepSize = detected.recommendedPrefillStepSize
           }
           if (detected.family === 'deepseek-v4') {
             base.dsv4PrefixCache = true

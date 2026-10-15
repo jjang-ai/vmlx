@@ -2616,6 +2616,7 @@ describe('detectModelConfigFromDir local high-risk artifact parity', () => {
     expect(detected.reasoningParser).toBe('think_xml')
     expect(detected.toolParser).toBe('xml_function')
     expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
+    expect(detected.recommendedPrefillStepSize).toBeUndefined()   // RL JANG_2L keeps the generic step
     expect(detected.isMultimodal).toBe(media)
     expect(detected.runtimeModalities).toEqual(media ? ['text', 'vision', 'video', 'audio'] : ['text'])
     expect(!!detected.forceTextOnly).toBe(!media)
@@ -2640,6 +2641,7 @@ describe('detectModelConfigFromDir local high-risk artifact parity', () => {
     expect(detected.isMultimodal).toBe(media)
     expect(detected.defaultEnableThinking).toBe(true)
     expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
+    expect(detected.recommendedPrefillStepSize).toBe(4096)
   })
 
   it('keeps a jangtq2 MiMo bundle without a routed JANGT contract off the V2.6 media route', () => {

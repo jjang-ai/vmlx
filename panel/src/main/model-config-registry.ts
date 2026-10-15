@@ -201,6 +201,13 @@ export interface DetectedConfig {
   defaultEnableThinking?: boolean
   /** Bundle-owned DSV4 native CSA/HCA pool codec startup default. */
   dsv4PoolQuantDefault?: boolean
+  /**
+   * Measured prefill chunk for NEW sessions of this bundle (never applied over a saved value). MiMo V2.6 JANGHT
+   * runs fused 192/128 attention and routed experts whose tiles fill better with more rows per expert: 4096 was
+   * +8-14 % cold prefill over 2048 on both lanes (8192: a further 4-6 % on M5, but sliding-window layers without the
+   * NAX kernel would materialize ~8.7 GB of scores per call at 8192, ~2.2 GB at 4096).
+   */
+  recommendedPrefillStepSize?: number
   cacheType: string
   cacheSubtype?: string
   architectureHints?: Record<string, string | number | boolean>
@@ -1861,6 +1868,8 @@ function applyJangCapabilities(
       // Fresh V2.6 uses the vendor template's native default-on control.
       next.defaultEnableThinking = jangCfg.chat?.thinking?.default !== false
       next.cacheSubtype = 'mimo_v2_asymmetric_swa'
+      // JANGHT (jangtq2) builds the fused-attention runtime; the RL JANG_2L family keeps the generic step.
+      if (jangCfg.format === 'jangtq2') next.recommendedPrefillStepSize = 4096
     }
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined

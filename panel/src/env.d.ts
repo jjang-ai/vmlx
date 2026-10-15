@@ -40,6 +40,7 @@ declare global {
           supportsThinkingBudget?: boolean;
           thinkInTemplate?: boolean;
           dsv4PoolQuantDefault?: boolean;
+          recommendedPrefillStepSize?: number;
           cacheType?: string;
           cacheSubtype?: string;
           architectureHints?: Record<string, string | number | boolean>;
