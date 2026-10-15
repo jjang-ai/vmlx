@@ -87,6 +87,29 @@ def _note_path(path: str, mask, layer: str = "full") -> None:
 _NAX_ATTENTION = os.environ.get("VMLX_MIMO_NAX_ATTENTION", "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
+# 1-4 query rows over a long cache (decode, DFlash AR steps, verify widths <= 4): split-key "flash decoding" with
+# simdgroup matrix products (metal/sdpa_flash_decode.py, oMLX port). MLX has no fused 192/128 vector kernel, so its
+# call materializes the scores: one row at 121k keys 1.84 ms per full layer vs 1.12 (x1.64; 9 layers = 6.5 ms per token),
+# two rows 3.47 vs 1.54, four rows 23.9 vs 3.11 (synthetic M5 Max, max |err| <= 1.2e-4 vs MLX). Crossovers measured:
+# one row from 32k keys, two rows from 4k, three-four rows from 2k (they also beat _grouped_few_rows).
+# VMLX_MIMO_FLASH_DECODE=0 turns it off (A/B only).
+_FLASH_DECODE = os.environ.get("VMLX_MIMO_FLASH_DECODE", "1").strip().lower() not in {"0", "false", "off", "no"}
+_FLASH_MIN_KEYS = {1: 32768, 2: 4096, 3: 2048, 4: 2048}
+
+
+def _flash_decode(q, k, v, scale, mask, sinks):
+    B, H, L, _ = q.shape
+    if not _FLASH_DECODE or int(k.shape[2]) < _FLASH_MIN_KEYS.get(int(L), 1 << 62):
+        return None
+    from ..metal.sdpa_flash_decode import sdpa_flash
+
+    o = sdpa_flash(q, k, v, scale, mask, sinks)
+    if o is None:
+        return None
+    # (B, L, H * Dv) -> (B, H, L, Dv): the caller's transpose + reshape back to (B, L, H * Dv) is then a view.
+    return o.reshape(B, L, H, int(v.shape[3])).transpose(0, 2, 1, 3)
+
+
 def _nax(q, k, v, scale, mask, sinks, window=0):
     if not _NAX_ATTENTION:
         return None
@@ -130,6 +153,11 @@ def _full_attention(q, k, v, scale, mask, sinks):
     T, dv = int(k.shape[2]), int(v.shape[3])
     causal = isinstance(mask, str) and mask == "causal"
     array_mask = isinstance(mask, mx.array) and mask.ndim >= 2 and tuple(mask.shape[-2:]) == (L, T)
+    if L <= 4:
+        o = _flash_decode(q, k, v, scale, mask, sinks)
+        if o is not None:
+            _note_path(f"flash-decode-{L}row", mask)
+            return o
     if (_FEW_ROWS[0] <= L <= _FEW_ROWS[1] and T >= _FEW_ROWS_MIN_KEYS and H % int(k.shape[1]) == 0
             and (mask is None or causal)):
         _note_path("grouped-few-rows", mask)
