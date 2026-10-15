@@ -215,10 +215,11 @@ class Target:
     def embed(self, ids):
         return self.model.model.embed_tokens(ids)
 
-    def forward(self, ids: list[int], cache) -> tuple[mx.array, mx.array]:
-        """-> (logits (S, V) fp32, taps (S, n_tap * D))."""
+    def forward(self, ids: list[int], cache, embeds: mx.array | None = None) -> tuple[mx.array, mx.array]:
+        """-> (logits (S, V) fp32, taps (S, n_tap * D)). ``embeds`` (1, S, D): media prefill (merged vision/audio
+        features from the omni model's get_input_embeddings) instead of the token embedding lookup."""
         self.store.clear()
-        h = self.model.model(mx.array(ids)[None], cache)
+        h = self.model.model(mx.array(ids)[None], cache, embeds)
         lg = self.model.lm_head(h)[0].astype(mx.float32)
         taps = mx.concatenate([self.store[i][0] for i in self.layer_ids], axis=-1)
         return lg, taps
@@ -321,57 +322,6 @@ def ar_generate(target: Target, prompt: list[int], max_tokens: int, eos: set, te
 
 
 # ------------------------------------------------------------------------------------------------------------ serving lane
-def _clone_cache(cache):
-    """Independent copies of MiMo's KVCache / RotatingKVCache states (logical size; later appends never alias)."""
-    from mlx_lm.models.cache import KVCache, RotatingKVCache
-    out = []
-    for c in cache:
-        if isinstance(c, RotatingKVCache):
-            n = RotatingKVCache(c.max_size, c.keep)
-            if c.keys is not None:
-                n.keys, n.values = c.keys * 1, c.values * 1
-            n.offset, n._idx = c.offset, c._idx
-        elif isinstance(c, KVCache):
-            n = KVCache()
-            if c.keys is not None:
-                n.keys, n.values = c.keys[..., : c.offset, :] * 1, c.values[..., : c.offset, :] * 1
-            n.offset = c.offset
-        else:
-            raise RuntimeError(f"MiMo DFlash prefix store: unsupported cache {type(c)}")
-        out.append(n)
-    return out
-
-
-class MiMoPrefixStore:
-    """RAM prompt-prefix snapshots for the MiMo DFlash lane: target caches, the drafter's context rows (last
-    `window` taps) and the last logits, keyed by prompt ids; a request whose prompt starts with a stored prompt restores
-    it and prefills only the suffix (multi-turn chats). LRU over VMLX_MIMO_DFLASH_PREFIX_ENTRIES (default 2)."""
-
-    def __init__(self, max_entries: int = 2):
-        from collections import OrderedDict
-        self.max_entries = max(1, int(max_entries)); self.entries = OrderedDict()
-        self.hits = self.misses = 0
-
-    def lookup(self, ids):
-        best = None
-        for key in self.entries:
-            if len(key) <= len(ids) and (best is None or len(key) > len(best)) and tuple(ids[: len(key)]) == key:
-                best = key
-        if best is None:
-            self.misses += 1
-            return None
-        self.entries.move_to_end(best); self.hits += 1
-        return len(best), self.entries[best]
-
-    def put(self, ids, cache, taps, logits):
-        key = tuple(int(t) for t in ids)
-        snap = (_clone_cache(cache), taps, logits)
-        mx.eval([x for c in snap[0] for x in (c.keys, c.values) if x is not None], taps, logits)
-        self.entries[key] = snap; self.entries.move_to_end(key)
-        while len(self.entries) > self.max_entries:
-            self.entries.popitem(last=False)
-
-
 _LANES: dict = {}
 
 
@@ -380,8 +330,7 @@ def _lane_for(model, drafter):
     lane = _LANES.get(key)
     if lane is None:
         text = getattr(getattr(model, "language_model", None), "inner", None) or model
-        lane = _LANES[key] = {"target": Target(text, drafter.layer_ids),
-                              "store": MiMoPrefixStore(int(__import__("os").environ.get("VMLX_MIMO_DFLASH_PREFIX_ENTRIES", "2")))}
+        lane = _LANES[key] = {"target": Target(text, drafter.layer_ids)}
     return lane
 
 
@@ -396,13 +345,43 @@ class LaneStats:
     output_token_ids: list = field(default_factory=list)
 
 
+class _TapWindow:
+    """The drafter's context rows (target taps) of the last ``window`` forwarded positions, appended per round and
+    concatenated lazily (a round adds 1-8 rows; concatenating 1024 x 20480 every round would cost more than it saves)."""
+
+    def __init__(self, window: int, rows: mx.array | None = None):
+        self.window, self.parts, self.n = window, [], 0
+        if rows is not None:
+            self.add(rows)
+
+    def add(self, rows: mx.array):
+        self.parts.append(rows); self.n += int(rows.shape[0])
+        if self.n > 2 * self.window:
+            self.rows()
+
+    def rows(self) -> mx.array | None:
+        if not self.parts:
+            return None
+        out = self.parts[0] if len(self.parts) == 1 else mx.concatenate(self.parts, axis=0)
+        out = out[-self.window:]
+        self.parts, self.n = [out], int(out.shape[0])
+        return out
+
+
 def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids, max_tokens: int, eos: set,
                 temperature: float = 0.0, top_p: float = 1.0, top_k: int = 0, prefill_step: int = 2048,
-                stats: LaneStats | None = None, store: MiMoPrefixStore | None = None, adaptive: bool = True,
-                block_size: int | None = None, controls=None, propose=None):
+                stats: LaneStats | None = None, adaptive: bool = True, block_size: int | None = None, controls=None,
+                propose=None, resume: dict | None = None, snapshot_cuts=(), on_snapshot=None, session: dict | None = None,
+                embeds: mx.array | None = None):
     """Yields (new_tokens, drafted) per cycle. Cache invariant: the last emitted token is sampled, not forwarded.
     Exact speculative sampling: drafts are DRAWN from the drafter's distribution (same temperature/top-p/top-k) and
-    accepted by rejection sampling against the target's (dflash.model_mlx._rejection_sample); greedy = argmax match."""
+    accepted by rejection sampling against the target's (dflash.model_mlx._rejection_sample); greedy = argmax match.
+
+    Multi-turn reuse (vmlx_engine.mimo_session): ``resume`` = {"target_cache", "draft_context", "cache_len"} restored
+    state, cache_len < len(prompt_ids); prefill stops exactly at each of ``snapshot_cuts`` once and calls
+    ``on_snapshot(cut, cache, taps)``; ``session`` (out) receives the final "target_cache", "taps" (drafter context
+    rows) and "forwarded" (positions the cache holds) when the generator ends, including when it is closed early.
+    ``embeds`` (1, len(prompt_ids), D): media prefill embeddings, used for the positions this request prefills."""
     import dflash.model_mlx as runtime
     from dflash.model_mlx import _rejection_sample, _sampling_probs, _sample_probs
     from vmlx_engine.glm_dflash2 import AdaptiveSpec
@@ -412,26 +391,44 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
     bs0 = int(block_size or drafter.block)
     t0 = time.perf_counter()
     prompt_ids = [int(t) for t in prompt_ids]
-    hit = store.lookup(prompt_ids) if store is not None else None
-    reused = 0
-    if hit is not None:
-        reused, (snap_cache, taps, logits) = hit
-        cache = _clone_cache(snap_cache)
+    if resume is not None:
+        cache, reused = resume["target_cache"], int(resume["cache_len"])
+        taps = resume["draft_context"]
+        if taps is None or reused >= len(prompt_ids) or int(taps.shape[0]) != min(W, reused):
+            raise ValueError("MiMo DFlash resume entry does not match its prompt / drafter window")
     else:
-        cache, taps, logits = target.model.make_cache(), None, None
-    pos = reused
+        cache, reused, taps = target.model.make_cache(), 0, None
+    cuts = sorted({int(c) for c in snapshot_cuts if reused < int(c) < len(prompt_ids)})
+    pos, logits = reused, None
     while pos < len(prompt_ids):
         end = min(len(prompt_ids), pos + prefill_step)
-        lg, tp = target.forward(prompt_ids[pos:end], cache)
+        end = next((c for c in cuts if pos < c < end), end)            # a snapshot is the cache exactly at its cut
+        lg, tp = target.forward(prompt_ids[pos:end], cache, None if embeds is None else embeds[:, pos:end])
         logits = lg[-1:]
         taps = tp if taps is None else mx.concatenate([taps, tp], axis=0)
         taps = taps[-W:]
         mx.eval(logits, taps)
         pos = end
-    if store is not None and reused < len(prompt_ids):
-        store.put(prompt_ids, cache, taps, logits)
+        if on_snapshot is not None and pos in cuts:
+            on_snapshot(pos, cache, taps)
     st.prompt_tokens, st.cached_tokens = len(prompt_ids), reused
     drafter.reset(); drafter.ctx_end = len(prompt_ids) - taps.shape[0]; drafter.add_context(taps, drafter.ctx_end)
+    window = _TapWindow(W, taps)
+    fwd = len(prompt_ids)                                # tokens forwarded = drafter.ctx_end = cache positions
+    try:
+        yield from _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eos, temperature, top_p,
+                                  top_k, st, adaptive, bs0, controls, propose, window, t0, runtime, _rejection_sample,
+                                  _sampling_probs, _sample_probs, AdaptiveSpec, cache)
+    finally:
+        if session is not None:
+            session["target_cache"], session["taps"] = cache, window.rows()
+            session["forwarded"] = int(drafter.ctx_end)
+
+
+def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eos, temperature, top_p, top_k, st,
+                   adaptive, bs0, controls, propose, window, t0, runtime, _rejection_sample, _sampling_probs,
+                   _sample_probs, AdaptiveSpec, cache):
+    fwd = len(prompt_ids)
 
     def proc(lg, hist, d_tok=None):                     # (S, V) -> (1, S, V), the requested TARGET distribution
         L = lg[None]
@@ -451,7 +448,7 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
     if tokens[-1] in eos:
         return
     policy = AdaptiveSpec(bs0) if adaptive else None
-    n, fwd = 1, len(prompt_ids)                          # fwd = tokens forwarded = drafter.ctx_end
+    n = 1                                                # fwd = tokens forwarded = drafter.ctx_end = cache positions
     after_ar = False
     while n < max_tokens:
         mode, b = policy.choose() if policy is not None else ("spec", bs0)
@@ -459,7 +456,7 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
             after_ar = True; ta = time.perf_counter(); new = []
             for _ in range(min(b, max_tokens - n)):
                 lg, tp = target.forward([tokens[-1]], cache)
-                drafter.add_context(tp, fwd); fwd += 1
+                drafter.add_context(tp, fwd); window.add(tp); fwd += 1
                 t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item()); new.append(t); tokens.append(t)
                 if t in eos:
                     break
@@ -492,16 +489,20 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
         else:
             picks = [int(x) for x in np.asarray(mx.argmax(L[0], axis=-1))]
             accepted = next((i for i in range(len(drafts)) if drafts[i] != picks[i]), len(drafts)); bonus = picks[accepted]
-        Target.rollback(cache, len(drafts) - accepted)
-        drafter.add_context(tp[: accepted + 1], fwd); fwd += accepted + 1
         new = (drafts[:accepted] + [bonus])[: max_tokens - n]
+        stop = next((i for i, t in enumerate(new) if t in eos), None)
+        if stop is not None:
+            new = new[: stop + 1]
+        # The cache keeps the anchor + every emitted token but the last (sampled, not forwarded). A round cut short
+        # by max_tokens or an EOS inside the accepted drafts keeps fewer rows than accepted + 1; a stored session
+        # entry must hold exactly the emitted tokens.
+        keep = len(new)
+        Target.rollback(cache, len(drafts) + 1 - keep)
+        drafter.add_context(tp[:keep], fwd); window.add(tp[:keep]); fwd += keep
         st.rounds += 1; st.accepted.append(accepted)
         if policy is not None:
             policy.update_spec(bs, accepted, time.perf_counter() - tr, after_ar=after_ar)
         after_ar = False
-        stop = next((i for i, t in enumerate(new) if t in eos), None)
-        if stop is not None:
-            new = new[: stop + 1]
         tokens.extend(new); n += len(new)
         yield new, bs - 1
         if stop is not None:
@@ -533,9 +534,10 @@ def stream_mimo_dflash(model, tokenizer, draft, prompt: str, *, max_tokens: int,
         detok = _StopDetokenizer(detok, [stop] if isinstance(stop, str) else list(stop))
     lane = _lane_for(model, drafter)
     st = LaneStats(); tic = time.perf_counter(); n = 0
-    store = lane["store"] if os.environ.get("VMLX_MIMO_DFLASH_PREFIX_CACHE", "1") != "0" else None
+    # Session reuse (RAM + SSD) lives in the MLLM wrapper's lane (models/mllm.py _stream_mimo_dflash); this generic
+    # DFlash2-runtime entry point serves a request from an empty cache.
     for new, drafted in mimo_rounds(lane["target"], drafter, mask_vec, list(prompt_tokens), int(max_tokens), eos,
-                                    float(temperature), float(top_p), int(top_k), stats=st, store=store,
+                                    float(temperature), float(top_p), int(top_k), stats=st,
                                     adaptive=os.environ.get("VMLX_MIMO_DFLASH_ADAPTIVE", "1") != "0",
                                     controls=sampling_controls):
         if n == 0:

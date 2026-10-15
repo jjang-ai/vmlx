@@ -257,6 +257,10 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             draft_model = load_drafter(resolved_draft)          # (MiMoDFlashDrafter, mask embedding)
             draft_tokenizer = None
             _spec_kind = "dflash2"
+            # Multi-turn session tier (RAM + the managed SSD pool) for this lane: vmlx_engine/mimo_session.py.
+            from . import mimo_session
+
+            mimo_session.attach_ssd(str(Path(resolved_draft).parent), str(resolved_draft))
             config.num_tokens = int(draft_model[0].block)
             logger.info("MiMo DFlash drafter loaded (%s weights as stored, block %d)",
                         "quantized" if json.loads((Path(resolved_draft) / "config.json").read_text()).get("quantization") else "bf16",

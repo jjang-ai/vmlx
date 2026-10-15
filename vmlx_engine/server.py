@@ -14890,9 +14890,14 @@ def _active_dflash2_cache_runtime():
     return dflash2_runtime
 
 
-async def _clear_dspark_cache(include_ssd=False, *, pool=False, expected_root=None, expected_pid=None):
-    """Keep generation excluded until the existing DSpark writer/clear finishes."""
-    from .dspark import session as dspark
+async def _clear_dspark_cache(include_ssd=False, *, pool=False, expected_root=None, expected_pid=None,
+                              session_module=None):
+    """Keep generation excluded until the existing DSpark writer/clear finishes. ``session_module``: another lane
+    with the same session API (vmlx_engine.mimo_session); default the DSpark lane."""
+    if session_module is None:
+        from .dspark import session as dspark
+    else:
+        dspark = session_module
 
     lock = getattr(_engine, "_generation_lock", None)
     worker = getattr(_engine, "_run_model_call", None)
@@ -15064,6 +15069,9 @@ async def cache_stats():
         if _loaded_dspark_health_status(_engine) is not None:
             from .dspark import session as dspark
             result["dspark_cache"] = dspark.cache_stats()
+        _mimo_sessions = sys.modules.get("vmlx_engine.mimo_session")
+        if _mimo_sessions is not None and (_mimo_sessions.STORE is not None or _mimo_sessions.SSD is not None):
+            result["mimo_dflash_cache"] = _mimo_sessions.cache_stats()
         # Every engine, not only DFlash2: SimpleEngine records the last terminal's durability too, and without any
         # engine block a SimpleEngine session's Cache panel had nothing to show (T-PERF map 2026-10-11).
         try:
@@ -16768,6 +16776,24 @@ async def clear_cache(
         except Exception:
             logger.exception("DSpark session clear did not finish")
             skipped.append("dspark_sessions:clear_failed")
+
+    _mimo_sessions = sys.modules.get("vmlx_engine.mimo_session")
+    if (clear_resident_prefix or clear_prefix_l2) and _mimo_sessions is not None and (
+        _mimo_sessions.STORE is not None or _mimo_sessions.SSD is not None
+    ):
+        # The MiMo DFlash lane's session entries (RAM + SSD): a clear must not leave them to be restored.
+        try:
+            await _clear_dspark_cache(include_ssd=clear_prefix_l2, session_module=_mimo_sessions)
+            cleared.append("mimo_dflash_sessions")
+            if clear_prefix_l2 and _mimo_sessions.SSD is not None:
+                cleared.append("mimo_dflash_session_disk")
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+            skipped.append("mimo_dflash_sessions:requests_in_use")
+        except Exception:
+            logger.exception("MiMo DFlash session clear did not finish")
+            skipped.append("mimo_dflash_sessions:clear_failed")
 
     if clear_resident_prefix or cache_type == "multimodal":
         clear_native_media = getattr(_engine, "clear_native_media_cache", None)

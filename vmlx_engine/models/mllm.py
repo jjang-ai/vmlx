@@ -7381,6 +7381,188 @@ class MLXMultimodalLM:
             persistence_future=receipt,
         )
 
+    def _mimo_dflash_draft(self):
+        """(MiMoDFlashDrafter, mask_vec) when this is a MiMo-V2.6 target on a server with its bundled DFlash drafter."""
+        if not getattr(self.model, "_mimo_v26_runtime", False):
+            return None
+        from ..speculative import get_draft_model, is_dflash2_enabled
+
+        if not is_dflash2_enabled():
+            return None
+        draft = get_draft_model()
+        return draft if isinstance(draft, tuple) and len(draft) == 2 else None
+
+    def _stream_mimo_dflash(self, formatted_prompt: str, max_tokens: int, temperature: float, kwargs: dict, *,
+                            draft, images: list, videos: list, audio: list):
+        """MiMo-V2.6 DFlash lane for text, image, video and audio requests, streamed as MLLMOutput chunks.
+
+        The generic routes failed every MiMo media request on this lane (2026-10-15 baseline): images reached the
+        native mlx-vlm stream (no ``stopping_criteria`` on MiMo's tokenizer), videos were split into image frames
+        against MiMo's video placeholder (count mismatch), audio arrived as decoded arrays (the MiMo processor takes
+        files). Here MiMo's own processor builds the prompt ids and media rows exactly as the batched lane does
+        (videos by local path, sampled by the processor at 1 fps; audio by path), the omni model merges the vision /
+        audio features (``get_input_embeddings``) and the lane prefills those embeddings, then drafts from the
+        target's taps as for text. Media positions carry salted session-key ids (one digest per item: its pixel or
+        audio-code rows), so a follow-up turn about the same media resumes past it and different media never match.
+        Multi-turn reuse: vmlx_engine.mimo_session (RAM + the managed SSD pool, publish-early end-of-turn receipt).
+        """
+        import hashlib
+        import time as _time
+
+        import mlx.core as mx
+        from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+        from .. import mimo_session as _ms
+        from ..mimo_dflash import LaneStats, _lane_for, mimo_rounds
+        from ..utils.prefill_step import prefill_step_size
+
+        drafter, mask_vec = draft
+        lane = _lane_for(self.model, drafter)
+        target = lane["target"]
+        tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
+        has_media = bool(images or videos or audio)
+        inputs = self.processor(formatted_prompt, images=list(images) or None, videos=list(videos) or None,
+                                audio=list(audio) or None)
+        prompt_ids = [int(t) for t in np.array(inputs["input_ids"])[0].tolist()]
+        items = list(inputs.get("_vmlx_mimo26_media_items") or [])
+        key_ids, media_end = list(prompt_ids), 0
+        for item in items:
+            rows = (inputs["audio_codes"][item["code_start"]:item["code_end"]] if item["modality"] == "audio"
+                    else inputs["pixel_values"][item["pixel_start"]:item["pixel_end"]])
+            digest = hashlib.sha256(item["modality"].encode())
+            digest.update(np.array(rows.astype(mx.float32)).tobytes())
+            stream = hashlib.shake_256(b"mimo-media|" + digest.digest()).digest(4 * (item["token_end"] - item["token_start"]))
+            for j, i in enumerate(range(item["token_start"], item["token_end"])):
+                key_ids[i] = 0x80000000 | (int.from_bytes(stream[4 * j:4 * j + 4], "big") & 0x3FFFFFFF)
+            media_end = max(media_end, int(item["token_end"]))
+        eos = {151643, 151645, 151672}
+        gen_eos = (self.config.get("eos_token_id") if isinstance(self.config, dict) else getattr(self.config, "eos_token_id", None))
+        eos |= set(gen_eos if isinstance(gen_eos, list) else ([gen_eos] if gen_eos is not None else []))
+        model_key = (id(target), id(drafter))
+        resume = _ms.lookup(model_key, key_ids, tokenizer, target.model.make_cache, eos)
+        cache_len = int(resume["cache_len"]) if resume is not None else 0
+        if resume is not None and resume.get("load_s") is not None:
+            _restored = 0
+            for _c in list(resume.get("target_cache") or []):
+                _st = _c.state if isinstance(_c.state, (list, tuple)) else [_c.state]
+                _restored += sum(int(getattr(_a, "nbytes", 0) or 0) for _a in _st if _a is not None)
+            _restored += int(getattr(resume.get("draft_context"), "nbytes", 0) or 0)
+            _ls = float(resume["load_s"])
+            logger.info("MiMo DFlash SSD restore: %d tokens, %.0f MB in %.1f ms (%.2f GB/s)", cache_len, _restored / 1e6,
+                        1000 * _ls, _restored / max(_ls, 1e-9) / 1e9)
+        # Media features only when this request prefills a media position (a restored prefix holding every media
+        # item skips the vision / audio towers).
+        embeds, media_s = None, 0.0
+        if has_media and media_end > cache_len:
+            _t = _time.perf_counter()
+            embeds = self.model.get_input_embeddings(
+                inputs["input_ids"], pixel_values=inputs.get("pixel_values"), image_grid_thw=inputs.get("image_grid_thw"),
+                audio_codes=inputs.get("audio_codes"),
+            ).inputs_embeds
+            mx.eval(embeds)
+            media_s = _time.perf_counter() - _t
+        elif has_media:
+            logger.info("MiMo DFlash media: every media token is inside the restored %d-token prefix; towers skipped",
+                        cache_len)
+        cuts = _ms.snapshot_cuts(tokenizer, prompt_ids, cache_len)
+        snapshots = []
+
+        def _on_snapshot(cut, cache, taps):
+            kind = next((k for k, c in cuts if c == cut), "boundary")
+            snapshots.append((kind, cut, _ms.clone(cache, target.model.make_cache), taps))
+
+        controls = None
+        min_p = float(kwargs.get("min_p", 0.0) or 0.0)
+        rep = kwargs.get("repetition_penalty")
+        rep = 1.0 if rep is None else float(rep)
+        freq = float(kwargs.get("frequency_penalty", 0.0) or 0.0)
+        pres = float(kwargs.get("presence_penalty", 0.0) or 0.0)
+        bias = kwargs.get("logit_bias")
+        if min_p or bias or rep != 1.0 or freq or pres:
+            from ..dflash2_sampling import DFlash2SamplingControls
+
+            controls = DFlash2SamplingControls(min_p=min_p, logit_bias=bias, repetition_penalty=rep,
+                                               frequency_penalty=freq, presence_penalty=pres)
+        tw = tokenizer if isinstance(tokenizer, TokenizerWrapper) else TokenizerWrapper(tokenizer)
+        detok = tw.detokenizer
+        detok.reset()
+        stop = kwargs.get("stop")
+        if stop:
+            from ..dflash2_runtime import _StopDetokenizer
+
+            detok = _StopDetokenizer(detok, [stop] if isinstance(stop, str) else list(stop))
+        st = LaneStats()
+        session: dict = {}
+        produced, emitted, finish = 0, [], None
+        started = _time.perf_counter()
+        logger.info("MiMo DFlash %s chat active for %s (prompt %d tokens, %d restored from %s)",
+                    "media (%d image(s), %d video(s), %d audio)" % (len(images), len(videos), len(audio))
+                    if has_media else "text", self.model_name, len(prompt_ids), cache_len,
+                    (resume or {}).get("source", "none"))
+        drafted = []
+        for new, n_drafted in mimo_rounds(
+            target, drafter, mask_vec, prompt_ids, int(max_tokens), eos, float(temperature),
+            float(kwargs.get("top_p", 1.0) or 1.0), int(kwargs.get("top_k", 0) or 0),
+            prefill_step=int(kwargs.get("prefill_step_size") or prefill_step_size()), stats=st,
+            adaptive=os.environ.get("VMLX_MIMO_DFLASH_ADAPTIVE", "1").strip().lower() not in {"0", "false", "off", "no"},
+            controls=controls, resume=resume, snapshot_cuts=[c for _, c in cuts], on_snapshot=_on_snapshot,
+            session=session, embeds=embeds,
+        ):
+            drafted.append(int(n_drafted))
+            for token in new:
+                emitted.append(int(token))
+                produced += 1
+                if token in eos:
+                    finish = "stop"
+                    break
+                detok.add_token(token)
+            if finish is None and getattr(detok, "matched", False):
+                finish = "stop"
+            if finish is None and produced >= int(max_tokens):
+                finish = "length"
+            if finish is not None:
+                break
+            yield MLLMOutput(text=detok.last_segment, prompt_tokens=len(prompt_ids), completion_tokens=produced)
+        detok.finalize()
+        elapsed = _time.perf_counter() - started
+        # Store this turn's reusable states: snapshots, then the end-of-turn entry (key = the prompt's key ids + every
+        # emitted token; the cache holds all but the last, which the next prompt re-forwards).
+        receipt = None
+        parent = _ms.ssd_parent(resume)
+        for kind, cut, t_cache, taps in snapshots:
+            if t_cache is not None:
+                receipt = _ms.store({"kind": kind, "tokens": key_ids[:cut], "cache_len": int(cut),
+                                     "target_cache": t_cache, "draft_context": taps, "model_key": model_key},
+                                    parent=parent)
+        forwarded = int(session.get("forwarded") or 0)
+        if (_ms.reuse_enabled() and session.get("target_cache") is not None and forwarded > cache_len
+                and forwarded == len(prompt_ids) + len(emitted) - 1):
+            receipt = _ms.store({"kind": "turn", "tokens": key_ids + emitted, "cache_len": forwarded,
+                                 "target_cache": session["target_cache"], "draft_context": session["taps"],
+                                 "model_key": model_key}, parent=parent)
+        spec_rounds = [d for d in drafted if d > 0]
+        accepted = list(st.accepted)
+        tpr = (sum(accepted) + len(accepted)) / max(len(accepted), 1)
+        spec = {"kind": "dflash2", "lane": "mimo" + ("-media" if has_media else ""), "cycles": len(accepted),
+                "emitted_per_cycle": round(tpr, 3),
+                "acceptance": round(sum(accepted) / max(sum(spec_rounds), 1), 4) if spec_rounds else 0.0,
+                "ar_tokens": int(st.ar_steps),
+                "widths": {str(w + 1): spec_rounds.count(w) for w in sorted(set(spec_rounds))},
+                "generation_tps": round(produced / max(elapsed - st.prefill_s, 1e-9), 2)}
+        logger.info("MiMo DFlash generation stats: prompt_tokens=%d cached=%d output_tokens=%d rounds=%d "
+                    "tokens_per_round=%.3f acceptance=%.1f%% ar_tokens=%d decode_tps=%.2f prefill_s=%.3f media_s=%.3f "
+                    "total_s=%.2f finish=%s", len(prompt_ids), cache_len, produced, len(accepted), tpr,
+                    100.0 * spec["acceptance"], st.ar_steps, spec["generation_tps"], st.prefill_s, media_s, elapsed,
+                    finish or "length")
+        yield MLLMOutput(
+            text=detok.last_segment, finish_reason=finish or "length", prompt_tokens=len(prompt_ids),
+            completion_tokens=produced, spec_stats=spec, cached_tokens=cache_len,
+            cache_detail=(resume or {}).get("source", ""),
+            prefill_usage={"tokens": int(len(prompt_ids) - cache_len), "seconds": float(st.prefill_s) + media_s,
+                           "scope": "model_prefill_and_prompt_state", "path": "mimo_dflash"},
+            persistence_future=receipt,
+        )
+
     def stream_chat(
         self,
         messages: list[dict],
@@ -7524,6 +7706,16 @@ class MLXMultimodalLM:
                         all_images = all_images[:_slot_count]
                 except Exception as _e:
                     logger.debug(f"Image slot count check failed: {_e}")
+
+        # MiMo-V2.6 with its bundled DFlash drafter: text and every media kind go through the MiMo lane (its own
+        # processor, merged media embeddings, session reuse); the generic routes below cannot serve MiMo media.
+        _mimo_draft = self._mimo_dflash_draft()
+        if _mimo_draft is not None:
+            yield from self._stream_mimo_dflash(
+                formatted_prompt, max_tokens, temperature, kwargs, draft=_mimo_draft, images=list(prepared_images),
+                videos=[process_video_input(v) for v in videos], audio=list(all_audio),
+            )
+            return
 
         # MiniCPM video arrives as native clips (processor videos= path): DSpark plans it like images.
         _dspark_media = None

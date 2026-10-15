@@ -110,17 +110,93 @@ def test_oracle_drafts_fully_accepted_and_equal_ar(tmp_path):
     tgt.close()
 
 
-def test_random_drafts_still_equal_ar_and_prefix_store(tmp_path):
+def _run(tgt, drafter, prompt, n, **kw):
+    return [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, n, set(), 0.0, adaptive=False, **kw) for t in new]
+
+
+def test_random_drafts_equal_ar_and_turn_state_resumes(tmp_path):
+    """The end-of-turn session state (cache + drafter taps) resumes the next turn: greedy output == AR."""
     model, tgt, drafter = _lane(tmp_path)
     prompt = np.random.default_rng(6).integers(0, V, size=40).tolist()
-    ref = _ar_greedy(model, prompt, 20)
-    store = MD.MiMoPrefixStore(2)
-    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 20, set(), 0.0, store=store, adaptive=False) for t in new]
-    assert out == ref
+    session = {}
+    out = _run(tgt, drafter, prompt, 20, session=session)
+    assert out == _ar_greedy(model, prompt, 20)
+    # the cache holds the prompt + every emitted token but the last (sampled, not forwarded)
+    assert session["forwarded"] == len(prompt) + len(out) - 1
+    assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
+    prompt2 = prompt + out + [5, 9]
     st = MD.LaneStats()
-    out2 = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt + [5, 9], 5, set(), 0.0, stats=st, store=store, adaptive=False) for t in new]
-    assert st.cached_tokens == len(prompt)
-    assert out2 == _ar_greedy(model, prompt + [5, 9], 5)
+    resume = {"target_cache": session["target_cache"], "draft_context": session["taps"], "cache_len": session["forwarded"]}
+    out2 = _run(tgt, drafter, prompt2, 6, stats=st, resume=resume)
+    assert st.cached_tokens == session["forwarded"]
+    assert out2 == _ar_greedy(model, prompt2, 6)
+    tgt.close()
+
+
+@pytest.mark.parametrize("max_tokens", [3, 4, 7])
+def test_round_cut_short_by_max_tokens_keeps_only_emitted_rows(tmp_path, max_tokens):
+    """Oracle drafts (5 accepted per round) cut by max_tokens mid-round: the stored state must hold exactly the
+    emitted tokens, so a resumed turn still equals AR (the ported lane kept rows of tokens never emitted)."""
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(8).integers(0, V, size=30).tolist()
+    ref = _ar_greedy(model, prompt, 40)
+    oracle = lambda n_emitted, k: ref[n_emitted: n_emitted + k] + [0] * max(0, n_emitted + k - len(ref))
+    session = {}
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, max_tokens, set(), 0.0, adaptive=False,
+                                          propose=oracle, session=session) for t in new]
+    assert out == ref[:max_tokens]
+    assert session["forwarded"] == len(prompt) + max_tokens - 1
+    prompt2 = prompt + out
+    resume = {"target_cache": session["target_cache"], "draft_context": session["taps"], "cache_len": session["forwarded"]}
+    # resuming re-forwards only the last emitted token (a 1-row step, as AR decoding does), so it continues the AR
+    # sequence itself (a one-shot prefill of prompt2 can flip near-tie argmaxes on this tiny random model)
+    assert _run(tgt, drafter, prompt2, 5, resume=resume) == ref[max_tokens: max_tokens + 5]
+    tgt.close()
+
+
+def test_snapshot_clone_isolated_from_later_rotating_writes(tmp_path):
+    """A boundary snapshot of the SWA RotatingKVCache must not change while the request keeps decoding (single-token
+    rotating updates write into the live buffer in place); resuming it equals AR."""
+    from vmlx_engine import mimo_session
+
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(9).integers(0, V, size=60).tolist()   # longer than the SWA window: wrapped
+    snaps = []
+    on_snap = lambda cut, cache, taps: snaps.append((cut, mimo_session.clone(cache, tgt.model.make_cache), taps))
+    out = _run(tgt, drafter, prompt, 12, snapshot_cuts=[37], on_snapshot=on_snap)
+    assert out == _ar_greedy(model, prompt, 12)
+    (cut, snap, taps), = snaps
+    before = [np.array(c.keys.astype(mx.float32)) for c in snap if c.keys is not None]
+    _run(tgt, drafter, prompt + out, 10)                   # unrelated decoding on a fresh cache must not touch it
+    resume = {"target_cache": snap, "draft_context": taps, "cache_len": cut}
+    assert all(np.array_equal(a, np.array(c.keys.astype(mx.float32))) for a, c in zip(before, [c for c in snap if c.keys is not None]))
+    assert _run(tgt, drafter, prompt, 8, resume=resume) == _ar_greedy(model, prompt, 8)
+    tgt.close()
+
+
+def test_session_ssd_round_trip_resumes_equal_to_ar(tmp_path, monkeypatch):
+    """Store a snapshot through mimo_session with an SSD tier, drop RAM, restore it from SSD: output == AR."""
+    from vmlx_engine import mimo_session
+    from vmlx_engine.dflash2_session_disk import DFlash2SessionSSD
+
+    model, tgt, drafter = _lane(tmp_path)
+    E = V - 1                                               # an "end of turn" id: the SSD cut finder keys on it
+    prompt = np.random.default_rng(10).integers(0, V - 2, size=50).tolist()
+    prompt[29] = E
+    monkeypatch.setattr(mimo_session, "STORE", None)
+    monkeypatch.setattr(mimo_session, "SSD", DFlash2SessionSSD(root=str(tmp_path / "ssd"), max_size_bytes=0, model_key="t"))
+    snaps = []
+    _run(tgt, drafter, prompt, 6, snapshot_cuts=[30],
+         on_snapshot=lambda cut, cache, taps: snaps.append((cut, mimo_session.clone(cache, tgt.model.make_cache), taps)))
+    (cut, snap, taps), = snaps
+    receipt = mimo_session.store({"kind": "system", "tokens": prompt[:cut], "cache_len": cut, "target_cache": snap,
+                                  "draft_context": taps, "model_key": "k"})
+    assert receipt.result(timeout=30)["durable"]
+    mimo_session.clear()                                    # RAM tier gone: the restore comes from SSD
+    tok = type("T", (), {"convert_tokens_to_ids": lambda self, t: -1})()
+    resume = mimo_session.lookup("k", prompt, tok, tgt.model.make_cache, eos_ids=[E])
+    assert resume is not None and resume["source"] == "mimo-dflash-ssd" and resume["cache_len"] == cut
+    assert _run(tgt, drafter, prompt, 8, resume=resume) == _ar_greedy(model, prompt, 8)
     tgt.close()
 
 
