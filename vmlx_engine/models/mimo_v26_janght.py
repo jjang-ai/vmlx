@@ -277,9 +277,10 @@ def warm_mimo_v26_janght(model) -> float:
 def warm_attention_kernels(model) -> float:
     """Compile the long-context attention kernel variants at load. The three warm-up forwards run on a short cache,
     so the NAX 192/128 variants (aligned / unaligned tiles, key-range passes with the head-dim split, window + bool
-    mask + sinks) and the flash decode kernels (1-4 rows) otherwise compile inside the first long request
-    (measured: first DFlash chain turn decoded at 34.9 tok/s vs 53.9 with the kernels already built). Synthetic
-    inputs at the model's head counts; nothing is cached. Returns the seconds spent."""
+    mask + sinks) and the flash decode kernels (1-4 rows) otherwise compile inside the first long request. Suspected
+    in the first DFlash chain turn with flash decode on (34.9 tok/s decode vs 53.9 in the flash-off arm, which builds
+    none of the flash kernels); not separated from sampling noise on a 19-token answer. Compiling here costs 0.8 s
+    at load. Synthetic inputs at the model's head counts; nothing is cached. Returns the seconds spent."""
     import time
 
     t0 = time.perf_counter()
