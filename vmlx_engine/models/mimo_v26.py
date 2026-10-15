@@ -240,4 +240,7 @@ def load_mimo_v26(bundle):
     })
     for owner in (model, model.language_model, text):
         owner._vmlx_runtime_artifact_identity = identity
+    materialized = getattr(text, "_vmlx_prefill_scores_materialized", True)
+    for owner in (model, model.language_model):
+        owner._vmlx_prefill_scores_materialized = materialized
     return model, MiMoV26Processor(tokenizer, omni), config

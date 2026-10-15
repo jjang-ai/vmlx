@@ -12241,6 +12241,14 @@ class MLLMBatchGenerator:
                         16,
                         min(int(self.prefill_step_size), int(_tight_env_step)),
                     )
+                elif getattr(self.model, "_vmlx_prefill_scores_materialized", True) is False:
+                    # The model's prefill attention never builds a chunk x
+                    # context score buffer (MiMo-V2.6 JANGHT on the NAX
+                    # 192/128 kernel), which is the only term the projection
+                    # below sizes. Applying it anyway capped MiMo at 1024-row
+                    # chunks (519 at 112k context) against a configured 2048:
+                    # more chunks, each re-streaming every routed expert.
+                    _tight_text_prefill_step_size = int(self.prefill_step_size)
                 else:
                     # PROJECT the safe step instead of collapsing to a flat 64.
                     #

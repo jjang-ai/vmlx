@@ -95,6 +95,22 @@ def _nax(q, k, v, scale, mask, sinks, window=0):
     return nax_attention_bdv(q, k, v, scale=scale, mask=mask, sinks=sinks, window=window)
 
 
+def prefill_scores_materialized(model) -> bool:
+    """False when every layer's prefill attention (L > 8) runs on the NAX 192/128 kernel: full layers stream keys and
+    window layers read their band, so no chunk x context score buffer exists. The batched engine's tight-memory step
+    projection sizes chunks by exactly that buffer (prefill_admission.max_prefill_chunk_tokens); for this model it
+    capped the plain lane at 1024-row chunks, falling to 519 at 112k context, while the configured step was 2048."""
+    try:
+        if not _NAX_ATTENTION or not all(isinstance(layer.self_attn, _attention_class.cls)
+                                         for layer in model.model.layers):
+            return True
+        from ..metal import nax_attention_bdv as nab
+
+        return not (nab.available() and nab._self_check_passed())
+    except Exception:  # noqa: BLE001 - unknown means "assume materialized" (the existing projection stays)
+        return True
+
+
 def _swa_attention(q, k, v, scale, mask, sinks, window, cache):
     """Sliding-window layer: the model's window mask ("causal" while offset + L <= window, else a bool band over the
     temporally ordered keys that end at the last query) is passed through and the band is applied in-kernel too,
@@ -147,6 +163,8 @@ def _full_attention(q, k, v, scale, mask, sinks):
 
 
 def _attention_class():
+    if _attention_class.cls is not None:
+        return _attention_class.cls
     from jang_tools.mimo_v2 import v26_model as T
 
     class LongContextAttention(T.Attention):
@@ -175,7 +193,11 @@ def _attention_class():
             else:
                 o = _full_attention(q, k, v, self.scale, mask, sinks)
             return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
+    _attention_class.cls = LongContextAttention
     return LongContextAttention
+
+
+_attention_class.cls = None
 
 
 def is_janght_bundle(contract: dict | None) -> bool:
@@ -237,6 +259,7 @@ def load_mimo_v26_janght_text(bundle: str | Path):
         from ..utils.jang_loader import _set_wired_limit_for_model
 
         _set_wired_limit_for_model(sorted(bundle.glob("model-*.safetensors")))
+    model._vmlx_prefill_scores_materialized = prefill_scores_materialized(model)
     warm_mimo_v26_janght(model)
     cfg = json.loads((bundle / "config.json").read_text())
     gen = {}
