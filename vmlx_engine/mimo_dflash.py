@@ -455,7 +455,9 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
     yield [tokens[-1]], 0
     if tokens[-1] in eos:
         return
-    policy = AdaptiveSpec(bs0) if adaptive else None
+    from vmlx_engine.glm_dflash2 import adaptive_costs
+
+    policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0)) if adaptive else None
     if policy is not None:
         # measured costs for the request's stats line: why a text kept drafting or fell back to AR
         st.policy = {"_policy": policy}

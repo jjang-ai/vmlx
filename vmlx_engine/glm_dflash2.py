@@ -927,17 +927,30 @@ class AdaptiveSpec:
 
     def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
                  probe_every: int = 24, margin: float = 0.05, ar_burst: int = 8, slope: float = 0.22,
-                 explore_every: int = 6):
+                 explore_every: int = 6, costs: dict | None = None):
         self.bmax, self.bmin = int(bmax), int(bmin)
         self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
         self.n_try = [prior_n] * (self.bmax + 1)
         self.n_acc = [prior_n * prior_p] * (self.bmax + 1)
-        self.t_ar = None
-        self.t_round: dict[int, float] = {}
+        # Costs are a property of the model + kernels, not of the text: ``costs`` is the process-wide table for this
+        # target (adaptive_costs). Per request they were re-measured from scratch, so EVERY request opened with an
+        # 8-token AR burst (t_ar unknown) and re-seeded its round costs: GLM-5.3 and MiMo stats showed ar_tokens = 9 /
+        # 8 on every request of a 13-turn chain at 76-97 % acceptance. Acceptance (p_i) stays per request.
+        self._costs = costs if costs is not None else {}
+        self._shared_costs = costs is not None
+        self.t_round: dict[int, float] = self._costs.setdefault("rounds", {})
         self.ar_since_probe = 0
         self.slope, self.explore_every = slope, explore_every
         self.rounds_since_explore = 0
         self._explore_flip = False
+
+    @property
+    def t_ar(self):
+        return self._costs.get("ar")
+
+    @t_ar.setter
+    def t_ar(self, value) -> None:
+        self._costs["ar"] = value
 
     def p(self, i: int) -> float:
         return self.n_acc[i] / max(self.n_try[i], 1e-9)
@@ -998,8 +1011,26 @@ class AdaptiveSpec:
             self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
 
     def update_ar(self, dt_per_token: float, tokens: int) -> None:
-        self.t_ar = dt_per_token if self.t_ar is None else 0.7 * self.t_ar + 0.3 * dt_per_token
         self.ar_since_probe += tokens
+        if self._shared_costs and not self._costs.get("ar_warm"):
+            # the first AR burst of the process can include 1-row kernel compiles: a stored outlier would keep the
+            # shared table claiming AR is slow (and AR fallback off) for every later request
+            self._costs["ar_warm"] = True
+            if self.t_ar is None:
+                self.ar_since_probe = 0
+                return
+        self.t_ar = dt_per_token if self.t_ar is None else 0.7 * self.t_ar + 0.3 * dt_per_token
+
+
+def adaptive_costs(target, bmax: int) -> dict:
+    """AdaptiveSpec cost table for one target model and block range, shared by every request on that target (see
+    AdaptiveSpec). Kept on the target object itself: a process-wide dict keyed by id() would hand a later target that
+    reuses a freed id the old model's costs."""
+    tables = getattr(target, "_vmlx_adaptive_costs", None)
+    if not isinstance(tables, dict):
+        tables = {}
+        object.__setattr__(target, "_vmlx_adaptive_costs", tables)
+    return tables.setdefault(int(bmax), {})
 
 
 def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int, eos: set, temperature: float = 0.0,
@@ -1104,7 +1135,7 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
         yield [tokens[-1]], 0
         if tokens[-1] in eos:
             return
-        policy = AdaptiveSpec(bs0) if adaptive else None
+        policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0)) if adaptive else None
 
         def sample_row(lg, hist):
             last = lg[:, -1:]

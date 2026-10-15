@@ -625,3 +625,27 @@ def test_prefix_disk_chain_parents_read_only_mla_rows(tmp_path, monkeypatch):
         second.disk.close()
     finally:
         target.close()
+
+
+def test_adaptive_costs_are_shared_across_requests_on_one_target():
+    """Round / AR costs belong to the model + kernels: a second request on the same target starts from the measured
+    costs (no opening AR burst to re-measure t_ar); acceptance stays per request; another target has its own table;
+    the first AR burst of a shared table is a warm-up and is not recorded."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec, adaptive_costs
+
+    tgt, other = SimpleNamespace(), SimpleNamespace()
+    r1 = AdaptiveSpec(8, costs=adaptive_costs(tgt, 8))
+    r1.update_ar(0.200, 8)                                  # first burst in the table: compile outlier, not stored
+    assert r1.t_ar is None
+    r1.update_ar(0.030, 8)
+    for _ in range(10):
+        r1.update_spec(4, 3, 0.050)
+    r2 = AdaptiveSpec(8, costs=adaptive_costs(tgt, 8))
+    assert r2.t_ar == r1.t_ar == 0.030 and 4 in r2.t_round
+    assert r2.choose()[0] == "spec"                        # no opening AR burst
+    assert r2.n_try == AdaptiveSpec(8).n_try               # acceptance starts from the prior again
+    r3 = AdaptiveSpec(8, costs=adaptive_costs(other, 8))
+    assert r3.t_ar is None and not r3.t_round
+    assert adaptive_costs(tgt, 4) is not adaptive_costs(tgt, 8)
