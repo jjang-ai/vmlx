@@ -189,9 +189,12 @@ def load_mimo_v26_janght_text(bundle: str | Path):
     # on SimpleEngine lanes (DFlash on or off; the batched MLLM generator wires during generation) MiMo ran unwired:
     # after >= 1 s idle the next forward paid 0.6-1.0 s (17 rows: 150 -> 750-1185 ms in-process) and the GPU keep-alive
     # could not prevent it; wired, the keep-alive removes it (168-172 ms after 2 / 6 s idle, probe 2026-10-15).
-    from ..utils.jang_loader import _set_wired_limit_for_model
+    import os
 
-    _set_wired_limit_for_model(sorted(bundle.glob("model-*.safetensors")))
+    if os.environ.get("VMLX_MIMO_WIRE_AT_LOAD", "1").strip().lower() not in {"0", "false", "off", "no"}:
+        from ..utils.jang_loader import _set_wired_limit_for_model
+
+        _set_wired_limit_for_model(sorted(bundle.glob("model-*.safetensors")))
     warm_mimo_v26_janght(model)
     cfg = json.loads((bundle / "config.json").read_text())
     gen = {}
