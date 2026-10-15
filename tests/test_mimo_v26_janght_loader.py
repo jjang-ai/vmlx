@@ -181,3 +181,26 @@ def test_few_row_grouped_attention_matches_native(rows):
     out = J._full_attention(q, k, v, 192 ** -0.5, "causal", sinks)
     err = float(mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item())
     assert out.shape == ref.shape and err < 1e-2, err
+
+
+@pytest.mark.parametrize("rows", [1100, 300])
+@pytest.mark.parametrize("kind", ["bool", "additive"])
+def test_full_attention_array_mask_padded_path_matches_native(monkeypatch, rows, kind):
+    """The batched engine passes explicit masks; they take the padded fused path too (rows < 1024 are lifted)."""
+    import mlx.core as mx
+    from vmlx_engine.models import mimo_v26_janght as J
+
+    monkeypatch.setattr(J, "_SCORES_BUDGET_BYTES", 0)
+    H, KV, T = 8, 2, 2048
+    mx.random.seed(9)
+    q = mx.random.normal((1, H, rows, 192)).astype(mx.bfloat16)
+    k = mx.random.normal((1, KV, T, 192)).astype(mx.bfloat16)
+    v = mx.random.normal((1, KV, T, 128)).astype(mx.bfloat16)
+    sinks = mx.random.normal((H,)).astype(mx.bfloat16)
+    allowed = mx.arange(T)[None, :] <= (T - rows + mx.arange(rows)[:, None])
+    mask = allowed if kind == "bool" else mx.where(allowed, 0.0, -mx.inf).astype(mx.bfloat16)
+    mask = mask[None, None]
+    ref = mx.fast.scaled_dot_product_attention(q, k, v, scale=192 ** -0.5, mask=mask, sinks=sinks)
+    out = J._full_attention(q, k, v, 192 ** -0.5, mask, sinks)
+    err = float(mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item())
+    assert out.shape == ref.shape and err < 2e-2, err

@@ -65,20 +65,48 @@ def _grouped_few_rows(q, k, v, scale, sinks):
     return (p.astype(v.dtype).reshape(B, KV, G * L, T) @ v).reshape(B, H, L, dv)
 
 
+_PATHS_SEEN: set = set()
+
+
+def _note_path(path: str, mask) -> None:
+    """Log each (attention path, mask kind) once per process: which route a lane's prefill / verify really takes."""
+    kind = "none" if mask is None else ("causal" if isinstance(mask, str) else f"array:{mask.dtype}")
+    if (path, kind) not in _PATHS_SEEN:
+        _PATHS_SEEN.add((path, kind))
+        import logging
+
+        logging.getLogger(__name__).info("MiMo full-attention path: %s (mask %s)", path, kind)
+
+
 def _full_attention(q, k, v, scale, mask, sinks):
     B, H, L, dq = q.shape
     T, dv = int(k.shape[2]), int(v.shape[3])
+    causal = isinstance(mask, str) and mask == "causal"
+    array_mask = isinstance(mask, mx.array) and mask.ndim >= 2 and tuple(mask.shape[-2:]) == (L, T)
     if (_FEW_ROWS[0] <= L <= _FEW_ROWS[1] and T >= _FEW_ROWS_MIN_KEYS and H % int(k.shape[1]) == 0
-            and (mask is None or (isinstance(mask, str) and mask == "causal"))):
+            and (mask is None or causal)):
+        _note_path("grouped-few-rows", mask)
         return _grouped_few_rows(q, k, v, scale, sinks)
-    if (mask is not None and not (isinstance(mask, str) and mask == "causal")) or T < _FUSED_MIN_ROWS \
+    # Array masks (the batched engine's prefill passes explicit masks) are fused as well (measured: 0 GB transient,
+    # 2048 x 32k 298-358 ms vs 130 ms for "causal"), so they take the padded path too instead of materializing scores.
+    if (mask is not None and not causal and not array_mask) or T < _FUSED_MIN_ROWS \
             or H * L * T * 4 <= _SCORES_BUDGET_BYTES or max(dq, dv) > _FUSED_HEAD_DIM:
+        if H * L * T * 4 > _SCORES_BUDGET_BYTES:
+            _note_path("native-materialized-scores", mask)
         return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask, sinks=sinks)
+    _note_path("padded-fused" + ("-lifted" if L < _FUSED_MIN_ROWS else ""), mask)
     lift = max(0, _FUSED_MIN_ROWS - L)
     if lift:
         q = mx.concatenate([mx.zeros((B, H, lift, dq), dtype=q.dtype), q], axis=2)
+        if array_mask:
+            # lifted rows see key 0 only (never an all-masked row); their outputs are discarded
+            first = mx.arange(T) == 0
+            row = first if mask.dtype == mx.bool_ else mx.where(first, 0.0, -mx.inf).astype(mask.dtype)
+            pre = mx.broadcast_to(row, (*mask.shape[:-2], lift, T))
+            mask = mx.concatenate([pre, mask], axis=-2)
     pad = lambda a, d: a if d == _FUSED_HEAD_DIM else mx.pad(a, [(0, 0), (0, 0), (0, 0), (0, _FUSED_HEAD_DIM - d)])
-    o = mx.fast.scaled_dot_product_attention(pad(q, dq), pad(k, dq), pad(v, dv), scale=scale, mask="causal", sinks=sinks)
+    o = mx.fast.scaled_dot_product_attention(pad(q, dq), pad(k, dq), pad(v, dv), scale=scale,
+                                             mask=mask if array_mask else "causal", sinks=sinks)
     return o[:, :, lift:, :dv]
 
 
