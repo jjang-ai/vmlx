@@ -363,13 +363,15 @@ def build_mimo_v26_janght_model(bundle: str | Path):
     n = install_jangt(model, {"jangt": cfg["jangt"], "quantization": q})
     if n != n_moe:
         raise ValueError(f"MiMo JANGHT: installed {n} routed stacks, the config has {n_moe} MoE layers")
+    # fused routed combine in the sorted prefill (jangt/switch.py, metal/moe_combine.py): MiMo proven, opt-in per model
+    from vmlx_engine.jangt.switch import enable_fused_combine
+
+    enable_fused_combine(model)
     moe_cls = _moe_class()
     attn_cls = _attention_class()
     for layer in model.model.layers:
         if isinstance(layer.mlp, T.MoE):
             layer.mlp.__class__ = moe_cls
-            # fused routed combine in the sorted prefill (jangt/switch.py, metal/moe_combine.py); MiMo-only opt-in
-            object.__setattr__(layer.mlp.switch_mlp, "_fused_combine", True)
         layer.self_attn.__class__ = attn_cls
         if layer.self_attn.is_swa:
             layer.self_attn._window = int(args.sliding_window)

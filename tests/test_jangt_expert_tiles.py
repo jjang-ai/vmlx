@@ -85,3 +85,18 @@ def test_fused_combine_opt_in_equals_the_batched_matmul(dn_mode, T, monkeypatch)
     fused = _prefill(m, x, idx, w, monkeypatch, True, True)
     scale = float(np.abs(base).max())
     assert scale > 0 and float(np.abs(fused - base).max()) <= 1e-6 * scale
+
+
+def test_enable_fused_combine_flags_every_routed_stack_only():
+    import mlx.nn as nn
+
+    class Holder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = _module("jangt", 0, 21)
+            self.b = _module("jangh", 0, 22)
+            self.other = nn.Linear(4, 4)
+
+    h = Holder()
+    assert SW.enable_fused_combine(h) == 2
+    assert h.a._fused_combine and h.b._fused_combine and not hasattr(h.other, "_fused_combine")

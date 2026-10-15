@@ -271,6 +271,17 @@ def contract_key(path: str) -> str:
     return "model." + path.split("model.", 1)[1] + ".switch_mlp" if "model." in path else path + ".switch_mlp"
 
 
+def enable_fused_combine(model: nn.Module) -> int:
+    """Opt every JANGT routed stack of ``model`` into the fused sorted-prefill combine (metal/moe_combine.py).
+    Per model, never global: each family enables it only after its own same-state proof. Returns the count."""
+    n = 0
+    for _, module in model.named_modules():
+        if isinstance(module, JTMixedSwitchGLU):
+            object.__setattr__(module, "_fused_combine", True)
+            n += 1
+    return n
+
+
 def install_jangt(model: nn.Module, config: dict) -> int:
     """Replace every routed SwitchGLU with a JTMixedSwitchGLU per the per-module contract (fail closed). config:
     {"jangt", "quantization", optional "swiglu_limit" (clamped SwiGLU, GLM-5.3 = 10; absent/0 = plain SwiGLU)}.

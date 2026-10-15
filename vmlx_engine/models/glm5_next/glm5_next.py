@@ -2391,6 +2391,13 @@ class Model(nn.Module):
 
             self.jangt_modules = install_jangt(self, {"jangt": args.jangt, "quantization": args.quantization,
                                                       "swiglu_limit": args.swiglu_limit})
+            import os as _os
+
+            if _os.environ.get("VMLX_GLM_FUSED_COMBINE", "0") == "1":
+                # A/B only until GLM has its own same-state proof (MiMo: 2.9 -> 0.68 ms per 2048-token layer)
+                from vmlx_engine.jangt.switch import enable_fused_combine
+
+                enable_fused_combine(self)
         from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active
 
         if args.num_nextn_predict_layers > 0 and is_mtp_active():
