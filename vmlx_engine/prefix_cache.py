@@ -76,6 +76,60 @@ def _cleanup_phase_finish(start, site, request_id, succeeded, collected=None):
 
 
 _CACHE_HASH_DEBUG = os.environ.get("VMLX_CACHE_HASH_DEBUG", "") == "1"
+
+
+class _PrefixView:
+    """Read-only first-``n`` view of a list, shared by every prefix-index entry of one store.
+
+    ``_update_prefix_index`` indexes every block-aligned prefix of the stored sequence. Each entry used to own copies
+    ``tokens[:prefix_len]`` and ``block_ids[:i]``: O(blocks^2) per store and resident. MiMo-V2.6 plain lane, one
+    conversation growing ~9.3k tokens a turn: the index update took 2.6 ms at 9k retained tokens and 395 ms at 121k
+    (1,895 blocks: ~115 M list references copied per store, ~0.9 GB of lists kept), the whole growth of terminal
+    persistence (241 -> 812 ms). The readers only take len(), iterate, index and compare with lists, which this view
+    provides over one shared copy per store.
+    """
+
+    __slots__ = ("_base", "_n")
+    __hash__ = None
+
+    def __init__(self, base: list, n: int):
+        self._base = base
+        self._n = int(n)
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __iter__(self):
+        import itertools
+
+        return itertools.islice(self._base, self._n)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._n)    # bounded to the view, no full-prefix copy
+            return self._base[start:stop:step]
+        n = self._n
+        i = index + n if index < 0 else index
+        if not 0 <= i < n:
+            raise IndexError("prefix view index out of range")
+        return self._base[i]
+
+    def _items(self) -> list:
+        return self._base if self._n == len(self._base) else self._base[: self._n]
+
+    def __eq__(self, other):
+        if isinstance(other, _PrefixView):
+            return self._n == other._n and (self._base is other._base or self._items() == other._items())
+        if isinstance(other, (list, tuple)):
+            return len(other) == self._n and self._items() == list(other)
+        return NotImplemented
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        return result if result is NotImplemented else not result
+
+    def __repr__(self) -> str:
+        return f"_PrefixView(n={self._n})"
 # One INFO line per block-aware store with host-side phase times (settle of the previous write-behind, block
 # allocation, the Metal synchronize before the NumPy mirror, the mirror, the per-block loop, the write fence). Diagnosis
 # of terminal persistence growing with context (MiMo plain lane: 241 -> 812 ms from 9k to 121k retained tokens while
@@ -5347,11 +5401,13 @@ class BlockAwarePrefixCache:
         defer_post_fence_gc: bool = False,
     ) -> Optional[BlockTable]:
         """Store cache data and deterministically terminate any begun L2 fence."""
-        marks = [("start", time.perf_counter())] if _STORE_PHASE_TRACE else None
+        # VMLX_STORE_PHASE_TRACE (see _STORE_PHASE_TRACE): read here so this lifecycle wrapper stays self-contained
+        marks = [("start", time.perf_counter())] if os.environ.get("VMLX_STORE_PHASE_TRACE", "") == "1" else None
         self._store_phase_marks = marks
         if getattr(self, "_write_behind_entries", None):
             self.settle_write_behind()
-        self._store_phase_mark("settle_prev")
+        if marks is not None:
+            marks.append(("settle_prev", time.perf_counter()))
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
             tokens,
             cache_extra_keys,
@@ -5370,9 +5426,11 @@ class BlockAwarePrefixCache:
                 _write_fence=write_fence,
                 _defer_gc=defer_post_fence_gc,
             )
-            self._store_phase_mark("impl_tail")
+            if marks is not None:
+                marks.append(("impl_tail", time.perf_counter()))
             self._settle_native_write_fence(request_id, write_fence)
-            self._store_phase_mark("fence")
+            if marks is not None:
+                marks.append(("fence", time.perf_counter()))
             if marks:
                 steps = ", ".join(f"{name}={1000 * (t - marks[i][1]):.1f}" for i, (name, t) in enumerate(marks[1:]))
                 logger.info("VMLX_STORE_PHASES request=%s tokens=%d total_ms=%.1f %s", request_id, len(tokens),
@@ -9424,7 +9482,8 @@ class BlockAwarePrefixCache:
                     cache_extra_keys=cache_extra_keys,
                 )
                 if valid:
-                    best_match = (cached_tokens, block_ids)
+                    # plain lists for the caller (index entries are shared _PrefixView objects)
+                    best_match = (list(cached_tokens), list(block_ids))
                     break
                 elif self._prefix_index.get(prefix_hash) is entry:
                     # Remove only the stale entry we actually validated.
@@ -9657,7 +9716,10 @@ class BlockAwarePrefixCache:
         block_ids: List[int],
         cache_extra_keys: Optional[Any] = None,
     ) -> None:
-        """Update prefix index with new token sequence."""
+        """Update prefix index with new token sequence.
+
+        One copy of ``tokens`` and ``block_ids`` per store; every prefix entry views it (_PrefixView)."""
+        base_tokens, base_ids = list(tokens), list(block_ids)
         with self.paged_cache._lock:
             # Index block-aligned prefixes.
             if self._chained_prefix_index_hash:
@@ -9668,8 +9730,8 @@ class BlockAwarePrefixCache:
                     start=1,
                 ):
                     self._prefix_index[prefix_hash] = (
-                        tokens[:prefix_len],
-                        block_ids[:i],
+                        _PrefixView(base_tokens, prefix_len),
+                        _PrefixView(base_ids, i),
                         self._prefix_index_extra_marker(
                             cache_extra_keys, prefix_len
                         ),
@@ -9682,8 +9744,8 @@ class BlockAwarePrefixCache:
                 start=1,
             ):
                 self._prefix_index[prefix_hash] = (
-                    tokens[:prefix_len],
-                    block_ids[:i],
+                    _PrefixView(base_tokens, prefix_len),
+                    _PrefixView(base_ids, i),
                     self._prefix_index_extra_marker(
                         cache_extra_keys, prefix_len
                     ),
