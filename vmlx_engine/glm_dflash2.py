@@ -1007,6 +1007,13 @@ class AdaptiveSpec:
                 self.n_try[i] += 1.0
             if i <= accepted:
                 self.n_acc[i] += 1.0
+        if self._shared_costs:
+            warm = self._costs.setdefault("warm_rounds", set())
+            if b not in warm:
+                # first round at this block size in the shared table: drafter / verify kernels compile inside it; a
+                # stored outlier would steer every later request toward AR (as _BlockChooser's warm set)
+                warm.add(b)
+                return
         if not after_ar or b not in self.t_round:
             self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
 

@@ -291,16 +291,25 @@ def test_prefix_store_reuse_is_lossless(adaptive):
     from vmlx_engine.glm_dflash2 import PrefixStore
     model = _target(5)
     target = GLMDFlashTarget(model, TAPS)
+
+    def fresh_policy():
+        # The adaptive policy's measured costs are shared by every request on a target (f1e5345f), so the AR / verify
+        # schedule of a later request differs from the first one's, and verify vs AR logits round differently. This
+        # test is about the prefix store, so each generation starts from the same (empty) cost table.
+        target.__dict__.pop("_vmlx_adaptive_costs", None)
+
     try:
         p1 = list(range(5, 42)); p2 = p1 + list(range(60, 77))          # 37 then 54 tokens (not multiples of 4/64)
         cold = {}
         for name, p in (("p1", p1), ("p2", p2)):
             ref, _ = _ar_logits(model, p, 24)
+            fresh_policy()
             cold[name] = list(generate_dflash2(target, ScriptedDraft(ref, 4), p, 24, eos=set(), adaptive=adaptive))
         store = PrefixStore(4)
         runs = []
         for name, p in (("p1", p1), ("p2", p2), ("p1", p1)):
             ref, _ = _ar_logits(model, p, 24)
+            fresh_policy()
             st = SpecStats()
             got = list(generate_dflash2(target, ScriptedDraft(ref, 4), p, 24, eos=set(), stats=st, adaptive=adaptive,
                                         prefix_store=store))
@@ -640,8 +649,11 @@ def test_adaptive_costs_are_shared_across_requests_on_one_target():
     r1.update_ar(0.200, 8)                                  # first burst in the table: compile outlier, not stored
     assert r1.t_ar is None
     r1.update_ar(0.030, 8)
+    r1.update_spec(4, 3, 0.900)                             # first round at block 4: compile outlier, not stored
+    assert 4 not in r1.t_round
     for _ in range(10):
         r1.update_spec(4, 3, 0.050)
+    assert abs(r1.t_round[4] - 0.050) < 1e-9
     r2 = AdaptiveSpec(8, costs=adaptive_costs(tgt, 8))
     assert r2.t_ar == r1.t_ar == 0.030 and 4 in r2.t_round
     assert r2.choose()[0] == "spec"                        # no opening AR burst

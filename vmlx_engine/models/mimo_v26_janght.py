@@ -121,7 +121,9 @@ def _nax(q, k, v, scale, mask, sinks, window=0):
 
 def prefill_scores_materialized(model) -> bool:
     """False when every layer's prefill attention (L > 8) runs on the NAX 192/128 kernel: full layers stream keys and
-    window layers read their band, so no chunk x context score buffer exists. The batched engine's tight-memory step
+    window layers read their band, so no chunk x context score buffer of prefill-chunk size exists. (A 9-16-row call
+    over >= 4096 keys still takes _grouped_few_rows, which materializes H x L x T fp32: ~0.5 GB at 131k keys, ~1/128 of
+    the 2048-row buffer the projection sizes.) The batched engine's tight-memory step
     projection sizes chunks by exactly that buffer (prefill_admission.max_prefill_chunk_tokens); for this model it
     capped the plain lane at 1024-row chunks, falling to 519 at 112k context, while the configured step was 2048."""
     try:
