@@ -76,6 +76,11 @@ def _cleanup_phase_finish(start, site, request_id, succeeded, collected=None):
 
 
 _CACHE_HASH_DEBUG = os.environ.get("VMLX_CACHE_HASH_DEBUG", "") == "1"
+# One INFO line per block-aware store with host-side phase times (settle of the previous write-behind, block
+# allocation, the Metal synchronize before the NumPy mirror, the mirror, the per-block loop, the write fence). Diagnosis
+# of terminal persistence growing with context (MiMo plain lane: 241 -> 812 ms from 9k to 121k retained tokens while
+# every turn adds ~147 blocks); the Metal waits hold the GIL, so a Python sampler cannot attribute them.
+_STORE_PHASE_TRACE = os.environ.get("VMLX_STORE_PHASE_TRACE", "") == "1"
 
 # Bump this when the token->cache-state contract changes for paged prefix
 # caches or their block-level L2 disk namespace. 2026-05-03 changed paged
@@ -5342,8 +5347,11 @@ class BlockAwarePrefixCache:
         defer_post_fence_gc: bool = False,
     ) -> Optional[BlockTable]:
         """Store cache data and deterministically terminate any begun L2 fence."""
+        marks = [("start", time.perf_counter())] if _STORE_PHASE_TRACE else None
+        self._store_phase_marks = marks
         if getattr(self, "_write_behind_entries", None):
             self.settle_write_behind()
+        self._store_phase_mark("settle_prev")
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
             tokens,
             cache_extra_keys,
@@ -5362,7 +5370,13 @@ class BlockAwarePrefixCache:
                 _write_fence=write_fence,
                 _defer_gc=defer_post_fence_gc,
             )
+            self._store_phase_mark("impl_tail")
             self._settle_native_write_fence(request_id, write_fence)
+            self._store_phase_mark("fence")
+            if marks:
+                steps = ", ".join(f"{name}={1000 * (t - marks[i][1]):.1f}" for i, (name, t) in enumerate(marks[1:]))
+                logger.info("VMLX_STORE_PHASES request=%s tokens=%d total_ms=%.1f %s", request_id, len(tokens),
+                            1000 * (marks[-1][1] - marks[0][1]), steps)
             # SSD-only publication waits for the writer fence above, so every
             # MLX-backed NumPy view has been released before this point. The
             # per-block allocations were evaluated on this model-owning thread;
@@ -5457,6 +5471,11 @@ class BlockAwarePrefixCache:
                         fence_id,
                         request_id,
                     )
+
+    def _store_phase_mark(self, name: str) -> None:
+        marks = getattr(self, "_store_phase_marks", None)
+        if marks is not None:
+            marks.append((name, time.perf_counter()))
 
     def _store_cache_impl(
         self,
@@ -5676,6 +5695,7 @@ class BlockAwarePrefixCache:
             # All tokens already cached
             return block_table
 
+        self._store_phase_mark("prepare")
         # Allocate blocks for new tokens
         num_new_blocks = (len(new_tokens) + self.block_size - 1) // self.block_size
 
@@ -5849,6 +5869,7 @@ class BlockAwarePrefixCache:
             # but the stock BatchGenerator and the default stream are not
             # covered — a bare mx.synchronize() handles both.
             mx.synchronize()
+            self._store_phase_mark("sync")
             for idx, layer_state in enumerate(cache_data):
                 cls = layer_state.get("class_name", "")
                 if _is_zaya_cca_cache_list_state(layer_state):
@@ -5969,6 +5990,7 @@ class BlockAwarePrefixCache:
             )
         )
 
+        self._store_phase_mark("np_mirror")
         pending_disk_writes: list = []
         disk_only_fallbacks: dict = {}
         native_paged_holds: dict = {}
@@ -6571,6 +6593,7 @@ class BlockAwarePrefixCache:
 
             parent_hash = block_chain_hash
 
+        self._store_phase_mark("block_loop")
         # Release every full-cache numpy VIEW immediately after extraction.
         # These views no longer duplicate F16/F32 source storage, but their
         # memoryview bases deliberately keep source/bridge MLX buffers alive.
@@ -6610,6 +6633,7 @@ class BlockAwarePrefixCache:
                 )
         except Exception:
             pass
+        self._store_phase_mark("views_gc")
 
         # Write deferred disk blocks (all numpy — no MLX/Metal ops).
         if pending_disk_writes and disk_store is not None:
@@ -6651,6 +6675,7 @@ class BlockAwarePrefixCache:
             _write_fence["disk_only_fallbacks"] = disk_only_fallbacks
         if native_paged_holds:
             _write_fence["native_paged_holds"] = native_paged_holds
+        self._store_phase_mark("disk_admit")
 
         # Update prefix index
         self._update_prefix_index(
@@ -6658,6 +6683,7 @@ class BlockAwarePrefixCache:
             block_table.block_ids,
             cache_extra_keys=cache_extra_keys,
         )
+        self._store_phase_mark("prefix_index")
 
         # Store entry for request (for legacy compatibility)
         norm_type = cache_type if cache_type in ("system", "user", "assistant") else "assistant"
@@ -6711,6 +6737,7 @@ class BlockAwarePrefixCache:
                         )
                 except Exception:
                     pass
+        self._store_phase_mark("tensor_gc_clear")
 
         # Track in per-type bucket for priority-aware eviction (F1 backport).
         # Drop old entry from any other bucket (request may have been re-stored
@@ -6741,6 +6768,7 @@ class BlockAwarePrefixCache:
         # ones evicted here.
         if self.paged_cache.enforces_byte_budget:
             self.paged_cache.enforce_byte_budget()
+        self._store_phase_mark("bookkeeping")
 
         return block_table
 
