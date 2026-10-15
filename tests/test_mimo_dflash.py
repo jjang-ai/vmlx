@@ -168,6 +168,9 @@ def test_snapshot_clone_isolated_from_later_rotating_writes(tmp_path):
     out = _run(tgt, drafter, prompt, 12, snapshot_cuts=[37], on_snapshot=on_snap)
     assert out == _ar_greedy(model, prompt, 12)
     (cut, snap, taps), = snaps
+    from mlx_lm.models.cache import RotatingKVCache
+    rings = [c for c in snap if isinstance(c, RotatingKVCache)]
+    assert rings and all(int(c.keys.shape[2]) <= int(c.max_size) for c in rings)   # dead concat rows trimmed
     before = [np.array(c.keys.astype(mx.float32)) for c in snap if c.keys is not None]
     _run(tgt, drafter, prompt + out, 10)                   # unrelated decoding on a fresh cache must not touch it
     resume = {"target_cache": snap, "draft_context": taps, "cache_len": cut}

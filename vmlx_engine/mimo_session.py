@@ -91,6 +91,18 @@ def clone(caches: list, factory: Callable) -> Optional[list]:
         for dst, src in zip(fresh, caches):
             state = src.state
             if isinstance(src, RotatingKVCache):
+                window = int(src.max_size)
+                keys = src.keys
+                if (keys is not None and int(src.keep) == 0 and int(keys.shape[2]) > window
+                        and int(src._idx) == int(keys.shape[2])):
+                    # Right after a multi-row prefill chunk the ring is in concat mode holding window - 1 + chunk
+                    # rows in temporal order; only the last `window` rows are ever attended again (the next update
+                    # drops the oldest). Keep those: a 2048-row chunk otherwise put ~434 MB of dead SWA rows into
+                    # every boundary snapshot (500 MB entries vs 282 MB end-of-turn entries on the 2026-10-15 chain).
+                    k, v = keys[..., -window:, :] * 1, src.values[..., -window:, :] * 1
+                    dst.state = [k, v]
+                    dst.meta_state = tuple(str(x) for x in (src.keep, window, src.offset, window))
+                    continue
                 state = [None if a is None else a * 1 for a in state]
             dst.state = list(state) if isinstance(state, (list, tuple)) else state
             if isinstance(src, RotatingKVCache):
