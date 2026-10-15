@@ -14,6 +14,7 @@ the reference's accumulation). No process-wide patch: the MoE subclass is assign
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import mlx.core as mx
@@ -68,14 +69,44 @@ def _grouped_few_rows(q, k, v, scale, sinks):
 _PATHS_SEEN: set = set()
 
 
-def _note_path(path: str, mask) -> None:
+def _note_path(path: str, mask, layer: str = "full") -> None:
     """Log each (attention path, mask kind) once per process: which route a lane's prefill / verify really takes."""
     kind = "none" if mask is None else ("causal" if isinstance(mask, str) else f"array:{mask.dtype}")
-    if (path, kind) not in _PATHS_SEEN:
-        _PATHS_SEEN.add((path, kind))
+    if (layer, path, kind) not in _PATHS_SEEN:
+        _PATHS_SEEN.add((layer, path, kind))
         import logging
 
-        logging.getLogger(__name__).info("MiMo full-attention path: %s (mask %s)", path, kind)
+        logging.getLogger(__name__).info("MiMo %s-attention path: %s (mask %s)", layer, path, kind)
+
+
+# Native 192/128 NAX attention (metal/nax_attention_bdv.py): MLX's own NAX flash kernel with a separate value head
+# dim, no padding, no q/k/v copies, key-range passes at long context; the sliding-window layers get an in-kernel band
+# (a tile reads only the ~5 key blocks its rows can see) instead of materialized scores. Declines (returns None) off
+# NAX GPUs, for L <= 8, non-bool array masks, and other head dims; the routes below stay as the fallback.
+# VMLX_MIMO_NAX_ATTENTION=0 turns it off (A/B only).
+_NAX_ATTENTION = os.environ.get("VMLX_MIMO_NAX_ATTENTION", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def _nax(q, k, v, scale, mask, sinks, window=0):
+    if not _NAX_ATTENTION:
+        return None
+    from ..metal.nax_attention_bdv import nax_attention_bdv
+
+    return nax_attention_bdv(q, k, v, scale=scale, mask=mask, sinks=sinks, window=window)
+
+
+def _swa_attention(q, k, v, scale, mask, sinks, window, cache):
+    """Sliding-window layer: the model's window mask ("causal" while offset + L <= window, else a bool band over the
+    temporally ordered keys that end at the last query) is passed through and the band is applied in-kernel too,
+    so the kernel only skips key blocks the mask already excludes."""
+    if int(q.shape[2]) > 8 and not hasattr(cache, "bits"):
+        o = _nax(q, k, v, scale, mask, sinks, window)
+        if o is not None:
+            _note_path("nax-bdv-window", mask, layer="sliding-window")
+            return o
+    from mlx_lm.models.base import scaled_dot_product_attention
+
+    return scaled_dot_product_attention(q, k, v, cache, scale, mask=mask, sinks=sinks)
 
 
 def _full_attention(q, k, v, scale, mask, sinks):
@@ -87,6 +118,11 @@ def _full_attention(q, k, v, scale, mask, sinks):
             and (mask is None or causal)):
         _note_path("grouped-few-rows", mask)
         return _grouped_few_rows(q, k, v, scale, sinks)
+    if L > 8:
+        o = _nax(q, k, v, scale, mask, sinks)
+        if o is not None:
+            _note_path("nax-bdv", mask)
+            return o
     # Array masks (the batched engine's prefill passes explicit masks) are fused as well (measured: 0 GB transient,
     # 2048 x 32k 298-358 ms vs 130 ms for "causal"), so they take the padded path too instead of materializing scores.
     if (mask is not None and not causal and not array_mask) or T < _FUSED_MIN_ROWS \
@@ -114,7 +150,10 @@ def _attention_class():
     from jang_tools.mimo_v2 import v26_model as T
 
     class LongContextAttention(T.Attention):
-        """v26 full-attention layer whose attention call stays on MLX's fused kernel at long context (see above)."""
+        """v26 attention layer on fused kernels at every context (see above); `_window` > 0 marks a sliding-window
+        layer (set at build from config.sliding_window)."""
+
+        _window = 0
 
         def __call__(self, x, mask=None, cache=None):
             B, L, _ = x.shape
@@ -131,7 +170,10 @@ def _attention_class():
             if cache is not None:
                 k, v = cache.update_and_fetch(k, v)
             sinks = self.attention_sink_bias.astype(q.dtype) if self.has_sink else None
-            o = _full_attention(q, k, v, self.scale, mask, sinks)
+            if self.is_swa:
+                o = _swa_attention(q, k, v, self.scale, mask, sinks, self._window, cache)
+            else:
+                o = _full_attention(q, k, v, self.scale, mask, sinks)
             return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
     return LongContextAttention
 
@@ -227,8 +269,9 @@ def build_mimo_v26_janght_model(bundle: str | Path):
     for layer in model.model.layers:
         if isinstance(layer.mlp, T.MoE):
             layer.mlp.__class__ = moe_cls
-        if not layer.self_attn.is_swa:
-            layer.self_attn.__class__ = attn_cls
+        layer.self_attn.__class__ = attn_cls
+        if layer.self_attn.is_swa:
+            layer.self_attn._window = int(args.sliding_window)
     index = json.loads((bundle / "model.safetensors.index.json").read_text())["weight_map"]
     weights = {}
     for shard in sorted(set(index.values())):
