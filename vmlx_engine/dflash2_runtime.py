@@ -682,19 +682,28 @@ def _assistant_tag_cut(tokenizer: Any, prompt_list: list[int], cache_len: int):
 
 
 def _system_end_cut(tokenizer: Any, prompt_list: list[int], cache_len: int):
-    """Index of the first <|im_start|> after a leading system message, or None
-    (no system message, or the cache already covers it)."""
+    """Index of the first <|im_start|> after the leading system message(s), or None
+    (no system message, or the cache already covers it).
+
+    Consecutive leading system blocks count as one: MiMo-V2.6's template renders the tools as their own first system
+    block and the conversation's system prompt as a second one, so stopping at the first block snapshotted only the
+    tool list (raw API row: 77 of 4,602 tokens reused by a new chat with the same tools + system prompt)."""
     try:
         tag = int(tokenizer.convert_tokens_to_ids("<|im_start|>"))
-        role = tokenizer.encode("system", add_special_tokens=False)
+        role = list(tokenizer.encode("system", add_special_tokens=False))
     except Exception:
         return None
-    if tag < 0 or not prompt_list or prompt_list[0] != tag or prompt_list[1:1 + len(role)] != list(role):
+    if tag < 0 or not prompt_list or prompt_list[0] != tag or prompt_list[1:1 + len(role)] != role:
         return None
-    for i in range(1, len(prompt_list)):
-        if prompt_list[i] == tag:
-            return i if cache_len < i < len(prompt_list) else None
-    return None
+    pos = 0
+    while True:
+        nxt = next((i for i in range(pos + 1, len(prompt_list)) if prompt_list[i] == tag), None)
+        if nxt is None:
+            return None
+        if prompt_list[nxt + 1:nxt + 1 + len(role)] == role:
+            pos = nxt                                  # another system block follows: extend the cut past it
+            continue
+        return nxt if cache_len < nxt < len(prompt_list) else None
 
 
 def _checkpoint_correction(cycle_committed: int, cycle_kept: int):

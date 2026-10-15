@@ -359,6 +359,10 @@ def test_system_end_cut_marks_the_first_tag_after_a_system_message():
     assert _system_end_cut(Tok(), sys_prompt, 0) == 6
     assert _system_end_cut(Tok(), sys_prompt, 6) is None          # already cached
     assert _system_end_cut(Tok(), [900, 12, 8, 901, 900, 13], 0) is None   # no system message
+    # MiMo-V2.6: tools as a first system block, then the conversation's system prompt: the cut is after both
+    two_systems = [900, 11, 70, 71, 901, 900, 11, 5, 6, 901, 900, 12, 8, 901, 900, 13]
+    assert _system_end_cut(Tok(), two_systems, 0) == 10
+    assert _system_end_cut(Tok(), [900, 11, 70, 901, 900, 11, 5, 901], 0) is None   # nothing after the systems
 
 
 def test_full_undo_rollback_restores_the_forward_start_on_mlx_vlm_targets():
