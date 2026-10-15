@@ -1857,7 +1857,7 @@ function applyJangCapabilities(
     next.reasoningParser = 'think_xml'
     next.supportsThinking = true
     next.thinkInTemplate = false
-    if (jangCfg.weight_format === 'mixed_affine_mxfp4') {
+    if (isMimoV26Contract(jangCfg)) {
       // Fresh V2.6 uses the vendor template's native default-on control.
       next.defaultEnableThinking = jangCfg.chat?.thinking?.default !== false
       next.cacheSubtype = 'mimo_v2_asymmetric_swa'
@@ -1939,9 +1939,28 @@ function applyJangCapabilities(
   return next
 }
 
+/**
+ * The engine's MiMo-V2.6 runtime contract (vmlx_engine/models/mimo_v26_contract.read_mimo_v26_contract): the RL JANG_2L
+ * family (weight_format mixed_affine_mxfp4) or a JANGHT / JANGH bundle (format jangtq2 with a routed JANGT contract).
+ * Gating on mixed_affine_mxfp4 alone sent JANGHT bundles (modality "omni", no weight_format) to the Nemotron omni
+ * artifact check: detected text-only, so text-only follow-ups dropped earlier images/video/audio from the history.
+ * parsedConfig (config.json) is checked when available, as the engine does; otherwise jang_config's own jangt block.
+ */
+function isMimoV26Contract(jangCfg: any, parsedConfig?: any): boolean {
+  if (jangCfg?.weight_format === 'mixed_affine_mxfp4') return true
+  if (jangCfg?.format !== 'jangtq2') return false
+  if (parsedConfig) {
+    const q = parsedConfig.quantization
+    return !!parsedConfig.jangt && typeof parsedConfig.jangt === 'object' && !!q && typeof q === 'object'
+      && Object.entries(q).some(([k, v]: [string, any]) =>
+        k.includes('.mlp.switch_mlp.') && !!v && typeof v === 'object' && (v.mode === 'jangt' || v.mode === 'jangtq2'))
+  }
+  return !!jangCfg.jangt && typeof jangCfg.jangt === 'object'
+}
+
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any, modelPath: string): boolean {
   const hasMediaConfig = configDeclaresMedia(parsedConfig)
-  if (parsedConfig?.model_type === 'mimo_v2' && jangCfg?.weight_format === 'mixed_affine_mxfp4') {
+  if (parsedConfig?.model_type === 'mimo_v2' && isMimoV26Contract(jangCfg, parsedConfig)) {
     // MiMo's native omni contract is separate from Nemotron's config_omni.json.
     const keys = bundleArtifactWeightKeys(modelPath) ?? []
     const visual = (jangCfg.has_vision === true || jangCfg.has_video === true)

@@ -2620,6 +2620,40 @@ describe('detectModelConfigFromDir local high-risk artifact parity', () => {
     expect(detected.runtimeModalities).toEqual(media ? ['text', 'vision', 'video', 'audio'] : ['text'])
     expect(!!detected.forceTextOnly).toBe(!media)
   })
+  it.each([false, true])('detects MiMo V2.6 JANGHT (jangtq2 + routed JANGT contract) media and thinking: %s', media => {
+    const dir = makeModelDir({
+      model_type: 'mimo_v2', vision_config: { depth: 28 }, audio_config: { d_model: 1280 },
+      jangt: { version: 1, code: 'v2_halfbits' },
+      quantization: { 'model.layers.1.mlp.switch_mlp.gate_proj': { mode: 'jangt', kbits: 2 } },
+    }, {
+      format: 'jangtq2', has_vision: media, has_video: media, has_audio: false,
+      jangt: { version: 1 },
+      chat: { thinking: { supported: true, default: true } },
+      capabilities: { family: 'mimo_v2', cache_type: 'kv', supports_tools: true, modality: 'omni',
+        modalities: { text: true, vision: media, video: media, audio: false } },
+    })
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: { 'visual.patch_embed.proj.weight': 'model-00001-of-00001.safetensors' },
+    }))
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('mimo_v2')
+    expect(detected.isMultimodal).toBe(media)
+    expect(detected.defaultEnableThinking).toBe(true)
+    expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
+  })
+
+  it('keeps a jangtq2 MiMo bundle without a routed JANGT contract off the V2.6 media route', () => {
+    const dir = makeModelDir({ model_type: 'mimo_v2', vision_config: { depth: 28 } }, {
+      format: 'jangtq2', has_vision: true,
+      capabilities: { family: 'mimo_v2', cache_type: 'kv', modality: 'omni',
+        modalities: { text: true, vision: true } },
+    })
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: { 'visual.patch_embed.proj.weight': 'model-00001-of-00001.safetensors' },
+    }))
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.cacheSubtype).toBeUndefined()
+  })
   const rows: Array<{
       name: string
       path: string
