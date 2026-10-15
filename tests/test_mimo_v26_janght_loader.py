@@ -163,3 +163,21 @@ def test_full_attention_padded_fused_path_matches_native(monkeypatch, rows, keys
     assert out.shape == ref.shape == (1, H, rows, 128)
     err = float(mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item())
     assert err < 2e-2, err
+
+
+@pytest.mark.parametrize("rows", [3, 8, 16])
+def test_few_row_grouped_attention_matches_native(rows):
+    """DFlash verify rows over a long cache take the grouped (GQA folded) path; same result as the native call."""
+    import mlx.core as mx
+    from vmlx_engine.models import mimo_v26_janght as J
+
+    H, KV, T = 16, 2, 4200
+    mx.random.seed(5)
+    q = mx.random.normal((1, H, rows, 192)).astype(mx.bfloat16)
+    k = mx.random.normal((1, KV, T, 192)).astype(mx.bfloat16)
+    v = mx.random.normal((1, KV, T, 128)).astype(mx.bfloat16)
+    sinks = mx.random.normal((H,)).astype(mx.bfloat16)
+    ref = mx.fast.scaled_dot_product_attention(q, k, v, scale=192 ** -0.5, mask="causal", sinks=sinks)
+    out = J._full_attention(q, k, v, 192 ** -0.5, "causal", sinks)
+    err = float(mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item())
+    assert out.shape == ref.shape and err < 1e-2, err

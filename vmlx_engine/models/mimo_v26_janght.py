@@ -36,9 +36,41 @@ _FUSED_HEAD_DIM = 256
 _SCORES_BUDGET_BYTES = 1 << 30
 
 
+# Few query rows (a DFlash verify round, 3-16 rows) against a long cache: MLX's fallback broadcasts the 4 kv heads to
+# the 64 query heads and materializes the scores (8 rows x 131k keys: 15.4 ms per full layer vs 1.7 ms for one decode
+# row). Folding the 16 query heads that share a kv head into the row axis reads each key once; the softmax with the
+# sink logit runs as one compiled fp32 kernel: 8 rows 10.3 ms at 131k, 2.6 ms at 32k (native 4.2); 4 rows 6.9 ms at
+# 131k (native 15.6). Two rows stay native (MLX is faster there). Differs from the native call by ~1e-4 (fp32 softmax).
+_FEW_ROWS = (3, 16)
+_FEW_ROWS_MIN_KEYS = 4096
+
+
+@mx.compile
+def _softmax_with_sinks(s, allowed, sink):
+    s = mx.where(allowed, s, -mx.inf)
+    m = mx.maximum(mx.max(s, axis=-1, keepdims=True), sink)
+    p = mx.exp(s - m)
+    return p / (p.sum(axis=-1, keepdims=True) + mx.exp(sink - m))
+
+
+def _grouped_few_rows(q, k, v, scale, sinks):
+    """Causal attention of the last L query rows over T keys, GQA folded into the rows (see _FEW_ROWS)."""
+    B, H, L, dq = q.shape
+    KV, T, dv = int(k.shape[1]), int(k.shape[2]), int(v.shape[3])
+    G = H // KV
+    s = ((q * scale).reshape(B, KV, G * L, dq) @ k.transpose(0, 1, 3, 2)).astype(mx.float32).reshape(B, KV, G, L, T)
+    allowed = mx.arange(T)[None, :] <= (T - L + mx.arange(L)[:, None])
+    sink = (sinks.astype(mx.float32) if sinks is not None else mx.full((H,), -mx.inf)).reshape(1, KV, G, 1, 1)
+    p = _softmax_with_sinks(s, allowed, sink)
+    return (p.astype(v.dtype).reshape(B, KV, G * L, T) @ v).reshape(B, H, L, dv)
+
+
 def _full_attention(q, k, v, scale, mask, sinks):
     B, H, L, dq = q.shape
     T, dv = int(k.shape[2]), int(v.shape[3])
+    if (_FEW_ROWS[0] <= L <= _FEW_ROWS[1] and T >= _FEW_ROWS_MIN_KEYS and H % int(k.shape[1]) == 0
+            and (mask is None or (isinstance(mask, str) and mask == "causal"))):
+        return _grouped_few_rows(q, k, v, scale, sinks)
     if (mask is not None and not (isinstance(mask, str) and mask == "causal")) or T < _FUSED_MIN_ROWS \
             or H * L * T * 4 <= _SCORES_BUDGET_BYTES or max(dq, dv) > _FUSED_HEAD_DIM:
         return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask, sinks=sinks)
