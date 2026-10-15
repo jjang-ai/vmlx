@@ -5537,6 +5537,12 @@ def load_jang_model(
     _ensure_zaya_runtime_supported(path, jang_cfg)
     hf_config = _read_hf_config(path)
     _ensure_jang_family_runtime_supported(path, hf_config)
+    # MiMo-V2.6 JANGHT (mixed JANGT/JANGH routed experts): its own loader, also on the text-only route.
+    if str(hf_config.get("model_type", "")).lower() == "mimo_v2":
+        from ..models.mimo_v26_contract import read_mimo_v26_contract
+        from ..models.mimo_v26_janght import is_janght_bundle, load_mimo_v26_janght_text
+        if is_janght_bundle(read_mimo_v26_contract(path)):
+            return load_mimo_v26_janght_text(path)
 
     def _finalize_loaded_jang(result):
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract

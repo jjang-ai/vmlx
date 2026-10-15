@@ -84,9 +84,26 @@ def is_dflash2_enabled() -> bool:
     return is_speculative_enabled() and _spec_kind == "dflash2"
 
 
+def _is_mimo_dflash_model(model: str) -> bool:
+    """MiMo-V2.6's native DFlash drafter (DFlashDraftModel shipped in <bundle>/dflash of a mimo_v2 bundle; SGLang
+    semantics: vmlx_engine/mimo_dflash.py). It runs on the DFlash2 serving lane machinery with its own adapter."""
+    path = Path(model).expanduser()
+    if not path.is_dir():
+        return False
+    try:
+        config = json.loads((path / "config.json").read_text())
+        target = json.loads((path.parent / "config.json").read_text())
+    except Exception:
+        return False
+    archs = config.get("architectures")
+    return isinstance(archs, list) and "DFlashDraftModel" in archs and target.get("model_type") == "mimo_v2"
+
+
 def _is_dflash2_model(model: str) -> bool:
     path = Path(model).expanduser()
     if path.is_dir():
+        if _is_mimo_dflash_model(model):
+            return True
         try:
             config = json.loads((path / "config.json").read_text())
             architectures = config.get("architectures")
@@ -109,7 +126,7 @@ def find_bundled_dflash2(model_path: str) -> str | None:
     if not root.is_dir():
         return None
     try:
-        children = sorted(root.iterdir(), key=lambda p: (p.name != "dflash2", p.name))
+        children = sorted(root.iterdir(), key=lambda p: (p.name not in ("dflash2", "dflash"), p.name))
     except OSError:
         return None
     for child in children:
@@ -234,7 +251,17 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             config.model,
             allow_download=True,
         )
-        if _is_dflash2_model(config.model):
+        if _is_mimo_dflash_model(resolved_draft):
+            from .mimo_dflash import load_drafter
+
+            draft_model = load_drafter(resolved_draft)          # (MiMoDFlashDrafter, mask embedding)
+            draft_tokenizer = None
+            _spec_kind = "dflash2"
+            config.num_tokens = int(draft_model[0].block)
+            logger.info("MiMo DFlash drafter loaded (%s weights as stored, block %d)",
+                        "quantized" if json.loads((Path(resolved_draft) / "config.json").read_text()).get("quantization") else "bf16",
+                        draft_model[0].block)
+        elif _is_dflash2_model(config.model):
             import dflash.model_mlx as dflash_runtime
             import mlx.core as mx
             import mlx.nn as nn

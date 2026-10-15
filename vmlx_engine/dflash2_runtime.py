@@ -1721,6 +1721,21 @@ def stream_dflash2_generate(
 
     from .glm_dflash2 import is_glm5_next, stream_glm_dflash2
     from .utils.prefill_step import prefill_step_size
+    from .mimo_dflash import is_mimo_v2, stream_mimo_dflash
+
+    if is_mimo_v2(model) and isinstance(draft, tuple):
+        # MiMo-V2.6: its native DFlash drafter (vmlx_engine/mimo_dflash.py; layer-output taps, SWA/full rollback).
+        controls = None
+        if min_p or logit_bias or repetition_penalty != 1.0 or frequency_penalty or presence_penalty:
+            from .dflash2_sampling import DFlash2SamplingControls
+            controls = DFlash2SamplingControls(
+                min_p=min_p, logit_bias=logit_bias, repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty, presence_penalty=presence_penalty,
+            )
+        yield from stream_mimo_dflash(model, tokenizer, draft, prompt, max_tokens=int(max_tokens),
+                                      temperature=float(temperature), top_p=float(top_p), top_k=int(top_k),
+                                      stop=stop, prompt_tokens=prompt_tokens, sampling_controls=controls)
+        return
 
     if is_glm5_next(model):
         # GLM-5.3-Flash: mHC taps (mean over streams) + KDA per-position rollback (vmlx_engine/glm_dflash2.py).

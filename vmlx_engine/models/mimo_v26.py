@@ -224,7 +224,12 @@ def load_mimo_v26(bundle):
     from mlx_lm import load
 
     register()
-    text, tokenizer = load(str(bundle))
+    from .mimo_v26_contract import read_mimo_v26_contract
+    from .mimo_v26_janght import is_janght_bundle, load_mimo_v26_janght_text
+    if is_janght_bundle(read_mimo_v26_contract(bundle)):
+        text, tokenizer = load_mimo_v26_janght_text(bundle)
+    else:
+        text, tokenizer = load(str(bundle))
     config = json.loads((Path(bundle) / "config.json").read_text())
     omni = MiMoV26Omni(bundle, text, tokenizer)
     model = Model(text, omni, config)

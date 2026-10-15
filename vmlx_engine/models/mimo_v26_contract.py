@@ -112,9 +112,21 @@ def read_mimo_v26_contract(bundle_path: str | Path | None) -> dict | None:
         meta = json.loads((path / "jang_config.json").read_text())
     except (OSError, ValueError, AttributeError):
         return None
-    if not isinstance(meta, dict) or meta.get("weight_format") != "mixed_affine_mxfp4":
+    if not isinstance(meta, dict):
         return None
-    return meta
+    if meta.get("weight_format") == "mixed_affine_mxfp4":           # the RL JANG_2L family
+        return meta
+    if meta.get("format") == "jangtq2" and _routed_jangt_contract(cfg):  # JANGHT / JANGH: trellis or codebook routed experts
+        return meta
+    return None
+
+
+def _routed_jangt_contract(cfg: dict) -> bool:
+    """config.json carries the JANGT runtime contract: a jangt block and routed projections quantized jangt / jangtq2."""
+    q = cfg.get("quantization")
+    if not isinstance(cfg.get("jangt"), dict) or not isinstance(q, dict):
+        return False
+    return any(".mlp.switch_mlp." in k and isinstance(v, dict) and v.get("mode") in ("jangt", "jangtq2") for k, v in q.items())
 
 
 def mimo_v26_media_requested(contract: dict) -> bool:
