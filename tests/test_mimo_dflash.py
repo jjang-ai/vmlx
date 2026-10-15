@@ -236,3 +236,20 @@ def test_drafter_loaded_on_one_thread_runs_on_another(tmp_path):
     import subprocess, sys
     r = subprocess.run([sys.executable, "-c", _THREAD_SCRIPT, str(tmp_path), str(D)], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and "THREAD OK" in r.stdout, (r.returncode, r.stdout[-500:], r.stderr[-1500:])
+
+
+def test_adaptive_ar_bursts_defer_drafter_context_and_stay_equal_to_ar(tmp_path):
+    """With the adaptive policy (AR bursts + draft rounds), deferred drafter context still yields AR-equal greedy output
+    and a session state aligned with the emitted tokens."""
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(12).integers(0, V, size=35).tolist()
+    session = {}
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 30, set(), 0.0, adaptive=True, session=session)
+           for t in new]
+    ref = _ar_greedy(model, prompt, 30)
+    assert out == ref
+    assert session["forwarded"] == len(prompt) + len(out) - 1
+    assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
+    resume = {"target_cache": session["target_cache"], "draft_context": session["taps"], "cache_len": session["forwarded"]}
+    assert _run(tgt, drafter, prompt + out, 5, resume=resume) == _ar_greedy(model, prompt, 35)[30:35]
+    tgt.close()

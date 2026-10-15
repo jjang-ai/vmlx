@@ -427,7 +427,8 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
     finally:
         if session is not None:
             session["target_cache"], session["taps"] = cache, window.rows()
-            session["forwarded"] = int(drafter.ctx_end)
+            # the target cache's own count (the drafter's context lags it inside an AR burst: deferred projection)
+            session["forwarded"] = int(cache[0].offset)
 
 
 def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eos, temperature, top_p, top_k, st,
@@ -453,15 +454,27 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
     if tokens[-1] in eos:
         return
     policy = AdaptiveSpec(bs0) if adaptive else None
-    n = 1                                                # fwd = tokens forwarded = drafter.ctx_end = cache positions
+    n = 1                                                # fwd = tokens forwarded = cache positions
     after_ar = False
+    # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
+    # starts (per-token projection of 5 drafter layers + an eval made every AR step slower than the plain lane's:
+    # prose, where the policy rightly stops drafting, ran 39 tok/s on this lane vs 46 on the plain lane).
+    pending, pending_at = [], fwd
+
+    def _flush_pending():
+        nonlocal pending, pending_at
+        if pending:
+            drafter.add_context(pending[0] if len(pending) == 1 else mx.concatenate(pending, axis=0), pending_at)
+            pending = []
     while n < max_tokens:
         mode, b = policy.choose() if policy is not None else ("spec", bs0)
         if mode == "ar":
             after_ar = True; ta = time.perf_counter(); new = []
             for _ in range(min(b, max_tokens - n)):
                 lg, tp = target.forward([tokens[-1]], cache)
-                drafter.add_context(tp, fwd); window.add(tp); fwd += 1
+                if not pending:
+                    pending_at = fwd
+                pending.append(tp); window.add(tp); fwd += 1
                 t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item()); new.append(t); tokens.append(t)
                 if t in eos:
                     break
@@ -474,6 +487,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         bs = min(b, max_tokens - n + 1)
         if bs <= 1:
             break
+        _flush_pending()
         tr = time.perf_counter()
         emb = target.embed(mx.array([tokens[-1]] + [drafter.mask_id] * (bs - 1)))[None]
         if mask_vec is not None:
