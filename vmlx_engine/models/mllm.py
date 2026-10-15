@@ -7535,13 +7535,22 @@ class MLXMultimodalLM:
                                      "target_cache": t_cache, "draft_context": taps, "model_key": model_key},
                                     parent=parent)
         forwarded = int(session.get("forwarded") or 0)
+        # The cache holds every emitted token but the last; when a pipelined AR step already forwarded the final EOS
+        # (st.eos_forwarded) it holds that too -- either way the entry's key is the prompt + every emitted token.
+        expect = len(prompt_ids) + len(emitted) - (0 if st.eos_forwarded else 1)
         if (_ms.reuse_enabled() and session.get("target_cache") is not None and forwarded > cache_len
-                and forwarded == len(prompt_ids) + len(emitted) - 1):
+                and forwarded == expect):
             receipt = _ms.store({"kind": "turn", "tokens": key_ids + emitted, "cache_len": forwarded,
                                  "target_cache": session["target_cache"], "draft_context": session["taps"],
                                  "model_key": model_key}, parent=parent)
         spec_rounds = [d for d in drafted if d > 0]
         accepted = list(st.accepted)
+        _pol = (st.policy or {}).get("_policy")
+        if _pol is not None:
+            logger.info("MiMo DFlash adaptive costs: t_ar_ms=%s t_round_ms=%s p=%s",
+                        None if _pol.t_ar is None else round(1000 * _pol.t_ar, 2),
+                        {b: round(1000 * t, 2) for b, t in sorted(_pol.t_round.items())},
+                        [round(_pol.p(i), 3) for i in range(1, _pol.bmax)])
         tpr = (sum(accepted) + len(accepted)) / max(len(accepted), 1)
         spec = {"kind": "dflash2", "lane": "mimo" + ("-media" if has_media else ""), "cycles": len(accepted),
                 "emitted_per_cycle": round(tpr, 3),

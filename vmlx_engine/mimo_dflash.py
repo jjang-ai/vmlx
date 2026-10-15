@@ -222,7 +222,7 @@ class Target:
         (prompt prefill): the head on the last row only -- a 2048-row chunk otherwise projected every row through the
         152,576-word head (~1.3 TFLOP and a 1.25 GB fp32 temporary) to keep one row."""
         self.store.clear()
-        h = self.model.model(mx.array(ids)[None], cache, embeds)
+        h = self.model.model(ids if isinstance(ids, mx.array) else mx.array(ids)[None], cache, embeds)
         if last_only:
             h = h[:, -1:]
         lg = self.model.lm_head(h)[0].astype(mx.float32)
@@ -348,6 +348,8 @@ class LaneStats:
     ar_steps: int = 0
     accepted: list = field(default_factory=list)
     output_token_ids: list = field(default_factory=list)
+    policy: dict = field(default_factory=dict)          # AdaptiveSpec's measured costs at the end (diagnostics)
+    eos_forwarded: bool = False                          # a pipelined AR step forwarded the final EOS (cache holds it)
 
 
 class _TapWindow:
@@ -454,6 +456,9 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
     if tokens[-1] in eos:
         return
     policy = AdaptiveSpec(bs0) if adaptive else None
+    if policy is not None:
+        # measured costs for the request's stats line: why a text kept drafting or fell back to AR
+        st.policy = {"_policy": policy}
     n = 1                                                # fwd = tokens forwarded = cache positions
     after_ar = False
     # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
@@ -470,14 +475,45 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         mode, b = policy.choose() if policy is not None else ("spec", bs0)
         if mode == "ar":
             after_ar = True; ta = time.perf_counter(); new = []
-            for _ in range(min(b, max_tokens - n)):
-                lg, tp = target.forward([tokens[-1]], cache)
+            k = min(b, max_tokens - n)
+
+            def _row(tp_row):
+                nonlocal pending_at, fwd
                 if not pending:
                     pending_at = fwd
-                pending.append(tp); window.add(tp); fwd += 1
-                t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item()); new.append(t); tokens.append(t)
-                if t in eos:
-                    break
+                pending.append(tp_row); window.add(tp_row); fwd += 1
+
+            if controls is None:
+                # Pipelined (as mlx_lm's generate loop): step i+1 is built from step i's lazily sampled token before
+                # that token is read back, so graph construction overlaps the GPU (the synchronous burst measured
+                # 23 ms/token here vs ~20 on the plain lane). A token that turns out to be EOS leaves its launched
+                # step in the cache: that step forwarded the EOS itself, so the cache holds prompt + every emitted
+                # token -- the end-of-turn state the next prompt (which re-renders that EOS) resumes after.
+                lg, tp = target.forward(mx.array([[tokens[-1]]]), cache)
+                y = pick(lg[None, -1:])
+                mx.async_eval(y, tp)
+                for i in range(k):
+                    _row(tp)
+                    nxt = None
+                    if i + 1 < k:
+                        lg2, tp2 = target.forward(y.reshape(1, 1), cache)
+                        y2 = pick(lg2[None, -1:])
+                        mx.async_eval(y2, tp2)
+                        nxt = (y2, tp2)
+                    t = int(y.item()); new.append(t); tokens.append(t)
+                    if t in eos:
+                        if nxt is not None:
+                            _row(nxt[1]); st.eos_forwarded = True
+                        break
+                    if nxt is not None:
+                        y, tp = nxt
+            else:
+                for _ in range(k):
+                    lg, tp = target.forward([tokens[-1]], cache)
+                    _row(tp)
+                    t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item()); new.append(t); tokens.append(t)
+                    if t in eos:
+                        break
             policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
             st.ar_steps += len(new); n += len(new)
             yield new, 0

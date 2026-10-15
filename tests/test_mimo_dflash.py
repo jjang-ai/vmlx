@@ -89,8 +89,10 @@ def _lane(tmp_path):
 
 
 def _ar_greedy(model, prompt, n):
+    # the prompt's head on its last row only, as the lane's prefill does (a full-chunk head can break a bf16 tie
+    # differently on this tiny random model)
     cache = model.make_cache()
-    lg = model(mx.array([prompt]), cache=cache)[0, -1]
+    lg = model.lm_head(model.model(mx.array([prompt]), cache)[:, -1:])[0, -1]
     out = [int(mx.argmax(lg).item())]
     while len(out) < n:
         lg = model(mx.array([[out[-1]]]), cache=cache)[0, -1]; out.append(int(mx.argmax(lg).item()))
@@ -252,4 +254,21 @@ def test_adaptive_ar_bursts_defer_drafter_context_and_stay_equal_to_ar(tmp_path)
     assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
     resume = {"target_cache": session["target_cache"], "draft_context": session["taps"], "cache_len": session["forwarded"]}
     assert _run(tgt, drafter, prompt + out, 5, resume=resume) == _ar_greedy(model, prompt, 35)[30:35]
+    tgt.close()
+
+
+def test_pipelined_ar_burst_eos_keeps_eos_row_and_resumes(tmp_path):
+    """A pipelined AR burst that samples EOS has already launched the next step with the EOS as input: the cache then
+    holds prompt + every emitted token (EOS included), flagged eos_forwarded, and that state resumes the next turn."""
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(14).integers(0, V, size=33).tolist()
+    ref = _ar_greedy(model, prompt, 12)
+    eos = {ref[3]}                                          # inside the first AR burst (the policy starts with AR)
+    session, st = {}, MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 12, eos, 0.0, adaptive=True, session=session,
+                                          stats=st) for t in new]
+    assert out == ref[:4] and out[-1] in eos
+    assert st.eos_forwarded and session["forwarded"] == len(prompt) + len(out)
+    assert int(session["target_cache"][0].offset) == session["forwarded"]
+    assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
     tgt.close()
