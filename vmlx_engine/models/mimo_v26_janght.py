@@ -266,10 +266,57 @@ def warm_mimo_v26_janght(model) -> float:
         mx.eval(model(mx.zeros((1, rows), dtype=mx.int32), cache=cache))
     mx.synchronize()
     del cache
+    t_attn = warm_attention_kernels(model)
     mx.clear_cache()
     dt = time.perf_counter() - t0
-    logging.getLogger(__name__).info("MiMo JANGHT kernels warmed at load (prefill / verify / decode paths): %.1f s", dt)
+    logging.getLogger(__name__).info("MiMo JANGHT kernels warmed at load (prefill / verify / decode paths): %.1f s "
+                                     "(long-context attention variants %.1f s)", dt, t_attn)
     return dt
+
+
+def warm_attention_kernels(model) -> float:
+    """Compile the long-context attention kernel variants at load. The three warm-up forwards run on a short cache,
+    so the NAX 192/128 variants (aligned / unaligned tiles, key-range passes with the head-dim split, window + bool
+    mask + sinks) and the flash decode kernels (1-4 rows) otherwise compile inside the first long request
+    (measured: first DFlash chain turn decoded at 34.9 tok/s vs 53.9 with the kernels already built). Synthetic
+    inputs at the model's head counts; nothing is cached. Returns the seconds spent."""
+    import time
+
+    t0 = time.perf_counter()
+    try:
+        layers = model.model.layers
+        full = next((l.self_attn for l in layers if not l.self_attn.is_swa), None)
+        swa = next((l.self_attn for l in layers if l.self_attn.is_swa), None)
+        dt = mx.bfloat16
+        z = lambda *shape: mx.zeros(shape, dtype=dt)
+        outs = []
+        if full is not None:
+            H, KV, dq, dv, sc = full.n_heads, full.n_kv, full.head_dim, full.v_head_dim, full.scale
+            for L, T in ((2048, 2048), (100, 3077), (2048, 16389)):  # aligned, unaligned, key-range passes
+                outs.append(_full_attention(z(1, H, L, dq), z(1, KV, T, dq), z(1, KV, T, dv), sc, "causal", None))
+            causal = (mx.arange(300)[:, None] + 1000) >= mx.arange(1300)[None]  # the batched lane's bool masks
+            outs.append(_full_attention(z(1, H, 300, dq), z(1, KV, 1300, dq), z(1, KV, 1300, dv), sc, causal, None))
+            for L in (1, 2, 3, 4):                                      # flash decode rows (DFlash verify widths)
+                T = max(_FLASH_MIN_KEYS.get(L, 4096), 4096) + 3
+                outs.append(_full_attention(z(1, H, L, dq), z(1, KV, T, dq), z(1, KV, T, dv), sc,
+                                            None if L == 1 else "causal", None))
+        if swa is not None and getattr(swa, "_window", 0):
+            H, KV, dq, dv, sc, W = swa.n_heads, swa.n_kv, swa.head_dim, swa.v_head_dim, swa.scale, swa._window
+            sinks = mx.zeros((H,), dtype=dt) if swa.has_sink else None
+            for L in (2048, 300):
+                T = L + W - 1
+                rows = mx.arange(L)[:, None] + (T - L)
+                band = (rows >= mx.arange(T)[None]) & (rows - mx.arange(T)[None] < W)
+                outs.append(_swa_attention(z(1, H, L, dq), z(1, KV, T, dq), z(1, KV, T, dv), sc, band, sinks, W, None))
+            outs.append(_swa_attention(z(1, H, 100, dq), z(1, KV, 100, dq), z(1, KV, 100, dv), sc, "causal", sinks, W,
+                                       None))
+        mx.eval(outs)
+        mx.synchronize()
+    except Exception as exc:  # noqa: BLE001 - a warm-up failure only means the first request compiles them
+        import logging
+
+        logging.getLogger(__name__).warning("MiMo attention kernel warm-up skipped: %s", exc)
+    return time.perf_counter() - t0
 
 
 def load_mimo_v26_janght_text(bundle: str | Path):

@@ -68,3 +68,20 @@ def test_fused_sorted_combine_matches_the_batched_matmul():
         out = sorted_combine(y_s, order, w2, mx.float32)
         assert out is not None and out.shape == (T, D) and out.dtype == mx.float32
         assert (mx.abs(out - ref).max() / mx.abs(ref).max()).item() < 1e-6
+
+
+def test_attention_kernel_warmup_builds_the_long_context_variants(caplog):
+    """warm_attention_kernels runs every routed variant on a stand-in with MiMo's attention geometry without error."""
+    import types
+
+    import vmlx_engine.models.mimo_v26_janght as M
+
+    def attn(is_swa):
+        return types.SimpleNamespace(self_attn=types.SimpleNamespace(
+            is_swa=is_swa, n_heads=64, n_kv=8 if is_swa else 4, head_dim=192, v_head_dim=128, scale=192 ** -0.5,
+            has_sink=is_swa, _window=128 if is_swa else 0))
+
+    model = types.SimpleNamespace(model=types.SimpleNamespace(layers=[attn(True), attn(False)]))
+    with caplog.at_level("WARNING"):
+        assert M.warm_attention_kernels(model) >= 0.0
+    assert "warm-up skipped" not in caplog.text
