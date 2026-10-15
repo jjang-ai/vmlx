@@ -141,3 +141,25 @@ def test_contract_needs_routed_jangt_metadata(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(cfg))
     c = read_mimo_v26_contract(tmp_path)
     assert c is not None and is_janght_bundle(c)
+
+
+@pytest.mark.parametrize("rows, keys", [(1100, 2048), (200, 2048), (1, 2048)])
+def test_full_attention_padded_fused_path_matches_native(monkeypatch, rows, keys):
+    """MiMo's 192/128 head dims are outside MLX's fused attention; the long-context path pads to 256 (and lifts short
+    chunks to the fused kernel's 1024-row floor with leading zero query rows). Same result as the native call."""
+    import mlx.core as mx
+    from vmlx_engine.models import mimo_v26_janght as J
+
+    monkeypatch.setattr(J, "_SCORES_BUDGET_BYTES", 0)          # take the padded path at test sizes
+    H, KV = 8, 2
+    mx.random.seed(3)
+    q = mx.random.normal((1, H, rows, 192)).astype(mx.bfloat16)
+    k = mx.random.normal((1, KV, keys, 192)).astype(mx.bfloat16)
+    v = mx.random.normal((1, KV, keys, 128)).astype(mx.bfloat16)
+    sinks = mx.random.normal((H,)).astype(mx.bfloat16)
+    mask = "causal" if rows > 1 else None
+    ref = mx.fast.scaled_dot_product_attention(q, k, v, scale=192 ** -0.5, mask=mask, sinks=sinks)
+    out = J._full_attention(q, k, v, 192 ** -0.5, mask, sinks)
+    assert out.shape == ref.shape == (1, H, rows, 128)
+    err = float(mx.max(mx.abs(out.astype(mx.float32) - ref.astype(mx.float32))).item())
+    assert err < 2e-2, err

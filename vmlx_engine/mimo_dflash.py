@@ -215,11 +215,16 @@ class Target:
     def embed(self, ids):
         return self.model.model.embed_tokens(ids)
 
-    def forward(self, ids: list[int], cache, embeds: mx.array | None = None) -> tuple[mx.array, mx.array]:
+    def forward(self, ids: list[int], cache, embeds: mx.array | None = None,
+                last_only: bool = False) -> tuple[mx.array, mx.array]:
         """-> (logits (S, V) fp32, taps (S, n_tap * D)). ``embeds`` (1, S, D): media prefill (merged vision/audio
-        features from the omni model's get_input_embeddings) instead of the token embedding lookup."""
+        features from the omni model's get_input_embeddings) instead of the token embedding lookup. ``last_only``
+        (prompt prefill): the head on the last row only -- a 2048-row chunk otherwise projected every row through the
+        152,576-word head (~1.3 TFLOP and a 1.25 GB fp32 temporary) to keep one row."""
         self.store.clear()
         h = self.model.model(mx.array(ids)[None], cache, embeds)
+        if last_only:
+            h = h[:, -1:]
         lg = self.model.lm_head(h)[0].astype(mx.float32)
         taps = mx.concatenate([self.store[i][0] for i in self.layer_ids], axis=-1)
         return lg, taps
@@ -403,7 +408,7 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
     while pos < len(prompt_ids):
         end = min(len(prompt_ids), pos + prefill_step)
         end = next((c for c in cuts if pos < c < end), end)            # a snapshot is the cache exactly at its cut
-        lg, tp = target.forward(prompt_ids[pos:end], cache, None if embeds is None else embeds[:, pos:end])
+        lg, tp = target.forward(prompt_ids[pos:end], cache, None if embeds is None else embeds[:, pos:end], last_only=True)
         logits = lg[-1:]
         taps = tp if taps is None else mx.concatenate([taps, tp], axis=0)
         taps = taps[-W:]

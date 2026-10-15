@@ -22,6 +22,60 @@ import mlx.nn as nn
 MEDIA_PREFIXES = ("visual.", "audio_encoder.", "speech_embeddings.", "model.mtp.")
 
 
+# Full-attention prefill (MiMo q/k head_dim 192, v head_dim 128). MLX 0.32's fused attention takes only equal q/k and
+# v head dims in {64, 80, 96, 128, 256}, and its full-attention kernel engages only for a causal mask with >= 1024
+# query rows; every other call materializes the (heads x rows x keys) fp32 scores. Measured on M5 Max (64 heads,
+# 4 kv heads): 2048 rows x 32k keys 478 ms + 17.3 GB transient, x 64k keys 1146 ms + 34.6 GB -- a 128k context
+# cannot be prefilled next to the 94 GB model. Zero-padding q/k to 256 and v to 256 (scale stays 192^-0.5; the
+# padded value columns are dropped) is the same arithmetic in the fused kernel: 267 ms + 0.27 GB at 32k, 296 ms +
+# 0.40 GB at 64k (outputs equal to the unpadded call). A chunk under 1024 rows against a long cache is lifted to
+# 1024 rows with leading zero query rows (causal: they only see earlier keys; their outputs are discarded).
+# Below the scores budget (decode, DFlash verify rows, short contexts) the native call is as fast or faster.
+_FUSED_MIN_ROWS = 1024
+_FUSED_HEAD_DIM = 256
+_SCORES_BUDGET_BYTES = 1 << 30
+
+
+def _full_attention(q, k, v, scale, mask, sinks):
+    B, H, L, dq = q.shape
+    T, dv = int(k.shape[2]), int(v.shape[3])
+    if (mask is not None and not (isinstance(mask, str) and mask == "causal")) or T < _FUSED_MIN_ROWS \
+            or H * L * T * 4 <= _SCORES_BUDGET_BYTES or max(dq, dv) > _FUSED_HEAD_DIM:
+        return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=mask, sinks=sinks)
+    lift = max(0, _FUSED_MIN_ROWS - L)
+    if lift:
+        q = mx.concatenate([mx.zeros((B, H, lift, dq), dtype=q.dtype), q], axis=2)
+    pad = lambda a, d: a if d == _FUSED_HEAD_DIM else mx.pad(a, [(0, 0), (0, 0), (0, 0), (0, _FUSED_HEAD_DIM - d)])
+    o = mx.fast.scaled_dot_product_attention(pad(q, dq), pad(k, dq), pad(v, dv), scale=scale, mask="causal", sinks=sinks)
+    return o[:, :, lift:, :dv]
+
+
+def _attention_class():
+    from jang_tools.mimo_v2 import v26_model as T
+
+    class LongContextAttention(T.Attention):
+        """v26 full-attention layer whose attention call stays on MLX's fused kernel at long context (see above)."""
+
+        def __call__(self, x, mask=None, cache=None):
+            B, L, _ = x.shape
+            qkv = self.qkv_proj(x)
+            q, k, v = mx.split(qkv, [self.q_size, self.q_size + self.k_size], axis=-1)
+            q = q.reshape(B, L, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
+            k = k.reshape(B, L, self.n_kv, self.head_dim).transpose(0, 2, 1, 3)
+            v = v.reshape(B, L, self.n_kv, self.v_head_dim).transpose(0, 2, 1, 3)
+            if self.v_scale is not None:
+                v = v * self.v_scale
+            offset = cache.offset if cache is not None else 0
+            q = self._rope(q, offset)
+            k = self._rope(k, offset)
+            if cache is not None:
+                k, v = cache.update_and_fetch(k, v)
+            sinks = self.attention_sink_bias.astype(q.dtype) if self.has_sink else None
+            o = _full_attention(q, k, v, self.scale, mask, sinks)
+            return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
+    return LongContextAttention
+
+
 def is_janght_bundle(contract: dict | None) -> bool:
     """`contract` = read_mimo_v26_contract(bundle), which already checked config.json's routed jangt contract."""
     return isinstance(contract, dict) and contract.get("format") == "jangtq2" and contract.get("weight_format") != "mixed_affine_mxfp4"
@@ -39,11 +93,39 @@ def _moe_class():
     return JangtMoE
 
 
+def warm_mimo_v26_janght(model) -> float:
+    """Build the routed-expert kernels at load instead of on the first request.
+
+    The JANGT trellis / JANGH codebook kernels are Metal source compiled on first use, one variant per format, bit
+    width, outlier width and path; measured 2026-10-15 the first request of a fresh process took 8.0-13.5 s to its first
+    token on 39-78 token prompts (the same request again: 0.4 s). Three forwards cover the three paths a request takes:
+    16 rows (128 expert slots: the sorted prefill tiles), 8 rows (64 slots: the decode kernels at a DFlash verify
+    width) and 1 row (decode). A throwaway cache; the allocator cache is released after. VMLX_MIMO_WARMUP=0 skips it.
+    Returns the seconds spent (0.0 when skipped)."""
+    import logging
+    import os
+    import time
+
+    if os.environ.get("VMLX_MIMO_WARMUP", "1").strip().lower() in {"0", "false", "off", "no"}:
+        return 0.0
+    t0 = time.perf_counter()
+    cache = model.make_cache()
+    for rows in (16, 8, 1):
+        mx.eval(model(mx.zeros((1, rows), dtype=mx.int32), cache=cache))
+    mx.synchronize()
+    del cache
+    mx.clear_cache()
+    dt = time.perf_counter() - t0
+    logging.getLogger(__name__).info("MiMo JANGHT kernels warmed at load (prefill / verify / decode paths): %.1f s", dt)
+    return dt
+
+
 def load_mimo_v26_janght_text(bundle: str | Path):
     from mlx_lm.utils import load_tokenizer
 
     bundle = Path(bundle)
     model = build_mimo_v26_janght_model(bundle)
+    warm_mimo_v26_janght(model)
     cfg = json.loads((bundle / "config.json").read_text())
     gen = {}
     if (bundle / "generation_config.json").exists():
@@ -71,9 +153,12 @@ def build_mimo_v26_janght_model(bundle: str | Path):
     if n != n_moe:
         raise ValueError(f"MiMo JANGHT: installed {n} routed stacks, the config has {n_moe} MoE layers")
     moe_cls = _moe_class()
+    attn_cls = _attention_class()
     for layer in model.model.layers:
         if isinstance(layer.mlp, T.MoE):
             layer.mlp.__class__ = moe_cls
+        if not layer.self_attn.is_swa:
+            layer.self_attn.__class__ = attn_cls
     index = json.loads((bundle / "model.safetensors.index.json").read_text())["weight_map"]
     weights = {}
     for shard in sorted(set(index.values())):
