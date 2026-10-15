@@ -946,7 +946,11 @@ async function scanModelsInPath(
         // DFlash2 drafters are not standalone chat models; they are offered
         // under Speculative Decoding -> Draft model instead.
         try {
-          if (configDeclaresDflash2(JSON.parse(await readFile(join(currentPath, "config.json"), "utf-8")))) return;
+          const scannedCfg = JSON.parse(await readFile(join(currentPath, "config.json"), "utf-8"));
+          if (configDeclaresDflash2(scannedCfg)) return;
+          // MiMo-V2.6's bundled DFlash drafter (<bundle>/dflash, DFlashDraftModel) is not a chat model either.
+          const scannedArch = (scannedCfg as { architectures?: unknown })?.architectures;
+          if (Array.isArray(scannedArch) && scannedArch.includes("DFlashDraftModel")) return;
         } catch {
           /* no readable config: keep the existing handling */
         }

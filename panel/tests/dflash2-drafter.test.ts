@@ -61,6 +61,28 @@ describe('bundled DFlash2 drafter detection', () => {
     expect(findBundledDflash2Drafter(join(root, 'missing'))).toBeNull()
     expect(findBundledDflash2Drafter('')).toBeNull()
   })
+
+  it("finds MiMo-V2.6's native DFlash drafter (<bundle>/dflash) only inside a mimo_v2 bundle", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('fs')
+    const { join } = await import('path')
+    const { tmpdir } = await import('os')
+    const { findBundledDflash2Drafter, isDflash2DrafterSelection } = await import('../src/main/dflash2Bundle')
+    const root = mkdtempSync(join(tmpdir(), 'vmlx-mimo-dflash-'))
+    const mimo = join(root, 'MiMo-V2.6-Flash-MOPD-JANGHT2.5')
+    mkdirSync(join(mimo, 'dflash'), { recursive: true })
+    mkdirSync(join(mimo, 'audio_tokenizer'), { recursive: true })
+    writeFileSync(join(mimo, 'config.json'), JSON.stringify({ model_type: 'mimo_v2' }))
+    writeFileSync(join(mimo, 'dflash', 'config.json'), JSON.stringify({ architectures: ['DFlashDraftModel'], model_type: 'qwen3' }))
+    writeFileSync(join(mimo, 'audio_tokenizer', 'config.json'), JSON.stringify({ architectures: ['MiMoAudioTokenizer'] }))
+    expect(findBundledDflash2Drafter(mimo)).toBe(join(mimo, 'dflash'))
+    expect(isDflash2DrafterSelection(join(mimo, 'dflash'))).toBe(true)
+    // the same drafter architecture in another family's bundle is not run by the MiMo adapter
+    const other = join(root, 'Other-Model')
+    mkdirSync(join(other, 'dflash'), { recursive: true })
+    writeFileSync(join(other, 'config.json'), JSON.stringify({ model_type: 'qwen3' }))
+    writeFileSync(join(other, 'dflash', 'config.json'), JSON.stringify({ architectures: ['DFlashDraftModel'] }))
+    expect(findBundledDflash2Drafter(other)).toBeNull()
+  })
 })
 
 

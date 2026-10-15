@@ -1,6 +1,19 @@
 import { existsSync, readdirSync, readFileSync } from 'fs'
-import { join } from 'path'
-import { configDeclaresDflash2, looksLikeDflash2Drafter } from '../shared/dflash2Drafter'
+import { dirname, join } from 'path'
+import { configDeclaresDflash2, configDeclaresMimoDflash, looksLikeDflash2Drafter } from '../shared/dflash2Drafter'
+
+function modelTypeOf(dir: string): string {
+  try {
+    return String(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).model_type || '')
+  } catch {
+    return ''
+  }
+}
+
+/** A drafter dir the engine runs on the DFlash2 lane: a DFlash2 drafter, or MiMo's DFlash inside a mimo_v2 bundle. */
+function drafterConfigOnDflash2Lane(cfg: unknown, targetDir: string): boolean {
+  return configDeclaresDflash2(cfg) || configDeclaresMimoDflash(cfg, modelTypeOf(targetDir))
+}
 
 /**
  * A DFlash2 drafter shipped INSIDE the model bundle: any immediate subfolder
@@ -16,12 +29,13 @@ export function findBundledDflash2Drafter(modelPath: string | undefined | null):
   } catch {
     return null
   }
-  const ordered = [...entries].sort((a, b) => (a === 'dflash2' ? -1 : b === 'dflash2' ? 1 : a.localeCompare(b)))
+  const rank = (name: string) => (name === 'dflash2' ? 0 : name === 'dflash' ? 1 : 2)
+  const ordered = [...entries].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
   for (const entry of ordered) {
     if (entry.startsWith('.')) continue
     const cfg = join(root, entry, 'config.json')
     try {
-      if (existsSync(cfg) && configDeclaresDflash2(JSON.parse(readFileSync(cfg, 'utf8')))) {
+      if (existsSync(cfg) && drafterConfigOnDflash2Lane(JSON.parse(readFileSync(cfg, 'utf8')), root)) {
         return join(root, entry)
       }
     } catch {
@@ -37,7 +51,7 @@ export function isDflash2DrafterSelection(path: string | undefined | null): bool
   if (!value) return false
   try {
     const cfg = join(value, 'config.json')
-    if (existsSync(cfg)) return configDeclaresDflash2(JSON.parse(readFileSync(cfg, 'utf8')))
+    if (existsSync(cfg)) return drafterConfigOnDflash2Lane(JSON.parse(readFileSync(cfg, 'utf8')), dirname(value))
   } catch {
     /* fall back to the name test */
   }

@@ -26,3 +26,14 @@ export function configDeclaresDflash2(config: unknown): boolean {
   const arch = (config as { architectures?: unknown } | null)?.architectures
   return Array.isArray(arch) && arch.some(a => a === 'DFlash2DraftModel')
 }
+
+/**
+ * MiMo-V2.6's native DFlash drafter (`DFlashDraftModel` in `<bundle>/dflash` of a `mimo_v2` bundle). The engine runs
+ * it on the DFlash2 lane with its own adapter (vmlx_engine/speculative.py `_is_mimo_dflash_model`, mimo_dflash.py), so
+ * the panel must pick that lane for it exactly as for a DFlash2 drafter.
+ */
+export function configDeclaresMimoDflash(config: unknown, targetModelType: unknown): boolean {
+  const arch = (config as { architectures?: unknown } | null)?.architectures
+  return String(targetModelType || '').toLowerCase() === 'mimo_v2'
+    && Array.isArray(arch) && arch.some(a => a === 'DFlashDraftModel')
+}
