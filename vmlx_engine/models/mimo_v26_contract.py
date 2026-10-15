@@ -13,14 +13,46 @@ import hashlib
 from pathlib import Path
 
 
+def _canonical_tool_call_arguments(message: dict) -> dict:
+    """Assistant tool calls with JSON-string ``arguments`` (the OpenAI wire form) as dicts.
+
+    The vendor template renders a STRING ``arguments`` verbatim inside ``<function=NAME>...</function>`` and only a
+    dict as ``<parameter=KEY>VALUE</parameter>`` elements. Histories from OpenAI clients carry JSON strings, so every
+    earlier call was rendered in the JSON-body form and the model copied it on the next call -- which the XML function
+    parser then read as a call without parameters and dropped (raw API row 2026-10-15: image + tool turn after one
+    tool round, ``<function=lookup_inventory>{"item": "amber-7319-Z"}</function>``). Non-object or non-JSON strings
+    (custom tool input) keep the template's verbatim form."""
+    calls = message.get("tool_calls")
+    if message.get("role") != "assistant" or not isinstance(calls, list):
+        return message
+    out = []
+    changed = False
+    for call in calls:
+        fn = call.get("function") if isinstance(call, dict) else None
+        args = fn.get("arguments") if isinstance(fn, dict) else None
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                call = {**call, "function": {**fn, "arguments": parsed}}
+                changed = True
+        out.append(call)
+    return {**message, "tool_calls": out} if changed else message
+
+
 def canonicalize_mimo_v26_tool_results(messages: list[dict]) -> list[dict]:
     """Preserve ID associations through the native template's positional format.
+
+    Also renders earlier tool calls in the template's parameter form (``_canonical_tool_call_arguments``).
 
     The vendor template renders neither call IDs nor result IDs. Complete
     ID-bearing result batches can be reordered without altering their meaning.
     Partial/unknown/duplicate IDs cannot be represented safely and are rejected.
     Native histories with no result-ID fields retain their supplied order.
     """
+    messages = [_canonical_tool_call_arguments(m) if isinstance(m, dict) else m for m in messages]
     output = []
     calls = []
     index = 0

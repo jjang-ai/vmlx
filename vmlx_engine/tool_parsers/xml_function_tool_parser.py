@@ -211,6 +211,16 @@ class XMLFunctionToolParser(ToolParser):
         if not arguments:
             for k, v in cls._RECOVERY_MISKEYED_PARAM.findall(body):
                 arguments[k.strip()] = cls._coerce_value(v, properties.get(k.strip()))
+        if not arguments and body.strip().startswith("{"):
+            # A JSON-object body is a template-defined form, not a malformation: MiMo-V2.6's vendor template renders a
+            # call's string `arguments` (and custom-tool `input`) verbatim inside <function=NAME>...</function>, so the
+            # model emits it after such a history turn.
+            try:
+                parsed = json.loads(body.strip())
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                arguments = parsed
         return arguments
 
     @classmethod
