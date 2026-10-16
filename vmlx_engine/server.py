@@ -2530,12 +2530,6 @@ def _stamped_reasoning_effort_contract(
     if from_chat:
         raw_levels = chat.get("reasoning_efforts")
     if not isinstance(raw_levels, (list, tuple)):
-        # Nemotron-3.5 stamps its tiers as capabilities.reasoning_modes {on, medium, off} -> template kwargs; the
-        # effort surface is medium + high (= on); off is the thinking toggle. See _apply_stamped_reasoning_modes.
-        modes = _stamped_reasoning_modes(bundle_path)
-        mode_levels = tuple(level for level, mode in (("medium", "medium"), ("high", "on")) if mode in modes)
-        if mode_levels:
-            return mode_levels, ("high" if "on" in modes else None)
         return (), None
     levels = tuple(
         dict.fromkeys(
@@ -3179,77 +3173,6 @@ def _apply_hy3_reasoning_policy(
 
 _EFFORT_LADDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Requested effort -> stamped reasoning mode, for bundles that stamp capabilities.reasoning_modes (Nemotron-3.5 Bolt /
-# Super-VL: on / medium (medium_effort) / off). Below medium there is no tier, so low/minimal take the nearest (medium).
-_REASONING_MODE_FOR_EFFORT = {
-    "minimal": "medium", "low": "medium", "medium": "medium", "high": "on", "xhigh": "on", "max": "on",
-}
-
-
-def _stamped_reasoning_modes(bundle_path: str | None) -> dict[str, dict]:
-    """capabilities.reasoning_modes from the bundle's jang_config.json: {mode: template kwargs}, or {}."""
-    if not bundle_path:
-        return {}
-    stamp = _read_bundle_json(bundle_path, "jang_config.json")
-    caps = stamp.get("capabilities") if isinstance(stamp, dict) else None
-    modes = caps.get("reasoning_modes") if isinstance(caps, dict) else None
-    if not isinstance(modes, dict):
-        return {}
-    return {str(k).strip().lower(): dict(v) for k, v in modes.items() if isinstance(v, dict)}
-
-
-def _apply_stamped_reasoning_modes(
-    chat_kwargs: dict,
-    ct_kwargs: dict,
-    modes: dict[str, dict],
-    *,
-    request=None,
-    request_id: str | None = None,
-) -> None:
-    """Translate a requested reasoning_effort into the bundle's stamped mode kwargs.
-
-    The Nemotron-3.5 templates read enable_thinking + medium_effort, never reasoning_effort, so passing the effort
-    through (what the generic stamped clamp does) silently ran the template default for every tier. A generic
-    thinking_mode ("thinking"/"on") makes the request model INFER reasoning_effort="medium"; that inferred value means
-    "thinking on", i.e. the template default, not the medium tier. An explicit enable_thinking=false always wins.
-    """
-    requested = ct_kwargs.get("reasoning_effort") or chat_kwargs.get("reasoning_effort")
-    if request is not None and isinstance(requested, str) and requested.strip().lower() == "medium":
-        # read the CALLER's chat_template_kwargs, not ct_kwargs (the server copies the effort in there)
-        caller_ct = getattr(request, "chat_template_kwargs", None)
-        if _dsv4_requested_reasoning_effort(request, caller_ct if isinstance(caller_ct, dict) else {}) is None:
-            requested = None                                    # inferred from a generic thinking_mode
-    if not isinstance(requested, str) or not requested.strip():
-        chat_kwargs.pop("reasoning_effort", None)
-        ct_kwargs.pop("reasoning_effort", None)
-        return
-    if ct_kwargs.get("enable_thinking") is False or chat_kwargs.get("enable_thinking") is False:
-        return
-    raw = requested.strip().lower()
-    mode = _REASONING_MODE_FOR_EFFORT.get(raw)
-    if mode not in modes:
-        fallback = "on" if "on" in modes else None
-        logger.warning("reasoning_effort %r has no stamped reasoning mode %s; using %r", raw, sorted(modes), fallback)
-        mode = fallback
-    if mode is None:
-        return
-    chosen = modes[mode]
-    for other in modes.values():                               # switch off flags another tier sets (medium_effort)
-        for key, value in other.items():
-            if key not in chosen and isinstance(value, bool) and value:
-                ct_kwargs[key] = False
-    ct_kwargs.update(chosen)
-    if "enable_thinking" in chosen:
-        chat_kwargs["enable_thinking"] = bool(chosen["enable_thinking"])
-    effective = "medium" if mode == "medium" else "high"
-    chat_kwargs["reasoning_effort"] = effective
-    ct_kwargs["reasoning_effort"] = effective
-    if effective != raw and request_id:
-        from vmlx_engine.context_limits import record_effort_substitution
-
-        record_effort_substitution(str(request_id), requested_effort=raw, effective_effort=effective,
-                                   stamped_levels=("medium", "high"))
-
 
 def _apply_stamped_effort_policy(
     chat_kwargs: dict,
@@ -3257,7 +3180,6 @@ def _apply_stamped_effort_policy(
     *,
     model_key: str,
     request_id: str | None = None,
-    request=None,
 ) -> None:
     """Clamp a requested ``reasoning_effort`` to the bundle's stamped set.
 
@@ -3269,10 +3191,6 @@ def _apply_stamped_effort_policy(
     its own strict encoder (explicit invalid effort must stay a loud 400)
     and Hy3 keeps its own normalizer, so both are skipped here.
     """
-    modes = _stamped_reasoning_modes(_model_path or model_key)
-    if modes:
-        _apply_stamped_reasoning_modes(chat_kwargs, ct_kwargs, modes, request=request, request_id=request_id)
-        return
     requested = ct_kwargs.get("reasoning_effort") or chat_kwargs.get(
         "reasoning_effort"
     )
@@ -17798,7 +17716,6 @@ async def create_anthropic_message(
         _msg_kwargs,
         _ct_kwargs,
         model_key=_model_path or _model_name or chat_req.model,
-        request=chat_req,
     )
 
     # DeepSeek V4 three-mode encoder (mirror OpenAI chat-completions path).
@@ -18766,7 +18683,6 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs,
         _ollama_ct_kwargs,
         model_key=_model_path or _model_name or chat_req.model,
-        request=chat_req,
     )
 
     # DSV4 three-mode mapping mirrored onto the Ollama adapter path so
@@ -21097,7 +21013,6 @@ async def create_chat_completion(
         _ct_kwargs,
         model_key=_model_path or _model_name or request.model,
         request_id=response_id,
-        request=request,
     )
 
     # DeepSeek V4 bundle-owned encoder: thinking_mode=chat|thinking plus an
@@ -24591,7 +24506,6 @@ async def create_response(
         _ct_kwargs,
         model_key=_model_path or _model_name or request.model,
         request_id=response_id,
-        request=request,
     )
 
     # DSV4 rail-policy + reasoning_effort handling — REAL /v1/responses path.

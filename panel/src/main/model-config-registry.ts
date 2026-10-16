@@ -1777,21 +1777,6 @@ function applyJangCapabilities(
   }
   if (!caps || typeof caps !== 'object') return next
 
-  // Nemotron-3.5 Bolt / Super-VL stamp capabilities.reasoning_modes {on, medium, off} -> template kwargs. The engine
-  // translates a requested effort into those kwargs (server._apply_stamped_reasoning_modes): medium -> medium_effort,
-  // high -> on (the template default); off stays the thinking toggle. Surface exactly those two tiers.
-  const reasoningModes = caps.reasoning_modes
-  if (reasoningModes && typeof reasoningModes === 'object' && !Array.isArray(reasoningModes)) {
-    const keys = Object.keys(reasoningModes).map(key => key.toLowerCase())
-    const tiers = ([['medium', 'medium'], ['high', 'on']] as const)
-      .filter(([, mode]) => keys.includes(mode))
-      .map(([tier]) => tier)
-    if (tiers.length > 0) {
-      next.supportedReasoningEfforts = [...tiers]
-      if (tiers.includes('high')) next.defaultReasoningEffort = 'high'
-    }
-  }
-
   const declaredModalities = declaredJangModalities(caps.modalities)
   const runtimeModalities = declaredModalities.length > 0
     ? declaredModalities
