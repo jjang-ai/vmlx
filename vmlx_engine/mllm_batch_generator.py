@@ -20615,9 +20615,10 @@ class MLLMBatchGenerator:
                 continue
             if _companion_exempt_cache(fixed[layer_idx]):
                 continue
-            if injected < len(ssm_states):
-                fixed[layer_idx] = ssm_states[injected]
-                injected += 1
+            if injected >= len(ssm_states):
+                return None
+            fixed[layer_idx] = ssm_states[injected]
+            injected += 1
         if injected != len(ssm_states):
             return None
         if not _validate_prompt_cache(fixed, source="mllm-clean-store-base"):
