@@ -37,6 +37,28 @@ BLOCK_FIELDS = ("n_routed_experts", "moe_intermediate_size", "num_experts_per_to
 _router_patched = False
 
 
+def _router_logits_fp32(x, weight):
+    """fp32 router logits (HF: F.linear(x.float(), weight.float())). Inside the native-MTP verify scope each row is a
+    separate single-row product: a multi-row fp32 GEMM reduces in a different order than the single-row product AR
+    decode runs, which can reorder near-tied experts (512 experts / top-22 on Super) and break greedy MTP == AR."""
+    import mlx.core as mx
+
+    xf, wt = x.astype(mx.float32), weight.astype(mx.float32).T
+    try:
+        from vmlx_engine.metal.row_exact_qmv import row_exact_scope_active
+        exact = row_exact_scope_active()
+    except Exception:
+        exact = False
+    rows = 1
+    for d in xf.shape[:-1]:
+        rows *= int(d)
+    if not exact or rows <= 1:
+        return xf @ wt
+    flat = xf.reshape(rows, xf.shape[-1])
+    out = mx.concatenate([flat[i:i + 1] @ wt for i in range(rows)], axis=0)
+    return out.reshape(*xf.shape[:-1], wt.shape[-1])
+
+
 def is_nemotron_h_moe(config: dict) -> bool:
     if not isinstance(config, dict):
         return False
@@ -60,7 +82,7 @@ def patch_nemotron_h_fp32_router() -> None:
 
         def fp32_call(self, x):
             return nemotron_h.group_expert_select(
-                x.astype(mx.float32) @ self.weight.astype(mx.float32).T,
+                _router_logits_fp32(x, self.weight),
                 self.e_score_correction_bias,
                 self.top_k,
                 self.n_group,
@@ -116,7 +138,7 @@ def patch_nemotron_h_for_puzzle() -> None:
         class Float32Router(nemotron_h.MoEGate):
             def __call__(self, x):
                 return nemotron_h.group_expert_select(
-                    x.astype(mx.float32) @ self.weight.astype(mx.float32).T,
+                    _router_logits_fp32(x, self.weight),
                     self.e_score_correction_bias,
                     self.top_k,
                     self.n_group,
