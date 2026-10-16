@@ -51,3 +51,58 @@ def test_wrapper_exposes_placeholder_id_and_runtime_flag(tmp_path):
     assert m.config.model_type == "nemotron_h"
     assert m._nemotron_bolt_vl_runtime is True
     assert "image_token_id" not in cfg                     # the caller's config dict is not mutated
+
+
+def _delta_fixture(bolt):
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+    from mlx_lm.models.cache import KVCache
+
+    kv = KVCache()
+    kv.update_and_fetch(mx.zeros((1, 2, 10, 4)), mx.zeros((1, 2, 10, 4)))
+    calls = {}
+
+    class _State:
+        state = [mx.zeros((1, 3))]
+
+    def derive(tokens, base, base_n, **kw):
+        calls.update(tokens=list(tokens), base_n=base_n, **kw)
+        return [_State(), base[0]]
+
+    fake = SimpleNamespace(
+        _is_hybrid=True, _hybrid_kv_positions=[1], _model_type="nemotron_h",
+        model=SimpleNamespace(_nemotron_bolt_vl_runtime=bolt),
+        _tokens_contain_media_placeholders=lambda toks: 18 in list(toks),
+        block_aware_cache=SimpleNamespace(reconstruct_cache=lambda bt: [kv]),
+        _prefill_for_clean_path_dependent_cache=derive,
+    )
+    return fake, calls
+
+
+def test_bolt_delta_advances_companion_across_text_gap_after_image():
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    fake, calls = _delta_fixture(bolt=True)
+    tokens = [1, 2, 18, 18, 18, 3, 4, 5, 6, 7]                 # image run inside the prefix, text-only gap 7..10
+    states = MLLMBatchGenerator._derive_hybrid_companion_delta(fake, object(), tokens, 10, 7, object())
+    assert states is not None and len(states) == 1
+    assert calls["base_n"] == 7 and calls["tokens"] == tokens and calls["delta_position_ids"] is None
+
+
+def test_non_bolt_runtime_still_declines_media_prefix_without_positions():
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    fake, calls = _delta_fixture(bolt=False)
+    tokens = [1, 2, 18, 18, 18, 3, 4, 5, 6, 7]
+    assert MLLMBatchGenerator._derive_hybrid_companion_delta(fake, object(), tokens, 10, 7, object()) is None
+    assert not calls
+
+
+def test_bolt_delta_refuses_gap_that_crosses_an_image():
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    fake, calls = _delta_fixture(bolt=True)
+    tokens = [1, 2, 3, 4, 5, 6, 18, 18, 18, 7]                 # placeholders inside the gap 5..10
+    assert MLLMBatchGenerator._derive_hybrid_companion_delta(fake, object(), tokens, 10, 5, object()) is None
+    assert not calls

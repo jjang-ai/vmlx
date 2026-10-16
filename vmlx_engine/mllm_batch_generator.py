@@ -20334,7 +20334,12 @@ class MLLMBatchGenerator:
             needs_text_positions = str(getattr(self, "_model_type", "")) in {
                 "qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text",
             }
-            if prefix_has_media or needs_text_positions:
+            # Nemotron-H (Bolt / Super-VL wrapper) has no positional encoding: NoPE attention and Mamba-2 state carry
+            # no position ids, so a text-only gap after an image is advanced exactly by the plain forward. (The gap
+            # itself crossing a placeholder was refused above.) Live: an edited last message after two images held a
+            # 5,696-token KV hit and a companion at 5,691 and was re-prefilled in full (5.4 s) for want of mRoPE ids.
+            position_free = bool(getattr(getattr(self, "model", None), "_nemotron_bolt_vl_runtime", False))
+            if (prefix_has_media or needs_text_positions) and not position_free:
                 # Reconstruct this request's compressed 3-axis positions from
                 # processed IDs/grids. Cached module attributes may be stale.
                 from copy import copy
