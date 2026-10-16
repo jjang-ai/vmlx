@@ -16789,6 +16789,20 @@ async def clear_cache(
 
         from .speculative import is_dflash2_enabled
         if (_engine is not None and is_dflash2_enabled()
+                and getattr(_current_model_config(), "family_name", None) == "mimo_v2"):
+            from . import mimo_session
+            try:
+                return await _clear_dspark_cache(
+                    pool=True, expected_root=expected_root, expected_pid=expected_pid,
+                    session_module=mimo_session,
+                )
+            except BlockingIOError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (OSError, sqlite3.Error) as exc:
+                logger.exception("MiMo SSD pool clear could not finish")
+                raise HTTPException(status_code=503, detail="SSD clear did not finish; refresh cache status before retrying") from exc
+
+        if (_engine is not None and is_dflash2_enabled()
                 and getattr(_current_model_config(), "family_name", None)
                 in {"glm5_next", "glm5_next_text"}):
             return await _clear_glm_shared_ssd_pool(expected_root, expected_pid)
