@@ -4754,6 +4754,16 @@ def _loaded_mllm_modalities() -> list[str] | None:
     ) if engine is not None else False
     if not engine_is_mllm:
         return None
+    # Bolt/Super preserve the source's RADIO metadata, and Bolt also declares
+    # video in its sidecar. Their Python wrapper currently implements images
+    # only. Report the loaded route's capabilities rather than admitting an
+    # unwired video request based on that declaration. Nano-Omni has a sound
+    # tower and its own dispatcher, so it does not match this detector.
+    from .models.nemotron_bolt_vl import is_nemotron_bolt_vl_bundle
+
+    bundle_path = _model_path or _model_name
+    if bundle_path and is_nemotron_bolt_vl_bundle(bundle_path):
+        return ["text", "vision"]
     mimo_modalities = _mimo_v2_runtime_modalities(_model_path or _model_name)
     if mimo_modalities is not None:
         gate = _mimo_v2_loaded_media_memory_gate(_model_path or _model_name, mimo_modalities)
