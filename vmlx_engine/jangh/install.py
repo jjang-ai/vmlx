@@ -120,10 +120,13 @@ def install_jangh(model: nn.Module, config: dict) -> int:
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
         replacements.append((mod, replacement))
-    import os
+    if mlp_prepared:
+        # resolved only when relu2 stacks exist: the installer contract tests run this body in a namespace that
+        # provides only TQSwitchGLU (see the tq_mlp lookup above)
+        import os
 
-    raw_limit = os.environ.get("JANGH_RELU2_DECODE_MAX_TOKENS", "").strip()
-    relu2_limit = int(raw_limit) if raw_limit.isdigit() else RELU2_DECODE_MAX_TOKENS
+        raw_limit = os.environ.get("JANGH_RELU2_DECODE_MAX_TOKENS", "").strip()
+        relu2_limit = int(raw_limit) if raw_limit.isdigit() else RELU2_DECODE_MAX_TOKENS
     for mod, D, I, E, c1, c2 in mlp_prepared:
         replacement = tq_mlp(D, I, E, c1["bits"], c2["bits"], rotation_fc1=c1["rotation"], rotation_fc2=c2["rotation"])
         replacement.is_jangh = True
