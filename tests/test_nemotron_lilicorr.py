@@ -104,3 +104,37 @@ def test_propose_single_sync_matches_direct_walk():
     assert path == L.greedy_walk(start_np, pair_np, ids)
     d.lilicorr = None
     assert d.propose(hidden, lm_head, None) == (None, top1)
+
+
+def _head_step(point_mass, sampler):
+    from types import SimpleNamespace
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    V = 50
+    logits = mx.full((1, 1, V), -1e9); logits[0, 0, 17] = 0.0
+
+    class LM:
+        _vmlx_point_mass_draft = point_mass
+
+        def mtp_forward(self, h, tok, cache, return_hidden=False):
+            return logits, mx.zeros((1, 1, 1))
+
+    gen = SimpleNamespace(language_model=LM(), _model_type="nemotron_h", _make_request_sampler=lambda r: sampler)
+    return MLLMBatchGenerator._step_native_mtp_head(gen, SimpleNamespace(), mx.zeros((1, 1, 4)), mx.array([3]), [])
+
+
+def test_point_mass_head_skips_request_sampler():
+    calls = []
+
+    def sampler(x):
+        calls.append(1)
+        return mx.argmax(x, axis=-1)
+
+    sampler._vmlx_accepts_logits = True
+    tok, lp, _ = _head_step(True, sampler)
+    assert calls == [] and tok.tolist() == [17] and lp is not None and float(lp[17]) == 0.0
+    tok2, lp2, _ = _head_step(False, sampler)                 # same result through the sampler path
+    assert calls == [1] and tok2.tolist() == [17] and mx.allclose(lp, lp2).item()
+    sampler._vmlx_is_greedy = True
+    assert _head_step(True, sampler)[1] is None               # greedy: no proposal logprobs, as the sampler path

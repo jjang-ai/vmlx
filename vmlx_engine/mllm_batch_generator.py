@@ -18131,7 +18131,14 @@ class MLLMBatchGenerator:
         if forward_probe is not None:
             forward_probe.finish(mtp_logits, mtp_hidden)
         final_logits = mtp_logits[:, -1, :]
-        draft_tok, draft_lp = _native_mtp_sample_one(final_logits, sampler)
+        if getattr(self.language_model, "_vmlx_point_mass_draft", False):
+            # point-mass head (LiLiCorr): any sampler, bias or penalty draws the argmax of a one-hot -1e9 row, so the
+            # vocab-sized sampler pass (top-p sort, ~0.6 ms a row) is skipped; q for stochastic accept is unchanged
+            draft_tok = _native_mtp_ensure_uint32(mx.argmax(final_logits, axis=-1))
+            greedy = _native_mtp_sampler_accepts_logits(sampler) and _native_mtp_sampler_is_greedy(sampler)
+            draft_lp = None if greedy else _native_mtp_logprobs(final_logits).squeeze(0)
+        else:
+            draft_tok, draft_lp = _native_mtp_sample_one(final_logits, sampler)
         if return_margin:
             return draft_tok, draft_lp, mtp_hidden, _native_mtp_top2_margin(final_logits)
         return draft_tok, draft_lp, mtp_hidden

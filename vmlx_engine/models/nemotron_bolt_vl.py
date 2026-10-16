@@ -231,6 +231,10 @@ class LiLiCorrLanguageModel(LanguageModel):
     * deeper levels (the marker hidden) return the next path token.
     Mamba-2 rollback points + row-exact verify come from models/nemotron_mamba_rollback.py (``n_confirmed``)."""
 
+    # every mtp_forward returns point-mass logits (the lattice path token, -1e9 elsewhere): the shared MTP draft step
+    # takes the argmax directly instead of running the request sampler over the vocabulary (mllm_batch_generator)
+    _vmlx_point_mass_draft = True
+
     def __init__(self, inner, drafter):
         super().__init__(inner, mtp=drafter)
         self.drafter = drafter
