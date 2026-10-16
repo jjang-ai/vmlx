@@ -179,3 +179,22 @@ def test_inferred_medium_does_not_claim_an_explicit_substitution(native_bundle, 
                                       model_key=str(path), request_id="inferred-native-mode", native_request=req)
     assert pop_effort_substitution("inferred-native-mode") is None
     assert "medium_effort" not in ct
+
+
+@pytest.mark.parametrize("thinking", [None, True, False])
+@pytest.mark.parametrize("budget", [64, 1500, 16384])
+def test_native_modes_do_not_invent_an_answer_reserve(native_bundle, thinking, budget):
+    assert server._dsv4_answer_pass_thinking_cap("nemotron_h", thinking, budget) is None
+
+
+def test_native_budget_exception_does_not_change_other_family_reserves(native_bundle):
+    assert server._dsv4_answer_pass_thinking_cap("deepseek_v4", True, 1500) == 1125
+
+
+def test_native_mode_is_visible_in_resolved_kwargs_log(native_bundle, caplog):
+    with caplog.at_level("INFO", logger="vmlx_engine.server"):
+        server._log_resolved_sampling_kwargs(
+            "/v1/chat/completions", "test",
+            {"chat_template_kwargs": {"medium_effort": False, "enable_thinking": True}},
+        )
+    assert any("'medium_effort': False" in r.getMessage() for r in caplog.records)
