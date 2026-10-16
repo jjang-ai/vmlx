@@ -15,6 +15,8 @@ REQUIRED_WIDTHS = frozenset({"2", "3", "4"})
 WIDTHS = frozenset(str(b) for b in CUBIC_PARAMS)
 ROTATIONS = ("none", "hadamard32")
 PROJECTIONS = ("gate_proj", "up_proj", "down_proj")
+# Gate-less relu2 expert stacks (Nemotron-H SwitchMLP: switch_mlp.fc1 / fc2).
+PROJECTIONS_MLP = ("fc1", "fc2")
 
 
 def _fail(message):
@@ -104,7 +106,7 @@ def projection_contract(config):
             continue                    # dense jangtq2 projection: validated/installed by jangh.dense
         path = canonical_path(path)
         stack, projection = path.rsplit(".", 1)
-        if projection not in PROJECTIONS or not stack.endswith(".switch_mlp"):
+        if projection not in PROJECTIONS + PROJECTIONS_MLP or not stack.endswith(".switch_mlp"):
             _fail("unrecognized routed projection")
         bits = entry.get("bits")
         rotation = entry.get("rotation", default_rotation)
@@ -120,6 +122,8 @@ def projection_contract(config):
     if not stacks:
         return {}                       # dense-only JANGH bundle (jangh.dense installs those entries)
     for stack, projections in stacks.items():
+        if set(projections) == set(PROJECTIONS_MLP):
+            continue                    # gate-less relu2 stack: fc1 / fc2 carry independent widths
         if set(projections) != set(PROJECTIONS):
             _fail("incomplete routed stack " + stack)
         if projections["gate_proj"] != projections["up_proj"]:

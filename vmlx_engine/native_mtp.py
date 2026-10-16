@@ -640,6 +640,24 @@ def _vision_keys_from_weight_keys(weight_keys: list[str]) -> list[str]:
     return [str(key) for key in weight_keys if vision_re.search(str(key))]
 
 
+def expected_indexed_mtp_layers(cfg: dict[str, Any] | None, config_layers: int | None) -> int | None:
+    """Distinct mtp.layers.N indexes a bundle with ``config_layers`` MTP steps should carry.
+
+    Nemotron-H (e.g. Nemotron-3.5-Super-VL) builds ONE MTP step from a block pattern —
+    ``mtp_layers_block_type: [attention, moe]`` / ``mtp_hybrid_override_pattern: "*E"`` — stored as mtp.layers.0
+    (attention + eh_proj fusion) and mtp.layers.1 (MoE + final_layernorm). Its index therefore holds
+    steps x pattern-length sub-layers; every other family stores one mtp.N per step.
+    """
+    if config_layers is None:
+        return None
+    c = cfg if isinstance(cfg, dict) else {}
+    c = c.get("text_config") if isinstance(c.get("text_config"), dict) and not c.get("mtp_layers_block_type") else c
+    pat = c.get("mtp_layers_block_type") or c.get("mtp_hybrid_override_pattern")
+    if isinstance(pat, (list, str)) and len(pat) > 1:
+        return config_layers * len(pat)
+    return config_layers
+
+
 def bundle_index_mtp_layer_count(bundle_path: str | Path | None) -> int | None:
     """Return highest indexed MTP layer + 1 from supported MTP key layouts."""
     keys, _error = _index_mtp_keys(bundle_path)
@@ -1001,7 +1019,7 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         config_layers is not None
         and config_layers > 0
         and indexed_layer_count is not None
-        and indexed_layer_count != config_layers
+        and indexed_layer_count != expected_indexed_mtp_layers(cfg, config_layers)
         and drop_mtp is not True
     ):
         issues.append(

@@ -4945,6 +4945,13 @@ class MLXMultimodalLM:
             _finalize_loaded_model()
             return
 
+        from .nemotron_bolt_vl import is_nemotron_bolt_vl_bundle
+        if is_nemotron_bolt_vl_bundle(resolved_name):
+            from .nemotron_bolt_vl import load_nemotron_bolt_vl
+            self.model, self.processor, self.config = load_nemotron_bolt_vl(resolved_name)
+            _finalize_loaded_model()
+            return
+
         # Install mlx_vlm registry patches (gemma4 + kimi_k25) on THIS thread
         # so any module-level `mx.new_stream(...)` in mlx_vlm.generate ends
         # up bound to the loader-executor worker rather than uvicorn

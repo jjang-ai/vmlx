@@ -11,7 +11,9 @@ def expected_payload(model):
         mixed = getattr(module, "is_jangt", False)                  # JANGT mixed stack: only its JANGH projections
         if not getattr(module, "is_jangtq2", False) and not mixed:
             continue
-        for projection in ("gate_proj", "up_proj", "down_proj"):
+        # gate-less relu2 stacks (TQSwitchMLP: fc1 / fc2) or SwiGLU stacks (gate / up / down)
+        projections = ("fc1", "fc2") if hasattr(module, "fc1") and not hasattr(module, "gate_proj") else ("gate_proj", "up_proj", "down_proj")
+        for projection in projections:
             linear = getattr(module, projection)
             if mixed and not hasattr(linear, "tq2_packed"):
                 continue

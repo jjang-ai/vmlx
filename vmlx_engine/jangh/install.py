@@ -13,7 +13,7 @@ import logging
 
 import mlx.nn as nn
 
-from .switch import TQSwitchGLU
+from .switch import TQSwitchGLU, TQSwitchMLP
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,14 @@ def is_jangh(config: dict) -> bool:
 
 def install_jangh(model: nn.Module, config: dict) -> int:
     from mlx_lm.models.switch_layers import SwitchGLU
-
+    try:
+        from mlx_lm.models.switch_layers import SwitchMLP
+    except ImportError:
+        SwitchMLP = None
+    # gate-less relu2 stacks (Nemotron-H). Resolved through globals: the installer contract tests execute this body in
+    # a namespace that provides only TQSwitchGLU, with a switch_layers double that defines only SwitchGLU.
+    tq_mlp = globals().get("TQSwitchMLP")
+    MLP_TYPES = tuple(t for t in (tq_mlp, SwitchMLP) if t is not None)
     contracts = projection_contract(config)
     if not contracts:
         return 0
@@ -47,7 +54,7 @@ def install_jangh(model: nn.Module, config: dict) -> int:
     inventory = {}
     for path, mod in list(model.named_modules()):
         sw = getattr(mod, "switch_mlp", None)
-        if not isinstance(sw, (SwitchGLU, TQSwitchGLU)):
+        if not isinstance(sw, (SwitchGLU, TQSwitchGLU) + MLP_TYPES):
             continue
         if "mtp" in path.split("."):
             continue
@@ -57,8 +64,29 @@ def install_jangh(model: nn.Module, config: dict) -> int:
         inventory[key] = (mod, sw)
     if set(inventory) != set(contracts):
         raise ValueError("jangtq2: routed module inventory differs from quantization entries")
-    prepared = []
+    prepared, mlp_prepared = [], []
     for key, (mod, sw) in inventory.items():
+        if isinstance(sw, MLP_TYPES):
+            # gate-less relu2 stack (Nemotron-H): fc1 (E, I, D) / fc2 (E, D, I), independent widths
+            if set(contracts[key]) != {"fc1", "fc2"}:
+                raise ValueError(f"jangtq2: {key} is a fc1/fc2 expert stack but its entries are {sorted(contracts[key])}")
+            c1, c2 = contracts[key]["fc1"], contracts[key]["fc2"]
+            if tq_mlp is not None and isinstance(sw, tq_mlp):
+                for name, expected in (("fc1", c1), ("fc2", c2)):
+                    linear = getattr(sw, name)
+                    if linear.bits != expected["bits"] or linear.rotation != expected["rotation"]:
+                        raise ValueError(f"jangtq2: installed contract differs for {key}.{name}")
+                continue
+            w1, w2 = sw.fc1.weight.shape, sw.fc2.weight.shape
+            if len(w1) != 3 or len(w2) != 3 or w2 != (w1[0], w1[2], w1[1]):
+                raise ValueError(f"jangtq2: inconsistent expert dimensions for {key}")
+            E, I, D = w1
+            if D % 32 or I % 32:
+                raise ValueError(f"jangtq2: unsupported packed/rotation dimensions for {key}")
+            mlp_prepared.append((mod, D, I, E, c1, c2))
+            continue
+        if set(contracts[key]) != set(("gate_proj", "up_proj", "down_proj")):
+            raise ValueError(f"jangtq2: {key} is a SwiGLU expert stack but its entries are {sorted(contracts[key])}")
         gu, dn = contracts[key]["gate_proj"], contracts[key]["down_proj"]
         if isinstance(sw, TQSwitchGLU):
             for name in ("gate_proj", "up_proj", "down_proj"):
@@ -84,9 +112,14 @@ def install_jangh(model: nn.Module, config: dict) -> int:
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
         replacements.append((mod, replacement))
+    for mod, D, I, E, c1, c2 in mlp_prepared:
+        replacement = tq_mlp(D, I, E, c1["bits"], c2["bits"], rotation_fc1=c1["rotation"], rotation_fc2=c2["rotation"])
+        replacement.is_jangh = True
+        replacement.is_jangtq2 = True
+        replacements.append((mod, replacement))
     for mod, replacement in replacements:
         mod.switch_mlp = replacement
-    logger.info("JANGTQ v2: installed %d TQSwitchGLU modules", len(replacements))
+    logger.info("JANGTQ v2: installed %d routed modules (%d TQSwitchMLP relu2)", len(replacements), len(mlp_prepared))
     return len(replacements)
 
 # Existing integrations retain the same callable, not a second implementation.

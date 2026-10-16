@@ -10466,6 +10466,16 @@ def _bundle_index_tensor_prefix_status(
         return False, f"model.safetensors.index.json read failed: {type(exc).__name__}: {exc}"
 
 
+def _expected_indexed_mtp_layers(cfg, config_layers):
+    """Nemotron-H MTP: one step = len(mtp_layers_block_type) sub-layers (see native_mtp.expected_indexed_mtp_layers)."""
+    try:
+        from .native_mtp import expected_indexed_mtp_layers
+
+        return expected_indexed_mtp_layers(cfg, config_layers)
+    except Exception:
+        return config_layers
+
+
 def _bundle_index_mtp_layer_count(bundle_path: str | None) -> int | None:
     """Count distinct ``mtp.N.*`` layer indexes in the bundle's weight map.
 
@@ -10653,7 +10663,7 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         config_layers is not None
         and config_layers > 0
         and indexed_mtp_layer_count is not None
-        and indexed_mtp_layer_count != config_layers
+        and indexed_mtp_layer_count != _expected_indexed_mtp_layers(cfg, config_layers)
         and drop_mtp is not True
     ):
         # Bundle indexes a different number of distinct mtp.N layers than the

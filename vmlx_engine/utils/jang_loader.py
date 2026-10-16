@@ -3213,6 +3213,14 @@ def _load_jang_v2(
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
+    # Nemotron-H puzzle blocks (per-block MoE widths in config["block_configs"], e.g. Nemotron-3.5-Bolt): patch
+    # BEFORE the model class is instantiated. Not wrapped in a broad except: a bundle that needs it must not load
+    # with the global-config blocks (wrong expert shapes).
+    from .nemotron_puzzle import ensure_puzzle_support as _ensure_puzzle
+    _puzzle_cfg = Path(str(path)) / "config.json"
+    if _puzzle_cfg.is_file() and _ensure_puzzle(json.loads(_puzzle_cfg.read_text())):
+        logger.info("Nemotron-H puzzle block configs: per-block MoE patch active")
+
     # Shape inference can add fine-grained packed MoEGate entries even when
     # the bundle only declares a uniform default. Upstream checks explicit
     # overrides BEFORE to_quantized support, so these entries crash skeleton
@@ -3229,12 +3237,23 @@ def _load_jang_v2(
     # (TQLinear.to_quantized accepts its own entry and returns itself). Install them inside that nn.quantize call.
     from vmlx_engine.jangh.dense import dense_entries as _jh_dense_entries, install_jangh_dense as _jh_install_dense
     _jh_ents = _jh_dense_entries(skeleton_config or config)
+    # Routed JANGH stacks on the generic v2 path (no family loader installs them first), e.g. Nemotron-3.5-Bolt's relu2
+    # switch_mlp.fc1/fc2: same rule as the dense entries — swap them in inside load_model's nn.quantize call, or the
+    # per-module {"mode": "jangtq2", "rotation": ...} entries reach SwitchLinear.to_quantized and crash startup.
+    from vmlx_engine.jangh.contract import projection_contract as _jh_pc, validate_format as _jh_vf
+    _jh_cfg = skeleton_config or config
+    _jh_routed = bool(not _jh_cfg.get("jangt") and _jh_vf(_jh_cfg) and _jh_pc(_jh_cfg))
     import mlx.nn as _jh_nn
     _jh_orig_quantize = _jh_nn.quantize
-    if _jh_ents:
+    if _jh_ents or _jh_routed:
         def _jh_quantize(model_, *args, **kwargs):
-            n = _jh_install_dense(model_, skeleton_config or config)
-            logger.info("  JANGH dense: %d Linear -> TQLinear before quantize", n)
+            if _jh_routed:
+                from vmlx_engine.jangh.install import install_jangh as _jh_install_routed
+                nr = _jh_install_routed(model_, _jh_cfg)
+                logger.info("  JANGH routed: %d expert stacks installed before quantize", nr)
+            if _jh_ents:
+                n = _jh_install_dense(model_, _jh_cfg)
+                logger.info("  JANGH dense: %d Linear -> TQLinear before quantize", n)
             return _jh_orig_quantize(model_, *args, **kwargs)
         _jh_nn.quantize = _jh_quantize
     try:
@@ -4073,6 +4092,14 @@ def _load_jang_v2_vlm(
         ensure_latent_moe_support(str(path))
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
+
+    # Nemotron-H puzzle blocks (per-block MoE widths in config["block_configs"], e.g. Nemotron-3.5-Bolt): patch
+    # BEFORE the model class is instantiated. Not wrapped in a broad except: a bundle that needs it must not load
+    # with the global-config blocks (wrong expert shapes).
+    from .nemotron_puzzle import ensure_puzzle_support as _ensure_puzzle
+    _puzzle_cfg = Path(str(path)) / "config.json"
+    if _puzzle_cfg.is_file() and _ensure_puzzle(json.loads(_puzzle_cfg.read_text())):
+        logger.info("Nemotron-H puzzle block configs: per-block MoE patch active")
 
     config = vlm_load_config(path)
     _normalize_gemma4_config_scalar_types(config)

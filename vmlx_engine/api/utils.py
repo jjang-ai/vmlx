@@ -747,6 +747,16 @@ def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bo
         )
         return True
 
+    # Nemotron-3.5-Bolt: flattened nemotron_h text config (no vision_config) + config_omni.json with a C-RADIO v4-H
+    # tower and no sound tower -> the standard multimodal scheduler (models/nemotron_bolt_vl.py).
+    try:
+        from ..models.nemotron_bolt_vl import is_nemotron_bolt_vl_bundle
+        if is_nemotron_bolt_vl_bundle(local_path) and not force_text_only:
+            _logger.info("is_mllm_model(%s): tier=nemotron_bolt_vl result=True", model_name)
+            return True
+    except Exception as exc:  # a broken detector must be visible: the bundle would silently serve text-only
+        _logger.warning("is_mllm_model(%s): nemotron_bolt_vl detection failed: %s: %s", model_name, type(exc).__name__, exc)
+
     # Nemotron-3-Nano-Omni: bundle has vision_config (would route through MLLM
     # path → mlx_vlm.get_model_and_args → ValueError "nemotron_h not supported"),
     # but the omni dispatcher loads its own encoders + LM at request time. The

@@ -221,3 +221,47 @@ class TQSwitchGLU(nn.Module):
         y = K.gather_qmv_weighted_down(h, d.tq2_packed, d.tq2_scales, d._cb, idx2, scores.reshape(-1, kk), d.bits,
                                        x.dtype, rotate=rk, slot_fastest=idx2.shape[0] > 1)
         return y.reshape(*lead, D)
+
+
+def relu2(x: mx.array) -> mx.array:
+    return mx.square(mx.maximum(x, 0))
+
+
+class TQSwitchMLP(nn.Module):
+    """Drop-in for mlx_lm SwitchMLP with gate-less relu2 experts on JANGTQ v2 weights (Nemotron-H: fc1 -> relu2 -> fc2,
+    e.g. Nemotron-3.5-Bolt's 1024-wide latent experts). Same kernels as TQSwitchGLU, single-projection form:
+      decode : fc1 gather qmv (f32) -> relu2 -> fc2 gather qmv          (rows < SORT_THRESHOLD routed pairs)
+      prefill: argsort experts -> fc1 sorted qmm -> relu2 -> fc2 sorted qmm -> unsort
+    Unweighted output (..., k, D) like SwitchMLP; the caller applies the router weights."""
+
+    def __init__(self, input_dims: int, hidden_dims: int, num_experts: int, bits_fc1: int, bits_fc2: int,
+                 rotation_fc1: str = "none", rotation_fc2: str = "none"):
+        super().__init__()
+        self.fc1 = TQSwitchLinear(input_dims, hidden_dims, num_experts, bits_fc1, rotation_fc1)
+        self.fc2 = TQSwitchLinear(hidden_dims, input_dims, num_experts, bits_fc2, rotation_fc2)
+
+    def _use_sorted(self, routed_rows: int, kk: int) -> bool:
+        limit = getattr(self, "decode_max_tokens", None)
+        if limit is None:
+            return routed_rows >= SORT_THRESHOLD
+        return (routed_rows // max(1, int(kk))) > int(limit)
+
+    def __call__(self, x, indices):
+        f1, f2 = self.fc1, self.fc2
+        lead, kk, D = x.shape[:-1], indices.shape[-1], x.shape[-1]
+        xf = x.reshape(-1, D)
+        idx = indices.reshape(-1).astype(mx.uint32)
+        if not self._use_sorted(idx.size, kk):
+            h = K.gather_qmv(rotate_rows(xf, f1), f1.tq2_packed, f1.tq2_scales, f1._cb, idx, f1.bits, x_per_dispatch=False,
+                             slot_fastest=xf.shape[0] > 1)
+            h = relu2(h).astype(x.dtype)
+            y = K.gather_qmv(rotate_rows(h, f2), f2.tq2_packed, f2.tq2_scales, f2._cb, idx, f2.bits, x_per_dispatch=True,
+                             slot_fastest=xf.shape[0] > 1)
+            return y.astype(x.dtype).reshape(*lead, kk, D)
+        order = mx.argsort(idx)
+        inv = mx.argsort(order)
+        idx_s = idx[order]
+        xs = rotate_rows(xf, f1)[order // kk]
+        h = relu2(K.gather_qmm_sorted(xs, f1.tq2_packed, f1.tq2_scales, f1._cb, idx_s, f1.bits))
+        y = K.gather_qmm_sorted(rotate_rows(h, f2), f2.tq2_packed, f2.tq2_scales, f2._cb, idx_s, f2.bits)
+        return y[inv].astype(x.dtype).reshape(*lead, kk, D)
