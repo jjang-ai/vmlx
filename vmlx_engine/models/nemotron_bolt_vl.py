@@ -41,9 +41,9 @@ def is_nemotron_bolt_vl_bundle(path) -> bool:
 class LanguageModel(nn.Module):
     """Text side for the MLLM scheduler. With a native MTP head (Nemotron-3.5-Super-VL) it also exposes the native-MTP
     contract the generator drives: ``return_hidden`` (the backbone output AFTER norm_f — the h_t the head was trained
-    on; before norm_f is wrong, jang Super 01-LOG control), ``mtp_forward`` and ``make_mtp_cache``. ``n_confirmed`` is
-    accepted and ignored: Mamba-2 layers publish no rollback point, so a rejected draft restores the verify snapshot and
-    replays the confirmed token (exact)."""
+    on; before norm_f is wrong, jang Super 01-LOG control), ``mtp_forward`` and ``make_mtp_cache``. With
+    ``n_confirmed`` the Mamba-2 layers publish rollback points for the verify forward (models/nemotron_mamba_rollback.py)
+    so a rejected draft rolls back instead of replaying the confirmed token."""
 
     def __init__(self, inner, mtp=None):
         super().__init__()
@@ -78,6 +78,16 @@ class LanguageModel(nn.Module):
         return (logits, h) if return_hidden else logits
 
     def __call__(self, inputs, cache=None, inputs_embeds=None, return_hidden=False, n_confirmed=0, **kwargs):
+        if n_confirmed and cache is not None and self.mtp is not None:
+            from . import nemotron_mamba_rollback as rb
+            marked = rb.mark_confirmed(cache, n_confirmed)
+            try:
+                return self._forward(inputs, cache, inputs_embeds, return_hidden)
+            finally:
+                rb.unmark(marked)
+        return self._forward(inputs, cache, inputs_embeds, return_hidden)
+
+    def _forward(self, inputs, cache, inputs_embeds, return_hidden):
         bb = self.inner.backbone
         if inputs_embeds is None:
             if not return_hidden:
@@ -284,5 +294,8 @@ def load_nemotron_bolt_vl(bundle):
         status = maybe_apply_native_mtp(str(bundle), allow_runtime=True)
         if status.get("runtime_active"):
             mtp = load_mtp_head(text, bundle)
+            if mtp is not None:
+                from . import nemotron_mamba_rollback
+                nemotron_mamba_rollback.apply()
     model = Model(text, bundle, config, mtp=mtp)
     return model, NemotronBoltProcessor(tokenizer, bundle), config

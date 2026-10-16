@@ -629,6 +629,15 @@ class TestUnseenStartDepthPolicy:
         assert gen._native_mtp_unseen_start_depth("qwen4_exp", sampled_profile=True, depth=3) is None
         assert gen._native_mtp_unseen_start_depth("qwen4_exp", sampled_profile=False, depth=3) == 3
 
+    def test_nemotron_h_seeds_at_depth(self, monkeypatch):
+        from vmlx_engine import mllm_batch_generator as gen
+
+        monkeypatch.setattr(gen, "_NATIVE_MTP_STOCHASTIC_ACCEPT", True)
+        assert gen._native_mtp_unseen_start_depth("nemotron_h", sampled_profile=False, depth=3) == 3
+        assert gen._native_mtp_unseen_start_depth("nemotron_h", sampled_profile=True, depth=2) == 2
+        monkeypatch.setattr(gen, "_NATIVE_MTP_STOCHASTIC_ACCEPT", False)
+        assert gen._native_mtp_unseen_start_depth("nemotron_h", sampled_profile=True, depth=3) is None
+
     def test_other_families_keep_unseen_ar(self, monkeypatch):
         from vmlx_engine import mllm_batch_generator as gen
 

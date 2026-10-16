@@ -6788,6 +6788,10 @@ def _native_mtp_calibration_enabled() -> bool:
 _NATIVE_MTP_CYCLE_TRACE = os.environ.get("VMLX_NATIVE_MTP_CYCLE_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Model types whose unseen profiles seed at the configured depth (live AR/D1/D2/D3 receipts; see below).
+_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset({"qwen4_exp", "nemotron_h", "nemotron_h_v2"})
+
+
 def _native_mtp_unseen_start_depth(
     model_type: Optional[str], *, sampled_profile: bool, depth: int
 ) -> Optional[int]:
@@ -6808,9 +6812,16 @@ def _native_mtp_unseen_start_depth(
     ordinary chat request is a sampled profile.  Keeping those on AR until a
     later probe made "Adaptive MTP" behave as AR for most short responses.
     With the kill switch (VMLX_MTP_STOCHASTIC_ACCEPT=0) sampled requests are
-    gated off before this point anyway.  No other family inherits this.
+    gated off before this point anyway.
+
+    nemotron_h (Nemotron-3.5-Super-VL head, MLLM lane) is the second measured
+    exception, 2026-10-16, app argv, 3 prompts x greedy/sampled, 512 tokens,
+    AR control at both ends (38.4/38.0 then 38.6/38.3 tok/s, clocks within 5 %):
+    D1 42.0/43.9, D2 49.7/48.5, D3 49.3/51.4 tok/s (+29-35 % at D2/D3), d1
+    acceptance ~90 %. Bolt shares the type but carries no head, so it never
+    reaches this point. No other family inherits this.
     """
-    if str(model_type or "").lower() != "qwen4_exp":
+    if str(model_type or "").lower() not in _NATIVE_MTP_MEASURED_COLD_START_TYPES:
         return None
     if sampled_profile and not _NATIVE_MTP_STOCHASTIC_ACCEPT:
         return None
@@ -18397,7 +18408,9 @@ class MLLMBatchGenerator:
                         sampled_profile=sampled_profile,
                         depth=depth,
                     ),
-                    unseen_start_source="qwen4_exp_measured_cold_start",
+                    unseen_start_source=(
+                        f"{str(getattr(self, '_model_type', '') or '').lower()}_measured_cold_start"
+                    ),
                 )
             if depth <= 0:
                 # A learned loss chooses AR initially, not forever. Keep the

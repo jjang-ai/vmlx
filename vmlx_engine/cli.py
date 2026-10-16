@@ -2612,6 +2612,12 @@ def serve_command(args):
                 mtp_display = "ACTIVE"
             elif mtp_status.get("runtime_available"):
                 mtp_display = "READY"
+            elif mtp_status.get("artifact_available") and mtp_status.get("runtime_supported"):
+                # supported runtime that is switched off (env / family default / validation): say so, never "unwired"
+                mtp_display = (
+                    f"{str(mtp_status.get('status') or 'runtime disabled').replace('_', ' ').upper()}"
+                    f" ({mtp_status.get('runtime_reason') or 'not active'})"
+                )
             elif mtp_status.get("artifact_available"):
                 mtp_display = "weights present; runtime unwired"
             else:
