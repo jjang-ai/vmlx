@@ -59,12 +59,14 @@ def test_explicit_medium_reaches_native_template(native_bundle, make_request, fi
     assert merged(req.model_copy())["medium_effort"] is True
 
 
-@pytest.mark.parametrize("effort", ["low", "high", "xhigh", "max"])
-def test_unimplemented_effort_is_not_silently_coerced(native_bundle, make_request, effort):
-    with pytest.raises(HTTPException) as exc:
-        merged(make_request(reasoning_effort=effort))
-    assert exc.value.status_code == 400
-    assert "medium effort only" in exc.value.detail
+@pytest.mark.parametrize("effort,native_medium", [("low", True), ("minimal", True), ("high", False), ("xhigh", False), ("max", False)])
+def test_unimplemented_effort_is_coerced_and_logged_not_refused(native_bundle, make_request, effort, native_medium, caplog):
+    # no 400 (an OpenAI client sending "high" by default must still work); nearest native tier; never silent
+    with caplog.at_level("WARNING", logger="vmlx_engine.server"):
+        kwargs = merged(make_request(reasoning_effort=effort))
+    assert kwargs.get("enable_thinking") is True
+    assert (kwargs.get("medium_effort") is True) is native_medium
+    assert any("no native Nemotron tier" in r.getMessage() for r in caplog.records)
 
 
 def test_native_kwarg_and_off_keep_precedence(native_bundle, make_request):

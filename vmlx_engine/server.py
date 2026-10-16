@@ -1421,13 +1421,18 @@ def _merge_ct_kwargs(
             explicit = getattr(native_request, "_explicit_reasoning_effort", None)
         if explicit is not None and _nemotron_native_medium_contract(_model_path or _model_name):
             if (enable_thinking if enable_thinking is not None else base.get("enable_thinking")) is not False:
-                if str(explicit).strip().lower() != "medium":
-                    raise HTTPException(
-                        status_code=400,
-                        detail="This Nemotron bundle supports native On/Off and medium effort only; "
-                        "omit reasoning_effort for native full reasoning.",
+                tier = str(explicit).strip().lower()
+                # Native tiers are On (full reasoning, the template default) and Medium (medium_effort). Other
+                # explicit efforts are coerced to the nearest native tier and LOGGED, the same contract as every
+                # other stamped family (_apply_stamped_effort_policy); refusing them with a 400 made ordinary
+                # OpenAI clients that send "high" by default fail outright.
+                native = "medium" if tier in ("minimal", "low", "medium") else "on"
+                if tier != "medium":
+                    logger.warning(
+                        "reasoning_effort %r has no native Nemotron tier; using %s (native tiers: on, medium)",
+                        tier, "Medium (medium_effort)" if native == "medium" else "On (full reasoning, default)",
                     )
-                if "medium_effort" not in (request_kwargs or {}):
+                if native == "medium" and "medium_effort" not in (request_kwargs or {}):
                     base["medium_effort"] = True
                 base.setdefault("enable_thinking", True)
     return base
