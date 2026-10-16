@@ -17,6 +17,14 @@ from .switch import TQSwitchGLU, TQSwitchMLP
 
 logger = logging.getLogger(__name__)
 
+# Gate-less relu2 stacks (Nemotron-H, e.g. Nemotron-3.5-Bolt: D=1024 latent, I=1536-2560, E=240-496, k=9): per-row gather
+# (decode) vs sorted (prefill) crossover, measured on the whole Bolt forward at a warm 1.5k-token state, M5 Max / MLX
+# 0.32.3, median of 7: gather 38 / 50 / 58 / 70 / 77 ms vs sorted 113 / 102 / 103 / 102 / 100 ms at 8 / 12 / 16 / 24 / 32
+# tokens, tie at 48 (117 vs 116), sorted wins from 64 (120 vs 140). The generic rule (sorted from 64 routed rows = 7
+# tokens at k=9) sent every 8-40-token forward (short cached follow-ups, chunk tails, speculative verify) to the sorted
+# path, which carries ~100 ms of fixed cost here. JANGH_RELU2_DECODE_MAX_TOKENS overrides.
+RELU2_DECODE_MAX_TOKENS = 40
+
 
 def _cfg_key(module_path: str) -> str:
     """Runtime module path -> on-disk config key (the bundle uses model.layers.N... naming)."""
@@ -112,10 +120,15 @@ def install_jangh(model: nn.Module, config: dict) -> int:
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
         replacements.append((mod, replacement))
+    import os
+
+    raw_limit = os.environ.get("JANGH_RELU2_DECODE_MAX_TOKENS", "").strip()
+    relu2_limit = int(raw_limit) if raw_limit.isdigit() else RELU2_DECODE_MAX_TOKENS
     for mod, D, I, E, c1, c2 in mlp_prepared:
         replacement = tq_mlp(D, I, E, c1["bits"], c2["bits"], rotation_fc1=c1["rotation"], rotation_fc2=c2["rotation"])
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
+        replacement.decode_max_tokens = relu2_limit
         replacements.append((mod, replacement))
     for mod, replacement in replacements:
         mod.switch_mlp = replacement

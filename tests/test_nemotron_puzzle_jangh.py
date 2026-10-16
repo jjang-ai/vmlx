@@ -119,6 +119,10 @@ def test_install_replaces_switchmlp_and_fails_closed():
     sw = model.layers[3].mixer.switch_mlp
     assert isinstance(sw, TQSwitchMLP) and sw.fc1.bits == 2 and sw.fc2.bits == 3
     assert sw.fc1.tq2_packed.shape == (8, 64, 64 * 2 // 32) and sw.fc2.tq2_scales.shape == (8, 64)
+    # measured Bolt crossover: per-row gather through 40 tokens, sorted beyond (rule is by TOKENS, k=top-k)
+    from vmlx_engine.jangh.install import RELU2_DECODE_MAX_TOKENS
+    assert sw.decode_max_tokens == RELU2_DECODE_MAX_TOKENS == 40
+    assert sw._use_sorted(40 * 9, 9) is False and sw._use_sorted(41 * 9, 9) is True
     broken = dict(full, quantization={k: v for k, v in q.items() if not k.endswith("3.mixer.switch_mlp.fc2")})
     model2 = nemotron_h.Model(nemotron_h.ModelArgs.from_dict(broken))
     with pytest.raises(ValueError):
