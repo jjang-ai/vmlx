@@ -930,7 +930,8 @@ class AdaptiveSpec:
 
     def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
                  probe_every: int = 24, margin: float = 0.05, ar_burst: int = 8, slope: float = 0.22,
-                 explore_every: int = 6, costs: dict | None = None):
+                 explore_every: int = 6, costs: dict | None = None, ar_reprobe_rounds: int | None = None,
+                 ar_reprobe_tokens: int = 4, ar_min_sample_tokens: int | None = None):
         self.bmax, self.bmin = int(bmax), int(bmin)
         self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
         self.n_try = [prior_n] * (self.bmax + 1)
@@ -946,6 +947,21 @@ class AdaptiveSpec:
         self.slope, self.explore_every = slope, explore_every
         self.rounds_since_explore = 0
         self._explore_flip = False
+        # AR cost hygiene (MiMo quality-v2 run 2026-10-16: the shared table held t_ar = 88 ms against a real ~25 ms,
+        # so AR was never chosen again -- ar_tokens 0 on every 10-33k-token reasoning turn, where spec rounds were only
+        # break-even). (1) a burst cut short by EOS / max_tokens pays two pipelined launches + a sync over 1-2 tokens,
+        # 2-4x the real per-token cost: such bursts do not update t_ar; (2) once spec wins, nothing re-measured AR, so
+        # a stale (or context-drifted) t_ar lasted the life of the process: after ar_reprobe_rounds spec rounds a
+        # short AR burst re-measures it and replaces most of the old value.
+        # VMLX_DFLASH_AR_REPROBE_ROUNDS=0 / VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS=1 restore the old behaviour (A/B control)
+        if ar_reprobe_rounds is None:
+            ar_reprobe_rounds = int(os.environ.get("VMLX_DFLASH_AR_REPROBE_ROUNDS", "256"))
+        if ar_min_sample_tokens is None:
+            ar_min_sample_tokens = int(os.environ.get("VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS", "3"))
+        self.ar_reprobe_rounds, self.ar_reprobe_tokens = int(ar_reprobe_rounds), int(ar_reprobe_tokens)
+        self.ar_min_sample_tokens = int(ar_min_sample_tokens)
+        self.rounds_since_ar = 0
+        self._reprobe_pending = False
 
     @property
     def t_ar(self):
@@ -985,6 +1001,10 @@ class AdaptiveSpec:
             return ("ar", self.ar_burst)
         if not self.t_round:                        # and one round
             return ("spec", best)
+        if self.ar_reprobe_rounds > 0 and self.rounds_since_ar >= self.ar_reprobe_rounds:
+            self.rounds_since_ar = 0
+            self._reprobe_pending = True
+            return ("ar", self.ar_reprobe_tokens)
         spec_rate = self.expected(best) / self.cost(best)
         # hysteresis: AR only when it is estimated at least `margin` faster than the best block (round costs carry
         # read-back overhead that AR bursts hide; switching on a near-tie loses)
@@ -1003,6 +1023,7 @@ class AdaptiveSpec:
     def update_spec(self, b: int, accepted: int, dt: float, after_ar: bool = False) -> None:
         """after_ar: the round right after an AR burst feeds the drafter all of the burst's context rows and is
         slower than a steady-state round; its acceptance counts, its time does not."""
+        self.rounds_since_ar += 1
         for i in range(1, self.bmax + 1):
             self.n_try[i] *= self.decay; self.n_acc[i] *= self.decay
         for i in range(1, b):
@@ -1022,6 +1043,10 @@ class AdaptiveSpec:
 
     def update_ar(self, dt_per_token: float, tokens: int) -> None:
         self.ar_since_probe += tokens
+        self.rounds_since_ar = 0
+        reprobe, self._reprobe_pending = self._reprobe_pending, False
+        if int(tokens) < self.ar_min_sample_tokens:
+            return                                  # EOS / max_tokens-cut burst: launch overhead, not the AR cost
         if self._shared_costs and not self._costs.get("ar_warm"):
             # the first AR burst of the process can include 1-row kernel compiles: a stored outlier would keep the
             # shared table claiming AR is slow (and AR fallback off) for every later request
@@ -1029,7 +1054,12 @@ class AdaptiveSpec:
             if self.t_ar is None:
                 self.ar_since_probe = 0
                 return
-        self.t_ar = dt_per_token if self.t_ar is None else 0.7 * self.t_ar + 0.3 * dt_per_token
+        if self.t_ar is None:
+            self.t_ar = dt_per_token
+        elif reprobe:
+            self.t_ar = 0.3 * self.t_ar + 0.7 * dt_per_token
+        else:
+            self.t_ar = 0.7 * self.t_ar + 0.3 * dt_per_token
 
 
 def adaptive_costs(target, bmax: int) -> dict:

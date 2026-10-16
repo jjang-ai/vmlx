@@ -661,3 +661,21 @@ def test_adaptive_costs_are_shared_across_requests_on_one_target():
     r3 = AdaptiveSpec(8, costs=adaptive_costs(other, 8))
     assert r3.t_ar is None and not r3.t_round
     assert adaptive_costs(tgt, 4) is not adaptive_costs(tgt, 8)
+
+
+def test_adaptive_ar_cost_ignores_cut_bursts_and_reprobes_stale_estimates():
+    """MiMo quality run 2026-10-16: the shared t_ar sat at 88 ms (real ~25) and AR was never re-measured."""
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    p = AdaptiveSpec(8, ar_reprobe_rounds=5)
+    p.update_ar(0.025, 8)
+    p.update_ar(0.300, 1)                                   # EOS after one token: launch overhead, ignored
+    assert abs(p.t_ar - 0.025) < 1e-9
+    p.t_ar = 0.088                                          # a stale estimate: spec always wins
+    for _ in range(5):
+        p.update_spec(3, 1, 0.064)
+    mode, k = p.choose()
+    assert (mode, k) == ("ar", 4)                           # re-probe after 5 spec rounds
+    p.update_ar(0.025, 4)
+    assert abs(p.t_ar - (0.3 * 0.088 + 0.7 * 0.025)) < 1e-9 # re-probe replaces most of the stale value
+    assert p.choose()[0] in ("ar", "spec") and p.rounds_since_ar == 0
