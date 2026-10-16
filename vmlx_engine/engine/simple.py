@@ -175,6 +175,12 @@ class SimpleEngine(BaseEngine):
         # Abort flag — checked between tokens in stream_generate
         self._abort_requested = False
         self._current_request_id: str | None = None
+        # Per-request cancel events of the MLLM stream (request id -> threading.Event). The engine-wide flag above is
+        # reset by the NEXT request: when a client drops during a long prefill, Starlette cancels the consumer, the
+        # generation lock is released while the model thread is still prefilling, the follow-up request takes the lock
+        # and clears the flag, and the abandoned prefill runs to the end (MiMo DFlash lane, 75k tokens: the follow-up
+        # waited 104 s, 2026-10-16). An event belongs to one request and is never cleared.
+        self._cancel_events: dict[str, threading.Event] = {}
         self._model_executor: ThreadPoolExecutor | None = None
         # A published terminal's SSD write that the next generation awaits.
         self._pending_persistence: asyncio.Task | None = None
@@ -1301,6 +1307,9 @@ class SimpleEngine(BaseEngine):
                 _admission_wait = await self._await_prior_terminal_persistence(request_id)
                 self._abort_requested = False
                 self._current_request_id = request_id
+                cancel_event = threading.Event()
+                if request_id:
+                    self._cancel_events[request_id] = cancel_event
                 stream_iter = None
                 try:
                     try:
@@ -1324,7 +1333,7 @@ class SimpleEngine(BaseEngine):
                     _sentinel = object()
                     def _next():
                         try:
-                            with generation_cancellation_scope(lambda: self._abort_requested):
+                            with generation_cancellation_scope(cancel_event.is_set):
                                 return next(stream_iter)
                         except StopIteration:
                             return _sentinel
@@ -1356,7 +1365,7 @@ class SimpleEngine(BaseEngine):
                             break
 
                         # Check abort flag between tokens
-                        if self._abort_requested:
+                        if self._abort_requested or cancel_event.is_set():
                             self._abort_requested = False
                             logger.info("SimpleEngine: MLLM generation aborted by request")
                             yield GenerationOutput(
@@ -1447,6 +1456,9 @@ class SimpleEngine(BaseEngine):
                             finish_reason="stop",
                         )
                 finally:
+                    # The consumer is gone or the stream ended: any next() still running on the model thread (a long
+                    # prefill whose client dropped) stops at its next chunk boundary instead of running to the end.
+                    cancel_event.set()
                     try:
                         close = getattr(stream_iter, "close", None)
                         if close is not None:
@@ -1456,6 +1468,8 @@ class SimpleEngine(BaseEngine):
                             await self._run_model_call(close)
                     finally:
                         self._current_request_id = None
+                        if request_id and self._cancel_events.get(request_id) is cancel_event:
+                            del self._cancel_events[request_id]
             return
 
         # For LLM, apply chat template and stream
@@ -1575,9 +1589,12 @@ class SimpleEngine(BaseEngine):
 
     async def abort_request(self, request_id: str) -> bool:
         """Abort the current generation if request_id matches (or unconditionally if no tracking)."""
+        event = self._cancel_events.get(request_id)
+        if event is not None:
+            event.set()                     # this request's own prefill / decode stops at its next boundary
         if self._current_request_id and request_id != self._current_request_id:
             logger.info(f"SimpleEngine: abort_request({request_id}) ignored — current request is {self._current_request_id}")
-            return False
+            return event is not None
         self._abort_requested = True
         logger.info(f"SimpleEngine: abort_request({request_id}) — flagging for abort")
         return True
