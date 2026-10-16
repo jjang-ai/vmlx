@@ -3566,6 +3566,12 @@ def _dsv4_answer_pass_thinking_cap(
         return None
     if effective_thinking is False:
         return None
+    if family_name in {"nemotron_h", "nemotron_h_v2"} and _nemotron_native_medium_contract(_model_path):
+        # These bundles own On/Medium/Off in their native template. They do
+        # not declare a server-managed reasoning budget: leave the caller's
+        # output cap intact instead of silently arming a second generation.
+        # Explicit max_thinking_tokens bypasses this default-only helper.
+        return None
     is_dsv4 = family_name == "deepseek_v4"
     env_var = "DSV4_ANSWER_RESERVE" if is_dsv4 else "VMLX_ANSWER_RESERVE"
     cap = _dsv4_default_thinking_cap(int(max_tokens or 0), env_var)
@@ -3933,6 +3939,7 @@ def _log_resolved_sampling_kwargs(
                 "thinking_budget",
                 "thinking_mode",
                 "enable_thinking",
+                "medium_effort",
             )
             if key in ct_kwargs
         }
