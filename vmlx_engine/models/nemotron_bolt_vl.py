@@ -235,6 +235,9 @@ class LiLiCorrLanguageModel(LanguageModel):
     # takes the argmax directly instead of running the request sampler over the vocabulary (mllm_batch_generator)
     _vmlx_point_mass_draft = True
 
+    # Loaded-runtime identity for health; this is not a native mtp.* artifact.
+    _vmlx_mtp_runtime_adapter = "nemotron_lilicorr"
+
     def __init__(self, inner, drafter):
         super().__init__(inner, mtp=drafter)
         self.drafter = drafter

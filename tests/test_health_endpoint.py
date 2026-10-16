@@ -1892,6 +1892,46 @@ class TestNativeMtpHealthMode:
             with patch.object(server, "_get_raw_model_from_engine", return_value=None):
                 return server._model_mtp_status_with_loaded_runtime(None)
 
+    @pytest.mark.parametrize("disabled", [False, True])
+    def test_loaded_lilicorr_reports_adapter_without_inventing_native_heads(self, monkeypatch, disabled):
+        from vmlx_engine import server
+
+        for name in ("VMLINUX_NATIVE_MTP", "VMLX_NATIVE_MTP"):
+            monkeypatch.delenv(name, raising=False)
+        if disabled:
+            monkeypatch.setenv("VMLINUX_NATIVE_MTP", "0")
+        native = {
+            "status": "not_configured", "runtime_available": False,
+            "runtime_supported": False, "artifact_available": False,
+            "config_num_nextn_predict_layers": 0, "index_has_mtp_tensors": False,
+            "runtime_adapter": "nemotron_h_head", "effective_depth": None,
+            "runtime_reason": "config does not request MTP",
+        }
+        language = SimpleNamespace(
+            _vmlx_mtp_runtime_adapter="nemotron_lilicorr", mtp=object(),
+            mtp_forward=lambda: None, make_mtp_cache=lambda: [],
+        )
+        monkeypatch.setattr(server, "_model_mtp_status", lambda _: dict(native))
+        monkeypatch.setattr(server, "_get_raw_model_from_engine", lambda: SimpleNamespace(language_model=language))
+        status = server._model_mtp_status_with_loaded_runtime(None)
+        assert status["runtime_available"] is True
+        assert status["runtime_supported"] is True
+        assert status["runtime_active"] is (not disabled)
+        assert status["runtime_adapter"] == "nemotron_lilicorr"
+        assert status["status"] == ("runtime_disabled" if disabled else "native_runtime_active")
+        assert "LiLiCorr" in status["runtime_reason"]
+        assert status["artifact_available"] is False
+        assert status["config_num_nextn_predict_layers"] == 0
+        assert status["index_has_mtp_tensors"] is False
+        if not disabled:
+            assert status["effective_depth"] is not None
+        # A folder/config hint or a stale marker without a usable head is not a loaded runtime.
+        language.mtp = None
+        absent = server._model_mtp_status_with_loaded_runtime(None)
+        assert absent["runtime_available"] is False
+        assert absent["runtime_active"] is False
+        assert absent["status"] == "not_configured"
+
     def test_default_is_adaptive(self, monkeypatch):
         status = self._status(monkeypatch, {})
         assert status["mode"] == "adaptive"

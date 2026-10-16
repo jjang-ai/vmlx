@@ -10896,6 +10896,19 @@ def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
 
         model = _get_raw_model_from_engine()
         active = bool(model is not None and model_has_native_mtp_runtime(model))
+        language_model = getattr(model, "language_model", model)
+        loaded_adapter = getattr(language_model, "_vmlx_mtp_runtime_adapter", None)
+        if active and loaded_adapter == "nemotron_lilicorr":
+            # Bolt's opt-in external drafter implements the native runtime
+            # interface without adding native mtp.* weights to the bundle.
+            # Keep artifact facts intact while reporting the attached adapter.
+            status.update(
+                runtime_available=True,
+                runtime_supported=True,
+                runtime_adapter=loaded_adapter,
+                runtime_scope="text+vl",
+                vl_runtime_available=True,
+            )
         status["runtime_active"] = False if native_disabled else active
         if native_disabled and status.get("runtime_available"):
             status["runtime_reason"] = "native MTP disabled by --disable-native-mtp/VMLINUX_NATIVE_MTP=0"
@@ -10912,6 +10925,12 @@ def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
                     status["effective_depth_source"] = source
                 except Exception:
                     pass
+        if active and loaded_adapter == "nemotron_lilicorr":
+            if native_disabled:
+                status["status"] = "runtime_disabled"
+                status["runtime_reason"] = "loaded LiLiCorr drafter disabled by native MTP policy"
+            else:
+                status["runtime_reason"] = "loaded LiLiCorr drafter is active through the native MTP runtime"
     except Exception:
         pass
     return status
