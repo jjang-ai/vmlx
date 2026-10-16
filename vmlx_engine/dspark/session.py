@@ -119,6 +119,28 @@ def ssd_parent(resume: Optional[dict]) -> Optional[dict]:
     return None
 
 
+def chain_after(parent: Optional[dict], receipt) -> Optional[dict]:
+    """The SSD parent for the NEXT entry a request stores, after storing one with ``parent``. When ``parent`` could not
+    be used (none, or the delta chain is at MAX_CHAIN) that entry was written in full: make it the parent of the
+    request's later entries, so a boundary + turn pair costs one full write and one small delta instead of two full
+    writes (MiMo 98k: 2 x 2.3 GB, 0.49 + 0.70 s, and the next request's admission waited 1.16 s). A usable parent is
+    kept (chain depth grows by one per request, as before)."""
+    from ..dflash2_session_disk import MAX_CHAIN
+
+    usable = bool(parent) and int(parent.get("depth", 0)) + 1 <= MAX_CHAIN
+    if usable:
+        return parent
+    ref = getattr(receipt, "vmlx_ssd_ref", None)
+    if not ref:
+        return parent
+    try:
+        if receipt.done() and not (receipt.result() or {}).get("durable", True):
+            return parent                                  # refused / failed write: never a parent
+    except Exception:  # noqa: BLE001
+        return parent
+    return dict(ref, receipt=receipt)
+
+
 def clone(caches: list, factory: Callable) -> Optional[list]:
     from ..dflash2_runtime import _clone_cache_shells
 

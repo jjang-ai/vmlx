@@ -82,6 +82,12 @@ def ssd_parent(resume: Optional[dict]) -> Optional[dict]:
     return _parent(resume)
 
 
+def chain_after(parent: Optional[dict], receipt) -> Optional[dict]:
+    from .dspark.session import chain_after as _chain
+
+    return _chain(parent, receipt)
+
+
 def clone(caches: list, factory: Callable) -> Optional[list]:
     """Independent snapshot of MiMo's target cache (see the module docstring for why rotating layers are copied)."""
     from mlx_lm.models.cache import RotatingKVCache

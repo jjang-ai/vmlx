@@ -424,3 +424,26 @@ def test_full_undo_rollback_restores_the_forward_start_on_mlx_vlm_targets():
     assert kv.offset == 4
     assert mx.array_equal(ssm[1], initial).item()
     assert mx.array_equal(ssm[0], conv_input[:, : K - 1]).item()
+
+
+def test_chain_after_makes_a_full_write_the_parent_of_the_next_entries():
+    """A request whose resume parent is unusable (none / chain at MAX_CHAIN) writes its first entry in full; its later
+    entries (boundary -> turn) must delta from that entry, not be written in full again. A usable parent is kept."""
+    from concurrent.futures import Future
+
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN
+    from vmlx_engine.dspark.session import chain_after
+
+    def receipt(ref, durable=True):
+        f = Future(); f.vmlx_ssd_ref = ref; f.set_result({"durable": durable}); return f
+
+    deep = {"sig": "a", "len": 100, "depth": MAX_CHAIN, "receipt": None}
+    r = receipt({"sig": "b", "len": 200, "depth": 0})
+    nxt = chain_after(deep, r)
+    assert nxt["sig"] == "b" and nxt["depth"] == 0 and nxt["receipt"] is r
+    assert chain_after(None, r)["sig"] == "b"
+    ok = {"sig": "a", "len": 100, "depth": 2, "receipt": None}
+    assert chain_after(ok, r) is ok                        # usable parent: unchanged (depth +1 per request)
+    assert chain_after(deep, receipt({"sig": "c", "len": 5, "depth": 0}, durable=False)) is deep   # refused write
+    pending = Future(); pending.vmlx_ssd_ref = {"sig": "d", "len": 7, "depth": 0}
+    assert chain_after(None, pending)["sig"] == "d"        # queued write: FIFO writer settles it before the child

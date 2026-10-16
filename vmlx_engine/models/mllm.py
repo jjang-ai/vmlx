@@ -7346,6 +7346,7 @@ class MLXMultimodalLM:
                                            "target_cache": t_cache, "draft_cache": d_cache, "model_key": model_key,
                                            "rope_delta": _entry_delta(cut)},
                                           parent=parent)
+                parent = _dsession.chain_after(parent, receipt)   # a full write becomes the next entries' parent
         forwarded = list(session.get("forwarded") or [])
         if _dsession.reuse_enabled() and len(forwarded) > cache_len and session.get("target_cache") is not None:
             # Session keys: the prompt's key ids (media positions carry the media identity) + the generated tokens.
@@ -7534,6 +7535,7 @@ class MLXMultimodalLM:
                 receipt = _ms.store({"kind": kind, "tokens": key_ids[:cut], "cache_len": int(cut),
                                      "target_cache": t_cache, "draft_context": taps, "model_key": model_key},
                                     parent=parent)
+                parent = _ms.chain_after(parent, receipt)   # a full write becomes the next entries' parent
         forwarded = int(session.get("forwarded") or 0)
         # The cache holds every emitted token but the last; when a pipelined AR step already forwarded the final EOS
         # (st.eos_forwarded) it holds that too -- either way the entry's key is the prompt + every emitted token.
