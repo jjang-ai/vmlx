@@ -1432,8 +1432,13 @@ def _merge_ct_kwargs(
                         "reasoning_effort %r has no native Nemotron tier; using %s (native tiers: on, medium)",
                         tier, "Medium (medium_effort)" if native == "medium" else "On (full reasoning, default)",
                     )
-                if native == "medium" and "medium_effort" not in (request_kwargs or {}):
-                    base["medium_effort"] = True
+                if "medium_effort" not in (request_kwargs or {}):
+                    if native == "medium":
+                        base["medium_effort"] = True
+                    elif "medium_effort" in base:
+                        # An explicit full-reasoning request supersedes the
+                        # server default, but never a caller's native kwarg.
+                        base["medium_effort"] = False
                 base.setdefault("enable_thinking", True)
     return base
 
@@ -3220,6 +3225,7 @@ def _apply_stamped_effort_policy(
     *,
     model_key: str,
     request_id: str | None = None,
+    native_request=None,
 ) -> None:
     """Clamp a requested ``reasoning_effort`` to the bundle's stamped set.
 
@@ -3244,6 +3250,28 @@ def _apply_stamped_effort_policy(
         _model_path or model_key
     )
     if not levels:
+        return
+    if (levels == ("medium",) and stamped_default is None
+            and _nemotron_native_medium_contract(_model_path or model_key)):
+        # _merge_ct_kwargs already resolved this native on/medium/off mode.
+        # A second effort clamp would report Medium even when the template
+        # actually runs On or Off. Preserve its kwargs and report that mode.
+        effective = (
+            "off" if ct_kwargs.get("enable_thinking") is False or chat_kwargs.get("enable_thinking") is False
+            else "medium" if ct_kwargs.get("medium_effort") is True
+            else "on"
+        )
+        explicit = (
+            getattr(native_request, "_explicit_reasoning_effort", None)
+            if native_request is not None else requested
+        )
+        if request_id and explicit is not None and str(explicit).strip().lower() != effective:
+            from vmlx_engine.context_limits import record_effort_substitution
+
+            record_effort_substitution(
+                request_id, requested_effort=explicit, effective_effort=effective,
+                stamped_levels=("off", "medium", "on"),
+            )
         return
     raw = requested.strip().lower()
     if raw in levels:
@@ -17769,6 +17797,7 @@ async def create_anthropic_message(
         _msg_kwargs,
         _ct_kwargs,
         model_key=_model_path or _model_name or chat_req.model,
+        native_request=chat_req,
     )
 
     # DeepSeek V4 three-mode encoder (mirror OpenAI chat-completions path).
@@ -18737,6 +18766,7 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs,
         _ollama_ct_kwargs,
         model_key=_model_path or _model_name or chat_req.model,
+        native_request=chat_req,
     )
 
     # DSV4 three-mode mapping mirrored onto the Ollama adapter path so
@@ -21068,6 +21098,7 @@ async def create_chat_completion(
         _ct_kwargs,
         model_key=_model_path or _model_name or request.model,
         request_id=response_id,
+        native_request=request,
     )
 
     # DeepSeek V4 bundle-owned encoder: thinking_mode=chat|thinking plus an
@@ -24562,6 +24593,7 @@ async def create_response(
         _ct_kwargs,
         model_key=_model_path or _model_name or request.model,
         request_id=response_id,
+        native_request=request,
     )
 
     # DSV4 rail-policy + reasoning_effort handling — REAL /v1/responses path.

@@ -124,6 +124,11 @@ def apply() -> bool:
             B, L, _ = x.shape
             if L <= 2 or cache is None or not row_exact_scope_active():
                 return original_attention(self, x, mask=mask, cache=cache)
+            # Pair slicing synthesizes a causal mask; it must not silently
+            # replace an explicit padding/additive mask or unmasked attention.
+            # The normal single-request verify path supplies "causal".
+            if not isinstance(mask, str) or mask != "causal":
+                return original_attention(self, x, mask=mask, cache=cache)
             queries = self.q_proj(x).reshape(B, L, self.num_heads, -1).transpose(0, 2, 1, 3)
             keys = self.k_proj(x).reshape(B, L, self.num_key_value_heads, -1).transpose(0, 2, 1, 3)
             values = self.v_proj(x).reshape(B, L, self.num_key_value_heads, -1).transpose(0, 2, 1, 3)
