@@ -24,13 +24,13 @@ def _loader(K, L: int, W: int) -> str:
     mu, isd = VL.code_stats(L, K); so = VL.step_offsets(K, 9); MU = VL.MULTS[K]; mk = (1 << L) - 1
     PL16 = int(VL.step_offsets(K, 17)[16]) // 2          # bits per 16 columns (8 steps)
     M2 = MASK | (MASK << 16); O2 = ORB | (ORB << 16)
-    ld = ("uint a0 = r[wi], a1 = r[wi + 1];" if K == 2 else
-          "uint w0 = r[wi], w1 = r[wi + 1], w2 = r[wi + 2]; uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh)));"
-          " uint a1 = sh == 0u ? w1 : ((w1 >> sh) | (w2 << (32u - sh)));")
+    # sub-chunk starts are multiples of PL16 bits, the same shift set as the decode lanes: one window rule for every K
+    # (K=1/1.5: 2 words realigned into a0; K=2.5/3: 3 words into a0/a1; K=2: static) -> moe_kernels._window
+    from vmlx_engine.jangt.moe_kernels import _step_extract, _window_load
+    ld = _window_load(K, L, lambda i: f"r[wi + {i}]" if i else "r[wi]")
     steps = []
     for j in range(8):
-        o = int(so[j])
-        ex = ("a0" if o == 0 else f"(a0 >> {o}u)") if o + L <= 32 else (("a1" if o == 32 else f"(a1 >> {o - 32}u)") if o >= 32 else f"((a0 >> {o}u) | (a1 << {32 - o}u))")
+        ex = _step_extract(int(so[j]), L)
         steps.append(f"{{ uint s = ({ex}) & {mk}u; half2 v = as_type<half2>(((s * {MU}u) & {M2}u) | {O2}u);"
                      f" d[{2*j}] = T((float(v.x) - {float(mu[0])}f) * {float(isd[0]) }f * s_row);"
                      f" d[{2*j+1}] = T((float(v.y) - {float(mu[1])}f) * {float(isd[1])}f * s_row); }}")

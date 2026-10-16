@@ -10,7 +10,9 @@ One MoE layer, T tokens x k selected experts ("slots"), JANGT units with ONE wid
   4. y   = gather_down_weighted(hr, h, idx, w)       one launch: every threadgroup owns 8 output rows of one token
                                                      and loops over that token's k slots, accumulating
                                                      w_slot * (down_e . hr_slot) in registers -> no reduction op
-Bit extraction: generic 96-bit window per lane (any K pattern: 2, 2.5, 3), lane = 16 consecutive weights = 8 steps.
+Bit extraction: a 32/64/96-bit window per lane (_window_load: K = 1, 1.5, 2, 2.5, 3), lane = 16 consecutive weights
+= 8 steps. Input widths that are not a multiple of 512 (Qwen3.8-Flash-Next down: I = 640) run a lane-masked tail
+block in the v3 decode kernels and dequant_rot.
 All weights of a unit are stored (E, N, W) uint32 (ragged files with uniform K reshape to this at load).
 """
 from __future__ import annotations
@@ -37,19 +39,69 @@ HALF_ACC = _os.environ.get("JANGT_HALF_ACC", "1") == "1"
 CODE_VARIANT = _os.environ.get("JANGT_CODE_PROBE", "mul32")   # mul32 = the real code; others are timing probes only   # packed half2 FMA per 16 weights (fp32 across chunks)
 
 
+def _lane_bits(K) -> int:
+    """Bits of one 16-weight lane segment (8 trellis steps): 32 (K=2), 48 (K=3), 40 (K=2.5), 24 (K=1.5), 16 (K=1)."""
+    return int(VL.step_offsets(K, 17)[16]) // 2
+
+
+@functools.lru_cache(maxsize=None)
+def _window(K, L: int) -> tuple[int, int, int]:
+    """(bits per lane PL, largest sub-word start shift over the 32 lanes, words the lane window must load).
+
+    Lane j of a 512-value block starts at bit j * PL of the block (blocks start on whole words: 32 * PL bits). Its 8
+    states end at so[7] + L bits past the lane start, so the window needs ceil((max_sh + so[7] + L) / 32) words:
+      K=2   PL=32  sh=0           -> 2 words, static shifts, a0/a1
+      K=3   PL=48  sh in {0,16}   -> 3 words, realigned into a0/a1 (so[7] + L = 54 > 32)
+      K=2.5 PL=40  sh in 0..24    -> 3 words, realigned into a0/a1 (46 > 32)
+      K=1.5 PL=24  sh in 0..24    -> 2 words, realigned into a0 only (so[7] + L = 20 + 12 = 32: every state of the
+                                     lane sits inside one realigned word, a1 is never formed and w2 never read)
+      K=1   PL=16  sh in {0,16}   -> 2 words, a0 only (26 bits)
+    Loading only the words the window needs also keeps the last lane of a row inside words_per_row (which carries
+    one spare word): a fixed 3-word load at K=1/1.5 reads one word past the row at some widths (K=1: kin = 16 mod 32;
+    K=1.5: kin = 16 mod 64; not at the Qwen dims 2560/640). Raw codes stay below 2 in magnitude for the K=1/1.5
+    multipliers too (MASK/ORB fix the exponent), so _xload3's fp16 range guard holds unchanged."""
+    PL = _lane_bits(K); so = VL.step_offsets(K, 9); span = int(so[7]) + L
+    max_sh = max((j * PL) & 31 for j in range(32))
+    return PL, max_sh, (max_sh + span + 31) // 32
+
+
+def _window_load(K, L: int, w) -> str:
+    """Metal statements that load lane window words w(i) (expressions) and realign them into a0 (and a1 when a state
+    crosses the first realigned word) by the lane's runtime sub-word shift `sh` (must be in scope)."""
+    PL, max_sh, nw = _window(K, L); so = VL.step_offsets(K, 9); span = int(so[7]) + L
+    if max_sh == 0:                       # K=2: lane segments are whole words, shifts are static
+        return f"uint a0 = {w(0)};" + (f" uint a1 = {w(1)};" if span > 32 else "")
+    if span <= 32:                        # K=1, K=1.5: one realigned word holds the 8 states
+        assert nw == 2, (K, nw)
+        return f"uint w0 = {w(0)}, w1 = {w(1)}; uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh)));"
+    assert span <= 64 and nw <= 3, (K, span, nw)
+    return (f"uint w0 = {w(0)}, w1 = {w(1)}, w2 = {w(2)}; "
+            f"uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh))); uint a1 = sh == 0u ? w1 : ((w1 >> sh) | (w2 << (32u - sh)));")
+
+
+def _step_extract(o: int, L: int) -> str:
+    """Expression for the state at static offset o of the realigned window a0 (a1)."""
+    assert o + L <= 64, (o, L)
+    if o + L <= 32:
+        return "a0" if o == 0 else f"(a0 >> {o}u)"
+    if o >= 32:
+        return "a1" if o == 32 else f"(a1 >> {o - 32}u)"
+    return f"((a0 >> {o}u) | (a1 << {32 - o}u))"
+
+
 def _decode_lane(K, L: int, W: int, wexpr: str, acc0: str, acc1: str, xt: str) -> str:
     """Metal snippet: decode this lane's 8 steps of row `wexpr` (uint* to the row) and FMA into acc0/acc1.
     32-bit only (Apple GPUs have no native 64-bit integer ALU; the first version used ulong shifts and ran at
     ~60 % of DRAM bandwidth): the lane's window is 2 (K=2) or 3 words; word select by compile-time step offset +
     runtime sub-word shift, funnel shift with 32-bit ops."""
     so = VL.step_offsets(K, 9); PL = int(VL.step_offsets(K, 17)[16]) // 2; mk = (1 << L) - 1; MU = VL.MULTS[K]
-    nwin = 2 if K == 2 else 3
+    nwin = 2 if K == 2 else max(2, _window(K, L)[2])
     # lane segments are contiguous: lane+1 starts exactly PL bits later. K=2 (PL=32): the lookahead word is the
     # next lane's own word -> simd_shuffle_down, lane 31 loads it. Other widths keep explicit loads (PL != 32).
     if K == 2:
         loads = "uint w0 = wr[wi]; uint w1 = simd_shuffle_down(w0, 1u); if (lane == 31u) w1 = wr[wi + 1u];"
     else:
-        loads = "uint w0 = wr[wi], w1 = wr[wi + 1u], w2 = wr[wi + 2u];"
+        loads = " ".join(f"uint w{i} = wr[wi + {i}u];" for i in range(nwin))
     steps = []
     for j in range(8):
         o = int(so[j])
@@ -268,7 +320,23 @@ def moe_decode(x: mx.array, idx: mx.array, rw: mx.array, U: dict) -> mx.array:
 
 
 # ------------------------------------------------------------------------------------------- word-aligned fast path
-WPL = {2: 16, 3: 32, 2.5: 64}          # weights per lane so a lane's bit segment is whole 32-bit words
+# Weights per lane so a lane's bit segment is whole 32-bit words (static shifts, no runtime realignment):
+#   K=2: 16 w = 8 steps x 4 bits = 32 bits = 1 word; K=3: 32 w = 96 bits = 3 words; K=2.5: 64 w = 32 steps of
+#   alternating 6/4 bits = 160 bits = 5 words.
+#   K=1.5 (2026-10-16): steps alternate 4/2 bits = 6 bits per 4 weights, so the smallest whole-word segment is
+#   64 weights = 32 steps = 16 x 6 = 96 bits = 3 words (16 or 32 weights = 24 / 48 bits never end on a word).
+#   K=1: 2 bits per step, 32 weights = 16 steps = 32 bits = 1 word.
+# A segment of an even number of steps keeps every lane on the same (even, odd) kpat phase. The chunk per simdgroup
+# is 32 x WPL weights (2048 at K=1.5/2.5, 1024 at K=1/3), so this path needs kin % (32 x WPL) == 0; Qwen3.8-Flash-Next
+# (D=2560, I=640) does not divide and runs the v3 kernels (16-weight lanes, runtime realignment, masked tail).
+WPL = {2: 16, 3: 32, 2.5: 64, 1.5: 64, 1: 32}
+
+
+def _lane_words(K) -> int:
+    """32-bit words per WPL lane segment (whole words by construction of WPL)."""
+    wpl = WPL[K]; bits = int(VL.step_offsets(K, wpl // 2 + 1)[wpl // 2])
+    assert bits % 32 == 0, (K, wpl, bits)
+    return bits // 32
 
 
 def _lane_decode_static(K, L: int, rows: list[tuple[str, str, str]], xt: str) -> str:
@@ -293,8 +361,7 @@ def _lane_decode_static(K, L: int, rows: list[tuple[str, str, str]], xt: str) ->
 def _gu_fast(kin: int, N: int, K, L: int, n_out: int, xdt: str, odt: str):
     W = VL.words_per_row(kin, L, K); mu, isd = VL.code_stats(L, K); wpl = WPL[K]; CH = 32 * wpl
     assert kin % CH == 0, (kin, CH)
-    lane_words = wpl * (5 if K == 2.5 else 2 * K) // 2 // 32 * 2 if K != 2.5 else 5   # 32-bit words per lane segment
-    lane_words = {2: 1, 3: 3, 2.5: 5}[K]
+    lane_words = _lane_words(K)   # 1 (K=1, 2), 3 (K=1.5, 3), 5 (K=2.5)
     outl = "" if n_out == 0 else f"""
           for (uint j = 0; j < {n_out}u; j++) {{ int c = ocol[(size_t)e * {n_out}u + j]; if (c < 0) continue;
             float xo = float(x[(size_t)t * {kin}u + uint(c)]);
@@ -338,7 +405,7 @@ def _gu_fast(kin: int, N: int, K, L: int, n_out: int, xdt: str, odt: str):
 def _down_fast(kin: int, N: int, K, L: int, n_out: int, kslots: int, hdt: str):
     W = VL.words_per_row(kin, L, K); mu, isd = VL.code_stats(L, K); wpl = WPL[K]; CH = 32 * wpl
     assert kin % CH == 0, (kin, CH)
-    lane_words = {2: 1, 3: 3, 2.5: 5}[K]
+    lane_words = _lane_words(K)
     outl = "" if n_out == 0 else f"""
             for (uint j = 0; j < {n_out}u; j++) {{ int c = ocol[(size_t)e * {n_out}u + j]; if (c < 0) continue;
               y = fma(float(h[(size_t)ts * {kin}u + uint(c)]), float(wout[((size_t)e * {N}u + row0 + r) * {n_out}u + j]), y); }}"""
@@ -413,31 +480,23 @@ def _fp16_guard() -> bool:
     return _os.environ.get("JANGT_FP16_GUARD", "1") != "0"      # read per call: in-process A/B
 
 
-def _lane_geom(K):
-    """bits per lane per 512-value block, words advanced per block, words the lane window needs."""
-    PL = int(VL.step_offsets(K, 17)[16]) // 2          # bits per lane (8 steps)
-    return PL, PL * 32 // 32, 2 if K == 2 else 3
+def _lane_geom(K, L: int = 12):
+    """bits per lane per 512-value block, words advanced per block (32 lanes x PL bits = PL words), words the lane
+    window needs (_window)."""
+    PL, _, nw = _window(K, L)
+    return PL, PL, nw
 
 
 def _tdot3(K, L: int, wr: str, acc: str) -> str:
     """Trellis dot of one row's lane chunk -> half2 accumulator `acc` (x in xh[8]). K=2: one word + lookahead word,
     static shifts. K=2.5/3: the lane's sub-word shift `sh` is constant for the whole loop, so the 3-word window is
-    realigned ONCE per load (two funnel shifts) and every step is a static shift of a0/a1 (no per-step selects)."""
+    realigned ONCE per load (two funnel shifts) and every step is a static shift of a0/a1 (no per-step selects).
+    K=1/1.5: same, with a 2-word window realigned into a0 only (_window)."""
     so = VL.step_offsets(K, 9); mk = (1 << L) - 1; MU = VL.MULTS[K]; M2 = MASK | (MASK << 16); O2 = ORB | (ORB << 16)
-    if K == 2:
-        ld = f"uint a0 = {wr}[0], a1 = {wr}[1];"
-    else:
-        ld = (f"uint w0 = {wr}[0], w1 = {wr}[1], w2 = {wr}[2]; "
-              f"uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh))); uint a1 = sh == 0u ? w1 : ((w1 >> sh) | (w2 << (32u - sh)));")
+    ld = _window_load(K, L, lambda i: f"{wr}[{i}]")
     st = []
     for j in range(8):
-        o = int(so[j]); assert o + L <= 64, (K, o)
-        if o + L <= 32:
-            ex = "a0" if o == 0 else f"(a0 >> {o}u)"
-        elif o >= 32:
-            ex = "a1" if o == 32 else f"(a1 >> {o - 32}u)"
-        else:
-            ex = f"((a0 >> {o}u) | (a1 << {32 - o}u))"
+        ex = _step_extract(int(so[j]), L)
         st.append(f"{{ uint s = ({ex}) & {mk}u; uint p = ((s * {MU}u) & {M2}u) | {O2}u; {acc} = fma(xh[{j}], as_type<half2>(p), {acc}); }}")
     return "{ " + ld + " " + " ".join(st) + " }"
 
@@ -462,10 +521,37 @@ def _xload3(guard: bool = True) -> str:
       {_UNROLL} for (uint i = 0; i < 8u; i++) {{ xh[i] = half2(half(xt[2u*i] * xs), half(xt[2u*i+1u] * xs)); se += xt[2u*i]; so += xt[2u*i+1u]; }}"""
 
 
+def _blocks(kin: int, body: str, advance: str) -> str:
+    """Metal loop over the 512-value blocks of a row: full blocks unmasked, then (kin % 512 != 0, e.g. Qwen3.8-Flash-Next
+    down with I = 640) ONE tail block in which only lanes j < (kin % 512) / 16 decode. A lane segment never straddles
+    the tail (16 weights per lane, kin % 16 == 0) and the stream is continuous, so tail lane j sits at the same bit
+    offset j * PL of its block as in a full block. Masked lanes contribute nothing to se/so or the accumulators; the
+    simd_sum epilogue runs after the loop, outside the divergent branch."""
+    assert kin % 16 == 0, f"jangt decode: input width {kin} is not a multiple of 16"
+    full, tail = kin // 512 * 512, kin % 512
+    src = f"""for (uint k0 = 0; k0 < {full}u; k0 += 512u) {{
+      {body}
+      {advance}
+    }}"""
+    if tail:
+        src += f"""
+    if (lane < {tail // 16}u) {{
+      {body}
+    }}"""
+    return src
+
+
 @functools.lru_cache(maxsize=None)
 def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float = 0.0, rot_out: bool = False,
            guard: bool = True, yz: bool = False):
-    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
+    gu_body = f"""{_xload3(guard)}
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+        half2 ag = half2(0.0h), au = half2(0.0h);
+        const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "ag")}
+        const device uint32_t* ur = up + r * {W}u; {_tdot3(K, L, "ur", "au")}
+        g0[r] += float(ag.x) * xi; g1[r] += float(ag.y) * xi; u0[r] += float(au.x) * xi; u1[r] += float(au.y) * xi;
+      }}"""
     # outlier columns: lane j < n_out owns column j for the simdgroup's 4 rows, one simd_sum per row (the first
     # version looped them on lane 0: -21 us per layer, 515 -> 389 GB/s)
     outl_pre = "" if n_out == 0 else f"""
@@ -504,16 +590,7 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
     float g0[4], g1[4], u0[4], u1[4];
     {_UNROLL} for (uint r = 0; r < 4u; r++) {{ g0[r] = 0.0f; g1[r] = 0.0f; u0[r] = 0.0f; u1[r] = 0.0f; }}
     float se = 0.0f, so = 0.0f;
-    for (uint k0 = 0; k0 < {kin}u; k0 += 512u) {{
-      {_xload3(guard)}
-      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
-        half2 ag = half2(0.0h), au = half2(0.0h);
-        const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "ag")}
-        const device uint32_t* ur = up + r * {W}u; {_tdot3(K, L, "ur", "au")}
-        g0[r] += float(ag.x) * xi; g1[r] += float(ag.y) * xi; u0[r] += float(au.x) * xi; u1[r] += float(au.y) * xi;
-      }}
-      wp += {adv}u; up += {adv}u; xp += 512u;
-    }}
+    {_blocks(kin, gu_body, f"wp += {adv}u; up += {adv}u; xp += 512u;")}
     float SE = simd_sum(se), SO = simd_sum(so);
     {_UNROLL} for (uint r = 0; r < 4u; r++) {{
       float G0 = simd_sum(g0[r]), G1 = simd_sum(g1[r]), U0 = simd_sum(u0[r]), U1 = simd_sum(u1[r]);
@@ -534,7 +611,13 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
 
 @functools.lru_cache(maxsize=None)
 def _down_v3(kin: int, N: int, K, L: int, n_out: int, kslots: int, W: int, hdt: str, guard: bool = True, yz: bool = False):
-    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
+    dn_body = f"""{_xload3(guard)}
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          half2 ad = half2(0.0h);
+          const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "ad")}
+          d0[r] += float(ad.x) * xi; d1[r] += float(ad.y) * xi;
+        }}"""
     outl_pre = "" if n_out == 0 else f"""
       float od[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
       if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
@@ -554,15 +637,7 @@ def _down_v3(kin: int, N: int, K, L: int, n_out: int, kslots: int, W: int, hdt: 
       float d0[4], d1[4];
       {_UNROLL} for (uint r = 0; r < 4u; r++) {{ d0[r] = 0.0f; d1[r] = 0.0f; }}
       float se = 0.0f, so = 0.0f;
-      for (uint k0 = 0; k0 < {kin}u; k0 += 512u) {{
-        {_xload3(guard)}
-        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
-          half2 ad = half2(0.0h);
-          const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "ad")}
-          d0[r] += float(ad.x) * xi; d1[r] += float(ad.y) * xi;
-        }}
-        wp += {adv}u; xp += 512u;
-      }}
+      {_blocks(kin, dn_body, f"wp += {adv}u; xp += 512u;")}
       float SE = simd_sum(se), SO = simd_sum(so);
       {_UNROLL} for (uint r = 0; r < 4u; r++) {{
         float D0 = simd_sum(d0[r]), D1 = simd_sum(d1[r]);
@@ -611,21 +686,20 @@ def gather_down_weighted_v3(hr, h, idx, rw, U, slot_fastest: bool = False):
 def _dequant_rot_kernel(kin: int, N: int, K, L: int, W: int):
     """Packed rows of a contiguous expert range -> bf16 (n_e, N, kin) in the ROTATED basis (value * row scale).
     One simdgroup per row and 512-value block; lane = 16 consecutive weights (same window logic as decode)."""
-    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
     so = VL.step_offsets(K, 9); mk = (1 << L) - 1; MU = VL.MULTS[K]; M2 = MASK | (MASK << 16); O2 = ORB | (ORB << 16)
-    ld = ("uint a0 = wr[0], a1 = wr[1];" if K == 2 else
-          "uint w0 = wr[0], w1 = wr[1], w2 = wr[2]; uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh))); "
-          "uint a1 = sh == 0u ? w1 : ((w1 >> sh) | (w2 << (32u - sh)));")
+    assert kin % 16 == 0, kin
+    ld = _window_load(K, L, lambda i: f"wr[{i}]")
     st = []
     for j in range(8):
-        o = int(so[j])
-        ex = ("a0" if o == 0 else f"(a0 >> {o}u)") if o + L <= 32 else (("a1" if o == 32 else f"(a1 >> {o - 32}u)") if o >= 32 else f"((a0 >> {o}u) | (a1 << {32 - o}u))")
+        ex = _step_extract(int(so[j]), L)
         st.append(f"{{ uint s = ({ex}) & {mk}u; half2 v = as_type<half2>(((s * {MU}u) & {M2}u) | {O2}u);"
                   f" o_[{2*j}] = bfloat16_t((float(v.x) - {float(mu[0])}f) * {float(isd[0])}f * sc);"
                   f" o_[{2*j+1}] = bfloat16_t((float(v.y) - {float(mu[1])}f) * {float(isd[1])}f * sc); }}")
     src = f"""
     uint lane = thread_index_in_simdgroup; uint blk = threadgroup_position_in_grid.x; uint row = threadgroup_position_in_grid.y;
     uint e = threadgroup_position_in_grid.z + e0[0];
+    if (blk * 512u + lane * 16u >= {kin}u) return;          // masked lanes of a kin % 512 tail block
     const uint lb = lane * {PL}u; const uint sh = lb & 31u; (void)sh;
     const device uint32_t* wr = w + ((size_t)e * {N}u + row) * {W}u + (size_t)blk * {adv}u + (lb >> 5);
     float sc = scale[(size_t)e * {N}u + row];
@@ -640,5 +714,5 @@ def dequant_rot(P: dict, e0: int, e1: int, L: int = 12) -> mx.array:
     """Experts e0..e1-1 of one JANGT projection -> (e1-e0, N, kin) bf16, rotated basis, row scales applied."""
     E, N, W = P["packed"].shape; kin = P["kin"]
     kern = _dequant_rot_kernel(kin, N, P["K"], L, W)
-    return kern(inputs=[P["packed"], P["scale"], mx.array([e0], dtype=mx.uint32)], grid=(32 * (kin // 512), N, e1 - e0), threadgroup=(32, 1, 1),
+    return kern(inputs=[P["packed"], P["scale"], mx.array([e0], dtype=mx.uint32)], grid=(32 * (-(-kin // 512)), N, e1 - e0), threadgroup=(32, 1, 1),
                 output_shapes=[(e1 - e0, N, kin)], output_dtypes=[mx.bfloat16])[0]
