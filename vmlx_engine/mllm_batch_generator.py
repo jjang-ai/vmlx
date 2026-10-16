@@ -5324,6 +5324,7 @@ def _native_mtp_rollback_to_confirmed_impl(
             continue
         if not (hasattr(layer, "is_trimmable") and layer.is_trimmable()):
             return False
+    kv_to_trim = []
     for layer in cache:
         if layer is None:
             continue
@@ -5376,9 +5377,13 @@ def _native_mtp_rollback_to_confirmed_impl(
                 layer.rollback_aux_to = None
             continue
         if hasattr(layer, "is_trimmable") and layer.is_trimmable():
-            layer.trim(reject_tokens)
+            # Defer KV mutation until every fallible recurrent restoration
+            # succeeds. On False, snapshot+replay still owns the full KV trim.
+            kv_to_trim.append(layer)
             continue
         return False
+    for layer in kv_to_trim:
+        layer.trim(reject_tokens)
     return True
 
 
