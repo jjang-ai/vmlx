@@ -18,16 +18,24 @@ from .v2core import MULT, MASK, ORB
 KV = 4
 # K bits per weight -> hash multiplier (mask / or shared). K=3: CPU code search 2026-10-08, Gaussian MSE 0.0239 at L=12
 # (scalar Lloyd-Max 3-bit 0.0345). Each step shifts in 2K bits (V=2).
-MULTS = {2: MULT, 3: 668265263, 2.5: MULT}
+MULTS = {2: MULT, 3: 668265263, 2.5: MULT,
+         # sub-2-bit units (Qwen3.8-Flash-Next JANGHT, 2026-10-16): code search of the encoder campaign
+         # (qwen38fn-janght-spark-2026-10-15/scripts/lowbit/lowbit_search.py), Gaussian MSE at L=12: 0.141 (K=1.5),
+         # 0.267 (K=1). Must stay identical to the encoder's jt_patch.py registration.
+         1.5: 2124823417, 1: 590428815}
 
 
 def kpat(K) -> tuple[int, int]:
-    """New bits entering at transition t (t >= 1): pat[t & 1]. Integer K: (2K, 2K). K = 2.5: transitions alternate
-    6 (t even) / 4 (t odd) bits -> 10 bits per 4 weights; a lane's first step is always even (k0/2 + 8*lane)."""
+    """New bits entering at transition t (t >= 1): pat[t & 1]. Integer K: (2K, 2K) (K=1 -> (2, 2)). K = 2.5:
+    transitions alternate 6 (t even) / 4 (t odd) bits -> 10 bits per 4 weights; K = 1.5: 4 (even) / 2 (odd) -> 6 bits
+    per 4 weights. A lane's first step is always even (k0/2 + 8*lane), so a lane segment of an even number of steps
+    always starts on the same (even, odd) phase."""
     if float(K).is_integer():
         return (2 * int(K), 2 * int(K))
-    assert K == 2.5, f"bitrate {K}"
-    return (6, 4)
+    if K == 2.5:
+        return (6, 4)
+    assert K == 1.5, f"bitrate {K}"
+    return (4, 2)
 
 
 def step_offsets(K, T: int) -> np.ndarray:
