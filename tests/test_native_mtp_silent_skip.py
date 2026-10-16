@@ -101,7 +101,9 @@ def test_server_mtp_support_agrees_with_the_runtime_set():
         assert _bundle_mtp_runtime_supported(family), (
             f"{family} is runtime-supported but the server says otherwise"
         )
-    for family in ("nemotron_h", "gemma4", "minimax", "zaya"):
+    # nemotron_h left this list on 2026-10-16: the Nemotron-3.5-Super-VL wrapper now attaches its head
+    # (adapter nemotron_h_head), so it is covered by the runtime-set loop above.
+    for family in ("gemma4", "minimax", "zaya"):
         assert not _bundle_mtp_runtime_supported(family), (
             f"the server advertises MTP for {family}, which the runtime rejects"
         )

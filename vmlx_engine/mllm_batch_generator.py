@@ -5307,6 +5307,23 @@ def _native_mtp_rollback_to_confirmed_impl(
     if reject_tokens <= 0:
         return False
     accepted_drafts = max(0, int(accepted_drafts))
+    # Decide for EVERY layer before mutating ANY: a False return sends the caller to the snapshot + replay path,
+    # which trims the trimmable layers itself, so a partial pass that had already trimmed some KV layers would be
+    # trimmed twice. (A model whose recurrent layers expose no rollback point, e.g. Nemotron-H Mamba-2, must fall
+    # back cleanly whatever the layer order.)
+    for layer in cache:
+        if layer is None:
+            continue
+        has_point = (getattr(layer, "rollback_state", None) is not None
+                     or getattr(layer, "rollback_to", None) is not None)
+        if has_point:
+            if accepted_drafts > 0 and getattr(layer, "rollback_to", None) is None:
+                return False
+            if accepted_drafts == 0 and getattr(layer, "rollback_state", None) is None:
+                return False
+            continue
+        if not (hasattr(layer, "is_trimmable") and layer.is_trimmable()):
+            return False
     for layer in cache:
         if layer is None:
             continue

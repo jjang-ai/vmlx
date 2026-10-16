@@ -13,10 +13,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import logging
+
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from mlx_lm.models.cache import KVCache
 from mlx_vlm.models.base import InputEmbeddingsFeatures, LanguageModelOutput
+
+logger = logging.getLogger(__name__)
 
 
 def is_nemotron_bolt_vl_bundle(path) -> bool:
@@ -34,9 +39,16 @@ def is_nemotron_bolt_vl_bundle(path) -> bool:
 
 
 class LanguageModel(nn.Module):
-    def __init__(self, inner):
+    """Text side for the MLLM scheduler. With a native MTP head (Nemotron-3.5-Super-VL) it also exposes the native-MTP
+    contract the generator drives: ``return_hidden`` (the backbone output AFTER norm_f — the h_t the head was trained
+    on; before norm_f is wrong, jang Super 01-LOG control), ``mtp_forward`` and ``make_mtp_cache``. ``n_confirmed`` is
+    accepted and ignored: Mamba-2 layers publish no rollback point, so a rejected draft restores the verify snapshot and
+    replays the confirmed token (exact)."""
+
+    def __init__(self, inner, mtp=None):
         super().__init__()
         self.inner = inner
+        self.mtp = mtp
 
     @property
     def layers(self):
@@ -45,12 +57,38 @@ class LanguageModel(nn.Module):
     def make_cache(self):
         return self.inner.make_cache()
 
-    def __call__(self, inputs, cache=None, inputs_embeds=None, **kwargs):
-        if inputs_embeds is None:
-            return LanguageModelOutput(logits=self.inner(inputs, cache=cache))
-        h = inputs_embeds
+    def make_mtp_cache(self):
+        return [KVCache()]                                  # the head's attention sub-layer keeps its own KV
+
+    def mtp_forward(self, hidden, next_tokens, mtp_cache, return_hidden=False):
+        """One head step: pairs (h_i, t_{i+1}) -> logits for t_{i+2}. Several pairs in one call (the aligned head cache
+        commits every confirmed pair) need a CAUSAL mask over the head's attention; jang_tools' __call__ passes none, so
+        the sub-layers are driven here."""
+        from mlx_lm.models.base import create_attention_mask
+
+        embed = self.inner.backbone.embeddings(next_tokens)
+        if hidden.shape[1] != embed.shape[1]:
+            hidden = hidden[:, -embed.shape[1]:, :]
+        cache = mtp_cache[0] if mtp_cache else None
+        entry, moe = self.mtp.layers
+        x = entry.fuse(embed, hidden)
+        x = entry(x, mask=create_attention_mask(x, cache), cache=cache)
+        h = moe.final_layernorm(moe(x))
+        logits = self.inner.lm_head(h)
+        return (logits, h) if return_hidden else logits
+
+    def __call__(self, inputs, cache=None, inputs_embeds=None, return_hidden=False, n_confirmed=0, **kwargs):
         bb = self.inner.backbone
-        return LanguageModelOutput(logits=self.inner.lm_head(_backbone_from_embeddings(bb, h, cache)))
+        if inputs_embeds is None:
+            if not return_hidden:
+                return LanguageModelOutput(logits=self.inner(inputs, cache=cache))
+            h = bb(inputs, cache=cache)
+        else:
+            h = _backbone_from_embeddings(bb, inputs_embeds, cache)
+        logits = self.inner.lm_head(h)
+        if return_hidden:
+            return logits, h
+        return LanguageModelOutput(logits=logits)
 
 
 def _backbone_from_embeddings(bb, h, cache):
@@ -70,9 +108,9 @@ def _backbone_from_embeddings(bb, h, cache):
 
 
 class Model(nn.Module):
-    def __init__(self, text, bundle, config):
+    def __init__(self, text, bundle, config, mtp=None):
         super().__init__()
-        self.language_model = LanguageModel(text)
+        self.language_model = LanguageModel(text, mtp)
         self._bundle = Path(bundle)
         self._vision = None
         omni = json.loads((self._bundle / "config_omni.json").read_text())
@@ -182,9 +220,69 @@ class NemotronBoltProcessor:
                 "pixel_values": mx.array(np.concatenate(flat)), "image_grid_thw": mx.array(np.asarray(grid, np.int32))}
 
 
+def _quantization_from_tensors(weights: dict, path: str, in_features: int):
+    """(bits, group_size) of a stored affine Linear / SwitchLinear, from its packed width against the module's true
+    input width (the packed width alone is ambiguous: 256 uint32 words fit 8b/g32, 4b/g64 and 2b/g128), or None when
+    the module is stored unquantized."""
+    w, s = weights.get(path + ".weight"), weights.get(path + ".scales")
+    if w is None or s is None:
+        return None
+    packed_bits = int(w.shape[-1]) * 32
+    groups = int(s.shape[-1])
+    if packed_bits % in_features or in_features % groups:
+        raise ValueError(f"nemotron MTP: {path} packed {tuple(w.shape)} / scales {tuple(s.shape)} do not fit {in_features} inputs")
+    bits, group = packed_bits // in_features, in_features // groups
+    if bits not in (2, 3, 4, 5, 6, 8) or group not in (32, 64, 128):
+        raise ValueError(f"nemotron MTP: {path} resolves to unsupported {bits}-bit / group {group}")
+    return bits, group
+
+
+def load_mtp_head(text, bundle):
+    """Build NVIDIA's Nemotron-H MTP head (jang_tools.nemotron_mtp structure: eh_proj fusion + attention sub-layer +
+    MoE sub-layer + final_layernorm, sharing embeddings and lm_head) and load only the ``mtp.*`` tensors, from the
+    shards that hold them. Each module is quantized exactly as stored (bits / group size inferred from its tensors)."""
+    from jang_tools.nemotron_mtp import NemotronHMTP
+
+    bundle = Path(bundle)
+    index = json.loads((bundle / "model.safetensors.index.json").read_text())["weight_map"]
+    shards = sorted({f for k, f in index.items() if k.startswith("mtp.")})
+    weights = {}
+    for shard in shards:
+        for k, v in mx.load(str(bundle / shard)).items():
+            if k.startswith("mtp."):
+                weights[k[len("mtp."):]] = v
+    if not weights:
+        return None
+    head = NemotronHMTP(text.args)
+    specs = {}
+    for name, module in head.named_modules():
+        if isinstance(module, nn.Linear) or type(module).__name__ in ("SwitchLinear",):
+            q = _quantization_from_tensors(weights, name, int(module.weight.shape[-1]))
+            if q is not None:
+                specs[name] = q
+
+    def predicate(path, module):
+        q = specs.get(path)
+        return {"bits": q[0], "group_size": q[1]} if q else False
+
+    nn.quantize(head, class_predicate=predicate)
+    head.load_weights(list(weights.items()), strict=True)
+    mx.eval(head.parameters())
+    logger.info("Nemotron-H native MTP head loaded: %d tensors from %d shard(s), %d quantized modules (%s)",
+                len(weights), len(shards), len(specs),
+                ", ".join(sorted({f"{b}b/g{g}" for b, g in specs.values()})))
+    return head
+
+
 def load_nemotron_bolt_vl(bundle):
+    from ..native_mtp import maybe_apply_native_mtp
     from ..utils.jang_loader import load_jang_model
     text, tokenizer = load_jang_model(str(bundle))
     config = json.loads((Path(bundle) / "config.json").read_text())
-    model = Model(text, bundle, config)
+    mtp = None
+    if int(config.get("num_nextn_predict_layers") or 0) > 0:
+        status = maybe_apply_native_mtp(str(bundle), allow_runtime=True)
+        if status.get("runtime_active"):
+            mtp = load_mtp_head(text, bundle)
+    model = Model(text, bundle, config, mtp=mtp)
     return model, NemotronBoltProcessor(tokenizer, bundle), config
