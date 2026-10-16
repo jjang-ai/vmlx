@@ -407,7 +407,12 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
         cache, reused, taps = target.model.make_cache(), 0, None
     cuts = sorted({int(c) for c in snapshot_cuts if reused < int(c) < len(prompt_ids)})
     pos, logits = reused, None
+    from vmlx_engine.utils.generation_cancellation import raise_if_generation_cancelled
+
     while pos < len(prompt_ids):
+        # cooperative cancel at every prefill chunk boundary (SimpleEngine's scope): a client that dropped during a
+        # 30k prompt otherwise held the engine until the whole prefill finished (follow-up waited 106-108 s, 2026-10-16)
+        raise_if_generation_cancelled()
         end = min(len(prompt_ids), pos + prefill_step)
         end = next((c for c in cuts if pos < c < end), end)            # a snapshot is the cache exactly at its cut
         lg, tp = target.forward(prompt_ids[pos:end], cache, None if embeds is None else embeds[:, pos:end], last_only=True)

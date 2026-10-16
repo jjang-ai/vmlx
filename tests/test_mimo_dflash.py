@@ -275,3 +275,28 @@ def test_pipelined_ar_burst_eos_keeps_eos_row_and_resumes(tmp_path):
     assert int(session["target_cache"][0].offset) == session["forwarded"]
     assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
     tgt.close()
+
+
+def test_prefill_stops_at_a_chunk_boundary_when_the_request_is_cancelled(tmp_path):
+    """SimpleEngine's cancellation scope (client gone) must stop the MiMo lane's prompt prefill at the next chunk
+    boundary instead of running every chunk (a dropped 30k prompt held the engine 106-108 s, 2026-10-16), and the lane
+    must then serve the next request normally (output == AR)."""
+    from vmlx_engine.utils.generation_cancellation import GenerationCancelled, generation_cancellation_scope
+
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(11).integers(0, V, size=40).tolist()
+    forwards = {"n": 0}
+    real_forward = tgt.forward
+
+    def counting_forward(*a, **k):
+        forwards["n"] += 1
+        return real_forward(*a, **k)
+
+    tgt.forward = counting_forward
+    with pytest.raises(GenerationCancelled):
+        with generation_cancellation_scope(lambda: forwards["n"] >= 2):
+            _run(tgt, drafter, prompt, 10, prefill_step=8)       # 5 chunks of 8: cancel after the second
+    assert forwards["n"] == 2
+    tgt.forward = real_forward
+    assert _run(tgt, drafter, prompt, 10) == _ar_greedy(model, prompt, 10)
+    tgt.close()

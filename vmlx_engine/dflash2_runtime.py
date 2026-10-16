@@ -218,6 +218,11 @@ class _TargetAdapter:
         return {"position_ids": (mx.arange(start, start + rows) + int(self.rope_delta))[None]}
 
     def __call__(self, inputs, cache=None):
+        if self.last_row_logits:
+            # prompt prefill (one call per chunk inside the dflash runtime's loop): cooperative cancel point
+            from .utils.generation_cancellation import raise_if_generation_cancelled
+
+            raise_if_generation_cancelled()
         media = (
             self._media_inputs(inputs, cache)
             if self.media_embeds is not None or self.rope_delta
