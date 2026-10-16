@@ -7,6 +7,29 @@ import pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["health", "cache_stats"])
+async def test_mimo_ssd_status_uses_loaded_owner_on_both_surfaces(monkeypatch, surface):
+    from vmlx_engine import server, speculative, mimo_session, dflash2_runtime
+
+    expected = {"ram": {"entries": 0}, "ssd": {
+        "global_budget": {"root": "/isolated-mimo", "bytes_used": 1234},
+        "pending_writes": 0,
+    }}
+    monkeypatch.setattr(server, "_engine", SimpleNamespace(
+        get_cache_stats=lambda: {}, get_stats=lambda: {}, is_mllm=True,
+    ))
+    monkeypatch.setattr(server, "_get_scheduler", lambda: None)
+    monkeypatch.setattr(server, "_current_model_config", lambda: SimpleNamespace(family_name="mimo_v2"))
+    monkeypatch.setattr(server, "_loaded_dspark_health_status", lambda *_: None)
+    monkeypatch.setattr(speculative, "is_dflash2_enabled", lambda: True)
+    monkeypatch.setattr(mimo_session, "cache_stats", lambda: expected)
+    monkeypatch.setattr(dflash2_runtime, "session_cache_stats", lambda: {"wrong_owner": "qwen"})
+    payload = await getattr(server, surface)()
+    actual = payload["cache"]["dflash2_cache"] if surface == "health" else payload["dflash2_cache"]
+    assert actual == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("condition", ["idle", "busy", "wrong_pid", "wrong_root", "pending_write"])
 async def test_mimo_pool_clear_owns_store_and_preserves_busy_entries(tmp_path, monkeypatch, condition):
     from vmlx_engine import server, speculative, mimo_session
