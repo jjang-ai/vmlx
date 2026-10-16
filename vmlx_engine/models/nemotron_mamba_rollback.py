@@ -54,7 +54,17 @@ def apply() -> bool:
             seq = int(hidden_states.shape[1])
             if cache is not None:
                 clear_rollback_point(cache)
-            if not (0 < n_conf < seq) or getattr(cache, "lengths", None) is not None:
+            if getattr(cache, "lengths", None) is not None:
+                return original(self, hidden_states, mask, cache)
+            # Inside the native-MTP verify scope every row must reproduce its single-token decode step bit for bit
+            # (greedy MTP == AR, C17): the multi-row chunked scan + conv over the block differ from the single-step
+            # path at layer 0 already (measured, Super, 4.9e-4 at the first Mamba block, 4.75-logit max at the head,
+            # argmax flip within 48 tokens). in_proj / out_proj stay batched (the scope installs the bit-exact
+            # multi-row QMV, weights read once); only conv + SSM, cheap state-bound work, run row by row.
+            from vmlx_engine.metal.row_exact_qmv import row_exact_scope_active
+
+            exact = seq > 1 and cache is not None and row_exact_scope_active()
+            if not exact and not (0 < n_conf < seq):
                 return original(self, hidden_states, mask, cache)
 
             projected = self.in_proj(hidden_states)
@@ -63,11 +73,21 @@ def apply() -> bool:
             )
             splits = [self.intermediate_size, self.intermediate_size + self.n_groups * self.ssm_state_size]
 
-            def segment(c, lo, hi):
+            def block(c, lo, hi):
                 m = mask[:, lo:hi] if mask is not None else None
                 conv_out = self._conv(conv_input[:, lo:hi], c, m)
                 hs, B, C = mx.split(conv_out, splits, axis=-1)
                 return self._ssm(hs, B, C, dt[:, lo:hi], c, m)
+
+            def segment(c, lo, hi):
+                if not exact or hi - lo <= 1:
+                    return block(c, lo, hi)
+                return mx.concatenate([block(c, r, r + 1) for r in range(lo, hi)], axis=1)
+
+            if not (0 < n_conf < seq):                       # row-exact verify without a rollback request
+                y = segment(cache, 0, seq)
+                cache.advance(seq)
+                return self.out_proj(self.norm(y, gate))
 
             y_conf = segment(cache, 0, n_conf)
             conv_c, ssm_c = cache[0], cache[1]
@@ -90,8 +110,34 @@ def apply() -> bool:
 
         Mixer.__call__ = __call__
         Mixer._vmlx_original_call = original
+
+        # Attention: MLX keeps its single-query vector SDPA for up to two queries (bit-exact with decode) and
+        # switches kernels from three, so a depth-3 verify (4 rows) differed from AR first at the first attention
+        # block (Super layer 7, measured). Inside the verify scope, attend rows in pairs like their decode steps.
+        Attention = nemotron_h.NemotronHAttention
+        original_attention = Attention.__call__
+        sdpa = nemotron_h.scaled_dot_product_attention
+
+        def attention_call(self, x, mask=None, cache=None):
+            from vmlx_engine.metal.row_exact_qmv import attend_rows_in_pairs, row_exact_scope_active
+
+            B, L, _ = x.shape
+            if L <= 2 or cache is None or not row_exact_scope_active():
+                return original_attention(self, x, mask=mask, cache=cache)
+            queries = self.q_proj(x).reshape(B, L, self.num_heads, -1).transpose(0, 2, 1, 3)
+            keys = self.k_proj(x).reshape(B, L, self.num_key_value_heads, -1).transpose(0, 2, 1, 3)
+            values = self.v_proj(x).reshape(B, L, self.num_key_value_heads, -1).transpose(0, 2, 1, 3)
+            keys, values = cache.update_and_fetch(keys, values)
+            output = attend_rows_in_pairs(
+                lambda q, k, v, m: sdpa(q, k, v, cache=cache, scale=self.scale, mask=m), queries, keys, values
+            )
+            return self.o_proj(output.transpose(0, 2, 1, 3).reshape(B, L, -1))
+
+        Attention.__call__ = attention_call
+        Attention._vmlx_original_call = original_attention
         _patched = True
-        logger.info("Patched mlx_lm NemotronHMamba2Mixer: native-MTP confirmed/draft split with rollback points")
+        logger.info("Patched mlx_lm nemotron_h for native-MTP verify: Mamba-2 rollback points + row-exact "
+                    "conv/SSM, attention rows in pairs (inside row_exact_verify_scope only)")
         return True
 
 
