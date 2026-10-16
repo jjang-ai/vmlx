@@ -490,7 +490,9 @@ _MLLM_MEDIA_PREFIX_CACHE_DEFAULT_FAMILIES = frozenset(
 )
 
 
-def _mllm_media_prefix_cache_family_enabled(model_type: Any, *, mimo_v26_runtime: bool = False) -> bool:
+def _mllm_media_prefix_cache_family_enabled(
+    model_type: Any, *, mimo_v26_runtime: bool = False, nemotron_bolt_vl_runtime: bool = False,
+) -> bool:
     """One policy source for generator lookup and scheduler publication.
 
     A duplicated allowlist made it possible for one half of the media SSD path
@@ -504,6 +506,12 @@ def _mllm_media_prefix_cache_family_enabled(model_type: Any, *, mimo_v26_runtime
     # The fresh bridge has typed mixed-SWA caches and native media embeddings.
     # The shared family label must not opt legacy V2.5 weights/runtime in.
     if mimo_v26_runtime is True and str(model_type or "").lower() == "mimo_v2":
+        return True
+    # Nemotron-3.5 Bolt / Super-VL wrapper (models/nemotron_bolt_vl.py): image rows are spliced into the token
+    # embeddings at one contiguous placeholder run per image, the hybrid Mamba-2 + attention cache is snapshotted at
+    # the main pass's chunk edges, and each image's key binds its own run. Admitted by the runtime flag, never by the
+    # nemotron_h label (Nemotron-Nano-Omni shares it and runs a different media path).
+    if nemotron_bolt_vl_runtime is True and str(model_type or "").lower() in ("nemotron_h", "nemotron_h_v2"):
         return True
     if str(model_type or "").lower() in _MLLM_MEDIA_PREFIX_CACHE_DEFAULT_FAMILIES:
         return True
@@ -11178,6 +11186,7 @@ class MLLMBatchGenerator:
         model_type = str(getattr(self, "_model_type", "") or "").lower()
         if not _mllm_media_prefix_cache_family_enabled(
             model_type, mimo_v26_runtime=getattr(getattr(self, "model", None), "_mimo_v26_runtime", False),
+            nemotron_bolt_vl_runtime=getattr(getattr(self, "model", None), "_nemotron_bolt_vl_runtime", False),
         ):
             return False
         if getattr(request, "_bypass_prefix_cache", False):

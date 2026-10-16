@@ -73,12 +73,16 @@ class Model(nn.Module):
     def __init__(self, text, bundle, config):
         super().__init__()
         self.language_model = LanguageModel(text)
-        self.config = SimpleNamespace(**config)
-        self.model_type = "nemotron_h"
         self._bundle = Path(bundle)
         self._vision = None
         omni = json.loads((self._bundle / "config_omni.json").read_text())
         self.image_token_id = int(omni["img_context_token_id"])
+        # The placeholder id lives in config_omni.json only; the generator finds media runs (per-image cache keys,
+        # media-aware chunk edges) from ``image_token_id`` on the wrapper config, so expose it there.
+        self.config = SimpleNamespace(**{**config, "image_token_id": self.image_token_id})
+        self.model_type = "nemotron_h"
+        # Media-conditioned prefix reuse (see mllm_batch_generator._mllm_media_prefix_cache_family_enabled).
+        self._nemotron_bolt_vl_runtime = True
 
     def vision(self):
         if self._vision is None:

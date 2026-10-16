@@ -1540,6 +1540,7 @@ class MLLMScheduler:
         runtime = getattr(getattr(self, "batch_generator", None), "model", None)
         if not _mllm_media_prefix_cache_family_enabled(
             model_type, mimo_v26_runtime=getattr(runtime, "_mimo_v26_runtime", False),
+            nemotron_bolt_vl_runtime=getattr(runtime, "_nemotron_bolt_vl_runtime", False),
         ):
             return False
         extra = getattr(request, "_cache_extra_keys", None)
