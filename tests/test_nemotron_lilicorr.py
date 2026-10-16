@@ -53,3 +53,25 @@ def test_nvfp4_linear_applies_global_scale():
     deq = mx.dequantize(q, s, None, group_size=16, bits=4, mode="nvfp4")
     want = (x @ deq.T) * 0.5 + 1.0
     assert mx.allclose(lin(x).astype(mx.float32), want.astype(mx.float32), atol=2e-2).item()
+
+
+def _put(rec, start, values):
+    # one forward of len(values) rows: each tap slot gets the same rows (n taps x D=1)
+    for slot in range(rec.n):
+        rec.put(slot, mx.array(np.array(values, dtype=np.float32).reshape(1, -1, 1)))
+    rec.flush(start)
+
+
+def test_tap_recorder_rewrite_after_reject_and_window():
+    from vmlx_engine.models.nemotron_bolt_vl import _TapRecorder
+
+    rec = _TapRecorder(2, window=6)
+    _put(rec, 0, [0, 1, 2, 3])                       # prefill positions 0..3
+    _put(rec, 4, [40, 50, 60])                       # verify rows 4..6 (5, 6 rejected later)
+    _put(rec, 5, [51, 61])                           # next forward rewrites from 5: 50 -> 51, 60 -> 61
+    start, rows = rec.rows(0, 7)
+    assert start == 1                                # window 6: positions 1..6 retained
+    assert np.array(rows)[:, 0].tolist() == [1, 2, 3, 40, 51, 61]
+    assert rec.rows(0, 8) == (None, None)            # position 7 not recorded: never hand out a partial context
+    start, rows = rec.rows(4, 6)
+    assert start == 4 and np.array(rows)[:, 0].tolist() == [40, 51]
