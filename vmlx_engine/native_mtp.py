@@ -76,7 +76,13 @@ _RUNTIME_SUPPORTED_FAMILIES = {
     # make_mtp_cache). MLLM lane. Stamp recommends 1 draft; unmeasured on
     # this artifact until a live depth sweep writes the tuning sidecar.
     "dots3_note",
+    # nemotron_h (Nemotron-3.5-Super-VL): one MTP step built from [attention, moe] sub-layers; the head is attached by
+    # the Bolt/Super-VL wrapper (models/nemotron_bolt_vl.py, adapter "nemotron_h_head"), not by the mlx-lm patch.
+    # MLLM lane; Mamba-2 state is restored from the verify snapshot on a rejected draft.
+    "nemotron_h",
 }
+# Families whose head is attached by their own vMLX wrapper instead of the mlx-lm MTP patch.
+_WRAPPER_HEAD_ADAPTERS = {"nemotron_h": "nemotron_h_head"}
 _EAGLE3_NATIVE_MTP_FAMILIES = {
     "minimax_m3",
     "minimax_m3_vl",
@@ -1056,6 +1062,9 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         isinstance(cfg.get("text_config"), dict)
         and (cfg.get("text_config") or {}).get("vision_config")
     )
+    if not has_vision_config and _normalize_family(family) == "nemotron_h":
+        # Nemotron-3.5 Bolt / Super-VL keep the C-RADIO tower config in config_omni.json
+        has_vision_config = bool((_read_json(bundle_path, "config_omni.json") or {}).get("vision_config"))
     vision_keys = _vision_keys_from_weight_keys(weight_keys) if not weight_key_error else []
     has_vision_weights = bool(vision_keys)
     has_vision = bool(has_vision_config and has_vision_weights)
@@ -1186,6 +1195,8 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         "runtime_reason": runtime_reason,
         "status": status,
         "issues": issues,
+        **({"runtime_adapter": _WRAPPER_HEAD_ADAPTERS[_normalize_family(family)]}
+           if _normalize_family(family) in _WRAPPER_HEAD_ADAPTERS else {}),
     }
 
 
@@ -1242,6 +1253,21 @@ def maybe_apply_native_mtp(
     global _ACTIVE_NATIVE_MTP_MODEL_PATH
     status = inspect_native_mtp_bundle(model_path)
     runtime_adapter = status.get("runtime_adapter", "mlx_lm_mtp_patch")
+    if runtime_adapter in _WRAPPER_HEAD_ADAPTERS.values():
+        # The family wrapper attaches its own head at load; nothing to patch in mlx-lm. Keep the mlx-lm patch's
+        # global flag off so no other model type grows a head from this load.
+        runtime_active = bool(status["runtime_available"] and allow_runtime)
+        status["runtime_active"] = runtime_active
+        if not runtime_active:
+            status["runtime_available"] = False
+            if reason:
+                status["runtime_reason"] = reason
+        logger.info(
+            "Native MTP %s for %s (family=%s adapter=%s status=%s depth=%s/%s)",
+            "runtime active" if runtime_active else "NOT active", model_path, status.get("family"),
+            runtime_adapter, status.get("status"), status.get("effective_depth"), status.get("effective_depth_source"),
+        )
+        return status
     should_patch_for_sanitize = bool(
         status["artifact_available"] and status["runtime_supported"]
         and runtime_adapter == "mlx_lm_mtp_patch"
