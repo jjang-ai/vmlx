@@ -5324,6 +5324,7 @@ def _native_mtp_rollback_to_confirmed_impl(
             continue
         if not (hasattr(layer, "is_trimmable") and layer.is_trimmable()):
             return False
+    kv_to_trim = []
     for layer in cache:
         if layer is None:
             continue
@@ -5376,9 +5377,13 @@ def _native_mtp_rollback_to_confirmed_impl(
                 layer.rollback_aux_to = None
             continue
         if hasattr(layer, "is_trimmable") and layer.is_trimmable():
-            layer.trim(reject_tokens)
+            # Defer KV mutation until every fallible recurrent restoration
+            # succeeds. On False, snapshot+replay still owns the full KV trim.
+            kv_to_trim.append(layer)
             continue
         return False
+    for layer in kv_to_trim:
+        layer.trim(reject_tokens)
     return True
 
 
@@ -20623,9 +20628,10 @@ class MLLMBatchGenerator:
                 continue
             if _companion_exempt_cache(fixed[layer_idx]):
                 continue
-            if injected < len(ssm_states):
-                fixed[layer_idx] = ssm_states[injected]
-                injected += 1
+            if injected >= len(ssm_states):
+                return None
+            fixed[layer_idx] = ssm_states[injected]
+            injected += 1
         if injected != len(ssm_states):
             return None
         if not _validate_prompt_cache(fixed, source="mllm-clean-store-base"):

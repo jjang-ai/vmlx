@@ -1256,11 +1256,16 @@ def maybe_apply_native_mtp(
     if runtime_adapter in _WRAPPER_HEAD_ADAPTERS.values():
         # The family wrapper attaches its own head at load; nothing to patch in mlx-lm. Keep the mlx-lm patch's
         # global flag off so no other model type grows a head from this load.
+        deactivate_native_mtp()
         runtime_active = bool(status["runtime_available"] and allow_runtime)
+        _ACTIVE_NATIVE_MTP_MODEL_PATH = Path(model_path) if runtime_active else None
         status["runtime_active"] = runtime_active
         if not runtime_active:
             status["runtime_available"] = False
-            if reason:
+            if status.get("status") == "native_runtime_ready":
+                status["status"] = "runtime_disabled"
+                status["runtime_reason"] = reason or "native MTP wrapper runtime disabled"
+            elif reason:
                 status["runtime_reason"] = reason
         logger.info(
             "Native MTP %s for %s (family=%s adapter=%s status=%s depth=%s/%s)",

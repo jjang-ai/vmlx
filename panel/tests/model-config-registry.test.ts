@@ -2979,3 +2979,51 @@ describe('sidecar evidence rule is shared across formats', () => {
     expect(detectModelConfigFromDir(dir).nativeMtp).toMatchObject({ depth: 2, depthSource: 'vmlx_mtp_tuning.json:best_native_mtp_depth.best_depth' })
   })
 })
+
+describe('Native Nemotron efficient reasoning', () => {
+  it.each(['nemotron_h', 'nemotron_h_v2'])('offers only the native medium tier for %s', (family) => {
+    const dir = makeModelDir({ model_type: family }, {
+      capabilities: { family, supports_thinking: true, reasoning_parser: 'deepseek_r1',
+        reasoning_modes: { on: { enable_thinking: true },
+          medium: { enable_thinking: true, medium_effort: true }, off: { enable_thinking: false } } },
+    })
+    const config = detectModelConfigFromDir(dir)
+    expect(config.supportedReasoningEfforts).toEqual(['medium'])
+    expect(config.defaultReasoningEffort).toBeUndefined()
+  })
+})
+
+describe('Nemotron image-only native runtime controls', () => {
+  function bundle(mtp: boolean, sound = false) {
+    const dir = makeModelDir({ model_type: 'nemotron_h', num_hidden_layers: 88,
+      num_nextn_predict_layers: mtp ? 1 : 0 }, {
+      capabilities: { family: 'nemotron_h', modality: 'vision', modalities: ['text', 'vision', 'video'] },
+    })
+    writeFileSync(join(dir, 'config_omni.json'), JSON.stringify({
+      vision_config: { model_type: 'radio' }, img_context_token_id: 18,
+      ...(sound ? { sound_config: { model_type: 'parakeet' } } : {}),
+    }))
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({ weight_map: {
+      'vision_model.radio.weight': 'model.safetensors',
+      ...(mtp ? { 'mtp.layers.0.eh_proj.weight': 'model.safetensors' } : {}),
+    } }))
+    return dir
+  }
+  it('shows the actual Super MTP control and image-only backend', () => {
+    const detected = detectModelConfigFromDir(bundle(true))
+    expect(detected.nativeMtp).toMatchObject({ supported: true, runtimeScope: 'text+vl', depth: 3 })
+    expect(detected.architectureHints?.nemotronImageOnly).toBe(true)
+    expect(detected.runtimeModalities).toEqual(['text', 'vision'])
+  })
+  it('keeps Bolt without a native head on AR', () => {
+    const detected = detectModelConfigFromDir(bundle(false))
+    expect(detected.nativeMtp).toBeUndefined()
+    expect(detected.architectureHints?.nemotronImageOnly).toBe(true)
+  })
+  it('does not classify Nano Omni as the image-only wrapper', () => {
+    const detected = detectModelConfigFromDir(bundle(true, true))
+    expect(detected.architectureHints?.nemotronImageOnly).toBeUndefined()
+    expect(detected.nativeMtp).toBeUndefined()
+    expect(detected.runtimeModalities).toContain('video')
+  })
+})

@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field, TypeAdapter, computed_field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter, computed_field, field_validator, model_validator
 
 from ..video_controls import VIDEO_CONTROL_FIELDS, validate_video_controls
 from ..image_controls import IMAGE_CONTROL_FIELDS, validate_image_controls
@@ -39,6 +39,18 @@ def _validate_strict_media_envelopes(data):
 
 
 _NO_REASONING_EFFORTS = {"none", "off", "false", "disabled", "disable", "0"}
+
+
+def _input_reasoning_effort(request) -> str | None:
+    """Capture caller intent before legacy On aliases infer a medium tier."""
+    effort = request.reasoning_effort
+    if effort is None and isinstance(request.reasoning, dict):
+        effort = request.reasoning.get("effort")
+    if effort is None:
+        mode = str(request.thinking_mode or "").strip().lower().replace("-", "_")
+        if mode in {"medium", "high", "max", "max_thinking", "maximum"}:
+            effort = "max" if mode in {"max_thinking", "maximum"} else mode
+    return effort if isinstance(effort, str) else None
 
 
 def _validate_openai_penalty(value: float | None, field_name: str) -> float | None:
@@ -295,6 +307,11 @@ class StreamOptions(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     """Request for chat completion."""
+
+    _explicit_reasoning_effort: str | None = PrivateAttr(default=None)
+
+    def model_post_init(self, __context: Any) -> None:
+        self._explicit_reasoning_effort = _input_reasoning_effort(self)
 
     @model_validator(mode="before")
     @classmethod
@@ -1077,6 +1094,11 @@ class ResponsesToolDefinition(BaseModel):
 
 class ResponsesRequest(BaseModel):
     """Request for OpenAI Responses API (POST /v1/responses)."""
+
+    _explicit_reasoning_effort: str | None = PrivateAttr(default=None)
+
+    def model_post_init(self, __context: Any) -> None:
+        self._explicit_reasoning_effort = _input_reasoning_effort(self)
 
     @model_validator(mode="before")
     @classmethod

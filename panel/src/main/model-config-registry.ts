@@ -1357,6 +1357,18 @@ function nativeMtpBlockedByProfile(jangCfg: any): boolean {
   )
 }
 
+// Mirror models/nemotron_bolt_vl.py: these RADIO-only bundles use the
+// image wrapper, not the Nano Omni video/audio backend. Do not infer from names.
+function isNemotronImageOnlyArtifact(config: any, modelPath: string): boolean {
+  if (!['nemotron_h', 'nemotron_h_v2'].includes(config?.model_type)) return false
+  try {
+    const omni = JSON.parse(readFileSync(join(modelPath, 'config_omni.json'), 'utf-8'))
+    return omni?.vision_config?.model_type === 'radio'
+      && omni.sound_config == null
+      && Object.prototype.hasOwnProperty.call(omni, 'img_context_token_id')
+  } catch { return false }
+}
+
 function detectNativeMtpCapability(
   parsedConfig: any,
   jangCfg: any,
@@ -1399,7 +1411,8 @@ function detectNativeMtpCapability(
     parsedConfig.text_config?.model_type,
     jangCfg?.capabilities?.family,
   ].map(value => String(value || '').toLowerCase())
-  if (!modelTypes.some(value => supportedFamilies.has(value))) return undefined
+  const nemotronImageOnly = isNemotronImageOnlyArtifact(parsedConfig, modelPath)
+  if (!nemotronImageOnly && !modelTypes.some(value => supportedFamilies.has(value))) return undefined
   const hy3 = modelTypes.includes('hy_v3')
   const glm5Next = modelTypes.includes('glm5_next') || modelTypes.includes('glm5_next_text')
   const tuningDepth = readNativeMtpTuningDepth(modelPath)
@@ -1450,17 +1463,19 @@ function detectNativeMtpCapability(
       // the layer count. The final fallback is 1, NOT 3: an uncharacterised
       // head must draft conservatively, because an over-deep draft is pure
       // loss (verify + replay) once acceptance falls under breakeven.
+      // The Nemotron wrapper already defaults to D3 in the engine; expose
+      // that existing policy rather than treating its one head as draft depth.
       depth:
         tuningDepth?.depth
         ?? declaredDrafts?.depth
-        ?? coerceNativeMtpDepth(configuredMtp.layers)
+        ?? (nemotronImageOnly ? 3 : coerceNativeMtpDepth(configuredMtp.layers))
         ?? 1,
       depthSource:
         tuningDepth?.source
         ?? declaredDrafts?.source
-        ?? configuredMtp.source,
+        ?? (nemotronImageOnly ? 'runtime-default' : configuredMtp.source),
       runtimeScope:
-        configDeclaresMedia(parsedConfig) && hasVisionWeights
+        (configDeclaresMedia(parsedConfig) || nemotronImageOnly) && hasVisionWeights
           ? 'text+vl'
           : 'text',
       // Match the runtime schema string reported by /v1/capabilities
@@ -1776,6 +1791,15 @@ function applyJangCapabilities(
     next.isTurboQuant = true
   }
   if (!caps || typeof caps !== 'object') return next
+
+  // These bundles have a native efficient Medium switch, not a generic
+  // low/high/max budget. Auto remains the template's full-reasoning default.
+  if (['nemotron_h', 'nemotron_h_v2'].includes(caps.family) &&
+      caps.reasoning_modes?.medium?.enable_thinking === true &&
+      caps.reasoning_modes?.medium?.medium_effort === true) {
+    next.supportedReasoningEfforts = ['medium']
+    delete next.defaultReasoningEffort
+  }
 
   const declaredModalities = declaredJangModalities(caps.modalities)
   const runtimeModalities = declaredModalities.length > 0
@@ -2204,6 +2228,10 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           }
           detected = applyLagunaVariantHint(detected, parsed, parsedJangConfig)
           detected = applyConfigMetadataOverrides(detected, parsed)
+          if (isNemotronImageOnlyArtifact(parsed, modelPath)) {
+            detected.architectureHints = { ...detected.architectureHints, nemotronImageOnly: true }
+            detected.runtimeModalities = ['text', 'vision']
+          }
           if (detected.family === 'glm5-next' && glmNativeSsdRuntimeEnabled(process.env.VMLX_GLM5_NATIVE_SSD)) {
             detected.nativeGlmSsd = true
           }

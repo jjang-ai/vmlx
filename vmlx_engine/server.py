@@ -1357,7 +1357,7 @@ _REASONING_STRENGTH_BY_EFFORT = {
 
 def _merge_ct_kwargs(
     request_kwargs: dict | None, reasoning_effort: str | None = None,
-    *, enable_thinking: bool | None = None,
+    *, enable_thinking: bool | None = None, native_request: Any = None,
 ) -> dict:
     """Merge server-wide default chat_template_kwargs with per-request overrides.
 
@@ -1411,6 +1411,25 @@ def _merge_ct_kwargs(
                 f"Invalid enable_thinking value {val!r} in chat_template_kwargs, ignoring"
             )
             del base["enable_thinking"]
+    # Nemotron's native efficient mode is not its default thinking mode.
+    # Legacy API On aliases infer `medium`; only a caller-selected tier may
+    # translate to the bundle's medium_effort switch. Raw template kwargs
+    # remain authoritative, and explicit Thinking Off still wins.
+    if native_request is not None:
+        explicit = (request_kwargs or {}).get("reasoning_effort")
+        if explicit is None:
+            explicit = getattr(native_request, "_explicit_reasoning_effort", None)
+        if explicit is not None and _nemotron_native_medium_contract(_model_path or _model_name):
+            if (enable_thinking if enable_thinking is not None else base.get("enable_thinking")) is not False:
+                if str(explicit).strip().lower() != "medium":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This Nemotron bundle supports native On/Off and medium effort only; "
+                        "omit reasoning_effort for native full reasoning.",
+                    )
+                if "medium_effort" not in (request_kwargs or {}):
+                    base["medium_effort"] = True
+                base.setdefault("enable_thinking", True)
     return base
 
 
@@ -2498,6 +2517,19 @@ def _jang_chat_default_mode(bundle_path: str) -> str | None:
         return None
 
 
+def _nemotron_native_medium_contract(
+    bundle_path: str | None, stamp: dict | None = None,
+) -> bool:
+    if stamp is None:
+        stamp = _read_bundle_json(bundle_path, "jang_config.json")
+    caps = stamp.get("capabilities")
+    if not isinstance(caps, dict) or caps.get("family") not in {"nemotron_h", "nemotron_h_v2"}:
+        return False
+    modes = caps.get("reasoning_modes")
+    medium = modes.get("medium") if isinstance(modes, dict) else None
+    return isinstance(medium, dict) and medium.get("enable_thinking") is True and medium.get("medium_effort") is True
+
+
 def _stamped_reasoning_effort_contract(
     bundle_path: str,
 ) -> tuple[tuple[str, ...], str | None]:
@@ -2512,6 +2544,9 @@ def _stamped_reasoning_effort_contract(
     if not bundle_path:
         return (), None
     stamp = _read_bundle_json(bundle_path, "jang_config.json")
+    if _nemotron_native_medium_contract(bundle_path, stamp):
+        # Auto is native full reasoning, not an implicit Medium selection.
+        return ("medium",), None
     reasoning = stamp.get("reasoning")
     reasoning = reasoning if isinstance(reasoning, dict) else {}
     chat = stamp.get("chat")
@@ -4754,6 +4789,16 @@ def _loaded_mllm_modalities() -> list[str] | None:
     ) if engine is not None else False
     if not engine_is_mllm:
         return None
+    # Bolt/Super preserve the source's RADIO metadata, and Bolt also declares
+    # video in its sidecar. Their Python wrapper currently implements images
+    # only. Report the loaded route's capabilities rather than admitting an
+    # unwired video request based on that declaration. Nano-Omni has a sound
+    # tower and its own dispatcher, so it does not match this detector.
+    from .models.nemotron_bolt_vl import is_nemotron_bolt_vl_bundle
+
+    bundle_path = _model_path or _model_name
+    if bundle_path and is_nemotron_bolt_vl_bundle(bundle_path):
+        return ["text", "vision"]
     mimo_modalities = _mimo_v2_runtime_modalities(_model_path or _model_name)
     if mimo_modalities is not None:
         gate = _mimo_v2_loaded_media_memory_gate(_model_path or _model_name, mimo_modalities)
@@ -5191,6 +5236,7 @@ def _resolve_omni_reasoning_request(request):
         request.chat_template_kwargs,
         request.reasoning_effort,
         enable_thinking=request.enable_thinking,
+        native_request=request,
     )
     enabled = _resolve_enable_thinking(
         request_value=request.enable_thinking,
@@ -15642,6 +15688,7 @@ def _cache_contract_render_and_tokenize(
         dry_request.chat_template_kwargs,
         getattr(dry_request, "reasoning_effort", None),
         enable_thinking=dry_request.enable_thinking,
+        native_request=dry_request,
     )
     resolved_thinking = _resolve_enable_thinking(
         request_value=dry_request.enable_thinking,
@@ -17667,6 +17714,7 @@ async def create_anthropic_message(
         chat_req.chat_template_kwargs,
         getattr(chat_req, "reasoning_effort", None),
         enable_thinking=chat_req.enable_thinking,
+        native_request=chat_req,
     )
     _msg_tool_choice = chat_req.tool_choice
     _msg_effective_tools = _request_tools_for_generation_prompt(chat_req)
@@ -18622,6 +18670,7 @@ async def ollama_chat(fastapi_request: Request):
         chat_req.chat_template_kwargs,
         getattr(chat_req, "reasoning_effort", None),
         enable_thinking=chat_req.enable_thinking,
+        native_request=chat_req,
     )
     _et = _resolve_enable_thinking(
         request_value=chat_req.enable_thinking,
@@ -20911,6 +20960,7 @@ async def create_chat_completion(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
         enable_thinking=request.enable_thinking,
+        native_request=request,
     )
     _explicit_thinking_off = request.enable_thinking is False or (
         _ct_kwargs.get("enable_thinking") is False
@@ -24411,6 +24461,7 @@ async def create_response(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
         enable_thinking=request.enable_thinking,
+        native_request=request,
     )
     _explicit_thinking_off = request.enable_thinking is False or (
         _ct_kwargs.get("enable_thinking") is False
@@ -26491,6 +26542,7 @@ async def stream_chat_completion(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
         enable_thinking=request.enable_thinking,
+        native_request=request,
     )
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,
@@ -29139,6 +29191,7 @@ async def stream_responses_api(
         request.chat_template_kwargs,
         getattr(request, "reasoning_effort", None),
         enable_thinking=request.enable_thinking,
+        native_request=request,
     )
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,

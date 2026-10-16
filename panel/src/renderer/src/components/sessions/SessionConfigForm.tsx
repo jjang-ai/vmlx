@@ -612,10 +612,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveMaxNumSeqs = dsv4Active ? 1 : concurrency.maxNumSeqs!
   const effectivePrefillBatchSize = dsv4Active ? 1 : concurrency.prefillBatchSize!
   const effectiveCompletionBatchSize = dsv4Active ? 1 : concurrency.completionBatchSize!
+  const nemotronImageOnly = detectedArchitectureHints?.nemotronImageOnly === true
   const detectedRuntimeVideoCapable = isRuntimeVideoCapable({
     normalizedFamily: normalizedDetectedFamily,
     runtimeModalities: detectedRuntimeModalities,
-    liveRuntimeModalities,
+    liveRuntimeModalities: liveRuntimeModalities ?? (nemotronImageOnly ? ['text', 'vision'] : undefined),
   })
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && !effectiveSmeltActive && config.isMultimodal !== false && multimodalActive && (
     detectedRuntimeVideoCapable ||
@@ -623,7 +624,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   )
   const nativeMtpDetected = detectedNativeMtp !== undefined
   const nativeMtpSupported = !!detectedNativeMtp?.supported
-  const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive && config.isMultimodal !== false && !effectiveSmeltActive
+  const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && !nemotronImageOnly && multimodalActive && config.isMultimodal !== false && !effectiveSmeltActive
   const nativeOmniStage1 = omniBackendVisible && (config.omniBackend || 'stage1') === 'stage1'
   // Legacy 'auto'/'deterministic' rows display as the mode they will launch as.
   const nativeMtpMode = resolveNativeMtpMode({
