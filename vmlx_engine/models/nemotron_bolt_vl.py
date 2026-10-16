@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import logging
 import os
+import weakref
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -111,7 +112,34 @@ class _TapRecorder:
     def __init__(self, n_taps, window):
         self.n, self.window = int(n_taps), int(window)
         self.slots = [None] * self.n
-        self.chunks = []                                        # [(start, (L, n*D) array)]
+        self._owner = None
+        self._contexts = weakref.WeakKeyDictionary()
+        self._unowned_chunks = []
+
+    def select(self, owner):
+        """Keep auxiliary forwards and restored conversations in separate histories.
+
+        The cache owns its history's lifetime. Neither the active selection nor
+        the history index keeps a completed request's KV/SSM cache alive.
+        """
+        previous = self._owner() if self._owner is not None else None
+        if previous is not owner:
+            self.slots = [None] * self.n
+        self._owner = weakref.ref(owner) if owner is not None else None
+
+    @property
+    def chunks(self):
+        if self._owner is None:
+            return self._unowned_chunks
+        owner = self._owner()
+        return self._contexts.get(owner, []) if owner is not None else []
+
+    @chunks.setter
+    def chunks(self, value):
+        if self._owner is None:
+            self._unowned_chunks = value
+        elif (owner := self._owner()) is not None:
+            self._contexts[owner] = value
 
     def put(self, slot, y):
         self.slots[slot] = y
@@ -208,7 +236,7 @@ class LiLiCorrLanguageModel(LanguageModel):
         self.drafter = drafter
         self._tap_dim = len(drafter.layer_ids) * int(inner.backbone.layers[0].norm.weight.shape[0])
         self._rec = _TapRecorder(len(drafter.layer_ids), drafter.window)
-        self._last_cache = None
+        self._last_cache_ref = None
         self._ctx_owner = None
         _install_block_tap_hook()
         for slot, idx in enumerate(drafter.layer_ids):
@@ -227,13 +255,18 @@ class LiLiCorrLanguageModel(LanguageModel):
         return [_LiLiCorrHeadCache()]
 
     def _forward(self, inputs, cache, inputs_embeds, return_hidden):
-        start = self._attn_offset(cache)
+        anchor = next((c for c in cache or [] if isinstance(c, KVCache)), None)
+        start = int(anchor.offset) if anchor is not None else None
+        self._rec.select(anchor)
         if return_hidden and cache is not None:
             # only the MTP seed / verify forwards ask for hidden, and they run on the request's own cache; auxiliary
             # forwards (clean-store re-prefills on a temporary cache) must not move the anchor position
-            self._last_cache = cache
-        out = super()._forward(inputs, cache, inputs_embeds, return_hidden)
-        taps = self._rec.flush(start)
+            self._last_cache_ref = weakref.ref(anchor) if anchor is not None else None
+        try:
+            out = super()._forward(inputs, cache, inputs_embeds, return_hidden)
+            taps = self._rec.flush(start)
+        finally:
+            self._rec.slots = [None] * self._rec.n
         if return_hidden:
             logits, _ = out
             return logits, taps
@@ -241,10 +274,14 @@ class LiLiCorrLanguageModel(LanguageModel):
 
     def _sync_context(self, p):
         d = self.drafter
-        owner = id(self._last_cache)
-        if self._ctx_owner != owner or d.ctx_end > p:
+        owner = self._last_cache_ref() if self._last_cache_ref is not None else None
+        if owner is None:
+            return False
+        self._rec.select(owner)
+        previous = self._ctx_owner() if self._ctx_owner is not None else None
+        if previous is not owner or d.ctx_end > p:
             d.reset()
-            self._ctx_owner = owner
+            self._ctx_owner = weakref.ref(owner)
         lo = d.ctx_end if d.ctx_end > 0 else max(0, p - d.window)
         if lo >= p:
             return True
@@ -261,7 +298,8 @@ class LiLiCorrLanguageModel(LanguageModel):
         hc = mtp_cache[0]
         vocab = int(self.inner.lm_head.weight.shape[0]) if hasattr(self.inner.lm_head, "weight") else None
         if hidden.shape[-1] == self._tap_dim:
-            p = self._attn_offset(self._last_cache)
+            anchor_cache = self._last_cache_ref() if self._last_cache_ref is not None else None
+            p = int(anchor_cache.offset) if anchor_cache is not None else None
             anchor = int(next_tokens.reshape(-1)[-1].item())
             hc.path, hc.level = [], 0
             if p is not None and self._sync_context(p):
