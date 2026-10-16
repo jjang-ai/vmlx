@@ -327,7 +327,12 @@ class LiLiCorrDrafter(nn.Module):
         if self.lilicorr is None or not use_lilicorr:
             return None, [int(t) for t in np.array(top1)]
         K = self.lilicorr.topk
-        ids = mx.argsort(-logp, axis=-1)[:, :K]
-        cand_lp = mx.take_along_axis(logp, ids, axis=-1)
+        # top-K in descending order (the head's rank features need rank order): partial selection, then sort the K,
+        # instead of a full sort of the 131k vocabulary per slot
+        part = mx.argpartition(-logp, kth=K - 1, axis=-1)[:, :K]
+        part_lp = mx.take_along_axis(logp, part, axis=-1)
+        order = mx.argsort(-part_lp, axis=-1)
+        ids = mx.take_along_axis(part, order, axis=-1)
+        cand_lp = mx.take_along_axis(part_lp, order, axis=-1)
         start, pair = self.lilicorr.score(embed(ids), cand_lp, pass_h, self.last_ctx)
         return greedy_walk(start, pair, ids), [int(t) for t in np.array(top1)]

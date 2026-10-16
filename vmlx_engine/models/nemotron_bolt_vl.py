@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import logging
+import os
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -101,6 +102,187 @@ class LanguageModel(nn.Module):
         return LanguageModelOutput(logits=logits)
 
 
+class _TapRecorder:
+    """Rolling record of the drafter's target taps (outputs of target blocks layer_ids, before the final norm) for the
+    last ``window`` absolute positions. Every target forward writes its rows at [start, start + L); a write truncates
+    any older rows from ``start`` on, so after a rejected verify the rewritten positions always hold the committed
+    prefix's taps (latest write wins)."""
+
+    def __init__(self, n_taps, window):
+        self.n, self.window = int(n_taps), int(window)
+        self.slots = [None] * self.n
+        self.chunks = []                                        # [(start, (L, n*D) array)]
+
+    def put(self, slot, y):
+        self.slots[slot] = y
+
+    def flush(self, start):
+        if any(t is None for t in self.slots) or start is None:
+            self.slots = [None] * self.n
+            return None
+        taps = mx.concatenate(self.slots, axis=-1)              # (1, L, n*D)
+        self.slots = [None] * self.n
+        L = int(taps.shape[1])
+        self.chunks = [(s, a[: max(0, start - s)]) for s, a in self.chunks if s < start]
+        self.chunks = [(s, a) for s, a in self.chunks if a.shape[0] > 0]
+        keep = taps[0, max(0, L - self.window):]
+        self.chunks.append((start + L - keep.shape[0], keep))
+        end = start + L
+        pruned = []
+        for s, a in self.chunks:                                # keep only the last `window` positions
+            lo = max(s, end - self.window)
+            if lo < s + a.shape[0]:
+                pruned.append((lo, a[lo - s:]))
+        self.chunks = pruned
+        return taps
+
+    def rows(self, lo, hi):
+        """(start, rows) for positions [max(lo, earliest), hi) that are recorded contiguously up to hi, else (None, None)."""
+        parts, pos = [], None
+        for s, a in self.chunks:
+            e = s + a.shape[0]
+            if e <= lo or s >= hi:
+                continue
+            a0 = max(lo, s)
+            if pos is not None and a0 != pos:
+                parts, pos = [], None                           # gap: restart after it
+            if pos is None:
+                start = a0
+            parts.append(a[a0 - s: min(hi, e) - s])
+            pos = min(hi, e)
+        if not parts or pos != hi:
+            return None, None
+        return start, mx.concatenate(parts, axis=0)
+
+
+_TAP_HOOK_INSTALLED = False
+
+
+def _install_block_tap_hook():
+    """NemotronHBlock records its output into an attached sink. A class-level hook keeps the block modules in the
+    parameter tree (swapping list entries for proxies would hide their weights from parameter walks)."""
+    global _TAP_HOOK_INSTALLED
+    if _TAP_HOOK_INSTALLED:
+        return
+    from mlx_lm.models import nemotron_h
+
+    Block = nemotron_h.NemotronHBlock
+    original = Block.__call__
+
+    def call(self, x, *args, **kwargs):
+        y = original(self, x, *args, **kwargs)
+        sink = getattr(self, "_vmlx_tap_sink", None)
+        if sink is not None:
+            sink.put(self._vmlx_tap_slot, y)
+        return y
+
+    Block.__call__ = call
+    _TAP_HOOK_INSTALLED = True
+
+
+class _LiLiCorrHeadCache:
+    """mtp_cache element of the LiLiCorr adapter: the drafted path of the current block. The drafter's context lives in
+    the drafter and is synced from the tap recorder, so trims and head-cache recreation never lose committed history."""
+
+    def __init__(self):
+        self.path, self.level, self.offset = [], 0, 0
+
+    def is_trimmable(self):
+        return True
+
+    def trim(self, n):
+        return int(n)                                           # chain pairs never enter the drafter context
+
+
+class LiLiCorrLanguageModel(LanguageModel):
+    """Nemotron-3.5-Bolt text side with NVIDIA's LiLiCorr block drafter behind the native-MTP head contract:
+    * every target forward records the drafter's taps (``_TapRecorder``); ``return_hidden`` returns them;
+    * level-0 ``mtp_forward`` (taps as hidden): sync the drafter context to every committed position (the target
+      attention cache offset), draft the block [anchor, mask x7] at that position, LiLiCorr greedy path; returns the
+      path's first token as a point-mass proposal (rejection sampling stays exact: q(x) = 1);
+    * deeper levels (the marker hidden) return the next path token.
+    Mamba-2 rollback points + row-exact verify come from models/nemotron_mamba_rollback.py (``n_confirmed``)."""
+
+    def __init__(self, inner, drafter):
+        super().__init__(inner, mtp=drafter)
+        self.drafter = drafter
+        self._tap_dim = len(drafter.layer_ids) * int(inner.backbone.layers[0].norm.weight.shape[0])
+        self._rec = _TapRecorder(len(drafter.layer_ids), drafter.window)
+        self._last_cache = None
+        self._ctx_owner = None
+        _install_block_tap_hook()
+        for slot, idx in enumerate(drafter.layer_ids):
+            layer = inner.backbone.layers[idx]
+            object.__setattr__(layer, "_vmlx_tap_sink", self._rec)
+            object.__setattr__(layer, "_vmlx_tap_slot", slot)
+
+    @staticmethod
+    def _attn_offset(cache):
+        for c in cache or []:
+            if isinstance(c, KVCache):
+                return int(c.offset)
+        return None
+
+    def make_mtp_cache(self):
+        return [_LiLiCorrHeadCache()]
+
+    def _forward(self, inputs, cache, inputs_embeds, return_hidden):
+        start = self._attn_offset(cache)
+        if return_hidden and cache is not None:
+            # only the MTP seed / verify forwards ask for hidden, and they run on the request's own cache; auxiliary
+            # forwards (clean-store re-prefills on a temporary cache) must not move the anchor position
+            self._last_cache = cache
+        out = super()._forward(inputs, cache, inputs_embeds, return_hidden)
+        taps = self._rec.flush(start)
+        if return_hidden:
+            logits, _ = out
+            return logits, taps
+        return out
+
+    def _sync_context(self, p):
+        d = self.drafter
+        owner = id(self._last_cache)
+        if self._ctx_owner != owner or d.ctx_end > p:
+            d.reset()
+            self._ctx_owner = owner
+        lo = d.ctx_end if d.ctx_end > 0 else max(0, p - d.window)
+        if lo >= p:
+            return True
+        start, rows = self._rec.rows(lo, p)
+        if rows is None:
+            return False
+        if d.ctx_end != start:                                  # history before `start` is not recorded (cached prefix)
+            d.reset()
+            d.ctx_end = start
+        d.add_context(rows, start)
+        return True
+
+    def mtp_forward(self, hidden, next_tokens, mtp_cache, return_hidden=False):
+        hc = mtp_cache[0]
+        vocab = int(self.inner.lm_head.weight.shape[0]) if hasattr(self.inner.lm_head, "weight") else None
+        if hidden.shape[-1] == self._tap_dim:
+            p = self._attn_offset(self._last_cache)
+            anchor = int(next_tokens.reshape(-1)[-1].item())
+            hc.path, hc.level = [], 0
+            if p is not None and self._sync_context(p):
+                d = self.drafter
+                emb = self.inner.backbone.embeddings
+                h = d.draft_hidden(emb(mx.array([[anchor] + [d.mask_id] * (d.block - 1)])), p)
+                path, _top1 = d.propose(h, self.inner.lm_head, emb)
+                hc.path = path or _top1
+            tok = hc.path[0] if hc.path else anchor
+            hc.level = 1
+        else:
+            tok = hc.path[hc.level] if hc.level < len(hc.path) else (hc.path[-1] if hc.path else 0)
+            hc.level += 1
+        if vocab is None:
+            vocab = int(self.inner.args.vocab_size)
+        logits = mx.full((1, 1, vocab), -1e9, dtype=mx.float32)
+        logits[0, 0, tok] = 0.0
+        marker = mx.zeros((1, 1, 1), dtype=mx.float32)
+        return (logits, marker) if return_hidden else logits
+
+
 def _backbone_from_embeddings(bb, h, cache):
     """mlx_lm NemotronHModel.__call__ with the embedding lookup replaced by precomputed rows."""
     from mlx_lm.models.base import create_attention_mask, create_ssm_mask
@@ -118,9 +300,9 @@ def _backbone_from_embeddings(bb, h, cache):
 
 
 class Model(nn.Module):
-    def __init__(self, text, bundle, config, mtp=None):
+    def __init__(self, text, bundle, config, mtp=None, language_model=None):
         super().__init__()
-        self.language_model = LanguageModel(text, mtp)
+        self.language_model = language_model if language_model is not None else LanguageModel(text, mtp)
         self._bundle = Path(bundle)
         self._vision = None
         omni = json.loads((self._bundle / "config_omni.json").read_text())
@@ -297,5 +479,17 @@ def load_nemotron_bolt_vl(bundle):
             if mtp is not None:
                 from . import nemotron_mamba_rollback
                 nemotron_mamba_rollback.apply()
-    model = Model(text, bundle, config, mtp=mtp)
+    language_model = None
+    lilicorr_dir = Path(bundle) / "lilicorr"
+    if mtp is None and lilicorr_dir.is_dir() and os.environ.get("VMLX_NEMOTRON_LILICORR", "0").strip() == "1":
+        # Opt-in until a live A/B qualifies it (offline greedy tau 2.8-4.9 on this target, ledger B12).
+        from . import nemotron_mamba_rollback
+        from .nemotron_lilicorr import LiLiCorrDrafter
+
+        drafter = LiLiCorrDrafter(lilicorr_dir)
+        nemotron_mamba_rollback.apply()
+        language_model = LiLiCorrLanguageModel(text, drafter)
+        logger.info("Nemotron-3.5-Bolt LiLiCorr drafter attached (block %d, taps %s, window %d)",
+                    drafter.block, drafter.layer_ids, drafter.window)
+    model = Model(text, bundle, config, mtp=mtp, language_model=language_model)
     return model, NemotronBoltProcessor(tokenizer, bundle), config
