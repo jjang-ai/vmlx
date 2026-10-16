@@ -75,3 +75,32 @@ def test_tap_recorder_rewrite_after_reject_and_window():
     assert rec.rows(0, 8) == (None, None)            # position 7 not recorded: never hand out a partial context
     start, rows = rec.rows(4, 6)
     assert start == 4 and np.array(rows)[:, 0].tolist() == [40, 51]
+
+
+def test_propose_single_sync_matches_direct_walk():
+    # stub head: start / pair from fixed arrays; propose must return the greedy walk over the rank-ordered top-K ids
+    # and the plain top-1 per slot, as plain Python ints
+    rng = np.random.default_rng(1)
+    V, D, B, K = 40, 8, 4, 3
+    W = mx.array(rng.normal(size=(V, D)).astype(np.float32))
+    start_np, pair_np = rng.normal(size=(K,)), rng.normal(size=(B - 2, K, K))
+
+    class Head:
+        topk = K
+
+        def score(self, emb, cand_lp, pass_h, anchor):
+            return mx.array(start_np.astype(np.float32)), mx.array(pair_np.astype(np.float32))
+
+    d = L.LiLiCorrDrafter.__new__(L.LiLiCorrDrafter)
+    nn_init = L.nn.Module.__init__
+    nn_init(d)
+    d.lilicorr, d.last_ctx = Head(), mx.zeros((D,))
+    hidden = mx.array(rng.normal(size=(1, B, D)).astype(np.float32))
+    lm_head = lambda h: h @ W.T
+    path, top1 = d.propose(hidden, lm_head, lambda ids: mx.zeros(ids.shape + (D,)))
+    logits = np.array(hidden[0, 1:]) @ np.array(W).T
+    ids = np.argsort(-logits, axis=-1)[:, :K]
+    assert top1 == logits.argmax(-1).tolist() and all(type(t) is int for t in top1)
+    assert path == L.greedy_walk(start_np, pair_np, ids)
+    d.lilicorr = None
+    assert d.propose(hidden, lm_head, None) == (None, top1)

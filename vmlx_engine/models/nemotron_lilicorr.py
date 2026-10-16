@@ -303,7 +303,8 @@ class LiLiCorrDrafter(nn.Module):
             new.append((k, v))
         self.kv = new
         self.ctx_end = pos0 + taps.shape[0]
-        mx.eval([x for kv in self.kv for x in kv], self.last_ctx)
+        # bounded graph without a host wait: the next draft_hidden reads these on the same stream
+        mx.async_eval([x for kv in self.kv for x in kv], self.last_ctx)
 
     def draft_hidden(self, block_emb, pos0):
         """block_emb (1, B, D) at positions pos0.. (pos0 == ctx_end) -> final hidden (1, B, D)."""
@@ -325,7 +326,8 @@ class LiLiCorrDrafter(nn.Module):
         logp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
         top1 = mx.argmax(logp, axis=-1)
         if self.lilicorr is None or not use_lilicorr:
-            return None, [int(t) for t in np.array(top1)]
+            mx.eval(top1)
+            return None, top1.tolist()
         K = self.lilicorr.topk
         # top-K in descending order (the head's rank features need rank order): partial selection, then sort the K,
         # instead of a full sort of the 131k vocabulary per slot
@@ -335,4 +337,6 @@ class LiLiCorrDrafter(nn.Module):
         ids = mx.take_along_axis(part, order, axis=-1)
         cand_lp = mx.take_along_axis(part_lp, order, axis=-1)
         start, pair = self.lilicorr.score(embed(ids), cand_lp, pass_h, self.last_ctx)
-        return greedy_walk(start, pair, ids), [int(t) for t in np.array(top1)]
+        # one device sync for everything the host walk reads (np.array on each of them was 3-4 separate waits)
+        mx.eval(start, pair, ids, top1)
+        return greedy_walk(start, pair, ids), top1.tolist()
