@@ -1777,6 +1777,15 @@ function applyJangCapabilities(
   }
   if (!caps || typeof caps !== 'object') return next
 
+  // These bundles have a native efficient Medium switch, not a generic
+  // low/high/max budget. Auto remains the template's full-reasoning default.
+  if (['nemotron_h', 'nemotron_h_v2'].includes(caps.family) &&
+      caps.reasoning_modes?.medium?.enable_thinking === true &&
+      caps.reasoning_modes?.medium?.medium_effort === true) {
+    next.supportedReasoningEfforts = ['medium']
+    delete next.defaultReasoningEffort
+  }
+
   const declaredModalities = declaredJangModalities(caps.modalities)
   const runtimeModalities = declaredModalities.length > 0
     ? declaredModalities

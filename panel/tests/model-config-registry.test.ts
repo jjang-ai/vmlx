@@ -2979,3 +2979,16 @@ describe('sidecar evidence rule is shared across formats', () => {
     expect(detectModelConfigFromDir(dir).nativeMtp).toMatchObject({ depth: 2, depthSource: 'vmlx_mtp_tuning.json:best_native_mtp_depth.best_depth' })
   })
 })
+
+describe('Native Nemotron efficient reasoning', () => {
+  it.each(['nemotron_h', 'nemotron_h_v2'])('offers only the native medium tier for %s', (family) => {
+    const dir = makeModelDir({ model_type: family }, {
+      capabilities: { family, supports_thinking: true, reasoning_parser: 'deepseek_r1',
+        reasoning_modes: { on: { enable_thinking: true },
+          medium: { enable_thinking: true, medium_effort: true }, off: { enable_thinking: false } } },
+    })
+    const config = detectModelConfigFromDir(dir)
+    expect(config.supportedReasoningEfforts).toEqual(['medium'])
+    expect(config.defaultReasoningEffort).toBeUndefined()
+  })
+})
