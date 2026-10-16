@@ -14,7 +14,7 @@ def _args():
     return ModelArgs(
         model_type="nemotron_h", vocab_size=97, hidden_size=32, intermediate_size=64, num_hidden_layers=3,
         max_position_embeddings=256, num_attention_heads=4, num_key_value_heads=2, attention_bias=False,
-        mamba_num_heads=4, mamba_head_dim=8, mamba_proj_bias=False, ssm_state_size=8, conv_kernel=4, n_groups=1,
+        mamba_num_heads=4, mamba_head_dim=8, mamba_proj_bias=False, ssm_state_size=64, conv_kernel=4, n_groups=1,
         mlp_bias=False, layer_norm_epsilon=1e-5, use_bias=False, use_conv_bias=True, hybrid_override_pattern=["M", "*", "E"],
         head_dim=8, moe_intermediate_size=32, moe_shared_expert_intermediate_size=32, moe_latent_size=32, n_group=1,
         n_routed_experts=4, n_shared_experts=1, topk_group=1, num_experts_per_tok=2, norm_topk_prob=True,
@@ -123,3 +123,38 @@ def test_rollback_is_atomic_when_a_recurrent_layer_has_no_point():
     assert kv1.trimmed == 0 and kv2.trimmed == 0             # nothing mutated: replay path trims exactly once
     assert _native_mtp_rollback_to_confirmed_impl([kv1, kv2], 2) is True
     assert kv1.trimmed == 2 and kv2.trimmed == 2
+
+
+def test_mamba_rollback_points_match_a_clean_recompute():
+    """Verify forward with n_confirmed=1 over [t0, d1, d2]: rollback_state == state after t0 alone, rollback_to(k) ==
+    state after t0 + k drafts computed from scratch; logits identical to the unmarked forward."""
+    from mlx_lm.models.cache import ArraysCache
+
+    from vmlx_engine.models import nemotron_mamba_rollback as rb
+
+    rb.apply()
+    lm = _lm()
+    prefix, block = mx.array([[3, 7, 11, 5]]), mx.array([[9, 2, 14]])
+
+    def primed():
+        c = lm.make_cache(); lm(prefix, cache=c); mx.eval([x for e in c for x in (e.state if isinstance(e, ArraysCache) else [e.keys])])
+        return c
+
+    c = primed()
+    logits_m, _ = lm(block, cache=c, return_hidden=True, n_confirmed=1)
+    c_plain = primed()
+    logits_p = lm(block, cache=c_plain).logits
+    assert mx.allclose(logits_m, logits_p, atol=2e-3).item()
+    ssm = [e for e in c if isinstance(e, ArraysCache)]
+    assert ssm and all(e.rollback_state is not None and e.rollback_to is not None for e in ssm)
+    for k in (0, 1, 2):
+        ref = primed()
+        if k + 1:
+            lm(block[:, :1 + k], cache=ref)
+        ref_ssm = [e for e in ref if isinstance(e, ArraysCache)]
+        for live, want in zip(ssm, ref_ssm):
+            conv, st = live.rollback_state if k == 0 else live.rollback_to(k)
+            assert mx.allclose(conv, want[0], atol=2e-3).item() and mx.allclose(st, want[1], atol=2e-3).item(), k
+    # an unmarked forward clears stale points
+    lm(mx.array([[4]]), cache=c)
+    assert all(e.rollback_state is None and e.rollback_to is None for e in ssm)
