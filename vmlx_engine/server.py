@@ -14370,7 +14370,7 @@ async def health():
     if _engine is not None:
         from .speculative import is_dflash2_enabled as _df2_cache_enabled
         if _df2_cache_enabled():
-            result.setdefault("cache", {})["dflash2_cache"] = _active_dflash2_cache_runtime().session_cache_stats()
+            result.setdefault("cache", {})["dflash2_cache"] = _active_dflash2_cache_stats()
         if dspark_info is not None:
             from .dspark import session as dspark
             result.setdefault("cache", {})["dspark_cache"] = dspark.cache_stats()
@@ -14986,6 +14986,14 @@ def _active_dflash2_cache_runtime():
     return dflash2_runtime
 
 
+def _active_dflash2_cache_stats():
+    """Expose the loaded lane's store through the panel's shared DFlash contract."""
+    if getattr(_current_model_config(), "family_name", None) == "mimo_v2":
+        from . import mimo_session
+        return mimo_session.cache_stats()
+    return _active_dflash2_cache_runtime().session_cache_stats()
+
+
 async def _clear_dspark_cache(include_ssd=False, *, pool=False, expected_root=None, expected_pid=None,
                               session_module=None):
     """Keep generation excluded until the existing DSpark writer/clear finishes. ``session_module``: another lane
@@ -15161,7 +15169,7 @@ async def cache_stats():
             result["scheduler_cache"] = scheduler_cache
         from .speculative import is_dflash2_enabled as _df2_cache_enabled
         if _df2_cache_enabled():
-            result["dflash2_cache"] = _active_dflash2_cache_runtime().session_cache_stats()
+            result["dflash2_cache"] = _active_dflash2_cache_stats()
         if _loaded_dspark_health_status(_engine) is not None:
             from .dspark import session as dspark
             result["dspark_cache"] = dspark.cache_stats()
