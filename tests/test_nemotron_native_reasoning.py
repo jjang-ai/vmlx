@@ -78,6 +78,32 @@ def test_native_kwarg_and_off_keep_precedence(native_bundle, make_request):
     assert merged(req)["medium_effort"] is True
 
 
+def test_native_on_overrides_inherited_medium_but_not_caller_kwargs(native_bundle, make_request, monkeypatch):
+    monkeypatch.setattr(server, "_default_chat_template_kwargs", {"medium_effort": True})
+    assert merged(make_request(reasoning_effort="high"))["medium_effort"] is False
+    assert merged(make_request(reasoning_effort="high", chat_template_kwargs={"medium_effort": True}))["medium_effort"] is True
+
+
+@pytest.mark.parametrize("fields,effective", [
+    ({"reasoning_effort": "high"}, "on"),
+    ({"reasoning_effort": "medium", "chat_template_kwargs": {"medium_effort": False}}, "on"),
+    ({"reasoning_effort": "high", "enable_thinking": False}, "off"),
+])
+def test_native_effort_diagnostics_describe_actual_template_mode(native_bundle, make_request, fields, effective):
+    from vmlx_engine.context_limits import pop_effort_substitution
+
+    path, _ = native_bundle
+    req = make_request(**fields)
+    ct = merged(req)
+    before = dict(ct)
+    chat = {"reasoning_effort": req.reasoning_effort, "enable_thinking": req.enable_thinking}
+    server._apply_stamped_effort_policy(chat, ct, model_key=str(path), request_id="native-mode-diagnostic", native_request=req)
+    diagnostic = pop_effort_substitution("native-mode-diagnostic")
+    assert diagnostic is not None
+    assert diagnostic["effective_effort"] == effective
+    assert ct == before  # diagnostics must not run a second template policy
+
+
 def test_native_stamp_advertises_only_medium_without_changing_default(native_bundle):
     path, _ = native_bundle
     assert server._stamped_reasoning_effort_contract(str(path)) == (("medium",), None)
@@ -141,3 +167,15 @@ def test_http_native_medium_survives_all_chat_adapters(native_bundle, monkeypatc
     assert captured, response.text
     assert captured.get("chat_template_kwargs", {}).get("medium_effort", False) is explicit
     assert captured["enable_thinking"] is True
+
+
+def test_inferred_medium_does_not_claim_an_explicit_substitution(native_bundle, make_request):
+    from vmlx_engine.context_limits import pop_effort_substitution
+
+    path, _ = native_bundle
+    req = make_request(thinking_mode="on")
+    ct = merged(req)
+    server._apply_stamped_effort_policy({"reasoning_effort": req.reasoning_effort}, ct,
+                                      model_key=str(path), request_id="inferred-native-mode", native_request=req)
+    assert pop_effort_substitution("inferred-native-mode") is None
+    assert "medium_effort" not in ct
