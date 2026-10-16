@@ -2298,9 +2298,12 @@ class SparseMoeBlock(nn.Module):
         if _ROUTE_OVERLAP_PROBE is not None and x.ndim == 3 and x.shape[1] > 1:
             _ROUTE_OVERLAP_PROBE.observe(inds)
 
-        if getattr(self.switch_mlp, "is_jangtq2", False):
-            # JANGH routed experts: hadamard32-rotated codebook banks; routed() fuses the
-            # router-weighted sum (decode) or applies it after the sorted prefill path.
+        if getattr(self.switch_mlp, "is_jangtq2", False) or getattr(
+            self.switch_mlp, "is_jangt", False
+        ):
+            # JANGH routed experts: hadamard32-rotated codebook banks; JANGT (JANGHT bundles):
+            # trellis units, JTMixedSwitchGLU. routed() fuses the router-weighted sum (decode)
+            # or applies it after the sorted prefill path.
             routed, fused_reduction = self.switch_mlp.routed(x, inds, scores), True
         else:
             routed, fused_reduction = qwen4_affine_switchglu(

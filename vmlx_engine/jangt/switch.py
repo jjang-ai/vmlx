@@ -293,3 +293,64 @@ def install_jangt(model: nn.Module, config: dict) -> int:
                                           int(n_out.get(f"{key}.gate_proj", 0)), int(n_out.get(f"{key}.down_proj", 0)), limit)
         count += 1
     return count
+
+
+_JT_FLOAT32 = ("jt_scale", "jt_su", "jt_cs")
+
+
+def is_jangt_format_tensor(name: str) -> bool:
+    """True for a JANGT format tensor (jt_* leaf): never a compute weight, never cast to the model's compute dtype
+    (jt_scale/jt_su/jt_cs are fp32 kernel inputs, the NAX prefill takes `const device float*` scales)."""
+    return name.rsplit(".", 1)[-1].startswith("jt_")
+
+
+def normalize_jangt_payload(model: nn.Module, weights: dict) -> int:
+    """Bring every installed JTSwitchLinear's tensors in `weights` (runtime module paths) to the module layout, in place.
+
+    Accepts the bundle layout (jt_packed (E, N, W)) and the encoder's ragged STAGE layout (jang_tools.jangt.moe_encode,
+    Qwen3.8-Flash-Next encode_q38t.py): jt_packed flat u32 + jt_off (E+1 word offsets) + jt_kbits (E widths). A stage
+    projection is accepted only when every expert has the module's contract width and the offsets are the uniform
+    E x N x words_per_row stride (one width per unit, the runtime kernels' layout); jt_off/jt_kbits are then dropped
+    (they are not parameters). Format integrity is checked, not guessed: a width or stride that disagrees with the
+    contract, or non-u32 packed words, raises (decoding them would produce garbage, not a degraded model).
+    Float format tensors are widened to fp32 (lossless from fp16/bf16); jt_ocol to int32. Returns projections seen."""
+    seen = 0
+    for path, mod in model.named_modules():
+        if not isinstance(mod, JTSwitchLinear):
+            continue
+        key = f"{path}.jt_packed"
+        if key not in weights:
+            continue                                     # strict load_weights reports the missing tensor
+        seen += 1
+        E, N, W = mod.jt_packed.shape
+        packed = weights[key]
+        if packed.dtype != mx.uint32:
+            raise ValueError(f"jangt: {key} must be uint32, got {packed.dtype}")
+        off, kb = weights.pop(f"{path}.jt_off", None), weights.pop(f"{path}.jt_kbits", None)
+        if kb is not None:
+            widths = sorted({float(v) for v in np.array(kb.astype(mx.float32)).reshape(-1)})
+            if widths != [float(mod.kbits)] or int(kb.size) != E:
+                raise ValueError(f"jangt: {path} stage widths {widths} x {int(kb.size)} do not match the contract "
+                                 f"(kbits {mod.kbits} x {E} experts); per-expert widths need the ragged kernel")
+        if off is not None:
+            o = np.array(off).astype(np.int64).reshape(-1)
+            if not np.array_equal(o, np.arange(E + 1, dtype=np.int64) * N * W):
+                raise ValueError(f"jangt: {path} jt_off is not the uniform E x N x {W}-word stride of kbits {mod.kbits}")
+        if packed.ndim == 1:
+            if off is None or kb is None:
+                raise ValueError(f"jangt: {key} is flat (stage layout) but jt_off/jt_kbits are missing")
+            if packed.size != E * N * W:
+                raise ValueError(f"jangt: {key} has {packed.size} words, expected {E} x {N} x {W}")
+            weights[key] = packed.reshape(E, N, W)
+        for leaf in _JT_FLOAT32:
+            k = f"{path}.{leaf}"
+            if k in weights and weights[k].dtype != mx.float32:
+                if not mx.issubdtype(weights[k].dtype, mx.floating):
+                    raise ValueError(f"jangt: {k} must be floating, got {weights[k].dtype}")
+                weights[k] = weights[k].astype(mx.float32)
+        k = f"{path}.jt_ocol"
+        if k in weights and weights[k].dtype != mx.int32:
+            if not mx.issubdtype(weights[k].dtype, mx.integer):
+                raise ValueError(f"jangt: {k} must be integer, got {weights[k].dtype}")
+            weights[k] = weights[k].astype(mx.int32)
+    return seen

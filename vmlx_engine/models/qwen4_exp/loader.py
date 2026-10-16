@@ -209,6 +209,13 @@ def _resolve_jang_runtime_compute_dtype(weights: dict[str, mx.array]):
     return next(iter(packed_dtypes))
 
 
+def _is_jangt_format_tensor(name: str) -> bool:
+    """JANGT trellis tensors (jt_scale/jt_su/jt_cs fp32, jt_wout fp16, jt_ocol int32, jt_packed u32) are format, not
+    compute weights: casting the fp32 scales to the compute dtype loses precision on decode and breaks the NAX
+    prefill kernel, which takes float scales (GLM JANGHT, 2026-10-10)."""
+    return name.rsplit(".", 1)[-1].startswith("jt_")
+
+
 def _normalize_jang_runtime_compute_dtypes(
     weights: dict[str, mx.array],
     model: nn.Module,
@@ -239,7 +246,7 @@ def _normalize_jang_runtime_compute_dtypes(
         if source_key is None:
             continue
         summary[source_key] += 1
-        if not cast_predicate(name) or name.endswith(".tq2_scales"):
+        if not cast_predicate(name) or name.endswith(".tq2_scales") or _is_jangt_format_tensor(name):
             summary["preserved"] += 1
             continue
         if value.dtype != target_dtype:
@@ -260,6 +267,7 @@ def _warn_runtime_dtype_mismatches(model: nn.Module, target_dtype) -> int:
             for name, value in tree_flatten(model.parameters())
             if value.dtype in {mx.float16, mx.bfloat16, mx.float32}
             and cast_predicate(name)
+            and not _is_jangt_format_tensor(name)
             and value.dtype != target_dtype
         ]
     except Exception as exc:  # noqa: BLE001
@@ -507,6 +515,40 @@ def _validate_ple_hash_buffers(model, ple_buffers: dict[str, mx.array]) -> None:
         actual = np.asarray(value).astype(np.int64, copy=False)
         if not np.array_equal(actual, wanted):
             raise ValueError(f"qwen4_exp PLE hash buffer mismatch: {suffix}")
+
+
+def _install_jangt_routed_experts(model, config: dict) -> int:
+    """JANGHT bundles: replace the backbone SwitchGLU modules with JTMixedSwitchGLU when config.json carries a
+    top-level "jangt" block (same contract as GLM-5.3 / Naive-N0.5 JANGHT, vmlx_engine.jangt.switch):
+      config["jangt"] = {"version": 1, "code": "v2_halfbits", "state_bits": 12, "rotation": "hadamard128-signs",
+                         "outlier_columns": {"model.layers.L.mlp.switch_mlp.<proj>": n_out}}
+      config["quantization"]["model.layers.L.mlp.switch_mlp.<proj>"] = {"mode": "jangt", "kbits": K}  (K in 1, 1.5,
+        2, 2.5, 3; gate_proj == up_proj) or a JANGH {"mode": "jangtq2", ...} group (mixed stacks).
+    Shared experts, routers and the SSD-backed PLE path are untouched; MTP experts stay affine (install_jangt skips
+    paths containing "mtp"). Qwen experts use plain SwiGLU (no clamp). A JANGHT bundle may also carry a "jangtq" block
+    for its JANGH groups; the routed stacks follow the JANGT contract and are never validated as all-JANGH (the
+    GLM-5.3 VLM rule). Fail closed: a declared JANGT bundle with an incomplete contract raises."""
+    jangt = config.get("jangt")
+    if not jangt:
+        return 0
+    from vmlx_engine.jangt.switch import install_jangt
+
+    installed = install_jangt(
+        model,
+        {"jangt": jangt, "quantization": config.get("quantization") or {}, "swiglu_limit": 0.0},
+    )
+    if installed <= 0:
+        raise ValueError("qwen4_exp declares JANGT routed experts but none were installed")
+    logger.info("qwen4_exp: %d JANGT/JANGH mixed routed expert banks installed", installed)
+    return installed
+
+
+def _install_routed_expert_formats(model, config: dict) -> tuple[int, int]:
+    """(JANGT stacks, JANGH stacks) installed before weights load. JANGT owns the routed stacks when declared."""
+    jangt_modules = _install_jangt_routed_experts(model, config)
+    if jangt_modules:
+        return jangt_modules, 0
+    return 0, _install_jangh_routed_experts(model, config)
 
 
 def _install_jangh_routed_experts(model, config: dict) -> int:
@@ -838,7 +880,7 @@ def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
         model_config, model_class, config, ["text", "vision"]
     )
     model = model_class.Model(model_config)
-    jangh_modules = _install_jangh_routed_experts(model, config)
+    jangt_modules, jangh_modules = _install_routed_expert_formats(model, config)
 
     weights, is_mlx_format, ple_buffers = _load_non_table_weights(
         model_path, affine1_modules
@@ -846,6 +888,12 @@ def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
     if not (is_mlx_format or jang_runtime_sanitized):
         weights = model.sanitize(weights)
     weights = _normalize_runtime_weight_names(weights)
+    if jangt_modules:
+        from vmlx_engine.jangt.switch import normalize_jangt_payload
+
+        # bundle (E, N, W) or encoder stage (ragged) layout -> module layout; fp32 format tensors; fail closed on a
+        # width/stride that disagrees with the per-module contract
+        normalize_jangt_payload(model, weights)
     normalized_hyper = (0, 0)
     runtime_dtype = None
     runtime_dtype_summary = None
