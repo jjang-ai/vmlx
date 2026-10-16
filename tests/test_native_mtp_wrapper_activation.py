@@ -31,4 +31,7 @@ def test_wrapper_activation_replaces_previous_bundle_state(monkeypatch, tmp_path
     assert m._ACTIVE_NATIVE_MTP_MODEL_PATH == (tmp_path if allow_runtime else None)
     if allow_runtime:
         assert m.native_mtp_effective_depth() == (1, "vmlx_mtp_tuning:test")
+    else:
+        assert result["status"] == "runtime_disabled"
+        assert result["runtime_reason"] == "native MTP wrapper runtime disabled"
 

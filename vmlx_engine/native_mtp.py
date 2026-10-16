@@ -1262,7 +1262,10 @@ def maybe_apply_native_mtp(
         status["runtime_active"] = runtime_active
         if not runtime_active:
             status["runtime_available"] = False
-            if reason:
+            if status.get("status") == "native_runtime_ready":
+                status["status"] = "runtime_disabled"
+                status["runtime_reason"] = reason or "native MTP wrapper runtime disabled"
+            elif reason:
                 status["runtime_reason"] = reason
         logger.info(
             "Native MTP %s for %s (family=%s adapter=%s status=%s depth=%s/%s)",
