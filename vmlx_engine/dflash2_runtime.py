@@ -1547,6 +1547,18 @@ class _BlockChooser:
         )
         self.ar_since_probe = 0
         self.ar_tokens = 0
+        # AR-cost hygiene, as glm_dflash2.AdaptiveSpec (d6d64762 / 3dec394f, found on the MiMo lane 2026-10-16: one
+        # stalled burst moved the shared AR cost 22 -> 88 ms and spec then won for the life of the process, because
+        # nothing re-measured AR once spec won): after ar_reprobe_cycles verify cycles an AR burst re-measures it (and
+        # replaces most of the old value); a burst of < ar_min_sample_tokens (EOS / max_tokens cut: launch + sync
+        # overhead) never updates it; an ordinary sample above ar_outlier_ratio x the current cost is skipped.
+        # VMLX_DFLASH_AR_REPROBE_ROUNDS=0 / VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS=1 restore the old behaviour (A/B).
+        self.ar_reprobe_cycles = int(os.environ.get("VMLX_DFLASH_AR_REPROBE_ROUNDS", "256"))
+        self.ar_min_sample_tokens = int(os.environ.get("VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS", "3"))
+        self.ar_outlier_ratio = 3.0
+        self.ar_outliers_skipped = 0
+        self.spec_since_ar = 0
+        self._reprobe_pending = False
 
     def _accept_probs(self, w: int) -> list[float]:
         out, prev = [], self.prior_p
@@ -1571,6 +1583,10 @@ class _BlockChooser:
         t_ar = self.cost.get("ar")
         if t_ar is None:
             return ("ar", self.ar_burst)   # one AR measurement before comparing
+        if self.ar_reprobe_cycles > 0 and self.spec_since_ar >= self.ar_reprobe_cycles:
+            self.spec_since_ar = 0
+            self._reprobe_pending = True
+            return ("ar", self.ar_burst)   # re-measure a possibly stale AR cost
         best = max(self.widths, key=lambda w: self.expected_tokens(w) / self.cost[w])
         spec_rate = self.expected_tokens(best) / self.cost[best]
         if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar or self.ar_since_probe >= self.ar_probe_every:
@@ -1583,7 +1599,8 @@ class _BlockChooser:
         ar = self.cost.get("ar")
         timed = [w for w in self.widths if w in self.cost]
         return (
-            "ar_ms_per_token=%s ar_rate=%s width_ms=%s expected_tokens=%s width_rate=%s ar_tokens=%d cycles=%d"
+            "ar_ms_per_token=%s ar_rate=%s width_ms=%s expected_tokens=%s width_rate=%s ar_tokens=%d cycles=%d "
+            "ar_outliers_skipped=%d"
             % (
                 "-" if ar is None else "%.1f" % (ar * 1000.0),
                 "-" if ar is None else "%.1f" % (1.0 / ar),
@@ -1592,6 +1609,7 @@ class _BlockChooser:
                 {w: round(self.expected_tokens(w) / self.cost[w], 1) for w in timed},
                 self.ar_tokens,
                 self.cycles,
+                self.ar_outliers_skipped,
             )
         )
 
@@ -1601,18 +1619,30 @@ class _BlockChooser:
             return
         self.ar_tokens += tokens
         self.ar_since_probe += tokens
+        self.spec_since_ar = 0
+        reprobe, self._reprobe_pending = self._reprobe_pending, False
+        if tokens < self.ar_min_sample_tokens:
+            return                         # EOS / max_tokens-cut burst: launch overhead, not the AR cost
         warm = self.cost.setdefault("warm", set())
         if "ar" not in warm:
             warm.add("ar")                 # first burst in this process: 1-row kernels compile
             return
         per = seconds / tokens
         c = self.cost.get("ar")
-        self.cost["ar"] = per if c is None else c + self.ar_alpha * (per - c)
+        if c is None:
+            self.cost["ar"] = per
+        elif reprobe:
+            self.cost["ar"] = 0.3 * c + 0.7 * per
+        elif self.ar_outlier_ratio > 0 and per > self.ar_outlier_ratio * c:
+            self.ar_outliers_skipped += 1  # one stalled burst must not freeze the chooser on spec
+        else:
+            self.cost["ar"] = c + self.ar_alpha * (per - c)
 
     def observe(self, width: int, tokens: int, seconds: float, after_ar: bool = False) -> None:
         if seconds <= 0 or width not in self.widths:
             return                         # clipped final block: not a candidate width
         accepted = tokens - 1
+        self.spec_since_ar += 1
         for k in range(1, len(self.trials)):
             self.trials[k] *= self.decay
             self.hits[k] *= self.decay

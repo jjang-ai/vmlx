@@ -192,3 +192,26 @@ def test_gdn_rollback_of_a_whole_one_row_forward_restores_its_start_state():
     assert attn.trimmed == 1
     assert bool(mx.array_equal(gdn[1], initial))
     assert bool(mx.array_equal(gdn[0], conv_input[:, :3]))
+
+
+def test_stale_ar_cost_is_reprobed_and_a_stalled_burst_is_skipped(monkeypatch):
+    """Ported from glm_dflash2.AdaptiveSpec (MiMo lane 2026-10-16): one stalled burst froze the shared AR cost and
+    spec won for the life of the process; cut bursts measured launch overhead."""
+    monkeypatch.setenv("VMLX_DFLASH_AR_REPROBE_ROUNDS", "20")
+    shared = {}
+    c = _seeded(shared, 0.92)
+    _ar_burst(c); _ar_burst(c)                             # warm-up, then 33 ms
+    _ar_burst(c, per_token=0.30)                           # a stalled burst: skipped
+    assert abs(shared["ar"] - 0.033) < 1e-9 and c.ar_outliers_skipped == 1
+    c.observe_ar(0.5, 1)                                   # EOS after one token: not an AR cost sample
+    assert abs(shared["ar"] - 0.033) < 1e-9
+    shared["ar"] = 0.200                                   # a stale estimate: spec always wins ...
+    actions = []
+    for _ in range(25):
+        mode, n = c.next_action()
+        actions.append(mode)
+        if mode == "ar":
+            _ar_burst(c, n=n)                              # ... until the re-probe (always taken)
+        else:
+            c.observe(c.width, c.width, 0.098)
+    assert "ar" in actions and shared["ar"] < 0.1
