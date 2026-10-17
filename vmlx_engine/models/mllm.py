@@ -7474,10 +7474,18 @@ class MLXMultimodalLM:
                         cache_len)
         cuts = _ms.snapshot_cuts(tokenizer, prompt_ids, cache_len)
         snapshots = []
+        chunks = _ms.ChunkWriter(_ms.ssd_parent(resume))
 
         def _on_snapshot(cut, cache, taps):
             kind = next((k for k, c in cuts if c == cut), "boundary")
-            snapshots.append((kind, cut, _ms.clone(cache, target.model.make_cache), taps))
+            t_cache = _ms.clone(cache, target.model.make_cache)
+            if kind == "chunk":
+                # stored now (not held to the end of the answer), chained to the previous chunk (mimo_session)
+                if t_cache is not None:
+                    chunks.put({"kind": "chunk", "tokens": key_ids[:cut], "cache_len": int(cut),
+                                "target_cache": t_cache, "draft_context": taps, "model_key": model_key})
+                return
+            snapshots.append((kind, cut, t_cache, taps))
 
         controls = None
         min_p = float(kwargs.get("min_p", 0.0) or 0.0)
@@ -7539,6 +7547,7 @@ class MLXMultimodalLM:
         parent = _ms.ssd_parent(resume)
         for kind, cut, t_cache, taps in snapshots:
             if t_cache is not None:
+                parent = chunks.parent_for(cut, parent)
                 receipt = _ms.store({"kind": kind, "tokens": key_ids[:cut], "cache_len": int(cut),
                                      "target_cache": t_cache, "draft_context": taps, "model_key": model_key},
                                     parent=parent)
@@ -7551,7 +7560,7 @@ class MLXMultimodalLM:
                 and forwarded == expect):
             receipt = _ms.store({"kind": "turn", "tokens": key_ids + emitted, "cache_len": forwarded,
                                  "target_cache": session["target_cache"], "draft_context": session["taps"],
-                                 "model_key": model_key}, parent=parent)
+                                 "model_key": model_key}, parent=chunks.parent_for(forwarded, parent))
         spec_rounds = [d for d in drafted if d > 0]
         accepted = list(st.accepted)
         _pol = (st.policy or {}).get("_policy")

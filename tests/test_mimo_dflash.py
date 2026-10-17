@@ -300,3 +300,51 @@ def test_prefill_stops_at_a_chunk_boundary_when_the_request_is_cancelled(tmp_pat
     tgt.forward = real_forward
     assert _run(tgt, drafter, prompt, 10) == _ar_greedy(model, prompt, 10)
     tgt.close()
+
+
+def test_chunk_cuts_and_ssd_candidates():
+    from vmlx_engine import mimo_session
+    from vmlx_engine.dflash2_session_disk import candidate_cuts
+
+    assert mimo_session.chunk_cuts(0, 50, 16) == [16, 32, 48]
+    assert mimo_session.chunk_cuts(20, 50, 16) == [32, 48]          # only past the restored prefix
+    assert mimo_session.chunk_cuts(32, 48, 16) == []                # strictly below the boundary
+    assert mimo_session.chunk_cuts(0, 50, 0) == []
+    assert candidate_cuts(list(range(50)), None, [], every=16) == [48, 32, 16]
+    assert candidate_cuts(list(range(50)), None, []) == []
+
+
+def test_partial_prefix_hit_restores_the_last_chunk_and_equals_ar(tmp_path, monkeypatch):
+    """A prompt diverging INSIDE the stored region (no message edge in between) restores the last chunk entry below the
+    divergence from SSD; chunks chain (each a delta on the previous one). Output == the same lane run cold with its
+    prefill split at the same position (the restore is exact; a split vs one-shot prefill differs by bf16 rounding,
+    ~1 % relative logits on this tiny random model, which can flip its near-ties -- the same class as the production
+    4096-token prefill chunking)."""
+    from vmlx_engine import mimo_session
+    from vmlx_engine.dflash2_session_disk import DFlash2SessionSSD
+
+    model, tgt, drafter = _lane(tmp_path)
+    rng = np.random.default_rng(11)
+    a = rng.integers(0, V - 2, size=60).tolist()
+    b = a[:45] + rng.integers(0, V - 2, size=13).tolist()
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_CHUNK_SNAPSHOT_EVERY", "16")
+    monkeypatch.setattr(mimo_session, "STORE", None)
+    monkeypatch.setattr(mimo_session, "SSD", DFlash2SessionSSD(root=str(tmp_path / "ssd"), max_size_bytes=0, model_key="t"))
+    writer = mimo_session.ChunkWriter(None)
+    receipts = []
+
+    def snap(cut, cache, taps):
+        receipts.append(writer.put({"kind": "chunk", "tokens": a[:cut], "cache_len": cut, "draft_context": taps,
+                                    "target_cache": mimo_session.clone(cache, tgt.model.make_cache), "model_key": "k"}))
+
+    _run(tgt, drafter, a, 4, snapshot_cuts=mimo_session.chunk_cuts(0, len(a), 16), on_snapshot=snap)
+    assert [r.result(timeout=30)["durable"] for r in receipts] == [True, True, True]
+    assert [r.vmlx_ssd_ref["depth"] for r in receipts] == [0, 1, 2]
+    assert writer.parent_for(40, None)["len"] == 32 and writer.parent_for(10, None) is None
+    mimo_session.clear()
+    tok = type("T", (), {"convert_tokens_to_ids": lambda self, t: -1})()
+    resume = mimo_session.lookup("k", b, tok, tgt.model.make_cache, eos_ids=[])
+    assert resume is not None and resume["source"] == "mimo-dflash-ssd" and resume["cache_len"] == 32
+    got = _run(tgt, drafter, b, 8, resume=resume)
+    assert got == _run(tgt, drafter, b, 8, snapshot_cuts=[32], on_snapshot=lambda *_: None)
+    tgt.close()

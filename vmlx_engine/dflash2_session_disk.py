@@ -120,10 +120,11 @@ def _parent_key_length(parent: dict, tokens: list[int]) -> Optional[int]:
     return key_len if signature_for(tokens[:key_len]) == sig else None
 
 
-def candidate_cuts(prompt: list[int], im_start_id: Optional[int], eos_ids: Iterable[int]) -> list[int]:
-    """Prefix lengths at which a stored entry can end, longest first."""
+def candidate_cuts(prompt: list[int], im_start_id: Optional[int], eos_ids: Iterable[int], every: int = 0) -> list[int]:
+    """Prefix lengths at which a stored entry can end, longest first. ``every`` > 0 adds the absolute multiples of
+    ``every`` (lanes that store periodic mid-message checkpoints, e.g. mimo_session chunk entries)."""
     eos = {int(t) for t in eos_ids}
-    cuts = set()
+    cuts = set(range(int(every), len(prompt), int(every))) if every and int(every) > 0 else set()
     for i, t in enumerate(prompt):
         if im_start_id is not None and t == im_start_id and i > 0:
             cuts.add(i)                    # boundary: tokens[:i], i = tag index
@@ -444,11 +445,11 @@ class DFlash2SessionSSD:
 
     # ---- read ----------------------------------------------------------------
     def take_matching(self, prompt: list[int], *, im_start_id: Optional[int], eos_ids: Iterable[int],
-                      make_target: Callable[[], list], make_draft: Callable[[], list]) -> Optional[dict]:
+                      make_target: Callable[[], list], make_draft: Callable[[], list], every: int = 0) -> Optional[dict]:
         import mlx.core as mx
 
         t0 = time.perf_counter()
-        for cut in candidate_cuts(prompt, im_start_id, eos_ids):
+        for cut in candidate_cuts(prompt, im_start_id, eos_ids, every):
             prefix = prompt[:cut]
             loaded = self.store.load(signature_for(prefix), lambda p: mx.load(str(p), return_metadata=True))
             if loaded is None:

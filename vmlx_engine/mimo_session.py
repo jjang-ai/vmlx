@@ -20,6 +20,16 @@ Rotating caches: a RotatingKVCache past its window returns its LIVE buffer from 
 write into it in place, so a shared-array clone (dflash2_runtime._clone_cache_shells) would keep changing after the
 snapshot. ``clone`` copies those layers (``* 1``); full-attention layers share an immutable slice.
 
+Chunk checkpoints (2026-10-16): a prompt that diverges INSIDE the last user message (another question about the same
+pasted document, an edited / regenerated message) matched no entry -- system / boundary / turn entries all end at message
+edges -- and re-prefilled everything (20,752-token follow-up sharing 20,740 tokens: 0 restored, 25.6 s). With the SSD
+tier attached, prefill also stops at every absolute multiple of CHUNK_EVERY (default 4096, the prefill step) past the
+restored prefix and below the boundary; each "chunk" entry is stored at once (``ChunkWriter``: the clone is not held for
+the whole answer) as a delta against the PREVIOUS chunk, so a long paste writes each row once (a delta against the
+request's resume parent would rewrite every earlier row: quadratic); MAX_CHAIN still forces a full entry every 8 links.
+The SSD cut finder probes the same multiples. RAM-only (no SSD) keeps the old cuts: the 4-entry RAM tier would churn.
+VMLX_MIMO_DFLASH_CHUNK_SNAPSHOT_EVERY=0 disables chunk entries.
+
 VMLX_MIMO_DFLASH_PREFIX_REUSE=0 disables reuse; VMLX_MIMO_DFLASH_SSD=0 keeps the RAM tier only.
 """
 from __future__ import annotations
@@ -70,10 +80,60 @@ def attach_ssd(target_path: str, drafter_path: str) -> None:
         logger.warning("MiMo DFlash session SSD tier unavailable; RAM tier only", exc_info=True)
 
 
+def chunk_every() -> int:
+    try:
+        return max(0, int(os.environ.get("VMLX_MIMO_DFLASH_CHUNK_SNAPSHOT_EVERY", "4096")))
+    except ValueError:
+        return 4096
+
+
+def chunk_cuts(cache_len: int, upper: int, every: int) -> list:
+    """Absolute multiples of ``every`` strictly between the restored prefix and ``upper``."""
+    if every <= 0:
+        return []
+    first = (int(cache_len) // every + 1) * every
+    return list(range(first, int(upper), every))
+
+
 def snapshot_cuts(tokenizer: Any, prompt: list, cache_len: int) -> list:
     from .dspark.session import snapshot_cuts as _cuts
 
-    return _cuts(tokenizer, prompt, cache_len) if reuse_enabled() else []
+    if not reuse_enabled():
+        return []
+    cuts = _cuts(tokenizer, prompt, cache_len)
+    if SSD is not None:
+        upper = next((c for k, c in cuts if k == "boundary"), len(prompt))
+        taken = {c for _, c in cuts}
+        cuts = sorted(cuts + [("chunk", c) for c in chunk_cuts(cache_len, upper, chunk_every()) if c not in taken],
+                      key=lambda kc: kc[1])
+    return cuts
+
+
+class ChunkWriter:
+    """Stores chunk entries as they are cut (each a delta against the previous chunk) and hands the request's
+    deferred entries (boundary / turn) the closest stored chunk below them as their parent."""
+
+    def __init__(self, parent: Optional[dict]):
+        self.parent = parent
+        self.refs: list = []                                   # [(cut, parent dict)] in cut order
+
+    def put(self, entry: dict):
+        receipt = store(entry, parent=self.parent)
+        ref = getattr(receipt, "vmlx_ssd_ref", None)
+        try:
+            refused = receipt.done() and not (receipt.result() or {}).get("durable", True)
+        except Exception:  # noqa: BLE001
+            refused = True
+        if ref and not refused:
+            self.parent = dict(ref, receipt=receipt)
+            self.refs.append((int(entry["cache_len"]), self.parent))
+        return receipt
+
+    def parent_for(self, cut: int, parent: Optional[dict]) -> Optional[dict]:
+        below = [p for c, p in self.refs if c < int(cut)]
+        if below and (parent is None or int(below[-1]["len"]) > int(parent.get("len", 0))):
+            return below[-1]
+        return parent
 
 
 def ssd_parent(resume: Optional[dict]) -> Optional[dict]:
@@ -135,7 +195,8 @@ def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, 
     except Exception:
         im_start = None
     resume = SSD.take_matching(prompt, im_start_id=int(im_start) if isinstance(im_start, int) and im_start >= 0 else None,
-                               eos_ids=list(eos_ids), make_target=make_target, make_draft=list)
+                               eos_ids=list(eos_ids), make_target=make_target, make_draft=list,
+                               every=chunk_every())
     if resume is not None:
         resume["model_key"] = model_key
         resume["source"] = "mimo-dflash-ssd"
