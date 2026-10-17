@@ -447,3 +447,20 @@ def test_chain_after_makes_a_full_write_the_parent_of_the_next_entries():
     assert chain_after(deep, receipt({"sig": "c", "len": 5, "depth": 0}, durable=False)) is deep   # refused write
     pending = Future(); pending.vmlx_ssd_ref = {"sig": "d", "len": 7, "depth": 0}
     assert chain_after(None, pending)["sig"] == "d"        # queued write: FIFO writer settles it before the child
+
+
+def test_chunk_snapshot_cuts_and_parent_choice():
+    from vmlx_engine.dflash2_runtime import _chunk_snapshot_cuts, _parent_below
+
+    assert _chunk_snapshot_cuts(0, 10000, 4096) == [4096, 8192]
+    assert _chunk_snapshot_cuts(5000, 10000, 4096) == [8192]               # only past the restored prefix
+    assert _chunk_snapshot_cuts(0, 8192, 4096) == [4096]                   # strictly below the boundary
+    assert _chunk_snapshot_cuts(0, 20000, 4096, media_first=9000) == [4096, 8192]  # not past the first media token
+    assert _chunk_snapshot_cuts(0, 20000, 0) == []
+    resume = {"len": 1000, "sig": "r", "depth": 0}
+    chunks = [(4096, {"len": 4096, "sig": "a", "depth": 1}), (8192, {"len": 8192, "sig": "b", "depth": 2})]
+    assert _parent_below(chunks, 9000, resume)["sig"] == "b"               # boundary after chunks: the last chunk
+    assert _parent_below(chunks, 3000, resume)["sig"] == "r"               # system cut before chunks: the resume
+    assert _parent_below([], 3000, None) is None
+    system = {"len": 1500, "sig": "s", "depth": 1}
+    assert _parent_below(chunks, 9000, system)["sig"] == "b"               # not the shorter system entry

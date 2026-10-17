@@ -571,6 +571,39 @@ def configure_session_ssd(*, root, max_size_bytes: int, target_path: str, draft_
     )
 
 
+def _chunk_snapshot_every() -> int:
+    """Chunk checkpoints (cross-lane port of mimo_session 118863e4, 2026-10-17): a prompt that diverges INSIDE the
+    last user message (another question about the same pasted document, an edited message) matched no entry --
+    system / boundary / turn entries all end at message edges -- and re-prefilled everything (MiMo 87.8k: 134.6 s
+    vs 3.2 s with chunks). 0 disables."""
+    try:
+        return max(0, int(os.environ.get("VMLX_DFLASH2_CHUNK_SNAPSHOT_EVERY", "4096")))
+    except ValueError:
+        return 4096
+
+
+def _chunk_snapshot_cuts(cache_len: int, upper: int, every: int, media_first: Optional[int] = None) -> list[int]:
+    """Absolute multiples of ``every`` strictly between the restored prefix and ``upper`` (the boundary cut or the
+    prompt end), and at or before the first media token (entries past it are media-salted RAM-only entries, which
+    would churn the RAM store)."""
+    if every <= 0:
+        return []
+    stop = int(upper) if media_first is None else min(int(upper), int(media_first) + 1)
+    return list(range((int(cache_len) // every + 1) * every, stop, every))
+
+
+def _parent_below(refs: list, cut: int, fallback: Optional[dict]) -> Optional[dict]:
+    """The longest stored SSD entry shorter than ``cut`` (refs: [(len, parent dict)]), else ``fallback``. A boundary
+    stored after chunk entries must be a delta on the last chunk, not on a shorter system entry (which would write
+    every chunk's rows again)."""
+    cands = [p for n, p in refs if int(n) < int(cut)]
+    if fallback is not None and int(fallback.get("len", 0)) < int(cut):
+        cands.append(fallback)
+    if not cands:
+        return fallback                    # nothing shorter: the SSD tier writes a full entry
+    return max(cands, key=lambda p: int(p.get("len", 0)))
+
+
 def _store_session(entry: dict, ram_only: bool = False, parent: Optional[dict] = None):
     """RAM store + SSD write-behind (when configured).
 
@@ -836,6 +869,7 @@ def _stream_generate_resumable(
             make_target=lambda: runtime.make_prompt_cache(adapter),
             # restored drafter caches carry offsets past the sliding window
             make_draft=lambda: (_patch_rotating_cache_resume_math(), runtime.make_prompt_cache(draft))[1],
+            every=_chunk_snapshot_every(),
         )
         if resume is not None:
             resume["model_key"] = model_key
@@ -855,6 +889,7 @@ def _stream_generate_resumable(
 
     # The SSD entry this request's cache is built on: a later snapshot of it is stored as a delta against it.
     _ssd_parent = None
+    _stored_refs: list = []                 # [(len, parent)] of entries this request stored (chunk checkpoints)
     if resume is not None:
         if resume.get("ssd_ref"):
             _ssd_parent = dict(resume["ssd_ref"], receipt=None)               # read from SSD: durable
@@ -970,6 +1005,14 @@ def _stream_generate_resumable(
             # Prefill in segments ending at each snapshot cut (system end,
             # assistant tag); a cut costs one extra chunk boundary.
             cuts = [(c, k) for c, k in ((system_cut, "system"), (boundary_cut, "boundary")) if c is not None]
+            from .glm_dflash2 import ssd_only_ram_release_enabled as _ssd_only
+            if _prefix_reuse_enabled() and _SESSION_SSD is not None and _ssd_only():
+                _taken = {c for c, _ in cuts}
+                cuts += [(c, "chunk") for c in _chunk_snapshot_cuts(
+                    cache_len, boundary_cut if boundary_cut is not None else len(prompt_list), _chunk_snapshot_every(),
+                    None if media is None or per_item_media else int(media["first_media_index"]),
+                ) if c not in _taken]
+                cuts.sort()
             if cuts:
                 parts, start = [], cache_len
                 for cut, kind in cuts:
@@ -981,12 +1024,29 @@ def _stream_generate_resumable(
                         prefill_step_size,
                     )
                     parts.append(h)
-                    snapshots.append((kind, cut, _clone_cache_shells(
-                        target_cache, lambda: runtime.make_prompt_cache(adapter)
-                    ), _snapshot_draft_state(
-                        runtime, draft, resume, parts, cut, cache_len, hidden_limit
-                    )))
+                    _shells = _clone_cache_shells(target_cache, lambda: runtime.make_prompt_cache(adapter))
+                    _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, hidden_limit)
                     start = cut
+                    if kind != "chunk":
+                        snapshots.append((kind, cut, _shells, _dstate))
+                        continue
+                    if _shells is None:
+                        continue
+                    # Chunk entries are stored NOW, chained on the previous stored entry, and the prefill waits
+                    # for the write: the shells are views of the live KV buffer, and while one is alive the next
+                    # in-place append copies the whole buffer (27B at 84.7k: 5.4 GB per held snapshot). A
+                    # 4096-row delta writes in ~0.1 s.
+                    _parent = _parent_below(_stored_refs, cut, _ssd_parent)
+                    _rc = _store_session({"model_key": base_key, "kind": "chunk", "tokens": key_list[:cut],
+                                          "rope_delta": _entry_rope_delta(cut), "cache_len": int(cut),
+                                          "target_cache": _shells, **_dstate}, parent=_parent)
+                    del _shells, _dstate
+                    try:
+                        _rc.result(timeout=30)
+                    except Exception:  # noqa: BLE001 - a slow or failed write only costs one buffer copy
+                        pass
+                    if getattr(_rc, "vmlx_ssd_ref", None) and (not _rc.done() or (_rc.result() or {}).get("durable")):
+                        _stored_refs.append((int(cut), dict(_rc.vmlx_ssd_ref, receipt=_rc)))
                 logits, h, _ = _prefill_last_logits(
                     runtime, adapter,
                     prompt_arr[start:],
@@ -1069,6 +1129,7 @@ def _stream_generate_resumable(
             text_only_cut = (
                 media is None or per_item_media or int(cut) <= int(media["first_media_index"])
             )
+            _ssd_parent = _parent_below(_stored_refs, cut, _ssd_parent)
             _snap_receipt = _store_session(
                 {
                     "model_key": base_key if text_only_cut else model_key,
@@ -1160,7 +1221,7 @@ def _stream_generate_resumable(
                     "draft_context": hidden if n == 1 else None,
                 },
                 ram_only=media is not None and not per_item_media,
-                parent=_ssd_parent,
+                parent=_parent_below(_stored_refs, len(confirmed) - 1, _ssd_parent),
             )
             logger.info(
                 "DFlash2 session stored: %d confirmed tokens (draft cache %s)",
