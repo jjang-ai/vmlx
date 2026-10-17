@@ -77,7 +77,54 @@ def snapshot_cuts(tokenizer: Any, prompt: list, cache_len: int) -> list:
         return []
     boundary = _assistant_tag_cut(tokenizer, prompt, cache_len)
     systems = [c for c in _system_block_cuts(tokenizer, prompt, cache_len) if boundary is None or c < boundary]
-    return [("system", c) for c in systems] + ([("boundary", boundary)] if boundary is not None else [])
+    cuts = [("system", c) for c in systems] + ([("boundary", boundary)] if boundary is not None else [])
+    from ..glm_dflash2 import ssd_only_ram_release_enabled
+
+    if SSD is not None and ssd_only_ram_release_enabled():
+        # Chunk checkpoints (cross-lane port of mimo_session 118863e4, 2026-10-17): entries also every
+        # chunk_every() absolute tokens, so a prompt diverging INSIDE the last user message restores the last chunk
+        # below the divergence instead of re-prefilling everything. SSD tier only (the RAM tier would churn).
+        from ..dflash2_runtime import _chunk_snapshot_cuts
+
+        taken = {c for _, c in cuts}
+        cuts += [("chunk", c) for c in _chunk_snapshot_cuts(cache_len, boundary if boundary is not None else len(prompt),
+                                                           chunk_every()) if c not in taken]
+        cuts.sort(key=lambda kc: kc[1])
+    return cuts
+
+
+def chunk_every() -> int:
+    """VMLX_DSPARK_CHUNK_SNAPSHOT_EVERY (default 4096); 0 disables chunk entries."""
+    try:
+        return max(0, int(os.environ.get("VMLX_DSPARK_CHUNK_SNAPSHOT_EVERY", "4096")))
+    except ValueError:
+        return 4096
+
+
+class ChunkWriter:
+    """Stores chunk entries as they are cut (each a delta on the previous chunk; a delta on the request's resume
+    parent would rewrite every earlier row) and hands the request's deferred entries the closest stored chunk below
+    them as parent (as mimo_session.ChunkWriter)."""
+
+    def __init__(self, parent: Optional[dict], store_fn: Optional[Callable] = None):
+        self.parent, self.refs, self._store = parent, [], store_fn
+
+    def put(self, entry: dict):
+        receipt = (self._store or store)(entry, parent=self.parent)
+        ref = getattr(receipt, "vmlx_ssd_ref", None)
+        try:
+            refused = receipt.done() and not (receipt.result() or {}).get("durable", True)
+        except Exception:  # noqa: BLE001
+            refused = True
+        if ref and not refused:
+            self.parent = dict(ref, receipt=receipt)
+            self.refs.append((int(entry["cache_len"]), self.parent))
+        return receipt
+
+    def parent_for(self, cut: int, parent: Optional[dict]) -> Optional[dict]:
+        from ..dflash2_runtime import _parent_below
+
+        return _parent_below(self.refs, cut, parent)
 
 
 def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, make_draft: Callable):
@@ -98,7 +145,7 @@ def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, 
     eos = getattr(getattr(tokenizer, "stopping_criteria", None), "eos_token_ids", None) or \
         ([tokenizer.eos_token_id] if getattr(tokenizer, "eos_token_id", None) is not None else [])
     resume = SSD.take_matching(prompt, im_start_id=int(im_start) if isinstance(im_start, int) and im_start >= 0 else None,
-                               eos_ids=eos, make_target=make_target, make_draft=make_draft)
+                               eos_ids=eos, make_target=make_target, make_draft=make_draft, every=chunk_every())
     if resume is not None:
         resume["model_key"] = model_key
         resume["source"] = "dspark-ssd"

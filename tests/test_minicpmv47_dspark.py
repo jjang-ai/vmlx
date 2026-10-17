@@ -1029,3 +1029,31 @@ def test_text_only_loads_the_multimodal_runtime_when_no_text_runtime_exists(tmp_
 
     (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type, "vision_config": {}}))
     assert is_mllm_model(str(tmp_path), force_text_only=True) is expected
+
+
+def test_chunk_cuts_only_with_an_ssd_tier_and_chunk_writer_chains(monkeypatch):
+    """Cross-lane port of the MiMo chunk checkpoints (2026-10-17): with an SSD tier (SSD-only RAM policy) the DSpark
+    lane also cuts every chunk_every() absolute tokens; each chunk is stored at once as a delta on the previous chunk,
+    and deferred entries take the closest stored chunk below them as parent."""
+    from concurrent.futures import Future
+    from vmlx_engine.dspark import session as S
+
+    tok = type("T", (), {"convert_tokens_to_ids": lambda self, t: -1})()
+    monkeypatch.setenv("VMLX_DSPARK_CHUNK_SNAPSHOT_EVERY", "16")
+    monkeypatch.setattr(S, "SSD", None)
+    assert [k for k, _ in S.snapshot_cuts(tok, list(range(50)), 0)] == []           # RAM-only: no chunk entries
+    monkeypatch.setattr(S, "SSD", object())
+    assert S.snapshot_cuts(tok, list(range(50)), 20) == [("chunk", 32), ("chunk", 48)]
+    stored = []
+
+    def fake_store(entry, parent=None):
+        stored.append((entry["cache_len"], parent and parent["len"]))
+        r = Future(); r.set_result({"durable": True})
+        r.vmlx_ssd_ref = {"sig": str(entry["cache_len"]), "len": entry["cache_len"], "depth": len(stored)}
+        return r
+
+    w = S.ChunkWriter({"len": 20, "sig": "resume"}, store_fn=fake_store)
+    for c in (32, 48):
+        w.put({"cache_len": c})
+    assert stored == [(32, 20), (48, 32)]                                            # chained, not all on the resume
+    assert w.parent_for(50, {"len": 20})["len"] == 48 and w.parent_for(30, {"len": 20})["len"] == 20

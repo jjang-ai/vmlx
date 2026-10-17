@@ -7306,10 +7306,18 @@ class MLXMultimodalLM:
             return active_delta if int(cut) >= int(media["media_end"]) else None
         cuts = _dsession.snapshot_cuts(tokenizer, prompt_ids, cache_len)
         snapshots = []
+        dchunks = _dsession.ChunkWriter(_dsession.ssd_parent(resume))
 
         def _on_snapshot(cut, cache, draft_caches):
             kind = next((k for k, c in cuts if c == cut), "boundary")
-            snapshots.append((kind, cut, _dsession.clone(cache, target.make_cache), _dsession.clone(draft_caches, _make_draft)))
+            t_cache, d_cache = _dsession.clone(cache, target.make_cache), _dsession.clone(draft_caches, _make_draft)
+            if kind == "chunk":
+                # stored now (not held to the end of the answer), chained on the previous chunk (dspark.session)
+                if t_cache is not None and d_cache is not None:
+                    dchunks.put({"kind": "chunk", "tokens": key_ids[:cut], "cache_len": int(cut), "target_cache": t_cache,
+                                 "draft_cache": d_cache, "model_key": model_key, "rope_delta": _entry_delta(cut)})
+                return
+            snapshots.append((kind, cut, t_cache, d_cache))
 
         session = {}
         ar_policy = (None if os.environ.get("VMLX_DSPARK_AR_FALLBACK", "1").strip().lower() in
@@ -7349,6 +7357,7 @@ class MLXMultimodalLM:
         parent = _dsession.ssd_parent(resume)
         for kind, cut, t_cache, d_cache in snapshots:
             if t_cache is not None and d_cache is not None:
+                parent = dchunks.parent_for(cut, parent)
                 receipt = _dsession.store({"kind": kind, "tokens": key_ids[:cut], "cache_len": int(cut),
                                            "target_cache": t_cache, "draft_cache": d_cache, "model_key": model_key,
                                            "rope_delta": _entry_delta(cut)},
@@ -7362,7 +7371,7 @@ class MLXMultimodalLM:
                                        "target_cache": session["target_cache"],
                                        "draft_cache": drafter.context_caches(), "model_key": model_key,
                                        "rope_delta": _entry_delta(len(forwarded))},
-                                      parent=parent)
+                                      parent=dchunks.parent_for(len(forwarded), parent))
         summary = stats.as_dict()
         if ar_policy is not None:
             logger.info("DSpark adaptive measured costs: %s ar_tokens=%d rounds=%d",
