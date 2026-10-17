@@ -996,6 +996,17 @@ def _stream_generate_resumable(
         return int(adapter.rope_delta) if int(cut) >= int(media.get("media_end", 0)) else None
     try:
         tic = time.perf_counter()
+        # VMLX_DFLASH2_PREFILL_TRACE=1 (diagnostic, off by default): per-phase prefill timings with a device sync between
+        # phases, one log line per request (follow-up turn after a partial hit ran 1.02 vs 0.28 s, 2026-10-17)
+        _ptrace = [] if os.environ.get("VMLX_DFLASH2_PREFILL_TRACE", "").strip() in {"1", "true", "on"} else None
+        _pt0 = [tic]
+
+        def _pmark(name):
+            if _ptrace is not None:
+                mx.synchronize()
+                _now = time.perf_counter()
+                _ptrace.append((name, round(1000 * (_now - _pt0[0]), 1)))
+                _pt0[0] = _now
         with mx.stream(runtime.generation_stream):
             hidden_limit = (
                 draft.config.sliding_window - 1
@@ -1024,8 +1035,11 @@ def _stream_generate_resumable(
                         prefill_step_size,
                     )
                     parts.append(h)
+                    _pmark(f"seg->{kind}@{cut}({cut - start})")
                     _shells = _clone_cache_shells(target_cache, lambda: runtime.make_prompt_cache(adapter))
+                    _pmark("clone")
                     _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, hidden_limit)
+                    _pmark("draft_state")
                     start = cut
                     if kind != "chunk":
                         snapshots.append((kind, cut, _shells, _dstate))
@@ -1047,6 +1061,7 @@ def _stream_generate_resumable(
                         pass
                     if getattr(_rc, "vmlx_ssd_ref", None) and (not _rc.done() or (_rc.result() or {}).get("durable")):
                         _stored_refs.append((int(cut), dict(_rc.vmlx_ssd_ref, receipt=_rc)))
+                    _pmark("chunk_store")
                 logits, h, _ = _prefill_last_logits(
                     runtime, adapter,
                     prompt_arr[start:],
@@ -1055,6 +1070,7 @@ def _stream_generate_resumable(
                     prefill_step_size,
                 )
                 parts.append(h)
+                _pmark(f"seg->end({int(prompt_arr.size) - start})")
                 hidden = mx.concatenate(parts, axis=1)
                 if hidden_limit is not None and hidden.shape[1] > hidden_limit:
                     hidden = hidden[:, -hidden_limit:]
@@ -1087,8 +1103,13 @@ def _stream_generate_resumable(
                 )
                 _rebase_drafter_cache(draft_cache, draft_offset)
                 draft_rebuild = (int(draft_offset), int(hidden.shape[1]))
+            _pmark("draft_splice_or_rebuild")
         mx.eval(logits, hidden)
+        _pmark("final_eval")
         prefill_elapsed = time.perf_counter() - tic
+        if _ptrace is not None:
+            logger.info("DFlash2 prefill trace: cached=%d prompt=%d total_ms=%.1f %s", cache_len, len(prompt_list),
+                        1000 * prefill_elapsed, " ".join(f"{k}={v}" for k, v in _ptrace))
         _prefill_usage = {
             "tokens": int(prompt_arr.size) - int(cache_len),
             "seconds": float(prefill_elapsed + _vision_seconds),
