@@ -21603,6 +21603,14 @@ async def create_chat_completion(
         # parsers (esp. Gemma 4 channel markers, Qwen 3.6 think tags) need the
         # special tokens that clean_output_text strips for display.
         _raw_for_parse = getattr(output, "raw_text", "") or output.text
+        if os.environ.get("VMLX_DEBUG_LOG_RAW_OUTPUT", "").strip().lower() in {"1", "true", "on", "yes"}:
+            # diagnostic only (off by default): the exact text the reasoning / tool parsers receive, to attribute a
+            # visible artifact to the model or to parsing (Super C23 "73197319", 2026-10-16: VLM logprobs are not
+            # implemented, so no other pre-parser record exists for media requests)
+            from .request_diagnostics import CURRENT_REQUEST_ID as _RAW_RID
+
+            logger.info("Raw model output for %s (pre-parser, think_in_prompt=%s): len=%d text=%r",
+                        _RAW_RID.get() or "-", _think_in_prompt_ns, len(_raw_for_parse), _raw_for_parse[:2000])
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
         _record_reasoning_token_usage(output, request_parser, engine.tokenizer)
         if _is_dsv4:
