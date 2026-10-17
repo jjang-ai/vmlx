@@ -857,6 +857,21 @@ def _quantize_model(
     )
 
 
+def _text_only_processor(model_path: Path, eos_token_ids):
+    """Processor for a text-only qwen4_exp bundle (no preprocessor_config.json): the tokenizer, with the chat template
+    and eos ids the MLLM path reads from a processor. Image/video inputs are refused by the model itself."""
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(str(model_path))
+    template = model_path / "chat_template.jinja"
+    if template.is_file() and not getattr(tok, "chat_template", None):
+        tok.chat_template = template.read_text()
+    if eos_token_ids is not None:
+        tok.eos_token_ids = eos_token_ids if isinstance(eos_token_ids, (list, tuple)) else [eos_token_ids]
+    tok.tokenizer = tok          # MLLM call sites read processor.tokenizer
+    return tok
+
+
 def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
     """Load qwen4_exp without ever adding its packed 51B PLE table to weights."""
     from mlx_vlm.utils import (
@@ -874,6 +889,10 @@ def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
     )
     model_class, _ = get_model_and_args(config)
     config.setdefault("text_config", config.pop("llm_config", {}))
+    # Text-only bundle (the 48 GB JANGHT build ships no vision tower): no `vision_config` in config.json. Same rule as
+    # vmlx-swift (`visionConfiguration` optional -> text-only). The wrapper still builds a default tower so the module
+    # tree matches upstream; it is removed below once the checkpoint confirms there are no vision weights.
+    declares_vision = "vision_config" in config
     config.setdefault("vision_config", {})
     model_config = model_class.ModelConfig.from_dict(config)
     model_config = update_module_configs(
@@ -888,6 +907,13 @@ def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
     if not (is_mlx_format or jang_runtime_sanitized):
         weights = model.sanitize(weights)
     weights = _normalize_runtime_weight_names(weights)
+    text_only = not declares_vision and not any(k.startswith("vision_tower.") for k in weights)
+    if text_only:
+        # strict=True below still covers every remaining parameter; only the declared-absent tower is dropped
+        model.pop("vision_tower")
+        logger.info("qwen4_exp: text-only bundle (no vision_config, no vision_tower.* weights): vision tower not built")
+    elif not declares_vision:
+        raise ValueError("qwen4_exp: checkpoint has vision_tower.* weights but config.json has no vision_config")
     if jangt_modules:
         from vmlx_engine.jangt.switch import normalize_jangt_payload
 
@@ -1014,14 +1040,17 @@ def load_qwen4_exp_vlm_model(model_path: str | Path, *, lazy: bool = False):
     # n-gram tables so cold prompts do not page-fault every new row from the
     # model drive (table_reader.FileBackedQuantizedNGramTable.start_page_cache_warm).
     table.start_page_cache_warm()
-    image_processor = load_image_processor(model_path)
-    processor = load_processor(
-        model_path,
-        True,
-        eos_token_ids=getattr(model.config, "eos_token_id", None),
-    )
-    if image_processor is not None:
-        processor.image_processor = image_processor
+    if text_only:
+        processor = _text_only_processor(model_path, getattr(model.config, "eos_token_id", None))
+    else:
+        image_processor = load_image_processor(model_path)
+        processor = load_processor(
+            model_path,
+            True,
+            eos_token_ids=getattr(model.config, "eos_token_id", None),
+        )
+        if image_processor is not None:
+            processor.image_processor = image_processor
     logger.info(
         "Loaded qwen4_exp with SSD-backed PLE (%s shards, MTP=%s, "
         "hyper_fused=%s, hyper_compiled=%s, hyper_dtype_normalized=%s/%s, "

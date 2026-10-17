@@ -890,6 +890,15 @@ def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bo
         if os.path.isfile(config_path):
             try:
                 model_config = json.loads(open(config_path).read())
+                # qwen4_exp has exactly one loader, the MLLM wrapper (models/qwen4_exp/loader.py), and it handles
+                # text-only bundles itself (no vision_config -> no tower). Routing a text-only qwen4_exp bundle to the
+                # text path would leave it with no loader at all. The advertised modalities still come from the
+                # bundle's capabilities stamp, not from this routing decision.
+                _mt = {str(model_config.get("model_type") or "").lower(),
+                       str((model_config.get("text_config") or {}).get("model_type") or "").lower()}
+                if _mt & {"qwen4_exp", "qwen4_exp_text"}:
+                    _logger.info("is_mllm_model(%s): tier=qwen4_exp_loader result=True", model_name)
+                    return True
                 # GH #251: explicit text-only marker wins over vision metadata.
                 if model_config.get("language_model_only") is True:
                     _logger.info(

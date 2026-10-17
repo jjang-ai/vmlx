@@ -38,6 +38,8 @@ class Model(Qwen3VLModel):
             self.language_model._rope_deltas = None
             return InputEmbeddingsFeatures(inputs_embeds=inputs_embeds)
 
+        if getattr(self, "vision_tower", None) is None:
+            raise ValueError("this qwen4_exp bundle is text-only (no vision tower): image/video input is not supported")
         dtype = self.vision_tower.patch_embed.proj.weight.dtype
         if pixel_values is not None:
             image_features = (
