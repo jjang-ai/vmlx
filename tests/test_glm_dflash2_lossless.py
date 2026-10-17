@@ -696,3 +696,50 @@ def test_adaptive_ar_cost_skips_a_single_stalled_burst():
     assert p.choose() == ("ar", 8)
     p.update_ar(0.090, 8)                                   # a re-probe is always taken: real increases land
     assert p.t_ar > 0.06
+
+
+class _SpreadDraft:
+    """A non-DFlash2DraftModel drafter with a spread q (fixed logits per slot) for the fallback sampled path."""
+
+    def __init__(self, block):
+        self.config, self.calls = _Cfg(block), 0
+        self.logits = mx.random.normal((1, block - 1, VOCAB), key=mx.random.key(5)) * 0.4
+
+    def make_cache(self):
+        return [_Cache()]
+
+    def bind(self, target):
+        return self
+
+    def __call__(self, block, hidden, cache, logits_start=1):
+        cache[0].offset += int(hidden.shape[1]) + block.shape[1]
+        return self.logits[:, : block.shape[1] - 1]
+
+
+def test_fallback_drafter_samples_its_drafts_from_q(monkeypatch):
+    """Rejection sampling is exact only when the drafts are DRAWN from the q it is given; the fallback branch took
+    the argmax (2026-10-16 audit). Spy on the rejection call: with a spread q the drafted tokens must not all be the
+    argmax of q, and the share of argmax drafts must be near the mean max-q."""
+    import dflash.model_mlx as DM
+
+    seen = []
+    real = DM._rejection_sample
+
+    def spy(d_tok, t_prob, d_prob, d_idx=None):
+        seen.append((np.array(d_tok[0]), np.array(mx.argmax(d_prob[0], axis=-1)), np.array(mx.max(d_prob[0], axis=-1))))
+        return real(d_tok, t_prob, d_prob, d_idx)
+
+    monkeypatch.setattr(DM, "_rejection_sample", spy)
+    model = _target(7)
+    target = GLMDFlashTarget(model, TAPS)
+    try:
+        mx.random.seed(0)
+        list(generate_dflash2(target, _SpreadDraft(4), list(range(5, 30)), 60, eos=set(), temperature=1.0))
+    finally:
+        target.close()
+    tok = np.concatenate([s[0] for s in seen]); top = np.concatenate([s[1] for s in seen])
+    qmax = np.concatenate([s[2] for s in seen])
+    share = float((tok == top).mean())
+    assert len(tok) >= 30 and share < 0.9, (len(tok), share)
+    assert abs(share - float(qmax.mean())) < 0.25, (share, float(qmax.mean()))
+

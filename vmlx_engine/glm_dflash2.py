@@ -1100,7 +1100,8 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
     A restore that already covers every image never runs the vision tower. Without per-item keys, prefixes are reused
     and stored only up to the first image."""
     import dflash.model_mlx as runtime
-    from dflash.model_mlx import DFlash2DraftModel, _rejection_sample, _sampling_probs, _trim_recent_cache, make_sampler
+    from dflash.model_mlx import (DFlash2DraftModel, _rejection_sample, _sample_probs, _sampling_probs,
+                                  _trim_recent_cache, make_sampler)
 
     sampler = make_sampler(temperature, top_p, top_k)
     bs0 = int(block_size or draft.config.block_size)
@@ -1258,7 +1259,10 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
                 dl = draft(block, hidden, dcache, logits_start=1)
                 d_idx = None
                 if temperature > 0:
-                    d_prob = _sampling_probs(dl, temperature, top_p, top_k); d_tok = mx.argmax(d_prob, axis=-1)
+                    # DRAW the drafts from q: rejection sampling is exact only for d ~ q. The argmax here (2026-10-16
+                    # audit) proposed a point mass while passing the full q, inflating acceptance min(1, p/q) toward
+                    # the drafter's top token (DFlash2DraftModel's selector, the production path, already samples)
+                    d_prob = _sampling_probs(dl, temperature, top_p, top_k); d_tok = _sample_probs(d_prob)
                 else:
                     d_prob = None; d_tok = mx.argmax(dl, axis=-1)
             if (trim_n := dcache[0].offset - (prompt.size + n - 1)) > 0:
