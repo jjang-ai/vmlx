@@ -743,3 +743,30 @@ def test_fallback_drafter_samples_its_drafts_from_q(monkeypatch):
     assert len(tok) >= 30 and share < 0.9, (len(tok), share)
     assert abs(share - float(qmax.mean())) < 0.25, (share, float(qmax.mean()))
 
+
+
+@pytest.mark.parametrize("gamma", [1, 3])
+def test_rejection_sample_with_candidate_indices_is_exact(gamma):
+    """The production selector path calls _rejection_sample with draft_indices (q over K candidates per slot). With the
+    drafts DRAWN from that sparse q, the first emitted token (accepted draft, residual or bonus) must follow the
+    target's p at that slot exactly. Synthetic p / q, so no model numerics; band = a perfect sampler's TV p99 x 1.25."""
+    from dflash.model_mlx import _rejection_sample
+
+    V, K, N = 32, 6, 6000
+    rng = np.random.default_rng(1)
+    p = rng.dirichlet(np.ones(V) * 0.5, size=gamma + 1).astype(np.float32)          # target rows (gamma + 1, V)
+    idx = np.stack([rng.choice(V, size=K, replace=False) for _ in range(gamma)])      # candidates per slot
+    q = rng.dirichlet(np.ones(K), size=gamma).astype(np.float32)                       # draft probs over candidates
+    tp, di, dq = mx.array(p[None]), mx.array(idx[None]), mx.array(q[None])
+    counts = np.zeros(V)
+    mx.random.seed(3)
+    for _ in range(N):
+        pick = [int(idx[s, rng.choice(K, p=q[s] / q[s].sum())]) for s in range(gamma)]
+        accepted, bonus = _rejection_sample(mx.array([pick]), tp, dq, di)
+        first = pick[0] if accepted >= 1 else bonus
+        counts[first] += 1
+    target = p[0].astype(np.float64) / p[0].sum()
+    tv = 0.5 * np.abs(counts / N - target).sum()
+    band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=target), minlength=V) / N - target).sum()
+                        for _ in range(40)], 0.99)
+    assert tv <= 1.25 * band, (tv, band)
