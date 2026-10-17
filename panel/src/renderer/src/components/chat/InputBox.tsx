@@ -69,6 +69,18 @@ function sizeLimitForKind(kind: AttachmentKind): number {
 
 /** A media file is refused at attach time only when the running engine ADVERTISES its modalities and that kind is
  * not among them (the server would answer the turn with a 400). Unknown or failed detection never restricts. */
+// Large text pastes bypass Chromium's textarea editing path. Measured 2026-10-17 in the dev app: a 370k-character
+// paste (an ~88k-token document) took 44-46 s through insertText (the path a real Cmd-V takes) and froze the
+// renderer, while setting the same value through React state is immediate. At or above this size the paste is
+// inserted at the selection through state (the browser's undo entry for that one paste is lost).
+export const LARGE_PASTE_CHARS = 20000
+
+export function insertPastedText(value: string, selStart: number, selEnd: number, text: string): { value: string, caret: number } {
+  const start = Math.max(0, Math.min(selStart, value.length))
+  const end = Math.max(start, Math.min(selEnd, value.length))
+  return { value: value.slice(0, start) + text + value.slice(end), caret: start + text.length }
+}
+
 export function attachmentAllowed(kind: AttachmentKind, modalities: string[] | null): boolean {
   if (kind === 'text' || !modalities || modalities.length === 0) return true
   const names = modalities.map(m => m.toLowerCase())
@@ -200,7 +212,17 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
     const mediaItems = Array.from(items).filter(i =>
       i.type.startsWith('image/') || i.type.startsWith('video/') || i.type.startsWith('audio/')
     )
-    if (mediaItems.length === 0) return
+    if (mediaItems.length === 0) {
+      const text = e.clipboardData?.getData('text/plain') || ''
+      const el = textareaRef.current
+      if (text.length >= LARGE_PASTE_CHARS && el) {
+        e.preventDefault()
+        const next = insertPastedText(el.value, el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length, text)
+        setMessage(next.value)
+        requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = next.caret })
+      }
+      return
+    }
     e.preventDefault()
     const files = mediaItems.map(item => item.getAsFile()).filter(Boolean) as File[]
     addFiles(files)
