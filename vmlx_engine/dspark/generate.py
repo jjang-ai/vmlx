@@ -107,6 +107,16 @@ class ARFallback:
         self.since_probe = 0
         self.rounds = 0
         self.probe = False                           # the next action must be a draft round
+        # AR-cost hygiene (cross-lane port of glm_dflash2.AdaptiveSpec d6d64762 / 3dec394f, 2026-10-17): once draft
+        # rounds win, nothing re-measured the AR step for the rest of the request (a 20-30k-token reasoning answer
+        # kept a one-step seed or one stalled burst); every ar_reprobe_rounds rounds an AR burst re-measures it and
+        # replaces most of the old value, and an ordinary sample above ar_outlier_ratio x the estimate is skipped.
+        # VMLX_DFLASH_AR_REPROBE_ROUNDS=0 restores the old behaviour (A/B).
+        self.ar_reprobe_rounds = int(os.environ.get("VMLX_DFLASH_AR_REPROBE_ROUNDS", "256"))
+        self.ar_outlier_ratio = 3.0
+        self.ar_outliers_skipped = 0
+        self.rounds_since_ar = 0
+        self._reprobe = False
 
     def next_is_ar(self) -> bool:
         if self.probe:
@@ -116,6 +126,11 @@ class ARFallback:
             return True
         if self.rounds >= 1 and self.ar_seconds is None:
             self.ar_left = 1                         # seed the AR cost once
+            return True
+        if self.ar_reprobe_rounds > 0 and self.ar_seconds is not None and self.rounds_since_ar >= self.ar_reprobe_rounds:
+            self.rounds_since_ar = 0
+            self._reprobe = True
+            self.ar_left = self.burst                # re-measure a possibly stale AR cost
             return True
         if self.draft_rate is not None and self.ar_seconds is not None \
                 and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin):
@@ -181,6 +196,7 @@ class ARFallback:
             prev = self.width_seconds.get(rows)
             self.width_seconds[rows] = seconds if prev is None else prev + self.alpha * (seconds - prev)
         self.rounds += 1
+        self.rounds_since_ar += 1
         self.since_probe = 0
         rate = tokens / max(seconds, 1e-9)
         self.draft_rate = rate if self.draft_rate is None else self.draft_rate + self.alpha * (rate - self.draft_rate)
@@ -202,7 +218,16 @@ class ARFallback:
 
     def record_ar_burst(self, steps: int, seconds: float) -> None:
         per_step = seconds / max(1, steps)
-        self.ar_seconds = per_step if self.ar_seconds is None else self.ar_seconds + self.alpha * (per_step - self.ar_seconds)
+        self.rounds_since_ar = 0
+        reprobe, self._reprobe = self._reprobe, False
+        if self.ar_seconds is None:
+            self.ar_seconds = per_step
+        elif reprobe:
+            self.ar_seconds = 0.3 * self.ar_seconds + 0.7 * per_step
+        elif self.ar_outlier_ratio > 0 and per_step > self.ar_outlier_ratio * self.ar_seconds:
+            self.ar_outliers_skipped += 1            # one stalled burst must not freeze the policy on drafting
+        else:
+            self.ar_seconds = self.ar_seconds + self.alpha * (per_step - self.ar_seconds)
         self.ar_left = max(0, self.ar_left - steps)
         self.since_probe += steps
         if self.since_probe >= self.probe_every:
