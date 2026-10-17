@@ -348,3 +348,46 @@ def test_partial_prefix_hit_restores_the_last_chunk_and_equals_ar(tmp_path, monk
     got = _run(tgt, drafter, b, 8, resume=resume)
     assert got == _run(tgt, drafter, b, 8, snapshot_cuts=[32], on_snapshot=lambda *_: None)
     tgt.close()
+
+
+def test_sampled_path_matches_the_target_distribution(tmp_path):
+    """Sampled DFlash (temperature 1, top-k 8; the random toy drafter is rejected ~87 % of the time, so the residual path
+    carries most tokens): the empirical marginals of the first three emitted tokens over seeded runs match the exact
+    target distribution, enumerated through the lane's OWN forwards (prompt prefill, then one 6-row verify-shaped
+    forward). Against a one-shot 1-row reference the toy model's 6-row vs 1-row rounding alone is TV ~0.03 (2026-10-16
+    probe), which is numerics, not the algorithm; that is why the reference uses the lane's row shapes."""
+    from dflash.model_mlx import _sampling_probs
+
+    K, N = 8, 2500
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(3).integers(0, V - 2, size=24).tolist()
+
+    def dist(rows=()):
+        cache = model.make_cache()
+        lg, _ = tgt.forward(prompt, cache, last_only=True)
+        if rows:
+            lg, _ = tgt.forward(list(rows) + [0] * (6 - len(rows)), cache)
+        row = lg[len(rows) - 1] if rows else lg[-1]
+        return np.array(_sampling_probs(row[None], 1.0, 1.0, K)[0].astype(mx.float32)).astype(np.float64)
+
+    p0 = dist()
+    p1, p2 = np.zeros(V), np.zeros(V)
+    for a in np.nonzero(p0)[0]:
+        pa = dist((int(a),)); p1 += p0[a] * pa
+        for b in np.nonzero(pa)[0]:
+            p2 += p0[a] * pa[b] * dist((int(a), int(b)))
+    emp = np.zeros((3, V))
+    for i in range(N):
+        mx.random.seed(1000 + i)
+        out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 3, set(), 1.0, 1.0, K, adaptive=False)
+               for t in new]
+        for j in range(3):
+            emp[j, out[j]] += 1
+    tgt.close()
+    rng = np.random.default_rng(0)
+    for j, p in enumerate((p0, p1, p2)):
+        p = p / p.sum()
+        tv = 0.5 * np.abs(emp[j] / N - p).sum()
+        band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=p), minlength=V) / N - p).sum()
+                            for _ in range(40)], 0.99)
+        assert tv <= 1.25 * band, (j, tv, band)
