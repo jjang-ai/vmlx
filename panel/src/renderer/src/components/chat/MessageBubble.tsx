@@ -45,6 +45,23 @@ interface MessageBubbleProps {
   onEdit?: (messageId: string, newContent: string) => void
 }
 
+// Language auto-detection (hljs.highlightAuto tries every grammar) is cosmetic, and on large untagged blocks it is the
+// whole render cost: a 370k-character pasted document (130 untagged blocks) took 2.3 s of blocking main thread, 99 % of
+// it highlightAuto (measured 2026-10-17). Untagged blocks above this size render as escaped plain text; tagged blocks
+// and small untagged ones still highlight. In USER messages untagged blocks are never auto-detected (pasted text; the
+// cap alone left 1.2 s on the same document, spread over its many small blocks).
+export const AUTO_HIGHLIGHT_MAX_CHARS = 4000
+
+export function escapeCodeHtml(code: string): string {
+  return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
+export function highlightCodeBlock(code: string, lang?: string, userContent = false): string {
+  if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value
+  if (userContent || code.length > AUTO_HIGHLIGHT_MAX_CHARS) return escapeCodeHtml(code)
+  return hljs.highlightAuto(code).value
+}
+
 // Custom renderer: wraps code blocks with a localized header bar.
 function parseMarkdown(
   markdown: string,
@@ -54,12 +71,7 @@ function parseMarkdown(
 ): string {
   const renderer = new marked.Renderer()
   renderer.code = (code, lang) => {
-  let highlighted: string
-  if (lang && hljs.getLanguage(lang)) {
-    highlighted = hljs.highlight(code, { language: lang }).value
-  } else {
-    highlighted = hljs.highlightAuto(code).value
-  }
+  const highlighted = highlightCodeBlock(code, lang, userContent)
   const headerHtml = `<div class="code-header"><span class="code-lang">${lang || defaultLanguage}</span><button class="code-copy-btn">${copyLabel}</button></div>`
   return `<div class="code-block-wrapper">${headerHtml}<pre><code class="hljs language-${lang || 'plaintext'}">${highlighted}</code></pre></div>`
   }
