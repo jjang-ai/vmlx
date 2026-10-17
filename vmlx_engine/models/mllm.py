@@ -7556,10 +7556,11 @@ class MLXMultimodalLM:
         accepted = list(st.accepted)
         _pol = (st.policy or {}).get("_policy")
         if _pol is not None:
-            logger.info("MiMo DFlash adaptive costs: t_ar_ms=%s t_round_ms=%s p=%s",
+            logger.info("MiMo DFlash adaptive costs: t_ar_ms=%s t_round_ms=%s p=%s ar_outliers_skipped=%s",
                         None if _pol.t_ar is None else round(1000 * _pol.t_ar, 2),
                         {b: round(1000 * t, 2) for b, t in sorted(_pol.t_round.items())},
-                        [round(_pol.p(i), 3) for i in range(1, _pol.bmax)])
+                        [round(_pol.p(i), 3) for i in range(1, _pol.bmax)],
+                        getattr(_pol, "ar_outliers_skipped", 0))
         tpr = (sum(accepted) + len(accepted)) / max(len(accepted), 1)
         spec = {"kind": "dflash2", "lane": "mimo" + ("-media" if has_media else ""), "cycles": len(accepted),
                 "emitted_per_cycle": round(tpr, 3),

@@ -675,7 +675,24 @@ def test_adaptive_ar_cost_ignores_cut_bursts_and_reprobes_stale_estimates():
     for _ in range(5):
         p.update_spec(3, 1, 0.064)
     mode, k = p.choose()
-    assert (mode, k) == ("ar", 4)                           # re-probe after 5 spec rounds
-    p.update_ar(0.025, 4)
+    assert (mode, k) == ("ar", 8)                           # re-probe after 5 spec rounds, normal burst length
+    p.update_ar(0.025, 8)
     assert abs(p.t_ar - (0.3 * 0.088 + 0.7 * 0.025)) < 1e-9 # re-probe replaces most of the stale value
     assert p.choose()[0] in ("ar", "spec") and p.rounds_since_ar == 0
+
+
+def test_adaptive_ar_cost_skips_a_single_stalled_burst():
+    """quality-v2 pilot 2026-10-16: t_ar 22 -> 88 ms in one blend (a ~2 s burst); then AR was never chosen again."""
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    p = AdaptiveSpec(8, ar_reprobe_rounds=4)
+    p.update_ar(0.022, 8)
+    p.update_ar(0.240, 8)                                   # stalled burst: skipped
+    assert abs(p.t_ar - 0.022) < 1e-9 and p.ar_outliers_skipped == 1
+    p.update_ar(0.030, 8)                                   # ordinary drift is blended
+    assert abs(p.t_ar - (0.7 * 0.022 + 0.3 * 0.030)) < 1e-9
+    for _ in range(4):
+        p.update_spec(3, 1, 0.064)
+    assert p.choose() == ("ar", 8)
+    p.update_ar(0.090, 8)                                   # a re-probe is always taken: real increases land
+    assert p.t_ar > 0.06

@@ -931,7 +931,8 @@ class AdaptiveSpec:
     def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
                  probe_every: int = 24, margin: float = 0.05, ar_burst: int = 8, slope: float = 0.22,
                  explore_every: int = 6, costs: dict | None = None, ar_reprobe_rounds: int | None = None,
-                 ar_reprobe_tokens: int = 4, ar_min_sample_tokens: int | None = None):
+                 ar_reprobe_tokens: int | None = None, ar_min_sample_tokens: int | None = None,
+                 ar_outlier_ratio: float = 3.0):
         self.bmax, self.bmin = int(bmax), int(bmin)
         self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
         self.n_try = [prior_n] * (self.bmax + 1)
@@ -951,14 +952,22 @@ class AdaptiveSpec:
         # so AR was never chosen again -- ar_tokens 0 on every 10-33k-token reasoning turn, where spec rounds were only
         # break-even). (1) a burst cut short by EOS / max_tokens pays two pipelined launches + a sync over 1-2 tokens,
         # 2-4x the real per-token cost: such bursts do not update t_ar; (2) once spec wins, nothing re-measured AR, so
-        # a stale (or context-drifted) t_ar lasted the life of the process: after ar_reprobe_rounds spec rounds a
-        # short AR burst re-measures it and replaces most of the old value.
+        # a stale (or context-drifted) t_ar lasted the life of the process: after ar_reprobe_rounds spec rounds an
+        # AR burst of the normal length re-measures it and replaces most of the old value (4-token probes read
+        # 27-32 ms against 21-27 for 8-token bursts in the 2026-10-16 A/B: launch overhead over fewer tokens);
+        # (3) the 88 ms itself came from ONE burst in one request (~240 ms per token, a ~2 s stall: t_ar 22 -> 88
+        # in a single 0.7/0.3 blend): an ordinary burst sample above ar_outlier_ratio x t_ar is not blended in.
+        # Re-probes are always taken, so a genuine increase still lands within ar_reprobe_rounds.
         # VMLX_DFLASH_AR_REPROBE_ROUNDS=0 / VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS=1 restore the old behaviour (A/B control)
         if ar_reprobe_rounds is None:
             ar_reprobe_rounds = int(os.environ.get("VMLX_DFLASH_AR_REPROBE_ROUNDS", "256"))
         if ar_min_sample_tokens is None:
             ar_min_sample_tokens = int(os.environ.get("VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS", "3"))
+        if ar_reprobe_tokens is None:
+            ar_reprobe_tokens = ar_burst
         self.ar_reprobe_rounds, self.ar_reprobe_tokens = int(ar_reprobe_rounds), int(ar_reprobe_tokens)
+        self.ar_outlier_ratio = float(ar_outlier_ratio)
+        self.ar_outliers_skipped = 0
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
         self.rounds_since_ar = 0
         self._reprobe_pending = False
@@ -1056,6 +1065,8 @@ class AdaptiveSpec:
                 return
         if self.t_ar is None:
             self.t_ar = dt_per_token
+        elif not reprobe and self.ar_outlier_ratio > 0 and dt_per_token > self.ar_outlier_ratio * self.t_ar:
+            self.ar_outliers_skipped += 1                # one stalled burst must not freeze the policy on spec
         elif reprobe:
             self.t_ar = 0.3 * self.t_ar + 0.7 * dt_per_token
         else:
