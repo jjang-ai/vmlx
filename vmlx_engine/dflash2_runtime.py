@@ -1349,7 +1349,7 @@ def _stream_generate_resumable(
                         mx.async_eval(nx, h)
                     else:
                         nx, h = launched
-                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted), requested=int(burst))
+                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted))
                 after_ar = True
                 hidden = mx.concatenate([hidden] + rows, axis=1)
                 if stop_matcher is None:
@@ -1695,18 +1695,15 @@ class _BlockChooser:
             )
         )
 
-    def observe_ar(self, seconds: float, tokens: int, requested: int | None = None) -> None:
-        """An AR burst: seconds per token, shared process-wide like the width costs. ``requested``: the planned burst
-        length; a burst that ended early (EOS / max_tokens) is not a cost sample (launches + sync over fewer tokens)."""
+    def observe_ar(self, seconds: float, tokens: int) -> None:
+        """An AR burst: seconds per token, shared process-wide like the width costs."""
         if seconds <= 0 or tokens <= 0:
             return
         self.ar_tokens += tokens
         self.ar_since_probe += tokens
         self.spec_since_ar = 0
         reprobe, self._reprobe_pending = self._reprobe_pending, False
-        if tokens < self.ar_min_sample_tokens or (requested is not None and tokens < int(requested)):
-            if reprobe:
-                self.spec_since_ar = self.ar_reprobe_cycles   # the re-measurement did not happen: re-probe next
+        if tokens < self.ar_min_sample_tokens:
             return                         # EOS / max_tokens-cut burst: launch overhead, not the AR cost
         warm = self.cost.setdefault("warm", set())
         if "ar" not in warm:

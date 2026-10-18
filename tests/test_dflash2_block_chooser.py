@@ -215,13 +215,3 @@ def test_stale_ar_cost_is_reprobed_and_a_stalled_burst_is_skipped(monkeypatch):
         else:
             c.observe(c.width, c.width, 0.098)
     assert "ar" in actions and shared["ar"] < 0.1
-
-
-def test_burst_cut_before_its_planned_length_is_not_an_ar_sample(monkeypatch):
-    shared = {}
-    c = _seeded(shared, 0.92)
-    _ar_burst(c)                                           # warm-up
-    c.observe_ar(0.0285 * 5, 5, requested=8)               # EOS after 5 of 8 tokens: not a sample
-    assert "ar" not in shared
-    c.observe_ar(0.020 * 8, 8, requested=8)
-    assert abs(shared["ar"] - 0.020) < 1e-9
