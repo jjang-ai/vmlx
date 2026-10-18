@@ -971,6 +971,30 @@ class AdaptiveSpec:
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
         self.rounds_since_ar = 0
         self._reprobe_pending = False
+        # Policy v2 (VMLX_DFLASH_POLICY_V2=1, 2026-10-18 release audit R21): (a) the AR step cost depends on the context
+        # (MiMo ~19.8 ms at 26 tokens vs ~21-22 ms at 6.8k), but one shared scalar measured on a long request was
+        # applied to short prose, so the policy never saw AR win there; v2 keeps it per context bucket (the caller sets
+        # ``context`` = cache positions before choose / update_ar) and falls back to the shared value for an unmeasured
+        # bucket. (b) on text where drafting loses, a forced draft round every probe_every AR tokens kept re-measuring
+        # acceptance (~4-5 % of prose decode); v2 doubles the interval each time a probe loses (cap 8x) and resets it
+        # when a probe wins, so text where drafting wins (all GLM prompts measured) never pays it.
+        self.policy_v2 = os.environ.get("VMLX_DFLASH_POLICY_V2", "0").strip().lower() in {"1", "true", "on", "yes"}
+        self.context = 0
+        self.probe_interval = int(probe_every)
+        self._probe_round = False
+
+    @staticmethod
+    def _ctx_bucket(context: int) -> int:
+        c = int(context)
+        return 0 if c < 2048 else 1 if c < 8192 else 2 if c < 32768 else 3
+
+    def _t_ar_now(self):
+        if self.policy_v2:
+            by = self._costs.get("ar_by_ctx") or {}
+            v = by.get(self._ctx_bucket(self.context))
+            if v is not None:
+                return v
+        return self.t_ar
 
     @property
     def t_ar(self):
@@ -1015,9 +1039,19 @@ class AdaptiveSpec:
             self._reprobe_pending = True
             return ("ar", self.ar_reprobe_tokens)
         spec_rate = self.expected(best) / self.cost(best)
+        t_ar = self._t_ar_now()
+        spec_wins = spec_rate * (1.0 + self.margin) >= 1.0 / t_ar
+        if self.policy_v2 and self._probe_round:
+            # the previous decision was a forced probe round: a lost probe backs the next one off, a won probe resets
+            self._probe_round = False
+            self.probe_interval = (int(self.probe_every) if spec_wins
+                                   else min(self.probe_interval * 2, 8 * int(self.probe_every)))
+        interval = self.probe_interval if self.policy_v2 else self.probe_every
         # hysteresis: AR only when it is estimated at least `margin` faster than the best block (round costs carry
         # read-back overhead that AR bursts hide; switching on a near-tie loses)
-        if spec_rate * (1.0 + self.margin) >= 1.0 / self.t_ar or self.ar_since_probe >= self.probe_every:
+        if spec_wins or self.ar_since_probe >= interval:
+            if self.policy_v2 and not spec_wins:
+                self._probe_round = True
             self.ar_since_probe = 0
             self.rounds_since_explore += 1
             if self.rounds_since_explore >= self.explore_every:
@@ -1063,6 +1097,14 @@ class AdaptiveSpec:
             if self.t_ar is None:
                 self.ar_since_probe = 0
                 return
+        if self.policy_v2:
+            by = self._costs.setdefault("ar_by_ctx", {})
+            k = self._ctx_bucket(self.context)
+            prev = by.get(k)
+            if prev is None:
+                by[k] = dt_per_token
+            elif reprobe or self.ar_outlier_ratio <= 0 or dt_per_token <= self.ar_outlier_ratio * prev:
+                by[k] = (0.3 * prev + 0.7 * dt_per_token) if reprobe else (0.7 * prev + 0.3 * dt_per_token)
         if self.t_ar is None:
             self.t_ar = dt_per_token
         elif not reprobe and self.ar_outlier_ratio > 0 and dt_per_token > self.ar_outlier_ratio * self.t_ar:
@@ -1227,6 +1269,8 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
 
         after_ar = False
         while n < max_tokens:
+            if policy is not None:
+                policy.context = int(prompt.size) + n          # cache positions (policy v2 context buckets)
             mode, b = policy.choose() if policy is not None else ("spec", bs0)
             if mode == "ar":
                 after_ar = True

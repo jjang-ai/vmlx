@@ -770,3 +770,61 @@ def test_rejection_sample_with_candidate_indices_is_exact(gamma):
     band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=target), minlength=V) / N - target).sum()
                         for _ in range(40)], 0.99)
     assert tv <= 1.25 * band, (tv, band)
+
+
+def test_policy_v2_keeps_the_ar_cost_per_context_bucket(monkeypatch):
+    """R21: one shared AR cost measured at 6.8k context (22 ms) was applied to 26-token prose (real ~19.8 ms)."""
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    monkeypatch.setenv("VMLX_DFLASH_POLICY_V2", "1")
+    p = AdaptiveSpec(8)
+    p.context = 6800
+    p.update_ar(0.022, 8)
+    p.context = 30
+    assert abs(p._t_ar_now() - 0.022) < 1e-9                 # unmeasured bucket: the shared value
+    p.update_ar(0.0198, 8)
+    assert abs(p._t_ar_now() - 0.0198) < 1e-9                # short context now has its own cost
+    p.context = 6800
+    assert abs(p._t_ar_now() - 0.022) < 1e-9
+    monkeypatch.setenv("VMLX_DFLASH_POLICY_V2", "0")
+    q = AdaptiveSpec(8)                                      # v1: one scalar, as before
+    q.context = 6800; q.update_ar(0.022, 8); q.context = 30
+    assert abs(q._t_ar_now() - 0.022) < 1e-9
+
+
+def test_policy_v2_backs_off_losing_probes_and_resets_on_a_win(monkeypatch):
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    monkeypatch.setenv("VMLX_DFLASH_POLICY_V2", "1")
+    p = AdaptiveSpec(4, probe_every=24, ar_reprobe_rounds=0)
+    p.update_ar(0.020, 8)
+    for _ in range(3):
+        p.update_spec(3, 0, 0.040)                           # prose: drafts rejected, AR wins
+    assert p.choose()[0] == "ar"
+    p.update_ar(0.020, 24)                                   # 24 AR tokens: a probe is due
+    assert p.choose()[0] == "spec" and p._probe_round
+    p.update_spec(3, 0, 0.040)                               # the probe loses
+    assert p.choose()[0] == "ar" and p.probe_interval == 48
+    p.update_ar(0.020, 24)
+    assert p.choose()[0] == "ar"                             # backed off: no probe at 24 AR tokens
+    p.update_ar(0.020, 24)
+    assert p.choose()[0] == "spec"                           # probe at 48
+    for _ in range(6):
+        p.update_spec(3, 2, 0.040)                           # text turned draftable: the probe wins
+    assert p.choose()[0] == "spec" and p.probe_interval == 24
+
+
+def test_policy_v1_probe_schedule_is_unchanged(monkeypatch):
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    monkeypatch.delenv("VMLX_DFLASH_POLICY_V2", raising=False)
+    p = AdaptiveSpec(4, probe_every=24, ar_reprobe_rounds=0)
+    p.update_ar(0.020, 8)
+    for _ in range(3):
+        p.update_spec(3, 0, 0.040)
+    assert p.choose()[0] == "ar"
+    for _ in range(4):
+        p.update_ar(0.020, 24)
+        assert p.choose()[0] == "spec"                       # probe every 24 AR tokens, never backed off
+        p.update_spec(3, 0, 0.040)
+        assert p.choose()[0] == "ar"

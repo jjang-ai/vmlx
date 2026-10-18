@@ -542,6 +542,8 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         if drafter is None:
             mode, b = "ar", AR_ONLY_BURST                  # drafter-less lane: every step AR, streamed per burst
         else:
+            if policy is not None:
+                policy.context = fwd                         # cache positions (policy v2 context buckets)
             mode, b = policy.choose() if policy is not None else ("spec", bs0)
         if mode == "ar":
             after_ar = True; ta = time.perf_counter(); new = []
