@@ -204,6 +204,41 @@ class TestImageCapabilities:
         caps = self._engine("Flux2Klein", ["seed", "prompt", "num_inference_steps", "height", "width", "guidance"]).capabilities()
         assert caps["negative_prompt"] is False and caps["variation_strength"] is False
 
+    @pytest.mark.parametrize("mclass,module_name", [
+        ("Flux2Klein", "mflux.models.flux2.variants.txt2img.flux2_klein"),
+        ("Flux2KleinEdit", "mflux.models.flux2.variants.edit.flux2_klein_edit"),
+    ])
+    def test_installed_klein_public_signature_excludes_negative_prompt(self, mclass, module_name):
+        import inspect
+        module = pytest.importorskip(module_name)
+        params = inspect.signature(getattr(module, mclass).generate_image).parameters
+        # The private CFG helper takes a negative prompt, but the public
+        # adapter fixes it to a blank string and exposes no such parameter.
+        assert "negative_prompt" not in params
+
+    @pytest.mark.parametrize("mclass", ["Flux2Klein", "Flux2KleinEdit"])
+    @pytest.mark.parametrize("negative", [None, "", "blurry"])
+    def test_klein_never_forwards_unsupported_negative_prompt(self, mclass, negative):
+        from PIL import Image
+        from types import SimpleNamespace
+        params = ["seed", "prompt", "num_inference_steps", "height", "width", "guidance"]
+        if mclass == "Flux2KleinEdit":
+            params.append("image_paths")
+        eng = self._engine(mclass, params)
+        eng._loaded = True
+        eng._generate_with_trace = MagicMock(return_value=(
+            SimpleNamespace(image=Image.new("RGB", (64, 64))), MagicMock(job_id="klein")))
+        args = dict(prompt="a blue bird", width=64, height=64, steps=1,
+                    seed=123, guidance=4, negative_prompt=negative)
+        if mclass == "Flux2KleinEdit":
+            eng.edit(image_path="source.png", **args)
+        else:
+            eng.generate(**args)
+        sent = eng._generate_with_trace.call_args.kwargs
+        assert "negative_prompt" not in sent
+        assert sent["guidance"] == 4 and sent["seed"] == 123
+        assert eng.capabilities()["negative_prompt"] is False
+
     def test_flux_signature_does_not_claim_unused_negative_prompt(self):
         caps = self._engine("Flux1", ["seed", "prompt", "negative_prompt", "image_path", "image_strength"]).capabilities()
         assert caps["negative_prompt"] is False
