@@ -20,6 +20,10 @@ All notable changes to vMLX Engine will be documented in this file.
 - Make rejected model tool output explicitly recoverable: Chat returns structured HTTP 422 or streaming error metadata with usage; Responses keeps an incomplete response that can be continued. Rejected tools are never executed and generation is not retried automatically.
 - Fix newly connected remote chats retaining the previous local session, so the first request uses the selected endpoint and saved model settings.
 - Require JANG 2.5.50 so clean installations include the Nemotron vision runtime used by the app.
+- Restore MiMo single-request serving with its bundled drafter disabled, including native media handling and SSD reuse across restarts.
+- Reduce MiMo draft-verification synchronization and use confidence-based draft cuts for greedy requests; sampled requests keep their existing policy. Preserve string-typed GLM tool arguments exactly.
+- Explain when changing tools or thinking can invalidate a long chat’s prefix cache. Label tool-loop prompt counts as summed usage, and report session-switch persistence failures accurately.
+- Freeze packaged runtime dependency versions and exclude incompatible Pillow 13 from ordinary pip installs.
 
 ## [1.6.79] - 2026-10-14
 
