@@ -5928,6 +5928,26 @@ class BlockAwarePrefixCache:
             # covered — a bare mx.synchronize() handles both.
             mx.synchronize()
             self._store_phase_mark("sync")
+            # External-companion hybrids store only positional KV here. Form
+            # their BF16 bit views together so importing each layer into NumPy
+            # does not submit a separate materialization/synchronization.
+            bf16_views = {}
+            if not store_cumulative_state:
+                for idx, layer_state in enumerate(cache_data):
+                    if layer_state.get("class_name") not in ("KVCache", "RotatingKVCache"):
+                        continue
+                    state = layer_state.get("state")
+                    if not isinstance(state, (tuple, list)) or len(state) != 2:
+                        continue
+                    keys, values = state
+                    if isinstance(keys, (tuple, list)) or not all(
+                        hasattr(value, "dtype") for value in (keys, values)
+                    ):
+                        continue
+                    if keys.dtype == mx.bfloat16 and values.dtype == mx.bfloat16:
+                        bf16_views[idx] = (keys.view(mx.uint16), values.view(mx.uint16))
+                if bf16_views:
+                    mx.eval(list(bf16_views.values()))
             for idx, layer_state in enumerate(cache_data):
                 cls = layer_state.get("class_name", "")
                 if _is_zaya_cca_cache_list_state(layer_state):
@@ -5999,9 +6019,12 @@ class BlockAwarePrefixCache:
                             # again on each tool-continuation store even when it
                             # adds one block.
                             if hasattr(k_np, 'dtype') and 'bfloat16' in str(k_np.dtype):
-                                k_np = k_np.view(mx.uint16)
-                                v_np = v_np.view(mx.uint16)
-                                mx.eval(k_np, v_np)
+                                if idx in bf16_views:
+                                    k_np, v_np = bf16_views[idx]
+                                else:
+                                    k_np = k_np.view(mx.uint16)
+                                    v_np = v_np.view(mx.uint16)
+                                    mx.eval(k_np, v_np)
                                 encoding = _BF16_BITS
                             np_sources[idx] = (
                                 _readonly_numpy_buffer_view(k_np),
@@ -6011,6 +6034,7 @@ class BlockAwarePrefixCache:
                             )
                     except Exception as _npe:
                         logger.debug(f"np_sources skip layer {idx}: {_npe}")
+            bf16_views.clear()  # the NumPy views now own their buffer references
 
         if disk_store is not None:
             logger.debug(
@@ -6024,8 +6048,9 @@ class BlockAwarePrefixCache:
         # copy of every block only to read its entry tags and discard it --
         # including each terminal block's full sliding windows on mixed-SWA
         # models. Build the mirror slice once and use it for both. Any other
-        # layer type (SSM/cumulative, CacheList, quantized, TQ, M3, DSV4, ZAYA)
-        # keeps the typed extractor, whose output those paths persist.
+        # ArraysCache layers owned by an external companion emit only skip
+        # entries and need no second payload either. Other native layer types
+        # and cumulative state stored in the block keep the typed extractor.
         np_only_store = bool(
             is_tensor_data
             and HAS_MLX
@@ -6041,9 +6066,17 @@ class BlockAwarePrefixCache:
             and cache_data
             and all(
                 isinstance(layer_state, dict)
-                and layer_state.get("class_name") in ("KVCache", "RotatingKVCache")
                 and not layer_state.get("dsv4_block_records")
-                and idx in np_sources
+                and (
+                    (
+                        layer_state.get("class_name") in ("KVCache", "RotatingKVCache")
+                        and idx in np_sources
+                    )
+                    or (
+                        not store_cumulative_state
+                        and layer_state.get("class_name") == "ArraysCache"
+                    )
+                )
                 for idx, layer_state in enumerate(cache_data)
             )
         )
