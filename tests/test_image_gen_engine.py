@@ -52,7 +52,7 @@ class TestImageGuidanceDefaults:
         source = (Path(mod.__file__).resolve().parents[1] /
                   "panel/src/shared/imageModels.ts").read_text()
         rows = re.findall(r"steps: ([\d.]+),\s+guidance: ([\d.]+),[\s\S]*?mfluxName: '([^']+)'", source)
-        assert len(rows) == 11
+        assert len(rows) == 12
         for steps, guidance, name in rows:
             assert mod.DEFAULT_STEPS[name] == int(steps)
             assert mod.DEFAULT_GUIDANCE[name] == float(guidance)

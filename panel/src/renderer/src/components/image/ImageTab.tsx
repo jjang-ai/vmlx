@@ -1,3 +1,4 @@
+import { imageNativePreset } from '../../../../shared/imageCapabilities'
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from '../../i18n'
 import { ImageModelPicker } from './ImageModelPicker'
@@ -575,6 +576,7 @@ export function ImageTab() {
           quantize: s.quantize,
           serverPort
         }
+        genParams.preset = imageNativePreset(capabilities, s.steps)
         // img2img: pass source image + strength when user uploaded an image in gen mode
         if (sourceImage) {
           genParams.imageBase64 = sourceImage.dataUrl
@@ -594,7 +596,7 @@ export function ImageTab() {
     } finally {
       if (submissionGuard.current.finish(owner)) setGenerating(false)
     }
-  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, settingsOwner, sessionMode, sourceImage, maskBase64, loadSessions, loadGenerations])
+  }, [capabilities, serverPort, serverStatus, selectedModel, currentSessionId, settings, settingsOwner, sessionMode, sourceImage, maskBase64, loadSessions, loadGenerations])
 
   const handleStop = useCallback(async () => {
     try {
@@ -803,7 +805,7 @@ export function ImageTab() {
             startTime={jobStartTime}
             cancelling={cancelling}
             mode={sessions.find(session => session.id === currentSessionId)?.sessionType ?? sessionMode}
-            onRegenerate={async (gen) => {
+            onRegenerate={capabilities?.mflux_class === 'Ideogram4' ? undefined : async (gen) => {
               // Iterate: set the output image as source for img2img
               // Read the generated image and set as source
               try {

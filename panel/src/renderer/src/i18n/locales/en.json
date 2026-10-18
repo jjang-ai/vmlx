@@ -1945,7 +1945,12 @@
       "capNo": "no",
       "capRequired": "required",
       "capVariationOnly": "variations only",
-      "capSingle": "one per request"
+      "capSingle": "one per request",
+      "presetFast": "Fast · 12 steps",
+      "presetBalanced": "Balanced · 20 steps",
+      "presetQuality": "Quality · 48 steps",
+      "presetGuidance": "The preset controls guidance throughout generation.",
+      "ideogramCaption": "Ideogram works best with a structured JSON caption; plain text is also accepted."
     },
     "topbar": {
       "historyTitle": "Show history",

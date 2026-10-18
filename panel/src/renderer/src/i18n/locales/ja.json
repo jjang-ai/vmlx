@@ -1945,7 +1945,12 @@
       "capNo": "なし",
       "capRequired": "必須",
       "capVariationOnly": "バリエーションのみ",
-      "capSingle": "1リクエストにつき1枚"
+      "capSingle": "1リクエストにつき1枚",
+      "presetFast": "高速 · 12ステップ",
+      "presetBalanced": "バランス · 20ステップ",
+      "presetQuality": "高品質 · 48ステップ",
+      "presetGuidance": "生成中のガイダンスはプリセットで制御されます。",
+      "ideogramCaption": "Ideogramには構造化JSONキャプションが適しています。通常のテキストも使用できます。"
     },
     "topbar": {
       "historyTitle": "履歴を表示",

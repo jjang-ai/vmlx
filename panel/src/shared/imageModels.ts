@@ -64,6 +64,14 @@ export interface ImageModelDef {
  */
 export const IMAGE_MODELS: ImageModelDef[] = [
   {
+    id: 'ideogram-4', name: 'Ideogram 4',
+    desc: 'Typography and structured JSON captions; native sampler presets',
+    category: 'generate', steps: 20, guidance: 7.0, size: '~14-28 GB',
+    quantizeOptions: [0], repoMap: { 0: 'ideogram-ai/ideogram-4-fp8' },
+    tier: 'medium', mfluxClass: 'Ideogram4', mfluxName: 'ideogram-4-fp8',
+    supportsImg2Img: false,
+  },
+  {
     id: 'qwen-image-2.1', name: 'Qwen Image 2.1',
     desc: 'Generation and reference editing (40 steps)',
     category: 'generate', supportedModes: ['generate', 'edit'],

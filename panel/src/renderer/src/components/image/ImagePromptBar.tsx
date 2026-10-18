@@ -59,6 +59,7 @@ interface ImagePromptBarProps {
 
 export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, cancelling, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
+  const nativePreset = capabilities?.mflux_class === 'Ideogram4'
   const [dragOver, setDragOver] = useState(false)
   const [showMaskPainter, setShowMaskPainter] = useState(false)
   const [cancelRequested, setCancelRequested] = useState(false)
@@ -235,15 +236,23 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
         </div>
       ) : null}
 
+      {nativePreset && <p className="text-xs text-muted-foreground mb-2">{t('image.settings.presetGuidance')} {t('image.settings.ideogramCaption')}</p>}
       {/* Quick settings row */}
       <div className="flex items-center gap-4 mb-2 text-xs">
         <div className="flex items-center gap-1">
           <label className="text-muted-foreground">{t('image.prompt.steps')}</label>
           <Help tip={t('image.prompt.stepsTip')} />
+          {nativePreset ? <select data-vmlx-control="image-native-preset" value={settings.steps}
+            onChange={(e) => onSettingsChange({ ...settings, steps: Number(e.target.value) })} className="bg-background border border-input rounded text-xs">
+            <option value={12}>{t('image.settings.presetFast')}</option>
+            <option value={20}>{t('image.settings.presetBalanced')}</option>
+            <option value={48}>{t('image.settings.presetQuality')}</option>
+          </select> : (
           <input type="number" value={settings.steps}
             onChange={(e) => onSettingsChange({ ...settings, steps: Math.max(1, Math.min(100, parseInt(e.target.value) || 1)) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
             min={1} max={100} />
+          )}
         </div>
         <div className="flex items-center gap-1">
           <label className="text-muted-foreground">{t('image.prompt.size')}</label>
@@ -258,8 +267,8 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
           <label className="text-muted-foreground">{t('image.prompt.guidance')}</label>
           <Help tip={t('image.prompt.guidanceTip')} />
           <input type="number" value={settings.guidance} data-vmlx-control="image-guidance-quick"
-            disabled={capabilities?.guidance === false}
-            title={capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
+            disabled={nativePreset || capabilities?.guidance === false}
+            title={nativePreset ? t('image.settings.presetGuidance') : capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
             onChange={(e) => onSettingsChange({ ...settings, guidance: imageGuidanceFromInput(e.target.value) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
             min={0} step={0.5} />

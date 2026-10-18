@@ -1945,7 +1945,12 @@
       "capNo": "否",
       "capRequired": "必需",
       "capVariationOnly": "仅变体",
-      "capSingle": "每次请求一张"
+      "capSingle": "每次请求一张",
+      "presetFast": "快速 · 12步",
+      "presetBalanced": "均衡 · 20步",
+      "presetQuality": "高质量 · 48步",
+      "presetGuidance": "预设控制整个生成过程中的引导强度。",
+      "ideogramCaption": "Ideogram 最适合结构化 JSON 描述，也支持纯文本。"
     },
     "topbar": {
       "historyTitle": "显示历史",

@@ -19554,7 +19554,7 @@ def _validate_image_request_parameters(body: Any) -> None:
     """
     if not isinstance(body, dict):
         raise HTTPException(400, detail="Invalid request body: object required")
-    for key in ("prompt", "model", "size", "image", "mask", "negative_prompt", "model_path"):
+    for key in ("prompt", "model", "size", "image", "mask", "negative_prompt", "model_path", "preset"):
         value = body.get(key)
         if value is not None and not isinstance(value, str):
             raise HTTPException(400, detail=f"{key} must be a string")
@@ -19790,6 +19790,7 @@ async def create_image(request: Request):
                 try:
                     result = await _run_image_gen_call(
                         _image_gen.generate,
+                        **({"preset": body["preset"]} if body.get("preset") is not None else {}),
                         prompt=prompt,
                         width=width,
                         height=height,
@@ -19875,6 +19876,8 @@ async def create_image_edit(request: Request):
 
     body = await _parse_image_edit_request_body(request)
     _validate_image_request_parameters(body)
+    if body.get("preset") is not None:
+        raise HTTPException(400, detail="preset is supported only for Ideogram image generation, not editing")
 
     from pathlib import Path
     import shutil

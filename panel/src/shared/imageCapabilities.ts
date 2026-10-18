@@ -62,3 +62,15 @@ export function imageRuntimeSnapshot(body: unknown): { status: ImageServerStatus
     ? { status: 'running', capabilities: image }
     : { status: 'error', capabilities: null }
 }
+
+/** The UI offers native Ideogram schedules. Stored steps uniquely identify
+ * these three presets; custom API steps remain a separate native mode. */
+export const IDEOGRAM_PRESETS: Record<number, string> = {
+  12: 'V4_TURBO_12', 20: 'V4_DEFAULT_20', 48: 'V4_QUALITY_48',
+}
+export function imageNativePreset(capabilities: ImageCapabilities | null | undefined, steps: number): string | undefined {
+  if (capabilities?.mflux_class !== 'Ideogram4') return undefined
+  const preset = IDEOGRAM_PRESETS[steps]
+  if (!preset) throw new Error('Select an Ideogram native sampler preset')
+  return preset
+}

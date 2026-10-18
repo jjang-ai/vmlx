@@ -1945,7 +1945,12 @@
       "capNo": "아니요",
       "capRequired": "필수",
       "capVariationOnly": "변형만",
-      "capSingle": "요청당 1장"
+      "capSingle": "요청당 1장",
+      "presetFast": "빠르게 · 12단계",
+      "presetBalanced": "균형 · 20단계",
+      "presetQuality": "고품질 · 48단계",
+      "presetGuidance": "프리셋이 생성 과정의 가이던스를 제어합니다.",
+      "ideogramCaption": "Ideogram은 구조화된 JSON 설명에 최적화되어 있으며 일반 텍스트도 사용할 수 있습니다."
     },
     "topbar": {
       "historyTitle": "기록 표시",

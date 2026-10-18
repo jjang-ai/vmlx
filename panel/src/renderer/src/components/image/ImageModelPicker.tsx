@@ -164,6 +164,7 @@ export function ImageModelPicker({ onSelect, currentModel, onKeepCurrent }: Imag
                     <option value="Flux1Fill">{t('image.picker.classFlux1Fill')}</option>
                     <option value="Flux2KleinEdit">{t('image.picker.classFlux2KleinEdit')}</option>
                     <option value="FIBO">{t('image.picker.classFIBO')}</option>
+                    <option value="Ideogram4">Ideogram 4</option>
                     <option value="SeedVR2">{t('image.picker.classSeedVR2')}</option>
                   </select>
                 </div>

@@ -311,6 +311,7 @@ export function registerImageHandlers(): void {
     count: number
     quantize?: number
     serverPort: number
+    preset?: string        // Native sampler; mutually exclusive with numeric controls on the wire
     imageBase64?: string    // Source image for img2img (optional)
     strength?: number       // img2img strength (0-1, optional)
   }) => {
@@ -339,6 +340,11 @@ export function registerImageHandlers(): void {
         guidance,
         n: count,
         response_format: 'b64_json'
+      }
+      if (params.preset) {
+        body.preset = params.preset
+        delete body.steps
+        delete body.guidance
       }
       if (negativePrompt) body.negative_prompt = negativePrompt
       if (seed != null) body.seed = seed

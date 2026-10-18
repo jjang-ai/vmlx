@@ -35,6 +35,7 @@ const SIZE_PRESETS = [
 
 export function ImageSettings({ settings, onChange, model, mode, capabilities }: ImageSettingsProps) {
   const { t } = useTranslation()
+  const nativePreset = capabilities?.mflux_class === 'Ideogram4'
   const isEdit = mode === 'edit'
   // Only claim a control is effective when the loaded model takes it.
   const strengthUnused = isEdit && capabilities?.edit_strength === false
@@ -61,11 +62,18 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
         {isEdit ? t('image.settings.editSettings') : t('image.settings.generationSettings')}
       </h3>
 
+      {nativePreset && <p className="text-xs text-muted-foreground mb-2">{t('image.settings.presetGuidance')} {t('image.settings.ideogramCaption')}</p>}
       {/* Standard Settings */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
         {/* Steps */}
         <div>
           <label className="text-xs text-muted-foreground block mb-1" title={t('image.settings.stepsTitle')}>{t('image.settings.steps')} &#9432;</label>
+          {nativePreset ? <select data-vmlx-control="image-native-preset" value={settings.steps}
+            onChange={(e) => update('steps', Number(e.target.value))} className="bg-background border border-input rounded text-xs">
+            <option value={12}>{t('image.settings.presetFast')}</option>
+            <option value={20}>{t('image.settings.presetBalanced')}</option>
+            <option value={48}>{t('image.settings.presetQuality')}</option>
+          </select> : (
           <input
             type="number"
             value={settings.steps}
@@ -74,6 +82,7 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
             min={1}
             max={100}
           />
+          )}
         </div>
 
         {/* Size */}
@@ -100,8 +109,8 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
             type="number"
             value={settings.guidance}
             data-vmlx-control="image-guidance-settings"
-            disabled={capabilities?.guidance === false}
-            title={capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
+            disabled={nativePreset || capabilities?.guidance === false}
+            title={nativePreset ? t('image.settings.presetGuidance') : capabilities?.guidance === false ? t('image.settings.guidanceUnused') : undefined}
             onChange={(e) => update('guidance', imageGuidanceFromInput(e.target.value))}
             className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
             min={0}

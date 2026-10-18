@@ -1553,3 +1553,24 @@ class TestImageParameterTypes:
         response = await client.post('/v1/images/generations', content=body,
                                      headers={'Content-Type': 'application/json'})
         assert response.status_code == 400
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('extra', [{}, {'preset':'V4_TURBO_12'}, {'steps':9,'guidance':0}])
+async def test_ideogram_generation_transport_preserves_native_controls(client, monkeypatch, extra):
+    import vmlx_engine.server as srv
+    generate=MagicMock(return_value=SimpleNamespace(b64_json='AAAA',seed=42))
+    engine=SimpleNamespace(is_loaded=True,model_name='ideogram-4-fp8',_model_path='/test/ideogram',
+        _mflux_class='Ideogram4',generate=generate,capabilities=lambda:{'guidance':True,'negative_prompt':False})
+    for key,value in dict(_image_gen=engine,_image_gen_lock=None,_standby_state=None,
+        _model_path='/test/ideogram',_model_name='ideogram-4-fp8',_served_model_name='ideogram-4-fp8').items():
+        monkeypatch.setattr(srv,key,value)
+    response=await client.post('/v1/images/generations',json={'prompt':'{"high_level_description":"A teapot"}','size':'512x512',**extra})
+    assert response.status_code==200,response.text
+    sent=generate.call_args.kwargs
+    assert sent['steps']==extra.get('steps') and sent['guidance']==extra.get('guidance')
+    assert sent.get('preset')==extra.get('preset')
+
+@pytest.mark.anyio
+async def test_native_preset_is_not_silently_ignored_on_edit(client):
+    response=await client.post('/v1/images/edits',json={'prompt':'caption','image':'unused','preset':'V4_DEFAULT_20'})
+    assert response.status_code==400 and 'not editing' in response.json()['detail']

@@ -46,11 +46,13 @@ MODEL_CLASS_MAP: dict[str, tuple[str, str]] = {
     "QwenImage21Edit": ("mflux.models.qwen21.variants.edit.qwen_image_21_edit", "QwenImage21Edit"),
     "Flux1Kontext": ("mflux.models.flux.variants.kontext.flux_kontext", "Flux1Kontext"),
     "Flux1Fill": ("mflux.models.flux.variants.fill.flux_fill", "Flux1Fill"),
+    "Ideogram4": ("mflux.models.ideogram4.variants.txt2img.ideogram4", "Ideogram4"),
     "SeedVR2": ("mflux.models.seedvr2.variants.upscale.seedvr2", "SeedVR2"),
 }
 
 # Default inference steps per mflux canonical name
 DEFAULT_STEPS: dict[str, int] = {
+    "ideogram-4-fp8": 20,
     "schnell": 4,
     "dev": 20,
     "z-image": 20,
@@ -76,6 +78,7 @@ DEFAULT_STEPS: dict[str, int] = {
 # test checks the two language surfaces. Resolve by loaded canonical identity,
 # never by a caller's alias or quant-folder basename. Explicit values win.
 DEFAULT_GUIDANCE: dict[str, float] = {
+    "ideogram-4-fp8": 7.0,
     "schnell": 0.0,
     "dev": 3.5,
     "z-image-turbo": 1.0,
@@ -91,6 +94,9 @@ DEFAULT_GUIDANCE: dict[str, float] = {
 
 # Legacy name aliases (kept for backward compat with CLI and stored configs)
 SUPPORTED_MODELS: dict[str, str] = {
+    "ideogram-4": "ideogram-4-fp8",
+    "ideogram-4-fp8": "ideogram-4-fp8",
+    "ideogram4": "ideogram-4-fp8",
     "schnell": "schnell",
     "dev": "dev",
     "z-image": "z-image",
@@ -141,6 +147,7 @@ EDIT_MODELS: dict[str, str] = {
 
 # Map mflux canonical name -> mfluxClass (for legacy load paths that don't pass mflux_class)
 _NAME_TO_CLASS: dict[str, str] = {
+    "ideogram-4-fp8": "Ideogram4",
     "schnell": "Flux1",
     "dev": "Flux1",
     "z-image": "ZImage",
@@ -737,6 +744,7 @@ class ImageGenEngine:
         negative_prompt: str | None = None,
         image_path: str | None = None,
         image_strength: float | None = None,
+        preset: str | None = None,
     ) -> ImageGenResult:
         """Generate an image from a text prompt, optionally using a source image (img2img).
 
@@ -766,6 +774,24 @@ class ImageGenEngine:
                 "image generation cancelled before start (cancel() was called)"
             )
 
+        native_ideogram = self._mflux_class == "Ideogram4"
+        ideogram_presets = {"V4_DEFAULT_20": 20, "V4_TURBO_12": 12, "V4_QUALITY_48": 48}
+        if preset is not None:
+            if not native_ideogram or preset not in ideogram_presets:
+                raise ValueError("preset must name a supported Ideogram 4 sampler")
+            if steps is not None or guidance is not None:
+                raise ValueError("preset cannot be combined with steps or guidance; omit preset for custom controls")
+        # Native presets contain per-step guidance, not just a step count.
+        native_steps, native_guidance = steps, guidance
+        if native_ideogram:
+            if guidance is not None and steps is None:
+                raise ValueError("Ideogram custom guidance requires explicit steps; omit both for the native preset")
+            if width < 256 or height < 256 or width > 2048 or height > 2048 or width % 16 or height % 16:
+                raise ValueError("Ideogram dimensions must be multiples of 16 between 256 and 2048")
+            if image_path is not None:
+                raise ValueError("Ideogram 4 does not support image-to-image")
+            if steps is None:
+                steps = ideogram_presets[preset or "V4_DEFAULT_20"]
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
         if guidance is None:
@@ -781,7 +807,7 @@ class ImageGenEngine:
         # it on an edit-only class (QwenImageEdit / Flux1Kontext / Flux1Fill /
         # Flux2KleinEdit) surfaces as a deep mflux TypeError ("unexpected
         # keyword argument 'image_path'"). Fail fast with a clear message.
-        _gen_mclasses = {"Flux1", "Flux2Klein", "ZImage", "FIBO", "QwenImage", "QwenImage21Edit"}
+        _gen_mclasses = {"Flux1", "Flux2Klein", "ZImage", "FIBO", "QwenImage", "QwenImage21Edit", "Ideogram4"}
         if self._mflux_class and self._mflux_class not in _gen_mclasses:
             raise ValueError(
                 f"Model '{self._model_name}' (class={self._mflux_class}) is an "
@@ -800,7 +826,8 @@ class ImageGenEngine:
         )
         logger.info(
             f"{'img2img' if is_img2img else 'txt2img'}: {width}x{height}, {steps} steps, "
-            f"guidance={guidance}, seed={seed}, negative_prompt={negative_disposition}"
+            f"guidance={'native-schedule' if native_ideogram and native_steps is None else guidance}, "
+            f"seed={seed}, negative_prompt={negative_disposition}"
             + (f", strength={image_strength}" if is_img2img else "")
         )
         start = time.perf_counter()
@@ -813,6 +840,16 @@ class ImageGenEngine:
             width=width,
             guidance=guidance,
         )
+        if native_ideogram:
+            kwargs.update(num_inference_steps=native_steps, guidance=native_guidance, preset=preset)
+            # Native text features include image positions and can be large.
+            # Retain the current prompt/size for repeated seeds, not every
+            # historical prompt forever. No global allocator flush or re-encode
+            # for unchanged inputs.
+            cache_key = (prompt, width, height)
+            if getattr(self, "_ideogram_prompt_key", None) != cache_key:
+                self._model.prompt_cache.clear()
+                self._ideogram_prompt_key = cache_key
         # Not all models accept negative_prompt (Klein doesn't)
         if negative_prompt is not None and negative_supported:
             kwargs["negative_prompt"] = negative_prompt

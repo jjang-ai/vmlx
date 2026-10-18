@@ -84,3 +84,17 @@ describe('image presentation follows task capabilities', () => {
     }
   }
 })
+
+it('shows native Ideogram presets and disables constant guidance in both control surfaces', () => {
+  const caps: ImageCapabilities = {loaded: true, mflux_class:'Ideogram4', mode:'generate', variation_strength:false, negative_prompt:false}
+  const quick = prompt('renamed-q4', caps)
+  const full = renderToStaticMarkup(React.createElement(ImageSettings, {model:'renamed-q4',mode:'generate', capabilities:caps, onChange:noop,
+    settings:{steps:20,guidance:7,width:512,height:512,negativePrompt:'',count:1,quantize:4,strength:.8}}))
+  for (const html of [quick, full]) {
+    expect(html).toContain('data-vmlx-control="image-native-preset"')
+    expect(html).toContain('image.settings.presetGuidance')
+    expect(html).toContain('image.settings.ideogramCaption')
+    const input = html.match(/<input[^>]*data-vmlx-control="image-guidance-[^"]+"[^>]*>/)![0]
+    expect(input).toContain('disabled=""')
+  }
+})
