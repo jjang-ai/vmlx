@@ -96,11 +96,15 @@ def chunk_cuts(cache_len: int, upper: int, every: int) -> list:
 
 
 def snapshot_cuts(tokenizer: Any, prompt: list, cache_len: int) -> list:
-    from .dspark.session import snapshot_cuts as _cuts
+    from .dflash2_runtime import _assistant_tag_cut, _system_block_cuts
 
     if not reuse_enabled():
         return []
-    cuts = _cuts(tokenizer, prompt, cache_len)
+    # Share token-boundary detection, not DSpark's reuse switch, SSD state,
+    # or chunk interval. Each lane owns those policies independently.
+    boundary = _assistant_tag_cut(tokenizer, prompt, cache_len)
+    systems = [c for c in _system_block_cuts(tokenizer, prompt, cache_len) if boundary is None or c < boundary]
+    cuts = [("system", c) for c in systems] + ([("boundary", boundary)] if boundary is not None else [])
     if SSD is not None:
         upper = next((c for k, c in cuts if k == "boundary"), len(prompt))
         taken = {c for _, c in cuts}
