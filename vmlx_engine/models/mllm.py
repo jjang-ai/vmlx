@@ -7534,6 +7534,11 @@ class MLXMultimodalLM:
                     if has_media else "text", self.model_name, len(prompt_ids), cache_len,
                     (resume or {}).get("source", "none"))
         drafted = []
+        try:
+            yield_every = max(0, int(os.environ.get("VMLX_MIMO_DFLASH_YIELD_TOKENS", "0")))
+        except ValueError:
+            yield_every = 0
+        yielded = 0
         for new, n_drafted in mimo_rounds(
             target, drafter, mask_vec, prompt_ids, int(max_tokens), eos, float(temperature),
             float(kwargs.get("top_p", 1.0) or 1.0), int(kwargs.get("top_k", 0) or 0),
@@ -7556,7 +7561,13 @@ class MLXMultimodalLM:
                 finish = "length"
             if finish is not None:
                 break
-            yield MLLMOutput(text=detok.last_segment, prompt_tokens=len(prompt_ids), completion_tokens=produced)
+            # Hand a chunk up only every `yield_every` tokens: each yield leaves this generator suspended while
+            # SimpleEngine hops through its executor thread and the event loop, and the GPU idles for that hop. A
+            # draft round emits ~1.7 tokens on prose (vs 8 per AR burst), so per-round yields paid the hop ~5x as
+            # often per token -- invisible to the adaptive policy, whose round timer stops before the yield.
+            if produced - yielded >= yield_every:
+                yielded = produced
+                yield MLLMOutput(text=detok.last_segment, prompt_tokens=len(prompt_ids), completion_tokens=produced)
         detok.finalize()
         elapsed = _time.perf_counter() - started
         # Store this turn's reusable states: snapshots, then the end-of-turn entry (key = the prompt's key ids + every
