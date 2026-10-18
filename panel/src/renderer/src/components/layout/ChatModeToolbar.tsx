@@ -149,9 +149,13 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
     await window.api.sessions.stop(activeSessionId)
   }
 
-  const handleSelectSession = (session: SessionSummary) => {
-    onSessionChange(session.id)
-    setShowModelPicker(false)
+  const handleSelectSession = async (session: SessionSummary) => {
+    try {
+      await onSessionChange(session.id)
+      setShowModelPicker(false)
+    } catch (error) {
+      showToast('error', t('layout.chatToolbar.remoteConnectFailed'), (error as Error).message)
+    }
   }
 
   const handleConnectRemote = async () => {
@@ -172,7 +176,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
 
       const result = await window.api.sessions.start(session.id)
       if (result.success) {
-        onSessionChange(session.id)
+        await onSessionChange(session.id)
         setShowRemoteForm(false)
         setShowModelPicker(false)
         setRemoteUrl('')

@@ -236,17 +236,17 @@ function App() {
 
   const handleSessionChange = useCallback(async (sessionId: string) => {
     if (!state.activeChatId) return
-    // Find the new session to get its modelPath
-    const newSession = sessions.find(s => s.id === sessionId)
-    if (newSession) {
-      // Update the chat's model_path in DB so it persists across reloads
-      await window.api.chat.update(state.activeChatId, {
-        modelId: newSession.modelPath,
-        modelPath: newSession.modelPath
-      } as any).catch((err) => console.error('Failed to update chat model:', err))
-    }
+    // A just-created remote may not be in this render's session list yet.
+    // Persist its identity before switching the endpoint; otherwise the send
+    // path resolves the old local model with the remote session's placeholder port.
+    const newSession = await window.api.sessions.get(sessionId)
+    if (!newSession) throw new Error(t('sessions.context.createFailed'))
+    await window.api.chat.update(state.activeChatId, {
+      modelId: newSession.modelPath,
+      modelPath: newSession.modelPath
+    })
     dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId, sessionId })
-  }, [dispatch, state.activeChatId, sessions])
+  }, [dispatch, state.activeChatId, t])
 
   // Setup screen
   if (checkingSetup) return null

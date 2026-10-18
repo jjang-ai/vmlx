@@ -66,6 +66,15 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         assert engine.calls == 1
         engine.output_text = "Recovered answer"
         followup = dict(body, stream=False)
+        if api == "responses":
+            if stream:
+                captured = [json.loads(line[5:]) for line in response.text.splitlines()
+                            if line.startswith("data:") and line[5:].strip() != "[DONE]"]
+                rejected_response = next(e["response"] for e in captured if e.get("type") == "response.incomplete")
+            else:
+                rejected_response = response.json()
+            followup["previous_response_id"] = rejected_response["id"]
+            followup["input"] = "Continue using only the declared tools."
         recovered = await client.post("/v1/" + ("chat/completions" if api == "chat" else "responses"), json=followup)
         assert recovered.status_code == 200
         assert engine.calls == 2
