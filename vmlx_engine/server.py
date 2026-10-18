@@ -22055,11 +22055,17 @@ async def create_chat_completion(
         and not tool_calls
         and _normalize_responses_finish_reason(finish_reason) != "length"
     ):
+        # Rejected model tool output is recoverable by a client follow-up;
+        # it is not a failed upstream service. Never execute or retry it here.
+        error = _reasoning_only_chat_error_payload(
+            response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
+        )["error"]
+        if _TOOL_CALL_REJECTED.get():
+            error["warnings"] = response_warnings
+            error["usage"] = get_usage(output).model_dump(exclude_none=True)
         raise HTTPException(
-            status_code=502,
-            detail=_reasoning_only_chat_error_payload(
-                response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
-            )["error"],
+            status_code=422 if _TOOL_CALL_REJECTED.get() else 502,
+            detail=error,
         )
 
     # Attach the context-clamp record when the admission clamp bound this
@@ -22519,7 +22525,11 @@ def _responses_terminal_state(
             response_status="incomplete",
             item_status="incomplete",
             event_type="response.incomplete",
-            incomplete_details={"reason": "tool_calls_rejected"},
+            incomplete_details={
+                "reason": "tool_calls_rejected",
+                "recoverable": True,
+                "recovery_action": "send_followup",
+            },
         )
     if reasoning_only_no_content:
         return _ResponsesTerminalState(
@@ -22639,9 +22649,16 @@ def _reasoning_only_chat_error_payload(
             "id": response_id,
             "object": "chat.completion.chunk",
             "error": {
-                "message": "No visible answer or usable tool call remained after tool-call rejection. Inspect the response warnings for the rejection reason.",
+                "message": (
+                    "The model produced an unavailable or invalid tool call. "
+                    "No rejected tool was executed. Inspect the response warnings, "
+                    "then send a follow-up with the available tools and corrected "
+                    "arguments. Generation was not retried automatically."
+                ),
                 "type": "invalid_response_error",
                 "code": "tool_calls_rejected",
+                "recoverable": True,
+                "recovery_action": "send_followup",
             },
         }
     return {

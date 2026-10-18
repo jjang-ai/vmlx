@@ -38,7 +38,8 @@ def test_rejection_state_survives_warning_drain_but_not_next_request():
 def test_responses_rejection_does_not_erase_actual_stop_cause(finish, reason):
     state = server._responses_terminal_state(finish, tool_calls_rejected=True, reasoning_only_no_content=True)
     assert state.event_type == 'response.incomplete'
-    assert state.incomplete_details == {'reason': reason}
+    assert state.incomplete_details['reason'] == reason
+    assert state.incomplete_details.get('recoverable', False) is (finish == 'stop')
 
 
 @pytest.mark.asyncio
@@ -96,12 +97,13 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
             from fastapi import HTTPException
             with pytest.raises(HTTPException) as error:
                 await server.create_chat_completion(request, fastapi_request=None)
-            assert error.value.status_code == 502
+            assert error.value.status_code == 422
             assert error.value.detail['code'] == 'tool_calls_rejected'
         else:
             response = await server.create_response(request, fastapi_request=None)
             assert response.status == 'incomplete'
-            assert response.incomplete_details == {'reason': 'tool_calls_rejected'}
+            assert response.incomplete_details['reason'] == 'tool_calls_rejected'
+            assert response.incomplete_details['recoverable'] is True
             assert '<tool_call>' not in response.model_dump_json()
         return
     if surface == 'chat':
@@ -120,7 +122,8 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
     else:
         terminals = [e for e in events if e.get('type') in {'response.completed', 'response.failed', 'response.incomplete'}]
         assert len(terminals) == 1
-        assert terminals[0]['response'].get('incomplete_details') == {'reason': 'tool_calls_rejected'}, terminals[0]
+        assert terminals[0]['response']['incomplete_details']['reason'] == 'tool_calls_rejected'
+        assert terminals[0]['response']['incomplete_details']['recoverable'] is True
         items = {item['id']: item for item in terminals[0]['response']['output']}
         for event in events:
             if event.get('type') == 'response.output_item.done':

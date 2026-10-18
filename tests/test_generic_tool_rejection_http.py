@@ -24,21 +24,26 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         tokenizer = SimpleNamespace(has_thinking=False)
         is_mllm = False
         preserve_native_tool_format = True
+        output_text = text
+        calls = 0
 
         async def chat(self, **kwargs):
-            return GenerationOutput(text=text, tokens=[],
+            self.calls += 1
+            return GenerationOutput(text=self.output_text, tokens=[],
                                     prompt_tokens=12, completion_tokens=2,
                                     finished=True, finish_reason=finish)
 
         async def stream_chat(self, **kwargs):
+            self.calls += 1
             accumulated = ""
-            for i, delta in enumerate([text[:11], text[11:]]):
+            for i, delta in enumerate([self.output_text[:11], self.output_text[11:]]):
                 accumulated += delta
                 yield GenerationOutput(text=accumulated, new_text=delta, tokens=[],
                                        prompt_tokens=12, completion_tokens=i+1,
                                        finished=bool(i), finish_reason=finish if i else None)
 
-    monkeypatch.setattr(server, "_engine", Engine())
+    engine = Engine()
+    monkeypatch.setattr(server, "_engine", engine)
     for field in ("_model_name", "_served_model_name"):
         monkeypatch.setattr(server, field, "generic-rejection-control")
     monkeypatch.setattr(server, "_model_path", None)
@@ -57,13 +62,30 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         body.update(input="Inspect if needed.", tools=[{"type": "function", **fn}], max_output_tokens=64)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
         response = await client.post("/v1/" + ("chat/completions" if api == "chat" else "responses"), json=body)
+        # No hidden retry, and a subsequent request can use the same engine.
+        assert engine.calls == 1
+        engine.output_text = "Recovered answer"
+        followup = dict(body, stream=False)
+        recovered = await client.post("/v1/" + ("chat/completions" if api == "chat" else "responses"), json=followup)
+        assert recovered.status_code == 200
+        assert engine.calls == 2
+        recovered_data = recovered.json()
+        if api == "chat":
+            assert recovered_data["choices"][0]["message"]["content"] == "Recovered answer"
+        else:
+            assert recovered_data["output_text"] == "Recovered answer"
+        assert "tool_calls_rejected" not in recovered.text
     assert "UNSAFE_ORPHAN_SUFFIX" not in response.text
     assert "<tool_call>" not in response.text
     if not stream:
         data = response.json()
         if api == "chat" and finish == "stop":
-            assert response.status_code == 502
+            assert response.status_code == 422
             assert data["detail"]["code"] == "tool_calls_rejected"
+            assert data["detail"]["recoverable"] is True
+            assert data["detail"]["recovery_action"] == "send_followup"
+            assert data["detail"]["usage"]["completion_tokens"] == 2
+            assert data["detail"]["warnings"]
         elif api == "chat":
             assert response.status_code == 200
             assert not data["choices"][0]["message"]["content"]
@@ -81,6 +103,10 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         errors = [e["error"]["code"] for e in events if e.get("error")]
         terminals = [c["finish_reason"] for e in events for c in e.get("choices", []) if c.get("finish_reason")]
         assert errors == (["tool_calls_rejected"] if finish == "stop" else [])
+        if errors:
+            error = next(e["error"] for e in events if e.get("error"))
+            assert error["recoverable"] is True
+            assert error["recovery_action"] == "send_followup"
         assert terminals == (["length"] if finish == "length" else [])
         assert response.text.rstrip().endswith("data: [DONE]")
         assert [e["usage"]["completion_tokens"] for e in events if e.get("usage")] == [2]

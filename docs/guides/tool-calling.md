@@ -310,3 +310,14 @@ No user configuration is needed — the fallback activates automatically when to
 | `--tool-call-parser` | Override auto-detected parser (see table above) |
 
 See [CLI Reference](../reference/cli.md) for all options.
+
+
+## Recovering from rejected model tool output
+
+If every generated tool call is unavailable or invalid and no visible answer remains, vMLX does not execute a rejected call or retry generation automatically. For automatic tool choice:
+
+- Non-streaming Chat Completions returns HTTP 422 with `detail.code: "tool_calls_rejected"`, `recoverable: true`, and `recovery_action: "send_followup"`. The detail includes rejection warnings and actual token usage.
+- Streaming Chat Completions emits the same typed error and recovery fields, followed by requested usage and `[DONE]`. Consume the stream through its end to retain usage.
+- Responses returns an incomplete response with `incomplete_details.reason: "tool_calls_rejected"` and the same recovery fields. Its response ID remains usable for an explicit follow-up.
+
+The client can send a follow-up that supplies the declared tools and corrects the rejected arguments. For Chat, include the conversation history; for Responses, use `previous_response_id` or explicit history. Keep the same tool definitions where applicable so the rendered prompt can reuse its cached prefix. Do not execute a tool named only in the rejection warning. Truncation, cancellation, and an unmet explicit `tool_choice: "required"` keep their distinct terminal semantics.
