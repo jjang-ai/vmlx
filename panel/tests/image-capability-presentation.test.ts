@@ -98,3 +98,41 @@ it('shows native Ideogram presets and disables constant guidance in both control
     expect(input).toContain('disabled=""')
   }
 })
+
+describe('native SeedVR and FIBO composer controls', () => {
+  const settings = {steps:20,width:512,height:768,guidance:4,negativePrompt:'blur',count:2,quantize:0,strength:.8,resolution:'2x',softness:.2}
+  const source = {name:'source.png',dataUrl:'data:image/png;base64,AAAA'}
+  const caps: ImageCapabilities = {loaded:true,mflux_class:'SeedVR2',mode:'edit',upscale:true,prompt:false,steps:false,guidance:false,negative_prompt:false,mask:'none',edit_strength:false,count:false}
+  function composer(promptText: string, capabilities: ImageCapabilities, sourceImage: typeof source | null = source) {
+    return renderToStaticMarkup(React.createElement(ImagePromptBar, {
+      prompt:promptText,onPromptChange:noop,onGenerate:noop,disabled:false,generating:false,
+      settings,onSettingsChange:noop,mode:'edit',sourceImage,onSourceImageChange:noop,capabilities,
+    }))
+  }
+  it('requires only source plus valid native settings, without a fake text prompt', () => {
+    const html = composer('',caps)
+    expect(submit(html)).not.toContain('disabled=""')
+    expect(submit(composer('',caps,null))).toContain('disabled=""')
+    expect(html).toContain('image.prompt.upscale')
+    expect(html).toContain('image-upscale-resolution')
+    expect(html).toContain('image-upscale-softness')
+    expect(html).not.toContain('<textarea')
+    for (const unused of ['image-guidance-quick','image.prompt.steps','image.prompt.size','image.prompt.strength','image.prompt.paintMask']) expect(html).not.toContain(unused)
+  })
+  it('keeps the full settings panel limited to native resolution/softness/seed', () => {
+    const html = renderToStaticMarkup(React.createElement(ImageSettings,{settings,onChange:noop,model:'native-upscale',mode:'edit',capabilities:caps}))
+    expect(html).toContain('image-upscale-resolution')
+    expect(html).toContain('image-upscale-softness')
+    expect(html).toContain('image.settings.seed')
+    for (const unused of ['image-guidance-settings','image.settings.steps','image.settings.size','image.settings.negativePrompt','image.settings.strength','image.settings.widthCustom']) expect(html).not.toContain(unused)
+  })
+  it('explains JSON and prevents invalid FIBO captions without rewriting them', () => {
+    const fibo: ImageCapabilities = {loaded:true,mflux_class:'FIBO',mode:'generate',variation_strength:true}
+    expect(submit(composer('plain prose',fibo))).toContain('disabled=""')
+    const json = ' {"short_description":"Red mug"} '
+    const html = composer(json,fibo)
+    expect(submit(html)).not.toContain('disabled=""')
+    expect(html).toContain('image-json-prompt-help')
+    expect(html).toContain('Red mug')
+  })
+})

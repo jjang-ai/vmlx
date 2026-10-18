@@ -367,3 +367,14 @@ describe('Qwen Image 2.1 saved pipeline', () => {
         steps: turbo ? 8 : 40, guidance: 1 } })
   })
 })
+
+describe('native SeedVR payload folders', () => {
+  it('requires both native3B roles, resolves their model, and rejects an incomplete folder', () => {
+    const dir = tmp()
+    writeSafetensors(join(dir, 'seedvr2_ema_3b_fp16.safetensors'), null)
+    expect(resolveLocalImageModelDirectory(dir,0)?.kind).toBe('not-a-model-directory')
+    writeSafetensors(join(dir, 'ema_vae_fp16.safetensors'), null)
+    expect(resolveLocalImageModelDirectory(dir,0)?.kind).toBe('model')
+    expect(resolveImageModelForLocalDirectory(dir)).toMatchObject({id:'seedvr2-3b',mfluxClass:'SeedVR2',category:'edit'})
+  })
+})

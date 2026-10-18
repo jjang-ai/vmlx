@@ -159,6 +159,8 @@ export function unmountedVolume(p: string, fs: LocalImageModelFs = defaultFs): s
 
 function isModelDirectory(dir: string, fs: LocalImageModelFs): boolean {
   if (fs.existsSync(join(dir, 'model_index.json'))) return true
+  // Native SeedVR2 has no text encoder or diffusers index. Require both real payload roles.
+  if (fs.existsSync(join(dir, 'seedvr2_ema_3b_fp16.safetensors')) && fs.existsSync(join(dir, 'ema_vae_fp16.safetensors'))) return true
   return fs.isDirectory(join(dir, 'transformer')) && (fs.isDirectory(join(dir, 'text_encoder')) || fs.isDirectory(join(dir, 'vae')))
 }
 
@@ -299,11 +301,13 @@ export function editPrecisionAlternative(res: Extract<LocalImageModelResolution,
  * engine refused with "Cannot determine mflux class".
  */
 export function resolveImageModelForLocalDirectory(path: string): ImageModelDef | undefined {
+  if (defaultFs.existsSync(join(path, 'seedvr2_ema_3b_fp16.safetensors')) && defaultFs.existsSync(join(path, 'ema_vae_fp16.safetensors'))) return getImageModel('seedvr2-3b')
   // A declared pipeline takes precedence over a directory label. Do not infer
   // an ambiguous Flux variant from the pipeline class alone.
   const index = defaultFs.readJson(join(path, 'model_index.json')) as { _class_name?: string; sample_sigmas?: unknown } | null
   const config = defaultFs.readJson(join(path, 'config.json')) as { _class_name?: string; original_model?: string } | null
   const pipelines: Record<string, string> = {
+    FIBOPipeline: 'fibo',
     QwenImagePipeline: 'qwen-image',
     QwenImageEditPipeline: 'qwen-image-edit',
     ZImageTurboPipeline: 'z-image-turbo',

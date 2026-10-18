@@ -1,9 +1,12 @@
+import { ImageUpscaleSettings } from './ImageUpscaleSettings'
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, HelpCircle } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { imageGuidanceFromInput, type ImageCapabilities } from '../../../../shared/imageCapabilities'
 
 interface ImageSettingsData {
+  resolution?: number | string
+  softness?: number
   steps: number
   width: number
   height: number
@@ -54,6 +57,18 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
 
   const update = (key: keyof ImageSettingsData, value: any) => {
     onChange({ ...settings, [key]: value })
+  }
+
+  if (capabilities?.loaded === true && capabilities.upscale === true) {
+    return <div className="border-b border-border bg-muted/30 px-4 py-3">
+      <ImageUpscaleSettings settings={settings} onChange={onChange} />
+      <label className="flex items-center gap-2 text-xs">
+        {t('image.settings.seed')}
+        <input type="number" value={settings.seed ?? ''} placeholder={t('image.settings.seedPlaceholder')}
+          onChange={e => update('seed', e.target.value.trim() ? Number.parseInt(e.target.value) : undefined)}
+          className="w-32 px-2 py-1 bg-background border border-input rounded" />
+      </label>
+    </div>
   }
 
   return (

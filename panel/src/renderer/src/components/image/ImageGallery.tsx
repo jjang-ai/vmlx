@@ -279,7 +279,7 @@ function ImageCard({
           )}
           {isEdit && (
             <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">
-              {t('image.history.editBadge')}
+              {t(generation.upscaleResolution != null ? 'image.prompt.upscale' : 'image.history.editBadge')}
             </span>
           )}
           <p
@@ -293,7 +293,7 @@ function ImageCard({
           <span>
             {generation.width}x{generation.height}
           </span>
-          <span>{t('image.gallery.stepsCount', { n: generation.steps })}</span>
+          {generation.upscaleResolution != null ? <span>{t('image.settings.upscaleResolution')}: {generation.upscaleResolution} · {t('image.settings.upscaleSoftness')}: {generation.upscaleSoftness ?? 0}</span> : <span>{t('image.gallery.stepsCount', { n: generation.steps })}</span>}
           {isVariation && generation.strength != null && (
             <span>{t('image.gallery.strengthLabel', { v: generation.strength })}</span>
           )}

@@ -1868,6 +1868,7 @@
       "classFlux2KleinEdit": "Flux2KleinEdit（Klein 編集）"
     },
     "prompt": {
+      "upscale": "拡大",
       "variationLabel": "バリエーション",
       "cancelTitle": "キャンセル",
       "maskTitle": "塗りつぶし/置換する領域を選ぶためのマスクをペイント",
@@ -1907,6 +1908,13 @@
       "generate": "生成"
     },
     "settings": {
+      "nativeJsonPromptInvalid": "有効なJSONプロンプトを入力してください。",
+      "nativeJsonPromptHelp": "FIBOはネイティブのJSONプロンプトを使用します。有効なJSONを貼り付けてください。通常のテキストは自動変換されません。",
+      "upscaleInvalid": "2以上のピクセル数または2xのような正の倍率と、0〜1のソフトネスを入力してください。",
+      "upscaleSource": "拡大元の画像",
+      "upscaleHelp": "短辺をピクセル数（既定は384）または2xのような倍率で指定します。元画像の縦横比は保持されます。ソフトネスは0〜1です。",
+      "upscaleSoftness": "ソフトネス",
+      "upscaleResolution": "出力解像度",
       "steps": "ステップ数",
       "stepsTitle": "デノイジングの反復回数。多いほど高品質になりますが遅くなります。Schnell は 4、Dev は 20 以上が目安です。",
       "size": "サイズ",

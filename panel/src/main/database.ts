@@ -137,6 +137,8 @@ export interface ImageGeneration {
   guidance: number;
   seed?: number;
   strength?: number;
+  upscaleResolution?: number | string;
+  upscaleSoftness?: number;
   elapsedSeconds?: number;
   imagePath: string;
   sourceImagePath?: string;
@@ -1183,6 +1185,12 @@ class DatabaseManager {
       }
       if (!imgGenCols.find((c) => c.name === "strength")) {
         this.db.exec("ALTER TABLE image_generations ADD COLUMN strength REAL");
+      }
+      if (!imgGenCols.find((c) => c.name === "upscale_resolution")) {
+        this.db.exec("ALTER TABLE image_generations ADD COLUMN upscale_resolution TEXT");
+      }
+      if (!imgGenCols.find((c) => c.name === "upscale_softness")) {
+        this.db.exec("ALTER TABLE image_generations ADD COLUMN upscale_softness REAL");
       }
       const imgSessCols = this.db.pragma("table_info(image_sessions)") as {
         name: string;
@@ -2484,8 +2492,8 @@ class DatabaseManager {
     this.ensureOpen();
     this.db
       .prepare(
-        `INSERT INTO image_generations (id, session_id, prompt, negative_prompt, model_name, width, height, steps, guidance, seed, strength, elapsed_seconds, image_path, source_image_path, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO image_generations (id, session_id, prompt, negative_prompt, model_name, width, height, steps, guidance, seed, strength, elapsed_seconds, image_path, source_image_path, created_at, upscale_resolution, upscale_softness)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         gen.id,
@@ -2503,6 +2511,8 @@ class DatabaseManager {
         gen.imagePath,
         gen.sourceImagePath || null,
         gen.createdAt,
+        gen.upscaleResolution != null ? String(gen.upscaleResolution) : null,
+        gen.upscaleSoftness ?? null,
       );
     // Update session's updatedAt
     this.updateImageSession(gen.sessionId, { updatedAt: gen.createdAt });
@@ -2527,6 +2537,8 @@ class DatabaseManager {
         guidance: r.guidance,
         seed: r.seed,
         strength: r.strength,
+        upscaleResolution: r.upscale_resolution ?? undefined,
+        upscaleSoftness: r.upscale_softness ?? undefined,
         elapsedSeconds: r.elapsed_seconds,
         imagePath: r.image_path,
         sourceImagePath: r.source_image_path,
@@ -2554,6 +2566,8 @@ class DatabaseManager {
       guidance: r.guidance,
       seed: r.seed,
       strength: r.strength,
+      upscaleResolution: r.upscale_resolution ?? undefined,
+      upscaleSoftness: r.upscale_softness ?? undefined,
       elapsedSeconds: r.elapsed_seconds,
       imagePath: r.image_path,
       sourceImagePath: r.source_image_path,

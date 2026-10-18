@@ -1868,6 +1868,7 @@
       "classFlux2KleinEdit": "Flux2KleinEdit（Klein 编辑）"
     },
     "prompt": {
+      "upscale": "放大",
       "variationLabel": "变体",
       "cancelTitle": "取消",
       "maskTitle": "绘制蒙版以选择要填充/替换的区域",
@@ -1907,6 +1908,13 @@
       "generate": "生成"
     },
     "settings": {
+      "nativeJsonPromptInvalid": "请输入有效的JSON提示词。",
+      "nativeJsonPromptHelp": "FIBO使用原生JSON提示词。请粘贴有效JSON；普通文本不会自动转换。",
+      "upscaleInvalid": "请输入至少2像素或2x等正倍率，以及0到1的柔和度。",
+      "upscaleSource": "用于放大的原图",
+      "upscaleHelp": "设置短边像素数（默认为384）或2x等倍率。保留原图纵横比。柔和度范围为0到1。",
+      "upscaleSoftness": "柔和度",
+      "upscaleResolution": "输出分辨率",
       "steps": "步数",
       "stepsTitle": "去噪迭代次数。步数越多 = 质量越好但越慢。Schnell 在 4 步时效果很好,Dev 需要 20+。",
       "size": "尺寸",

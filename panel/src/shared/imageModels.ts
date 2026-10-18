@@ -63,6 +63,18 @@ export interface ImageModelDef {
  * and validation will pick it up automatically.
  */
 export const IMAGE_MODELS: ImageModelDef[] = [
+  // Local native adapters: no synthetic downloadable quantization repository.
+  {
+    id: 'fibo', name: 'FIBO', desc: 'Native JSON prompt generation',
+    category: 'generate', steps: 20, guidance: 3.5, size: '~9 GB (q4)',
+    quantizeOptions: [4, 0], repoMap: {}, mfluxClass: 'FIBO', mfluxName: 'fibo', supportsImg2Img: true,
+  },
+  {
+    id: 'seedvr2-3b', name: 'SeedVR2 3B', desc: 'Native image upscaling',
+    category: 'edit', steps: 1, guidance: 0, size: '~7 GB',
+    quantizeOptions: [0], repoMap: {}, mfluxClass: 'SeedVR2', mfluxName: 'seedvr2-3b', supportsImg2Img: false,
+  },
+
   {
     id: 'ideogram-4', name: 'Ideogram 4',
     desc: 'Typography and structured JSON captions; native sampler presets',
@@ -194,6 +206,19 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     mfluxClass: 'Flux2Klein',
     mfluxName: 'flux2-klein-9b',
     supportsImg2Img: true,
+  },
+
+  // Klein edit runs a distinct native adapter over the same bundle. Selecting
+  // the ordinary native name continues to select generation by default.
+  {
+    id: 'klein-4b-edit', name: 'FLUX.2 Klein 4B Edit', desc: 'Reference image editing',
+    category: 'edit', steps: 20, guidance: 3.5, size: '~4-8 GB', quantizeOptions: [4, 0], repoMap: {},
+    mfluxClass: 'Flux2KleinEdit', mfluxName: 'flux2-klein-4b', supportsImg2Img: false,
+  },
+  {
+    id: 'klein-9b-edit', name: 'FLUX.2 Klein 9B Edit', desc: 'Reference image editing',
+    category: 'edit', steps: 20, guidance: 3.5, size: '~8-18 GB', quantizeOptions: [4, 0], repoMap: {},
+    mfluxClass: 'Flux2KleinEdit', mfluxName: 'flux2-klein-9b', supportsImg2Img: false,
   },
 
   // Qwen Image (generation) — large model, good prompt understanding
@@ -426,4 +451,14 @@ export function resolveImageModelArtifact(modelName: string, quantize: number): 
     quantize: selected,
     subfolder: model.repoSubfolderMap?.[selected],
   }
+}
+
+/** The native Klein edit class uses the same identified 4B/9B weights.
+ * Do not infer a variant from a class alone, or claim the generator is dual-mode. */
+export function imageModelForTask(model: ImageModelDef | undefined, mode?: 'generate' | 'edit', mfluxClass?: string): ImageModelDef | undefined {
+  if (model?.mfluxClass === 'Flux2Klein' && (mode === 'edit' || mfluxClass === 'Flux2KleinEdit')) {
+    return IMAGE_MODELS.find(candidate => candidate.mfluxName === model.mfluxName &&
+      candidate.mfluxClass === 'Flux2KleinEdit' && candidate.category === 'edit') || model
+  }
+  return model
 }

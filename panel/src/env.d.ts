@@ -520,6 +520,9 @@ declare global {
           steps: number;
           guidance: number;
           strength: number;
+          operation?: 'upscale';
+          resolution?: number | string;
+          softness?: number;
           seed?: number;
           serverPort: number;
         }) => Promise<{

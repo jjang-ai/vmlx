@@ -21,6 +21,10 @@ export interface ImageCapabilities {
   mask?: 'required' | 'optional' | 'none'
   /** generation models return n images; edit always returns one. */
   count?: boolean
+  /** Native upscaling: source image plus resolution/softness, no text prompt. */
+  upscale?: boolean
+  prompt?: boolean
+  steps?: boolean
   error?: string
 }
 

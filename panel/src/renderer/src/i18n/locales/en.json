@@ -1868,6 +1868,7 @@
       "classFlux2KleinEdit": "Flux2KleinEdit (Klein edit)"
     },
     "prompt": {
+      "upscale": "Upscale",
       "variationLabel": "Variation",
       "cancelTitle": "Cancel",
       "maskTitle": "Paint a mask to select which areas to fill/replace",
@@ -1907,6 +1908,13 @@
       "generate": "Generate"
     },
     "settings": {
+      "nativeJsonPromptInvalid": "Enter a valid JSON prompt.",
+      "nativeJsonPromptHelp": "FIBO uses native JSON prompts. Paste valid JSON; plain text is not automatically converted.",
+      "upscaleInvalid": "Enter at least 2 pixels or a positive scale such as 2x, and softness from 0 to 1.",
+      "upscaleSource": "Source image for upscaling",
+      "upscaleHelp": "Set the shortest edge in pixels (384 by default), or a scale such as 2x. The source aspect ratio is preserved. Softness ranges from 0 to 1.",
+      "upscaleSoftness": "Softness",
+      "upscaleResolution": "Output resolution",
       "steps": "Steps",
       "stepsTitle": "Number of denoising iterations. More steps = better quality but slower. Schnell works well at 4, Dev needs 20+.",
       "size": "Size",

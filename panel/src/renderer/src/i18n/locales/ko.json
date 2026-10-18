@@ -1868,6 +1868,7 @@
       "classFlux2KleinEdit": "Flux2KleinEdit (Klein 편집)"
     },
     "prompt": {
+      "upscale": "확대",
       "variationLabel": "변형",
       "cancelTitle": "취소",
       "maskTitle": "채우거나 교체할 영역을 선택하려면 마스크를 칠하세요",
@@ -1907,6 +1908,13 @@
       "generate": "생성"
     },
     "settings": {
+      "nativeJsonPromptInvalid": "유효한 JSON 프롬프트를 입력하세요.",
+      "nativeJsonPromptHelp": "FIBO는 기본 JSON 프롬프트를 사용합니다. 유효한 JSON을 붙여 넣으세요. 일반 텍스트는 자동 변환되지 않습니다.",
+      "upscaleInvalid": "2 이상의 픽셀 수 또는 2x 같은 양의 배율과 0~1의 부드러움을 입력하세요.",
+      "upscaleSource": "확대할 원본 이미지",
+      "upscaleHelp": "짧은 변의 픽셀 수(기본값 384) 또는 2x 같은 배율을 설정하세요. 원본 종횡비가 유지됩니다. 부드러움 범위는 0~1입니다.",
+      "upscaleSoftness": "부드러움",
+      "upscaleResolution": "출력 해상도",
       "steps": "단계",
       "stepsTitle": "노이즈 제거 반복 횟수. 단계가 많을수록 품질이 좋지만 느립니다. Schnell은 4에서 잘 작동하고 Dev는 20 이상이 필요합니다.",
       "size": "크기",

@@ -1,4 +1,5 @@
 // MLX Studio Image System — mlx.studio — Jinho Jang
+import { imageEditBody } from '../../shared/imageNativeInputs'
 import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { join, resolve } from 'path'
@@ -8,7 +9,7 @@ import { publishImageOutputs, type ImageOutputFile } from '../imageOutputPublica
 import { sessionManager } from '../sessions'
 import { sameLocalBundlePath } from '../local-bundle-identity'
 import { db } from '../database'
-import { IMAGE_MODELS, getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
+import { IMAGE_MODELS, getImageModel, resolveImageModelArtifact, resolveImageModelFromDirectoryName, imageModelForTask } from '../../shared/imageModels'
 import { resolveLocalImageModelDirectory, localImageModelError, unmountedVolume, editPrecisionAlternative, resolveImageModelForLocalDirectory, inspectLocalImageModel } from '../../shared/imageLocalModel'
 import { createBundleRepairProgressReporter } from '../bundle-repair-progress'
 import {
@@ -37,7 +38,7 @@ function imageSettingsOwner(sessionId: string) {
   if (config.modelType !== 'image') throw new Error('Session is not an image model')
   const model = resolveImageModelForLocalDirectory(session.modelPath)
     || getImageModel(config.servedModelName) || resolveImageModelFromDirectoryName(config.servedModelName || '')
-  return { sessionId, modelId: model?.id || config.servedModelName || '', quantize: config.imageQuantize ?? 0 }
+  return { sessionId, modelId: imageModelForTask(model, config.imageMode, config.mfluxClass)?.id || config.servedModelName || '', quantize: config.imageQuantize ?? 0 }
 }
 
 let handlersRegistered = false
@@ -507,13 +508,16 @@ export function registerImageHandlers(): void {
     guidance: number
     strength: number
     seed?: number
+    operation?: 'upscale'
+    resolution?: number | string
+    softness?: number
     serverPort: number
   }) => {
     let generationController: AbortController | null = null
     const logOwner = activeImageSessionId
     const clientJobId = uuidv4()
     try {
-      const { sessionId, prompt, model, imageBase64, maskBase64, width, height, steps, guidance, strength, seed, serverPort } = params
+      const { sessionId, prompt, model, imageBase64, width, height, steps, guidance, strength, seed, serverPort } = params
       const baseUrl = `http://127.0.0.1:${serverPort}`
 
       // Touch session to reset idle timer
@@ -527,23 +531,7 @@ export function registerImageHandlers(): void {
 
       // Call the image editing endpoint
       // Strip data URL prefix if present (FileReader adds it)
-      const cleanImageB64 = imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
-      const body: Record<string, any> = {
-        prompt,
-        model,
-        image: cleanImageB64,
-        size: `${width}x${height}`,
-        steps,
-        guidance,
-        strength,
-        n: 1,
-        response_format: 'b64_json'
-      }
-      if (params.negativePrompt) body.negative_prompt = params.negativePrompt
-      if (seed != null) body.seed = seed
-      if (maskBase64) {
-        body.mask = maskBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
-      }
+      const body = imageEditBody(params)
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller
@@ -613,7 +601,7 @@ export function registerImageHandlers(): void {
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
 
-      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number; image_job_id?: string }> }
+      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number; image_job_id?: string; width?: number; height?: number; resolution?: number | string; softness?: number }> }
       logImageClientJob(logOwner, { client_job_id: clientJobId, phase: 'saving_outputs', image_job_ids: result.data.map(item => item.image_job_id).filter(Boolean) })
       const elapsed = (Date.now() - startTime) / 1000
 
@@ -634,19 +622,25 @@ export function registerImageHandlers(): void {
         const buffer = Buffer.from(item.b64_json, 'base64')
         outputFiles.push({ path: imagePath, data: buffer })
 
+        // Upscaling owns output geometry; never label it with the hidden edit-size controls.
+        if (params.operation === 'upscale' && (!Number.isInteger(item.width) || !Number.isInteger(item.height) || item.width! <= 0 || item.height! <= 0)) {
+          throw new Error('Upscaler did not report its output dimensions')
+        }
         // Use the actual seed from the server response (engine resolves random seeds)
         const gen: ImageGeneration = {
           id: genId,
           sessionId,
           prompt,
-          negativePrompt: params.negativePrompt || undefined,
+          negativePrompt: params.operation === 'upscale' ? undefined : params.negativePrompt || undefined,
           modelName: model,
-          width,
-          height,
-          steps,
-          guidance,
+          width: params.operation === 'upscale' ? item.width! : width,
+          height: params.operation === 'upscale' ? item.height! : height,
+          steps: params.operation === 'upscale' ? 1 : steps,
+          guidance: params.operation === 'upscale' ? 0 : guidance,
+          upscaleResolution: params.operation === 'upscale' ? item.resolution ?? body.resolution as number | string : undefined,
+          upscaleSoftness: params.operation === 'upscale' ? item.softness ?? body.softness as number : undefined,
           seed: item.seed ?? seed,
-          strength,
+          strength: params.operation === 'upscale' ? undefined : strength,
           elapsedSeconds: elapsed,
           imagePath,
           sourceImagePath,
@@ -774,6 +768,7 @@ export function registerImageHandlers(): void {
           // A local inspection's unresolved result is meaningful. Do not
           // resurrect a rejected/unknown declaration from its folder name.
           let modelDef = resolveImageModelForLocalDirectory(modelPath)
+          modelDef = imageModelForTask(modelDef, imageMode, serverSettings?.mfluxClass)
           if (!modelDef && serverSettings?.mfluxClass) {
             // A class identifies a runtime implementation, not always a base
             // variant. Carry its canonical identity only when unambiguous;

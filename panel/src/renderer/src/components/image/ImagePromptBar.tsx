@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
 import { Send, ImagePlus, X, Pencil, RefreshCw, HelpCircle, Paintbrush } from 'lucide-react'
+import { ImageUpscaleSettings } from './ImageUpscaleSettings'
+import { parseUpscaleResolution, isNativeJsonPrompt, imagePromptForRequest } from '../../../../shared/imageNativeInputs'
 import { MaskPainter } from './MaskPainter'
 import { useTranslation } from '../../i18n'
 import { imageGuidanceFromInput, imageVariationPreservesSource, type ImageCapabilities } from '../../../../shared/imageCapabilities'
@@ -10,6 +12,8 @@ function Help({ tip }: { tip: string }) {
 }
 
 interface ImagePromptBarSettings {
+  resolution?: number | string
+  softness?: number
   steps: number
   width: number
   height: number
@@ -60,6 +64,10 @@ interface ImagePromptBarProps {
 export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities, onGenerate, disabled, generating, cancelling, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, maskBase64, onMaskChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const { t } = useTranslation()
   const nativePreset = capabilities?.mflux_class === 'Ideogram4'
+  const upscale = capabilities?.loaded === true && capabilities.upscale === true
+  const nativeJson = capabilities?.mflux_class === 'FIBO'
+  const validUpscale = parseUpscaleResolution(settings.resolution ?? 384) !== undefined && Number.isFinite(settings.softness ?? 0) && (settings.softness ?? 0) >= 0 && (settings.softness ?? 0) <= 1
+  const validPrompt = !nativeJson || isNativeJsonPrompt(prompt)
   const [dragOver, setDragOver] = useState(false)
   const [showMaskPainter, setShowMaskPainter] = useState(false)
   const [cancelRequested, setCancelRequested] = useState(false)
@@ -93,25 +101,19 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
   }, [iteratePrompt, iterateCounter])
 
   // Build the actual prompt sent to the engine
-  const buildFinalPrompt = useCallback((): string => {
-    if (isVariation && prompt.trim()) {
-      return `${iteratePrompt}, ${prompt.trim()}`
-    }
-    if (isVariation && !prompt.trim()) {
-      return iteratePrompt!
-    }
-    return prompt.trim()
-  }, [prompt, iteratePrompt, isVariation])
+  const buildFinalPrompt = useCallback((): string =>
+    imagePromptForRequest(prompt, isVariation ? iteratePrompt : null, nativeJson),
+  [prompt, iteratePrompt, isVariation, nativeJson])
 
   // Fill model requires both source image AND mask
   const needsMask = isFillModel && isEdit
-  const canSubmit = !disabled && !generating && (isVariation ? true : prompt.trim()) && (!isEdit || !!sourceImage) && (!needsMask || !!maskBase64)
+  const canSubmit = !disabled && !generating && (upscale ? validUpscale : validPrompt && (isVariation ? true : prompt.trim())) && (!isEdit || !!sourceImage) && (!needsMask || !!maskBase64)
 
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return
     const finalPrompt = buildFinalPrompt()
-    if (finalPrompt) onGenerate(finalPrompt)
-  }, [canSubmit, buildFinalPrompt, onGenerate])
+    if (upscale || finalPrompt) onGenerate(upscale ? '' : finalPrompt)
+  }, [canSubmit, buildFinalPrompt, onGenerate, upscale])
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -199,7 +201,7 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium truncate">{sourceImage.name}</p>
                 <p className="text-[10px] text-muted-foreground">
-                  {isFillModel ? t('image.prompt.sourceInpainting') : t('image.prompt.sourceInstructionEdit')}
+                  {upscale ? t('image.settings.upscaleSource') : isFillModel ? t('image.prompt.sourceInpainting') : t('image.prompt.sourceInstructionEdit')}
                   {supportsMask && maskBase64 && <span className="text-violet-400 ml-1">{t('image.prompt.maskApplied')}</span>}
                 </p>
               </div>
@@ -237,8 +239,11 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
       ) : null}
 
       {nativePreset && <p className="text-xs text-muted-foreground mb-2">{t('image.settings.presetGuidance')} {t('image.settings.ideogramCaption')}</p>}
+      {nativeJson && <p className="text-xs text-muted-foreground mb-2" data-vmlx-control="image-json-prompt-help">{t('image.settings.nativeJsonPromptHelp')}</p>}
+      {upscale && <ImageUpscaleSettings settings={settings} onChange={onSettingsChange} />}
+      {upscale && !validUpscale && <p className="text-xs text-destructive mb-2">{t('image.settings.upscaleInvalid')}</p>}
       {/* Quick settings row */}
-      <div className="flex items-center gap-4 mb-2 text-xs">
+      {!upscale && <div className="flex items-center gap-4 mb-2 text-xs">
         <div className="flex items-center gap-1">
           <label className="text-muted-foreground">{t('image.prompt.steps')}</label>
           <Help tip={t('image.prompt.stepsTip')} />
@@ -290,14 +295,15 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
         {!isEdit && !isVariation && settings.count > 1 && (
           <span className="text-muted-foreground">{t('image.prompt.imageCount', { n: settings.count })}</span>
         )}
-      </div>
+      </div>}
 
       {/* Prompt input + submit */}
       <div className="flex gap-2">
-        <textarea ref={textareaRef} value={prompt}
+        {!upscale && <textarea ref={textareaRef} value={prompt}
           onChange={(e) => setPrompt(e.target.value)} onKeyDown={handleKeyDown} onPaste={handlePaste}
           placeholder={
             disabled ? t('image.prompt.placeholderWaiting')
+              : nativeJson ? t('image.settings.nativeJsonPromptHelp')
               : isVariation ? t('image.prompt.placeholderVariation')
               : isEdit && !sourceImage ? t('image.prompt.placeholderNeedSource')
               : needsMask && !maskBase64 ? t('image.prompt.placeholderNeedMask')
@@ -306,7 +312,7 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
           }
           disabled={disabled || generating} rows={2}
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
-        />
+        />}
         {generating ? (
           <button disabled={cancelling || cancelRequested} onClick={async () => {
             setCancelRequested(true)
@@ -323,13 +329,14 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
             }`}>
             {isVariation ? <RefreshCw className="h-4 w-4" /> : isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-            <span className="text-sm">{isVariation ? t('image.prompt.vary') : isEdit ? t('image.prompt.edit') : t('image.prompt.generate')}</span>
+            <span className="text-sm">{upscale ? t('image.prompt.upscale') : isVariation ? t('image.prompt.vary') : isEdit ? t('image.prompt.edit') : t('image.prompt.generate')}</span>
           </button>
         )}
       </div>
 
+      {nativeJson && prompt.trim() && !validPrompt && <p className="mt-1 text-xs text-destructive" role="alert">{t('image.settings.nativeJsonPromptInvalid')}</p>}
       {/* Prompt preview for variation */}
-      {isVariation && (
+      {isVariation && !nativeJson && (
         <p className="mt-1.5 text-[10px] text-muted-foreground truncate">
           {prompt.trim()
             ? <>{t('image.prompt.promptLabel')} <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span></>

@@ -1,7 +1,9 @@
+import { parseUpscaleResolution } from './imageNativeInputs'
 import { getDefaultGuidance, getDefaultSteps } from './imageModels'
 
 export interface ImageRuntimeSettings {
   steps: number; width: number; height: number; guidance: number
+  resolution?: number | string; softness?: number
   negativePrompt: string; seed?: number; count: number; quantize: number; strength: number
 }
 type Preferences = Omit<ImageRuntimeSettings, 'seed' | 'quantize'>
@@ -20,7 +22,7 @@ export const IMAGE_SETTINGS_KEY = 'image_settings_v2'
 export function defaultImageRuntimeSettings(modelId: string, quantize: number): ImageRuntimeSettings {
   return { steps: getDefaultSteps(modelId), guidance: getDefaultGuidance(modelId),
     width: 1024, height: 1024, negativePrompt: '', seed: undefined,
-    count: 1, quantize, strength: ['qwen-image-2.1', 'qwen-image-2.1-turbo'].includes(modelId) ? 1.0 : 0.8 }
+    resolution: 384, softness: 0, count: 1, quantize, strength: ['qwen-image-2.1', 'qwen-image-2.1-turbo'].includes(modelId) ? 1.0 : 0.8 }
 }
 
 function preferences(value: unknown): Partial<Preferences> {
@@ -34,6 +36,9 @@ function preferences(value: unknown): Partial<Preferences> {
     const v = raw[key]
     if (typeof v === 'number' && Number.isFinite(v) && v >= 0) result[key] = v
   }
+  const resolution = parseUpscaleResolution(raw.resolution)
+  if (resolution !== undefined) result.resolution = resolution
+  if (typeof raw.softness === 'number' && Number.isFinite(raw.softness) && raw.softness >= 0 && raw.softness <= 1) result.softness = raw.softness
   if (typeof raw.negativePrompt === 'string') result.negativePrompt = raw.negativePrompt
   return result
 }

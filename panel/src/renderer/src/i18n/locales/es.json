@@ -1868,6 +1868,7 @@
       "classFlux2KleinEdit": "Flux2KleinEdit (edición Klein)"
     },
     "prompt": {
+      "upscale": "Ampliar",
       "variationLabel": "Variación",
       "cancelTitle": "Cancelar",
       "maskTitle": "Pinte una máscara para seleccionar qué áreas rellenar o reemplazar",
@@ -1907,6 +1908,13 @@
       "generate": "Generar"
     },
     "settings": {
+      "nativeJsonPromptInvalid": "Introduce un prompt JSON válido.",
+      "nativeJsonPromptHelp": "FIBO usa prompts JSON nativos. Pega JSON válido; el texto simple no se convierte automáticamente.",
+      "upscaleInvalid": "Introduce al menos 2 píxeles o una escala positiva como 2x, y una suavidad de 0 a 1.",
+      "upscaleSource": "Imagen original para ampliar",
+      "upscaleHelp": "Define el lado más corto en píxeles (384 por defecto) o una escala como 2x. Se conserva la proporción de la imagen original. La suavidad va de 0 a 1.",
+      "upscaleSoftness": "Suavidad",
+      "upscaleResolution": "Resolución de salida",
       "steps": "Pasos",
       "stepsTitle": "Número de iteraciones de eliminación de ruido. Más pasos = mejor calidad pero más lento. Schnell funciona bien con 4, Dev necesita 20 o más.",
       "size": "Tamaño",

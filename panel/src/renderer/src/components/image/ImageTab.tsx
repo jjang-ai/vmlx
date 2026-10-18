@@ -38,6 +38,8 @@ export interface ImageGenerationInfo {
   guidance: number
   seed?: number
   strength?: number
+  upscaleResolution?: number | string
+  upscaleSoftness?: number
   elapsedSeconds?: number
   imagePath: string
   sourceImagePath?: string
@@ -47,6 +49,8 @@ export interface ImageGenerationInfo {
 type ServerStatus = ImageServerStatus
 
 interface ImageSettings {
+  resolution?: number | string
+  softness?: number
   steps: number
   width: number
   height: number
@@ -552,6 +556,9 @@ export function ImageTab() {
           negativePrompt: s.negativePrompt || undefined,
           model: selectedModel,
           imageBase64: sourceImage!.dataUrl,
+          operation: capabilities?.upscale ? 'upscale' : undefined,
+          resolution: s.resolution,
+          softness: s.softness,
           maskBase64: maskBase64 || undefined,
           width: s.width,
           height: s.height,
@@ -651,12 +658,15 @@ export function ImageTab() {
     imageDrafts.newConversation()
     setGenerations([])
     setError(null)
-    // Reset mode to match the currently running model's category
-    if (selectedModel) {
+    // Loaded adapter capabilities outrank bundle names shared by generation/edit classes.
+    // A true dual adapter keeps the user's currently selected operation.
+    if (capabilities?.loaded && capabilities.mode) {
+      if (capabilities.mode !== 'dual') setSessionMode(capabilities.mode)
+    } else if (selectedModel) {
       const modelDef = getImageModel(selectedModel) || resolveImageModelFromDirectoryName(selectedModel.split('/').filter(Boolean).pop() || selectedModel)
       if (modelDef) setSessionMode(modelDef.category)
     }
-  }, [selectedModel])
+  }, [selectedModel, capabilities])
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     imageDrafts.select(sessionId)
@@ -805,7 +815,7 @@ export function ImageTab() {
             startTime={jobStartTime}
             cancelling={cancelling}
             mode={sessions.find(session => session.id === currentSessionId)?.sessionType ?? sessionMode}
-            onRegenerate={capabilities?.mflux_class === 'Ideogram4' ? undefined : async (gen) => {
+            onRegenerate={capabilities?.mflux_class === 'Ideogram4' || capabilities?.upscale ? undefined : async (gen) => {
               // Iterate: set the output image as source for img2img
               // Read the generated image and set as source
               try {
@@ -818,7 +828,7 @@ export function ImageTab() {
                 }
                 imageDrafts.update(token, {
                   sourceImage: { dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` },
-                  maskBase64: null, prompt: '', iteratePrompt: gen.prompt,
+                  maskBase64: null, prompt: capabilities?.mflux_class === 'FIBO' ? gen.prompt : '', iteratePrompt: gen.prompt,
                   iterateCounter: token.draft.iterateCounter + 1,
                 })
                 // Restore settings from this generation
