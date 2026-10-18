@@ -587,7 +587,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
                     if t in eos:
                         break
             if policy is not None:
-                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
+                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new), requested=b)
             st.ar_steps += len(new); n += len(new)
             yield new, 0
             if new[-1] in eos:

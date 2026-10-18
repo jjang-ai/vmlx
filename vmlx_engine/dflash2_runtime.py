@@ -1349,7 +1349,7 @@ def _stream_generate_resumable(
                         mx.async_eval(nx, h)
                     else:
                         nx, h = launched
-                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted))
+                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted), requested=int(burst))
                 after_ar = True
                 hidden = mx.concatenate([hidden] + rows, axis=1)
                 if stop_matcher is None:
@@ -1639,8 +1639,18 @@ class _BlockChooser:
         self.ar_min_sample_tokens = int(os.environ.get("VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS", "3"))
         self.ar_outlier_ratio = 3.0
         self.ar_outliers_skipped = 0
-        self.spec_since_ar = 0
         self._reprobe_pending = False
+
+    # The re-probe counter lives with the shared AR cost it refreshes (as glm_dflash2.AdaptiveSpec, 2026-10-18 release
+    # audit R20): counted per request it never reached ar_reprobe_cycles on requests under 256 cycles, so the
+    # process-wide AR cost from the first sampled burst was never re-measured.
+    @property
+    def spec_since_ar(self) -> int:
+        return int(self.cost.get("spec_since_ar", 0))
+
+    @spec_since_ar.setter
+    def spec_since_ar(self, value: int) -> None:
+        self.cost["spec_since_ar"] = int(value)
 
     def _accept_probs(self, w: int) -> list[float]:
         out, prev = [], self.prior_p
@@ -1695,15 +1705,18 @@ class _BlockChooser:
             )
         )
 
-    def observe_ar(self, seconds: float, tokens: int) -> None:
-        """An AR burst: seconds per token, shared process-wide like the width costs."""
+    def observe_ar(self, seconds: float, tokens: int, requested: int | None = None) -> None:
+        """An AR burst: seconds per token, shared process-wide like the width costs. ``requested``: the planned burst
+        length; a burst that ended early (EOS / max_tokens) is not a cost sample (launches + sync over fewer tokens)."""
         if seconds <= 0 or tokens <= 0:
             return
         self.ar_tokens += tokens
         self.ar_since_probe += tokens
         self.spec_since_ar = 0
         reprobe, self._reprobe_pending = self._reprobe_pending, False
-        if tokens < self.ar_min_sample_tokens:
+        if tokens < self.ar_min_sample_tokens or (requested is not None and tokens < int(requested)):
+            if reprobe:
+                self.spec_since_ar = self.ar_reprobe_cycles   # the re-measurement did not happen: re-probe next
             return                         # EOS / max_tokens-cut burst: launch overhead, not the AR cost
         warm = self.cost.setdefault("warm", set())
         if "ar" not in warm:

@@ -969,8 +969,23 @@ class AdaptiveSpec:
         self.ar_outlier_ratio = float(ar_outlier_ratio)
         self.ar_outliers_skipped = 0
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
-        self.rounds_since_ar = 0
+        self._own_rounds_since_ar = 0
         self._reprobe_pending = False
+
+    # The re-probe counter lives with the cost it refreshes. Per request (2026-10-18 release audit R20) it never
+    # reached ar_reprobe_rounds on requests under 256 rounds, so a shared t_ar measured once at process start (MiMo:
+    # 28.5-29 ms from a 5-token EOS-cut burst at 6.8k context vs a real ~20 ms pipelined step) held for the life of
+    # the process and kept prose drafting at 46.6 tok/s where AR ran 50.4 (same clock, 3/3 reps).
+    @property
+    def rounds_since_ar(self) -> int:
+        return int(self._costs.get("rounds_since_ar", 0)) if self._shared_costs else self._own_rounds_since_ar
+
+    @rounds_since_ar.setter
+    def rounds_since_ar(self, value: int) -> None:
+        if self._shared_costs:
+            self._costs["rounds_since_ar"] = int(value)
+        else:
+            self._own_rounds_since_ar = int(value)
 
     @property
     def t_ar(self):
@@ -1050,11 +1065,16 @@ class AdaptiveSpec:
         if not after_ar or b not in self.t_round:
             self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
 
-    def update_ar(self, dt_per_token: float, tokens: int) -> None:
+    def update_ar(self, dt_per_token: float, tokens: int, requested: int | None = None) -> None:
+        """``requested``: the burst length asked for. A burst that ended early (EOS / max_tokens) pays its pipeline
+        launches and the final sync over fewer tokens than planned (the cut that set MiMo's t_ar to 28.5 ms was 5 of
+        8 tokens, above the 3-token floor): it is not an AR cost sample."""
         self.ar_since_probe += tokens
         self.rounds_since_ar = 0
         reprobe, self._reprobe_pending = self._reprobe_pending, False
-        if int(tokens) < self.ar_min_sample_tokens:
+        if int(tokens) < self.ar_min_sample_tokens or (requested is not None and int(tokens) < int(requested)):
+            if reprobe:
+                self.rounds_since_ar = self.ar_reprobe_rounds   # the re-measurement did not happen: re-probe next
             return                                  # EOS / max_tokens-cut burst: launch overhead, not the AR cost
         if self._shared_costs and not self._costs.get("ar_warm"):
             # the first AR burst of the process can include 1-row kernel compiles: a stored outlier would keep the
@@ -1232,7 +1252,7 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
                 after_ar = True
                 ta = time.perf_counter()
                 new, rows = ar_burst(min(b, max_tokens - n))
-                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
+                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new), requested=b)
                 hidden = mx.concatenate([hidden] + rows, axis=1)
                 if hidden_limit is not None and hidden.shape[1] > hidden_limit:
                     drop = hidden.shape[1] - hidden_limit          # outside the drafter's sliding window anyway

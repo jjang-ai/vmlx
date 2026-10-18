@@ -770,3 +770,49 @@ def test_rejection_sample_with_candidate_indices_is_exact(gamma):
     band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=target), minlength=V) / N - target).sum()
                         for _ in range(40)], 0.99)
     assert tv <= 1.25 * band, (tv, band)
+
+
+def test_shared_ar_cost_is_reprobed_across_short_requests():
+    """2026-10-18 release audit R20 (MiMo, same clock 3/3 reps): the shared t_ar held 28.5-29 ms for the whole
+    process (real pipelined step ~20 ms) because the re-probe counter was per request and no request reached 256
+    rounds; prose then drafted at 46.6 tok/s where AR ran 50.4. The counter now lives in the shared table."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec, adaptive_costs
+
+    tgt = SimpleNamespace()
+    costs = adaptive_costs(tgt, 8)
+    first = AdaptiveSpec(8, costs=costs, ar_reprobe_rounds=10)
+    first.update_ar(0.030, 8)                                # warm-up burst of the table
+    first.update_ar(0.0285, 8)
+    for _ in range(4):                                       # 4 + 4 + 3 rounds over three short requests
+        first.update_spec(3, 1, 0.040)
+    second = AdaptiveSpec(8, costs=costs, ar_reprobe_rounds=10)
+    for _ in range(4):
+        second.update_spec(3, 1, 0.040)
+    third = AdaptiveSpec(8, costs=costs, ar_reprobe_rounds=10)
+    for _ in range(3):
+        third.update_spec(3, 1, 0.040)
+    assert third.choose() == ("ar", 8)                       # re-probe due across requests
+    third.update_ar(0.020, 8, requested=8)
+    assert abs(third.t_ar - (0.3 * 0.0285 + 0.7 * 0.020)) < 1e-9
+    assert costs["rounds_since_ar"] == 0
+
+
+def test_burst_cut_before_its_planned_length_is_not_an_ar_sample():
+    """The 28.5 ms seed was a 5-of-8-token burst ended by EOS at 6.8k context (above the 3-token floor)."""
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    p = AdaptiveSpec(8, ar_reprobe_rounds=4)
+    p.update_ar(0.0285, 5, requested=8)                      # cut: no sample
+    assert p.t_ar is None
+    p.update_ar(0.020, 8, requested=8)
+    assert abs(p.t_ar - 0.020) < 1e-9
+    for _ in range(4):
+        p.update_spec(3, 1, 0.040)
+    assert p.choose() == ("ar", 8)
+    p.update_ar(0.050, 3, requested=8)                       # the re-probe itself was cut ...
+    assert abs(p.t_ar - 0.020) < 1e-9
+    assert p.choose() == ("ar", 8)                           # ... so the next decision re-probes again
+    p.update_ar(0.024, 8, requested=8)
+    assert abs(p.t_ar - (0.3 * 0.020 + 0.7 * 0.024)) < 1e-9
