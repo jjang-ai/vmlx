@@ -40,6 +40,16 @@ from vmlx_engine.errors import UnsupportedMediaModalityError
 logger = logging.getLogger(__name__)
 
 
+def _mimo_block_env():
+    """VMLX_MIMO_DFLASH_BLOCK=<n>: MiMo DFlash verify width for A/Bs (2-16); unset / invalid = the drafter's block."""
+    raw = os.environ.get("VMLX_MIMO_DFLASH_BLOCK", "").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    return n if 2 <= n <= 16 else None
+
+
 _VLM_STREAM = None
 _VLM_STREAM_OWNER: int | None = None
 
@@ -7544,6 +7554,9 @@ class MLXMultimodalLM:
             float(kwargs.get("top_p", 1.0) or 1.0), int(kwargs.get("top_k", 0) or 0),
             prefill_step=int(kwargs.get("prefill_step_size") or prefill_step_size()), stats=st,
             adaptive=os.environ.get("VMLX_MIMO_DFLASH_ADAPTIVE", "1").strip().lower() not in {"0", "false", "off", "no"},
+            # A/B tool (as VMLX_DFLASH2_BLOCK): a pinned verify width with VMLX_MIMO_DFLASH_ADAPTIVE=0 (or the adaptive
+            # policy's maximum width when it stays on); unset = the drafter's block
+            block_size=_mimo_block_env(),
             controls=controls, resume=resume, snapshot_cuts=[c for _, c in cuts], on_snapshot=_on_snapshot,
             session=session, embeds=embeds,
         ):
