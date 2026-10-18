@@ -623,3 +623,42 @@ def test_simple_engine_native_video_clip(tmp_path):
     with pytest.raises(ValueError):
         _video_frames_as_native_clip([])
     assert math.isfinite(float(clip.mean()))
+
+
+@pytest.mark.parametrize("case", [
+    "text_only", "small_image_4x", "multirow_slices_16x",
+    "two_images_no_image_id", "video_2f_sliced_16x", "batch2_leftpad",
+])
+def test_cached_canvas_tail_keeps_processor_positions_and_decode_delta(case):
+    """A restored suffix must have exactly the cold transformer's canvas plan."""
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+    from vmlx_engine.models.minicpmv4_7.language import _CanvasLanguageMixin
+
+    d = {k.split("__")[1]: _DATA[k] for k in _DATA.files if k.split("__")[0] == case}
+    lm = _CanvasLanguageMixin()
+    lm.config = SimpleNamespace(
+        slice_start_id=MARKERS[0], slice_end_id=MARKERS[1],
+        image_start_id=MARKERS[2], image_end_id=MARKERS[3], newline_id=MARKERS[4],
+        image_token_id=IMAGE_PAD, video_token_id=VIDEO_PAD, downsample_mode="16x",
+    )
+    gen = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    gen._model_type = "minicpmv4_7"
+    gen.language_model = lm
+    ids = mx.array(d["input_ids"])
+    cut = int(ids.shape[-1]) - 1
+    req = SimpleNamespace(
+        request_id="canvas-tail", attention_mask=mx.array(d["attention_mask"]),
+        extra_kwargs={
+            **{k: mx.array(d[k]) for k in ("mm_token_type_ids", "target_sizes", "target_sizes_videos") if k in d},
+            "downsample_mode": "4x" if int(d["mode"][0]) == 2 else "16x",
+        },
+    )
+    assert gen._mrope_tail_position_ids(req, ids, cut)
+    np.testing.assert_array_equal(np.asarray(req._mrope_tail_position_ids), d["position_ids"][..., cut:])
+    np.testing.assert_array_equal(np.asarray(req._mrope_tail_rope_deltas), d["rope_deltas"])
+    assert req._mrope_decode_delta == int(d["rope_deltas"].reshape(-1)[0])
+    if "target_sizes" in req.extra_kwargs or "target_sizes_videos" in req.extra_kwargs:
+        req.extra_kwargs = {}
+        fresh = SimpleNamespace(request_id="missing-canvas", extra_kwargs={})
+        assert not gen._mrope_tail_position_ids(fresh, ids, cut)
+        assert not hasattr(fresh, "_mrope_tail_position_ids")

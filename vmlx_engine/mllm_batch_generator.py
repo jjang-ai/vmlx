@@ -486,6 +486,7 @@ _MLLM_MEDIA_PREFIX_CACHE_DEFAULT_FAMILIES = frozenset(
         "gemma4_unified",
         "step3p7",
         "dots3_note",
+        "minicpmv4_7",
     }
 )
 
@@ -10799,7 +10800,7 @@ class MLLMBatchGenerator:
         # after the forbidden region when it fits under N-1, else before it,
         # else none.
         family = str(getattr(self, "_model_type", "") or "").lower()
-        if family in {"qwen3_5", "qwen3_5_moe", "qwen4_exp"}:
+        if family in {"qwen3_5", "qwen3_5_moe", "qwen4_exp", "minicpmv4_7"}:
             span = self._media_placeholder_span(token_ids)
         else:
             span = None
@@ -11297,7 +11298,7 @@ class MLLMBatchGenerator:
         # + 1 image = 12 s TTFT, cached 0). The conditioned-tail runner still
         # validates ids/embeddings/positions and falls back to a full prefill.
         return str(getattr(self, "_model_type", "") or "").lower() in {
-            "qwen3_5", "qwen3_5_moe", "qwen4_exp",
+            "qwen3_5", "qwen3_5_moe", "qwen4_exp", "minicpmv4_7",
         }
 
     def _decline_unsupported_hybrid_media_tail(
@@ -14496,11 +14497,28 @@ class MLLMBatchGenerator:
             cached = int(cached_tokens)
             if cached <= 0 or cached >= total:
                 return False
+            # MiniCPM uses canvas crop sizes, not Qwen image/video grids.
+            # Rebuild from this request's processor metadata, never a plan
+            # left on the shared language model by an earlier request.
+            rope_kwargs = {}
+            attention_mask = None
+            if str(getattr(self, "_model_type", "")).lower() == "minicpmv4_7":
+                extra = getattr(request, "extra_kwargs", None) or {}
+                attention_mask = getattr(request, "attention_mask", None)
+                rope_kwargs = {
+                    key: extra[key]
+                    for key in (
+                        "mm_token_type_ids", "target_sizes",
+                        "target_sizes_videos", "downsample_mode",
+                    )
+                    if key in extra
+                }
             position_ids, rope_deltas = rope_index(
                 ids,
                 getattr(request, "image_grid_thw", None),
                 getattr(request, "video_grid_thw", None),
-                None,
+                attention_mask,
+                **rope_kwargs,
             )
             if position_ids is None or getattr(position_ids, "ndim", 0) != 3 or int(position_ids.shape[-1]) != total:
                 return False
@@ -14509,6 +14527,10 @@ class MLLMBatchGenerator:
             request._mrope_tail_position_ids = tail  # type: ignore[attr-defined]
             request._mrope_tail_rope_deltas = rope_deltas  # type: ignore[attr-defined]
             request._mrope_full_position_ids = position_ids  # type: ignore[attr-defined]
+            # A restored media prefix takes the text-only prefill branch.
+            # That branch bypasses the media hook which normally records
+            # MiniCPM's per-request decode offset for the subsequent batch.
+            _record_request_rope_delta(lm, request)
             logger.info(
                 "VLM HYBRID media hit: text tail of %d token(s) keeps mRoPE positions for %s (first=%s, last=%s)",
                 total - cached,
@@ -16006,6 +16028,18 @@ class MLLMBatchGenerator:
                                             len(_full_remaining),
                                             _qwen_tail["kind"],
                                         )
+                                    elif (
+                                        str(getattr(self, "_model_type", "")).lower() == "minicpmv4_7"
+                                        and not self._mrope_tail_position_ids(
+                                            req, getattr(req, "input_ids", None), int(block_table.num_tokens)
+                                        )
+                                    ):
+                                        self._discard_request_cache_hit(
+                                            req,
+                                            reason="minicpm_canvas_positions_unavailable",
+                                            attempted_cached_tokens=int(block_table.num_tokens),
+                                        )
+                                        continue
                                     elif _full_remaining:
                                         self._mrope_tail_position_ids(
                                             req, getattr(req, "input_ids", None), int(block_table.num_tokens)
@@ -20403,6 +20437,7 @@ class MLLMBatchGenerator:
                 if str(getattr(self, "_model_type", "")) not in {
                     "qwen4_exp", "qwen4_exp_text", "qwen3_5", "qwen3_5_text",
                     "qwen3_5_moe", "qwen3_5_moe_text",
+                    "minicpmv4_7",
                 } or not self._mrope_tail_position_ids(
                     position_request, full_ids, ck_len
                 ):
@@ -21154,7 +21189,7 @@ class MLLMBatchGenerator:
         rejected so their caller can retain the safe terminal snapshot.
         """
         family = str(getattr(self, "_model_type", "") or "").lower()
-        if family not in {"qwen3_5", "qwen3_5_moe"}:
+        if family not in {"qwen3_5", "qwen3_5_moe", "minicpmv4_7"}:
             return None
         if not full_tokens or len(tokens) >= len(full_tokens):
             return None
