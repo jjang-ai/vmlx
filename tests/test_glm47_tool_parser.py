@@ -171,3 +171,49 @@ class TestGlm47ToolParser:
             "path": "panel/package.json"
         }
         assert out.content is None
+
+
+def _request(props):
+    return {"tools": [{"type": "function", "function": {
+        "name": "write_file", "parameters": {"type": "object", "properties": props}}}]}
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("001", "001"),
+    ("true", "true"),
+    ("null", "null"),
+    ('{"a": 1}', '{"a": 1}'),
+    ('"quoted"', '"quoted"'),
+    ("line one\n  line two\n", "line one\n  line two\n"),
+])
+def test_string_schema_keeps_the_generated_bytes(parser, raw, expected):
+    """The template renders strings verbatim (tojson only for non-strings): a string parameter must not be JSON-decoded."""
+    text = ("<tool_call>write_file\n<arg_key>content</arg_key><arg_value>" + raw +
+            "</arg_value><arg_key>mode</arg_key><arg_value>420</arg_value></tool_call>")
+    req = _request({"content": {"type": "string"}, "mode": {"type": "integer"}})
+    out = parser.extract_tool_calls(text, req)
+    args = json.loads(out.tool_calls[0]["arguments"])
+    assert args["content"] == expected
+    assert args["mode"] == 420
+
+
+def test_nullable_string_and_typed_and_unknown_parameters(parser):
+    text = ("<tool_call>write_file\n"
+            "<arg_key>note</arg_key><arg_value>null</arg_value>"
+            "<arg_key>flags</arg_key><arg_value>[1, 2]</arg_value>"
+            "<arg_key>force</arg_key><arg_value>false</arg_value>"
+            "<arg_key>extra</arg_key><arg_value>7</arg_value></tool_call>")
+    req = _request({"note": {"type": ["string", "null"]}, "flags": {"type": "array"},
+                    "force": {"type": "boolean"}})
+    args = json.loads(parser.extract_tool_calls(text, req).tool_calls[0]["arguments"])
+    assert args == {"note": None, "flags": [1, 2], "force": False, "extra": 7}
+
+
+def test_streaming_uses_the_same_schema_decode(parser):
+    req = _request({"content": {"type": "string"}})
+    head = "<tool_call>write_file\n<arg_key>content</arg_key><arg_value>0042"
+    tail = "</arg_value></tool_call>"
+    assert parser.extract_tool_calls_streaming("", head, head, request=req) is None
+    out = parser.extract_tool_calls_streaming(head, head + tail, tail, request=req)
+    args = json.loads(out["tool_calls"][0]["function"]["arguments"])
+    assert args == {"content": "0042"}
