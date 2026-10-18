@@ -117,6 +117,68 @@ class TestImagePaintMaskTransport:
 
 class TestImageSessionIdentity:
     @pytest.mark.anyio
+    @pytest.mark.parametrize("canonical", ["flux2-klein-4b", "flux2-klein-9b"])
+    @pytest.mark.parametrize("request_kind,adapter,loaded,expected", [
+        ("omitted", "Flux2KleinEdit", True, 200),
+        ("canonical", "Flux2KleinEdit", True, 200),
+        ("path", "Flux2KleinEdit", True, 200),
+        ("other_name", "Flux2KleinEdit", True, 400),
+        ("other_path", "Flux2KleinEdit", True, 400),
+        ("omitted", "Flux2Klein", True, 400),
+        ("canonical", "Flux2Klein", True, 400),
+        ("omitted", "Flux2KleinEdit", False, 200),
+        ("canonical", "Flux2KleinEdit", False, 200),
+        ("other_name", "Flux2KleinEdit", False, 400),
+        ("other_path", "Flux2KleinEdit", False, 400),
+        ("omitted", "Flux2Klein", False, 400),
+        ("canonical", "Flux2Klein", False, 400),
+    ])
+    async def test_klein_edit_requires_matching_selected_adapter(
+        self, client, monkeypatch, canonical, request_kind, adapter, loaded, expected
+    ):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        output = SimpleNamespace(b64_json="AAAA", seed=42)
+        engine = SimpleNamespace(
+            is_loaded=loaded, model_name=canonical, _model_path="/test/klein",
+            _mflux_class=adapter, capabilities=lambda: {"guidance": True},
+            load=MagicMock(), unload=MagicMock(), edit=MagicMock(return_value=output),
+        )
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_path", "/test/klein")
+        monkeypatch.setattr(srv, "_model_name", canonical)
+        monkeypatch.setattr(srv, "_served_model_name", "image-session")
+        image = io.BytesIO()
+        Image.new("RGB", (64, 64)).save(image, format="PNG")
+        body = {"prompt": "make blue red", "size": "64x64",
+                "image": base64.b64encode(image.getvalue()).decode()}
+        if request_kind != "omitted":
+            body["model"] = {
+                "canonical": canonical, "path": "/test/klein",
+                "other_name": "flux2-klein-9b" if canonical.endswith("4b") else "flux2-klein-4b",
+                "other_path": canonical,
+            }[request_kind]
+        if request_kind == "other_path":
+            body["model_path"] = "/test/different-bundle"
+        response = await client.post("/v1/images/edits", json=body)
+        assert response.status_code == expected, response.text
+        if expected == 200 and not loaded:
+            engine.load.assert_called_once()
+            assert engine.load.call_args.args == (canonical,)
+            assert engine.load.call_args.kwargs["mflux_class"] == "Flux2KleinEdit"
+            assert engine.load.call_args.kwargs["model_path"] == "/test/klein"
+        else:
+            engine.load.assert_not_called()
+        engine.unload.assert_not_called()
+        if expected == 200:
+            engine.edit.assert_called_once()
+        else:
+            engine.edit.assert_not_called()
+
+    @pytest.mark.anyio
     @pytest.mark.parametrize("lane,canonical", [("edits", "qwen-image-edit"), ("generations", "dev")])
     @pytest.mark.parametrize("guidance", [None, 0.0, 4.25])
     async def test_guidance_omission_is_resolved_after_model_selection(self, client, monkeypatch, lane, canonical, guidance):
@@ -652,6 +714,82 @@ class TestImageEditRequestValidation:
         )
         assert resp.status_code == 400
         assert "prompt is required" in resp.json()["detail"]
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("multipart", [False, True])
+    @pytest.mark.parametrize("resolution", [512, "1.5x", None])
+    async def test_seedvr_native_controls_without_prompt(self, client, monkeypatch, multipart, resolution):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        result = SimpleNamespace(b64_json="AAAA", seed=42, width=768, height=384)
+        engine = SimpleNamespace(is_loaded=True, model_name="seedvr2-3b",
+                                 _model_path="/test/seedvr2", _mflux_class="SeedVR2",
+                                 edit=MagicMock(return_value=result))
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_path", "/test/seedvr2")
+        source = io.BytesIO()
+        Image.new("RGB", (128, 64)).save(source, format="PNG")
+        body = {"seed": 42, "softness": 0.25}
+        if resolution is not None:
+            body["resolution"] = resolution
+        if multipart:
+            response = await client.post("/v1/images/edits",
+                data={key: str(value) for key, value in body.items()},
+                files={"image": ("source.png", source.getvalue(), "image/png")})
+        else:
+            response = await client.post("/v1/images/edits", json={
+                **body, "image": base64.b64encode(source.getvalue()).decode(),
+            })
+        assert response.status_code == 200, response.text
+        sent = engine.edit.call_args.kwargs
+        assert sent["prompt"] == ""
+        assert sent.get("resolution") == resolution
+        assert sent["softness"] == 0.25
+        image = response.json()["data"][0]
+        assert (image["width"], image["height"]) == (768, 384)
+        assert image["resolution"] == (384 if resolution is None else resolution)
+        assert image["softness"] == 0.25
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("resolution", [0, 1, True, 2.5, "0x", "nan", "1e3x", {}, []])
+    async def test_seedvr_invalid_resolution_is_400_before_model_load(self, client, resolution):
+        response = await client.post("/v1/images/edits", json={
+            "model": "seedvr2-3b", "image": "unused", "resolution": resolution,
+        })
+        assert response.status_code == 400, response.text
+        assert "resolution" in response.json()["detail"]
+
+    @pytest.mark.anyio
+    async def test_seedvr_positive_scale_rounding_to_zero_returns_400(self, client, monkeypatch):
+        import io
+        import sys
+        from PIL import Image
+        from vmlx_engine.image_gen import ImageGenEngine
+        import vmlx_engine.server as srv
+        scale = SimpleNamespace(value=0.01, get_scaled_value=lambda edge: 0)
+        monkeypatch.setitem(sys.modules, "mflux.utils.scale_factor",
+                            SimpleNamespace(ScaleFactor=SimpleNamespace(parse=lambda text: scale)))
+        engine = ImageGenEngine()
+        engine._model = MagicMock()
+        engine._loaded = True
+        engine._model_name = "seedvr2-3b"
+        engine._mflux_class = "SeedVR2"
+        engine._model_path = "/test/seedvr2"
+        engine._generate_with_trace = MagicMock()
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        source = io.BytesIO()
+        Image.new("RGB", (64, 64)).save(source, format="PNG")
+        response = await client.post("/v1/images/edits", json={
+            "image": base64.b64encode(source.getvalue()).decode(), "resolution": "0.01x",
+        })
+        assert response.status_code == 400, response.text
+        assert "rounds the source" in response.json()["detail"]
+        engine._generate_with_trace.assert_not_called()
 
     @pytest.mark.anyio
     async def test_edit_image_required(self, client):

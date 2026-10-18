@@ -19567,7 +19567,15 @@ def _validate_image_request_parameters(body: Any) -> None:
         if type(value) is not int or (key in ("n", "steps") and value < 1):
             suffix = "positive integer" if key in ("n", "steps") else "integer"
             raise HTTPException(400, detail=f"{key} must be a {suffix}")
-    for key in ("guidance", "strength"):
+    resolution = body.get("resolution")
+    if resolution is not None:
+        valid_resolution = type(resolution) is int and resolution >= 2
+        if isinstance(resolution, str) and re.fullmatch(r"\d+(?:\.\d+)?[xX]", resolution.strip()):
+            scale = float(resolution.strip()[:-1])
+            valid_resolution = math.isfinite(scale) and scale > 0
+        if not valid_resolution:
+            raise HTTPException(400, detail="resolution must be an integer of at least 2 pixels or a positive scale such as '2x'")
+    for key in ("guidance", "strength", "softness"):
         value = body.get(key)
         if value is None:
             continue
@@ -19871,6 +19879,8 @@ async def create_image_edit(request: Request):
         guidance: Guidance scale (omitted = loaded model's product preset)
         steps: Inference steps (optional)
         seed: Random seed (optional)
+        resolution: SeedVR2 shortest-edge pixels or scale such as '2x' (default 384)
+        softness: SeedVR2 softness from 0 to 1 (default 0)
     """
     global _image_gen
 
@@ -19893,7 +19903,14 @@ async def create_image_edit(request: Request):
     steps = body.get("steps")
     seed = body.get("seed")
 
-    if not prompt:
+    upscale_requested = (
+        model in ("seedvr2", "seedvr2-3b", "seedvr2-7b")
+        or (
+            getattr(_image_gen, "_mflux_class", None) == "SeedVR2"
+            and _image_request_matches_current_model(_image_gen, model, model, body.get("model_path"))
+        )
+    )
+    if not prompt and not upscale_requested:
         raise HTTPException(status_code=400, detail="prompt is required")
     if not image_b64:
         raise HTTPException(status_code=400, detail="image (base64) is required")
@@ -20061,11 +20078,26 @@ async def create_image_edit(request: Request):
 
             from .image_gen import EDIT_MODELS, SUPPORTED_MODELS
 
+            resolved = EDIT_MODELS.get(model.lower(), model)
+            same_image_model = _image_request_matches_current_model(
+                _image_gen, model, resolved, body.get("model_path")
+            )
+            already_loaded = _image_gen.is_loaded and same_image_model
+            # Klein generation and editing share a canonical model name. Only
+            # the identity-matched selected edit adapter establishes edit support.
+            # unload() retains its class so sleep can restore the same adapter;
+            # the name alone must never authorize a generation-only adapter.
+            selected_klein_edit = (
+                same_image_model
+                and getattr(_image_gen, "_mflux_class", None) == "Flux2KleinEdit"
+            )
+
             # Reject gen-only models on the edit endpoint. Without this
             # check, calling edit() with a gen model (e.g. "schnell")
             # silently falls through to img2img, ignoring the user's
             # explicit instruction-based-edit intent.
-            if model and model.lower() in SUPPORTED_MODELS and model.lower() not in EDIT_MODELS:
+            if (model and model.lower() in SUPPORTED_MODELS
+                    and model.lower() not in EDIT_MODELS and not selected_klein_edit):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -20076,13 +20108,7 @@ async def create_image_edit(request: Request):
                     ),
                 )
 
-            resolved = EDIT_MODELS.get(model.lower(), model)
-
             # Check if we need to load a different model
-            same_image_model = _image_request_matches_current_model(
-                _image_gen, model, resolved, body.get("model_path")
-            )
-            already_loaded = _image_gen.is_loaded and same_image_model
             if not already_loaded:
                 try:
                     reload_name = _image_gen.model_name if same_image_model else model
@@ -20106,6 +20132,12 @@ async def create_image_edit(request: Request):
                         status_code=500,
                         detail=f"Failed to load edit model '{model}': {e}",
                     )
+
+            is_upscale = getattr(_image_gen, "_mflux_class", None) == "SeedVR2"
+            if not prompt and not is_upscale:
+                raise HTTPException(400, detail="prompt is required")
+            if is_upscale and ("size" in body or n != 1):
+                raise HTTPException(400, detail="SeedVR2 preserves aspect ratio; use resolution instead of size and request one image")
 
             # Normalize for the actual adapter after load, under the model lock.
             # Preserve the old RGB contract everywhere except native Qwen 2.1.
@@ -20140,6 +20172,9 @@ async def create_image_edit(request: Request):
             for i in range(n):
                 image_request.check()
                 img_seed = (seed + i) if seed is not None else None
+                upscale_controls = {
+                    key: body[key] for key in ("resolution", "softness") if key in body
+                }
                 try:
                     result = await _run_image_gen_call(
                         _image_gen.edit,
@@ -20153,6 +20188,7 @@ async def create_image_edit(request: Request):
                         strength=strength,
                         negative_prompt=body.get("negative_prompt"),
                         mask_path=str(mask_path) if mask_path else None,
+                        **upscale_controls,
                     )
                 except (HTTPException, ImageRequestCancelled):
                     raise
@@ -20164,14 +20200,19 @@ async def create_image_edit(request: Request):
                         status_code=500, detail=f"Image editing failed: {e}"
                     )
 
-                images.append(
-                    {
-                        "b64_json": result.b64_json,
-                        "revised_prompt": prompt,
-                        "seed": result.seed,
-                        "image_job_id": getattr(result, "job_id", None),
-                    }
-                )
+                image_result = {
+                    "b64_json": result.b64_json,
+                    "revised_prompt": prompt,
+                    "seed": result.seed,
+                    "image_job_id": getattr(result, "job_id", None),
+                }
+                if is_upscale:
+                    image_result.update(
+                        width=result.width, height=result.height,
+                        resolution=body.get("resolution") if body.get("resolution") is not None else 384,
+                        softness=body.get("softness") if body.get("softness") is not None else 0.0,
+                    )
+                images.append(image_result)
 
     except HTTPException:
         raise
@@ -20221,7 +20262,7 @@ async def _parse_image_edit_request_body(request: Request) -> dict[str, Any]:
 
     parsed: dict[str, Any] = {}
     int_fields = {"n", "steps", "seed"}
-    float_fields = {"strength", "guidance"}
+    float_fields = {"strength", "guidance", "softness"}
 
     async def _file_to_b64(value: Any) -> str:
         data = await value.read()
@@ -20239,7 +20280,9 @@ async def _parse_image_edit_request_body(request: Request) -> dict[str, Any]:
             continue
 
         text = str(value)
-        if key in int_fields and text.strip():
+        if key == "resolution" and text.strip().isdigit():
+            parsed[key] = int(text)
+        elif key in int_fields and text.strip():
             try:
                 parsed[key] = int(text)
             except ValueError:

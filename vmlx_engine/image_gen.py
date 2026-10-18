@@ -90,6 +90,11 @@ DEFAULT_GUIDANCE: dict[str, float] = {
     "qwen-image-2.1-turbo": 1.0,
     "dev-kontext": 2.5,
     "dev-fill": 30.0,
+    "fibo": 3.5,
+    "fibo-lite": 3.5,
+    # Native upscaling has no guidance parameter; these mirror the UI metadata.
+    "seedvr2-3b": 0.0,
+    "seedvr2-7b": 0.0,
 }
 
 # Legacy name aliases (kept for backward compat with CLI and stored configs)
@@ -128,6 +133,9 @@ SUPPORTED_MODELS: dict[str, str] = {
 }
 
 EDIT_MODELS: dict[str, str] = {
+    "seedvr2": "seedvr2-3b",
+    "seedvr2-3b": "seedvr2-3b",
+    "seedvr2-7b": "seedvr2-7b",
     # These edit-saved bundles use one native runtime for both endpoints.
     "qwen-image-2.1": "qwen-image-2.1",
     "qwen-image-2.1-turbo": "qwen-image-2.1-turbo",
@@ -765,6 +773,16 @@ class ImageGenEngine:
         if not self.is_loaded:
             raise RuntimeError("No image model loaded. Call load() first.")
 
+        if self._mflux_class == "FIBO":
+            # FIBO consumes a structured JSON caption directly. Validate its
+            # native input contract without rewriting the user's prompt or
+            # silently loading a separate caption-expansion model.
+            import json
+            try:
+                json.loads(prompt)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("FIBO requires a valid JSON prompt; enter a structured JSON caption") from exc
+
         # vmlx#100 / mlxstudio#100 — honor cancellation requested while a
         # prior call was running (or before this call started). Mflux is
         # uncancellable mid-step, so this is the entry-point checkpoint.
@@ -901,6 +919,8 @@ class ImageGenEngine:
         strength: float | None = None,
         negative_prompt: str | None = None,
         mask_path: str | None = None,
+        resolution: int | str | None = None,
+        softness: float | None = None,
     ) -> ImageGenResult:
         """Edit an image using a loaded editing model.
 
@@ -909,6 +929,18 @@ class ImageGenEngine:
         """
         if not self.is_loaded:
             raise RuntimeError("No edit model loaded. Call load() first.")
+
+        if self._mflux_class == "SeedVR2":
+            if prompt or mask_path or negative_prompt or any(
+                value is not None for value in (steps, guidance, strength)
+            ):
+                raise ValueError("SeedVR2 upscaling accepts image, seed, resolution and softness, not prompt, mask, steps, guidance or strength")
+            return self._upscale_seedvr2(
+                image_path=image_path, seed=seed,
+                resolution=resolution, softness=softness,
+            )
+        if resolution is not None or softness is not None:
+            raise ValueError("resolution and softness are supported only by SeedVR2 upscaling")
 
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
@@ -1044,6 +1076,57 @@ class ImageGenEngine:
             job_id=trace.job_id,
         )
 
+    def _upscale_seedvr2(self, *, image_path, seed, resolution, softness) -> ImageGenResult:
+        """Dispatch the native upscaler without text-generation parameters."""
+        import math
+        if not image_path:
+            raise ValueError("SeedVR2 requires a source image")
+        if resolution is None:
+            resolution = 384  # Native mflux SeedVR2 CLI default, shortest edge.
+        if isinstance(resolution, str):
+            from mflux.utils.scale_factor import ScaleFactor
+            resolution = ScaleFactor.parse(resolution)
+            if not math.isfinite(resolution.value):
+                raise ValueError("resolution scale must be finite")
+            # The native scale parser rounds to its dimension step. A positive
+            # factor can still produce zero pixels on a small source; reject
+            # that concrete invalid shape before allocating model tensors.
+            from PIL import Image
+            with Image.open(image_path) as source:
+                try:
+                    scaled_edge = resolution.get_scaled_value(min(source.size))
+                except (OverflowError, ValueError) as exc:
+                    raise ValueError("resolution scale produces invalid image dimensions") from exc
+            if scaled_edge < 2:
+                raise ValueError("resolution scale rounds the source's shortest edge below 2 pixels; choose a larger scale")
+        elif type(resolution) is not int or resolution < 2:
+            raise ValueError("resolution must be an integer of at least 2 pixels or a positive scale such as '2x'")
+        softness = 0.0 if softness is None else softness
+        if type(softness) not in (int, float) or not math.isfinite(softness) or not 0 <= softness <= 1:
+            raise ValueError("softness must be a finite number between 0 and 1")
+        if seed is None:
+            import random
+            seed = random.randint(0, 2**32 - 1)
+        start = time.perf_counter()
+        generated_image, trace = self._generate_with_trace(
+            seed=seed, image_path=image_path, resolution=resolution, softness=softness,
+        )
+        elapsed = time.perf_counter() - start
+        trace.event("encoding_png")
+        pil_image = generated_image.image
+        buffer = io.BytesIO()
+        pil_image.save(buffer, format="PNG")
+        image_bytes = buffer.getvalue()
+        trace.event("encoded_png", bytes=len(image_bytes))
+        # Native shortest-edge scaling preserves the input aspect ratio; the
+        # generic edit width/height defaults are not the resulting dimensions.
+        width, height = pil_image.size
+        return ImageGenResult(
+            image_bytes=image_bytes, width=width, height=height,
+            model=self._model_name or "unknown", seed=seed, steps=1,
+            elapsed_seconds=elapsed, job_id=trace.job_id,
+        )
+
     def _generate_with_trace(self, **kwargs):
         return observed_image_call(
             self._model, model_name=self._model_name,
@@ -1053,7 +1136,7 @@ class ImageGenEngine:
     # Explicit edit classes handled by edit(); each has its own branch and none
     # of them forwards image_strength (Kontext/Fill/Klein condition on the
     # reference or the mask; Qwen edit conditions on the source image).
-    _EDIT_CLASSES = frozenset({"QwenImageEdit", "QwenImage21Edit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"})
+    _EDIT_CLASSES = frozenset({"QwenImageEdit", "QwenImage21Edit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit", "SeedVR2"})
 
     def capabilities(self) -> dict:
         """What the LOADED model actually accepts, from its class and its
@@ -1073,6 +1156,7 @@ class ImageGenEngine:
         mclass = self._mflux_class or ""
         is_edit = mclass in self._EDIT_CLASSES
         dual = mclass == "QwenImage21Edit"
+        upscale = mclass == "SeedVR2"
         # Flux1's actual model configuration controls whether a guidance
         # embedding exists. Schnell accepts the argument but does not use it;
         # Dev does. Do not infer other adapters' semantics from this flag.
@@ -1080,12 +1164,18 @@ class ImageGenEngine:
         guidance = guidance if mclass == "Flux1" and isinstance(guidance, bool) else None
         if dual:
             guidance = self._model_name != "qwen-image-2.1-turbo"
+        if upscale:
+            guidance = False
         return {
             "loaded": bool(self.is_loaded),
             "model": self._model_name,
             "mflux_class": mclass,
             "quantize": self._quantize,
             "mode": "dual" if dual else ("edit" if is_edit else "generate"),
+            "upscale": upscale,
+            "prompt": not upscale,
+            "prompt_format": "json" if mclass == "FIBO" else "text",
+            "steps": not upscale,
             "negative_prompt": self._supports_negative_prompt(),
             "guidance": guidance,
             "variation_strength": dual or ((not is_edit) and "image_strength" in params),

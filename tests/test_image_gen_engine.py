@@ -52,7 +52,8 @@ class TestImageGuidanceDefaults:
         source = (Path(mod.__file__).resolve().parents[1] /
                   "panel/src/shared/imageModels.ts").read_text()
         rows = re.findall(r"steps: ([\d.]+),\s+guidance: ([\d.]+),[\s\S]*?mfluxName: '([^']+)'", source)
-        assert len(rows) == 12
+        assert len(rows) == 16
+        assert {"fibo", "seedvr2-3b", "flux2-klein-4b", "flux2-klein-9b"} <= {name for _, _, name in rows}
         for steps, guidance, name in rows:
             assert mod.DEFAULT_STEPS[name] == int(steps)
             assert mod.DEFAULT_GUIDANCE[name] == float(guidance)
@@ -329,3 +330,146 @@ class TestQwen21NativeAdapter:
         assert cap['mask'] == 'optional'
         assert cap['guidance'] is (not turbo)
         assert cap['negative_prompt'] is (not turbo)
+
+
+class TestSeedVR2NativeAdapter:
+    def _engine(self):
+        from PIL import Image
+        from types import SimpleNamespace
+        from vmlx_engine.image_gen import ImageGenEngine
+
+        class Native:
+            def generate_image(self, seed, image_path, resolution, softness=0.0):
+                pass
+
+        eng = ImageGenEngine()
+        eng._model = Native()
+        eng._loaded = True
+        eng._mflux_class = "SeedVR2"
+        eng._model_name = "seedvr2-3b"
+        eng._generate_with_trace = MagicMock(return_value=(
+            SimpleNamespace(image=Image.new("RGB", (768, 384))), MagicMock(job_id="upscale")))
+        return eng
+
+    @pytest.mark.parametrize("resolution,softness,expected", [
+        (None, None, {"resolution": 384, "softness": 0.0}),
+        (512, 0.3, {"resolution": 512, "softness": 0.3}),
+    ])
+    def test_dispatch_is_native_and_dimensions_are_actual(self, resolution, softness, expected):
+        eng = self._engine()
+        result = eng.edit(prompt="", image_path="reference.png", seed=123,
+                          resolution=resolution, softness=softness)
+        assert eng._generate_with_trace.call_args.kwargs == {
+            "seed": 123, "image_path": "reference.png", **expected,
+        }
+        assert (result.width, result.height, result.steps) == (768, 384, 1)
+        assert result.seed == 123
+        caps = eng.capabilities()
+        assert caps["mode"] == "edit" and caps["upscale"] is True
+        for name in ("prompt", "steps", "guidance", "negative_prompt", "count", "edit_strength", "variation_strength"):
+            assert caps[name] is False
+        assert caps["mask"] == "none"
+
+    @pytest.mark.parametrize("unsupported", [
+        {"prompt": "make blue"}, {"mask_path": "mask.png"},
+        {"steps": 1}, {"guidance": 1}, {"strength": 0.5},
+        {"negative_prompt": "blurry"},
+    ])
+    def test_rejects_non_native_controls_before_inference(self, unsupported):
+        eng = self._engine()
+        args = dict(prompt="", image_path="reference.png", seed=123)
+        args.update(unsupported)
+        with pytest.raises(ValueError, match="SeedVR2 upscaling accepts"):
+            eng.edit(**args)
+        eng._generate_with_trace.assert_not_called()
+
+    @pytest.mark.parametrize("controls", [
+        {"resolution": 0}, {"resolution": 1}, {"resolution": True},
+        {"resolution": 2.5}, {"softness": -0.1}, {"softness": 1.1},
+        {"softness": float("nan")}, {"softness": True},
+    ])
+    def test_rejects_invalid_upscale_controls(self, controls):
+        eng = self._engine()
+        with pytest.raises(ValueError):
+            eng.edit(prompt="", image_path="reference.png", **controls)
+        eng._generate_with_trace.assert_not_called()
+
+    def test_non_upscale_adapter_rejects_upscale_controls(self):
+        eng = self._engine()
+        eng._mflux_class = "QwenImageEdit"
+        with pytest.raises(ValueError, match="only by SeedVR2"):
+            eng.edit(prompt="make blue", image_path="reference.png", resolution=512)
+        eng._generate_with_trace.assert_not_called()
+
+    @pytest.mark.parametrize("scaled_edge", [96, 0])
+    def test_scale_string_uses_native_scale_parser(self, monkeypatch, tmp_path, scaled_edge):
+        import sys
+        from types import SimpleNamespace
+        from PIL import Image
+        source = tmp_path / "reference.png"
+        Image.new("RGB", (128, 64)).save(source)
+        scale = SimpleNamespace(value=1.5, get_scaled_value=MagicMock(return_value=scaled_edge))
+        parser = MagicMock(return_value=scale)
+        monkeypatch.setitem(sys.modules, "mflux.utils.scale_factor",
+                            SimpleNamespace(ScaleFactor=SimpleNamespace(parse=parser)))
+        eng = self._engine()
+        if scaled_edge == 0:
+            with pytest.raises(ValueError, match="rounds the source"):
+                eng.edit(prompt="", image_path=str(source), seed=123, resolution="1.5x")
+            eng._generate_with_trace.assert_not_called()
+        else:
+            eng.edit(prompt="", image_path=str(source), seed=123, resolution="1.5x")
+            assert eng._generate_with_trace.call_args.kwargs["resolution"] is scale
+        parser.assert_called_once_with("1.5x")
+        scale.get_scaled_value.assert_called_once_with(64)
+
+    @pytest.mark.parametrize("cancel_at", ["before", "after"])
+    def test_upscale_keeps_request_owned_cancellation(self, cancel_at):
+        from types import SimpleNamespace
+        from PIL import Image
+        from vmlx_engine.image_requests import ImageRequest, ImageRequestCancelled, current_image_request
+        eng = self._engine()
+        del eng._generate_with_trace  # Use the real observable dispatch.
+        request = ImageRequest("seedvr-cancel")
+        def generate(**kwargs):
+            request.stop()
+            return SimpleNamespace(image=Image.new("RGB", (128, 64)))
+        eng._model.generate_image = MagicMock(side_effect=generate)
+        if cancel_at == "before":
+            request.stop()
+        token = current_image_request.set(request)
+        try:
+            with pytest.raises(ImageRequestCancelled):
+                eng.edit(prompt="", image_path="reference.png", seed=123)
+            assert eng._model.generate_image.call_count == (0 if cancel_at == "before" else 1)
+        finally:
+            current_image_request.reset(token)
+
+
+class TestFIBONativePrompt:
+    def test_plain_text_has_actionable_error_before_inference(self):
+        from vmlx_engine.image_gen import ImageGenEngine
+        eng = ImageGenEngine()
+        eng._model = MagicMock()
+        eng._loaded = True
+        eng._mflux_class = "FIBO"
+        eng._generate_with_trace = MagicMock()
+        with pytest.raises(ValueError, match="FIBO requires a valid JSON prompt"):
+            eng.generate("a red mug")
+        eng._generate_with_trace.assert_not_called()
+
+    def test_json_prompt_is_preserved_byte_for_byte(self):
+        from PIL import Image
+        from types import SimpleNamespace
+        from vmlx_engine.image_gen import ImageGenEngine
+        eng = ImageGenEngine()
+        eng._model = MagicMock()
+        eng._loaded = True
+        eng._mflux_class = "FIBO"
+        eng._model_name = "fibo"
+        eng._generate_with_trace = MagicMock(return_value=(
+            SimpleNamespace(image=Image.new("RGB", (64, 64))), MagicMock(job_id="fibo")))
+        prompt = '{ "short_description": "A red mug", "custom": [1, true] }'
+        eng.generate(prompt, width=64, height=64, steps=1, seed=42)
+        assert eng._generate_with_trace.call_args.kwargs["prompt"] == prompt
+        assert eng.capabilities()["prompt_format"] == "json"
