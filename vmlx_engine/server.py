@@ -19614,7 +19614,7 @@ async def create_image(request: Request):
 
     _validate_image_request_parameters(body)
     prompt = body.get("prompt", "")
-    model = body.get("model", "schnell")
+    model = body.get("model")
     n = min(body.get("n", 1), 4)  # Cap at 4 images per request
     size = body.get("size", "1024x1024")
     quality = body.get("quality", "standard")
@@ -19692,6 +19692,12 @@ async def create_image(request: Request):
                     status_code=501,
                     detail="mflux not installed. Install with: pip install mflux",
                 )
+
+        # Omission targets this server's adapter, including metadata retained
+        # through deep sleep. Resolve under the lock, after wake; a hard-coded
+        # default here would unload a different preloaded model.
+        if model is None:
+            model = _image_gen.model_name or "schnell"
 
         # Resolve aliases before comparison (e.g., "flux-schnell" → "schnell")
         from .image_gen import EDIT_MODELS as _EDIT_MODELS
@@ -19873,7 +19879,7 @@ async def create_image_edit(request: Request):
     from pathlib import Path
     import shutil
 
-    model = body.get("model", "qwen-image-edit")
+    model = body.get("model")
     prompt = body.get("prompt", "")
     image_b64 = body.get("image", "")
     mask_b64 = body.get("mask")
@@ -20046,6 +20052,9 @@ async def create_image_edit(request: Request):
                         status_code=501,
                         detail="mflux not installed. Install with: pip install mflux",
                     )
+
+            if model is None:
+                model = _image_gen.model_name or "qwen-image-edit"
 
             from .image_gen import EDIT_MODELS, SUPPORTED_MODELS
 

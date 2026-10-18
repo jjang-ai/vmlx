@@ -192,6 +192,51 @@ class TestImageSessionIdentity:
             assert engine.load.call_args.kwargs["mflux_class"] == mclass
             assert engine.load.call_args.kwargs["model_path"] == folder
 
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("lane,canonical,mclass", [
+        ("generations", "z-image-turbo", "ZImage"),
+        ("edits", "qwen-image-2.1", "QwenImage21Edit"),
+    ])
+    @pytest.mark.parametrize("state", ["loaded", "unloaded", "wake"])
+    async def test_omitted_model_preserves_session_adapter(self, client, monkeypatch, lane, canonical, mclass, state):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+
+        output = SimpleNamespace(b64_json="AAAA", seed=42)
+        engine = SimpleNamespace(is_loaded=state == "loaded", model_name=canonical,
+            _model_path="/test/image", _mflux_class=mclass,
+            capabilities=lambda: {"guidance": True},
+            load=MagicMock(), unload=MagicMock(),
+            edit=MagicMock(return_value=output), generate=MagicMock(return_value=output))
+        monkeypatch.setattr(srv, "_image_gen", None if state == "wake" else engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", "deep" if state == "wake" else None)
+        monkeypatch.setattr(srv, "_model_path", "/test/image")
+        monkeypatch.setattr(srv, "_model_name", canonical)
+        monkeypatch.setattr(srv, "_served_model_name", "image-session")
+        async def wake():
+            srv._image_gen = engine
+            engine.is_loaded = True
+            srv._standby_state = None
+            return {"status": "active"}
+        monkeypatch.setattr(srv, "admin_wake", wake)
+        monkeypatch.setattr(srv, "_wake_with_lock_held", wake)
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 64)).save(buf, format="PNG")
+        response = await client.post(f"/v1/images/{lane}", json={
+            "prompt": "test", "size": "64x64", "steps": 1,
+            "image": base64.b64encode(buf.getvalue()).decode(),
+        })
+        assert response.status_code == 200, response.text
+        engine.unload.assert_not_called()
+        if state == "unloaded":
+            engine.load.assert_called_once()
+            assert engine.load.call_args.args == (canonical,)
+            assert engine.load.call_args.kwargs["mflux_class"] == mclass
+        else:
+            engine.load.assert_not_called()
+
     def test_alias_does_not_hide_different_artifact(self, monkeypatch):
         import vmlx_engine.server as srv
         monkeypatch.setattr(srv, "_model_path", "/models/first")
