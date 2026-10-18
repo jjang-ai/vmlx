@@ -22986,7 +22986,7 @@ def _responses_scrub_multimodal_history_for_text_followup(messages: list[dict]) 
 
 
 def _responses_preserves_loaded_media_history(engine: Any) -> bool:
-    """Keep authored media on the qualified GLM multimodal replay path.
+    """Keep authored media on qualified GLM and MiMo multimodal replay paths.
 
     Resolve the loaded bundle, never the caller's model alias. Cache availability
     must not change conversation meaning: a miss keeps media for cold prefill
@@ -22995,7 +22995,7 @@ def _responses_preserves_loaded_media_history(engine: Any) -> bool:
     if not getattr(engine, "is_mllm", False):
         return False
     config = _current_model_config()
-    return getattr(config, "family_name", None) in {"glm5_next", "glm5_next_text"}
+    return getattr(config, "family_name", None) in {"glm5_next", "glm5_next_text", "mimo_v2"}
 
 
 def _responses_should_scrub_multimodal_history_for_followup(

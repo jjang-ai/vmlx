@@ -120,12 +120,14 @@ def test_valid_tool_result_chain_preserves_call_adjacency(route_probe):
 @pytest.mark.parametrize("family,is_mllm,retained", [
     ("glm5_next", True, True),
     ("glm5_next_text", True, True),
+    ("mimo_v2", True, True),
+    ("mimo_v2", False, False),
     ("glm5_next", False, False),
     ("qwen3_vl", True, False),
     (None, True, False),
 ])
 @pytest.mark.parametrize("as_string", [True, False])
-def test_loaded_glm_text_chain_preserves_authored_media(
+def test_loaded_qualified_text_chain_preserves_authored_media(
     route_probe, monkeypatch, family, is_mllm, retained, as_string
 ):
     from copy import deepcopy
