@@ -969,23 +969,8 @@ class AdaptiveSpec:
         self.ar_outlier_ratio = float(ar_outlier_ratio)
         self.ar_outliers_skipped = 0
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
-        self._own_rounds_since_ar = 0
+        self.rounds_since_ar = 0
         self._reprobe_pending = False
-
-    # The re-probe counter lives with the cost it refreshes. Per request (2026-10-18 release audit R20) it never
-    # reached ar_reprobe_rounds on requests under 256 rounds, so a shared t_ar measured once at process start (MiMo:
-    # 28.5-29 ms from a 5-token EOS-cut burst at 6.8k context vs a real ~20 ms pipelined step) held for the life of
-    # the process and kept prose drafting at 46.6 tok/s where AR ran 50.4 (same clock, 3/3 reps).
-    @property
-    def rounds_since_ar(self) -> int:
-        return int(self._costs.get("rounds_since_ar", 0)) if self._shared_costs else self._own_rounds_since_ar
-
-    @rounds_since_ar.setter
-    def rounds_since_ar(self, value: int) -> None:
-        if self._shared_costs:
-            self._costs["rounds_since_ar"] = int(value)
-        else:
-            self._own_rounds_since_ar = int(value)
 
     @property
     def t_ar(self):
@@ -1068,7 +1053,9 @@ class AdaptiveSpec:
     def update_ar(self, dt_per_token: float, tokens: int, requested: int | None = None) -> None:
         """``requested``: the burst length asked for. A burst that ended early (EOS / max_tokens) pays its pipeline
         launches and the final sync over fewer tokens than planned (the cut that set MiMo's t_ar to 28.5 ms was 5 of
-        8 tokens, above the 3-token floor): it is not an AR cost sample."""
+        8 tokens, above the 3-token floor, and that seed then held for the life of the process): it is not an AR
+        cost sample. (A process-wide re-probe counter was measured too and dropped: on GLM, where drafting beats AR on
+        every prompt, the extra forced re-probes cost 2-3.5 % on prose and sampled decode, 2026-10-18 release audit.)"""
         self.ar_since_probe += tokens
         self.rounds_since_ar = 0
         reprobe, self._reprobe_pending = self._reprobe_pending, False

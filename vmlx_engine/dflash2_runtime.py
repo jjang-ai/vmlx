@@ -1639,18 +1639,8 @@ class _BlockChooser:
         self.ar_min_sample_tokens = int(os.environ.get("VMLX_DFLASH_AR_MIN_SAMPLE_TOKENS", "3"))
         self.ar_outlier_ratio = 3.0
         self.ar_outliers_skipped = 0
+        self.spec_since_ar = 0
         self._reprobe_pending = False
-
-    # The re-probe counter lives with the shared AR cost it refreshes (as glm_dflash2.AdaptiveSpec, 2026-10-18 release
-    # audit R20): counted per request it never reached ar_reprobe_cycles on requests under 256 cycles, so the
-    # process-wide AR cost from the first sampled burst was never re-measured.
-    @property
-    def spec_since_ar(self) -> int:
-        return int(self.cost.get("spec_since_ar", 0))
-
-    @spec_since_ar.setter
-    def spec_since_ar(self, value: int) -> None:
-        self.cost["spec_since_ar"] = int(value)
 
     def _accept_probs(self, w: int) -> list[float]:
         out, prev = [], self.prior_p

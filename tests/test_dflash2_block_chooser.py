@@ -217,27 +217,6 @@ def test_stale_ar_cost_is_reprobed_and_a_stalled_burst_is_skipped(monkeypatch):
     assert "ar" in actions and shared["ar"] < 0.1
 
 
-def test_shared_ar_cost_is_reprobed_across_short_requests(monkeypatch):
-    """2026-10-18 release audit R20: the re-probe counter was per request, so a process of requests under 256 cycles
-    never re-measured the shared AR cost. It now lives in the shared table."""
-    monkeypatch.setenv("VMLX_DFLASH_AR_REPROBE_ROUNDS", "10")
-    shared = {}
-    c = _seeded(shared, 0.92)
-    _ar_burst(c); _ar_burst(c)                             # warm-up, then 33 ms
-    shared["ar"] = 0.200                                   # a stale estimate: spec always wins
-    seen = []
-    for _ in range(4):                                     # four short requests of 4 cycles each
-        r = _BlockChooser((5, 8, 16), cost=shared)
-        for _ in range(4):
-            mode, n = r.next_action()
-            seen.append(mode)
-            if mode == "ar":
-                _ar_burst(r, n=n)
-            else:
-                r.observe(r.width, r.width, 0.098)
-    assert "ar" in seen and shared["ar"] < 0.1
-
-
 def test_burst_cut_before_its_planned_length_is_not_an_ar_sample(monkeypatch):
     shared = {}
     c = _seeded(shared, 0.92)
