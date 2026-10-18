@@ -809,6 +809,7 @@ export function ImageTab() {
         <div className="flex-1 min-h-0 overflow-hidden">
           {/* Saved history keeps its operation when a dual model's composer changes mode. */}
           <ImageGallery
+            upscale={capabilities?.loaded === true && capabilities.upscale === true}
             generations={generations}
             generating={generating}
             progress={jobProgress}

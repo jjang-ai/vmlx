@@ -2005,6 +2005,8 @@
       "copyPromptAria": "프롬프트 복사",
       "deleteTitle": "갤러리에서 이 이미지 삭제",
       "deleteAria": "이미지 삭제",
+      "emptyUpscaleTitle": "첫 이미지를 업스케일해 보세요",
+      "emptyUpscaleBody": "원본 이미지를 업로드하고 아래에서 출력 해상도를 선택한 다음 확대를 누르세요.",
       "emptyEditTitle": "첫 이미지를 편집해 보세요",
       "emptyGenTitle": "첫 이미지를 생성해 보세요",
       "emptyEditBody": "원본 이미지를 업로드하고 아래에 프롬프트를 입력하면 선택한 모델로 편집할 수 있습니다.",

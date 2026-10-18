@@ -2005,6 +2005,8 @@
       "copyPromptAria": "プロンプトをコピー",
       "deleteTitle": "この画像をギャラリーから削除",
       "deleteAria": "画像を削除",
+      "emptyUpscaleTitle": "最初の画像を拡大しましょう",
+      "emptyUpscaleBody": "元画像をアップロードし、下で出力解像度を選択してから「拡大」を選んでください。",
       "emptyEditTitle": "最初の画像を編集しましょう",
       "emptyGenTitle": "最初の画像を生成しましょう",
       "emptyEditBody": "元画像をアップロードし、下にプロンプトを入力すると、選択したモデルで編集できます。",

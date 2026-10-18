@@ -2005,6 +2005,8 @@
       "copyPromptAria": "Copiar prompt",
       "deleteTitle": "Eliminar esta imagen de la galería",
       "deleteAria": "Eliminar imagen",
+      "emptyUpscaleTitle": "Amplía tu primera imagen",
+      "emptyUpscaleBody": "Sube una imagen de origen, elige abajo la resolución de salida y selecciona Ampliar.",
       "emptyEditTitle": "Edita tu primera imagen",
       "emptyGenTitle": "Genera tu primera imagen",
       "emptyEditBody": "Sube una imagen de origen y escribe un prompt abajo para editarla con el modelo seleccionado.",

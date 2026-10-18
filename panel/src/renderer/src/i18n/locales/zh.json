@@ -2005,6 +2005,8 @@
       "copyPromptAria": "复制提示词",
       "deleteTitle": "从画廊中删除此图像",
       "deleteAria": "删除图像",
+      "emptyUpscaleTitle": "放大你的第一张图片",
+      "emptyUpscaleBody": "上传源图片，在下方选择输出分辨率，然后选择放大。",
       "emptyEditTitle": "编辑你的第一张图片",
       "emptyGenTitle": "生成你的第一张图片",
       "emptyEditBody": "上传源图片并在下方输入提示词，即可使用所选模型进行编辑。",

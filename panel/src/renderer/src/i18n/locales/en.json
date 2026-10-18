@@ -2005,6 +2005,8 @@
       "copyPromptAria": "Copy prompt",
       "deleteTitle": "Delete this image from the gallery",
       "deleteAria": "Delete image",
+      "emptyUpscaleTitle": "Upscale your first image",
+      "emptyUpscaleBody": "Upload a source image, choose the output resolution below, then select Upscale.",
       "emptyEditTitle": "Edit your first image",
       "emptyGenTitle": "Generate your first image",
       "emptyEditBody": "Upload a source image and type a prompt below to edit it with the selected model.",

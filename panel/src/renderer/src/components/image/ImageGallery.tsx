@@ -20,6 +20,7 @@ interface ImageGalleryProps {
   startTime?: number | null;
   cancelling?: boolean;
   mode?: "generate" | "edit";
+  upscale?: boolean;
   onRegenerate?: (gen: ImageGenerationInfo) => void;
   // ms#61: per-image delete so users can prune the gallery without
   // wiping the whole session.
@@ -34,6 +35,7 @@ export function ImageGallery({
   startTime,
   cancelling,
   mode,
+  upscale,
   onRegenerate,
   onDelete,
 }: ImageGalleryProps) {
@@ -57,12 +59,16 @@ export function ImageGallery({
           )}
         </div>
         <h3 className="text-lg font-semibold mb-2">
-          {mode === "edit"
+          {upscale
+            ? t('image.gallery.emptyUpscaleTitle')
+            : mode === "edit"
             ? t('image.gallery.emptyEditTitle')
             : t('image.gallery.emptyGenTitle')}
         </h3>
         <p className="text-sm text-muted-foreground max-w-sm">
-          {mode === "edit"
+          {upscale
+            ? t('image.gallery.emptyUpscaleBody')
+            : mode === "edit"
             ? t('image.gallery.emptyEditBody')
             : t('image.gallery.emptyGenBody')}
         </p>

@@ -136,3 +136,11 @@ describe('native SeedVR and FIBO composer controls', () => {
     expect(html).toContain('Red mug')
   })
 })
+
+ it('uses prompt-free empty-gallery help only for a loaded native upscaler', () => {
+  const html = (mode: 'generate' | 'edit', upscale?: boolean) => renderToStaticMarkup(React.createElement(ImageGallery, {generations:[],generating:false,mode,upscale}))
+  expect(html('edit',true)).toContain('image.gallery.emptyUpscaleBody')
+  expect(html('edit',true)).not.toContain('image.gallery.emptyEditBody')
+  expect(html('edit')).toContain('image.gallery.emptyEditBody')
+  expect(html('generate')).toContain('image.gallery.emptyGenBody')
+})
