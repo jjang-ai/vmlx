@@ -66,7 +66,7 @@ dependencies = [
     "tiktoken>=0.5.0",
     "huggingface-hub>=0.23.0",
     "numpy>=1.24.0",
-    "pillow>=10.0.0",
+    "pillow>=10.0.0,<13",  # MFlux imports PIL._typing; Pillow 13 breaks Python 3.12/3.13.
     "tqdm>=4.66.0",
     "pyyaml>=6.0",
     "requests>=2.28.0",
@@ -266,6 +266,13 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+
+# Keep the Apple runtime lock on the versions qualified in the bundled app.
+# Non-Darwin resolution remains independent (including its MLX wheel floor).
+[tool.uv]
+constraint-dependencies = [
+    "mlx-audio==0.5.8; sys_platform == 'darwin'",
+]
 
 # Pin the published JANG 2.5.50 source for reproducible runtime and quantization tools.
 [tool.uv.sources]

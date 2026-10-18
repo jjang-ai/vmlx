@@ -27,6 +27,9 @@ VMLX_SOURCE_COMMIT=""
 # verification action isolated from the build machine's Python configuration.
 export PYTHONNOUSERSITE=1
 unset PYTHONPATH PYTHONHOME VIRTUAL_ENV
+# Apply to every pip transaction, including build dependencies and audio extras.
+# This reproduces the qualified runtime instead of accepting new transitive wheels.
+export PIP_CONSTRAINT="$SCRIPT_DIR/bundled-python-constraints.txt"
 
 remove_bundle_tree_with_retry() {
   local target="$1"
@@ -306,7 +309,7 @@ MLX_VLM_VERSION="0.5.0"
 MFLUX_VERSION="0.23.0"
 PILLOW_VERSION="12.3.0"
 # Pillow 13 imports numbers._IntegralLike at runtime from PIL._typing, which
-# breaks MFlux's ModelConfig import on our standalone Python 3.12. Keep the
+# breaks MFlux's ModelConfig import on Python 3.12 and 3.13. Keep the
 # working image dependency shipped with the previous bundle.
 OPENCV_VERSION="4.13.0.92"
 MLX_AUDIO_VERSION="0.5.8"
