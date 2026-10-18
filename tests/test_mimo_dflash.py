@@ -428,3 +428,35 @@ def test_add_context_queues_without_blocking():
     for (k1, v1), (k2, v2) in zip(m.kv, ref.kv):
         assert k1.shape == k2.shape and v1.shape == v2.shape
         assert _rel(k1, k2) < 1e-2 and _rel(v1, v2) < 1e-2
+
+
+@pytest.mark.parametrize("p_min", ["0.05", "0.5", "1.0"])
+def test_confidence_cut_keeps_greedy_equal_to_ar(tmp_path, monkeypatch, p_min):
+    """VMLX_MIMO_DFLASH_DRAFT_PMIN cuts a block where the drafter's running confidence drops: fewer verify rows, the
+    same greedy output (incl. blocks cut to the anchor alone)."""
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN", p_min)
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(13).integers(0, V, size=29).tolist()
+    st = MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 21, set(), 0.0, stats=st, adaptive=False)
+           for t in new]
+    assert out == _ar_greedy(model, prompt, 21)
+    assert st.cut_drafts > 0
+    tgt.close()
+
+
+def test_confident_drafts_counts_the_leading_run():
+    dl = mx.log(mx.array([[[0.9, 0.1], [0.6, 0.4], [0.99, 0.01]]], dtype=mx.float32))
+    tok = mx.array([[0, 0, 0]], dtype=mx.int32)
+    assert MD._confident_drafts(dl, tok, None, 0.5) == 3          # running product 0.9, 0.54, 0.5346
+    assert MD._confident_drafts(dl, tok, None, 0.55) == 1
+    assert MD._confident_drafts(dl, tok, None, 0.95) == 0
+    q = mx.array([[[0.2, 0.8], [0.5, 0.5], [0.1, 0.9]]], dtype=mx.float32)
+    assert MD._confident_drafts(dl, mx.array([[1, 0, 1]], dtype=mx.int32), q, 0.38) == 2   # 0.8, 0.4, 0.36
+    assert MD._confident_drafts(dl, tok[:, :0], None, 0.5) == 0
+
+
+def test_draft_p_min_parsing(monkeypatch):
+    for raw, want in (("", 0.0), ("0", 0.0), ("0.4", 0.4), ("2", 0.0), ("-1", 0.0), ("x", 0.0)):
+        monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN", raw)
+        assert MD._draft_p_min() == want

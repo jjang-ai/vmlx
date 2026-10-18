@@ -249,6 +249,34 @@ class Target:
 
 
 # ------------------------------------------------------------------------------------------------------------ loops
+def _draft_p_min() -> float:
+    """VMLX_MIMO_DFLASH_DRAFT_PMIN in (0, 1]: cut a draft block where the running product of the drafter's own
+    probabilities of its drafts falls below the threshold (verify rows past a low-confidence draft are mostly
+    rejected and each costs ~9 ms on this model: measured round cost 50 / 61 / 70 / 80 / 91 / 103 / 111 ms for 2-8
+    rows at 32-36k context). 0 (default) verifies the whole block the policy chose. The cut depends only on the
+    drafter's proposal, never on the target, so greedy output and the sampled distribution are unchanged; it costs
+    one read-back of the cut position before the verify is built."""
+    import os
+
+    try:
+        v = float(os.environ.get("VMLX_MIMO_DFLASH_DRAFT_PMIN", "0") or 0)
+    except ValueError:
+        return 0.0
+    return v if 0.0 < v <= 1.0 else 0.0
+
+
+def _confident_drafts(dl: mx.array, d_tok: mx.array, d_prob, p_min: float) -> int:
+    """Number of leading drafts whose running drafter-probability product stays >= p_min. dl (1, n, V) fp32 drafter
+    logits; d_prob (1, n, V) the sampling distribution the drafts were drawn from (None for greedy: the softmax)."""
+    if int(d_tok.shape[1]) == 0:
+        return 0
+    if d_prob is None:
+        q = mx.take_along_axis(mx.softmax(dl[0], axis=-1), d_tok[0][:, None], axis=-1)[:, 0]
+    else:
+        q = mx.take_along_axis(d_prob[0], d_tok[0][:, None], axis=-1)[:, 0]
+    return int(mx.sum(mx.cumprod(q, axis=-1) >= p_min).item())
+
+
 @dataclass
 class Stats:
     rounds: int = 0
@@ -352,6 +380,7 @@ class LaneStats:
     output_token_ids: list = field(default_factory=list)
     policy: dict = field(default_factory=dict)          # AdaptiveSpec's measured costs at the end (diagnostics)
     eos_forwarded: bool = False                          # a pipelined AR step forwarded the final EOS (cache holds it)
+    cut_drafts: int = 0                                  # drafts dropped by the confidence cut (VMLX_MIMO_DFLASH_DRAFT_PMIN)
 
 
 class _TapWindow:
@@ -470,6 +499,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         st.policy = {"_policy": policy}
     n = 1                                                # fwd = tokens forwarded = cache positions
     after_ar = False
+    p_min = _draft_p_min() if propose is None else 0.0
     # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
     # starts (per-token projection of 5 drafter layers + an eval made every AR step slower than the plain lane's:
     # prose, where the policy rightly stops drafting, ran 39 tok/s on this lane vs 46 on the plain lane).
@@ -549,6 +579,14 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         # idle while Python built the 48-layer verify graph (one extra host round trip per round). Same token ids,
         # same arithmetic and the same random-draw order: outputs are unchanged.
         d_tok = d_tok.astype(mx.int32)
+        if p_min > 0.0:
+            keep_d = _confident_drafts(dl, d_tok, d_prob, p_min)
+            if keep_d < int(d_tok.shape[1]):
+                d_tok = d_tok[:, :keep_d]
+                if d_prob is not None:
+                    d_prob = d_prob[:, :keep_d]
+                st.cut_drafts += bs - 1 - keep_d
+                bs = keep_d + 1
         mx.async_eval(d_tok)
         lg, tp = target.forward(mx.concatenate([mx.array([[tokens[-1]]], dtype=mx.int32), d_tok], axis=1), cache)
         L = proc(lg, prompt_ids + tokens, d_tok)
@@ -575,7 +613,8 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         Target.rollback(cache, len(drafts) + 1 - keep)
         drafter.add_context(tp[:keep], fwd); window.add(tp[:keep]); fwd += keep
         st.rounds += 1; st.accepted.append(accepted)
-        if policy is not None:
+        if policy is not None and bs >= policy.bmin:
+            # a cut block is recorded at the width it verified (its time is that width's cost)
             policy.update_spec(bs, accepted, time.perf_counter() - tr, after_ar=after_ar)
         after_ar = False
         tokens.extend(new); n += len(new)

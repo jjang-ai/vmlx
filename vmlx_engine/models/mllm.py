@@ -7586,6 +7586,8 @@ class MLXMultimodalLM:
                 "ar_tokens": int(st.ar_steps),
                 "widths": {str(w + 1): spec_rounds.count(w) for w in sorted(set(spec_rounds))},
                 "generation_tps": round(produced / max(elapsed - st.prefill_s, 1e-9), 2)}
+        if getattr(st, "cut_drafts", 0):
+            spec["cut_drafts"] = int(st.cut_drafts)              # VMLX_MIMO_DFLASH_DRAFT_PMIN confidence cut
         logger.info("MiMo DFlash generation stats: prompt_tokens=%d cached=%d output_tokens=%d rounds=%d "
                     "tokens_per_round=%.3f acceptance=%.1f%% ar_tokens=%d decode_tps=%.2f prefill_s=%.3f media_s=%.3f "
                     "total_s=%.2f finish=%s", len(prompt_ids), cache_len, produced, len(accepted), tpr,
