@@ -396,6 +396,7 @@ def test_sampled_path_matches_the_target_distribution(tmp_path):
 def test_spec_round_builds_verify_from_device_drafts_and_equals_ar(tmp_path, monkeypatch):
     """A draft round queues the verify forward from the lazy draft tokens (no host read-back of the drafts before the
     verify graph is built; the round's read-backs follow the verify), and greedy output stays equal to AR."""
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN", "0")              # full blocks: every round verifies drafts
     model, tgt, drafter = _lane(tmp_path)
     prompt = np.random.default_rng(11).integers(0, V, size=37).tolist()   # not a multiple of the block / window
     events = []
@@ -457,6 +458,11 @@ def test_confident_drafts_counts_the_leading_run():
 
 
 def test_draft_p_min_parsing(monkeypatch):
-    for raw, want in (("", 0.0), ("0", 0.0), ("0.4", 0.4), ("2", 0.0), ("-1", 0.0), ("x", 0.0)):
+    monkeypatch.delenv("VMLX_MIMO_DFLASH_DRAFT_PMIN", raising=False)
+    monkeypatch.delenv("VMLX_MIMO_DFLASH_DRAFT_PMIN_SAMPLED", raising=False)
+    assert MD._draft_p_min() == 0.4 and MD._draft_p_min(sampled=True) == 0.0      # measured defaults
+    for raw, want in (("", 0.4), ("0", 0.0), ("0.25", 0.25), ("2", 0.0), ("-1", 0.0), ("x", 0.4)):
         monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN", raw)
         assert MD._draft_p_min() == want
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN_SAMPLED", "0.3")
+    assert MD._draft_p_min(sampled=True) == 0.3

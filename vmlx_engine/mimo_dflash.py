@@ -249,19 +249,25 @@ class Target:
 
 
 # ------------------------------------------------------------------------------------------------------------ loops
-def _draft_p_min() -> float:
-    """VMLX_MIMO_DFLASH_DRAFT_PMIN in (0, 1]: cut a draft block where the running product of the drafter's own
-    probabilities of its drafts falls below the threshold (verify rows past a low-confidence draft are mostly
-    rejected and each costs ~9 ms on this model: measured round cost 50 / 61 / 70 / 80 / 91 / 103 / 111 ms for 2-8
-    rows at 32-36k context). 0 (default) verifies the whole block the policy chose. The cut depends only on the
-    drafter's proposal, never on the target, so greedy output and the sampled distribution are unchanged; it costs
-    one read-back of the cut position before the verify is built."""
+def _draft_p_min(sampled: bool = False) -> float:
+    """Drafter-confidence cut: a draft block ends where the running product of the drafter's own probabilities of its
+    drafts falls below the threshold (verify rows past a low-confidence draft are mostly rejected and each costs
+    ~5-10 ms on this model: round costs 37 / 41 / 46 / 51 / 56 / 60 ms for 2-7 rows at short context, 50 / 61 / 70 /
+    80 / 91 / 103 / 111 ms for 2-8 rows at 32-36k). The cut depends only on the drafter's proposal, never on the
+    target, so greedy output and the sampled distribution are unchanged; it costs one read-back of the cut position
+    before the verify is built.
+    Defaults from the 2026-10-18 same-state A/B (6 engines per arm, ~1.6 GHz): greedy rounds cut at 0.4 (code +6.5 %,
+    7k-context decode +2.8 % over the uncut lane; prose within noise); sampled rounds are not cut (the cut measured
+    -3 % / within noise at the bundle's temperature 1.0). VMLX_MIMO_DFLASH_DRAFT_PMIN (greedy) and
+    VMLX_MIMO_DFLASH_DRAFT_PMIN_SAMPLED take a value in (0, 1]; 0 turns the cut off."""
     import os
 
+    name, default = (("VMLX_MIMO_DFLASH_DRAFT_PMIN_SAMPLED", "0") if sampled else ("VMLX_MIMO_DFLASH_DRAFT_PMIN", "0.4"))
+    raw = os.environ.get(name)
     try:
-        v = float(os.environ.get("VMLX_MIMO_DFLASH_DRAFT_PMIN", "0") or 0)
+        v = float(default if raw is None or raw.strip() == "" else raw)
     except ValueError:
-        return 0.0
+        v = float(default)
     return v if 0.0 < v <= 1.0 else 0.0
 
 
@@ -499,7 +505,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         st.policy = {"_policy": policy}
     n = 1                                                # fwd = tokens forwarded = cache positions
     after_ar = False
-    p_min = _draft_p_min() if propose is None else 0.0
+    p_min = _draft_p_min(sampled=temperature > 0) if propose is None else 0.0
     # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
     # starts (per-token projection of 5 drafter layers + an eval made every AR step slower than the plain lane's:
     # prose, where the policy rightly stops drafting, ran 39 tok/s on this lane vs 46 on the plain lane).
