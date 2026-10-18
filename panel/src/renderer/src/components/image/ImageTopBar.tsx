@@ -21,6 +21,7 @@ interface ImageTopBarProps {
   port: number | null
   generating?: boolean
   mode: 'generate' | 'edit'
+  onModeChange?: (mode: 'generate' | 'edit') => void
   onSettings: () => void
   onLogs: () => void
   onStop: () => void
@@ -37,6 +38,7 @@ export function ImageTopBar({
   status,
   port,
   mode,
+  onModeChange,
   generating,
   onSettings,
   onLogs,
@@ -90,11 +92,20 @@ export function ImageTopBar({
           <FolderOpen className="h-3.5 w-3.5 flex-shrink-0" />
         </button>
 
-        {/* Mode badge */}
-        {model && mode === 'edit' && (
+        {/* A dual adapter switches operations without reloading its weights. */}
+        {model && onModeChange && (
+          <select data-vmlx-control="image-mode" aria-label={t('image.picker.modeLabel')}
+            value={mode} disabled={generating || status !== 'running'}
+            onChange={event => onModeChange(event.target.value as 'generate' | 'edit')}
+            className="text-xs px-2 py-1 bg-background border border-input rounded">
+            <option value="generate">{t('image.topBar.imageGen')}</option>
+            <option value="edit">{t('image.topBar.imageEdit')}</option>
+          </select>
+        )}
+        {model && !onModeChange && mode === 'edit' && (
           <span className="text-[10px] px-1.5 py-0.5 bg-violet-500/15 text-violet-400 rounded-full font-medium">{t('image.topBar.imageEdit')}</span>
         )}
-        {model && mode === 'generate' && (
+        {model && !onModeChange && mode === 'generate' && (
           <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/15 text-blue-400 rounded-full font-medium">{t('image.topBar.imageGen')}</span>
         )}
         {model && (

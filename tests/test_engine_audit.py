@@ -8147,7 +8147,7 @@ class TestStartupCompatibilityGuards:
     def test_bundled_python_requires_mflux_for_image_models(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
-        assert 'MFLUX_VERSION="0.19.0"' in bundle_script
+        assert 'MFLUX_VERSION="0.23.0"' in bundle_script
         assert '"mflux==$MFLUX_VERSION"' in bundle_script
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script

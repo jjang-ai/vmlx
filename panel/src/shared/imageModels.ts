@@ -20,6 +20,8 @@ export interface ImageModelDef {
   desc: string
   /** Generation or editing model */
   category: 'generate' | 'edit'
+  /** One saved runtime may support both text generation and reference editing. */
+  supportedModes?: ('generate' | 'edit')[]
   /** Default inference steps */
   steps: number
   /**
@@ -61,6 +63,27 @@ export interface ImageModelDef {
  * and validation will pick it up automatically.
  */
 export const IMAGE_MODELS: ImageModelDef[] = [
+  {
+    id: 'qwen-image-2.1', name: 'Qwen Image 2.1',
+    desc: 'Generation and reference editing (40 steps)',
+    category: 'generate', supportedModes: ['generate', 'edit'],
+    steps: 40, guidance: 1.0, size: '~10-32 GB', quantizeOptions: [4, 6, 8, 0],
+    repoMap: { 0: 'Qwen/Qwen-Image-2.1',
+      4: 'OsaurusAI/Qwen-Image-2.1-mflux-4bit',
+      6: 'OsaurusAI/Qwen-Image-2.1-mflux-6bit',
+      8: 'OsaurusAI/Qwen-Image-2.1-mflux-8bit' },
+    tier: 'medium', mfluxClass: 'QwenImage21Edit', mfluxName: 'qwen-image-2.1',
+    supportsImg2Img: true,
+  },
+  {
+    id: 'qwen-image-2.1-turbo', name: 'Qwen Image 2.1 Turbo',
+    desc: 'Distilled generation and reference editing (8 steps)',
+    category: 'generate', supportedModes: ['generate', 'edit'],
+    steps: 8, guidance: 1.0, size: '~32 GB', quantizeOptions: [0],
+    repoMap: { 0: 'Qwen/Qwen-Image-2.1-Turbo' },
+    tier: 'medium', mfluxClass: 'QwenImage21Edit', mfluxName: 'qwen-image-2.1-turbo',
+    supportsImg2Img: true,
+  },
   // ── Image Generation ──────────────────────────────────────────────────
 
   // Flux Schnell — fastest, 4 steps, dual encoder

@@ -60,3 +60,15 @@ describe('image runtime settings ownership', () => {
     expect(writes).toEqual([IMAGE_SETTINGS_KEY])
   })
 })
+
+describe('Qwen Image 2.1 native defaults', () => {
+  it.each(['qwen-image-2.1', 'qwen-image-2.1-turbo'])('preserves %s settings without crossing variants', modelId => {
+    const db = storage()
+    const owner = { sessionId: 'q21', modelId, quantize: 6 }
+    const initial = loadImageRuntimeSettings(db, owner)
+    expect(initial).toMatchObject({ steps: modelId.endsWith('turbo') ? 8 : 40, guidance: 1, strength: 1 })
+    saveImageRuntimeSettings(db, owner, { ...initial, strength: .6, width: 512, steps: 12 })
+    expect(loadImageRuntimeSettings(db, owner)).toMatchObject({ strength: .6, width: 512, steps: 12 })
+    expect(loadImageRuntimeSettings(db, { ...owner, modelId: 'qwen-image-edit' })).toMatchObject({ steps: 28, guidance: 4 })
+  })
+})

@@ -8,17 +8,17 @@ export interface ImageCapabilities {
   model?: string | null
   mflux_class?: string
   quantize?: number | null
-  mode?: 'generate' | 'edit'
+  mode?: 'generate' | 'edit' | 'dual'
   /** Adapter actually uses negative conditioning; a signature alone is insufficient (Flux1 accepts but ignores it). */
   negative_prompt?: boolean
   /** False only when the loaded adapter establishes that guidance is unused. */
   guidance?: boolean | null
   /** img2img strength on a generation model (the gallery's Iterate). */
   variation_strength?: boolean
-  /** strength on an edit model: false for every edit class the engine accepts (their branches never forward it). */
+  /** Whether the loaded edit adapter forwards strength to its native pipeline. */
   edit_strength?: boolean | null
-  /** "required" for Flux Fill inpainting, otherwise "none". */
-  mask?: 'required' | 'none'
+  /** Required for Flux Fill; optional for Qwen Image 2.1 regional editing. */
+  mask?: 'required' | 'optional' | 'none'
   /** generation models return n images; edit always returns one. */
   count?: boolean
   error?: string

@@ -303,7 +303,7 @@ echo "==> Upgrading pip..."
 MLX_VERSION="0.32.3"
 MLX_LM_VERSION="0.31.3"
 MLX_VLM_VERSION="0.5.0"
-MFLUX_VERSION="0.19.0"
+MFLUX_VERSION="0.23.0"
 PILLOW_VERSION="12.3.0"
 # Pillow 13 imports numbers._IntegralLike at runtime from PIL._typing, which
 # breaks MFlux's ModelConfig import on our standalone Python 3.12. Keep the

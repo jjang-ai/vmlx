@@ -52,7 +52,7 @@ class TestImageGuidanceDefaults:
         source = (Path(mod.__file__).resolve().parents[1] /
                   "panel/src/shared/imageModels.ts").read_text()
         rows = re.findall(r"steps: ([\d.]+),\s+guidance: ([\d.]+),[\s\S]*?mfluxName: '([^']+)'", source)
-        assert len(rows) == 9
+        assert len(rows) == 11
         for steps, guidance, name in rows:
             assert mod.DEFAULT_STEPS[name] == int(steps)
             assert mod.DEFAULT_GUIDANCE[name] == float(guidance)
@@ -143,12 +143,11 @@ class TestSupportedModels:
         assert "dev" in SUPPORTED_MODELS
         assert "z-image-turbo" in SUPPORTED_MODELS
 
-    def test_edit_models_separate(self):
+    def test_only_native_dual_models_overlap(self):
         from vmlx_engine.image_gen import SUPPORTED_MODELS, EDIT_MODELS
-        # Edit models should NOT be in SUPPORTED_MODELS
-        for key in EDIT_MODELS:
-            if key not in ("flux-kontext", "kontext", "kontext-dev", "flux-fill", "fill", "fill-dev"):
-                assert key not in SUPPORTED_MODELS, f"Edit model '{key}' should not be in SUPPORTED_MODELS"
+        assert set(EDIT_MODELS) & set(SUPPORTED_MODELS) == {
+            "qwen-image-2.1", "qwen-image-2.1-turbo"}
+
 
 
 class TestMPOConversion:
@@ -244,3 +243,54 @@ class TestImageCapabilities:
         import inspect
         import vmlx_engine.server as server
         assert 'result["image"] = _image_gen.capabilities()' in inspect.getsource(server)
+
+class TestQwen21NativeAdapter:
+    @pytest.mark.parametrize('turbo', [False, True])
+    def test_bundle_metadata_overrides_renamed_folder(self, tmp_path, turbo):
+        import json
+        from vmlx_engine.image_gen import _detect_class_from_model_index
+        data = {'_class_name': 'QwenImage21Pipeline'}
+        if turbo:
+            data['sample_sigmas'] = [1.0, .978453, .95418, .926626, .89508, .845148, .704534, .414568]
+        (tmp_path / 'model_index.json').write_text(json.dumps(data))
+        assert _detect_class_from_model_index(str(tmp_path)) == (
+            'QwenImage21Edit', 'qwen-image-2.1-turbo' if turbo else 'qwen-image-2.1')
+
+    @pytest.mark.parametrize('turbo', [False, True])
+    @pytest.mark.parametrize('operation', ['generate', 'edit', 'variation'])
+    def test_native_kwargs_defaults_and_dual_capabilities(self, turbo, operation):
+        from PIL import Image
+        from types import SimpleNamespace
+        from vmlx_engine.image_gen import ImageGenEngine
+        class Native:
+            def generate_image(self, seed, prompt, num_inference_steps=None, width=None,
+                               height=None, guidance=1, negative_prompt=None,
+                               image_paths=None, strength=1, mask_image=None): pass
+        eng = ImageGenEngine()
+        eng._model = Native()
+        eng._loaded = True
+        eng._mflux_class = 'QwenImage21Edit'
+        eng._model_name = 'qwen-image-2.1-turbo' if turbo else 'qwen-image-2.1'
+        eng._generate_with_trace = MagicMock(return_value=(
+            SimpleNamespace(image=Image.new('RGBA', (64, 64))), MagicMock(job_id='q21')))
+        args = dict(prompt='paint blue', width=64, height=64, seed=123)
+        if operation == 'edit':
+            eng.edit(image_path='ref.png', mask_path='mask.png', strength=.6, **args)
+        elif operation == 'variation':
+            eng.generate(image_path='ref.png', image_strength=.6, **args)
+        else:
+            eng.generate(**args)
+        sent = eng._generate_with_trace.call_args.kwargs
+        assert sent['seed'] == 123
+        assert sent['num_inference_steps'] == (8 if turbo else 40)
+        assert sent['guidance'] == 1
+        assert 'image_path' not in sent and 'image_strength' not in sent
+        if operation != 'generate':
+            assert sent['image_paths'] == ['ref.png'] and sent['strength'] == .6
+        if operation == 'edit':
+            assert sent['mask_image'] == 'mask.png'
+        cap = eng.capabilities()
+        assert cap['mode'] == 'dual' and cap['edit_strength'] and cap['variation_strength']
+        assert cap['mask'] == 'optional'
+        assert cap['guidance'] is (not turbo)
+        assert cap['negative_prompt'] is (not turbo)

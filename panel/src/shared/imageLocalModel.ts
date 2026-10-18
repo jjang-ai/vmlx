@@ -301,7 +301,7 @@ export function editPrecisionAlternative(res: Extract<LocalImageModelResolution,
 export function resolveImageModelForLocalDirectory(path: string): ImageModelDef | undefined {
   // A declared pipeline takes precedence over a directory label. Do not infer
   // an ambiguous Flux variant from the pipeline class alone.
-  const index = defaultFs.readJson(join(path, 'model_index.json')) as { _class_name?: string } | null
+  const index = defaultFs.readJson(join(path, 'model_index.json')) as { _class_name?: string; sample_sigmas?: unknown } | null
   const config = defaultFs.readJson(join(path, 'config.json')) as { _class_name?: string; original_model?: string } | null
   const pipelines: Record<string, string> = {
     QwenImagePipeline: 'qwen-image',
@@ -311,6 +311,10 @@ export function resolveImageModelForLocalDirectory(path: string): ImageModelDef 
     FluxFillPipeline: 'fill',
   }
   const pipeline = index?._class_name || config?._class_name
+  if (pipeline === 'QwenImage21Pipeline') {
+    return getImageModel(Array.isArray(index?.sample_sigmas) && index.sample_sigmas.length > 0
+      ? 'qwen-image-2.1-turbo' : 'qwen-image-2.1')
+  }
   if (pipeline && pipelines[pipeline]) {
     return getImageModel(pipelines[pipeline])
   }

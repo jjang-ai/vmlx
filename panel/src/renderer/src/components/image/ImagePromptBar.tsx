@@ -68,6 +68,7 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
   // The loaded adapter owns the mask contract. Local folders and served
   // aliases may be renamed; a name containing "fill" proves nothing.
   const isFillModel = mode === 'edit' && capabilities?.loaded === true && capabilities.mask === 'required'
+  const supportsMask = isFillModel || (mode === 'edit' && capabilities?.loaded === true && capabilities.mask === 'optional')
 
   const isEdit = mode === 'edit'
   // Variation mode: gen model with source image from Iterate button
@@ -198,11 +199,11 @@ export function ImagePromptBar({ prompt, onPromptChange: setPrompt, capabilities
                 <p className="text-xs font-medium truncate">{sourceImage.name}</p>
                 <p className="text-[10px] text-muted-foreground">
                   {isFillModel ? t('image.prompt.sourceInpainting') : t('image.prompt.sourceInstructionEdit')}
-                  {isFillModel && maskBase64 && <span className="text-violet-400 ml-1">{t('image.prompt.maskApplied')}</span>}
+                  {supportsMask && maskBase64 && <span className="text-violet-400 ml-1">{t('image.prompt.maskApplied')}</span>}
                 </p>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
-                {isFillModel && (
+                {supportsMask && (
                   <button
                     onClick={() => setShowMaskPainter(true)}
                     className={`px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors ${

@@ -19546,6 +19546,39 @@ def _image_request_matches_current_model(engine, model, resolved, model_path=Non
     return bool(current_name) and (not model or identity(model) in names or identity(resolved) in names)
 
 
+def _validate_image_request_parameters(body: Any) -> None:
+    """Reject malformed image controls before loading or scheduling GPU work.
+
+    Native adapters still own model-specific ranges and defaults. This checks
+    transport types only; it never rewrites a valid generation parameter.
+    """
+    if not isinstance(body, dict):
+        raise HTTPException(400, detail="Invalid request body: object required")
+    for key in ("prompt", "model", "size", "image", "mask", "negative_prompt", "model_path"):
+        value = body.get(key)
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(400, detail=f"{key} must be a string")
+    for key in ("n", "steps", "seed"):
+        value = body.get(key)
+        if value is None and key != "n":
+            continue
+        if key not in body:
+            continue
+        if type(value) is not int or (key in ("n", "steps") and value < 1):
+            suffix = "positive integer" if key in ("n", "steps") else "integer"
+            raise HTTPException(400, detail=f"{key} must be a {suffix}")
+    for key in ("guidance", "strength"):
+        value = body.get(key)
+        if value is None:
+            continue
+        try:
+            finite = type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise HTTPException(400, detail=f"{key} must be a finite number")
+
+
 @app.post(
     "/v1/images/generations",
     dependencies=[
@@ -19579,6 +19612,7 @@ async def create_image(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
 
+    _validate_image_request_parameters(body)
     prompt = body.get("prompt", "")
     model = body.get("model", "schnell")
     n = min(body.get("n", 1), 4)  # Cap at 4 images per request
@@ -19667,7 +19701,7 @@ async def create_image(request: Request):
         # with an edit model (e.g. qwen-image-edit) raises TypeError deep
         # in mflux and surfaces as a confusing 500. Return a clear 400
         # pointing the caller at /v1/images/edits.
-        if model and model.lower() in _EDIT_MODELS:
+        if model and model.lower() in _EDIT_MODELS and model.lower() not in _IMG_MODELS:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -19762,6 +19796,8 @@ async def create_image(request: Request):
                     )
                 except ImageRequestCancelled:
                     raise
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid image parameters: {e}")
                 except Exception as e:
                     logger.exception("Image generation failed")
                     raise HTTPException(
@@ -19824,7 +19860,7 @@ async def create_image_edit(request: Request):
         mask: Base64-encoded mask image (optional, for inpainting)
         size: Output size (e.g., "1024x1024")
         n: Number of images to generate (default 1)
-        strength: Edit strength 0.0-1.0 (default 0.75)
+        strength: Native edit strength (omitted = adapter default)
         guidance: Guidance scale (omitted = loaded model's product preset)
         steps: Inference steps (optional)
         seed: Random seed (optional)
@@ -19832,6 +19868,7 @@ async def create_image_edit(request: Request):
     global _image_gen
 
     body = await _parse_image_edit_request_body(request)
+    _validate_image_request_parameters(body)
 
     from pathlib import Path
     import shutil
@@ -19842,7 +19879,7 @@ async def create_image_edit(request: Request):
     mask_b64 = body.get("mask")
     size = body.get("size", "1024x1024")
     n = min(body.get("n", 1), 4)
-    strength = body.get("strength", 0.75)
+    strength = body.get("strength")
     guidance = body.get("guidance")
     steps = body.get("steps")
     seed = body.get("seed")
@@ -19856,7 +19893,10 @@ async def create_image_edit(request: Request):
     try:
         width, height = map(int, size.lower().split("x"))
     except (ValueError, AttributeError):
-        width, height = 1024, 1024
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid size format: {size}. Use WxH (e.g., 1024x1024)",
+        )
     # Validate dimensions (same limits as image generation)
     if width < 64 or width > 4096:
         raise HTTPException(
@@ -19901,12 +19941,10 @@ async def create_image_edit(request: Request):
             except Exception:
                 pass  # No EXIF data or unsupported — continue without rotation
 
-            # Convert to 8-bit RGB (handles RGBA, CMYK, P, L, I, I;16, F, LA, PA modes)
-            if src_img.mode in ("RGBA", "LA", "PA"):
-                # Composite alpha onto white background before converting
-                background = _PILImage.new("RGB", src_img.size, (255, 255, 255))
-                background.paste(src_img, mask=src_img.split()[-1])
-                src_img = background
+            # Keep transparency until the loaded adapter is known. Qwen 2.1
+            # natively consumes RGBA; legacy adapters retain white compositing.
+            if src_img.mode in ("RGBA", "LA", "PA") or "transparency" in src_img.info:
+                src_img = src_img.convert("RGBA")
             elif src_img.mode != "RGB":
                 src_img = src_img.convert("RGB")
 
@@ -19914,7 +19952,7 @@ async def create_image_edit(request: Request):
             logger.info(
                 f"Edit: received image {len(image_b64)} b64 chars -> {len(image_data)} bytes "
                 f"(format={src_format}, mode={src_original_mode}, size={src_img.size}), "
-                f"converted to RGB PNG at {image_path}"
+                f"converted to {src_img.mode} PNG at {image_path}"
             )
         except Exception as conv_err:
             # Provide actionable error instead of silently saving raw bytes
@@ -20057,6 +20095,15 @@ async def create_image_edit(request: Request):
                         detail=f"Failed to load edit model '{model}': {e}",
                     )
 
+            # Normalize for the actual adapter after load, under the model lock.
+            # Preserve the old RGB contract everywhere except native Qwen 2.1.
+            if getattr(_image_gen, "_mflux_class", None) != "QwenImage21Edit":
+                with _PILImage.open(str(image_path)) as source:
+                    if source.mode == "RGBA":
+                        background = _PILImage.new("RGB", source.size, "white")
+                        background.paste(source, mask=source.getchannel("A"))
+                        background.save(str(image_path), format="PNG")
+
             # Generate edited images (inside lock)
             # Verify the input image can be opened
             try:
@@ -20097,6 +20144,8 @@ async def create_image_edit(request: Request):
                     )
                 except (HTTPException, ImageRequestCancelled):
                     raise
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid image parameters: {e}")
                 except Exception as e:
                     logger.exception("Image editing failed")
                     raise HTTPException(

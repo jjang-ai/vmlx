@@ -774,7 +774,7 @@ export function registerImageHandlers(): void {
             // never guess Dev vs Schnell or a Klein parameter count.
             const candidates = IMAGE_MODELS.filter(model =>
               model.mfluxClass === serverSettings.mfluxClass &&
-              (!imageMode || model.category === imageMode))
+              (!imageMode || model.category === imageMode || model.supportedModes?.includes(imageMode)))
             if (candidates.length !== 1) {
               return { success: false, error: 'This architecture/task does not identify one base model. Use a folder with supported base-model metadata so its variant can be identified before loading.', serverKept: true }
             }
@@ -787,7 +787,8 @@ export function registerImageHandlers(): void {
             console.warn(`[IMAGE] Adapter unresolved for ${modelPath}; current server kept`)
             return { success: false, error: 'Could not identify this image model. Select its architecture explicitly or use a folder with supported model metadata.', serverKept: true }
           }
-          if (modelDef && (mfluxClass !== modelDef.mfluxClass || mode !== modelDef.category)) {
+          if (modelDef && (mfluxClass !== modelDef.mfluxClass ||
+              (mode !== modelDef.category && !modelDef.supportedModes?.includes(mode)))) {
             return { success: false, error: `The selected folder resolves to ${modelDef.name} (${modelDef.mfluxClass}, ${modelDef.category}), but the selected architecture or mode conflicts. Use automatic detection or select a matching folder.`, serverKept: true }
           }
 

@@ -43,6 +43,7 @@ MODEL_CLASS_MAP: dict[str, tuple[str, str]] = {
     "FIBO": ("mflux.models.fibo.variants.txt2img.fibo", "FIBO"),
     "QwenImage": ("mflux.models.qwen.variants.txt2img.qwen_image", "QwenImage"),
     "QwenImageEdit": ("mflux.models.qwen.variants.edit.qwen_image_edit", "QwenImageEdit"),
+    "QwenImage21Edit": ("mflux.models.qwen21.variants.edit.qwen_image_21_edit", "QwenImage21Edit"),
     "Flux1Kontext": ("mflux.models.flux.variants.kontext.flux_kontext", "Flux1Kontext"),
     "Flux1Fill": ("mflux.models.flux.variants.fill.flux_fill", "Flux1Fill"),
     "SeedVR2": ("mflux.models.seedvr2.variants.upscale.seedvr2", "SeedVR2"),
@@ -60,6 +61,8 @@ DEFAULT_STEPS: dict[str, int] = {
     "flux2-klein-base-9b": 20,
     "qwen-image": 20,
     "qwen-image-edit": 28,
+    "qwen-image-2.1": 40,
+    "qwen-image-2.1-turbo": 8,
     "dev-kontext": 24,
     "dev-fill": 20,
     "fibo": 20,
@@ -80,6 +83,8 @@ DEFAULT_GUIDANCE: dict[str, float] = {
     "flux2-klein-9b": 3.5,
     "qwen-image": 4.0,
     "qwen-image-edit": 4.0,
+    "qwen-image-2.1": 1.0,
+    "qwen-image-2.1-turbo": 1.0,
     "dev-kontext": 2.5,
     "dev-fill": 30.0,
 }
@@ -95,6 +100,8 @@ SUPPORTED_MODELS: dict[str, str] = {
     "flux2-klein-base-4b": "flux2-klein-base-4b",
     "flux2-klein-base-9b": "flux2-klein-base-9b",
     "qwen-image": "qwen-image",
+    "qwen-image-2.1": "qwen-image-2.1",
+    "qwen-image-2.1-turbo": "qwen-image-2.1-turbo",
     "fibo": "fibo",
     # Aliases
     "flux-schnell": "schnell",
@@ -115,6 +122,9 @@ SUPPORTED_MODELS: dict[str, str] = {
 }
 
 EDIT_MODELS: dict[str, str] = {
+    # These edit-saved bundles use one native runtime for both endpoints.
+    "qwen-image-2.1": "qwen-image-2.1",
+    "qwen-image-2.1-turbo": "qwen-image-2.1-turbo",
     "qwen-image-edit": "qwen-image-edit",
     "flux-kontext": "dev-kontext",
     "kontext": "dev-kontext",
@@ -141,6 +151,8 @@ _NAME_TO_CLASS: dict[str, str] = {
     "flux2-klein-base-9b": "Flux2Klein",
     "qwen-image": "QwenImage",
     "qwen-image-edit": "QwenImageEdit",
+    "qwen-image-2.1": "QwenImage21Edit",
+    "qwen-image-2.1-turbo": "QwenImage21Edit",
     "dev-kontext": "Flux1Kontext",
     "dev-fill": "Flux1Fill",
     "fibo": "FIBO",
@@ -172,6 +184,7 @@ _DIFFUSERS_CLASS_TO_MFLUX: dict[str, tuple[str, str]] = {
     "FIBOPipeline": ("FIBO", "fibo"),
     "QwenImagePipeline": ("QwenImage", "qwen-image"),
     "QwenImageEditPipeline": ("QwenImageEdit", "qwen-image-edit"),
+    "QwenImage21Pipeline": ("QwenImage21Edit", "qwen-image-2.1"),
     "FluxKontextPipeline": ("Flux1Kontext", "dev-kontext"),
     "FluxFillPipeline": ("Flux1Fill", "dev-fill"),
     "SeedVR2Pipeline": ("SeedVR2", "seedvr2-3b"),
@@ -201,6 +214,8 @@ def _detect_class_from_model_index(model_path: str | None) -> tuple[str, str] | 
             return None
         data = json.loads(idx_path.read_text())
         class_name = data.get("_class_name")
+        if class_name == "QwenImage21Pipeline" and isinstance(data.get("sample_sigmas"), list) and data["sample_sigmas"]:
+            return "QwenImage21Edit", "qwen-image-2.1-turbo"
         if not isinstance(class_name, str):
             return None
         mapping = _DIFFUSERS_CLASS_TO_MFLUX.get(class_name)
@@ -475,6 +490,12 @@ class ImageGenEngine:
 
         # Resolve mflux class
         resolved_class = mflux_class
+        # The saved sampling grid owns Turbo identity, even after a rename.
+        declared = _detect_class_from_model_index(model_path)
+        if declared and declared[0] == "QwenImage21Edit":
+            if resolved_class and resolved_class != declared[0]:
+                raise ValueError("The selected runtime conflicts with the Qwen Image 2.1 bundle metadata")
+            resolved_class, resolved_name = declared
         if not resolved_class:
             resolved_class = (
                 _NAME_TO_CLASS.get(resolved_name)
@@ -760,7 +781,7 @@ class ImageGenEngine:
         # it on an edit-only class (QwenImageEdit / Flux1Kontext / Flux1Fill /
         # Flux2KleinEdit) surfaces as a deep mflux TypeError ("unexpected
         # keyword argument 'image_path'"). Fail fast with a clear message.
-        _gen_mclasses = {"Flux1", "Flux2Klein", "ZImage", "FIBO", "QwenImage"}
+        _gen_mclasses = {"Flux1", "Flux2Klein", "ZImage", "FIBO", "QwenImage", "QwenImage21Edit"}
         if self._mflux_class and self._mflux_class not in _gen_mclasses:
             raise ValueError(
                 f"Model '{self._model_name}' (class={self._mflux_class}) is an "
@@ -793,11 +814,17 @@ class ImageGenEngine:
             guidance=guidance,
         )
         # Not all models accept negative_prompt (Klein doesn't)
-        if negative_prompt and negative_supported:
+        if negative_prompt is not None and negative_supported:
             kwargs["negative_prompt"] = negative_prompt
+        if self._mflux_class == "QwenImage21Edit" and guidance > 1 and negative_prompt is None:
+            kwargs["negative_prompt"] = ""
         if is_img2img:
-            kwargs["image_path"] = image_path
-            kwargs["image_strength"] = image_strength
+            if self._mflux_class == "QwenImage21Edit":
+                kwargs["image_paths"] = [image_path]
+                kwargs["strength"] = image_strength
+            else:
+                kwargs["image_path"] = image_path
+                kwargs["image_strength"] = image_strength
 
         generated_image, trace = self._generate_with_trace(**kwargs)
 
@@ -834,7 +861,7 @@ class ImageGenEngine:
         steps: int | None = None,
         guidance: float | None = None,
         seed: int | None = None,
-        strength: float = 0.75,
+        strength: float | None = None,
         negative_prompt: str | None = None,
         mask_path: str | None = None,
     ) -> ImageGenResult:
@@ -867,7 +894,7 @@ class ImageGenEngine:
         logger.info(
             f"Editing image: model={self._model_name}, {width}x{height}, "
             f"{steps} steps, guidance={guidance}, strength={strength} "
-            f"(not forwarded: {self._mflux_class or 'edit'} conditions on the source image), "
+            f"(native strength for QwenImage21Edit; other edit adapters condition on the source), "
             f"seed={seed}, negative_prompt={edit_negative_disposition}"
         )
         start = time.perf_counter()
@@ -879,7 +906,7 @@ class ImageGenEngine:
         # calling edit() on a generation model (Flux1 / ZImage / Flux2Klein)
         # falls through to the generic img2img branch and silently performs
         # variations instead of instruction-based editing.
-        _edit_mclasses = {"QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"}
+        _edit_mclasses = {"QwenImageEdit", "QwenImage21Edit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"}
         if mclass not in _edit_mclasses:
             raise ValueError(
                 f"Model '{self._model_name}' (class={mclass}) is not an editing "
@@ -887,7 +914,7 @@ class ImageGenEngine:
                 f"img2img, or load qwen-image-edit / flux-kontext / flux-fill."
             )
 
-        if mclass == "QwenImageEdit":
+        if mclass in {"QwenImageEdit", "QwenImage21Edit"}:
             qwen_kwargs: dict = dict(
                 seed=seed,
                 prompt=prompt,
@@ -897,8 +924,15 @@ class ImageGenEngine:
                 width=width,
                 guidance=guidance,
             )
-            if negative_prompt and 'negative_prompt' in self._get_generate_params():
+            if negative_prompt is not None and self._supports_negative_prompt():
                 qwen_kwargs["negative_prompt"] = negative_prompt
+            if mclass == "QwenImage21Edit":
+                if strength is not None:
+                    qwen_kwargs["strength"] = strength
+                if guidance > 1 and negative_prompt is None:
+                    qwen_kwargs["negative_prompt"] = ""
+                if mask_path:
+                    qwen_kwargs["mask_image"] = mask_path
             generated_image, trace = self._generate_with_trace(**qwen_kwargs)
         elif mclass == "Flux1Kontext":
             # Kontext uses reference image for subject conditioning
@@ -982,7 +1016,7 @@ class ImageGenEngine:
     # Explicit edit classes handled by edit(); each has its own branch and none
     # of them forwards image_strength (Kontext/Fill/Klein condition on the
     # reference or the mask; Qwen edit conditions on the source image).
-    _EDIT_CLASSES = frozenset({"QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"})
+    _EDIT_CLASSES = frozenset({"QwenImageEdit", "QwenImage21Edit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"})
 
     def capabilities(self) -> dict:
         """What the LOADED model actually accepts, from its class and its
@@ -993,31 +1027,34 @@ class ImageGenEngine:
           compatibility argument is unused, unlike QwenImage/QwenImageEdit.
         - variation_strength: img2img strength on a generation model (the
           gallery's "Iterate"), i.e. generate_image takes image_strength.
-        - edit_strength: strength on an edit model. False for every edit class
-          edit() accepts, because their branches never forward it.
-        - mask: "required" for Flux1Fill (inpainting), otherwise "none".
+        - edit_strength: true for the Qwen 2.1 native source-strength input;
+          false for adapters that only condition on a reference.
+        - mask: required for Flux1Fill, optional for Qwen 2.1, otherwise none.
         - count: generation models return n images; edit always returns one.
         """
         params = self._get_generate_params()
         mclass = self._mflux_class or ""
         is_edit = mclass in self._EDIT_CLASSES
+        dual = mclass == "QwenImage21Edit"
         # Flux1's actual model configuration controls whether a guidance
         # embedding exists. Schnell accepts the argument but does not use it;
         # Dev does. Do not infer other adapters' semantics from this flag.
         guidance = getattr(getattr(self._model, "model_config", None), "supports_guidance", None)
         guidance = guidance if mclass == "Flux1" and isinstance(guidance, bool) else None
+        if dual:
+            guidance = self._model_name != "qwen-image-2.1-turbo"
         return {
             "loaded": bool(self.is_loaded),
             "model": self._model_name,
             "mflux_class": mclass,
             "quantize": self._quantize,
-            "mode": "edit" if is_edit else "generate",
+            "mode": "dual" if dual else ("edit" if is_edit else "generate"),
             "negative_prompt": self._supports_negative_prompt(),
             "guidance": guidance,
-            "variation_strength": (not is_edit) and "image_strength" in params,
-            "edit_strength": False if is_edit else None,
-            "mask": "required" if mclass == "Flux1Fill" else "none",
-            "count": not is_edit,
+            "variation_strength": dual or ((not is_edit) and "image_strength" in params),
+            "edit_strength": True if dual else (False if is_edit else None),
+            "mask": "optional" if dual else ("required" if mclass == "Flux1Fill" else "none"),
+            "count": dual or not is_edit,
         }
 
     def _supports_negative_prompt(self) -> bool:
@@ -1026,6 +1063,7 @@ class ImageGenEngine:
         # Keep the semantic adapter contract explicit, qualified by a dependency
         # test, rather than falsely advertising support from the signature.
         return (self._mflux_class != "Flux1"
+                and self._model_name != "qwen-image-2.1-turbo"
                 and "negative_prompt" in self._get_generate_params())
 
     def _get_generate_params(self) -> set[str]:

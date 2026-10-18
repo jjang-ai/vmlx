@@ -663,10 +663,10 @@ class TestImageEditRequestValidation:
         assert "utf-8" not in detail.lower()
 
     def test_edit_strength_default(self):
-        """Default strength is 0.75 (verified from source)."""
+        """Omitted strength is left to the loaded adapter."""
         import vmlx_engine.server as srv
         source = inspect.getsource(srv.create_image_edit)
-        assert '0.75' in source
+        assert 'strength = body.get("strength")' in source
 
     def test_edit_mask_is_optional(self):
         """Mask defaults to None (verified from source)."""
@@ -753,13 +753,12 @@ class TestSizeParsing:
         with pytest.raises(AttributeError):
             None.split("x")
 
-    def test_edit_size_fallback(self):
-        """Edit endpoint falls back to 1024x1024 on invalid size
-        (different behavior from generation endpoint)."""
-        # From source: except (ValueError, AttributeError): width, height = 1024, 1024
-        import vmlx_engine.server as srv
-        source = inspect.getsource(srv.create_image_edit)
-        assert "width, height = 1024, 1024" in source
+    @pytest.mark.anyio
+    async def test_edit_size_rejects_invalid_input(self, client):
+        response = await client.post('/v1/images/edits', json={
+            'prompt': 'edit', 'image': 'unused', 'size': 'bad-size'})
+        assert response.status_code == 400
+        assert 'Invalid size format' in response.json()['detail']
 
 
 # ---------------------------------------------------------------------------
@@ -1427,3 +1426,85 @@ class TestModuleLevelGlobals:
                 found = True
                 break
         assert found, "_image_gen_lock declaration not found at module level"
+
+class TestQwen21EditTransport:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize('mclass,model,expected_mode', [
+        ('QwenImage21Edit', 'qwen-image-2.1', 'RGBA'),
+        ('QwenImage21Edit', 'qwen-image-2.1-turbo', 'RGBA'),
+        ('QwenImageEdit', 'qwen-image-edit', 'RGB'),
+    ])
+    async def test_alpha_native_defaults_and_explicit_parameters(self, client, monkeypatch, mclass, model, expected_mode):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        observed = []
+        def edit(**kwargs):
+            with Image.open(kwargs['image_path']) as image:
+                observed.append((image.mode, image.getpixel((0, 0)), kwargs.copy()))
+            return SimpleNamespace(b64_json='AAAA', seed=kwargs['seed'])
+        engine = SimpleNamespace(is_loaded=True, model_name=model, _model_path='/test/q21',
+                                 _mflux_class=mclass, edit=MagicMock(side_effect=edit))
+        for key, value in dict(_image_gen=engine, _image_gen_lock=None, _standby_state=None,
+                               _model_path='/test/q21', _model_name=model, _served_model_name=model).items():
+            monkeypatch.setattr(srv, key, value)
+        buffer = io.BytesIO()
+        Image.new('RGBA', (64, 64), (10, 20, 30, 0)).save(buffer, format='PNG')
+        request = dict(model=model, prompt='blue sphere', size='64x64', seed=7,
+                       image=base64.b64encode(buffer.getvalue()).decode())
+        for extra in ({}, {'strength': .6, 'guidance': 1, 'steps': 8}):
+            response = await client.post('/v1/images/edits', json={**request, **extra})
+            assert response.status_code == 200, response.text
+            mode, pixel, sent = observed[-1]
+            assert mode == expected_mode
+            assert pixel == ((10, 20, 30, 0) if expected_mode == 'RGBA' else (255, 255, 255))
+            assert sent['strength'] == extra.get('strength')
+            assert sent['steps'] == extra.get('steps') and sent['guidance'] == extra.get('guidance')
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize('endpoint', ['generations', 'edits'])
+    async def test_native_input_error_is_client_error(self, client, monkeypatch, endpoint):
+        import io
+        from PIL import Image
+        import vmlx_engine.server as srv
+        fail = MagicMock(side_effect=ValueError('strength must be in (0, 1]'))
+        engine = SimpleNamespace(is_loaded=True, model_name='qwen-image-2.1',
+                                 _model_path='/test/q21', _mflux_class='QwenImage21Edit',
+                                 edit=fail, generate=fail, capabilities=lambda: {})
+        for key, value in dict(_image_gen=engine, _image_gen_lock=None, _standby_state=None,
+                               _model_path='/test/q21', _model_name='qwen-image-2.1',
+                               _served_model_name='qwen-image-2.1').items():
+            monkeypatch.setattr(srv, key, value)
+        buffer = io.BytesIO()
+        Image.new('RGB', (64, 64)).save(buffer, format='PNG')
+        response = await client.post(f'/v1/images/{endpoint}', json={
+            'model': 'qwen-image-2.1', 'prompt': 'blue mug', 'strength': 0,
+            'image': base64.b64encode(buffer.getvalue()).decode()})
+        assert response.status_code == 400, response.text
+        assert 'strength must be in (0, 1]' in response.json()['detail']
+
+class TestImageParameterTypes:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize('endpoint', ['generations', 'edits'])
+    @pytest.mark.parametrize('extra', [
+        {'n': 'bad'}, {'n': 0}, {'n': -1}, {'n': True}, {'n': None},
+        {'steps': 0}, {'steps': 1.5}, {'steps': False},
+        {'seed': '123'}, {'guidance': '1'}, {'guidance': 10 ** 400}, {'strength': []},
+        {'prompt': ['hello']}, {'model': {}}, {'image': []}, {'mask': {}},
+    ])
+    async def test_bad_types_never_reach_generation(self, client, monkeypatch, endpoint, extra):
+        import vmlx_engine.server as srv
+        worker = AsyncMock(side_effect=AssertionError('GPU worker must not run'))
+        monkeypatch.setattr(srv, '_run_image_gen_call', worker)
+        response = await client.post(f'/v1/images/{endpoint}', json={
+            'prompt': 'hello', 'image': 'unused', **extra})
+        assert response.status_code == 400, response.text
+        worker.assert_not_called()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize('body', ['[]', 'null', '{"prompt":"x","guidance":NaN}',
+                                     '{"prompt":"x","strength":Infinity}'])
+    async def test_invalid_json_values(self, client, body):
+        response = await client.post('/v1/images/generations', content=body,
+                                     headers={'Content-Type': 'application/json'})
+        assert response.status_code == 400

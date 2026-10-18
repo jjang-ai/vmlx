@@ -353,3 +353,17 @@ describe('a precision variant folder resolves its model through the bundle root'
     expect(tab.split("serverSettingsRef.current = serverSettings")[1]).toContain("setServerStatus('starting')")
   })
 })
+
+describe('Qwen Image 2.1 saved pipeline', () => {
+  it.each([false, true])('detects a renamed dual-mode bundle, turbo=%s', turbo => {
+    const dir = mfluxBundle(tmp(), 'renamed-bundle', 6)
+    writeFileSync(join(dir, 'model_index.json'), JSON.stringify({
+      _class_name: 'QwenImage21Pipeline',
+      ...(turbo ? { sample_sigmas: [1, .978453, .95418, .926626, .89508, .845148, .704534, .414568] } : {}),
+    }))
+    expect(inspectLocalImageModel(dir)).toMatchObject({ success: true, quantize: 6,
+      model: { id: turbo ? 'qwen-image-2.1-turbo' : 'qwen-image-2.1',
+        mfluxClass: 'QwenImage21Edit', supportedModes: ['generate', 'edit'],
+        steps: turbo ? 8 : 40, guidance: 1 } })
+  })
+})

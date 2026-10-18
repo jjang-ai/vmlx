@@ -722,6 +722,13 @@ export function ImageTab() {
           status={serverStatus}
           port={serverPort}
           mode={sessionMode}
+          onModeChange={capabilities?.mode === 'dual' ? mode => {
+            if (generating || mode === sessionMode) return
+            imageDrafts.newConversation()
+            setGenerations([])
+            setError(null)
+            setSessionMode(mode)
+          } : undefined}
           generating={generating}
           onSettings={() => setShowSettings(!showSettings)}
           onLogs={() => setShowLogs(!showLogs)}
@@ -788,13 +795,14 @@ export function ImageTab() {
         )}
 
         <div className="flex-1 min-h-0 overflow-hidden">
+          {/* Saved history keeps its operation when a dual model's composer changes mode. */}
           <ImageGallery
             generations={generations}
             generating={generating}
             progress={jobProgress}
             startTime={jobStartTime}
             cancelling={cancelling}
-            mode={sessionMode}
+            mode={sessions.find(session => session.id === currentSessionId)?.sessionType ?? sessionMode}
             onRegenerate={async (gen) => {
               // Iterate: set the output image as source for img2img
               // Read the generated image and set as source

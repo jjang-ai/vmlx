@@ -20,7 +20,7 @@ export const IMAGE_SETTINGS_KEY = 'image_settings_v2'
 export function defaultImageRuntimeSettings(modelId: string, quantize: number): ImageRuntimeSettings {
   return { steps: getDefaultSteps(modelId), guidance: getDefaultGuidance(modelId),
     width: 1024, height: 1024, negativePrompt: '', seed: undefined,
-    count: 1, quantize, strength: 0.8 }
+    count: 1, quantize, strength: ['qwen-image-2.1', 'qwen-image-2.1-turbo'].includes(modelId) ? 1.0 : 0.8 }
 }
 
 function preferences(value: unknown): Partial<Preferences> {
