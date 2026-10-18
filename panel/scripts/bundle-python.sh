@@ -304,6 +304,10 @@ MLX_VERSION="0.32.3"
 MLX_LM_VERSION="0.31.3"
 MLX_VLM_VERSION="0.5.0"
 MFLUX_VERSION="0.19.0"
+PILLOW_VERSION="12.3.0"
+# Pillow 13 imports numbers._IntegralLike at runtime from PIL._typing, which
+# breaks MFlux's ModelConfig import on our standalone Python 3.12. Keep the
+# working image dependency shipped with the previous bundle.
 OPENCV_VERSION="4.13.0.92"
 MLX_AUDIO_VERSION="0.5.8"
 # Keep the downloader/tokenizer dependency on the version qualified with the
@@ -371,7 +375,7 @@ echo "==> Installing dependencies..."
 "$PYTHON" -m pip install --only-binary=:all: \
   "mlx==$MLX_VERSION" "mlx-lm==$MLX_LM_VERSION" "mlx-vlm==$MLX_VLM_VERSION" \
   "transformers==5.19.0" "tokenizers==0.23.2" "huggingface-hub==$HUGGINGFACE_HUB_VERSION" \
-  "numpy>=1.24.0" "pillow>=10.0.0" \
+  "numpy>=1.24.0" "pillow==$PILLOW_VERSION" \
   "opencv-python==$OPENCV_VERSION" \
   "fastapi>=0.100.0" "uvicorn>=0.23.0" \
   "mcp==$MCP_VERSION" "jsonschema>=4.0.0" "referencing>=0.37.0" \
