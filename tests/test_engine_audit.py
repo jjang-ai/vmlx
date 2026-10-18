@@ -8160,7 +8160,7 @@ class TestStartupCompatibilityGuards:
         # Ling/Bailing hybrid needs the mlx-lm runtime floor that the bundle
         # uses before the local bailing_hybrid vendor file is applied.
         assert '"mlx-lm>=0.31.3"' in pyproject
-        assert pyproject.count('"jang>=2.5.49"') >= 3
+        assert pyproject.count('"jang>=2.5.50"') >= 3
 
     def test_pypi_dependencies_are_registry_safe_and_match_bundled_dflash(self):
         import tomllib
@@ -8204,7 +8204,7 @@ class TestStartupCompatibilityGuards:
 
         assert '${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}' in bundle_script
         assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
-        assert 'pip install --no-deps "jang>=2.5.49"' in bundle_script
+        assert 'pip install --no-deps "jang>=2.5.50"' in bundle_script
         assert '${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}' in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
 
@@ -8240,7 +8240,7 @@ class TestStartupCompatibilityGuards:
         assert "bundled-Python provenance manifest is missing" in verify_script
         assert "bundled JANG distribution version drift" in verify_script
         assert "bundled JANG provenance mismatch" in verify_script
-        assert 'JANG_MIN_VERSION="2.5.49"' in verify_script
+        assert 'JANG_MIN_VERSION="2.5.50"' in verify_script
 
     def test_release_scripts_accept_documented_jang_tools_env_names_with_legacy_fallback(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
