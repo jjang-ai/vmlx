@@ -10,6 +10,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Add Ideogram 4 generation from compatible MFlux bundles, including native fast/balanced/quality schedules and structured captions. Bound retained prompt features to the current prompt and size; preserve custom API controls explicitly.
 - Keep the currently loaded image adapter when an API request omits the model, including after deep sleep. Report invalid image parameters clearly and explain when negative conditioning is inactive.
 - Update MFlux to 0.23 for the new image adapters; preserve Pillow 12.3 compatibility in the packaged Python runtime.
+- Support native SeedVR2 upscaling controls and saved output dimensions; preserve FIBO structured captions and explicit Flux2 Klein editing across new sessions and deep sleep.
 
 - Add MiMo-V2.6 text, image, video, audio and tool support, with bundled DFlash detection and SSD-backed conversation reuse. Preserve earlier media in Responses API follow-ups and keep MiMo checkpoint settings independent of DSpark.
 - Add Nemotron-3.5 Bolt and Super-VL multimodal loading, including their native routing, expert activation and vision normalization. Enable compatible Super-VL native MTP with exact greedy verification; LiLiCorr remains opt-in and off by default.
