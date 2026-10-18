@@ -7193,7 +7193,7 @@ def test_r20_release_version_gate_requires_the_pinned_jang_lock():
     failures: list[str] = []
     versions = module.validate_versions(failures)
     assert failures == []
-    assert versions["uv_lock_jang"] == module.JANG_VERSION == "2.5.49"
+    assert versions["uv_lock_jang"] == module.JANG_VERSION == "2.5.50"
 
 
 def test_r20_v5_release_scope_review_fails_closed_on_unrelated_panel_source():

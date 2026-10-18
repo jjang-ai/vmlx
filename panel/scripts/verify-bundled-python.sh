@@ -271,7 +271,7 @@ echo "  ok   bundled critical vmlx_engine files match source content"
 BUNDLED_JANG_TOOLS_DIR="$(run_bundled_python -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
 JANG_TOOLS_SOURCE_ROOT="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"
 JANG_TOOLS_SOURCE_DIR="$JANG_TOOLS_SOURCE_ROOT/jang_tools"
-JANG_MIN_VERSION="2.5.49"
+JANG_MIN_VERSION="2.5.50"
 PROVENANCE_FILE="$BUNDLE_ROOT/vmlx-bundle-provenance.json"
 HASH_GATED_JANG_TOOLS_FILES=(
   "capabilities.py"

@@ -4,6 +4,18 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.80] - 2026-10-18
+
+- Add MiMo-V2.6 text, image, video, audio and tool support, with bundled DFlash detection and SSD-backed conversation reuse. Preserve earlier media in Responses API follow-ups and keep MiMo checkpoint settings independent of DSpark.
+- Add Nemotron-3.5 Bolt and Super-VL multimodal loading, including their native routing, expert activation and vision normalization. Enable compatible Super-VL native MTP with exact greedy verification; LiLiCorr remains opt-in and off by default.
+- Improve MiMo cold-start compilation, long-context attention and verification, and periodically refresh ordinary-decoding cost estimates in speculative lanes. Gains depend on the model, sampling, context and workload.
+- Reuse SSD chunk checkpoints when a question changes within a long document, including compatible MiMo, Qwen 27B and MiniCPM sessions. Reduce repeated prefix-index work and redundant snapshot writes while retaining background persistence and continuation fences.
+- Stop cancelled DFlash prefill at chunk boundaries, preserve rotating-cache snapshots, and correct shared speculative rejection and fallback sampling paths.
+- Keep large text pastes responsive and avoid expensive automatic syntax detection for user messages and large unlabelled code blocks.
+- Make rejected model tool output explicitly recoverable: Chat returns structured HTTP 422 or streaming error metadata with usage; Responses keeps an incomplete response that can be continued. Rejected tools are never executed and generation is not retried automatically.
+- Fix newly connected remote chats retaining the previous local session, so the first request uses the selected endpoint and saved model settings.
+- Require JANG 2.5.50 so clean installations include the Nemotron vision runtime used by the app.
+
 ## [1.6.79] - 2026-10-14
 
 - Preserve model-native and explicit output limits when projected memory estimates are conservative; retain adaptive prefill chunking and memory advisories.

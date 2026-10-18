@@ -17,7 +17,7 @@ PREVIOUS_BUNDLE_DIR="$PANEL_DIR/.bundled-python.previous.$$"
 BUNDLE_PUBLISHED=0
 STANDALONE_TARBALL=""
 JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"
-JANG_MIN_VERSION="2.5.49"
+JANG_MIN_VERSION="2.5.50"
 JANG_SOURCE_COMMIT=""
 JANG_SOURCE_VERSION=""
 VMLX_SOURCE_COMMIT=""
@@ -309,7 +309,7 @@ MLX_AUDIO_VERSION="0.5.8"
 # Keep the downloader/tokenizer dependency on the version qualified with the
 # bundled runtime. A lower bound silently upgraded it during a source-only
 # rebuild, invalidating the retained dependency comparison.
-HUGGINGFACE_HUB_VERSION="1.32.0"
+HUGGINGFACE_HUB_VERSION="1.33.0"
 # The MCP SDK was installed as an unpinned "mcp>=1.0.0", so every re-bundle took
 # whatever PyPI had latest — which is how the shipped bundle silently moved to a
 # MAJOR version (2.0.0) while uv.lock still records 1.26.0. Nothing broke,
@@ -450,7 +450,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
 else
   if [ "${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
-    "$PYTHON" -m pip install --no-deps "jang>=2.5.49"
+    "$PYTHON" -m pip install --no-deps "jang>=2.5.50"
   else
     echo "ERROR: RELEASE BLOCKED — local jang-tools source missing: $JANG_LOCAL" >&2
     echo "       vMLX release builds must bundle the checked-out JANG runtime," >&2
