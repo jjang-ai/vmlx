@@ -38,8 +38,13 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
   const isEdit = mode === 'edit'
   // Only claim a control is effective when the loaded model takes it.
   const strengthUnused = isEdit && capabilities?.edit_strength === false
-  const negativeUnused = capabilities?.negative_prompt === false
+  const negativeNeedsGuidance = capabilities?.mflux_class === 'QwenImage21Edit' &&
+    capabilities.negative_prompt === true && settings.guidance <= 1
+  const negativeUnused = capabilities?.negative_prompt === false || negativeNeedsGuidance
   const capModel = capabilities?.mflux_class || model || ''
+  const negativeUnavailable = negativeNeedsGuidance
+    ? t('image.settings.negativeNeedsGuidance')
+    : t('image.settings.negativeNotUsed', { model: capModel })
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showServer, setShowServer] = useState(false)
   const [showNegativeHelp, setShowNegativeHelp] = useState(false)
@@ -187,13 +192,13 @@ export function ImageSettings({ settings, onChange, model, mode, capabilities }:
           type="text"
           value={settings.negativePrompt}
           onChange={(e) => update('negativePrompt', e.target.value)}
-          placeholder={negativeUnused ? t('image.settings.negativeNotUsed', { model: capModel }) : t('image.settings.negativePlaceholder')}
+          placeholder={negativeUnused ? negativeUnavailable : t('image.settings.negativePlaceholder')}
           disabled={negativeUnused}
           data-vmlx-image-cap={negativeUnused ? 'negative-unused' : 'negative'}
           className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         />
         {negativeUnused && (
-          <p className="text-[10px] text-muted-foreground mt-1">{t('image.settings.negativeNotUsed', { model: capModel })}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">{negativeUnavailable}</p>
         )}
       </div>
 

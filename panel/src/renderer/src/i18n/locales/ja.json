@@ -1918,6 +1918,7 @@
       "quantize": "量子化",
       "quantizeTitle": "モデル精度。サーバー起動時に設定され、実行中は変更できません。",
       "negativePrompt": "ネガティブプロンプト",
+      "negativeNeedsGuidance": "ネガティブプロンプトはガイダンスが1より大きい場合にのみ適用されます。",
       "negativePlaceholder": "画像で避けたいもの...",
       "widthCustom": "幅 (カスタム)",
       "heightCustom": "高さ (カスタム)",

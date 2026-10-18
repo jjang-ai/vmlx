@@ -1918,6 +1918,7 @@
       "quantize": "量化",
       "quantizeTitle": "模型精度。仅可在启动服务器时设置,运行中无法修改。",
       "negativePrompt": "负面提示词",
+      "negativeNeedsGuidance": "仅当引导强度大于 1 时，负面提示词才会生效。",
       "negativePlaceholder": "不希望出现在图像中的内容...",
       "widthCustom": "宽度（自定义）",
       "heightCustom": "高度（自定义）",

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../src/renderer/src/i18n', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 import { ImagePromptBar } from '../src/renderer/src/components/image/ImagePromptBar'
 import { ImageGallery } from '../src/renderer/src/components/image/ImageGallery'
+import { ImageSettings } from '../src/renderer/src/components/image/ImageSettings'
 import type { ImageGenerationInfo } from '../src/renderer/src/components/image/ImageTab'
 import type { ImageCapabilities } from '../src/shared/imageCapabilities'
 import { imageGuidanceFromInput } from '../src/shared/imageCapabilities'
@@ -21,6 +22,23 @@ function submit(html: string) {
   return html.match(/<button[^>]*data-vmlx-control="image-generate"[^>]*>/)![0]
 }
 describe('image presentation follows task capabilities', () => {
+  it('keeps Qwen 2.1 negative conditioning inactive until CFG is enabled without losing the saved prompt', () => {
+    for (const [supported, guidance, disabled, conditionalNotice] of [
+      [true, 1, true, true], [true, 2, false, false], [false, 1, true, false],
+    ] as const) {
+      const settings = { steps: 8, width: 512, height: 512, guidance,
+        negativePrompt: 'blur', count: 1, quantize: 4, strength: 1 }
+      const html = renderToStaticMarkup(React.createElement(ImageSettings, {
+        settings, onChange: noop, model: 'renamed-local', mode: 'generate',
+        capabilities: { loaded: true, mflux_class: 'QwenImage21Edit', negative_prompt: supported },
+      }))
+      const input = html.match(/<input[^>]*data-vmlx-image-cap="negative(?:-unused)?"[^>]*>/)![0]
+      expect(input.includes('disabled=""')).toBe(disabled)
+      expect(html.includes('image.settings.negativeNeedsGuidance')).toBe(conditionalNotice)
+      expect(input).toContain('value="blur"')
+      expect(settings.guidance).toBe(guidance)
+    }
+  })
   it('disables guidance only when the loaded adapter declares it unused', () => {
     for (const supported of [false, true, undefined]) {
       const html = prompt('renamed-schnell', { loaded: true, guidance: supported })

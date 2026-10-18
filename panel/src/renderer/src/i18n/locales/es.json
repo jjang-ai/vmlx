@@ -1918,6 +1918,7 @@
       "quantize": "Cuantizar",
       "quantizeTitle": "Precisión del modelo. Se establece al iniciar el servidor y no se puede cambiar mientras está en ejecución.",
       "negativePrompt": "Prompt negativo",
+      "negativeNeedsGuidance": "Los prompts negativos solo se aplican cuando Guidance es mayor que 1.",
       "negativePlaceholder": "Elementos a evitar en la imagen...",
       "widthCustom": "Ancho (personalizado)",
       "heightCustom": "Alto (personalizado)",

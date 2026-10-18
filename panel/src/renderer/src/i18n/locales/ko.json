@@ -1918,6 +1918,7 @@
       "quantize": "양자화",
       "quantizeTitle": "모델 정밀도. 서버 시작 시 설정되며 실행 중에는 변경할 수 없습니다.",
       "negativePrompt": "네거티브 프롬프트",
+      "negativeNeedsGuidance": "네거티브 프롬프트는 가이던스가 1보다 클 때만 적용됩니다.",
       "negativePlaceholder": "이미지에서 피할 것들...",
       "widthCustom": "너비 (사용자 지정)",
       "heightCustom": "높이 (사용자 지정)",
