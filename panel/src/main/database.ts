@@ -54,6 +54,7 @@ export interface MessageMetrics {
   remoteRequestSeconds?: number;
   remotePasses?: number;
   promptTokens?: number;
+  promptTokensScope?: 'exchange';
   cachedTokens?: number;
   cacheDetail?: string;
   tokensPerSecond: string;

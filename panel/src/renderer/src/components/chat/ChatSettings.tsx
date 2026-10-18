@@ -734,6 +734,11 @@ function statusToneClass(status: string): string {
               {detectedSupportsAdaptiveThinking === true && (
                 <p className="text-xs text-muted-foreground mt-1.5">{t('chat.settings.thinkingAdaptiveHelp')}</p>
               )}
+              {enableThinkingHonored && thinkingSupported && (
+                <p className="text-xs text-muted-foreground mt-1.5" data-vmlx-control="thinking-cache-impact">
+                  {t('chat.settings.promptCacheChangeNotice')}
+                </p>
+              )}
               {enableThinkingHonored && (
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {t(thinkingOffSupported
@@ -988,6 +993,9 @@ function statusToneClass(status: string): string {
               </label>
               <p className="text-xs text-muted-foreground mt-1 ml-6">
                 {t('chat.settings.enableBuiltinToolsHelp')}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1 ml-6" data-vmlx-control="tools-cache-impact">
+                {t('chat.settings.promptCacheChangeNotice')}
               </p>
 
               {overrides.builtinToolsEnabled && (

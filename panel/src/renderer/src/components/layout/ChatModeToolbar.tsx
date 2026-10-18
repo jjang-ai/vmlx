@@ -154,7 +154,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
       await onSessionChange(session.id)
       setShowModelPicker(false)
     } catch (error) {
-      showToast('error', t('layout.chatToolbar.remoteConnectFailed'), (error as Error).message)
+      showToast('error', t('layout.chatToolbar.sessionSwitchFailed'), (error as Error).message)
     }
   }
 

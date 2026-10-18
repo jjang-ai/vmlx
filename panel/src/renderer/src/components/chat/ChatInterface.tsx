@@ -13,6 +13,7 @@ import { readAssistantDisplayTimeline, type AssistantDisplayTimeline } from '../
 interface MessageMetrics {
   tokenCount: number
   promptTokens?: number
+  promptTokensScope?: 'exchange'
   cachedTokens?: number
   cacheDetail?: string  // e.g. "paged", "paged+ssm(23)+tq", "disk"
   tokensPerSecond: string

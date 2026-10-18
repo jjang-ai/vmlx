@@ -51,6 +51,19 @@ describe('chat prefill TPS', () => {
   })
 })
 
+describe('completed tool-loop usage scope', () => {
+  it('marks only saved and completed totals after folding the final request', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const fold = source.indexOf('promptTokens = exchangePromptTokens + finalStreamPromptTokens;')
+    const completion = source.indexOf('win.webContents.send("chat:complete"', fold)
+    const marker = 'promptTokensScope: exchangePromptTokens > 0 ? "exchange" : undefined,'
+    expect(source.slice(0, fold)).not.toContain(marker)
+    expect(source.slice(fold, completion)).toContain(marker)
+    expect(source.slice(completion, source.indexOf('return assistantMessage;', completion))).toContain(marker)
+    expect(source.split(marker)).toHaveLength(3)
+  })
+})
+
 describe('footer pp/s chips (cold + cached reuse)', () => {
   it('estimates cold pp/s from TTFT only without a cache hit', () => {
     expect(estimateColdPrefillTps({ promptTokens: 4000, cachedTokens: 0, ttftSeconds: 5 })).toBe('800.0')

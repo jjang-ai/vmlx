@@ -4872,6 +4872,7 @@ export function registerChatHandlers(
         assistantMessage.metricsJson = JSON.stringify({
           tokenCount: totalTokenCount,
           promptTokens: promptTokens || undefined,
+          promptTokensScope: exchangePromptTokens > 0 ? "exchange" : undefined,
           cachedTokens: cachedTokens || undefined,
           cacheDetail: cacheDetail || undefined,
           tokensPerSecond: finalTpsLabel,
@@ -5079,6 +5080,7 @@ export function registerChatHandlers(
               metrics: {
                 tokenCount: totalTokenCount,
                 promptTokens,
+                promptTokensScope: exchangePromptTokens > 0 ? "exchange" : undefined,
                 cachedTokens,
                 cacheDetail,
                 tokensPerSecond: finalTpsLabel,

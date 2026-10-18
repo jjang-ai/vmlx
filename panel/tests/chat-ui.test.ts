@@ -442,6 +442,27 @@ describe('Metrics Display Items', () => {
     expect(promptItem!.label).toBe('500 prompt (400 cached)')
   })
 
+  it('labels completed tool-loop usage as a sum rather than a context size', () => {
+    const metrics = { ...baseMetrics, promptTokens: 206454, cachedTokens: 103000,
+      promptTokensScope: 'exchange' as const, cacheDetail: 'block-disk+ssm' }
+    const items = getMetricsItems(metrics, false, t)
+    const prompt = items.find(i => i.value === '206454')!
+    expect(prompt.label).toBe('206454 prompt total (103000 block-disk+ssm cached)')
+    expect(prompt.title).toContain('summed across this turn’s requests')
+    expect(prompt.title).toContain('not the conversation’s context size')
+    expect(prompt.title).toContain('block-disk+ssm')
+    expect(metrics.promptTokens).toBe(206454)
+  })
+
+  it('does not label legacy or per-request streaming counts as an exchange total', () => {
+    for (const streaming of [false, true]) {
+      const prompt = getMetricsItems({ ...baseMetrics, promptTokens: 103181 }, streaming, t)
+        .find(i => i.value === '103181')!
+      expect(prompt.label).toBe('103181 prompt')
+      expect(prompt.title).not.toContain('summed')
+    }
+  })
+
   it('includes TTFT when > 0', () => {
     const items = getMetricsItems(baseMetrics, false, t)
     expect(items.find(i => i.label.includes('TTFT'))).toBeDefined()

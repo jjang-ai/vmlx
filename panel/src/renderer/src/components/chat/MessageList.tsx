@@ -7,6 +7,7 @@ import type { AssistantDisplayTimeline } from '../../../../shared/assistantDispl
 interface MessageMetrics {
   tokenCount: number
   promptTokens?: number
+  promptTokensScope?: 'exchange'
   cachedTokens?: number
   tokensPerSecond: string
   ppMetricSource?: string

@@ -105,6 +105,23 @@ describe('ChatInterface stream ownership across navigation', () => {
     expect(f.state.reasoningDoneMap.reply).toBe(true)
   })
 
+  it('preserves exchange-total scope in the live completion and reopened DB history', async () => {
+    const metrics = { ...completion.metrics, promptTokens: 206454, cachedTokens: 103000,
+      promptTokensScope: 'exchange' }
+    const live = mount()
+    await live.active()
+    live.emit('Stream', { fullContent: 'Partial', metrics: { tokenCount: 1, promptTokens: 103273 } })
+    live.emit('Complete', { ...completion, metrics })
+    expect(live.state.messages.at(-1).metrics).toEqual(metrics)
+    expect(live.state.currentMetrics).toBeNull()
+    expect(live.state.streamingMessageId).toBeNull()
+
+    const reopened = mount()
+    reopened.messages.resolve([{ ...pending, content: completion.content, metricsJson: JSON.stringify(metrics) }])
+    await flush()
+    expect(reopened.state.messages[0].metrics).toEqual(metrics)
+  })
+
   it('ignores both late active snapshots after a terminal event', async () => {
     const f = mount()
     await f.hydrate()

@@ -116,6 +116,7 @@ export interface MessageMetrics {
   remoteRequestSeconds?: number;
   remotePasses?: number;
   promptTokens?: number;
+  promptTokensScope?: 'exchange';
   cachedTokens?: number;
   cacheDetail?: string;
   tokensPerSecond: string;
@@ -192,11 +193,13 @@ export function getMetricsItems(
       cached = t('chat.metrics.cachedSuffix', { cached: `${metrics.cachedTokens}${detail}` });
     }
     items.push({
-      label: `${t('chat.metrics.promptLabel', { n: metrics.promptTokens })}${cached}`,
+      label: `${t(metrics.promptTokensScope === 'exchange' ? 'chat.metrics.promptTotalLabel' : 'chat.metrics.promptLabel', { n: metrics.promptTokens })}${cached}`,
       value: `${metrics.promptTokens}`,
-      title: metrics.cacheDetail
-        ? t('chat.metrics.promptTitleCache', { detail: metrics.cacheDetail })
-        : t('chat.metrics.promptTitle'),
+      title: metrics.promptTokensScope === 'exchange'
+        ? `${t('chat.metrics.promptTotalTitle')}${metrics.cacheDetail ? ` ${t('chat.metrics.promptTitleCache', { detail: metrics.cacheDetail })}` : ''}`
+        : metrics.cacheDetail
+          ? t('chat.metrics.promptTitleCache', { detail: metrics.cacheDetail })
+          : t('chat.metrics.promptTitle'),
       dimmed: true,
     });
   }

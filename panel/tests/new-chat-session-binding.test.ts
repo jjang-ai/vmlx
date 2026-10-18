@@ -38,6 +38,22 @@ describe('new remote session binding', () => {
     expect(dispatch).not.toHaveBeenCalled()
   })
 
+  it('keeps a local chat bound to its saved model when persistence fails, with a session-switch error', async () => {
+    const dispatch = vi.fn(), showToast = vi.fn(), setShowModelPicker = vi.fn()
+    const select = selectionCallback(vi.fn().mockResolvedValue({ modelPath: '/models/local-new' }),
+      vi.fn().mockRejectedValue(new Error('database is read-only')), dispatch)
+    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'src', 'components', 'layout', 'ChatModeToolbar.tsx'), 'utf8')
+    const body = src.split('const handleSelectSession = async (session: SessionSummary) => {')[1].split('\n  const handleConnectRemote')[0]
+    const js = ts.transpile(`const choose = async (session: any) => {${body}`, { target: ts.ScriptTarget.ES2020 })
+    const choose = new Function('onSessionChange', 'setShowModelPicker', 'showToast', 't', `${js}; return choose`)(
+      select, setShowModelPicker, showToast, (key: string) => key,
+    )
+    await choose({ id: 'local-new', type: 'local' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(setShowModelPicker).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenCalledWith('error', 'layout.chatToolbar.sessionSwitchFailed', 'database is read-only')
+  })
+
   it('does not navigate when the selected session no longer exists', async () => {
     const update = vi.fn(), dispatch = vi.fn()
     await expect(selectionCallback(vi.fn().mockResolvedValue(null), update, dispatch)('remote')).rejects.toThrow()
