@@ -539,6 +539,8 @@ REQUIRED = [
     ("mlx_vlm.models.gemma3", "mlx-vlm gemma3", "bundled mlx-vlm gemma3 missing"),
     ("mlx_vlm.models.qwen3_vl", "mlx-vlm qwen3_vl", "bundled mlx-vlm qwen3_vl missing"),
     ("mflux", "mflux image runtime", "bundled mflux package missing — Image tab and Server-tab image models will fail before ready"),
+    ("mflux.models.qwen21.variants.edit.qwen_image_21_edit", "Qwen Image 2.1", "bundled mflux lacks the native Qwen Image 2.1 adapter"),
+    ("mflux.models.ideogram4.variants.txt2img.ideogram4", "Ideogram 4", "bundled mflux lacks the native Ideogram 4 adapter"),
     ("mflux.models.common.config.model_config", "mflux ModelConfig", "mflux install incomplete — cannot resolve local image model configs"),
     ("timm", "timm vision backbone", "bundled timm package missing — Nemotron-Omni image/video media dispatch will fail before generation"),
     ("einops", "einops tensor rearrange", "bundled einops package missing — Nemotron-Omni vision remote code will fail before generation"),
