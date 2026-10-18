@@ -130,7 +130,9 @@ class MiMoDFlashDrafter(nn.Module):
             new.append((k, v))
         self.kv = new
         self.ctx_end = pos0 + taps.shape[0]
-        mx.eval([x for kv in self.kv for x in kv])
+        # Queued, not waited on: the projection runs while the next round's draft / verify graphs are built (the
+        # round's single read-back follows the verify). A blocking eval here stalled the host once per round.
+        mx.async_eval([x for kv in self.kv for x in kv])
 
     def draft(self, block_emb: mx.array, pos0: int) -> mx.array:
         """block_emb (1, B, D) at positions pos0.. (pos0 == ctx_end) -> final hidden (1, B, D)."""
@@ -542,14 +544,25 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
             d_prob = _sampling_probs(dl, temperature, top_p, top_k); d_tok = _sample_probs(d_prob)
         else:
             d_prob = None; d_tok = mx.argmax(dl, axis=-1)
-        drafts = [int(x) for x in np.asarray(d_tok[0])]
-        lg, tp = target.forward([tokens[-1]] + drafts, cache)
+        # The drafts stay on the GPU: the verify forward is built from the lazy draft tokens while the drafter runs,
+        # and the round reads back once, after the verify is queued. Reading the drafts to the host first left the GPU
+        # idle while Python built the 48-layer verify graph (one extra host round trip per round). Same token ids,
+        # same arithmetic and the same random-draw order: outputs are unchanged.
+        d_tok = d_tok.astype(mx.int32)
+        mx.async_eval(d_tok)
+        lg, tp = target.forward(mx.concatenate([mx.array([[tokens[-1]]], dtype=mx.int32), d_tok], axis=1), cache)
         L = proc(lg, prompt_ids + tokens, d_tok)
         if temperature > 0:
-            accepted, bonus = _rejection_sample(d_tok, probs_of(L), d_prob)
+            t_prob = probs_of(L)
+            mx.async_eval(t_prob, tp)
+            drafts = d_tok[0].tolist()
+            accepted, bonus = _rejection_sample(d_tok, t_prob, d_prob)
             bonus = int(bonus)
         else:
-            picks = [int(x) for x in np.asarray(mx.argmax(L[0], axis=-1))]
+            t_tok = mx.argmax(L[0], axis=-1)
+            mx.async_eval(t_tok, tp)
+            drafts = d_tok[0].tolist()
+            picks = t_tok.tolist()
             accepted = next((i for i in range(len(drafts)) if drafts[i] != picks[i]), len(drafts)); bonus = picks[accepted]
         new = (drafts[:accepted] + [bonus])[: max_tokens - n]
         stop = next((i for i, t in enumerate(new) if t in eos), None)

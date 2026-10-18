@@ -391,3 +391,40 @@ def test_sampled_path_matches_the_target_distribution(tmp_path):
         band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=p), minlength=V) / N - p).sum()
                             for _ in range(40)], 0.99)
         assert tv <= 1.25 * band, (j, tv, band)
+
+
+def test_spec_round_builds_verify_from_device_drafts_and_equals_ar(tmp_path, monkeypatch):
+    """A draft round queues the verify forward from the lazy draft tokens (no host read-back of the drafts before the
+    verify graph is built; the round's read-backs follow the verify), and greedy output stays equal to AR."""
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(11).integers(0, V, size=37).tolist()   # not a multiple of the block / window
+    events = []
+    real_forward = tgt.forward
+
+    def forward(ids, cache, *a, **k):
+        if isinstance(ids, mx.array) and ids.ndim == 2 and int(ids.shape[1]) > 1 and not k.get("last_only"):
+            events.append("verify-from-array")
+        elif not isinstance(ids, mx.array) and len(ids) > 1 and not k.get("last_only"):
+            events.append("verify-from-list")
+        return real_forward(ids, cache, *a, **k)
+
+    monkeypatch.setattr(tgt, "forward", forward)
+    out = _run(tgt, drafter, prompt, 19)
+    assert out == _ar_greedy(model, prompt, 19)
+    assert events and set(events) == {"verify-from-array"}, events
+    tgt.close()
+
+
+def test_add_context_queues_without_blocking():
+    c = {"hidden_size": D, "intermediate_size": 512, "num_hidden_layers": 2, "num_attention_heads": 8, "num_key_value_heads": 2,
+         "head_dim": 128, "partial_rotary_factor": 0.5, "rope_theta": 10000.0, "rms_norm_eps": 1e-6, "sliding_window": 32,
+         "block_size": 8, "dflash_config": {"target_layer_ids": [0, 1], "mask_token_id": 7, "block_size": 8, "attention_value_scale": 0.612}}
+    m = MD.MiMoDFlashDrafter(c)
+    mx.eval(m.parameters())
+    taps = mx.random.normal((21, 2 * D)).astype(mx.bfloat16)
+    ref = MD.MiMoDFlashDrafter(c); ref.update(m.parameters())
+    m.add_context(taps[:13], 0); m.add_context(taps[13:], 13)
+    ref.add_context(taps, 0)
+    for (k1, v1), (k2, v2) in zip(m.kv, ref.kv):
+        assert k1.shape == k2.shape and v1.shape == v2.shape
+        assert _rel(k1, k2) < 1e-2 and _rel(v1, v2) < 1e-2
