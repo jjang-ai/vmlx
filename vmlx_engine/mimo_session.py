@@ -59,8 +59,10 @@ def reuse_enabled() -> bool:
     return os.environ.get("VMLX_MIMO_DFLASH_PREFIX_REUSE", "1").strip().lower() not in _OFF
 
 
-def attach_ssd(target_path: str, drafter_path: str) -> None:
-    """Same managed pool and budget as the block cache (dspark.session.configure_defaults is called by the CLI)."""
+def attach_ssd(target_path: str, drafter_path: Optional[str]) -> None:
+    """Same managed pool and budget as the block cache (dspark.session.configure_defaults is called by the CLI).
+    ``drafter_path`` None: the drafter-less AR lane, in its own namespace (its entries hold no drafter context, so the
+    speculative lane must never restore them, and the reverse would waste the stored taps)."""
     global SSD
     from .dspark.session import _DEFAULTS
 
@@ -72,8 +74,9 @@ def attach_ssd(target_path: str, drafter_path: str) -> None:
     try:
         from .dflash2_session_disk import DFlash2SessionSSD, model_identity
 
-        SSD = DFlash2SessionSSD(root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"],
-                                model_key="mimo-dflash|" + model_identity(str(target_path), str(drafter_path)))
+        key = ("mimo-dflash|" + model_identity(str(target_path), str(drafter_path)) if drafter_path is not None
+               else "mimo-ar|" + model_identity(str(target_path), str(target_path)))
+        SSD = DFlash2SessionSSD(root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"], model_key=key)
         logger.info("MiMo DFlash session SSD tier: %s", SSD.store.directory)
     except Exception:
         SSD = None
@@ -183,14 +186,16 @@ def clone(caches: list, factory: Callable) -> Optional[list]:
         return None
 
 
-def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, eos_ids) -> Optional[dict]:
+def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, eos_ids,
+           need_draft: bool = True) -> Optional[dict]:
     """The stored entry covering the longest prefix of ``prompt`` (RAM, then SSD), or None; ownership moves to the
-    caller. An entry without its drafter context is a miss (the drafter could not resume aligned)."""
+    caller. On the speculative lane (``need_draft``) an entry without its drafter context is a miss (the drafter could
+    not resume aligned); the drafter-less AR lane needs only the target cache."""
     if not reuse_enabled():
         return None
     resume = _store().take_matching(model_key, prompt)
     if resume is not None:
-        resume.setdefault("source", "mimo-dflash-ram")
+        resume.setdefault("source", "mimo-dflash-ram" if need_draft else "mimo-ar-ram")
         return resume
     if SSD is None:
         return None
@@ -203,8 +208,8 @@ def lookup(model_key: Any, prompt: list, tokenizer: Any, make_target: Callable, 
                                every=chunk_every())
     if resume is not None:
         resume["model_key"] = model_key
-        resume["source"] = "mimo-dflash-ssd"
-        if resume.get("draft_context") is None:
+        resume["source"] = "mimo-dflash-ssd" if need_draft else "mimo-ar-ssd"
+        if need_draft and resume.get("draft_context") is None:
             return None
     return resume
 

@@ -222,12 +222,15 @@ class Target:
         """-> (logits (S, V) fp32, taps (S, n_tap * D)). ``embeds`` (1, S, D): media prefill (merged vision/audio
         features from the omni model's get_input_embeddings) instead of the token embedding lookup. ``last_only``
         (prompt prefill): the head on the last row only -- a 2048-row chunk otherwise projected every row through the
-        152,576-word head (~1.3 TFLOP and a 1.25 GB fp32 temporary) to keep one row."""
+        152,576-word head (~1.3 TFLOP and a 1.25 GB fp32 temporary) to keep one row. A target without tap layers (the
+        drafter-less AR lane) returns taps None."""
         self.store.clear()
         h = self.model.model(ids if isinstance(ids, mx.array) else mx.array(ids)[None], cache, embeds)
         if last_only:
             h = h[:, -1:]
         lg = self.model.lm_head(h)[0].astype(mx.float32)
+        if not self.layer_ids:
+            return lg, None
         taps = mx.concatenate([self.store[i][0] for i in self.layer_ids], axis=-1)
         return lg, taps
 
@@ -367,11 +370,12 @@ _LANES: dict = {}
 
 
 def _lane_for(model, drafter):
+    """``drafter`` None: the drafter-less AR lane (no tap layers)."""
     key = (id(model), id(drafter))
     lane = _LANES.get(key)
     if lane is None:
         text = getattr(getattr(model, "language_model", None), "inner", None) or model
-        lane = _LANES[key] = {"target": Target(text, drafter.layer_ids)}
+        lane = _LANES[key] = {"target": Target(text, drafter.layer_ids if drafter is not None else [])}
     return lane
 
 
@@ -425,20 +429,25 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
     state, cache_len < len(prompt_ids); prefill stops exactly at each of ``snapshot_cuts`` once and calls
     ``on_snapshot(cut, cache, taps)``; ``session`` (out) receives the final "target_cache", "taps" (drafter context
     rows) and "forwarded" (positions the cache holds) when the generator ends, including when it is closed early.
-    ``embeds`` (1, len(prompt_ids), D): media prefill embeddings, used for the positions this request prefills."""
+    ``embeds`` (1, len(prompt_ids), D): media prefill embeddings, used for the positions this request prefills.
+
+    ``drafter`` None: the drafter-less AR lane (DFlash drafter switched off). Same processor / media embeddings / prompt
+    prefill / snapshots / session store as the speculative lane, every decode step a pipelined AR step, no tap rows
+    (entries carry ``draft_context`` None, in their own SSD namespace). MiMo's generic mlx-vlm route cannot serve it: it
+    failed every request with "'TokenizerWrapper' object is not callable" (2026-10-18 release audit R15)."""
     import dflash.model_mlx as runtime
     from dflash.model_mlx import _rejection_sample, _sampling_probs, _sample_probs
     from vmlx_engine.glm_dflash2 import AdaptiveSpec
 
     st = stats if stats is not None else LaneStats()
-    W = drafter.window
-    bs0 = int(block_size or drafter.block)
+    W = drafter.window if drafter is not None else 0
+    bs0 = int(block_size or drafter.block) if drafter is not None else 1
     t0 = time.perf_counter()
     prompt_ids = [int(t) for t in prompt_ids]
     if resume is not None:
         cache, reused = resume["target_cache"], int(resume["cache_len"])
-        taps = resume["draft_context"]
-        if taps is None or reused >= len(prompt_ids) or int(taps.shape[0]) != min(W, reused):
+        taps = resume["draft_context"] if drafter is not None else None
+        if reused >= len(prompt_ids) or (drafter is not None and (taps is None or int(taps.shape[0]) != min(W, reused))):
             raise ValueError("MiMo DFlash resume entry does not match its prompt / drafter window")
     else:
         cache, reused, taps = target.model.make_cache(), 0, None
@@ -454,15 +463,20 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
         end = next((c for c in cuts if pos < c < end), end)            # a snapshot is the cache exactly at its cut
         lg, tp = target.forward(prompt_ids[pos:end], cache, None if embeds is None else embeds[:, pos:end], last_only=True)
         logits = lg[-1:]
-        taps = tp if taps is None else mx.concatenate([taps, tp], axis=0)
-        taps = taps[-W:]
-        mx.eval(logits, taps)
+        if drafter is not None:
+            taps = tp if taps is None else mx.concatenate([taps, tp], axis=0)
+            taps = taps[-W:]
+            mx.eval(logits, taps)
+        else:
+            mx.eval(logits)
         pos = end
         if on_snapshot is not None and pos in cuts:
             on_snapshot(pos, cache, taps)
     st.prompt_tokens, st.cached_tokens = len(prompt_ids), reused
-    drafter.reset(); drafter.ctx_end = len(prompt_ids) - taps.shape[0]; drafter.add_context(taps, drafter.ctx_end)
-    window = _TapWindow(W, taps)
+    window = None
+    if drafter is not None:
+        drafter.reset(); drafter.ctx_end = len(prompt_ids) - taps.shape[0]; drafter.add_context(taps, drafter.ctx_end)
+        window = _TapWindow(W, taps)
     fwd = len(prompt_ids)                                # tokens forwarded = drafter.ctx_end = cache positions
     try:
         yield from _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eos, temperature, top_p,
@@ -470,9 +484,14 @@ def mimo_rounds(target: Target, drafter: MiMoDFlashDrafter, mask_vec, prompt_ids
                                   _sampling_probs, _sample_probs, AdaptiveSpec, cache)
     finally:
         if session is not None:
-            session["target_cache"], session["taps"] = cache, window.rows()
+            session["target_cache"], session["taps"] = cache, window.rows() if window is not None else None
             # the target cache's own count (the drafter's context lags it inside an AR burst: deferred projection)
             session["forwarded"] = int(cache[0].offset)
+
+
+# Drafter-less lane: tokens per pipelined AR burst (one read-back sync and one streamed chunk per burst). The adaptive
+# policy's own AR bursts are 8 tokens; the same length keeps streaming granularity at the server's stream interval.
+AR_ONLY_BURST = 8
 
 
 def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eos, temperature, top_p, top_k, st,
@@ -499,7 +518,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         return
     from vmlx_engine.glm_dflash2 import adaptive_costs
 
-    policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0)) if adaptive else None
+    policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0)) if adaptive and drafter is not None else None
     if policy is not None:
         # measured costs for the request's stats line: why a text kept drafting or fell back to AR
         st.policy = {"_policy": policy}
@@ -516,17 +535,25 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         if pending:
             drafter.add_context(pending[0] if len(pending) == 1 else mx.concatenate(pending, axis=0), pending_at)
             pending = []
+
+    def _ae(*xs):                                       # async_eval without the drafter-less lane's None taps
+        mx.async_eval(*[x for x in xs if x is not None])
     while n < max_tokens:
-        mode, b = policy.choose() if policy is not None else ("spec", bs0)
+        if drafter is None:
+            mode, b = "ar", AR_ONLY_BURST                  # drafter-less lane: every step AR, streamed per burst
+        else:
+            mode, b = policy.choose() if policy is not None else ("spec", bs0)
         if mode == "ar":
             after_ar = True; ta = time.perf_counter(); new = []
             k = min(b, max_tokens - n)
 
             def _row(tp_row):
                 nonlocal pending_at, fwd
-                if not pending:
-                    pending_at = fwd
-                pending.append(tp_row); window.add(tp_row); fwd += 1
+                if drafter is not None:
+                    if not pending:
+                        pending_at = fwd
+                    pending.append(tp_row); window.add(tp_row)
+                fwd += 1
 
             if controls is None:
                 # Pipelined (as mlx_lm's generate loop): step i+1 is built from step i's lazily sampled token before
@@ -536,14 +563,14 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
                 # token -- the end-of-turn state the next prompt (which re-renders that EOS) resumes after.
                 lg, tp = target.forward(mx.array([[tokens[-1]]]), cache)
                 y = pick(lg[None, -1:])
-                mx.async_eval(y, tp)
+                _ae(y, tp)
                 for i in range(k):
                     _row(tp)
                     nxt = None
                     if i + 1 < k:
                         lg2, tp2 = target.forward(y.reshape(1, 1), cache)
                         y2 = pick(lg2[None, -1:])
-                        mx.async_eval(y2, tp2)
+                        _ae(y2, tp2)
                         nxt = (y2, tp2)
                     t = int(y.item()); new.append(t); tokens.append(t)
                     if t in eos:
@@ -559,7 +586,8 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
                     t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item()); new.append(t); tokens.append(t)
                     if t in eos:
                         break
-            policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
+            if policy is not None:
+                policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
             st.ar_steps += len(new); n += len(new)
             yield new, 0
             if new[-1] in eos:

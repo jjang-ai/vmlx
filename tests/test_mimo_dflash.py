@@ -466,3 +466,93 @@ def test_draft_p_min_parsing(monkeypatch):
         assert MD._draft_p_min() == want
     monkeypatch.setenv("VMLX_MIMO_DFLASH_DRAFT_PMIN_SAMPLED", "0.3")
     assert MD._draft_p_min(sampled=True) == 0.3
+
+
+# ---- drafter-less AR lane (release audit 2026-10-18 R15: MiMo failed every request with its DFlash drafter off) ----
+def _ar_lane(tmp_path):
+    _bundle(tmp_path)
+    model = build_mimo_v26_janght_model(tmp_path)
+    return model, MD._lane_for(model, None)["target"]
+
+
+@pytest.mark.parametrize("adaptive", [True, False])
+def test_drafterless_lane_equals_ar_and_resumes_its_turn_state(tmp_path, adaptive):
+    model, tgt = _ar_lane(tmp_path)
+    assert tgt.layer_ids == []
+    prompt = np.random.default_rng(21).integers(0, V, size=37).tolist()      # not a multiple of the 8-token burst
+    session, st = {}, MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, None, None, prompt, 21, set(), 0.0, stats=st, adaptive=adaptive,
+                                          session=session) for t in new]
+    assert out == _ar_greedy(model, prompt, 21)
+    assert st.rounds == 0 and st.ar_steps == 20                              # first token comes from the prefill
+    assert session["taps"] is None and session["forwarded"] == len(prompt) + len(out) - 1
+    assert int(session["target_cache"][0].offset) == session["forwarded"]
+    resume = {"target_cache": session["target_cache"], "draft_context": None, "cache_len": session["forwarded"]}
+    st2 = MD.LaneStats()
+    out2 = [t for new, _ in MD.mimo_rounds(tgt, None, None, prompt + out, 5, set(), 0.0, stats=st2, resume=resume)
+            for t in new]
+    assert st2.cached_tokens == session["forwarded"]
+    assert out2 == _ar_greedy(model, prompt, 26)[21:26]
+
+
+def test_drafterless_lane_eos_inside_a_burst_keeps_the_cache_aligned(tmp_path):
+    model, tgt = _ar_lane(tmp_path)
+    prompt = np.random.default_rng(22).integers(0, V, size=29).tolist()
+    ref = _ar_greedy(model, prompt, 12)
+    eos = {ref[5]}
+    session, st = {}, MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, None, None, prompt, 12, eos, 0.0, stats=st, session=session) for t in new]
+    assert out == ref[: ref.index(ref[5]) + 1] and out[-1] in eos
+    expect = len(prompt) + len(out) - (0 if st.eos_forwarded else 1)
+    assert session["forwarded"] == expect == int(session["target_cache"][0].offset)
+
+
+def test_drafterless_entries_restore_only_on_the_ar_lane(tmp_path, monkeypatch):
+    from vmlx_engine import mimo_session
+    from vmlx_engine.dflash2_session_disk import DFlash2SessionSSD
+
+    model, tgt = _ar_lane(tmp_path)
+    E = V - 1
+    prompt = np.random.default_rng(23).integers(0, V - 2, size=45).tolist()
+    prompt[26] = E
+    monkeypatch.setattr(mimo_session, "STORE", None)
+    monkeypatch.setattr(mimo_session, "SSD", DFlash2SessionSSD(root=str(tmp_path / "ssd"), max_size_bytes=0, model_key="ar"))
+    snaps = []
+    list(MD.mimo_rounds(tgt, None, None, prompt, 4, set(), 0.0, snapshot_cuts=[27],
+                        on_snapshot=lambda cut, cache, taps: snaps.append((cut, mimo_session.clone(cache, tgt.model.make_cache), taps))))
+    (cut, snap, taps), = snaps
+    assert taps is None
+    receipt = mimo_session.store({"kind": "system", "tokens": prompt[:cut], "cache_len": cut, "target_cache": snap,
+                                  "draft_context": None, "model_key": "k"})
+    assert receipt.result(timeout=30)["durable"]
+    mimo_session.clear()
+    tok = type("T", (), {"convert_tokens_to_ids": lambda self, t: -1})()
+    # the speculative lane cannot resume an entry without drafter context
+    assert mimo_session.lookup("k", prompt, tok, tgt.model.make_cache, eos_ids=[E]) is None
+    resume = mimo_session.lookup("k", prompt, tok, tgt.model.make_cache, eos_ids=[E], need_draft=False)
+    assert resume is not None and resume["source"] == "mimo-ar-ssd" and resume["cache_len"] == cut
+    got = [t for new, _ in MD.mimo_rounds(tgt, None, None, prompt, 8, set(), 0.0, resume=resume) for t in new]
+    assert got == _ar_greedy(model, prompt, 8)
+
+
+def test_drafterless_ssd_tier_uses_its_own_namespace(tmp_path, monkeypatch):
+    from vmlx_engine import mimo_session
+    from vmlx_engine import dflash2_session_disk as disk
+    from vmlx_engine.dspark import session as dspark_session
+
+    seen = []
+
+    class FakeSSD:
+        def __init__(self, root, max_size_bytes, model_key):
+            seen.append(model_key)
+            self.store = type("S", (), {"directory": str(root)})()
+
+    monkeypatch.setitem(dspark_session._DEFAULTS, "enabled", True)
+    monkeypatch.setitem(dspark_session._DEFAULTS, "root", str(tmp_path))
+    monkeypatch.setitem(dspark_session._DEFAULTS, "max_size_bytes", 0)
+    monkeypatch.setattr(disk, "DFlash2SessionSSD", FakeSSD)
+    monkeypatch.setattr(disk, "model_identity", lambda t, d: f"{t}+{d}")
+    monkeypatch.setattr(mimo_session, "SSD", None)
+    mimo_session.attach_ssd("/m/target", "/m/target/dflash")
+    mimo_session.attach_ssd("/m/target", None)
+    assert seen == ["mimo-dflash|/m/target+/m/target/dflash", "mimo-ar|/m/target+/m/target"]

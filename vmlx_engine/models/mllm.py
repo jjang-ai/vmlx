@@ -7433,7 +7433,15 @@ class MLXMultimodalLM:
         from ..mimo_dflash import LaneStats, _lane_for, mimo_rounds
         from ..utils.prefill_step import prefill_step_size
 
-        drafter, mask_vec = draft
+        # draft None: the drafter-less AR lane (bundled DFlash drafter switched off). MiMo has no other route that
+        # serves it: the generic mlx-vlm path failed every request ("'TokenizerWrapper' object is not callable").
+        drafter, mask_vec = draft if draft is not None else (None, None)
+        if drafter is None and _ms.SSD is None and not getattr(self, "_mimo_ar_ssd_tried", False):
+            # the drafter loader attaches the speculative lane's tier; the AR lane attaches its own on first use
+            self._mimo_ar_ssd_tried = True
+            _path = Path(str(self.model_name)).expanduser()
+            if _path.is_dir():
+                _ms.attach_ssd(str(_path), None)
         lane = _lane_for(self.model, drafter)
         target = lane["target"]
         tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
@@ -7456,7 +7464,7 @@ class MLXMultimodalLM:
         gen_eos = (self.config.get("eos_token_id") if isinstance(self.config, dict) else getattr(self.config, "eos_token_id", None))
         eos |= set(gen_eos if isinstance(gen_eos, list) else ([gen_eos] if gen_eos is not None else []))
         model_key = (id(target), id(drafter))
-        resume = _ms.lookup(model_key, key_ids, tokenizer, target.model.make_cache, eos)
+        resume = _ms.lookup(model_key, key_ids, tokenizer, target.model.make_cache, eos, need_draft=drafter is not None)
         cache_len = int(resume["cache_len"]) if resume is not None else 0
         if resume is not None and resume.get("load_s") is not None:
             _restored = 0
@@ -7520,7 +7528,8 @@ class MLXMultimodalLM:
         session: dict = {}
         produced, emitted, finish = 0, [], None
         started = _time.perf_counter()
-        logger.info("MiMo DFlash %s chat active for %s (prompt %d tokens, %d restored from %s)",
+        lane_label = "MiMo DFlash" if drafter is not None else "MiMo AR (no drafter)"
+        logger.info("%s %s chat active for %s (prompt %d tokens, %d restored from %s)", lane_label,
                     "media (%d image(s), %d video(s), %d audio)" % (len(images), len(videos), len(audio))
                     if has_media else "text", self.model_name, len(prompt_ids), cache_len,
                     (resume or {}).get("source", "none"))
@@ -7588,17 +7597,19 @@ class MLXMultimodalLM:
                 "generation_tps": round(produced / max(elapsed - st.prefill_s, 1e-9), 2)}
         if getattr(st, "cut_drafts", 0):
             spec["cut_drafts"] = int(st.cut_drafts)              # VMLX_MIMO_DFLASH_DRAFT_PMIN confidence cut
-        logger.info("MiMo DFlash generation stats: prompt_tokens=%d cached=%d output_tokens=%d rounds=%d "
+        logger.info("%s generation stats: prompt_tokens=%d cached=%d output_tokens=%d rounds=%d "
                     "tokens_per_round=%.3f acceptance=%.1f%% ar_tokens=%d decode_tps=%.2f prefill_s=%.3f media_s=%.3f "
-                    "total_s=%.2f finish=%s", len(prompt_ids), cache_len, produced, len(accepted), tpr,
+                    "total_s=%.2f finish=%s", lane_label, len(prompt_ids), cache_len, produced, len(accepted), tpr,
                     100.0 * spec["acceptance"], st.ar_steps, spec["generation_tps"], st.prefill_s, media_s, elapsed,
                     finish or "length")
         yield MLLMOutput(
             text=detok.last_segment, finish_reason=finish or "length", prompt_tokens=len(prompt_ids),
-            completion_tokens=produced, spec_stats=spec, cached_tokens=cache_len,
+            # the drafter-less lane reports no speculative decoding (Perf panel: none)
+            completion_tokens=produced, spec_stats=spec if drafter is not None else None, cached_tokens=cache_len,
             cache_detail=(resume or {}).get("source", ""),
             prefill_usage={"tokens": int(len(prompt_ids) - cache_len), "seconds": float(st.prefill_s) + media_s,
-                           "scope": "model_prefill_and_prompt_state", "path": "mimo_dflash"},
+                           "scope": "model_prefill_and_prompt_state",
+                           "path": "mimo_dflash" if drafter is not None else "mimo_ar"},
             persistence_future=receipt,
         )
 
@@ -7746,10 +7757,11 @@ class MLXMultimodalLM:
                 except Exception as _e:
                     logger.debug(f"Image slot count check failed: {_e}")
 
-        # MiMo-V2.6 with its bundled DFlash drafter: text and every media kind go through the MiMo lane (its own
-        # processor, merged media embeddings, session reuse); the generic routes below cannot serve MiMo media.
+        # MiMo-V2.6: text and every media kind go through the MiMo lane (its own processor, merged media embeddings,
+        # session reuse) -- speculative with the bundled DFlash drafter, AR without it. The generic routes below cannot
+        # serve MiMo at all (every request failed there with the drafter off, release audit 2026-10-18 R15).
         _mimo_draft = self._mimo_dflash_draft()
-        if _mimo_draft is not None:
+        if _mimo_draft is not None or getattr(self.model, "_mimo_v26_runtime", False):
             yield from self._stream_mimo_dflash(
                 formatted_prompt, max_tokens, temperature, kwargs, draft=_mimo_draft, images=list(prepared_images),
                 videos=[process_video_input(v) for v in videos], audio=list(all_audio),
