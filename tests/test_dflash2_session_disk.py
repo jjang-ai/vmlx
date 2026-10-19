@@ -206,16 +206,18 @@ def test_pending_token_parent_cannot_be_overwritten_by_its_own_delta(ssd):
                       "cache_len": len(tokens) - 1, "target_cache": target})
     assert ssd.flush()
     _grow(target, 1)
-    # Same lookup key with one more cached row must become a full root,
-    # not a self-referential parent chain at the same file signature.
+    # Same lookup key with one more cached row keeps the durable root,
+    # never a self-referential delta at the same file signature.
     child = ssd.put({"kind": "boundary", "tokens": tokens,
                      "cache_len": len(tokens), "target_cache": target,
                      "ssd_parent": dict(parent.vmlx_ssd_ref, receipt=parent)})
     assert ssd.flush() and child.result()["durable"]
     assert child.vmlx_ssd_ref["depth"] == 0
     got = _take(ssd, tokens + [IM_START, 3])
-    assert got is not None and got["cache_len"] == len(tokens)
-    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+    assert "kept" in child.result()["detail"]
+    assert got is not None and got["cache_len"] == len(tokens) - 1
+    assert all(mx.array_equal(a[..., :len(tokens) - 1, :], b)
+               for a, b in zip(target[0].state, got["target_cache"][0].state))
 
 
 @pytest.mark.parametrize("parent", [
@@ -421,6 +423,9 @@ def _chain(ssd, lengths, start=None):
         if prev is not None:
             entry["ssd_parent"] = dict(prev.vmlx_ssd_ref, receipt=prev)
         prev = ssd.put(entry)
+        # Build a durable ancestry fixture, independent of CPU/GPU producer
+        # speed and the intentionally bounded asynchronous write queue.
+        assert ssd.flush() and prev.result()["durable"]
         receipts.append(prev)
     assert ssd.flush()
     return tokens, receipts, target
@@ -608,4 +613,34 @@ def test_chain_after_replaced_parent_reuses_new_full_snapshot(ssd):
     assert grandchild.vmlx_ssd_ref["depth"] == 1
     got = _take(ssd, tokens + [IM_START, 7])
     assert got is not None and got["cache_len"] == 12
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+@pytest.mark.parametrize("stored_rows,incoming_rows", [(4, 3), (3, 4)])
+def test_same_token_key_with_pending_final_token_keeps_parent_and_descendant(ssd, stored_rows, incoming_rows):
+    """AR and speculative turns may sign the same confirmed tokens with one pending KV row."""
+    from vmlx_engine.dflash2_session_disk import signature_for
+
+    prefix = [IM_START, 1, 2, IM_END]
+    target = _target(stored_rows)
+    parent = ssd.put({"tokens": prefix, "cache_len": stored_rows, "target_cache": target})
+    assert ssd.flush()
+    path = ssd.store.paths(signature_for(prefix))[0]
+    before = path.read_bytes()
+    _grow(target, 8 - stored_rows)
+    tokens = prefix + [IM_START, 3, 4, IM_END]
+    child = ssd.put({"tokens": tokens, "cache_len": 8, "target_cache": target,
+                     "ssd_parent": dict(parent.vmlx_ssd_ref, receipt=parent)})
+    assert ssd.flush() and child.vmlx_ssd_ref["depth"] == 1
+
+    kept = ssd.put({"tokens": prefix, "cache_len": incoming_rows, "target_cache": _target(incoming_rows)})
+    assert ssd.flush()
+    assert "kept" in kept.result()["detail"]
+    assert kept.result()["retained_tokens"] == stored_rows
+    assert kept.vmlx_ssd_ref["len"] == stored_rows
+    assert kept.vmlx_ssd_ref["delta_compatible"] is False
+    assert path.read_bytes() == before
+    got = _take(ssd, tokens + [IM_START, 5])
+    assert got is not None and got["cache_len"] == 8
+    assert ssd.stats["chain_misses"] == 0
     assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))

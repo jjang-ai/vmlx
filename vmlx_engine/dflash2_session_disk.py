@@ -323,16 +323,17 @@ class DFlash2SessionSSD:
                 return None
         return parent
 
-    def _chain_depth(self, sig: str, cache_len: int) -> Optional[tuple[int, dict]]:
+    def _chain_depth(self, sig: str, cache_len: Optional[int]) -> Optional[tuple[int, dict]]:
         """(links - 1, leaf metadata) of the stored chain ending at ``sig`` read from headers only, or None when the
         entry or any parent is missing, a link's row count is not what its child recorded, or the walk is longer than
-        the loader accepts (take_matching / _load_chain: MAX_CHAIN + 1 parents)."""
-        depth, cur_sig, cur_len, leaf = 0, sig, int(cache_len), None
+        the loader accepts (take_matching / _load_chain: MAX_CHAIN + 1 parents).
+        A None cache_len accepts the leaf's stored row count; parent links still require exact counts."""
+        depth, cur_sig, cur_len, leaf = 0, sig, int(cache_len) if cache_len is not None else None, None
         expected_generation = None
         try:
             for _ in range(MAX_CHAIN + 2):
                 meta = self.store.load(cur_sig, _read_header_meta)
-                if meta is None or int(meta["cache_len"]) != cur_len:
+                if meta is None or (cur_len is not None and int(meta["cache_len"]) != cur_len):
                     return None
                 if expected_generation is not None and meta.get("generation") != expected_generation:
                     return None
@@ -390,10 +391,17 @@ class DFlash2SessionSSD:
         stored file is kept; it is rewritten only when it is less complete than this entry (drafter context or state
         missing). The kept file is NOT a delta parent for the incoming live cache: equal tokens may have different
         KV bits after a different prefill chunking. A later actual restore can safely use it as a parent."""
-        walked = self._chain_depth(sig, int(entry["cache_len"]))
+        # The lookup key includes confirmed tokens, while an AR/speculative turn
+        # may leave its last token pending. Preserve the existing snapshot even
+        # when its row count differs by that pending token: replacing it would
+        # invalidate descendants bound to its exact generation.
+        walked = self._chain_depth(sig, None)
         if walked is None:
             return None
         depth, meta = walked
+        stored_rows = int(meta["cache_len"])
+        if not 0 < stored_rows <= len(entry["tokens"]) <= stored_rows + 1:
+            return None
         arrays = set(meta.get("_arrays") or ())
         if entry.get("draft_context") is not None and "draft_context" not in arrays:
             return None
@@ -401,12 +409,12 @@ class DFlash2SessionSSD:
             return None
         self.stats["same_prefix_kept"] += 1
         logger.info("DFlash2 SSD kept %s entry: %d tokens already durable (same prefix, chain %d)",
-                    entry.get("kind", "turn"), int(entry["cache_len"]), depth)
+                    entry.get("kind", "turn"), stored_rows, depth)
         receipt = Future()
-        receipt.vmlx_ssd_ref = {"sig": sig, "len": int(entry["cache_len"]), "depth": depth,
+        receipt.vmlx_ssd_ref = {"sig": sig, "len": stored_rows, "depth": depth,
                                 "generation": meta.get("generation"), "delta_compatible": False}
         receipt.set_running_or_notify_cancel()
-        receipt.set_result({"outcome": "stored", "durable": True, "retained_tokens": int(entry["cache_len"]),
+        receipt.set_result({"outcome": "stored", "durable": True, "retained_tokens": stored_rows,
                             "detail": "DFlash2 SSD entry already durable (same prefix kept)"})
         return receipt
 
