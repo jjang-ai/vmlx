@@ -990,7 +990,11 @@ def _patch_qwen_model(qlang: Any) -> None:
         # Opt-in verify-forward fence (VMLX_DFLASH2_VERIFY_FENCE=N): queue the graph every N layers so the GPU starts
         # the first layers while Python still builds the rest of a 64-layer verify forward (the reference engines
         # submit every 4 layers). Evaluation order only: every array's arithmetic is unchanged.
-        fence = verify_fence_every() if (gdn_sink is not None and h.shape[1] > 1) else 0
+        fence = 0
+        if gdn_sink is not None:
+            _shape = getattr(h, "shape", ())
+            if len(_shape) > 1 and int(_shape[1]) > 1:
+                fence = verify_fence_every()
         for layer_idx, (layer, layer_cache) in enumerate(zip(self.layers, cache)):
             layer_mask = ssm_mask if layer.is_linear else fa_mask
             h = layer(
