@@ -385,6 +385,67 @@ def _rebuild_draft_hidden(hidden, resume, cache_len, delta_size, hidden_offset, 
     return hidden, cache_len + delta_size - int(hidden.shape[1])
 
 
+# ---------------------------------------------------------------------------
+# Draft-vocabulary cut for the drafter's head (opt-in, VMLX_DFLASH2_DRAFT_VOCAB)
+# ---------------------------------------------------------------------------
+#
+# The DFlash2 drafter proposes through the TARGET's lm_head (248,320 x 5,120, 8-bit on the 27B: ~1.27 GB read per draft
+# round for bs rows).  Both reference engines project draft logits through a prefix of the head only (one keeps rows
+# [0, 98304); the other adds the specials [248032, 248320)), verify with the full head, and report an acceptance loss
+# <= 0.36 % of tokens.  Exactness: only the PROPOSAL changes; the target verifies every draft with its full head, so the
+# greedy output is the target argmax and speculative sampling stays distribution-exact for any proposal law (q is zero
+# outside the kept rows and the drafts are drawn from that q).  Rows are sliced (contiguous views), never copied.
+DRAFT_VOCAB_SEGMENTS = {"tf": ((0, 98304), (248032, 248320)), "prefix": ((0, 98304),)}
+
+
+def draft_vocab_segments(vocab: int):
+    import os
+
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_VOCAB", "off").strip().lower()
+    segs = DRAFT_VOCAB_SEGMENTS.get(raw)
+    if segs is None or any(hi > vocab or lo >= hi for lo, hi in segs):
+        return None
+    return segs
+
+
+def install_draft_vocab_cut(draft: Any, segments) -> bool:
+    """Replace ``draft.compute_logits`` by a version that projects only ``segments`` of the bound head's rows and
+    returns full-width logits with -inf elsewhere (the candidate selector keeps working on token ids).  Reads the
+    head through ``draft.lm_head`` at call time (bound per request)."""
+    import math
+
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    if getattr(draft, "_vmlx_vocab_cut", None) is not None:
+        return True
+    cfg = draft.config
+    segs = tuple((int(lo), int(hi)) for lo, hi in segments)
+
+    def compute_logits(hidden):
+        head = draft.lm_head
+        if not isinstance(head, nn.QuantizedLinear) or "bias" in head:
+            return type(draft).compute_logits(draft, hidden)        # unknown head: the full projection
+        lead = hidden.shape[:-1]
+        parts = []
+        for lo, hi in segs:
+            parts.append(mx.quantized_matmul(hidden, head["weight"][lo:hi], head["scales"][lo:hi], head["biases"][lo:hi],
+                                             transpose=True, group_size=head.group_size, bits=head.bits))
+        vocab = int(head["weight"].shape[0])
+        out = mx.full((*lead, vocab), -math.inf, dtype=parts[0].dtype)
+        for (lo, hi), part in zip(segs, parts):
+            out[..., lo:hi] = part
+        out = out * cfg.output_multiplier
+        cap = cfg.final_logit_softcapping
+        if cap is not None and cap > 0:
+            out = mx.tanh(out / cap) * cap
+        return out
+
+    draft.compute_logits = compute_logits
+    draft._vmlx_vocab_cut = segs
+    return True
+
+
 def _adapter_for(model: Any) -> _TargetAdapter:
     language_model = model.language_model
     adapter = getattr(language_model, "_vmlx_dflash2_adapter", None)

@@ -294,6 +294,13 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
             logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
+            if target_type != "glm5_next":
+                from .dflash2_runtime import draft_vocab_segments, install_draft_vocab_cut
+
+                _segs = draft_vocab_segments(int(getattr(draft_model.config, "vocab_size", 0) or 0))
+                if _segs is not None and install_draft_vocab_cut(draft_model, _segs):
+                    logger.info("DFlash2 drafter head projects %s of %d vocabulary rows (VMLX_DFLASH2_DRAFT_VOCAB)",
+                                "+".join(f"[{lo},{hi})" for lo, hi in _segs), int(draft_model.config.vocab_size))
             draft_tokenizer = None
             _spec_kind = "dflash2"
             config.num_tokens = resolve_num_draft_tokens(
