@@ -233,3 +233,36 @@ def test_block_plan_env_candidate_list_is_clipped_sorted_and_optional(monkeypatc
     monkeypatch.setenv("VMLX_DFLASH2_BLOCK", "4")             # a pinned width still wins
     monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "3,5")
     assert _dflash2_block_plan(8) == (4,)
+
+
+def test_lane_flat_ignores_the_vocab_head_kept_on_mlx():
+    # lane_qmm.install keeps a vocabulary-sized head on MLX; that alone must not make a lane target non-flat
+    # (Qwen3.8-27B JANG_4D ran the codebook-MLP width plan because of it).
+    import types
+
+    import mlx.nn as nn
+
+    from vmlx_engine.dflash2_runtime import _lane_flat
+    from vmlx_engine.metal.lane_qmm import VOCAB_HEAD_MIN_N, LaneQuantizedLinear
+
+    def lane(n=64):
+        m = nn.QuantizedLinear(64, n, bias=False, group_size=64, bits=4)
+        m.__class__ = LaneQuantizedLinear
+        return m
+
+    def adapter(**mods):
+        t = nn.Module()
+        for k, v in mods.items():
+            setattr(t, k, v)
+        return types.SimpleNamespace(_target=t)
+
+    head = nn.QuantizedLinear(64, VOCAB_HEAD_MIN_N, bias=False, group_size=64, bits=4)
+    assert _lane_flat(adapter(a=lane(), b=lane(), lm_head=head)) is True
+    small = nn.QuantizedLinear(64, 64, bias=False, group_size=64, bits=4)
+    assert _lane_flat(adapter(a=lane(), other=small, lm_head=head)) is False      # a plain projection still counts
+
+    class TQLinear(nn.Module):                                                    # dense codebook projection
+        pass
+
+    assert _lane_flat(adapter(a=lane(), mlp=TQLinear())) is False
+    assert _lane_flat(adapter(lm_head=head)) is False                             # no lane projection at all

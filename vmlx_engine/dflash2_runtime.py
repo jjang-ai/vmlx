@@ -1833,19 +1833,30 @@ def _lane_flat(adapter: Any) -> bool:
     """True when every quantized projection of the target runs on the lane
     matmul (metal/lane_qmm.py), i.e. verify cost is ~flat from 1 to 16 rows.
     False when any dense JANGH codebook projection (jangh.dense.TQLinear) or
-    plain MLX QuantizedLinear remains: those still cost more per extra row."""
+    plain MLX QuantizedLinear remains: those still cost more per extra row.
+
+    The vocabulary-sized head that ``lane_qmm.install`` deliberately keeps on
+    MLX (N >= VOCAB_HEAD_MIN_N) does not count: it runs once per verify and
+    is itself near-flat in rows (27B, N=248,320: 2.54 / 2.62 / 3.98 / 3.57 ms
+    at 1 / 5 / 8 / 16 rows against a ~70-80 ms verify). Counting it made
+    every lane target non-flat since that exclusion landed (2026-10-11), so
+    Qwen3.8-27B JANG_4D ran the codebook-MLP plan (5, 8, 16), then
+    (3, 5, 8, 16), whose narrow widths it does not need: served story
+    40.95 -> 39.2 tok/s with width 3 added (3 reps, 2026-10-19)."""
     cached = getattr(adapter, "_vmlx_lane_flat", None)
     if cached is not None:
         return cached
     flat = False
     try:
         import mlx.nn as nn
-        from .metal.lane_qmm import LaneQuantizedLinear
+        from .metal.lane_qmm import VOCAB_HEAD_MIN_N, LaneQuantizedLinear
 
         lane = other = 0
         for _name, m in adapter._target.named_modules():
             if isinstance(m, LaneQuantizedLinear):
                 lane += 1
+            elif isinstance(m, nn.QuantizedLinear) and int(m["weight"].shape[0]) >= VOCAB_HEAD_MIN_N:
+                continue                   # the head lane_qmm.install keeps on MLX (see docstring)
             elif isinstance(m, nn.QuantizedLinear) or type(m).__name__ == "TQLinear":
                 other += 1
         flat = lane > 0 and other == 0
