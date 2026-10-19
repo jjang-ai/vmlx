@@ -971,6 +971,14 @@ class AdaptiveSpec:
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
         self.rounds_since_ar = 0
         self._reprobe_pending = False
+        # Probe back-off (VMLX_DFLASH_PROBE_BACKOFF=1, opt-in, 2026-10-19): on text where drafting loses, a forced draft
+        # round every probe_every AR tokens keeps re-measuring acceptance; each lost probe doubles the interval (cap
+        # 8x), a won probe resets it, so text where drafting wins never pays it. (The back-off half of the rejected
+        # policy v2, measured then only together with per-context AR costs and while MiMo's in-lane AR step carried the
+        # lane matmul's +8 %; on MLX kernels the in-lane plain step equals the drafter-less one, R27.)
+        self.probe_backoff = os.environ.get("VMLX_DFLASH_PROBE_BACKOFF", "0").strip().lower() in {"1", "true", "on", "yes"}
+        self.probe_interval = int(probe_every)
+        self._probe_round = False
         # Realized-rate guard (VMLX_DFLASH_REALIZED_GUARD=1, 2026-10-18, Eric: speculative lanes must never lose to AR):
         # the model-based choice (expected tokens from per-position acceptance / measured round cost) kept drafting
         # on MiMo prose where realized throughput was 5-8 % below AR, partly because rounds the lane's confidence cut
@@ -1043,7 +1051,15 @@ class AdaptiveSpec:
             r = self.realized_rate()
             if r is not None and r < 1.0 / self.t_ar:
                 spec_wins = False                   # measured draft throughput is below AR: fall back
-        if spec_wins or self.ar_since_probe >= self.probe_every:
+        if self.probe_backoff and self._probe_round:
+            # the previous decision was a forced probe round: a lost probe backs the next one off, a won probe resets
+            self._probe_round = False
+            self.probe_interval = (int(self.probe_every) if spec_wins
+                                   else min(self.probe_interval * 2, 8 * int(self.probe_every)))
+        interval = self.probe_interval if self.probe_backoff else self.probe_every
+        if spec_wins or self.ar_since_probe >= interval:
+            if self.probe_backoff and not spec_wins:
+                self._probe_round = True
             self.ar_since_probe = 0
             self.rounds_since_explore += 1
             if self.rounds_since_explore >= self.explore_every:
