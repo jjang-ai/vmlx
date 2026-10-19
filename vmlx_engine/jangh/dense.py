@@ -13,13 +13,18 @@ import mlx.nn as nn
 from . import kernels as K
 from .format import codebook
 
-# Rows at which a dense JANGH projection switches from the per-row gather QMV
-# (weights re-read for EVERY row: Qwen3.8-27B JANGH2 forward +15 ms per extra
-# row) to the one-pass sorted QMM (~38 ms fixed, then nearly flat).  Measured
-# on M5 Max, 27B JANGH2 full forward: rows 1/2/4/5/8/16 = 37/53/83/97/150/264 ms
-# per-row vs 36/75/77/78/88/101 ms sorted -> crossover between 3 and 4 rows.
-# Verify windows (DFlash2 blocks of 5-8 rows, MTP depth+1) sit above it.
+# Dense decode routing (rows = activation rows of one call):
+#   rows 1 .. ROWS_THRESHOLD-1 : kernels.gather_qmv_rows -- every row shares each weight read, per-row bits identical to
+#                                the per-row gather QMV (tests/test_jangh_dense_rows.py); 1 row rotates in-kernel,
+#                                2+ rows read h32_rows(x, float32) once per activation.
+#   rows >= ROWS_THRESHOLD     : one-pass sorted QMM (~38 ms fixed on the 27B JANGH2 MLP, then nearly flat).
+# Before (SORT_THRESHOLD 4, per-row gather QMV below it) the 27B JANGH2 forward cost 37/53/83/97/150/264 ms at
+# 1/2/4/5/8/16 rows per-row vs 36/75/77/78/88/101 sorted; the rows kernel measured (M5 Max, 32 distinct weights per
+# shape) 0.057 / 0.065 / 0.09 / 0.12-0.15 / 0.15-0.19 ms per 2-bit MLP projection at 1/2/3/4/5 rows against
+# 0.065-0.091 / 0.13 / 0.18 / 0.25 / 0.32 per-row and 0.17-0.20 sorted, so the crossover moved to 6 rows.
+# VMLX_JANGH_DENSE_ROWS=0 restores the old routing (A/B control); the per-row kernel stays for 3/6-bit formats.
 SORT_THRESHOLD = 4
+ROWS_THRESHOLD = 6
 ROTATIONS = ("none", "hadamard32")
 
 
@@ -59,12 +64,30 @@ class TQLinear(nn.Module):
         x2 = x.reshape(-1, Kd); T = x2.shape[0]
         idx = mx.zeros((T,), dtype=mx.uint32)
         rot = self.rotation == "hadamard32"
-        if T < SORT_THRESHOLD or (getattr(self, "row_exact_verify", False) and _row_exact_rows(T)):
+        exact = getattr(self, "row_exact_verify", False) and _row_exact_rows(T)
+        if _rows_enabled() and K.rows_kernel_supports(self.bits) and (T < ROWS_THRESHOLD or exact):
+            if T == 1:
+                y = K.gather_qmv_rows(x2, self.tq2_packed, self.tq2_scales, idx[:1], self.bits, rotate=rot)
+            else:
+                xr = K.h32_rows_cached(x) if rot else x2          # keyed on the module input: gate and up share it
+                y = K.gather_qmv_rows(xr, self.tq2_packed, self.tq2_scales, idx[:1], self.bits)
+        elif T < SORT_THRESHOLD or exact:
             y = K.gather_qmv(x2, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits, x_per_dispatch=True, rotate=rot)
         else:
             xr = K.h32_rows(x2, x2.dtype) if rot else x2
             y = K.gather_qmm_sorted(xr, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits)
         return y.astype(x.dtype).reshape(*lead, self.output_dims)
+
+
+_ROWS_ENV = None
+
+
+def _rows_enabled() -> bool:
+    global _ROWS_ENV
+    if _ROWS_ENV is None:
+        import os
+        _ROWS_ENV = os.environ.get("VMLX_JANGH_DENSE_ROWS", "1").strip().lower() not in ("0", "off", "false", "no")
+    return _ROWS_ENV
 
 
 def dense_entries(config: dict) -> dict[str, dict]:
