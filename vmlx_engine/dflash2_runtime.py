@@ -1877,6 +1877,15 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
             return (fixed,)
         except ValueError:
             pass
+    # A/B tool: an explicit candidate list (e.g. "3,5,8,16"), each clipped to 2..2*trained; the chooser still picks.
+    plan = os.environ.get("VMLX_DFLASH2_WIDTHS", "").strip()
+    if plan:
+        try:
+            widths = sorted({max(2, min(int(w), 2 * trained)) for w in plan.split(",") if w.strip()})
+            if widths:
+                return tuple(widths)
+        except ValueError:
+            pass
     if lane_flat:
         # Verify cost is ~flat (lane matmul on every projection): width 5 is
         # dominated by the trained width, which costs the same and drafts

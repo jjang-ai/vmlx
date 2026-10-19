@@ -215,3 +215,21 @@ def test_stale_ar_cost_is_reprobed_and_a_stalled_burst_is_skipped(monkeypatch):
         else:
             c.observe(c.width, c.width, 0.098)
     assert "ar" in actions and shared["ar"] < 0.1
+
+
+def test_block_plan_env_candidate_list_is_clipped_sorted_and_optional(monkeypatch):
+    from vmlx_engine.dflash2_runtime import _dflash2_block_plan
+
+    monkeypatch.delenv("VMLX_DFLASH2_BLOCK", raising=False)
+    monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "3,5,8,16")
+    assert _dflash2_block_plan(8) == (3, 5, 8, 16)
+    assert _dflash2_block_plan(8, lane_flat=True) == (3, 5, 8, 16)
+    monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "40,1,8,8")
+    assert _dflash2_block_plan(8) == (2, 8, 16)              # clipped to 2..2*trained, deduplicated, sorted
+    monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "x")
+    assert _dflash2_block_plan(8) == (5, 8, 16)              # unparsable: the default plan
+    monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "")
+    assert _dflash2_block_plan(8) == (5, 8, 16)
+    monkeypatch.setenv("VMLX_DFLASH2_BLOCK", "4")             # a pinned width still wins
+    monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "3,5")
+    assert _dflash2_block_plan(8) == (4,)
