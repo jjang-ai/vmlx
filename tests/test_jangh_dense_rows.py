@@ -152,3 +152,21 @@ def test_tqlinear_output_equals_the_per_row_kernel_for_every_narrow_width():
         ref = _per_row(x.reshape(T, 64), packed, scales, 2, True).astype(mx.bfloat16).reshape(1, T, 96)
         mx.eval(new, ref)
         assert mx.array_equal(new, ref).item(), T
+
+
+def test_rows_kernel_partial_output_simdgroup_is_bitwise_exact():
+    """N=13 exercises a partially filled output group, not only whole empty groups."""
+    for bits in (2, 4, 8):
+        packed, scales = _weight(13, 96, bits, 40 + bits)
+        for rows in (1, 2, 5, 8, 11):
+            for dtype in (mx.bfloat16, mx.float16):
+                x = mx.random.normal((rows, 96)).astype(dtype)
+                for rotate in (False, True):
+                    ref = _per_row(x, packed, scales, bits, rotate)
+                    xin = K.h32_rows(x, mx.float32) if rotate and rows > 1 else x
+                    got = K.gather_qmv_rows(
+                        xin, packed, scales, mx.zeros((1,), dtype=mx.uint32), bits,
+                        rotate=rotate and rows == 1,
+                    )
+                    mx.eval(ref, got)
+                    assert mx.array_equal(ref, got).item(), (bits, rows, dtype, rotate)
