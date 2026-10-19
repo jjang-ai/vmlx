@@ -1052,7 +1052,7 @@
       "nativeMtpAdaptiveNote": "自适应 MTP 会监测解码性能；当测得的额外开销超过收益时，可以降低草稿深度或回退到普通解码。它不会固定或改写 temperature、top-p、top-k 或 min-p。greedy 请求按同一性验证；采样请求使用拒绝采样接受，因此输出分布就是模型自身的分布。实时深度、接受率和回退原因显示在性能面板。",
       "nativeMtpDefaultOffNote": "此 bundle 当前的 MTP 验证器实测慢于普通解码，因此以 AR 启动。选择自适应 MTP 即可启用；AR 安全阀仍保护每个请求。",
       "nativeMtpDetectedNote": "检测到的范围：{scope}；原生缓存：{cache}；草稿上限来源：{depthSource}。混合 bundle 将 KV 块和类型化 SSM 状态保存在 SSD 缓存契约中；常驻分页 RAM 保持禁用。",
-      "specDecodeHint": "使用小型草稿模型提出 token，然后在目标模型的单次传递中验证。可带来 20-90% 加速且零质量损失。",
+      "specDecodeHint": "小型草稿模型提出 token，由目标模型验证。速度取决于模型和任务；短回复可能更慢。",
       "specDecodeIncompatBatching": "推测解码与连续批处理不兼容。缓存栈调度器激活期间，启动时省略草稿模型。",
       "specDecodeIncompatVlm": "推测解码与多模态 (VLM) 模型不兼容。VLM 请求启动时省略草稿模型。",
       "draftModel": "草稿模型",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "使用内置的 DFlash2 草稿模型（{{name}}）",
       "useBundledDflash2Tooltip": "模型包包含 DFlash2 草稿模型时默认开启。下方填写的草稿模型优先。关闭后使用模型包自带的原生 MTP（自适应/AR）。",
       "nativeMtpOffForDrafter": "选择 DFlash2 草稿模型时原生 MTP 关闭（两者不能共享同一解码步骤）。清空草稿模型或关闭内置草稿模型即可恢复自适应 MTP。",
-      "dflash2AdaptiveBlockNote": "DFlash2 每步自动选择验证块宽度，最多为草稿模型训练块的两倍（8 或 16 个 token；宽验证代价高时为 5），取当前文本上每秒 token 数更高的一种。“每步草稿 token 数”不适用。"
+      "dflash2AdaptiveBlockNote": "DFlash2 根据检测到的模型所用的方案自适应调整验证块大小。“每步草稿 token 数”不适用。"
     },
     "create": {
       "title": "创建会话",

@@ -1052,7 +1052,7 @@
       "nativeMtpAdaptiveNote": "MTP adaptativo supervisa el rendimiento de decodificación y puede reducir la profundidad de borrador o volver a la decodificación normal cuando el coste medido supera el beneficio. Nunca fija ni reescribe temperature, top-p, top-k o min-p. Las solicitudes greedy se verifican por identidad; las muestreadas usan aceptación por muestreo de rechazo, así que la distribución de salida es la del propio modelo. La profundidad, la aceptación y los motivos de fallback aparecen en Rendimiento.",
       "nativeMtpDefaultOffNote": "El verificador MTP actual de este bundle midió más lento que la decodificación normal, así que empieza en AR. Elige MTP adaptativo para activarlo; la válvula de seguridad AR sigue protegiendo cada solicitud.",
       "nativeMtpDetectedNote": "Alcance detectado: {scope}; caché nativa: {cache}; fuente del límite de borrador: {depthSource}. Los bundles híbridos guardan bloques KV y estado SSM tipado en el contrato de caché SSD; la RAM paginada retenida sigue desactivada.",
-      "specDecodeHint": "Usa un modelo borrador pequeño para proponer tokens y luego verificarlos en una sola pasada del modelo objetivo. Puede dar un 20-90% de aceleración sin pérdida de calidad.",
+      "specDecodeHint": "Un modelo borrador pequeño propone tokens que el modelo objetivo verifica. La velocidad depende del modelo y de la tarea; las respuestas cortas pueden ser más lentas.",
       "specDecodeIncompatBatching": "La decodificación especulativa es incompatible con el procesamiento por lotes continuo. El modelo borrador se omite en el arranque mientras el planificador de la pila de caché está activo.",
       "specDecodeIncompatVlm": "La decodificación especulativa es incompatible con modelos multimodales (VLM). El modelo borrador se omite en el arranque para solicitudes VLM.",
       "draftModel": "Modelo borrador",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "Usar el drafter DFlash2 incluido ({{name}})",
       "useBundledDflash2Tooltip": "Activado por defecto cuando el paquete del modelo incluye un drafter DFlash2. Un modelo borrador indicado abajo tiene prioridad. Desactivado = se usa el MTP nativo del paquete (Adaptativo/AR).",
       "nativeMtpOffForDrafter": "El MTP nativo está desactivado mientras haya un drafter DFlash2 seleccionado (no pueden compartir el paso de decodificación). Borra el modelo borrador o desactiva el drafter incluido para volver a usar MTP adaptativo.",
-      "dflash2AdaptiveBlockNote": "DFlash2 elige su bloque de verificación en cada paso, hasta el doble del bloque con el que se entrenó el drafter (8 o 16 tokens; 5 cuando las verificaciones anchas son costosas), el que produzca más tokens por segundo con este texto. Tokens borrador por paso no se aplica."
+      "dflash2AdaptiveBlockNote": "DFlash2 adapta el tamaño del bloque de verificación según el plan del modelo detectado. Tokens borrador por paso no se aplica."
     },
     "create": {
       "title": "Crear sesión",

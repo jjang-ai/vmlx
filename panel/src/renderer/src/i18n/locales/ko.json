@@ -1052,7 +1052,7 @@
       "nativeMtpAdaptiveNote": "적응형 MTP는 디코딩 성능을 모니터링하며, 측정된 오버헤드가 이점보다 크면 드래프트 깊이를 줄이거나 일반 디코딩으로 돌아갈 수 있습니다. temperature, top-p, top-k, min-p를 고정하거나 다시 쓰지 않습니다. greedy 요청은 동일성으로 검증하고 샘플링 요청은 거부 샘플링 수락을 사용하므로 출력 분포는 모델 자체의 것입니다. 실시간 깊이, 수락률, 폴백 이유는 성능 탭에 표시됩니다.",
       "nativeMtpDefaultOffNote": "이 번들의 현재 MTP 검증기가 일반 디코딩보다 느리게 측정되어 AR로 시작합니다. 적응형 MTP를 선택하면 옵트인됩니다. AR 안전 밸브는 여전히 모든 요청을 보호합니다.",
       "nativeMtpDetectedNote": "감지된 범위: {scope}; 네이티브 캐시: {cache}; 초안 상한 소스: {depthSource}. 하이브리드 번들은 KV 블록과 타입 SSM 상태를 SSD 캐시 계약에 저장하며 유지 페이지 RAM은 비활성 상태입니다.",
-      "specDecodeHint": "작은 드래프트 모델로 토큰을 제안한 다음 타깃 모델의 단일 패스로 검증합니다. 품질 손실 없이 20-90% 속도 향상이 가능합니다.",
+      "specDecodeHint": "작은 드래프트 모델이 토큰을 제안하고 타깃 모델이 검증합니다. 속도는 모델과 작업에 따라 달라지며 짧은 응답은 더 느릴 수 있습니다.",
       "specDecodeIncompatBatching": "투기적 디코딩은 연속 배치 처리와 호환되지 않습니다. 캐시 스택 스케줄러가 활성인 동안 시작 시 드래프트 모델이 생략됩니다.",
       "specDecodeIncompatVlm": "투기적 디코딩은 멀티모달 (VLM) 모델과 호환되지 않습니다. VLM 요청의 경우 시작 시 드래프트 모델이 생략됩니다.",
       "draftModel": "드래프트 모델",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "번들에 포함된 DFlash2 드래프터 사용({{name}})",
       "useBundledDflash2Tooltip": "모델 번들에 DFlash2 드래프터가 있으면 기본으로 켜집니다. 아래에 입력한 드래프트 모델이 우선합니다. 끄면 번들의 네이티브 MTP(Adaptive/AR)를 사용합니다.",
       "nativeMtpOffForDrafter": "DFlash2 드래프터가 선택된 동안 네이티브 MTP는 꺼집니다(같은 디코딩 단계를 공유할 수 없음). Adaptive MTP로 돌아가려면 드래프트 모델을 비우거나 번들 드래프터를 끄세요.",
-      "dflash2AdaptiveBlockNote": "DFlash2는 단계마다 검증 블록 폭을 고릅니다. 드래프터 학습 폭의 최대 2배(8 또는 16토큰, 넓은 검증이 비쌀 때는 5) 중 현재 텍스트에서 초당 토큰이 더 많은 쪽을 사용합니다. 단계당 드래프트 토큰 수는 적용되지 않습니다."
+      "dflash2AdaptiveBlockNote": "DFlash2는 감지된 모델의 계획에 따라 검증 블록 크기를 조정합니다. 단계당 드래프트 토큰 수는 적용되지 않습니다."
     },
     "create": {
       "title": "세션 생성",

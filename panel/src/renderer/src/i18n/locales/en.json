@@ -1052,7 +1052,7 @@
       "nativeMtpAdaptiveNote": "Adaptive MTP monitors decode performance and can reduce draft depth or fall back to plain decode when measured overhead outweighs the benefit. It never pins or rewrites temperature, top-p, top-k or min-p. Greedy requests verify by identity; sampled requests use rejection-sampling acceptance, so the output distribution is the model's own. Live depth, acceptance and fallback reasons are shown in Performance.",
       "nativeMtpDefaultOffNote": "This bundle's current MTP verifier measured slower than plain decode, so it starts in AR. Choose Adaptive MTP to opt in; the AR-safety valve still protects every request.",
       "nativeMtpDetectedNote": "Detected scope: {scope}; native cache: {cache}; draft ceiling source: {depthSource}. Hybrid cache bundles keep KV blocks and typed SSM companion state in the SSD cache contract; retained paged RAM stays disabled.",
-      "specDecodeHint": "Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss.",
+      "specDecodeHint": "A small draft model proposes tokens for the target model to verify. Speed depends on the model and workload; short responses can be slower.",
       "specDecodeIncompatBatching": "Speculative decoding is incompatible with continuous batching. The draft model is omitted at launch while the cache-stack scheduler is active.",
       "specDecodeIncompatVlm": "VLM speculative decoding requires a matched DFlash2 draft. Other draft models are omitted at launch for VLM requests.",
       "draftModel": "Draft Model",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "Use the bundled DFlash2 drafter ({{name}})",
       "useBundledDflash2Tooltip": "On by default when the model bundle includes a DFlash2 drafter. A Draft model entered below takes precedence. Off = the bundle's native MTP (Adaptive/AR) is used instead.",
       "nativeMtpOffForDrafter": "Native MTP is off while a DFlash2 drafter is selected (the two cannot share a decode step). Clear the Draft model or turn the bundled drafter off to use Adaptive MTP again.",
-      "dflash2AdaptiveBlockNote": "DFlash2 picks its verify block each step, up to twice the drafter's trained block (8 or 16 tokens; 5 when wide verifies are costly), whichever produces more tokens per second on this text. Draft Tokens per Step does not apply."
+      "dflash2AdaptiveBlockNote": "DFlash2 adapts its verification block size using the plan for the detected model. Draft Tokens per Step does not apply."
     },
     "create": {
       "title": "Create Session",
