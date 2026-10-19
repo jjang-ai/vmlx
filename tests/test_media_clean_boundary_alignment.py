@@ -307,7 +307,8 @@ def test_qwen_hybrid_media_tail_admits_only_a_pure_text_prefix():
     (11, "per_media_placeholder", False),
     (8, "aggregate_first_placeholder", False),
 ])
-def test_qwen_conditioned_tail_complete_item_boundary(cached, mode, accepted):
+@pytest.mark.parametrize("family", ["qwen3_5", "minicpmv4_7"])
+def test_qwen_conditioned_tail_complete_item_boundary(cached, mode, accepted, family):
     import mlx.core as mx
 
     class Language:
@@ -316,7 +317,7 @@ def test_qwen_conditioned_tail_complete_item_boundary(cached, mode, accepted):
 
     tokens = [1] * 5 + [99] * 3 + [2] * 2 + [99] * 3 + [3] * 2
     generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
-    generator._model_type = "qwen3_5"
+    generator._model_type = family
     generator.model = SimpleNamespace(get_input_embeddings=lambda *a, **kw: None)
     generator.language_model = Language()
     generator._media_safe_capture_limit = lambda _: 5

@@ -133,10 +133,10 @@ class _CanvasLanguageMixin:
     ):
         """Canvas positions ``(3, B, S)`` and ``(B, 1)`` deltas as int32 MLX arrays.
 
-        The Qwen-style positional signature is accepted so generic callers
-        (prefix-cache priming) reach this method; they carry Qwen grids, not
-        MiniCPM target sizes, so media prompts without ``target_sizes`` raise
-        and those callers fall back to a cold prefill.
+        Prefix-cache priming accepts the Qwen-style positional signature but
+        must also pass this request's native target sizes and token types.
+        Media prompts missing those sizes raise rather than inventing a
+        Qwen-grid position plan.
         """
         cfg = self.config
         markers = (
