@@ -1342,8 +1342,9 @@ def _stream_generate_resumable(
 
         # Verify width per cycle (see _dflash2_block_plan / _BlockChooser):
         # the width with the best predicted tokens per measured second.
-        widths = _dflash2_block_plan(block_size, _lane_flat(adapter))
-        chooser = _BlockChooser(widths, cost=_width_costs(adapter, widths))
+        _codebook = _codebook_mlp(adapter)
+        widths = _dflash2_block_plan(block_size, _lane_flat(adapter), codebook=_codebook)
+        chooser = _BlockChooser(widths, cost=_width_costs(adapter, widths), first_widest=_codebook)
         after_ar = False
 
         def _ar_step(tok_arr, history):
@@ -1659,7 +1660,7 @@ class _BlockChooser:
     ar_burst = 8
     ar_alpha = 0.3
 
-    def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None):
+    def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None, first_widest: bool = False):
         # ``low`` may be the whole tuple of candidate widths (from
         # _dflash2_block_plan); (low, high) is kept for the two-width callers.
         if isinstance(low, (tuple, list)):
@@ -1672,7 +1673,9 @@ class _BlockChooser:
         # widths[0]) saw two positions per cycle and climbed to width 16 only after ~12 cycles on code: 12 of 23 cycles
         # of a 122-token code reply ran at width 3 (74.8 tok/s) where the (5, 8, 16) plan ran 15 of 16 at width 16
         # (83.7 tok/s). One wide cycle costs ~110 ms once per request (~0.1 ms per token of a 384-token reply).
-        self.width = widths[-1]
+        # Dense codebook-MLP targets only (``first_widest``, measured on JANGH2): Qwen3.8-27B JANG_4D, whose verify
+        # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
+        self.width = widths[-1] if first_widest else widths[0]
         self._last_timed: dict = {}
         top = max(self.widths)
         self.trials = [0.0] * top          # index k = draft position k (1-based)
@@ -1858,7 +1861,26 @@ def _lane_flat(adapter: Any) -> bool:
     return flat
 
 
-def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
+def _codebook_mlp(adapter: Any) -> bool:
+    """True when the target has dense JANGH codebook projections (jangh.dense.TQLinear, e.g. Qwen3.8-27B JANGH2's 2-bit
+    MLP): their verify cost grows steeply with rows below the sorted-tile threshold, which is what the narrow width 3
+    and the widest first cycle were measured on."""
+    cached = getattr(adapter, "_vmlx_codebook_mlp", None)
+    if cached is not None:
+        return cached
+    found = False
+    try:
+        found = any(type(m).__name__ == "TQLinear" for _n, m in adapter._target.named_modules())
+    except Exception:
+        found = False
+    try:
+        adapter._vmlx_codebook_mlp = found
+    except Exception:
+        pass
+    return found
+
+
+def _dflash2_block_plan(trained_max: int, lane_flat: bool = False, codebook: bool = False) -> tuple:
     """Candidate verify widths for one request, smallest first.
 
     DFlash2 drafts a whole block (``bs-1`` masked positions) in ONE drafter
@@ -1896,6 +1918,8 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
         # dominated by the trained width, which costs the same and drafts
         # deeper.  Measured JANG_4D: fixed 8 prose 44.3 vs (5,8,16) 38-41,
         # because the model sent many prose cycles to 5.
+        # In practice unreachable: _lane_flat counts the vocabulary head lane_qmm.install keeps on MLX. Do NOT change
+        # that without a served A/B: making JANG_4D lane-flat (8, 16) measured story 37.1 -> 32.7-33.0 (2026-10-19).
         return (trained, 2 * trained)
     # Not lane-flat (a dense codebook MLP, e.g. JANGH2): verify cost grows with rows below the sorted-tile threshold,
     # and since 1-5-row calls share each weight read (jangh.kernels.gather_qmv_rows) a 3-row round costs ~59 ms against
@@ -1903,7 +1927,12 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
     # width 5: served JANGH2 story 35.0 / 34.9 tok/s with (3, 5, 8, 16) vs 29.2 / 30.4 with (5, 8, 16) and the AR lane
     # 29.6 / 29.9 (2026-10-19 A/B, 2 reps at 1294-1333 MHz). Code keeps width 16 once the first cycle has observed
     # every position (see _BlockChooser: the first cycle of a request runs the widest window).
-    return tuple(sorted({3, min(5, trained), trained, 2 * trained}))
+    if codebook:
+        return tuple(sorted({3, min(5, trained), trained, 2 * trained}))
+    # Other non-flat targets keep (5, trained, 2*trained). Qwen3.8-27B JANG_4D (affine on the lane matmul, head on MLX)
+    # measured worse with width 3 (story 37.1 -> 35.7-36.1, 3 reps) and worse still with (8, 16) (32.7-33.0): its verify
+    # costs 62-70 ms at 5 rows vs 71-78 at 8 (A/B 2026-10-19 at matched 1,302-1,387 MHz).
+    return tuple(sorted({min(5, trained), trained, 2 * trained}))
 
 
 def stream_dflash2_generate(
