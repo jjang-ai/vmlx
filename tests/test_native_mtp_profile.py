@@ -450,6 +450,28 @@ class TestSeedPathIntegration:
             req, [object()], first_token, [None])
         assert getattr(req, "_native_mtp_ar_tier", None) is None
 
+    def test_adaptive_ar_decision_reaches_request_health_snapshot(self, monkeypatch):
+        for learned in (False, True):
+            generator, req, first_token = self._build_generator(monkeypatch)
+            store = generator._native_mtp_profiles = NativeMTPProfileStore()
+            key = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=2)
+            if learned:
+                store.observe(key, final_depth=1, fallback_to_ar=True,
+                              fallback_reason="cost", finish_reason="fallback_to_ar")
+            assert not generator._seed_native_mtp_from_prefill(
+                req, [object()], first_token, [None])
+            snapshot = generator._stats.to_dict()
+            skip = snapshot["last_native_mtp_skip"]
+            assert skip is not None
+            assert skip["request_id"] == req.request_id
+            assert skip["uid"] == req.request_id
+            assert skip["reason"].startswith(
+                "adaptive_profile_ar" if learned else "adaptive_unseen_ar")
+            assert skip["profile_key"] == list(key)
+            assert skip["configured_depth"] == 3
+            assert snapshot["last_native_mtp"] is None
+            assert not hasattr(req, "_native_mtp_state")
+
     def test_learned_ar_start_respects_reentry_disabled(self, monkeypatch):
         generator, req, first_token = self._build_generator(monkeypatch)
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_AR_REENTRY", "0")

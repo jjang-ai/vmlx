@@ -18454,6 +18454,22 @@ class MLLMBatchGenerator:
                     ),
                 )
             if depth <= 0:
+                # A loaded head is capability, not proof that this request
+                # used MTP. Publish adaptive AR decisions through the same
+                # health/performance field as the eligibility gate above.
+                stats = getattr(self, "_stats", None)
+                if stats is not None:
+                    stats.last_native_mtp_skip = {
+                        "uid": str(request.request_id),
+                        "request_id": request.request_id,
+                        "reason": (
+                            "adaptive_unseen_ar: workload has no measured MTP advantage"
+                            if profile_seed == "unseen_ar"
+                            else f"adaptive_{profile_seed}: measured AR preference"
+                        ),
+                        "profile_key": list(request_profile_key),
+                        "configured_depth": configured_ladder_depth,
+                    }
                 # A learned loss chooses AR initially, not forever. Keep the
                 # same measured recovery schedule used after an in-request
                 # loss; it gathers real AR steps before probing. Unknown
