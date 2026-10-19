@@ -502,3 +502,80 @@ def test_in_process_chains_stay_deltas(ssd):
     _, receipts, _ = _chain(ssd, lengths)
     assert [r.vmlx_ssd_ref["depth"] for r in receipts] == list(range(MAX_CHAIN + 1))
     assert ssd.stats["delta_writes"] == MAX_CHAIN and ssd.stats["deep_parent_full_writes"] == 0
+
+
+def test_kept_prefix_must_not_become_parent_of_recomputed_state(ssd):
+    """Equal tokens need not mean equal KV bits after a different prefill chunking."""
+    prefix = [IM_START, 1, 2, IM_END]
+    old = _target(4)
+    ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": old})
+    assert ssd.flush()
+    current = _target(4)
+    kept = ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": current})
+    assert ssd.flush()
+    _grow(current, 4)
+    child_tokens = prefix + [IM_START, 3, 4, IM_END]
+    child = ssd.put({"tokens": child_tokens, "cache_len": 8, "target_cache": current,
+                     "ssd_parent": dict(kept.vmlx_ssd_ref, receipt=kept)})
+    assert ssd.flush() and child.result()["durable"]
+    got = _take(ssd, child_tokens + [IM_START, 5])
+    assert got is not None and got["cache_len"] == 8
+    assert all(mx.array_equal(a, b) for a, b in zip(current[0].state, got["target_cache"][0].state))
+
+
+def test_replaced_prefix_must_not_silently_change_existing_child(ssd):
+    prefix = [IM_START, 1, 2, IM_END]
+    current = _target(4)
+    parent = ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": current})
+    assert ssd.flush()
+    _grow(current, 4)
+    child_tokens = prefix + [IM_START, 3, 4, IM_END]
+    ssd.put({"tokens": child_tokens, "cache_len": 8, "target_cache": current,
+             "ssd_parent": dict(parent.vmlx_ssd_ref, receipt=parent)})
+    assert ssd.flush()
+    ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": _target(4),
+             "draft_context": mx.ones((1, 4, 3))})
+    assert ssd.flush()
+    got = _take(ssd, child_tokens + [IM_START, 5])
+    # It may reject the old child or retain its exact state, never splice new parent bits into it.
+    assert got is None or got["cache_len"] != 8 or all(
+        mx.array_equal(a, b) for a, b in zip(current[0].state, got["target_cache"][0].state))
+
+
+def test_actual_restore_of_kept_prefix_can_be_a_delta_parent(ssd):
+    prefix = [IM_START, 1, 2, IM_END]
+    first = ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": _target(4)})
+    assert ssd.flush()
+    ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": _target(4)})
+    restored = _take(ssd, prefix + [IM_START, 5])
+    assert restored is not None
+    assert restored["ssd_ref"]["generation"] == first.vmlx_ssd_ref["generation"]
+    target = restored["target_cache"]
+    _grow(target, 4)
+    tokens = prefix + [IM_START, 3, 4, IM_END]
+    child = ssd.put({"tokens": tokens, "cache_len": 8, "target_cache": target,
+                     "ssd_parent": restored["ssd_ref"]})
+    assert ssd.flush() and child.result()["durable"]
+    assert child.vmlx_ssd_ref["depth"] == 1
+    got = _take(ssd, tokens + [IM_START, 5])
+    assert got is not None and got["cache_len"] == 8
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+def test_replaced_parent_reference_forces_whole_child(ssd):
+    prefix = [IM_START, 1, 2, IM_END]
+    target = _target(4)
+    parent = ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": target})
+    assert ssd.flush()
+    ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": _target(4),
+             "draft_context": mx.ones((1, 4, 3))})
+    assert ssd.flush()
+    _grow(target, 4)
+    tokens = prefix + [IM_START, 3, 4, IM_END]
+    child = ssd.put({"tokens": tokens, "cache_len": 8, "target_cache": target,
+                     "ssd_parent": dict(parent.vmlx_ssd_ref, receipt=parent)})
+    assert ssd.flush() and child.result()["durable"]
+    assert child.vmlx_ssd_ref["depth"] == 0
+    got = _take(ssd, tokens + [IM_START, 5])
+    assert got is not None and got["cache_len"] == 8
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))

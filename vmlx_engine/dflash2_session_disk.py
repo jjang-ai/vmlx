@@ -72,6 +72,7 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from array import array
 from concurrent.futures import Future
 from pathlib import Path
@@ -306,7 +307,7 @@ class DFlash2SessionSSD:
         """``entry["ssd_parent"]`` (``{"sig", "len", "depth", "receipt"}``: the SSD entry this cache was built on)
         when a delta against it is sound: a strict prefix by signature, chain not too deep, its write not failed."""
         parent = entry.get("ssd_parent")
-        if not parent:
+        if not parent or parent.get("delta_compatible") is False or not parent.get("generation"):
             return None
         n, tokens = int(parent.get("len", 0)), entry["tokens"]
         if not 0 < n < int(entry["cache_len"]) or n > len(tokens) or int(parent.get("depth", 0)) + 1 > MAX_CHAIN:
@@ -327,15 +328,21 @@ class DFlash2SessionSSD:
         entry or any parent is missing, a link's row count is not what its child recorded, or the walk is longer than
         the loader accepts (take_matching / _load_chain: MAX_CHAIN + 1 parents)."""
         depth, cur_sig, cur_len, leaf = 0, sig, int(cache_len), None
+        expected_generation = None
         try:
             for _ in range(MAX_CHAIN + 2):
                 meta = self.store.load(cur_sig, _read_header_meta)
                 if meta is None or int(meta["cache_len"]) != cur_len:
                     return None
+                if expected_generation is not None and meta.get("generation") != expected_generation:
+                    return None
                 leaf = leaf or meta
                 parent = meta.get("parent")
                 if not parent:
                     return depth, leaf
+                expected_generation = parent.get("generation")
+                if not expected_generation:
+                    return None
                 depth += 1
                 cur_sig, cur_len = parent["sig"], int(parent["len"])
         except Exception:
@@ -355,10 +362,13 @@ class DFlash2SessionSSD:
         if receipt is not None and not receipt.done():
             return parent
         walked = self._chain_depth(parent["sig"], int(parent["len"]))
-        if walked is None or walked[0] + 1 > MAX_CHAIN:
+        if (walked is None or walked[0] + 1 > MAX_CHAIN
+                or walked[1].get("generation") != parent["generation"]):
             self.stats["deep_parent_full_writes"] += 1
             logger.info("DFlash2 SSD: parent %d-token entry %s; writing a whole entry", int(parent["len"]),
-                        "chain unreadable" if walked is None else "already %d deep on disk" % walked[0])
+                        "chain unreadable" if walked is None else
+                        "generation changed" if walked[1].get("generation") != parent["generation"] else
+                        "already %d deep on disk" % walked[0])
             return None
         return dict(parent, depth=max(int(parent.get("depth", 0)), walked[0]))
 
@@ -376,9 +386,10 @@ class DFlash2SessionSSD:
         loader drops it as a chain miss. Measured 2026-10-19 (MiMo in-app chain, second session over the same
         prefixes): turns re-stored the 9,187- and 18,577-token entries with new parents, the previous session's
         27,159-token boundary then walked 11 links and was skipped, and the next turn restored 24,576 instead of
-        27,1xx tokens (+2.6k-token re-prefill). Same tokens in the same model namespace are the same cache, so the
+        27,1xx tokens (+2.6k-token re-prefill). The old prefix remains a valid standalone snapshot, so the
         stored file is kept; it is rewritten only when it is less complete than this entry (drafter context or state
-        missing)."""
+        missing). The kept file is NOT a delta parent for the incoming live cache: equal tokens may have different
+        KV bits after a different prefill chunking. A later actual restore can safely use it as a parent."""
         walked = self._chain_depth(sig, int(entry["cache_len"]))
         if walked is None:
             return None
@@ -392,7 +403,8 @@ class DFlash2SessionSSD:
         logger.info("DFlash2 SSD kept %s entry: %d tokens already durable (same prefix, chain %d)",
                     entry.get("kind", "turn"), int(entry["cache_len"]), depth)
         receipt = Future()
-        receipt.vmlx_ssd_ref = {"sig": sig, "len": int(entry["cache_len"]), "depth": depth}
+        receipt.vmlx_ssd_ref = {"sig": sig, "len": int(entry["cache_len"]), "depth": depth,
+                                "generation": meta.get("generation"), "delta_compatible": False}
         receipt.set_running_or_notify_cancel()
         receipt.set_result({"outcome": "stored", "durable": True, "retained_tokens": int(entry["cache_len"]),
                             "detail": "DFlash2 SSD entry already durable (same prefix kept)"})
@@ -443,12 +455,18 @@ class DFlash2SessionSSD:
         # Evaluate on the generation thread; the writer only copies bytes.
         mx.eval(list(arrays.values()))
         depth = int(parent.get("depth", 0)) + 1 if parent else 0
-        meta = {"kind": entry.get("kind", "turn"), "cache_len": int(entry["cache_len"]),
+        # Token signatures identify lookup prefixes, not exact numerical state. Bind
+        # children to this particular snapshot so a later replacement can only
+        # invalidate a child, never splice different KV bits into its delta.
+        generation = uuid.uuid4().hex
+        meta = {"generation": generation, "kind": entry.get("kind", "turn"), "cache_len": int(entry["cache_len"]),
                 "rope_delta": entry.get("rope_delta"),
                 "target": target_layers, "draft": draft_layers,
-                "parent": {"sig": parent["sig"], "len": int(parent["len"]), "depth": depth} if parent else None}
+                "parent": {"sig": parent["sig"], "len": int(parent["len"]), "depth": depth,
+                           "generation": parent["generation"]} if parent else None}
         receipt = Future()
-        receipt.vmlx_ssd_ref = {"sig": signature_for(tokens), "len": int(entry["cache_len"]), "depth": depth}
+        receipt.vmlx_ssd_ref = {"sig": signature_for(tokens), "len": int(entry["cache_len"]), "depth": depth,
+                                "generation": generation}
         # Cancelling an HTTP consumer must not cancel an already-owned write.
         receipt.set_running_or_notify_cancel()
         try:
@@ -480,6 +498,10 @@ class DFlash2SessionSSD:
                     # FIFO: the parent was queued first, so it is settled by now. A child of a failed or evicted
                     # parent would restore nothing; refuse it (its RAM entry stays, see dflash2_runtime).
                     raise OSError("DFlash2 SSD parent entry is not durable")
+                if parent is not None:
+                    current = self.store.load(parent["sig"], _read_header_meta)
+                    if current is None or current.get("generation") != parent["generation"]:
+                        raise OSError("DFlash2 SSD parent entry was replaced")
                 path = self.store.save(
                     sig,
                     lambda tmp: mx.save_safetensors(str(tmp), arrays, {"dflash2": json.dumps(meta)}),
@@ -589,7 +611,8 @@ class DFlash2SessionSSD:
                     "load_s": dt,
                     # this entry is on SSD: a cache built on it can be stored as a delta against it
                     "ssd_ref": {"sig": signature_for(prefix), "len": int(meta["cache_len"]),
-                                "depth": int((meta.get("parent") or {}).get("depth", 0))}}
+                                "depth": int((meta.get("parent") or {}).get("depth", 0)),
+                                "generation": meta.get("generation")}}
         self.stats["misses"] += 1
         return None
 
@@ -613,7 +636,8 @@ class DFlash2SessionSSD:
                 return None
             p_arrays, p_metadata = loaded
             p_meta = json.loads(p_metadata["dflash2"])
-            if int(p_meta["cache_len"]) != n or p_arrays["tokens"].tolist() != prefix[:key_len]:
+            if (not parent.get("generation") or p_meta.get("generation") != parent["generation"]
+                    or int(p_meta["cache_len"]) != n or p_arrays["tokens"].tolist() != prefix[:key_len]):
                 return None
             links.insert(0, (p_arrays, p_meta))
             cur = p_meta

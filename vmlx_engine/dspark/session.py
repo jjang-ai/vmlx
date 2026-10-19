@@ -174,7 +174,8 @@ def chain_after(parent: Optional[dict], receipt) -> Optional[dict]:
     kept (chain depth grows by one per request, as before)."""
     from ..dflash2_session_disk import MAX_CHAIN
 
-    usable = bool(parent) and int(parent.get("depth", 0)) + 1 <= MAX_CHAIN
+    usable = (bool(parent) and parent.get("delta_compatible") is not False
+              and int(parent.get("depth", 0)) + 1 <= MAX_CHAIN)
     if usable:
         return parent
     ref = getattr(receipt, "vmlx_ssd_ref", None)
