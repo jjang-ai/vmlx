@@ -8,6 +8,7 @@
  * no visible answer. Observed live on DSV4 against a deleted release-gate run
  * directory.
  */
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
@@ -49,4 +50,24 @@ describe('built-in tool working directory validation', () => {
 
     expect(result.is_error).toBe(false)
   })
+
+  it('distinguishes empty files from nonempty files smaller than a kilobyte', async () => {
+    const { executeBuiltinTool } = await import('../src/main/tools/executor')
+    const directory = mkdtempSync(join(tmpdir(), 'vmlx-tool-sizes-'))
+    try {
+      writeFileSync(join(directory, 'empty.txt'), '')
+      writeFileSync(join(directory, 'small.txt'), 'x')
+      writeFileSync(join(directory, 'kilobyte.txt'), Buffer.alloc(1024))
+
+      const result = await executeBuiltinTool('list_directory', { path: '.' }, directory)
+
+      expect(result.is_error).toBe(false)
+      expect(result.content).toContain('empty.txt  (0 B)')
+      expect(result.content).toContain('small.txt  (1 B)')
+      expect(result.content).toContain('kilobyte.txt  (1.0 KB)')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
 })
