@@ -556,3 +556,47 @@ def test_drafterless_ssd_tier_uses_its_own_namespace(tmp_path, monkeypatch):
     mimo_session.attach_ssd("/m/target", "/m/target/dflash")
     mimo_session.attach_ssd("/m/target", None)
     assert seen == ["mimo-dflash|/m/target+/m/target/dflash", "mimo-ar|/m/target+/m/target"]
+
+
+# ---- per-round verify-row policy (VMLX_MIMO_DFLASH_POLICY=rows) ----
+def test_rows_policy_greedy_equals_ar_and_resumes(tmp_path, monkeypatch):
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_POLICY", "rows")
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(31).integers(0, V, size=37).tolist()
+    session, st = {}, MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 33, set(), 0.0, stats=st, session=session) for t in new]
+    assert out == _ar_greedy(model, prompt, 33)
+    assert session["forwarded"] == len(prompt) + len(out) - 1
+    assert int(session["taps"].shape[0]) == min(drafter.window, session["forwarded"])
+    resume = {"target_cache": session["target_cache"], "draft_context": session["taps"], "cache_len": session["forwarded"]}
+    out2 = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt + out, 6, set(), 0.0, resume=resume) for t in new]
+    assert out2 == _ar_greedy(model, prompt, 39)[33:39]
+    tgt.close()
+
+
+def test_rows_policy_eos_and_max_tokens(tmp_path, monkeypatch):
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_POLICY", "rows")
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(32).integers(0, V, size=29).tolist()
+    ref = _ar_greedy(model, prompt, 20)
+    eos = {ref[7]}
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 20, eos, 0.0) for t in new]
+    assert out == ref[: ref.index(ref[7]) + 1]
+    for m in (1, 2, 5):
+        assert [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, m, set(), 0.0) for t in new] == ref[:m]
+    tgt.close()
+
+
+def test_rows_policy_is_greedy_only(tmp_path, monkeypatch):
+    # Sampled rounds keep the default policy: the confidence calibrates argmax agreement, not min(1, p/q) acceptance.
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_POLICY", "rows")
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(33).integers(0, V, size=31).tolist()
+    st = MD.LaneStats()
+    list(MD.mimo_rounds(tgt, drafter, None, prompt, 12, set(), 0.0, stats=st))
+    assert isinstance(st.policy, dict) and "rows_policy" in st.policy
+    st = MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 12, set(), 1.0, stats=st) for t in new]
+    assert len(out) == 12
+    assert not (isinstance(st.policy, dict) and "rows_policy" in st.policy)
+    tgt.close()

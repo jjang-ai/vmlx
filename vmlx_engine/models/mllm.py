@@ -40,6 +40,16 @@ from vmlx_engine.errors import UnsupportedMediaModalityError
 logger = logging.getLogger(__name__)
 
 
+def _mimo_block_env():
+    """VMLX_MIMO_DFLASH_BLOCK=<n>: MiMo DFlash verify width for A/Bs (2-16); unset / invalid = the drafter's block."""
+    raw = os.environ.get("VMLX_MIMO_DFLASH_BLOCK", "").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    return n if 2 <= n <= 16 else None
+
+
 _VLM_STREAM = None
 _VLM_STREAM_OWNER: int | None = None
 
@@ -548,6 +558,32 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
     SwitchGLU._vmlx_mimo_affine_decode_fast_path = True
     logger.info("Installed vMLX MiMo-V2 affine SwitchGLU decode fast path")
     return True
+
+
+def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: bool) -> tuple[bool, str]:
+    """Whether a DFlash2 target's affine projections go through the lane matmul (metal/lane_qmm.py), and why not.
+
+    The lane kernel costs about the same for 1..16 rows, which makes wide verifies nearly free on targets whose verify
+    cost is those projections (Qwen3.8 27B). It is not used for:
+    - glm5_next: it corrupts the target from the first token (served DFlash2 lane answered "17 x 15" for 17 x 19 at
+      temperature 0; VMLX_LANE_QMM=0 restored the exact answer, 2026-10-10);
+    - MiMo-V2: its verify cost is routed-expert reads (~4.5-5 ms per extra row), not its 99 affine projections, so the
+      flat cost paid only at 8 rows (59.1 vs 61.2 ms) while one-row steps got slower (20.99 -> 22.81 ms) and so did
+      2-4-row verifies (same process, 2026-10-18). With the drafter-confidence cut most rounds are 1-4 rows; served
+      A/B (3 reps, 2026-10-18) on MLX kernels: prose 45.9 -> 48.4, sampled 53.7 -> 55.7 tok/s.
+      VMLX_MIMO_LANE_QMM=1 restores the lane (A/B).
+    VMLX_LANE_QMM=0 turns it off for every target."""
+    import os
+
+    if not dflash2_enabled:
+        return False, ""
+    if os.environ.get("VMLX_LANE_QMM", "1").strip().lower() in ("0", "off", "false", "no"):
+        return False, "VMLX_LANE_QMM=0"
+    if lm_type == "glm5_next":
+        return False, "glm5_next keeps its native kernels"
+    if is_mimo_v2 and os.environ.get("VMLX_MIMO_LANE_QMM", "0").strip().lower() not in ("1", "on", "true", "yes"):
+        return False, "MiMo-V2 keeps MLX kernels; VMLX_MIMO_LANE_QMM=1 restores the lane"
+    return True, ""
 
 
 def _is_mimo_v2_runtime_object_or_name(model: Any, model_name: Any = None) -> bool:
@@ -4904,12 +4940,13 @@ class MLXMultimodalLM:
                 from ..speculative import is_dflash2_enabled
 
                 _lm_type = str(getattr(getattr(self.model, "config", None), "model_type", "") or "")
-                # glm5_next: the lane matmul corrupts the target from the first token (served DFlash2 lane answered
-                # "17 x 15" for 17 x 19 at temperature 0; VMLX_LANE_QMM=0 restored the exact answer, 2026-10-10). Its
-                # verify slabs are measured without it; keep GLM on the native kernels.
-                if is_dflash2_enabled() and _lm_type != "glm5_next" and os.environ.get(
-                    "VMLX_LANE_QMM", "1"
-                ).strip().lower() not in ("0", "off", "false", "no"):
+                # Which targets keep their native kernels (glm5_next, MiMo-V2) and why: _dflash_target_lane_qmm.
+                _lane, _why = _dflash_target_lane_qmm(
+                    is_dflash2_enabled(), _lm_type, _is_mimo_v2_runtime_object_or_name(self.model, resolved_name)
+                )
+                if not _lane and _why:
+                    logger.info("DFlash2 target lane matmul: not installed (%s)", _why)
+                if _lane:
                     import time as _time
                     from ..metal import lane_qmm
 
@@ -7534,11 +7571,19 @@ class MLXMultimodalLM:
                     if has_media else "text", self.model_name, len(prompt_ids), cache_len,
                     (resume or {}).get("source", "none"))
         drafted = []
+        try:
+            yield_every = max(0, int(os.environ.get("VMLX_MIMO_DFLASH_YIELD_TOKENS", "0")))
+        except ValueError:
+            yield_every = 0
+        yielded = 0
         for new, n_drafted in mimo_rounds(
             target, drafter, mask_vec, prompt_ids, int(max_tokens), eos, float(temperature),
             float(kwargs.get("top_p", 1.0) or 1.0), int(kwargs.get("top_k", 0) or 0),
             prefill_step=int(kwargs.get("prefill_step_size") or prefill_step_size()), stats=st,
             adaptive=os.environ.get("VMLX_MIMO_DFLASH_ADAPTIVE", "1").strip().lower() not in {"0", "false", "off", "no"},
+            # A/B tool (as VMLX_DFLASH2_BLOCK): a pinned verify width with VMLX_MIMO_DFLASH_ADAPTIVE=0 (or the adaptive
+            # policy's maximum width when it stays on); unset = the drafter's block
+            block_size=_mimo_block_env(),
             controls=controls, resume=resume, snapshot_cuts=[c for _, c in cuts], on_snapshot=_on_snapshot,
             session=session, embeds=embeds,
         ):
@@ -7556,7 +7601,13 @@ class MLXMultimodalLM:
                 finish = "length"
             if finish is not None:
                 break
-            yield MLLMOutput(text=detok.last_segment, prompt_tokens=len(prompt_ids), completion_tokens=produced)
+            # Hand a chunk up only every `yield_every` tokens: each yield leaves this generator suspended while
+            # SimpleEngine hops through its executor thread and the event loop, and the GPU idles for that hop. A
+            # draft round emits ~1.7 tokens on prose (vs 8 per AR burst), so per-round yields paid the hop ~5x as
+            # often per token -- invisible to the adaptive policy, whose round timer stops before the yield.
+            if produced - yielded >= yield_every:
+                yielded = produced
+                yield MLLMOutput(text=detok.last_segment, prompt_tokens=len(prompt_ids), completion_tokens=produced)
         detok.finalize()
         elapsed = _time.perf_counter() - started
         # Store this turn's reusable states: snapshots, then the end-of-turn entry (key = the prompt's key ids + every
@@ -7581,6 +7632,11 @@ class MLXMultimodalLM:
                                  "model_key": model_key}, parent=chunks.parent_for(forwarded, parent))
         spec_rounds = [d for d in drafted if d > 0]
         accepted = list(st.accepted)
+        _rp, _dr = (st.policy or {}).get("rows_policy"), (st.policy or {}).get("drafting")
+        if _rp is not None and _dr is not None:
+            logger.info("MiMo DFlash rows policy: plain_ms=%.2f verify_ms=%s skipped=%d probes=%d period=%d",
+                        _rp.plain.ms, {r: round(v, 1) for r, v in sorted(_rp.verify.costs.items()) if r <= 8},
+                        _dr.skipped, _dr.probes, _dr.period)
         _pol = (st.policy or {}).get("_policy")
         if _pol is not None:
             logger.info("MiMo DFlash adaptive costs: t_ar_ms=%s t_round_ms=%s p=%s ar_outliers_skipped=%s",
