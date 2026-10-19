@@ -406,3 +406,99 @@ def test_dspark_drafter_context_is_a_delta_and_restores_bit_identical(ssd, draft
         assert size < whole_ctx // 4                                          # only the new context rows
     else:
         assert size > whole_ctx
+
+
+# ---- same prefix stored again (a later session over the same conversation) ----
+def _chain(ssd, lengths, start=None):
+    """Writes a delta chain over the prefixes of one token list; returns (tokens, receipts, target)."""
+    tokens = [IM_START] + [10 + i for i in range(max(lengths) - 1)]
+    target = _target(lengths[0]) if start is None else start
+    receipts, prev = [], None
+    for i, n in enumerate(lengths):
+        if i:
+            _grow(target, n - lengths[i - 1])
+        entry = {"kind": "chunk", "tokens": tokens[:n], "cache_len": n, "target_cache": target}
+        if prev is not None:
+            entry["ssd_parent"] = dict(prev.vmlx_ssd_ref, receipt=prev)
+        prev = ssd.put(entry)
+        receipts.append(prev)
+    assert ssd.flush()
+    return tokens, receipts, target
+
+
+def _side(ssd, tokens, base_receipt, base_len, n):
+    """A side entry tokens[:n] stored as a delta on the entry tokens[:base_len] (another conversation's turn)."""
+    t = _target(base_len)
+    _grow(t, n - base_len)
+    r = ssd.put({"kind": "turn", "tokens": tokens[:n], "cache_len": n, "target_cache": t,
+                 "ssd_parent": dict(base_receipt.vmlx_ssd_ref, receipt=base_receipt)})
+    assert ssd.flush()
+    return r, t
+
+
+def test_same_prefix_restored_later_keeps_the_stored_entry_so_dependents_still_load(ssd):
+    """2026-10-19 MiMo in-app chain, second session over the same prefixes: two turns re-stored mid-chain prefixes as
+    deltas on OTHER parents; every older entry naming them as parents then walked two more links, the 8-deep
+    boundary walked 11 and the loader dropped it (restore fell back to an earlier chunk)."""
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN, signature_for
+    lengths = [4 * (i + 1) for i in range(MAX_CHAIN + 1)]          # 4..36, depths 0..MAX_CHAIN
+    tokens, receipts, target = _chain(ssd, lengths)
+    deepest = lengths[-1]
+    assert receipts[-1].vmlx_ssd_ref["depth"] == MAX_CHAIN
+    # side entries at 6 (on 4) and 14 (on 12): the parents the second session's re-stores are built on
+    s6, t6 = _side(ssd, tokens, receipts[0], 4, 6)
+    s14, t14 = _side(ssd, tokens, receipts[2], 12, 14)
+    files = {n: ssd.store.paths(signature_for(tokens[:n]))[0] for n in (8, 16)}
+    before = {n: f.read_bytes() for n, f in files.items()}
+    # second session: prefixes 8 and 16 stored again, built on the side entries
+    _grow(t6, 2)
+    again8 = ssd.put({"kind": "boundary", "tokens": tokens[:8], "cache_len": 8, "target_cache": t6,
+                      "ssd_parent": dict(s6.vmlx_ssd_ref, receipt=s6)})
+    _grow(t14, 2)
+    again16 = ssd.put({"kind": "boundary", "tokens": tokens[:16], "cache_len": 16, "target_cache": t14,
+                       "ssd_parent": dict(s14.vmlx_ssd_ref, receipt=s14)})
+    assert ssd.flush()
+    assert again8.result()["durable"] and again16.result()["durable"]
+    assert "kept" in again8.result()["detail"] and ssd.stats["same_prefix_kept"] == 2
+    assert again8.vmlx_ssd_ref["depth"] == 1 and again16.vmlx_ssd_ref["depth"] == 3      # the kept entries' depths
+    assert all(files[n].read_bytes() == before[n] for n in files)                        # not replaced
+    got = _take(ssd, tokens[:deepest] + [IM_START, 7])               # the MAX_CHAIN-deep dependent still restores
+    assert got is not None and got["cache_len"] == deepest and ssd.stats["chain_misses"] == 0
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+def test_parent_whose_recorded_depth_understates_its_chain_gets_a_whole_child(ssd):
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN
+    lengths = [4 * (i + 1) for i in range(MAX_CHAIN + 1)]
+    tokens, receipts, target = _chain(ssd, lengths)
+    deepest = receipts[-1].vmlx_ssd_ref
+    _grow(target, 4)
+    n = lengths[-1] + 4
+    # a restored parent whose ref claims depth 0 although its file walks MAX_CHAIN parents (a replaced ancestor)
+    child = ssd.put({"kind": "turn", "tokens": tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END], "cache_len": n,
+                     "target_cache": target, "ssd_parent": dict(deepest, depth=0)})
+    assert ssd.flush() and child.result()["durable"]
+    assert child.vmlx_ssd_ref["depth"] == 0 and ssd.stats["deep_parent_full_writes"] == 1   # written whole
+    got = _take(ssd, tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END, IM_START, 5])
+    assert got is not None and got["cache_len"] == n
+
+
+def test_less_complete_stored_entry_is_replaced_by_a_whole_entry(ssd):
+    from vmlx_engine.dflash2_session_disk import signature_for
+    prefix = [IM_START, 1, 2, IM_END, 5]
+    ssd.put({"kind": "boundary", "tokens": prefix, "cache_len": 5, "target_cache": _target(5)})   # no drafter context
+    assert ssd.flush()
+    context = mx.arange(12).reshape(1, 4, 3).astype(mx.bfloat16)
+    r = ssd.put({"kind": "boundary", "tokens": prefix, "cache_len": 5, "target_cache": _target(5), "draft_context": context})
+    assert ssd.flush() and r.result()["durable"] and "kept" not in r.result()["detail"] and ssd.stats["same_prefix_kept"] == 0
+    got = _take(ssd, prefix + [IM_START, 6])
+    assert got is not None and mx.array_equal(got["draft_context"], context)
+    assert ssd.store.paths(signature_for(prefix))[0].is_file()
+
+
+def test_in_process_chains_stay_deltas(ssd):
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN
+    lengths = [4 * (i + 1) for i in range(MAX_CHAIN + 1)]
+    _, receipts, _ = _chain(ssd, lengths)
+    assert [r.vmlx_ssd_ref["depth"] for r in receipts] == list(range(MAX_CHAIN + 1))
+    assert ssd.stats["delta_writes"] == MAX_CHAIN and ssd.stats["deep_parent_full_writes"] == 0

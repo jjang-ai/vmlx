@@ -101,6 +101,21 @@ def signature_for(tokens: list[int]) -> str:
     return f"{len(tokens)}:{_token_digest(tokens)}"
 
 
+def _read_header_meta(path) -> dict:
+    """The ``dflash2`` metadata of a stored entry from its safetensors header alone (no tensor reads), plus the names
+    of its stored arrays under ``_arrays``."""
+    import struct
+
+    with open(path, "rb") as f:
+        n = struct.unpack("<Q", f.read(8))[0]
+        if not 0 < n <= 64 << 20:
+            raise ValueError(f"implausible safetensors header length {n}")
+        head = json.loads(f.read(n))
+    meta = json.loads((head.get("__metadata__") or {})["dflash2"])
+    meta["_arrays"] = [k for k in head if k != "__metadata__"]
+    return meta
+
+
 def _parent_key_length(parent: dict, tokens: list[int]) -> Optional[int]:
     """Validate the lookup prefix independently of its cached row count.
 
@@ -277,7 +292,8 @@ class DFlash2SessionSSD:
             logger.info("DFlash2 SSD: cleared %d bytes of legacy session entries (schema %s)",
                         self.legacy_cleared, ",".join(LEGACY_SCHEMAS))
         self.stats = {"writes": 0, "write_bytes": 0, "write_s": 0.0, "write_errors": 0, "delta_writes": 0,
-                      "dropped": 0, "hits": 0, "hit_tokens": 0, "load_s": 0.0, "misses": 0, "chain_misses": 0}
+                      "dropped": 0, "hits": 0, "hit_tokens": 0, "load_s": 0.0, "misses": 0, "chain_misses": 0,
+                      "same_prefix_kept": 0, "deep_parent_full_writes": 0}
         # Two prefill snapshots plus a reserved final-turn slot. Requests
         # settle their terminal receipt before releasing the generation lock.
         self._q: "queue.Queue[tuple]" = queue.Queue(maxsize=self.queue_depth + 1)
@@ -286,7 +302,7 @@ class DFlash2SessionSSD:
 
     # ---- write ---------------------------------------------------------------
     @staticmethod
-    def _usable_parent(entry: dict) -> Optional[dict]:
+    def _usable_parent_static(entry: dict) -> Optional[dict]:
         """``entry["ssd_parent"]`` (``{"sig", "len", "depth", "receipt"}``: the SSD entry this cache was built on)
         when a delta against it is sound: a strict prefix by signature, chain not too deep, its write not failed."""
         parent = entry.get("ssd_parent")
@@ -306,15 +322,97 @@ class DFlash2SessionSSD:
                 return None
         return parent
 
+    def _chain_depth(self, sig: str, cache_len: int) -> Optional[tuple[int, dict]]:
+        """(links - 1, leaf metadata) of the stored chain ending at ``sig`` read from headers only, or None when the
+        entry or any parent is missing, a link's row count is not what its child recorded, or the walk is longer than
+        the loader accepts (take_matching / _load_chain: MAX_CHAIN + 1 parents)."""
+        depth, cur_sig, cur_len, leaf = 0, sig, int(cache_len), None
+        try:
+            for _ in range(MAX_CHAIN + 2):
+                meta = self.store.load(cur_sig, _read_header_meta)
+                if meta is None or int(meta["cache_len"]) != cur_len:
+                    return None
+                leaf = leaf or meta
+                parent = meta.get("parent")
+                if not parent:
+                    return depth, leaf
+                depth += 1
+                cur_sig, cur_len = parent["sig"], int(parent["len"])
+        except Exception:
+            return None
+        return None
+
+    def _usable_parent(self, entry: dict) -> Optional[dict]:
+        """As _usable_parent_static, and for a parent that is already a durable file (restored from SSD, or a write
+        this process saw settle), the depth that counts is its ACTUAL chain on disk, read from headers: a parent file
+        replaced by a later write of the same prefix could make a recorded depth understate the walk, and a delta past
+        the loader's limit is a silent miss (2026-10-19: an 8-deep entry walked 11 links). Parents still queued in this
+        process keep their recorded depth (their own write settles first, FIFO)."""
+        parent = self._usable_parent_static(entry)
+        if parent is None:
+            return None
+        receipt = parent.get("receipt")
+        if receipt is not None and not receipt.done():
+            return parent
+        walked = self._chain_depth(parent["sig"], int(parent["len"]))
+        if walked is None or walked[0] + 1 > MAX_CHAIN:
+            self.stats["deep_parent_full_writes"] += 1
+            logger.info("DFlash2 SSD: parent %d-token entry %s; writing a whole entry", int(parent["len"]),
+                        "chain unreadable" if walked is None else "already %d deep on disk" % walked[0])
+            return None
+        return dict(parent, depth=max(int(parent.get("depth", 0)), walked[0]))
+
+    def _stored(self, sig: str) -> bool:
+        try:
+            return self.store.paths(sig)[0].is_file()
+        except Exception:
+            return False
+
+    def _kept_same_prefix(self, entry: dict, sig: str) -> Optional[Future]:
+        """A durable receipt for an entry whose exact prefix is already stored with an intact chain, or None.
+
+        Rewriting that file would REPLACE an entry other entries may name as their parent; a delta replacement
+        lengthens every such chain (it now walks through this entry's new parents) and past MAX_CHAIN + 1 links the
+        loader drops it as a chain miss. Measured 2026-10-19 (MiMo in-app chain, second session over the same
+        prefixes): turns re-stored the 9,187- and 18,577-token entries with new parents, the previous session's
+        27,159-token boundary then walked 11 links and was skipped, and the next turn restored 24,576 instead of
+        27,1xx tokens (+2.6k-token re-prefill). Same tokens in the same model namespace are the same cache, so the
+        stored file is kept; it is rewritten only when it is less complete than this entry (drafter context or state
+        missing)."""
+        walked = self._chain_depth(sig, int(entry["cache_len"]))
+        if walked is None:
+            return None
+        depth, meta = walked
+        arrays = set(meta.get("_arrays") or ())
+        if entry.get("draft_context") is not None and "draft_context" not in arrays:
+            return None
+        if entry.get("draft_cache") is not None and meta.get("draft") is None:
+            return None
+        self.stats["same_prefix_kept"] += 1
+        logger.info("DFlash2 SSD kept %s entry: %d tokens already durable (same prefix, chain %d)",
+                    entry.get("kind", "turn"), int(entry["cache_len"]), depth)
+        receipt = Future()
+        receipt.vmlx_ssd_ref = {"sig": sig, "len": int(entry["cache_len"]), "depth": depth}
+        receipt.set_running_or_notify_cancel()
+        receipt.set_result({"outcome": "stored", "durable": True, "retained_tokens": int(entry["cache_len"]),
+                            "detail": "DFlash2 SSD entry already durable (same prefix kept)"})
+        return receipt
+
     def put(self, entry: dict) -> Future:
         """Snapshot ``entry`` (a RAM-store dict) and queue it for SSD (a delta when ``entry["ssd_parent"]`` allows).
 
         The receipt carries ``vmlx_ssd_ref`` = this entry's ``{"sig", "len", "depth"}`` for a later child."""
         import mlx.core as mx
 
+        sig = signature_for([int(t) for t in entry["tokens"]])
+        kept = self._kept_same_prefix(entry, sig)
+        if kept is not None:
+            return kept
         arrays: dict = {}
         target_layers: list = []
-        parent = self._usable_parent(entry)
+        # A same-prefix file that exists but could not be kept (broken / too-long chain, less complete) is replaced
+        # by a WHOLE entry: entries naming it as their parent then walk a shorter chain, never a longer one.
+        parent = None if self._stored(sig) else self._usable_parent(entry)
         _pack("t", entry["target_cache"], arrays, target_layers, int(parent["len"]) if parent else 0)
         if parent is not None and not any("delta" in info for info in target_layers):
             parent = None                       # no append-only layer used it: a whole entry, no dependency
