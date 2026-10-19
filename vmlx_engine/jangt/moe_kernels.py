@@ -642,3 +642,209 @@ def dequant_rot(P: dict, e0: int, e1: int, L: int = 12) -> mx.array:
     kern = _dequant_rot_kernel(kin, N, P["K"], L, W)
     return kern(inputs=[P["packed"], P["scale"], mx.array([e0], dtype=mx.uint32)], grid=(32 * (kin // 512), N, e1 - e0), threadgroup=(32, 1, 1),
                 output_shapes=[(e1 - e0, N, kin)], output_dtypes=[mx.bfloat16])[0]
+
+
+# ------------------------------------------------------------------- grouped few-row decode (each expert read once)
+# A verify forward decodes 2-16 rows. The v3 kernels give every (row, slot) pair its own threadgroups, so an expert
+# routed to several rows is read once per row: measured on MiMo-V2.6 (one routed layer, 2 rows) a fully shared expert
+# set still costs 65 % of a disjoint one, and consecutive tokens share 2.3 of 8 experts (14 / 28 / 42 % of the reads at
+# 2 / 4 / 8 rows are duplicates). The grouped kernels sort the call's (expert, row) pairs; one threadgroup per expert
+# segment loads each 512-value block's weight words once per output row and applies them to every row routed to that
+# expert. Per row the arithmetic is the v3 kernel's own (same activation load and fp16 range guard, the same 8 trellis
+# steps on the same words, the same block order and fp32 accumulation, the same simd_sum epilogue), so every row is
+# bit-identical to v3 at any row count. The down projection writes each (row, slot) result and a combine kernel applies
+# the routing weights slot by slot in v3's order (fma chain from 0), so the weighted sum is bit-identical too.
+
+
+def _tload3(K, wr: str) -> str:
+    """The lane's trellis window words of one output row, realigned into a0 / a1 (as _tdot3's load)."""
+    if K == 2:
+        return f"uint a0 = {wr}[0], a1 = {wr}[1];"
+    return (f"uint w0 = {wr}[0], w1 = {wr}[1], w2 = {wr}[2]; "
+            f"uint a0 = sh == 0u ? w0 : ((w0 >> sh) | (w1 << (32u - sh))); uint a1 = sh == 0u ? w1 : ((w1 >> sh) | (w2 << (32u - sh)));")
+
+
+def _tsteps3(K, L: int, xh: str, acc: str) -> str:
+    """The 8 trellis steps of _tdot3 on the realigned a0 / a1, into the half2 accumulator `acc` with activations `xh`."""
+    so = VL.step_offsets(K, 9); mk = (1 << L) - 1; MU = VL.MULTS[K]; M2 = MASK | (MASK << 16); O2 = ORB | (ORB << 16)
+    st = []
+    for j in range(8):
+        o = int(so[j])
+        if o + L <= 32:
+            ex = "a0" if o == 0 else f"(a0 >> {o}u)"
+        elif o >= 32:
+            ex = "a1" if o == 32 else f"(a1 >> {o - 32}u)"
+        else:
+            ex = f"((a0 >> {o}u) | (a1 << {32 - o}u))"
+        st.append(f"{{ uint s = ({ex}) & {mk}u; uint p = ((s * {MU}u) & {M2}u) | {O2}u; {acc} = fma({xh}[{j}], as_type<half2>(p), {acc}); }}")
+    return " ".join(st)
+
+
+def _xload3_row(j: int, guard: bool = True) -> str:
+    """_xload3 for row j of a group: the same arithmetic on xp{j}, into xh{j}, xi{j}, se{j}, so{j}."""
+    if not guard:
+        return f"""{{ float xt[16];
+      {_UNROLL} for (uint i = 0; i < 16u; i++) xt[i] = xp{j}[i];
+      xi{j} = 1.0f;
+      {_UNROLL} for (uint i = 0; i < 8u; i++) {{ xh{j}[i] = half2(half(xt[2u*i]), half(xt[2u*i+1u])); se{j} += xt[2u*i]; so{j} += xt[2u*i+1u]; }} }}"""
+    return f"""{{ float xt[16];
+      {_UNROLL} for (uint i = 0; i < 16u; i++) xt[i] = xp{j}[i];
+      float xm = 0.0f;
+      {_UNROLL} for (uint i = 0; i < 16u; i++) xm = metal::max(xm, metal::abs(xt[i]));
+      float xs = xm > 1024.0f ? metal::exp2(-metal::ceil(metal::log2(xm * (1.0f / 1024.0f)))) : 1.0f; xi{j} = 1.0f / xs;
+      {_UNROLL} for (uint i = 0; i < 8u; i++) {{ xh{j}[i] = half2(half(xt[2u*i] * xs), half(xt[2u*i+1u] * xs)); se{j} += xt[2u*i]; so{j} += xt[2u*i+1u]; }} }}"""
+
+
+def _group_head(RP: int) -> str:
+    """Segment of sorted position p (one threadgroup per position; only a segment's first position works) and the
+    row ids of pass `base`: padded rows (j >= nr) repeat row 0 and are never stored."""
+    rows = " ".join(f"uint ts{j} = ord[base + ({j}u < nr ? {j}u : 0u)];" for j in range(RP))
+    return f"""
+    uint e = es[p];
+    if (p > 0u && es[p - 1u] == e) return;
+    uint q = p; while (q + 1u < npos[0] && es[q + 1u] == e) q++;
+    const uint lb = lane * PLV; const uint sh = lb & 31u; (void)sh;
+    for (uint base = p; base <= q; base += {RP}u) {{
+      uint nr = metal::min({RP}u, q - base + 1u);
+      {rows}"""
+
+
+@functools.lru_cache(maxsize=None)
+def _gu_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float = 0.0, guard: bool = True, RP: int = 2):
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
+    R = range(RP)
+    head = _group_head(RP).replace("PLV", f"{PL}u")
+    decl = "\n      ".join(
+        f"uint t{j} = ts{j} / kslots[0]; const device float* xp{j} = xr + (size_t)t{j} * {kin}u + lane * 16u; "
+        f"float g0_{j}[4] = {{0,0,0,0}}, g1_{j}[4] = {{0,0,0,0}}, u0_{j}[4] = {{0,0,0,0}}, u1_{j}[4] = {{0,0,0,0}}; "
+        f"float se{j} = 0.0f, so{j} = 0.0f, xi{j} = 1.0f; half2 xh{j}[8];" for j in R)
+    outl_pre = "" if n_out == 0 else "\n      ".join(
+        f"""float og{j}[4] = {{0.0f, 0.0f, 0.0f, 0.0f}}, ou{j}[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
+      if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
+        if (c >= 0) {{ float xo = float(x[(size_t)t{j} * {kin}u + uint(c)]);
+          {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og{j}[r] = xo * float(woutg[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]);
+                                                     ou{j}[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og{j}[r] = simd_sum(og{j}[r]); ou{j}[r] = simd_sum(ou{j}[r]); }}""" for j in R)
+    loads = "\n        ".join(_xload3_row(j, guard) for j in R)
+    gate_rows = " ".join(f"{{ half2 ag = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'ag')} g0_{j}[r] += float(ag.x) * xi{j}; g1_{j}[r] += float(ag.y) * xi{j}; }}" for j in R)
+    up_rows = " ".join(f"{{ half2 au = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'au')} u0_{j}[r] += float(au.x) * xi{j}; u1_{j}[r] += float(au.y) * xi{j}; }}" for j in R)
+    clamp = "" if not limit > 0 else f" g = metal::min(g, {float(limit)}f); u = metal::clamp(u, {-float(limit)}f, {float(limit)}f);"
+    epi = []
+    for j in R:
+        outl = "" if n_out == 0 else f" g += og{j}[r]; u += ou{j}[r];"
+        epi.append(f"""{{ float SE = simd_sum(se{j}), SO = simd_sum(so{j});
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          float G0 = simd_sum(g0_{j}[r]), G1 = simd_sum(g1_{j}[r]), U0 = simd_sum(u0_{j}[r]), U1 = simd_sum(u1_{j}[r]);
+          if (lane == 0u && {j}u < nr) {{
+            float g = ((G0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (G1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sg[(size_t)e * {N}u + row0 + r];
+            float u = ((U0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (U1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * su_[(size_t)e * {N}u + row0 + r];{outl}{clamp}
+            out[(size_t)ts{j} * {N}u + row0 + r] = {odt}((g / (1.0f + metal::fast::exp(-g))) * u);
+          }} }} }}""")
+    src = f"""
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * 8u + sgi * 4u; uint p = threadgroup_position_in_grid.z;{head}
+      {decl}{outl_pre}
+      const device uint32_t* wp = wg + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
+      const device uint32_t* up = wu + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
+      for (uint k0 = 0; k0 < {kin}u; k0 += 512u) {{
+        {loads}
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          {{ const device uint32_t* wr = wp + r * {W}u; {_tload3(K, "wr")} {gate_rows} }}
+          {{ const device uint32_t* wr = up + r * {W}u; {_tload3(K, "wr")} {up_rows} }}
+        }}
+        wp += {adv}u; up += {adv}u;{" ".join(f" xp{j} += 512u;" for j in R)}
+      }}
+      {chr(10).join(epi)}
+    }}
+    """
+    ins = ["xr", "x", "es", "ord", "npos", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
+    lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
+    return mx.fast.metal_kernel(name=f"jt4g_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_rp{RP}",
+                                input_names=ins, output_names=["out"], source=src)
+
+
+@functools.lru_cache(maxsize=None)
+def _down_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, hdt: str, guard: bool = True, RP: int = 2):
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K)
+    R = range(RP)
+    head = _group_head(RP).replace("PLV", f"{PL}u")
+    decl = "\n      ".join(
+        f"const device float* xp{j} = hr + (size_t)ts{j} * {kin}u + lane * 16u; float d0_{j}[4] = {{0,0,0,0}}, d1_{j}[4] = {{0,0,0,0}}; "
+        f"float se{j} = 0.0f, so{j} = 0.0f, xi{j} = 1.0f; half2 xh{j}[8];" for j in R)
+    outl_pre = "" if n_out == 0 else "\n      ".join(
+        f"""float od{j}[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
+      if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
+        if (c >= 0) {{ float ho = float(h[(size_t)ts{j} * {kin}u + uint(c)]);
+          {_UNROLL} for (uint r = 0; r < 4u; r++) od{j}[r] = ho * float(wout[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }}
+      {_UNROLL} for (uint r = 0; r < 4u; r++) od{j}[r] = simd_sum(od{j}[r]);""" for j in R)
+    loads = "\n        ".join(_xload3_row(j, guard) for j in R)
+    rows = " ".join(f"{{ half2 ad = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'ad')} d0_{j}[r] += float(ad.x) * xi{j}; d1_{j}[r] += float(ad.y) * xi{j}; }}" for j in R)
+    epi = []
+    for j in R:
+        outl = "" if n_out == 0 else f" y += od{j}[r];"
+        epi.append(f"""{{ float SE = simd_sum(se{j}), SO = simd_sum(so{j});
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          float D0 = simd_sum(d0_{j}[r]), D1 = simd_sum(d1_{j}[r]);
+          float y = ((D0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (D1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sd[(size_t)e * {N}u + row0 + r];{outl}
+          if (lane == 0u && {j}u < nr) ysl[(size_t)ts{j} * {N}u + row0 + r] = y;
+        }} }}""")
+    src = f"""
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * 8u + sgi * 4u; uint p = threadgroup_position_in_grid.z;{head}
+      {decl}{outl_pre}
+      const device uint32_t* wp = wd + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
+      for (uint k0 = 0; k0 < {kin}u; k0 += 512u) {{
+        {loads}
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          {{ const device uint32_t* wr = wp + r * {W}u; {_tload3(K, "wr")} {rows} }}
+        }}
+        wp += {adv}u;{" ".join(f" xp{j} += 512u;" for j in R)}
+      }}
+      {chr(10).join(epi)}
+    }}
+    """
+    ins = ["hr", "h", "es", "ord", "npos", "wd", "sd"] + (["ocol", "wout"] if n_out else [])
+    return mx.fast.metal_kernel(name=f"jt4g_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{hdt}{'' if guard else '_ng'}_rp{RP}",
+                                input_names=ins, output_names=["ysl"], source=src)
+
+
+@functools.lru_cache(maxsize=None)
+def _slot_combine(N: int, kslots: int):
+    """out[t, n] = sum over slots of rw[t, s] * ysl[t * k + s, n]: the fma chain from 0 in slot order (v3's order)."""
+    src = f"""
+    uint n = thread_position_in_grid.x, t = thread_position_in_grid.y;
+    if (n >= {N}u) return;
+    float acc = 0.0f;
+    for (uint sl = 0; sl < {kslots}u; sl++) {{ uint ts = t * {kslots}u + sl; acc = fma(float(rw[ts]), ysl[(size_t)ts * {N}u + n], acc); }}
+    out[(size_t)t * {N}u + n] = acc;
+    """
+    return mx.fast.metal_kernel(name=f"jt4g_comb_n{N}_s{kslots}", input_names=["ysl", "rw"], output_names=["out"], source=src)
+
+
+def _group_order(idx: mx.array):
+    flat = idx.reshape(-1).astype(mx.uint32)
+    order = mx.argsort(flat).astype(mx.uint32)
+    return flat[order], order, mx.array([int(flat.size)], dtype=mx.uint32)
+
+
+def gather_gate_up_swiglu_grouped(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float = 0.0, rows_per_pass: int = 2):
+    """As gather_gate_up_swiglu_v3 (rot_out off), each expert's weights read once for all rows routed to it."""
+    T, kin = x.shape; k = idx.shape[1]; N = U["gate"]["scale"].shape[1]; n_out = U["gate"]["n_out"]; W = int(U["gate"]["packed"].shape[-1])
+    es, order, npos = _group_order(idx)
+    ins = [xr, x, es, order, npos, mx.array([k], dtype=mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
+           U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
+    kern = _gu_v3g(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype],
+                   float(limit), _fp16_guard(), int(rows_per_pass))
+    return kern(inputs=ins, grid=(64, N // 8, T * k), threadgroup=(64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
+
+
+def gather_down_weighted_grouped(hr, h, idx, rw, U, rows_per_pass: int = 2):
+    """As gather_down_weighted_v3, each expert's weights read once for all (row, slot) pairs routed to it."""
+    T, k = idx.shape; kin = h.shape[1]; N = U["down"]["scale"].shape[1]; n_out = U["down"]["n_out"]; W = int(U["down"]["packed"].shape[-1])
+    es, order, npos = _group_order(idx)
+    ins = [hr, h, es, order, npos, U["down"]["packed"], U["down"]["scale"]] + ([U["down"]["ocol"], U["down"]["wout"]] if n_out else [])
+    ysl = _down_v3g(kin, N, U["K_dn"], U["L"], n_out, W, _dt(h), _fp16_guard(), int(rows_per_pass))(
+        inputs=ins, grid=(64, N // 8, T * k), threadgroup=(64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[mx.float32])[0]
+    tg = min(256, N)
+    return _slot_combine(N, k)(inputs=[ysl, rw.reshape(-1).astype(mx.float32)], grid=(((N + tg - 1) // tg) * tg, T, 1),
+                               threadgroup=(tg, 1, 1), output_shapes=[(T, N)], output_dtypes=[mx.float32])[0]
