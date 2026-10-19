@@ -971,6 +971,27 @@ class AdaptiveSpec:
         self.ar_min_sample_tokens = int(ar_min_sample_tokens)
         self.rounds_since_ar = 0
         self._reprobe_pending = False
+        # Realized-rate guard (VMLX_DFLASH_REALIZED_GUARD=1, 2026-10-18, Eric: speculative lanes must never lose to AR):
+        # the model-based choice (expected tokens from per-position acceptance / measured round cost) kept drafting
+        # on MiMo prose where realized throughput was 5-8 % below AR, partly because rounds the lane's confidence cut
+        # reduces to one row are never recorded. With the guard, every draft round (degenerate ones included)
+        # reports emitted tokens and wall time (observe_round); drafting continues only while the realized rate of the
+        # last `realized_window` rounds also beats AR. Probes still run, so draftable text switches back.
+        self.realized_guard = os.environ.get("VMLX_DFLASH_REALIZED_GUARD", "0").strip().lower() in {"1", "true", "on", "yes"}
+        self.realized_window = 6
+        self._recent: list = []
+
+    def observe_round(self, tokens: int, seconds: float) -> None:
+        """Every draft round as emitted (any width, including rounds cut to one row): tokens and wall seconds."""
+        if seconds > 0 and tokens > 0:
+            self._recent.append((int(tokens), float(seconds)))
+            if len(self._recent) > self.realized_window:
+                self._recent.pop(0)
+
+    def realized_rate(self):
+        if len(self._recent) < 3:
+            return None
+        return sum(t for t, _ in self._recent) / sum(s for _, s in self._recent)
 
     @property
     def t_ar(self):
@@ -1017,7 +1038,12 @@ class AdaptiveSpec:
         spec_rate = self.expected(best) / self.cost(best)
         # hysteresis: AR only when it is estimated at least `margin` faster than the best block (round costs carry
         # read-back overhead that AR bursts hide; switching on a near-tie loses)
-        if spec_rate * (1.0 + self.margin) >= 1.0 / self.t_ar or self.ar_since_probe >= self.probe_every:
+        spec_wins = spec_rate * (1.0 + self.margin) >= 1.0 / self.t_ar
+        if spec_wins and self.realized_guard:
+            r = self.realized_rate()
+            if r is not None and r < 1.0 / self.t_ar:
+                spec_wins = False                   # measured draft throughput is below AR: fall back
+        if spec_wins or self.ar_since_probe >= self.probe_every:
             self.ar_since_probe = 0
             self.rounds_since_explore += 1
             if self.rounds_since_explore >= self.explore_every:
@@ -1290,6 +1316,7 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
             st.rounds += 1; st.accepted.append(accepted); st.blocks.append(bs)
             if policy is not None:
                 policy.update_spec(bs, accepted, time.perf_counter() - tr, after_ar=after_ar)
+                policy.observe_round(len(new), time.perf_counter() - tr)
             after_ar = False
             stop = next((i for i, t in enumerate(new) if t in eos), None)
             if stop is not None:

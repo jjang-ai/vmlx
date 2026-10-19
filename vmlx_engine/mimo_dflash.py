@@ -657,6 +657,8 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         Target.rollback(cache, len(drafts) + 1 - keep)
         drafter.add_context(tp[:keep], fwd); window.add(tp[:keep]); fwd += keep
         st.rounds += 1; st.accepted.append(accepted)
+        if policy is not None:
+            policy.observe_round(len(new), time.perf_counter() - tr)   # every round, cut-to-one-row ones too
         if policy is not None and bs >= policy.bmin:
             # a cut block is recorded at the width it verified (its time is that width's cost)
             policy.update_spec(bs, accepted, time.perf_counter() - tr, after_ar=after_ar)

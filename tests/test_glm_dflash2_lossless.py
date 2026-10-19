@@ -770,3 +770,35 @@ def test_rejection_sample_with_candidate_indices_is_exact(gamma):
     band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=target), minlength=V) / N - target).sum()
                         for _ in range(40)], 0.99)
     assert tv <= 1.25 * band, (tv, band)
+
+
+def test_realized_guard_falls_back_when_measured_drafting_is_slower_than_ar(monkeypatch):
+    """Eric 2026-10-18: speculative lanes must never lose to AR. The model-based estimate says drafting wins; the
+    rounds' measured throughput says it does not (e.g. rounds cut to one row): the guard falls back to AR."""
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    monkeypatch.setenv("VMLX_DFLASH_REALIZED_GUARD", "1")
+    p = AdaptiveSpec(4, probe_every=24, ar_reprobe_rounds=0)
+    p.update_ar(0.020, 8)                                    # AR 50 tok/s
+    for _ in range(4):
+        p.update_spec(3, 2, 0.040)                           # model: 3 tokens / 40 ms = 75 tok/s
+    assert p.choose()[0] == "spec"                           # no realized data yet
+    for _ in range(4):
+        p.observe_round(1, 0.026)                            # measured: 38 tok/s
+    assert p.choose()[0] == "ar"
+    for _ in range(6):
+        p.observe_round(3, 0.040)                            # text turned draftable: 75 tok/s
+    assert p.choose()[0] == "spec"
+
+
+def test_realized_guard_off_keeps_the_model_based_choice(monkeypatch):
+    from vmlx_engine.glm_dflash2 import AdaptiveSpec
+
+    monkeypatch.delenv("VMLX_DFLASH_REALIZED_GUARD", raising=False)
+    p = AdaptiveSpec(4, probe_every=24, ar_reprobe_rounds=0)
+    p.update_ar(0.020, 8)
+    for _ in range(4):
+        p.update_spec(3, 2, 0.040)
+    for _ in range(4):
+        p.observe_round(1, 0.026)
+    assert p.choose()[0] == "spec"
