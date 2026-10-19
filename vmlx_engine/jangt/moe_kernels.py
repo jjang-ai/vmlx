@@ -721,10 +721,14 @@ def _group_head(RP: int) -> str:
     """Segment of sorted position p (one threadgroup per position; only a segment's first position works) and the
     row ids of pass `base`: padded rows (j >= nr) repeat row 0 and are never stored."""
     rows = " ".join(f"uint ts{j} = ord[base + ({j}u < nr ? {j}u : 0u)];" for j in range(RP))
+    # One threadgroup per pass of RP rows inside an expert segment (positions p with (p - segment start) % RP == 0):
+    # a shared expert is read once per RP rows while segments of many rows still spread over several threadgroups
+    # (one threadgroup walking a whole segment serially measured 13-18 % slower than v3).
     return f"""
     uint e = es[p];
-    if (p > 0u && es[p - 1u] == e) return;
-    uint q = p; while (q + 1u < npos[0] && es[q + 1u] == e) q++;
+    uint s0 = p; while (s0 > 0u && es[s0 - 1u] == e) s0--;
+    if ((p - s0) % {RP}u != 0u) return;
+    uint q = p; while (q + 1u < npos[0] && q + 1u < p + {RP}u && es[q + 1u] == e) q++;
     const uint lb = lane * PLV; const uint sh = lb & 31u; (void)sh;
     for (uint base = p; base <= q; base += {RP}u) {{
       uint nr = metal::min({RP}u, q - base + 1u);
@@ -781,7 +785,7 @@ def _gu_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str,
     """
     ins = ["xr", "x", "es", "ord", "npos", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
     lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
-    return mx.fast.metal_kernel(name=f"jt4g2_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_rp{RP}",
+    return mx.fast.metal_kernel(name=f"jt4g3_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_rp{RP}",
                                 input_names=ins, output_names=["out"], source=src)
 
 
@@ -826,7 +830,7 @@ def _down_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, hdt: str, guard: 
     }}
     """
     ins = ["hr", "h", "es", "ord", "npos", "wd", "sd"] + (["ocol", "wout"] if n_out else [])
-    return mx.fast.metal_kernel(name=f"jt4g2_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{hdt}{'' if guard else '_ng'}_rp{RP}",
+    return mx.fast.metal_kernel(name=f"jt4g3_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{hdt}{'' if guard else '_ng'}_rp{RP}",
                                 input_names=ins, output_names=["ysl"], source=src)
 
 
