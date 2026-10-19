@@ -24,6 +24,7 @@ import functools
 import math
 import os
 import re
+import threading
 
 import mlx.core as mx
 
@@ -753,6 +754,142 @@ def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool,
                      _consts(float(limit), dtype=mx.float32)],
              grid=(NSG * 32, ndisp, tiles) if yz else (NSG * 32, tiles, ndisp), threadgroup=(NSG * 32, 1, 1),
              output_shapes=[(ndisp, N)], output_dtypes=[mx.float32])[0]
+
+
+# ------------------------------------------------------------------ dense multi-row decode (verify windows)
+#
+# One dense JANGTQ2 projection over M activation rows that share every weight read (gather_qmv with
+# x_per_dispatch=True re-reads the whole weight once per row: Qwen3.8-27B JANGH2's 2-bit MLP cost +15 ms per verify
+# row, so DFlash2 widths 2-5 paid 53/68/77/78 ms per forward against 37 ms for one row).  Per (row m, output r) the
+# accumulation is exactly gather_qmv's: a_m starts at 0 per 512-value block, fma over the lane's 16 values in
+# ascending t, folded into accg_m[r], then simd_sum - so every row equals the per-row kernel bit for bit, and the
+# routing between the two is a speed decision only (tests/test_jangh_dense_rows.py).
+# Registers bound the design: ROWS_PER_SG output rows per simdgroup (RPSM) and XCH activation values held per row,
+# the 16-value lane chunk walked in XCH-wide pieces (t ascending, so the order is unchanged).  Measured on M5 Max
+# (32 distinct 21 MB weights, 27B MLP shapes, 2-bit): 1 row 0.057 ms with RPSM 8 + in-kernel rotation vs 0.065-0.091
+# per-row; 2/3/4/5 rows 0.065/0.09/0.12-0.15/0.15-0.19 ms with RPSM 4 + XCH 8 on fp32 pre-rotated rows vs per-row
+# 0.13/0.18/0.25/0.32 and the sorted tile path 0.17-0.20 (flat); from 6 rows the sorted path wins.
+# Rotation: at 1 row in-kernel (the per-row kernel's _HAD32 on each row's 16 values); at 2+ rows h32_rows(x, float32)
+# once per activation (the same fp32 butterfly stages in the same order, verified bit-identical), reused across the
+# gate/up pair that reads the same activation (``_h32_cached``).
+ROWS_KERNEL_BITS = (2, 4, 8)
+ROWS_MAX_LAUNCH = 8
+
+
+def _rows_chunk_dot(bits: int, mr: int, xch: int, had: str) -> str:
+    mask = (1 << bits) - 1
+    per = 32 // bits
+    out = []
+    for c in range(0, VPT, xch):
+        loads = "\n".join(f"            xt{m}[i] = active ? float(xp{m}[{c}u + i]) : 0.0f;" for m in range(mr))
+        fmas = "\n".join(f"            a{m} = fma(xt{m}[t - {c}u], lv, a{m});" for m in range(mr))
+        out.append(f'''
+          {UNROLL} for (uint i = 0; i < {xch}u; i++) {{
+{loads}
+          }}
+          {had if c == 0 else ""}
+          {UNROLL} for (uint t = {c}u; t < {c + xch}u; t++) {{
+            float lv = tq_level<{bits}>((ww[t / {per}u] >> ({bits}u * (t % {per}u))) & {mask}u);
+{fmas}
+          }}''')
+    return "\n".join(out)
+
+
+@functools.lru_cache(maxsize=None)
+def _rows_kernel(bits: int, mr: int, rpsm: int, xch: int, xname: str, guarded: bool, rotate: bool):
+    if bits not in ROWS_KERNEL_BITS or VPT % xch or (rotate and xch != VPT):
+        raise ValueError("jangtq2 rows kernel: unsupported bits / chunk / rotation combination")
+    nw = bits // 2
+    psz = _ptype(bits)[1]
+    had = "\n".join(_HAD32.replace("xt[", f"xt{m}[") for m in range(mr)) if rotate else ""
+    acc_decl = " ".join(f"float accg{m}[{rpsm}];" for m in range(mr))
+    acc_zero = " ".join(f"accg{m}[r] = 0.0f;" for m in range(mr))
+    xt_decl = " ".join(f"float xt{m}[{xch}];" for m in range(mr))
+    a_decl = " ".join(f"float a{m} = 0.0f;" for m in range(mr))
+    a_fold = " ".join(f"accg{m}[r] += a{m};" for m in range(mr))
+    xptr = "\n    ".join(f"auto xp{m} = x + (size_t){m} * K + lane * {VPT}u;" for m in range(mr))
+    xadv = " ".join(f"xp{m} += {BLOCK}u;" for m in range(mr))
+    guard = "if (row0 + r >= N || !active) continue;" if guarded else ""
+    active = f"bool active = (k0 + lane * {VPT}u) < K;" if guarded else "const bool active = true;"
+    store = "\n".join(f'''
+      {{ float s = simd_sum(accg{m}[r]);
+        if (lane == 0 && row0 + r < N) out[(size_t){m} * N + row0 + r] = s * float(sg[(size_t)e * N + row0 + r]); }}'''
+                      for m in range(mr))
+    src = f'''
+    uint K = meta[0], N = meta[1];
+    const uint RB = K * {bits}u / 8u;
+    const uint LB = {2 * bits}u;
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * {NSG * rpsm}u + sgi * {rpsm}u;
+    uint e = idx[0];
+    const device uint32_t* wp = wg + ((size_t)e * N + row0) * (RB / {psz}u) + lane * (LB / {psz}u);
+    {xptr}
+    {acc_decl} {xt_decl}
+    {UNROLL} for (uint r = 0; r < {rpsm}u; r++) {{ {acc_zero} }}
+    for (uint k0 = 0; k0 < K; k0 += {BLOCK}u) {{
+      {active}
+      {UNROLL} for (uint r = 0; r < {rpsm}u; r++) {{
+        {guard}
+        const device uint32_t* wr = wp + r * (RB / {psz}u);
+        uint ww[{nw}];
+        {UNROLL} for (uint j = 0; j < {nw}u; j++) ww[j] = wr[j];
+        {a_decl}
+{_rows_chunk_dot(bits, mr, xch, had)}
+        {a_fold}
+      }}
+      wp += {BLOCK * bits // 8 // psz}u; {xadv}
+    }}
+    {UNROLL} for (uint r = 0; r < {rpsm}u; r++) {{
+{store}
+    }}
+'''
+    return mx.fast.metal_kernel(
+        name=f"jangtq2t_qmv_rows_m{mr}_r{rpsm}_c{xch}_b{bits}_{xname}_{'gd' if guarded else 'al'}{'_h32' if rotate else ''}",
+        input_names=["x", "wg", "sg", "idx", "meta"], output_names=["out"], header=_cb_header(), source=src)
+
+
+def rows_kernel_supports(bits: int) -> bool:
+    return bits in ROWS_KERNEL_BITS
+
+
+def gather_qmv_rows(x, packed, scales, idx, bits, *, rotate: bool = False, rows_per_simdgroup: int | None = None,
+                    chunk: int | None = None, rows_per_launch: int = ROWS_MAX_LAUNCH):
+    """Dense decode over M rows that share each weight read: x (M, K) -> float32 (M, N) of expert idx[0].
+    rotate: apply the v2 Hadamard-32 in the kernel (1-row calls); multi-row callers pass rows already rotated by
+    h32_rows(x, float32).  Every row's bits equal gather_qmv(x_per_dispatch=True)'s."""
+    M, Kd = x.shape
+    N = packed.shape[1]
+    if Kd % 32:
+        raise ValueError("jangtq2 requires K % 32 == 0")
+    if rows_per_simdgroup is None:
+        rows_per_simdgroup = 8 if M == 1 else 4
+    if chunk is None:
+        chunk = VPT if (M == 1 or rotate) else 8
+    guarded = not (Kd % BLOCK == 0 and N % (NSG * rows_per_simdgroup) == 0)
+    tiles = (N + NSG * rows_per_simdgroup - 1) // (NSG * rows_per_simdgroup)
+    outs = []
+    for m0 in range(0, M, rows_per_launch):
+        mr = min(rows_per_launch, M - m0)
+        k = _rows_kernel(bits, mr, rows_per_simdgroup, chunk, _TNAME[x.dtype], guarded, rotate)
+        outs.append(k(inputs=[x[m0:m0 + mr] if M > mr else x, packed, scales, idx.astype(mx.uint32).reshape(-1),
+                             _consts(Kd, N, dtype=mx.uint32)],
+                      grid=(NSG * 32, tiles, 1), threadgroup=(NSG * 32, 1, 1),
+                      output_shapes=[(mr, N)], output_dtypes=[mx.float32])[0])
+    return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=0)
+
+
+_H32_LAST = threading.local()
+
+
+def h32_rows_cached(x):
+    """h32_rows(x, float32), reused while the caller passes the SAME array object (a layer's gate and up projections
+    read one activation).  Holding x keeps its id from being recycled, so `is` cannot match another array."""
+    slot = getattr(_H32_LAST, "slot", None)
+    if slot is not None and slot[0] is x:
+        return slot[1]
+    r = h32_rows(x, mx.float32)
+    _H32_LAST.slot = (x, r)
+    return r
 
 
 def _wdown_rows(bits: int, guard: str) -> str:
