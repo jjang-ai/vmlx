@@ -37,6 +37,21 @@ from vmlx_engine.metal.row_exact_qmv import (
 logger = logging.getLogger(__name__)
 
 
+
+_VERIFY_FENCE = None
+
+
+def verify_fence_every() -> int:
+    """Layers between queued submissions inside a verify forward (VMLX_DFLASH2_VERIFY_FENCE, default 0 = one graph)."""
+    global _VERIFY_FENCE
+    if _VERIFY_FENCE is None:
+        import os
+        try:
+            _VERIFY_FENCE = max(0, int(os.environ.get("VMLX_DFLASH2_VERIFY_FENCE", "0") or 0))
+        except ValueError:
+            _VERIFY_FENCE = 0
+    return _VERIFY_FENCE
+
 def _qwen35_mtp_draft_head_disabled() -> bool:
     """Explicit kill switch for the Qwen3.5/3.8 proposal head."""
 
@@ -972,6 +987,10 @@ def _patch_qwen_model(qlang: Any) -> None:
                 position_embeddings = fa_layer.self_attn.rotary_emb(h, position_ids)
 
         capture_set = set(capture_layer_ids) if capture_layer_ids else set()
+        # Opt-in verify-forward fence (VMLX_DFLASH2_VERIFY_FENCE=N): queue the graph every N layers so the GPU starts
+        # the first layers while Python still builds the rest of a 64-layer verify forward (the reference engines
+        # submit every 4 layers). Evaluation order only: every array's arithmetic is unchanged.
+        fence = verify_fence_every() if (gdn_sink is not None and h.shape[1] > 1) else 0
         for layer_idx, (layer, layer_cache) in enumerate(zip(self.layers, cache)):
             layer_mask = ssm_mask if layer.is_linear else fa_mask
             h = layer(
@@ -985,6 +1004,8 @@ def _patch_qwen_model(qlang: Any) -> None:
             )
             if hidden_sink is not None and layer_idx in capture_set:
                 hidden_sink.append(h)
+            if fence and (layer_idx + 1) % fence == 0 and layer_idx + 1 < len(self.layers):
+                mx.async_eval(h)
 
         return h
 
