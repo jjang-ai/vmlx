@@ -525,6 +525,16 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
     n = 1                                                # fwd = tokens forwarded = cache positions
     after_ar = False
     p_min = _draft_p_min(sampled=temperature > 0) if propose is None else 0.0
+    # The cut reads its position back before the verify is built (one host sync per round, ~5 ms measured in-lane:
+    # width-2 rounds 36 ms vs 31 ms without it). A round of width w can save at most w - 2 verify rows, so on narrow
+    # rounds the sync costs more than the rows it can save. VMLX_MIMO_DFLASH_CUT_MIN_WIDTH=<w>: cut only rounds of at
+    # least w rows (0 / unset = every round, as before).
+    import os
+
+    try:
+        cut_min_width = max(0, int(os.environ.get("VMLX_MIMO_DFLASH_CUT_MIN_WIDTH", "0")))
+    except ValueError:
+        cut_min_width = 0
     # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
     # starts (per-token projection of 5 drafter layers + an eval made every AR step slower than the plain lane's:
     # prose, where the policy rightly stops drafting, ran 39 tok/s on this lane vs 46 on the plain lane).
@@ -613,7 +623,7 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         # idle while Python built the 48-layer verify graph (one extra host round trip per round). Same token ids,
         # same arithmetic and the same random-draw order: outputs are unchanged.
         d_tok = d_tok.astype(mx.int32)
-        if p_min > 0.0:
+        if p_min > 0.0 and bs >= cut_min_width:
             keep_d = _confident_drafts(dl, d_tok, d_prob, p_min)
             if keep_d < int(d_tok.shape[1]):
                 d_tok = d_tok[:, :keep_d]
