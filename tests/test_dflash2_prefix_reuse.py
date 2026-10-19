@@ -476,3 +476,19 @@ def test_chain_after_advances_past_kept_but_not_restored_parent():
     receipt.set_result({"durable": True})
     advanced = chain_after(parent, receipt)
     assert advanced["sig"] == "new" and advanced["receipt"] is receipt
+
+
+def test_chain_after_kept_or_failed_full_receipt_preserves_live_parent():
+    from concurrent.futures import Future
+    from vmlx_engine.dspark.session import chain_after
+
+    parent = {"sig": "live", "len": 4, "depth": 1, "generation": "live-state"}
+    kept = Future()
+    kept.vmlx_ssd_ref = {"sig": "kept", "len": 8, "depth": 0,
+                         "generation": "different-state", "delta_compatible": False}
+    kept.set_result({"durable": True})
+    assert chain_after(parent, kept) is parent
+    failed = Future()
+    failed.vmlx_ssd_ref = {"sig": "failed", "len": 8, "depth": 0, "generation": "new-state"}
+    failed.set_result({"durable": False})
+    assert chain_after(parent, failed) is parent

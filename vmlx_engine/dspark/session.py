@@ -171,14 +171,22 @@ def chain_after(parent: Optional[dict], receipt) -> Optional[dict]:
     be used (none, or the delta chain is at MAX_CHAIN) that entry was written in full: make it the parent of the
     request's later entries, so a boundary + turn pair costs one full write and one small delta instead of two full
     writes (MiMo 98k: 2 x 2.3 GB, 0.49 + 0.70 s, and the next request's admission waited 1.16 s). A usable parent is
-    kept (chain depth grows by one per request, as before)."""
+    kept unless the writer actually had to replace it with a new full snapshot."""
     from ..dflash2_session_disk import MAX_CHAIN
 
     usable = (bool(parent) and parent.get("delta_compatible") is not False
               and int(parent.get("depth", 0)) + 1 <= MAX_CHAIN)
-    if usable:
-        return parent
     ref = getattr(receipt, "vmlx_ssd_ref", None)
+    # The writer can reject a superficially usable parent whose on-disk
+    # generation or actual chain depth changed. Its new full snapshot is the
+    # correct base for later entries; retaining the old reference would force
+    # every subsequent entry to be written whole too. A kept prefix is not a
+    # snapshot of this live state and must never trigger this transition.
+    new_full = (bool(ref) and bool(ref.get("generation"))
+                and ref.get("delta_compatible") is not False
+                and int(ref.get("depth", -1)) == 0)
+    if usable and not new_full:
+        return parent
     if not ref:
         return parent
     try:

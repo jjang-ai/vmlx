@@ -579,3 +579,33 @@ def test_replaced_parent_reference_forces_whole_child(ssd):
     got = _take(ssd, tokens + [IM_START, 5])
     assert got is not None and got["cache_len"] == 8
     assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+def test_chain_after_replaced_parent_reuses_new_full_snapshot(ssd):
+    from vmlx_engine.dspark.session import chain_after
+
+    prefix = [IM_START, 1, 2, IM_END]
+    target = _target(4)
+    parent = ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": target})
+    assert ssd.flush()
+    stale = dict(parent.vmlx_ssd_ref, receipt=parent)
+    ssd.put({"tokens": prefix, "cache_len": 4, "target_cache": _target(4),
+             "draft_context": mx.ones((1, 4, 3))})
+    assert ssd.flush()
+    _grow(target, 4)
+    tokens = prefix + [IM_START, 3, 4, IM_END]
+    child = ssd.put({"tokens": tokens, "cache_len": 8, "target_cache": target,
+                     "ssd_parent": stale})
+    assert ssd.flush() and child.result()["durable"]
+    assert child.vmlx_ssd_ref["depth"] == 0
+    next_parent = chain_after(stale, child)
+    assert next_parent["generation"] == child.vmlx_ssd_ref["generation"]
+    _grow(target, 4)
+    tokens += [IM_START, 5, 6, IM_END]
+    grandchild = ssd.put({"tokens": tokens, "cache_len": 12, "target_cache": target,
+                          "ssd_parent": next_parent})
+    assert ssd.flush() and grandchild.result()["durable"]
+    assert grandchild.vmlx_ssd_ref["depth"] == 1
+    got = _take(ssd, tokens + [IM_START, 7])
+    assert got is not None and got["cache_len"] == 12
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
