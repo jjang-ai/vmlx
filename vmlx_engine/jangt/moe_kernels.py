@@ -680,6 +680,28 @@ def _tsteps3(K, L: int, xh: str, acc: str) -> str:
     return " ".join(st)
 
 
+def _tdecode3(K, L: int, pv: str) -> str:
+    """The 8 trellis steps' decoded half2 weights of the realigned a0 / a1 into pv[0..7] (the values _tdot3 multiplies),
+    decoded once and applied to every row routed to the expert."""
+    so = VL.step_offsets(K, 9); mk = (1 << L) - 1; MU = VL.MULTS[K]; M2 = MASK | (MASK << 16); O2 = ORB | (ORB << 16)
+    st = [f"half2 {pv}[8];"]
+    for j in range(8):
+        o = int(so[j])
+        if o + L <= 32:
+            ex = "a0" if o == 0 else f"(a0 >> {o}u)"
+        elif o >= 32:
+            ex = "a1" if o == 32 else f"(a1 >> {o - 32}u)"
+        else:
+            ex = f"((a0 >> {o}u) | (a1 << {32 - o}u))"
+        st.append(f"{{ uint s = ({ex}) & {mk}u; {pv}[{j}] = as_type<half2>(((s * {MU}u) & {M2}u) | {O2}u); }}")
+    return " ".join(st)
+
+
+def _tapply(pv: str, xh: str, acc: str) -> str:
+    """acc = fma over the 8 steps in step order (the same products and order as _tdot3 / _tsteps3)."""
+    return " ".join(f"{acc} = fma({xh}[{i}], {pv}[{i}], {acc});" for i in range(8))
+
+
 def _xload3_row(j: int, guard: bool = True) -> str:
     """_xload3 for row j of a group: the same arithmetic on xp{j}, into xh{j}, xi{j}, se{j}, so{j}."""
     if not guard:
@@ -726,8 +748,8 @@ def _gu_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str,
                                                      ou{j}[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
       {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og{j}[r] = simd_sum(og{j}[r]); ou{j}[r] = simd_sum(ou{j}[r]); }}""" for j in R)
     loads = "\n        ".join(_xload3_row(j, guard) for j in R)
-    gate_rows = " ".join(f"{{ half2 ag = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'ag')} g0_{j}[r] += float(ag.x) * xi{j}; g1_{j}[r] += float(ag.y) * xi{j}; }}" for j in R)
-    up_rows = " ".join(f"{{ half2 au = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'au')} u0_{j}[r] += float(au.x) * xi{j}; u1_{j}[r] += float(au.y) * xi{j}; }}" for j in R)
+    gate_rows = _tdecode3(K, L, "pv") + " " + " ".join(f"{{ half2 ag = half2(0.0h); {_tapply('pv', f'xh{j}', 'ag')} g0_{j}[r] += float(ag.x) * xi{j}; g1_{j}[r] += float(ag.y) * xi{j}; }}" for j in R)
+    up_rows = _tdecode3(K, L, "pv") + " " + " ".join(f"{{ half2 au = half2(0.0h); {_tapply('pv', f'xh{j}', 'au')} u0_{j}[r] += float(au.x) * xi{j}; u1_{j}[r] += float(au.y) * xi{j}; }}" for j in R)
     clamp = "" if not limit > 0 else f" g = metal::min(g, {float(limit)}f); u = metal::clamp(u, {-float(limit)}f, {float(limit)}f);"
     epi = []
     for j in R:
@@ -759,7 +781,7 @@ def _gu_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str,
     """
     ins = ["xr", "x", "es", "ord", "npos", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
     lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
-    return mx.fast.metal_kernel(name=f"jt4g_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_rp{RP}",
+    return mx.fast.metal_kernel(name=f"jt4g2_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_rp{RP}",
                                 input_names=ins, output_names=["out"], source=src)
 
 
@@ -778,7 +800,7 @@ def _down_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, hdt: str, guard: 
           {_UNROLL} for (uint r = 0; r < 4u; r++) od{j}[r] = ho * float(wout[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }}
       {_UNROLL} for (uint r = 0; r < 4u; r++) od{j}[r] = simd_sum(od{j}[r]);""" for j in R)
     loads = "\n        ".join(_xload3_row(j, guard) for j in R)
-    rows = " ".join(f"{{ half2 ad = half2(0.0h); {_tsteps3(K, L, f'xh{j}', 'ad')} d0_{j}[r] += float(ad.x) * xi{j}; d1_{j}[r] += float(ad.y) * xi{j}; }}" for j in R)
+    rows = _tdecode3(K, L, "pv") + " " + " ".join(f"{{ half2 ad = half2(0.0h); {_tapply('pv', f'xh{j}', 'ad')} d0_{j}[r] += float(ad.x) * xi{j}; d1_{j}[r] += float(ad.y) * xi{j}; }}" for j in R)
     epi = []
     for j in R:
         outl = "" if n_out == 0 else f" y += od{j}[r];"
@@ -804,7 +826,7 @@ def _down_v3g(kin: int, N: int, K, L: int, n_out: int, W: int, hdt: str, guard: 
     }}
     """
     ins = ["hr", "h", "es", "ord", "npos", "wd", "sd"] + (["ocol", "wout"] if n_out else [])
-    return mx.fast.metal_kernel(name=f"jt4g_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{hdt}{'' if guard else '_ng'}_rp{RP}",
+    return mx.fast.metal_kernel(name=f"jt4g2_dn_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{hdt}{'' if guard else '_ng'}_rp{RP}",
                                 input_names=ins, output_names=["ysl"], source=src)
 
 
