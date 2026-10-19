@@ -433,12 +433,14 @@ def install_draft_vocab_cut(draft: Any, segments) -> bool:
                                              transpose=True, group_size=head.group_size, bits=head.bits))
         vocab = int(head["weight"].shape[0])
         out = mx.full((*lead, vocab), -math.inf, dtype=parts[0].dtype)
-        for (lo, hi), part in zip(segs, parts):
-            out[..., lo:hi] = part
-        out = out * cfg.output_multiplier
         cap = cfg.final_logit_softcapping
-        if cap is not None and cap > 0:
-            out = mx.tanh(out / cap) * cap
+        for (lo, hi), part in zip(segs, parts):
+            part = part * cfg.output_multiplier
+            if cap is not None and cap > 0:
+                part = mx.tanh(part / cap) * cap
+            out[..., lo:hi] = part
+        # Apply transforms only to retained rows: tanh(-inf) is finite, so
+        # softcapping the masked tensor would reopen excluded vocabulary.
         return out
 
     draft.compute_logits = compute_logits

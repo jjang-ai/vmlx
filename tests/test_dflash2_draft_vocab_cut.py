@@ -81,3 +81,19 @@ def test_unknown_head_falls_back_to_the_full_projection():
     h = mx.random.normal((1, 2, 64)).astype(mx.bfloat16)
     out = draft.compute_logits(h)
     assert out.shape == (1, 2, 512) and not bool(mx.any(out == -math.inf).item())
+
+
+def test_softcap_preserves_excluded_vocabulary_mask():
+    draft = _Draft(_head())
+    draft.config = _Cfg()
+    draft.config.output_multiplier = 1.5
+    draft.config.final_logit_softcapping = 2.0
+    h = mx.random.normal((1, 3, 64)).astype(mx.bfloat16)
+    full = mx.tanh(draft.lm_head(h) * 1.5 / 2.0) * 2.0
+    assert D.install_draft_vocab_cut(draft, ((0, 128), (480, 512)))
+    cut = draft.compute_logits(h)
+    mx.eval(full, cut)
+    assert mx.array_equal(cut[..., :128], full[..., :128]).item()
+    assert mx.array_equal(cut[..., 480:], full[..., 480:]).item()
+    assert mx.all(cut[..., 128:480] == -math.inf).item()
+    assert mx.all(mx.softmax(cut, axis=-1)[..., 128:480] == 0).item()
