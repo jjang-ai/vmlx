@@ -66,6 +66,26 @@ def test_h32_rows_fp32_matches_in_kernel_rotation_and_is_reused_per_activation()
     assert mx.array_equal(ref, got).item()
     y = mx.random.normal((3, 64)).astype(mx.bfloat16)
     assert K.h32_rows_cached(y) is not a                   # a different activation is rotated afresh
+    x3 = mx.random.normal((1, 3, 64)).astype(mx.bfloat16)  # a 3-D module input is keyed as is and returned 2-D
+    r3 = K.h32_rows_cached(x3)
+    assert r3.shape == (3, 64) and K.h32_rows_cached(x3) is r3
+
+
+def test_gate_and_up_share_one_rotation_per_layer_input(monkeypatch):
+    """Two TQLinear modules called with the SAME input object rotate it once (the old key was a per-call reshape)."""
+    calls = []
+    real = K.h32_rows
+
+    def spy(x, out_dtype=None):
+        calls.append(x.shape); return real(x, out_dtype)
+
+    monkeypatch.setattr(K, "h32_rows", spy)
+    monkeypatch.setattr(D, "_ROWS_ENV", True)
+    gate, up = D.TQLinear(64, 96, 2), D.TQLinear(64, 96, 2)
+    x = mx.random.normal((1, 3, 64)).astype(mx.bfloat16)
+    mx.eval(gate(x), up(x))
+    assert len(calls) == 1
+    D._ROWS_ENV = None
 
 
 def test_rows_kernel_refuses_unsupported_formats():

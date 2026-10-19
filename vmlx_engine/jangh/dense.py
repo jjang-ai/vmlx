@@ -69,7 +69,7 @@ class TQLinear(nn.Module):
             if T == 1:
                 y = K.gather_qmv_rows(x2, self.tq2_packed, self.tq2_scales, idx[:1], self.bits, rotate=rot)
             else:
-                xr = K.h32_rows_cached(x2) if rot else x2
+                xr = K.h32_rows_cached(x) if rot else x2          # keyed on the module input: gate and up share it
                 y = K.gather_qmv_rows(xr, self.tq2_packed, self.tq2_scales, idx[:1], self.bits)
         elif T < SORT_THRESHOLD or exact:
             y = K.gather_qmv(x2, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits, x_per_dispatch=True, rotate=rot)

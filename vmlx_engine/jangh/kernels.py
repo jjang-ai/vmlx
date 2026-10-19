@@ -882,12 +882,14 @@ _H32_LAST = threading.local()
 
 
 def h32_rows_cached(x):
-    """h32_rows(x, float32), reused while the caller passes the SAME array object (a layer's gate and up projections
-    read one activation).  Holding x keeps its id from being recycled, so `is` cannot match another array."""
+    """h32_rows(x, float32) as (rows, K), reused while the caller passes the SAME array object: a layer's gate and up
+    projections are called with one activation object, so the key is the caller's input itself (never a reshape of
+    it, which is a new object per call).  Holding x keeps its id from being recycled, so `is` cannot match another
+    array."""
     slot = getattr(_H32_LAST, "slot", None)
     if slot is not None and slot[0] is x:
         return slot[1]
-    r = h32_rows(x, mx.float32)
+    r = h32_rows(x, mx.float32).reshape(-1, int(x.shape[-1]))
     _H32_LAST.slot = (x, r)
     return r
 
