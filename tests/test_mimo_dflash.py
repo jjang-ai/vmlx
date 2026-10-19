@@ -585,3 +585,18 @@ def test_rows_policy_eos_and_max_tokens(tmp_path, monkeypatch):
     for m in (1, 2, 5):
         assert [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, m, set(), 0.0) for t in new] == ref[:m]
     tgt.close()
+
+
+def test_rows_policy_is_greedy_only(tmp_path, monkeypatch):
+    # Sampled rounds keep the default policy: the confidence calibrates argmax agreement, not min(1, p/q) acceptance.
+    monkeypatch.setenv("VMLX_MIMO_DFLASH_POLICY", "rows")
+    model, tgt, drafter = _lane(tmp_path)
+    prompt = np.random.default_rng(33).integers(0, V, size=31).tolist()
+    st = MD.LaneStats()
+    list(MD.mimo_rounds(tgt, drafter, None, prompt, 12, set(), 0.0, stats=st))
+    assert isinstance(st.policy, dict) and "rows_policy" in st.policy
+    st = MD.LaneStats()
+    out = [t for new, _ in MD.mimo_rounds(tgt, drafter, None, prompt, 12, set(), 1.0, stats=st) for t in new]
+    assert len(out) == 12
+    assert not (isinstance(st.policy, dict) and "rows_policy" in st.policy)
+    tgt.close()

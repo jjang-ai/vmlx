@@ -560,6 +560,32 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
     return True
 
 
+def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: bool) -> tuple[bool, str]:
+    """Whether a DFlash2 target's affine projections go through the lane matmul (metal/lane_qmm.py), and why not.
+
+    The lane kernel costs about the same for 1..16 rows, which makes wide verifies nearly free on targets whose verify
+    cost is those projections (Qwen3.8 27B). It is not used for:
+    - glm5_next: it corrupts the target from the first token (served DFlash2 lane answered "17 x 15" for 17 x 19 at
+      temperature 0; VMLX_LANE_QMM=0 restored the exact answer, 2026-10-10);
+    - MiMo-V2: its verify cost is routed-expert reads (~4.5-5 ms per extra row), not its 99 affine projections, so the
+      flat cost paid only at 8 rows (59.1 vs 61.2 ms) while one-row steps got slower (20.99 -> 22.81 ms) and so did
+      2-4-row verifies (same process, 2026-10-18). With the drafter-confidence cut most rounds are 1-4 rows; served
+      A/B (3 reps, 2026-10-18) on MLX kernels: prose 45.9 -> 48.4, sampled 53.7 -> 55.7 tok/s.
+      VMLX_MIMO_LANE_QMM=1 restores the lane (A/B).
+    VMLX_LANE_QMM=0 turns it off for every target."""
+    import os
+
+    if not dflash2_enabled:
+        return False, ""
+    if os.environ.get("VMLX_LANE_QMM", "1").strip().lower() in ("0", "off", "false", "no"):
+        return False, "VMLX_LANE_QMM=0"
+    if lm_type == "glm5_next":
+        return False, "glm5_next keeps its native kernels"
+    if is_mimo_v2 and os.environ.get("VMLX_MIMO_LANE_QMM", "0").strip().lower() not in ("1", "on", "true", "yes"):
+        return False, "MiMo-V2 keeps MLX kernels; VMLX_MIMO_LANE_QMM=1 restores the lane"
+    return True, ""
+
+
 def _is_mimo_v2_runtime_object_or_name(model: Any, model_name: Any = None) -> bool:
     """Return true when an MLLM-loaded object is the MiMo-V2 runtime.
 
@@ -4914,12 +4940,13 @@ class MLXMultimodalLM:
                 from ..speculative import is_dflash2_enabled
 
                 _lm_type = str(getattr(getattr(self.model, "config", None), "model_type", "") or "")
-                # glm5_next: the lane matmul corrupts the target from the first token (served DFlash2 lane answered
-                # "17 x 15" for 17 x 19 at temperature 0; VMLX_LANE_QMM=0 restored the exact answer, 2026-10-10). Its
-                # verify slabs are measured without it; keep GLM on the native kernels.
-                if is_dflash2_enabled() and _lm_type != "glm5_next" and os.environ.get(
-                    "VMLX_LANE_QMM", "1"
-                ).strip().lower() not in ("0", "off", "false", "no"):
+                # Which targets keep their native kernels (glm5_next, MiMo-V2) and why: _dflash_target_lane_qmm.
+                _lane, _why = _dflash_target_lane_qmm(
+                    is_dflash2_enabled(), _lm_type, _is_mimo_v2_runtime_object_or_name(self.model, resolved_name)
+                )
+                if not _lane and _why:
+                    logger.info("DFlash2 target lane matmul: not installed (%s)", _why)
+                if _lane:
                     import time as _time
                     from ..metal import lane_qmm
 

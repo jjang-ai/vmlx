@@ -537,8 +537,12 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         cut_min_width = 0
     # VMLX_MIMO_DFLASH_POLICY=rows: per-round verify-row choice from the drafter's calibrated confidence + drafting
     # back-off (vmlx_engine/spec_rows_policy.py). Replaces the per-request width policy and the fixed confidence cut.
+    # Greedy rounds only: the confidence calibrates argmax agreement; a sampled draft's acceptance (min(1, p/q)) is a
+    # different quantity, and rounds cut to one row are never observed, so a pessimistic sampled prior never corrects
+    # (served sampled 47.6 tok/s = AR vs 53.7 on the default policy, 2026-10-18). Sampled keeps the default policy.
     rows = drafting = None
-    if drafter is not None and propose is None and os.environ.get("VMLX_MIMO_DFLASH_POLICY", "").strip().lower() == "rows":
+    if drafter is not None and propose is None and temperature <= 0 and os.environ.get(
+            "VMLX_MIMO_DFLASH_POLICY", "").strip().lower() == "rows":
         from vmlx_engine.spec_rows_policy import MIMO_V26_LADDER, Drafting, RowsPolicy, choose_rows
 
         rows = RowsPolicy.for_target(target, MIMO_V26_LADDER)
