@@ -535,6 +535,17 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         cut_min_width = max(0, int(os.environ.get("VMLX_MIMO_DFLASH_CUT_MIN_WIDTH", "0")))
     except ValueError:
         cut_min_width = 0
+    # VMLX_MIMO_DFLASH_POLICY=rows: per-round verify-row choice from the drafter's calibrated confidence + drafting
+    # back-off (vmlx_engine/spec_rows_policy.py). Replaces the per-request width policy and the fixed confidence cut.
+    rows = drafting = None
+    if drafter is not None and propose is None and os.environ.get("VMLX_MIMO_DFLASH_POLICY", "").strip().lower() == "rows":
+        from vmlx_engine.spec_rows_policy import MIMO_V26_LADDER, Drafting, RowsPolicy, choose_rows
+
+        rows = RowsPolicy.for_target(target, MIMO_V26_LADDER)
+        drafting = Drafting()
+        policy = None
+        p_min = 0.0
+        st.policy = {"rows_policy": rows, "drafting": drafting}
     # AR bursts defer the drafter's context: their tap rows are projected in ONE add_context when the next draft round
     # starts (per-token projection of 5 drafter layers + an eval made every AR step slower than the plain lane's:
     # prose, where the policy rightly stops drafting, ran 39 tok/s on this lane vs 46 on the plain lane).
@@ -551,6 +562,13 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
     while n < max_tokens:
         if drafter is None:
             mode, b = "ar", AR_ONLY_BURST                  # drafter-less lane: every step AR, streamed per burst
+        elif rows is not None:
+            owed = drafting.take_owed(max_tokens - n)      # plain steps owed by losing draft rounds: one AR burst
+            if owed > 0:
+                mode, b = "ar", owed
+            else:
+                mode, b = "spec", bs0
+                drafting.drafting_now()
         else:
             mode, b = policy.choose() if policy is not None else ("spec", bs0)
         if mode == "ar":
@@ -598,6 +616,9 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
                         break
             if policy is not None:
                 policy.update_ar((time.perf_counter() - ta) / max(len(new), 1), len(new))
+            if rows is not None and len(new) >= min(3, b):
+                rows.plain.sample(1000.0 * (time.perf_counter() - ta) / max(len(new), 1))
+                rows.verify.reset_prior(rows.plain.ms)
             st.ar_steps += len(new); n += len(new)
             yield new, 0
             if new[-1] in eos:
@@ -623,6 +644,36 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         # idle while Python built the 48-layer verify graph (one extra host round trip per round). Same token ids,
         # same arithmetic and the same random-draw order: outputs are unchanged.
         d_tok = d_tok.astype(mx.int32)
+        q = None
+        if rows is not None:
+            # the drafter's probability of each token it proposed (one read-back), calibrated -> verify-row choice
+            src = mx.softmax(dl[0], axis=-1) if d_prob is None else d_prob[0]
+            q = mx.take_along_axis(src, d_tok[0][:, None], axis=-1)[:, 0].tolist()
+            t_draft = time.perf_counter()
+            n_rows, _ = choose_rows([rows.calib.probability(x) for x in q], rows.verify.costs, bs)
+            if n_rows < bs:
+                d_tok = d_tok[:, : n_rows - 1]
+                if d_prob is not None:
+                    d_prob = d_prob[:, : n_rows - 1]
+                st.cut_drafts += bs - n_rows
+                bs = n_rows
+            q = q[: bs - 1]
+            if bs == 1:
+                # a plain step: the drafts were not worth a verify row. Its drafter forward is the round's loss.
+                lg, tp = target.forward(mx.array([[tokens[-1]]], dtype=mx.int32), cache)
+                t = int(pick(proc(lg[-1:], prompt_ids + tokens))[-1].item())
+                new = [t]
+                drafter.add_context(tp[:1], fwd); window.add(tp[:1]); fwd += 1
+                now = time.perf_counter()
+                rows.plain.sample(1000.0 * (now - t_draft))
+                drafting.record(rows.plain.ms, 1000.0 * (now - tr))
+                st.ar_steps += 1
+                after_ar = False
+                tokens.extend(new); n += 1
+                yield new, 0
+                if t in eos:
+                    return
+                continue
         if p_min > 0.0 and bs >= cut_min_width:
             keep_d = _confident_drafts(dl, d_tok, d_prob, p_min)
             if keep_d < int(d_tok.shape[1]):
@@ -657,6 +708,12 @@ def _decode_rounds(target, drafter, mask_vec, prompt_ids, logits, max_tokens, eo
         Target.rollback(cache, len(drafts) + 1 - keep)
         drafter.add_context(tp[:keep], fwd); window.add(tp[:keep]); fwd += keep
         st.rounds += 1; st.accepted.append(accepted)
+        if rows is not None:
+            now = time.perf_counter()
+            rows.verify.sample(bs, 1000.0 * (now - t_draft))
+            for k in range(min(len(q), accepted + 1)):
+                rows.calib.observe(q[k], k < accepted)
+            drafting.record(len(new) * rows.plain.ms, 1000.0 * (now - tr))
         if policy is not None:
             policy.observe_round(len(new), time.perf_counter() - tr)   # every round, cut-to-one-row ones too
         if policy is not None and bs >= policy.bmin:

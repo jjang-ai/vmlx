@@ -7605,6 +7605,11 @@ class MLXMultimodalLM:
                                  "model_key": model_key}, parent=chunks.parent_for(forwarded, parent))
         spec_rounds = [d for d in drafted if d > 0]
         accepted = list(st.accepted)
+        _rp, _dr = (st.policy or {}).get("rows_policy"), (st.policy or {}).get("drafting")
+        if _rp is not None and _dr is not None:
+            logger.info("MiMo DFlash rows policy: plain_ms=%.2f verify_ms=%s skipped=%d probes=%d period=%d",
+                        _rp.plain.ms, {r: round(v, 1) for r, v in sorted(_rp.verify.costs.items()) if r <= 8},
+                        _dr.skipped, _dr.probes, _dr.period)
         _pol = (st.policy or {}).get("_policy")
         if _pol is not None:
             logger.info("MiMo DFlash adaptive costs: t_ar_ms=%s t_round_ms=%s p=%s ar_outliers_skipped=%s",
