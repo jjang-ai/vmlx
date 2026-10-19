@@ -45,8 +45,8 @@ def test_fixed_width_env(monkeypatch):
     monkeypatch.setenv("VMLX_DFLASH2_BLOCK", "32")
     assert _dflash2_block_plan(8) == (16,)                 # capped at 2x trained
     monkeypatch.setenv("VMLX_DFLASH2_BLOCK", "auto")
-    assert _dflash2_block_plan(8) == (5, 8, 16)
-    assert _dflash2_block_plan(4) == (4, 8)
+    assert _dflash2_block_plan(8) == (3, 5, 8, 16)           # a dense codebook MLP: narrow rounds are cheap now
+    assert _dflash2_block_plan(4) == (3, 4, 8)
     assert _dflash2_block_plan(8, lane_flat=True) == (8, 16)     # flat verify cost: 5 is dominated
 
 
@@ -54,11 +54,11 @@ def test_first_cycle_at_a_width_is_warmup_and_costs_persist_across_requests():
     shared: dict = {}
     c = _BlockChooser(5, 8, shared)
     widths = []
-    for _ in range(4):                                     # warm 5, time 5, warm 8, time 8
+    for _ in range(4):                                     # widest first (warm 8), then unseen widths: warm 5, time 5, time 8
         w = c.width
         widths.append(w)
         c.observe(w, w, 2.0 if w not in shared.get("warm", set()) else (0.05 if w == 5 else 0.06))
-    assert widths == [5, 5, 8, 8]
+    assert widths == [8, 5, 5, 8]
     assert shared[5] == 0.05 and shared[8] == 0.06        # the 2.0 s warm-up cycles were discarded
     c2 = _BlockChooser(5, 8, shared)                       # the next request starts with measured costs
     c2.observe(5, 5, 0.05)
@@ -227,9 +227,9 @@ def test_block_plan_env_candidate_list_is_clipped_sorted_and_optional(monkeypatc
     monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "40,1,8,8")
     assert _dflash2_block_plan(8) == (2, 8, 16)              # clipped to 2..2*trained, deduplicated, sorted
     monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "x")
-    assert _dflash2_block_plan(8) == (5, 8, 16)              # unparsable: the default plan
+    assert _dflash2_block_plan(8) == (3, 5, 8, 16)           # unparsable: the default plan
     monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "")
-    assert _dflash2_block_plan(8) == (5, 8, 16)
+    assert _dflash2_block_plan(8) == (3, 5, 8, 16)
     monkeypatch.setenv("VMLX_DFLASH2_BLOCK", "4")             # a pinned width still wins
     monkeypatch.setenv("VMLX_DFLASH2_WIDTHS", "3,5")
     assert _dflash2_block_plan(8) == (4,)

@@ -1667,7 +1667,12 @@ class _BlockChooser:
         else:
             widths = (int(low),) if high is None or high <= low else (int(low), int(high))
         self.widths = widths
-        self.width = widths[0]
+        # The first cycle of a request runs the WIDEST window: it observes every draft position once, so the expected
+        # tokens of the deep widths are estimated from this text, not from the prior. Starting narrow (the old
+        # widths[0]) saw two positions per cycle and climbed to width 16 only after ~12 cycles on code: 12 of 23 cycles
+        # of a 122-token code reply ran at width 3 (74.8 tok/s) where the (5, 8, 16) plan ran 15 of 16 at width 16
+        # (83.7 tok/s). One wide cycle costs ~110 ms once per request (~0.1 ms per token of a 384-token reply).
+        self.width = widths[-1]
         self._last_timed: dict = {}
         top = max(self.widths)
         self.trials = [0.0] * top          # index k = draft position k (1-based)
@@ -1892,7 +1897,13 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
         # deeper.  Measured JANG_4D: fixed 8 prose 44.3 vs (5,8,16) 38-41,
         # because the model sent many prose cycles to 5.
         return (trained, 2 * trained)
-    return tuple(sorted({min(5, trained), trained, 2 * trained}))
+    # Not lane-flat (a dense codebook MLP, e.g. JANGH2): verify cost grows with rows below the sorted-tile threshold,
+    # and since 1-5-row calls share each weight read (jangh.kernels.gather_qmv_rows) a 3-row round costs ~59 ms against
+    # 77 for 5 rows and 38 ms per in-lane AR token, so on prose (p ~ 0.3 per position) width 3 beats both AR and
+    # width 5: served JANGH2 story 35.0 / 34.9 tok/s with (3, 5, 8, 16) vs 29.2 / 30.4 with (5, 8, 16) and the AR lane
+    # 29.6 / 29.9 (2026-10-19 A/B, 2 reps at 1294-1333 MHz). Code keeps width 16 once the first cycle has observed
+    # every position (see _BlockChooser: the first cycle of a request runs the widest window).
+    return tuple(sorted({3, min(5, trained), trained, 2 * trained}))
 
 
 def stream_dflash2_generate(
