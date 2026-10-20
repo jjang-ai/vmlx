@@ -420,7 +420,7 @@ def _dummy(dtype):
     return arr
 
 
-def sdpa_flash(q, k, v, scale: float, mask, sinks) -> Optional[mx.array]:
+def sdpa_flash(q, k, v, scale: float, mask, sinks, tile: int = TILE_KEYS) -> Optional[mx.array]:
     """Attention of ``q (B, H, L, D)`` over ``k (B, Hk, S, D)`` /
     ``v (B, Hk, S, Dv)`` for ``L <= MAX_ROWS`` rows, returned as
     ``(B, L, H * Dv)``.
@@ -486,7 +486,7 @@ def sdpa_flash(q, k, v, scale: float, mask, sinks) -> Optional[mx.array]:
             ("G", int(gqa)),
             ("NKV", int(Hk)),
             ("ROWS", int(L)),
-            ("TILE", TILE_KEYS),
+            ("TILE", int(tile)),
             ("HS", hs),
             ("CAUSAL", bool(causal and L > 1)),
             ("MASK_KIND", int(mask_kind)),
