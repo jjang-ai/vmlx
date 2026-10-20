@@ -2193,6 +2193,7 @@ def _main_pass_finish_reason(
     content_was_emitted: bool,
     accumulated_reasoning: str,
     answer_pass_pending: bool,
+    tool_calls_rejected: bool = False,
 ) -> str | None:
     """Return only a terminal reason that is final for the external stream.
 
@@ -2209,8 +2210,10 @@ def _main_pass_finish_reason(
     """
     if not finished:
         return None
-    if bool((accumulated_reasoning or "").strip()) and not content_was_emitted:
-        # A reasoning-only terminal still needs a diagnostic warning. Hold the
+    if (
+        bool((accumulated_reasoning or "").strip()) or tool_calls_rejected
+    ) and not content_was_emitted:
+        # A reasoning-only or rejected-tool terminal needs a diagnostic. Hold the
         # terminal until that warning can be emitted, then send exactly one
         # authoritative finish chunk. This also covers the bounded answer-pass
         # case, whose first-stage finish is internal.
@@ -8812,6 +8815,19 @@ def _first_unquoted_marker_pos(text: str, marker: str) -> int:
         start = pos + 1
 
 
+def _record_suppressed_tool_markup() -> None:
+    """Explain hidden control text once, including unfinished native calls."""
+    diagnostic = (
+        "The model emitted tool-call markup while tool calls were disabled for "
+        "this request. The markup was hidden and no tool was executed."
+    )
+    bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
+    # Cleanup runs on every streaming tick. A partial call may never reach the
+    # parser's rejection path, but must not leave an unexplained empty success.
+    if bucket is not None and diagnostic not in bucket:
+        _record_tool_call_drop(diagnostic)
+
+
 def _clean_suppressed_tool_markup_for_display(
     output_text: str, request: ChatCompletionRequest | ResponsesRequest | None = None
 ) -> str:
@@ -8825,6 +8841,7 @@ def _clean_suppressed_tool_markup_for_display(
         tool_calls = None
         cleaned_text = output_text
     if tool_calls:
+        _record_suppressed_tool_markup()
         return _strip_tool_markup_residue_for_display(cleaned_text or "")
 
     marker_positions = [
@@ -8835,6 +8852,7 @@ def _clean_suppressed_tool_markup_for_display(
     if not marker_positions:
         return output_text
 
+    _record_suppressed_tool_markup()
     marker_start = min(marker_positions)
     visible_prefix = output_text[:marker_start].rstrip()
     suppressed_suffix = output_text[marker_start:]
@@ -27726,6 +27744,7 @@ async def stream_chat_completion(
                                 content_was_emitted=content_was_emitted,
                                 accumulated_reasoning=accumulated_reasoning,
                                 answer_pass_pending=_answer_pass_pending,
+                                tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
                             ),
                         )
                     ],
@@ -27865,9 +27884,14 @@ async def stream_chat_completion(
                                 content=content if content else None
                             ),
                             logprobs=chunk_logprobs,
-                            finish_reason=output.finish_reason
-                            if output.finished
-                            else None,
+                            finish_reason=_main_pass_finish_reason(
+                                output.finish_reason,
+                                finished=bool(output.finished),
+                                content_was_emitted=content_was_emitted,
+                                accumulated_reasoning="",
+                                answer_pass_pending=False,
+                                tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
+                            ),
                         )
                     ],
                 )

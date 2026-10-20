@@ -13,13 +13,30 @@ from vmlx_engine.engine.base import GenerationOutput
 @pytest.mark.parametrize("api", ["chat", "responses"])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("finish", ["stop", "length"])
-@pytest.mark.parametrize("text", [
-    "<tool_call>UNSAFE_ORPHAN_SUFFIX",
-    '<tool_call>{"name":"unavailable_tool","arguments":{"path":"x"}}</tool_call>',
-    '<tool_call>{"name":"file_info","arguments":{}}</tool_call>',
-    '<tool_call>{"name":"file_info","arguments":[]}</tool_call>',
+@pytest.mark.parametrize("parser,text,tool_policy", [
+    ("auto", "<tool_call>UNSAFE_ORPHAN_SUFFIX", "auto"),
+    ("auto", '<tool_call>{"name":"unavailable_tool","arguments":{"path":"x"}}</tool_call>', "auto"),
+    ("auto", '<tool_call>{"name":"file_info","arguments":{}}</tool_call>', "auto"),
+    ("auto", '<tool_call>{"name":"file_info","arguments":[]}</tool_call>', "auto"),
+    pytest.param(
+        "xml_function",
+        "<tool_call>\n<function=write_file>\n<parameter=path>\nreport.md\n"
+        "</parameter>\n<parameter=content>\n# Technical Report",
+        "no-tools", id="no-tools-incomplete",
+    ),
+    pytest.param(
+        "xml_function",
+        "<tool_call>\n<function=write_file>\n<parameter=path>\nreport.md\n"
+        "</parameter>\n<parameter=content>\n# Technical Report",
+        "none", id="none-incomplete",
+    ),
+    pytest.param(
+        "xml_function",
+        "<think></think><tool_call>\n<function=write_file>\n<parameter=content>\nReport",
+        "no-tools", id="no-tools-reasoning-incomplete",
+    ),
 ])
-async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, text):
+async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, parser, text, tool_policy):
     class Engine:
         tokenizer = SimpleNamespace(has_thinking=False)
         is_mllm = False
@@ -48,7 +65,10 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         monkeypatch.setattr(server, field, "generic-rejection-control")
     monkeypatch.setattr(server, "_model_path", None)
     monkeypatch.setattr(server, "_reasoning_parser", None)
-    monkeypatch.setattr(server, "_tool_call_parser", "auto")
+    if text.startswith("<think>"):
+        from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+        monkeypatch.setattr(server, "_reasoning_parser", Qwen3ReasoningParser())
+    monkeypatch.setattr(server, "_tool_call_parser", parser)
     monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
     monkeypatch.setattr(server, "_api_key", None)
     fn = {"name": "file_info", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}
@@ -60,6 +80,11 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
             body["stream_options"] = {"include_usage": True}
     else:
         body.update(input="Inspect if needed.", tools=[{"type": "function", **fn}], max_output_tokens=64)
+    if tool_policy == "no-tools":
+        body.pop("tools")
+        body.pop("tool_choice")
+    elif tool_policy == "none":
+        body["tool_choice"] = "none"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
         response = await client.post("/v1/" + ("chat/completions" if api == "chat" else "responses"), json=body)
         # No hidden retry, and a subsequent request can use the same engine.
@@ -84,8 +109,23 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         else:
             assert recovered_data["output_text"] == "Recovered answer"
         assert "tool_calls_rejected" not in recovered.text
+        if tool_policy != "auto":
+            assert "tool calls were disabled" not in recovered.text
     assert "UNSAFE_ORPHAN_SUFFIX" not in response.text
     assert "<tool_call>" not in response.text
+    if tool_policy != "auto":
+        if stream:
+            captured = [json.loads(line[5:]) for line in response.text.splitlines()
+                        if line.startswith("data:") and line[5:].strip() != "[DONE]"]
+            warnings = [
+                warning for event in captured
+                for warning in (event.get("response", event).get("warnings") or [])
+            ]
+        else:
+            data = response.json()
+            warnings = data.get("detail", data).get("warnings", [])
+        assert len(warnings) == 1
+        assert "tool calls were disabled" in warnings[0]
     if not stream:
         data = response.json()
         if api == "chat" and finish == "stop":
@@ -123,3 +163,22 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
         terminals = [e for e in events if e.get("type") in {"response.completed", "response.incomplete", "response.failed"}]
         assert len(terminals) == 1 and terminals[0]["type"] == "response.incomplete"
         assert terminals[0]["response"]["incomplete_details"]["reason"] == ("max_output_tokens" if finish == "length" else "tool_calls_rejected")
+
+
+def test_suppressed_markup_warning_is_deduplicated_and_keeps_quoted_examples(monkeypatch):
+    monkeypatch.setattr(server, "_tool_call_parser", "xml_function")
+    request = server.ResponsesRequest(model="m", input="Explain the format", tool_choice="none")
+    server._begin_tool_call_drop_capture()
+    try:
+        quoted = "Example:\n```xml\n<tool_call>\n<function=write_file>\n```\n"
+        assert server._clean_suppressed_tool_markup_for_display(quoted, request) == quoted
+        assert server._take_tool_call_drop_diagnostics() == []
+        server._begin_tool_call_drop_capture()
+        prefix = "Before.\n<tool_call>\n<function=write_file>\n<parameter=content>"
+        assert server._clean_suppressed_tool_markup_for_display(prefix, request) == "Before."
+        assert server._clean_suppressed_tool_markup_for_display(prefix + "Report", request) == "Before."
+        assert server._TOOL_CALL_REJECTED.get()
+        warnings = server._take_tool_call_drop_diagnostics()
+        assert len(warnings) == 1 and "tool calls were disabled" in warnings[0]
+    finally:
+        server._begin_tool_call_drop_capture()
