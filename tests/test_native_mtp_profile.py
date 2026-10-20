@@ -667,3 +667,15 @@ class TestUnseenStartDepthPolicy:
         for family in ("qwen3_5", "glm5_next", "hy_v3", None, ""):
             assert gen._native_mtp_unseen_start_depth(family, sampled_profile=False, depth=3) is None
             assert gen._native_mtp_unseen_start_depth(family, sampled_profile=True, depth=3) is None
+
+
+def test_qwen3_5_moe_unseen_profiles_seed_at_configured_depth(monkeypatch):
+    # Ornith-1.5-122B (routed-MoE Qwen3.5): measured cold start once the head's experts loaded; dense Qwen3.5 stays AR.
+    from vmlx_engine import mllm_batch_generator as mbg
+
+    monkeypatch.setattr(mbg, "_NATIVE_MTP_STOCHASTIC_ACCEPT", True)
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=False, depth=1) == 1
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=True, depth=2) == 2
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5", sampled_profile=False, depth=1) is None
+    monkeypatch.setattr(mbg, "_NATIVE_MTP_STOCHASTIC_ACCEPT", False)
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=True, depth=2) is None

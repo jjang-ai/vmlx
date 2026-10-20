@@ -6810,7 +6810,9 @@ _NATIVE_MTP_CYCLE_TRACE = os.environ.get("VMLX_NATIVE_MTP_CYCLE_TRACE", "").stri
 
 
 # Model types whose unseen profiles seed at the configured depth (live AR/D1/D2/D3 receipts; see below).
-_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset({"qwen4_exp", "nemotron_h", "nemotron_h_v2"})
+_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset(
+    {"qwen4_exp", "nemotron_h", "nemotron_h_v2", "qwen3_5_moe", "qwen3_5_moe_text"}
+)
 
 
 def _native_mtp_unseen_start_depth(
@@ -6840,7 +6842,16 @@ def _native_mtp_unseen_start_depth(
     AR control at both ends (38.4/38.0 then 38.6/38.3 tok/s, clocks within 5 %):
     D1 42.0/43.9, D2 49.7/48.5, D3 49.3/51.4 tok/s (+29-35 % at D2/D3), d1
     acceptance ~90 %. Bolt shares the type but carries no head, so it never
-    reaches this point. No other family inherits this.
+    reaches this point.
+
+    qwen3_5_moe (Ornith-1.5-122B, routed-MoE Qwen3.5) is the third, 2026-10-19,
+    once its head's routed experts actually loaded (jang_loader split-expert
+    stacks; before that the head drafted through random experts at 21-27 %
+    acceptance and lost at every depth). App argv, JANGH2, fixed D1 with prompt
+    priming vs AR in the same run (GPU clock 1,581-1,589 MHz): long greedy 59.4
+    vs 47.5 tok/s, long sampled 55.6 vs 46.7, short greedy 58.3 vs 50.6, short
+    sampled 50.5 vs 50.9, acceptance 71.0 %; greedy text equal to AR. No other
+    family inherits this.
     """
     if str(model_type or "").lower() not in _NATIVE_MTP_MEASURED_COLD_START_TYPES:
         return None
