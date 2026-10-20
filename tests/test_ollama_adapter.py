@@ -902,6 +902,26 @@ def test_ollama_generate_terminal_merge_preserves_length_after_usage():
     assert merged["prompt_eval_count"] == 73
 
 
+@pytest.mark.parametrize("adapter_name", [
+    "openai_chat_chunk_to_ollama_ndjson",
+    "openai_chat_chunk_to_ollama_generate_ndjson",
+    "openai_completion_chunk_to_ollama_ndjson",
+])
+def test_ollama_error_preserves_partial_usage_without_success(adapter_name):
+    from vmlx_engine.api import ollama_adapter
+
+    usage = {
+        "prompt_tokens": 12, "completion_tokens": 9,
+        "prompt_tokens_details": {"cached_tokens": 7, "cache_detail": "block-disk+ssm"},
+    }
+    line = "data: " + json.dumps({"error": {"message": "Rejected tool"}, "usage": usage})
+    row = json.loads(getattr(ollama_adapter, adapter_name)(line, "probe"))
+    assert row == {
+        "error": "Rejected tool", "prompt_eval_count": 12, "eval_count": 9,
+        "vmlx_usage": {"prompt_tokens_details": usage["prompt_tokens_details"]},
+    }
+
+
 def test_ollama_chat_stream_maps_upstream_error_to_native_error_row():
     from vmlx_engine.api.ollama_adapter import openai_chat_chunk_to_ollama_ndjson
 

@@ -1372,6 +1372,40 @@ describe("Ollama gateway request translation behavior", () => {
     expect(chunks.at(-1).message).not.toHaveProperty("thinking");
   });
 
+  it.each(["/api/chat", "/api/generate"])(
+    "preserves actual partial usage on terminal errors for %s", async (route) => {
+      const usage = {
+        prompt_tokens: 689, completion_tokens: 32, total_tokens: 721,
+        prompt_tokens_details: {cached_tokens: 681, cache_detail: "block-disk+ssm"},
+      };
+      const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, {"Content-Type": "text/event-stream"});
+          res.write(`data: ${JSON.stringify({
+            error: {type: "invalid_response_error", code: "tool_calls_rejected", message: "Hidden tool markup"},
+            usage,
+          })}\n\n`);
+          res.write(`data: ${JSON.stringify({choices: [], usage})}\n\n`);
+          res.end("data: [DONE]\n\n");
+        });
+      });
+      backend = {server, port: await listen(server), bodies: [], paths: []};
+      const started = await startGateway(backend.port);
+      gateway = started.gateway;
+      const response = await fetch(`http://127.0.0.1:${started.port}${route}`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({model: "hy3-model", stream: true, prompt: "report",
+          messages: [{role: "user", content: "report"}]}),
+      });
+      const rows = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+      expect(rows).toEqual([{
+        error: "Hidden tool markup", prompt_eval_count: 689, eval_count: 32,
+        vmlx_usage: {prompt_tokens_details: usage.prompt_tokens_details},
+      }]);
+    },
+  );
+
   it("maps a reasoning-only Chat stream failure to one native Ollama error row", async () => {
     backend = await startReasoningOnlyErrorBackend();
     const started = await startGateway(backend.port);

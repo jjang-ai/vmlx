@@ -158,7 +158,10 @@ async def test_generic_control_rejection_http(monkeypatch, api, stream, finish, 
             assert error["recovery_action"] == "send_followup"
         assert terminals == (["length"] if finish == "length" else [])
         assert response.text.rstrip().endswith("data: [DONE]")
-        assert [e["usage"]["completion_tokens"] for e in events if e.get("usage")] == [2]
+        assert [e["usage"]["completion_tokens"] for e in events
+                if e.get("usage") and not e.get("error")] == [2]
+        if errors:
+            assert next(e["usage"] for e in events if e.get("error"))["completion_tokens"] == 2
     else:
         terminals = [e for e in events if e.get("type") in {"response.completed", "response.incomplete", "response.failed"}]
         assert len(terminals) == 1 and terminals[0]["type"] == "response.incomplete"
@@ -182,3 +185,58 @@ def test_suppressed_markup_warning_is_deduplicated_and_keeps_quoted_examples(mon
         assert len(warnings) == 1 and "tool calls were disabled" in warnings[0]
     finally:
         server._begin_tool_call_drop_capture()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["anthropic", "ollama"])
+async def test_suppressed_call_error_preserves_native_usage(monkeypatch, api):
+    class Engine:
+        tokenizer = SimpleNamespace(has_thinking=False)
+        is_mllm = False
+        preserve_native_tool_format = True
+
+        async def stream_chat(self, **kwargs):
+            text = "<tool_call>\n<function=write_file>\n<parameter=content>\nReport"
+            yield GenerationOutput(
+                text=text, new_text=text, prompt_tokens=12, completion_tokens=9,
+                cached_tokens=7, cache_detail="block-disk+ssm",
+                finished=True, finish_reason="stop",
+            )
+
+    monkeypatch.setattr(server, "_engine", Engine())
+    for field in ("_model_name", "_served_model_name"):
+        monkeypatch.setattr(server, field, "suppressed-usage-test")
+    monkeypatch.setattr(server, "_model_path", None)
+    monkeypatch.setattr(server, "_reasoning_parser", None)
+    monkeypatch.setattr(server, "_tool_call_parser", "xml_function")
+    monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+    monkeypatch.setattr(server, "_api_key", None)
+    body = {"model": "suppressed-usage-test", "stream": True,
+            "messages": [{"role": "user", "content": "Write a report."}]}
+    if api == "anthropic":
+        body["max_tokens"] = 32
+    else:
+        body["options"] = {"num_predict": 32}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app),
+                                 base_url="http://test") as client:
+        response = await client.post("/v1/messages" if api == "anthropic" else "/api/chat",
+                                     json=body)
+    assert response.status_code == 200
+    rows = [json.loads(line[6:] if line.startswith("data: ") else line)
+            for line in response.text.splitlines()
+            if line.startswith("data: {") or line.startswith("{")]
+    errors = [row for row in rows if row.get("error")]
+    assert len(errors) == 1
+    assert rows[-1] == errors[0]
+    assert not any(row.get("done") or row.get("type") == "message_stop" for row in rows)
+    if api == "anthropic":
+        assert errors[0]["usage"] == {
+            "input_tokens": 5, "output_tokens": 9,
+            "cache_read_input_tokens": 7, "cache_creation_input_tokens": 0,
+        }
+    else:
+        assert errors[0]["prompt_eval_count"] == 12
+        assert errors[0]["eval_count"] == 9
+        assert errors[0]["vmlx_usage"]["prompt_tokens_details"] == {
+            "cached_tokens": 7, "cache_detail": "block-disk+ssm",
+        }

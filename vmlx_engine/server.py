@@ -28963,6 +28963,18 @@ async def stream_chat_completion(
             empty_output_error = _reasoning_only_chat_error_payload(
                 response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
             )
+            error_usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            if cached_tokens > 0 or cache_detail:
+                error_usage.prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=cached_tokens, cache_detail=cache_detail
+                )
+            # Native adapters terminate on this error and cannot consume the
+            # later Chat usage tail. Carry the same actual counts on the error.
+            empty_output_error["usage"] = error_usage.model_dump(exclude_none=True)
             if _is_pending_required_tool_choice(request):
                 # This branch returns before the later required-tool check.
                 # Keep the parser diagnostic, but report the unmet request
@@ -28985,15 +28997,6 @@ async def stream_chat_completion(
                 + "\n\n"
             )
             if include_usage:
-                error_usage = Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
-                if cached_tokens > 0 or cache_detail:
-                    error_usage.prompt_tokens_details = PromptTokensDetails(
-                        cached_tokens=cached_tokens, cache_detail=cache_detail
-                    )
                 error_usage_chunk = ChatCompletionChunk(
                     id=response_id, created=_created_ts, model=request.model,
                     choices=[], usage=error_usage,

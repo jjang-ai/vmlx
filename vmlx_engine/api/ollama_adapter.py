@@ -615,7 +615,7 @@ def _openai_stream_error_to_ollama(chunk: dict[str, Any]) -> str | None:
 
     OpenAI-compatible vMLX streams carry structured failures as
     ``{"error": {"message": ...}}``.  Ollama's streaming contract instead
-    requires a terminal NDJSON row shaped exactly as ``{"error": "..."}``.
+    requires a terminal NDJSON row with a string ``error`` field.
     """
     error = chunk.get("error")
     if isinstance(error, dict):
@@ -632,6 +632,28 @@ def _openai_stream_error_to_ollama(chunk: dict[str, Any]) -> str | None:
         return None
     message = str(message).strip()
     return message or "the model failed to generate a response"
+
+
+def _ollama_error_usage(chunk: dict) -> dict:
+    """Keep actual partial counts without turning an error into done/stop."""
+    usage = chunk.get("usage")
+    if not isinstance(usage, dict):
+        return {}
+    result = {}
+    for source, target in (
+        ("prompt_tokens", "prompt_eval_count"),
+        ("completion_tokens", "eval_count"),
+    ):
+        if source in usage:
+            result[target] = usage[source]
+    details = {
+        key: usage[key]
+        for key in ("prompt_tokens_details", "vmlx_prefill", "vmlx_decode")
+        if isinstance(usage.get(key), dict)
+    }
+    if details:
+        result["vmlx_usage"] = details
+    return result
 
 
 def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
@@ -654,7 +676,7 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
 
     stream_error = _openai_stream_error_to_ollama(chunk)
     if stream_error is not None:
-        return json.dumps({"error": stream_error}) + "\n"
+        return json.dumps({"error": stream_error, **_ollama_error_usage(chunk)}) + "\n"
 
     choices = chunk.get("choices", [])
     usage = chunk.get("usage", {})
@@ -838,7 +860,7 @@ def openai_chat_chunk_to_ollama_generate_ndjson(
         return None
 
     if "error" in chat_obj:
-        return json.dumps({"error": str(chat_obj["error"])}) + "\n"
+        return json.dumps(chat_obj) + "\n"
 
     message = chat_obj.get("message") or {}
     result: dict[str, Any] = {
@@ -920,7 +942,7 @@ def openai_completion_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str |
 
     stream_error = _openai_stream_error_to_ollama(chunk)
     if stream_error is not None:
-        return json.dumps({"error": stream_error}) + "\n"
+        return json.dumps({"error": stream_error, **_ollama_error_usage(chunk)}) + "\n"
 
     choices = chunk.get("choices", [])
     text = ""
