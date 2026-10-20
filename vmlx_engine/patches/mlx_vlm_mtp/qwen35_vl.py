@@ -183,6 +183,12 @@ def _qwen35_mtp_proposal_head(model: Any) -> Any:
     return state["head"]
 
 _PATCHED = False
+# Identities of the language modules already patched. apply() is idempotent PER MODULE OBJECT: registering the
+# vendored qwen3_5 family runtime swaps new modules in under the mlx_vlm names, and a process-wide "already patched"
+# flag set by an earlier apply() on the stock modules left the vendored classes unpatched (no MTP head contract, no
+# return_hidden / capture path) -- seen as order-dependent test failures, reachable whenever one process patches the
+# stock modules before registering the vendored runtime.
+_PATCHED_MODULES: set = set()
 _DISABLE_ENV_VALUES = {"0", "false", "FALSE", "no", "NO", "off", "OFF"}
 
 
@@ -219,8 +225,6 @@ def _qwen35_patch_embed_to_mlx_layout(key: str, value: Any) -> Any:
 def apply() -> bool:
     """Apply the Qwen3.5/3.6 VLM native-MTP adapter. Idempotent."""
     global _PATCHED
-    if _PATCHED:
-        return True
 
     try:
         from mlx_vlm.models.qwen3_5 import config as qcfg
@@ -239,11 +243,15 @@ def apply() -> bool:
         qmoe_lang = None
         qmoe_vl = None
 
+    module_key = (id(qlang), id(qmoe_lang))
+    if module_key in _PATCHED_MODULES:
+        return True
     if (
         hasattr(qlang.LanguageModel, "mtp_forward")
         and not hasattr(qlang.LanguageModel, "_vmlx_mtp_patched")
     ):
         _PATCHED = True
+        _PATCHED_MODULES.add(module_key)
         qlang.LanguageModel._vmlx_mtp_patched = "upstream"
         return True
 
@@ -265,6 +273,7 @@ def apply() -> bool:
         _patch_moe_outer_model(qmoe_vl)
 
     _PATCHED = True
+    _PATCHED_MODULES.add(module_key)
     qlang.LanguageModel._vmlx_mtp_patched = "patch"
     logger.info("mlx-vlm Qwen3.5/3.6 MTP language adapter applied")
     return True
