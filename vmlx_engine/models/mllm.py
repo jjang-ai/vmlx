@@ -4555,11 +4555,12 @@ def _load_dspark_runtime(model: Any, model_path: str | Path) -> dict | None:
         raise ValueError("DSpark drafter vocabulary is larger than the target's")
     if max(drafter.target_layer_ids) >= int(text_cfg.get("num_hidden_layers", 0)):
         raise ValueError("DSpark drafter taps layers the target does not have")
-    # MoE targets: stay below the expert sort threshold (minicpm_target.preferred_max_draft: 6 at top-8), where the
-    # stock multi-row block is row-exact and ~1.7x cheaper than the per-row route the threshold needs.
-    # The width is chosen per round (dspark.generate.choose_width / ARFallback); this is only the verifier ceiling. A
-    # bundle's speculative.max_draft stamp is advisory and never lowers it (no stamped depth caps an adaptive drafter).
-    max_draft = max(1, min(MAX_VERIFY_ROWS - 1, int(target.preferred_max_draft)))
+    # Expose the verifier's full supported width. At the MoE sort threshold
+    # target.verify uses exact per-row expert calls; their higher cost is not
+    # a correctness ceiling. Per-round width choice and measured AR fallback
+    # own that cost decision. Neither a family preference nor a bundle stamp
+    # may turn it into a hard depth cap.
+    max_draft = MAX_VERIFY_ROWS - 1
     if spec.get("max_draft") is not None:
         try:
             stamped = int(spec["max_draft"])
