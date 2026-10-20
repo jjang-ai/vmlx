@@ -135,6 +135,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [detectedHonorsEnableThinking, setDetectedHonorsEnableThinking] = useState<boolean | undefined>(undefined)
   const [detectedNativeMtpSupported, setDetectedNativeMtpSupported] = useState<boolean | undefined>(undefined)
   const [detectedNativeMtpDefaultMode, setDetectedNativeMtpDefaultMode] = useState<'auto' | 'off' | undefined>(undefined)
+  const [detectedNativeMtpAdapter, setDetectedNativeMtpAdapter] = useState<string | undefined>(undefined)
   const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
   const [messageCount, setMessageCount] = useState(0)
   const loadRequestRef = useRef(0)
@@ -182,7 +183,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       return {}
     }
   })()
-  const nativeMtpMode = parseSessionNativeMtpMode(nativeMtpConfig)
+  const nativeMtpMode = parseSessionNativeMtpMode(nativeMtpConfig, detectedNativeMtpAdapter)
   // Adaptive MTP never pins the sampler: the displayed values are exactly the
   // saved/bundle values the request will carry.
   const displayedTemperature = displayedOverrides.temperature ?? displayedModelDefaults.temperature
@@ -266,6 +267,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setThinkingBudgetSupported(undefined)
     setSupportsThinkingBudget(undefined)
     setDetectedNativeMtpDefaultMode(undefined)
+    setDetectedNativeMtpSupported(undefined)
+    setDetectedNativeMtpAdapter(undefined)
 
     void loadChatSettingsHydration<ChatOverrides>(session.config, {
       overrides: () => window.api.chat.getOverrides(chatId) as Promise<ChatOverrides | null>,
@@ -290,6 +293,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       setDetectedHonorsEnableThinking(detected?.honorsEnableThinking)
       setDetectedNativeMtpSupported((detected as any)?.nativeMtp?.supported === true)
       setDetectedNativeMtpDefaultMode((detected as any)?.nativeMtp?.defaultMode)
+      setDetectedNativeMtpAdapter((detected as any)?.nativeMtp?.adapter)
       setDetectedReasoningEfforts(detected?.supportedReasoningEfforts)
       setDetectedDefaultReasoningEffort(detected?.defaultReasoningEffort)
       setSupportsThinkingBudget(detected?.supportsThinkingBudget)

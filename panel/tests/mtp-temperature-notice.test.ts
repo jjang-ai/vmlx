@@ -42,6 +42,13 @@ describe('MTP temperature disclosure (adaptive never pins the sampler)', () => {
     expect(parseSessionNativeMtpMode({ nativeMtpMode: 'off' })).toBe('off')
   })
 
+  it('uses the separate LiLiCorr choice rather than an old native-MTP default', () => {
+    const old = { nativeMtpMode: 'adaptive' }
+    expect(parseSessionNativeMtpMode(old, 'nemotron_lilicorr')).toBeUndefined()
+    expect(parseSessionNativeMtpMode({ ...old, lilicorrMode: 'off' }, 'nemotron_lilicorr')).toBe('off')
+    expect(parseSessionNativeMtpMode(JSON.stringify({ ...old, lilicorrMode: 'adaptive' }), 'nemotron_lilicorr')).toBe('adaptive')
+  })
+
   it('is rendered with the temperature control and no sampler control is disabled by MTP', () => {
     const source = readFileSync(resolve(__dirname, '../src/renderer/src/components/chat/ChatSettings.tsx'), 'utf8')
     expect(source).toContain('resolveMtpTemperatureNotice(')
