@@ -52,6 +52,23 @@ def verify_fence_every() -> int:
             _VERIFY_FENCE = 0
     return _VERIFY_FENCE
 
+def _qwen35_mtp_post_norm_hidden(model: Any) -> bool:
+    """Whether the native-MTP head is fed the trunk hidden AFTER the final norm.
+
+    Measured on Ornith-1.5-122B JANGH2 (routed-MoE Qwen3.5), teacher-forced greedy acceptance of the bundle's head over
+    1,023 positions: code 71.5 % pre-norm vs 76.6 % post-norm, prose 70.4 vs 73.6 % (the vLLM Qwen3-Next / Qwen3.5
+    drafter also receives the normed stream; the bundle's offline BF16 control scored post 70.1 vs pre 67.4 %). Dense
+    Qwen3.5 heads keep the pre-norm input until measured. ``VMLX_QWEN35_MTP_HIDDEN=pre|post`` overrides. Only the
+    trunk hidden entering the head changes: chained drafts already feed the head's own mtp.norm output, and every
+    draft is verified by the target, so outputs are unchanged."""
+
+    raw = os.environ.get("VMLX_QWEN35_MTP_HIDDEN", "").strip().lower()
+    if raw in {"pre", "post"}:
+        return raw == "post"
+    args = getattr(model, "args", None)
+    return int(getattr(args, "num_experts", 0) or 0) > 0
+
+
 def _qwen35_mtp_draft_head_disabled() -> bool:
     """Explicit kill switch for the Qwen3.5/3.8 proposal head."""
 
@@ -166,6 +183,12 @@ def _qwen35_mtp_proposal_head(model: Any) -> Any:
     return state["head"]
 
 _PATCHED = False
+# Identities of the language modules already patched. apply() is idempotent PER MODULE OBJECT: registering the
+# vendored qwen3_5 family runtime swaps new modules in under the mlx_vlm names, and a process-wide "already patched"
+# flag set by an earlier apply() on the stock modules left the vendored classes unpatched (no MTP head contract, no
+# return_hidden / capture path) -- seen as order-dependent test failures, reachable whenever one process patches the
+# stock modules before registering the vendored runtime.
+_PATCHED_MODULES: set = set()
 _DISABLE_ENV_VALUES = {"0", "false", "FALSE", "no", "NO", "off", "OFF"}
 
 
@@ -202,8 +225,6 @@ def _qwen35_patch_embed_to_mlx_layout(key: str, value: Any) -> Any:
 def apply() -> bool:
     """Apply the Qwen3.5/3.6 VLM native-MTP adapter. Idempotent."""
     global _PATCHED
-    if _PATCHED:
-        return True
 
     try:
         from mlx_vlm.models.qwen3_5 import config as qcfg
@@ -222,11 +243,15 @@ def apply() -> bool:
         qmoe_lang = None
         qmoe_vl = None
 
+    module_key = (id(qlang), id(qmoe_lang))
+    if module_key in _PATCHED_MODULES:
+        return True
     if (
         hasattr(qlang.LanguageModel, "mtp_forward")
         and not hasattr(qlang.LanguageModel, "_vmlx_mtp_patched")
     ):
         _PATCHED = True
+        _PATCHED_MODULES.add(module_key)
         qlang.LanguageModel._vmlx_mtp_patched = "upstream"
         return True
 
@@ -248,6 +273,7 @@ def apply() -> bool:
         _patch_moe_outer_model(qmoe_vl)
 
     _PATCHED = True
+    _PATCHED_MODULES.add(module_key)
     qlang.LanguageModel._vmlx_mtp_patched = "patch"
     logger.info("mlx-vlm Qwen3.5/3.6 MTP language adapter applied")
     return True
@@ -413,12 +439,18 @@ def _row_exact_attention(self, qlang, x, cache, position_ids, position_embedding
     if cache is not None:
         keys, values = cache.update_and_fetch(keys, values)
     if isinstance(keys, mx.array) and isinstance(values, mx.array):
-        output = attend_rows_in_pairs(
-            lambda q, k, v, m: qlang.scaled_dot_product_attention(
-                q, k, v, cache=cache, scale=self.scale, mask=m,
-            ),
-            queries, keys, values,
-        )
+        from vmlx_engine.metal.qwen35_flash_decode import verify_attention
+
+        def _pairs(q, k, v):
+            return attend_rows_in_pairs(
+                lambda qq, kk, vv, m: qlang.scaled_dot_product_attention(
+                    qq, kk, vv, cache=cache, scale=self.scale, mask=m,
+                ),
+                q, k, v,
+            )
+
+        # Rows over a long cache take the split-key flash kernel exactly as their decode steps do.
+        output = verify_attention(queries, keys, values, self.scale, _pairs)
     else:  # quantized KV storage: stock multi-query kernel
         output = qlang.scaled_dot_product_attention(
             queries, keys, values, cache=cache, scale=self.scale, mask="causal",
@@ -528,14 +560,18 @@ def _patch_attention_text_rope(qlang: Any) -> None:
         if cache is not None:
             keys, values = cache.update_and_fetch(keys, values)
 
-        output = qlang.scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            cache=cache,
-            scale=self.scale,
-            mask=mask,
-        )
+        from vmlx_engine.metal.qwen35_flash_decode import decode_attention
+
+        output = decode_attention(queries, keys, values, self.scale, mask)
+        if output is None:
+            output = qlang.scaled_dot_product_attention(
+                queries,
+                keys,
+                values,
+                cache=cache,
+                scale=self.scale,
+                mask=mask,
+            )
         output = output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
 
         return self.o_proj(output * qlang.mx.sigmoid(gate))
@@ -1132,6 +1168,7 @@ def _patch_language_model(qlang: Any) -> None:
             )
 
         position_ids = kwargs.pop("position_ids", None)
+        prefill_last_logits_only = bool(kwargs.pop("prefill_last_logits_only", False))
         pixel_values = kwargs.pop("pixel_values", None)
         image_grid_thw = kwargs.pop("image_grid_thw", None)
         video_grid_thw = kwargs.pop("video_grid_thw", None)
@@ -1232,32 +1269,46 @@ def _patch_language_model(qlang: Any) -> None:
                 )
                 self._vmlx_text_rope_only = False
 
+        capture = (
+            not return_hidden
+            and inputs_embeds is None
+            and capture_requested(self)
+        )
+        # Always take the trunk output BEFORE the final norm here: this path
+        # applies model.norm exactly once below. (A capture-armed forward used
+        # to get the already-normed output from the fast trunk call and then
+        # normed it again, so arming prompt priming changed the logits.)
         hidden = self.model(
             inputs,
             cache=cache,
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
             n_confirmed=n_confirmed,
-            return_unnormed=force_text_rope
-            or return_hidden
-            or not return_logits
-            or n_confirmed > 0,
+            return_unnormed=True,
         )
-        if (
-            not return_hidden
-            and inputs_embeds is None
-            and capture_requested(self)
-        ):
-            capture_prefill(self, inputs, hidden, cache)
+        post_norm_head_input = _qwen35_mtp_post_norm_hidden(self)
+        normed = None
+        if capture:
+            normed = self.model.norm(hidden)
+            capture_prefill(self, inputs, normed if post_norm_head_input else hidden, cache)
         if not return_logits:
             return hidden
-        normed = self.model.norm(hidden)
+        if normed is None:
+            normed = self.model.norm(hidden)
+        head_input = normed
+        if prefill_last_logits_only and not return_hidden and normed.shape[1] > 1:
+            # Same contract as the vendored LanguageModel.__call__: prompt
+            # prefill samples only the last row (prompt capture above already
+            # consumed the full hidden).
+            head_input = normed[:, -1:, :]
         if self.args.tie_word_embeddings:
-            logits = self.model.embed_tokens.as_linear(normed)
+            logits = self.model.embed_tokens.as_linear(head_input)
         else:
-            logits = self.lm_head(normed)
+            logits = self.lm_head(head_input)
         if return_hidden:
-            return logits, hidden
+            # Every return_hidden consumer feeds the native-MTP head (seed,
+            # verify, replay): hand it the trunk hidden the policy selects.
+            return logits, (normed if post_norm_head_input else hidden)
         return qlang.LanguageModelOutput(logits=logits)
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache, return_hidden=False):
@@ -1330,6 +1381,7 @@ def _patch_language_model(qlang: Any) -> None:
         return predicate
 
     cls.__init__ = __init__
+    __call__._vmlx_prefill_last_logits_only = True
     cls.__call__ = __call__
     cls.mtp_forward = mtp_forward
     cls.make_mtp_cache = make_mtp_cache

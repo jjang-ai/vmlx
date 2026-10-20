@@ -16,6 +16,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import shutil
 import struct
 import sys
@@ -710,6 +711,130 @@ def _prepare_gemma_ple_shard_weights(
         )
 
     return pending
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Split per-expert routed stacks (JANG writers store some MoE heads -- e.g. the native-MTP head of Ornith-1.5-122B --
+# as X.experts.<e>.{gate,up,down}_proj.{weight,scales,biases}, one tensor per expert, while the runtime module is a
+# stacked X.switch_mlp.<proj>). The v2 VLM loader used to drop those keys (load_weights(strict=False)), leaving the
+# switch modules at their random float32 init: Ornith's MTP head drafted through 256 random experts (live acceptance
+# 21-27 % vs 59 % offline) and held ~9.7 GB of float32 garbage. These helpers (1) mark the stacked switch path as
+# quantized with the experts' own uniform bits / group / mode, (2) buffer the per-expert tensors across shards and
+# (3) stack them in numeric expert order after the last shard, failing closed on any missing expert or shape mismatch.
+_SPLIT_EXPERT_QPATH_RE = re.compile(r"^(?P<prefix>.+)\.experts\.(?P<e>\d+)\.(?P<proj>gate_proj|up_proj|down_proj)$")
+_SPLIT_EXPERT_KEY_RE = re.compile(
+    r"^(?P<prefix>.+)\.experts\.(?P<e>\d+)\.(?P<proj>gate_proj|up_proj|down_proj)\.(?P<part>weight|scales|biases)$"
+)
+
+
+def _split_expert_switch_paths(quantized_paths) -> dict[str, set[int]]:
+    """{X.switch_mlp.<proj>: expert ids} for every quantized per-expert path X.experts.<e>.<proj>."""
+    out: dict[str, set[int]] = {}
+    for path in quantized_paths:
+        m = _SPLIT_EXPERT_QPATH_RE.match(path)
+        if m:
+            out.setdefault(f"{m['prefix']}.switch_mlp.{m['proj']}", set()).add(int(m["e"]))
+    return out
+
+
+def _split_expert_switch_override(switch_path: str, expert_ids, quantization: dict) -> Optional[dict]:
+    """The single quantization entry shared by every expert of a split stack, or None if the config has none.
+
+    A stack is one QuantizedSwitchLinear, so experts with different bits / group size / mode cannot be stacked: raise
+    instead of building a module whose packed width silently mismatches some experts."""
+    entries = []
+    for e in sorted(expert_ids):
+        v = quantization.get(switch_path.replace(".switch_mlp.", f".experts.{e}.", 1))
+        if not isinstance(v, dict) or "bits" not in v or "group_size" not in v:
+            return None
+        entries.append((int(v["bits"]), int(v["group_size"]), str(v.get("mode") or "affine")))
+    if not entries:
+        return None
+    if len(set(entries)) != 1:
+        raise ValueError(f"jang_loader: split experts of {switch_path} mix quantization layouts {sorted(set(entries))}")
+    bits, group_size, mode = entries[0]
+    out = {"bits": bits, "group_size": group_size}
+    if mode != "affine":
+        out["mode"] = mode
+    return out
+
+
+def _take_split_expert_tensors(shard_weights: dict, switch_module_paths: set[str], buffer: dict) -> int:
+    """Move X.experts.<e>.<proj>.<part> tensors whose stacked module X.switch_mlp.<proj> exists into ``buffer``."""
+    moved = 0
+    for key in list(shard_weights.keys()):
+        m = _SPLIT_EXPERT_KEY_RE.match(key)
+        if not m:
+            continue
+        switch_path = f"{m['prefix']}.switch_mlp.{m['proj']}"
+        if switch_path not in switch_module_paths:
+            continue
+        buffer.setdefault(switch_path, {}).setdefault(m["part"], {})[int(m["e"])] = shard_weights.pop(key)
+        moved += 1
+    return moved
+
+
+def _load_split_expert_stacks(model, buffer: dict) -> int:
+    """Stack buffered per-expert tensors into their switch modules (numeric expert order); fail closed."""
+    if not buffer:
+        return 0
+    modules = dict(model.named_modules())
+    items = []
+    for switch_path, parts in sorted(buffer.items()):
+        module = modules.get(switch_path)
+        if module is None:
+            raise RuntimeError(f"jang_loader: no module {switch_path} for split experts")
+        n_experts = int(getattr(module, "num_experts", 0) or 0)
+        quantized = hasattr(module, "scales")
+        required = ("weight", "scales", "biases") if quantized and getattr(module, "mode", "affine") == "affine" else (
+            ("weight", "scales") if quantized else ("weight",))
+        for part in required:
+            got = parts.get(part, {})
+            missing = [e for e in range(n_experts) if e not in got]
+            if missing or len(got) != n_experts:
+                raise RuntimeError(
+                    f"jang_loader: split experts of {switch_path}.{part}: have {len(got)}/{n_experts}, missing {missing[:8]}"
+                )
+            stacked = mx.stack([got[e] for e in range(n_experts)])
+            current = module[part]
+            # Packed codes must match the module's packed layout exactly; scales / biases take the bundle's dtype
+            # (load_weights replaces the init arrays, as for every other quantized layer).
+            if tuple(stacked.shape) != tuple(current.shape) or (part == "weight" and stacked.dtype != current.dtype):
+                raise RuntimeError(
+                    f"jang_loader: split experts of {switch_path}.{part}: stacked {tuple(stacked.shape)} {stacked.dtype} "
+                    f"!= module {tuple(current.shape)} {current.dtype}"
+                )
+            items.append((f"{switch_path}.{part}", stacked))
+    model.load_weights(items, strict=False)
+    for name, arr in items:
+        path, part = name.rsplit(".", 1)
+        if modules[path][part] is not arr and not bool(mx.array_equal(modules[path][part], arr).item()):
+            raise RuntimeError(f"jang_loader: split-expert stack {name} did not land in its module")
+    logger.info("  Stacked split per-expert tensors into %d switch modules (%d tensors)",
+                len(buffer), len(items))
+    return len(items)
+
+
+def _audit_unloaded_parameters(model, loaded_keys: set, *, label: str) -> list[str]:
+    """ADVISORY: model parameters that no bundle tensor was loaded into (they keep their init values).
+
+    ``load_weights(strict=False)`` silently drops keys that match no module, so a renamed or differently laid-out
+    tensor group leaves its module at random init with no error (Ornith's MTP routed experts ran that way). This
+    never refuses a load; it names what was not loaded, loudly, so the next such drop is visible on the first run.
+    """
+    from mlx.utils import tree_flatten
+
+    missing = [name for name, _ in tree_flatten(model.parameters()) if name not in loaded_keys]
+    if missing:
+        logger.warning(
+            "%s: %d model parameters were not loaded from the bundle and keep their initial values "
+            "(first: %s). If any of these are trained weights, the bundle layout is not being mapped.",
+            label, len(missing), ", ".join(missing[:12]),
+        )
+    else:
+        logger.info("%s: every model parameter was loaded from the bundle", label)
+    model._vmlx_unloaded_parameters = list(missing)
+    return missing
 
 
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
@@ -4584,6 +4709,11 @@ def _load_jang_v2_vlm(
                     _qpath.replace(".switch_mlp.", ".experts.switch_glu.")
                 )
 
+    # Split per-expert stacks (X.experts.<e>.<proj>, e.g. the Ornith native-MTP head): the runtime module is the
+    # stacked X.switch_mlp.<proj>, so mark that path quantized too (bits from the experts' own entries below).
+    _split_switch_paths = _split_expert_switch_paths(quantized_suffixes)
+    quantized_suffixes.update(_split_switch_paths)
+
     quantization = {"group_size": block_size, "bits": default_bits}
 
     # Per-module bit overrides patched into config by quant_shape_inference
@@ -4617,6 +4747,9 @@ def _load_jang_v2_vlm(
                 if v.get("mode"):
                     o["mode"] = str(v["mode"])
                 return o
+        for cand in candidates:
+            if cand in _split_switch_paths:
+                return _split_expert_switch_override(cand, _split_switch_paths[cand], _qcfg_overrides)
         return None
 
     def get_class_predicate(p, m):
@@ -4725,6 +4858,12 @@ def _load_jang_v2_vlm(
     _gemma_ple_pending: dict[str, dict[str, mx.array]] = {}
     _affine1_expanded_count = 0
     _jangtq2_loaded_keys = set()
+    _split_expert_buffer: dict = {}
+    _vlm_loaded_keys: set = set()
+    _switch_module_paths = {
+        path for path, _module in model.named_modules()
+        if path.endswith((".switch_mlp.gate_proj", ".switch_mlp.up_proj", ".switch_mlp.down_proj"))
+    } if _split_switch_paths else set()
     for sf in _iter_shards_with_progress(weight_files):
         shard_weights = mx.load(str(sf))
         if _ternary_packed_modules:
@@ -5053,6 +5192,8 @@ def _load_jang_v2_vlm(
             shard_weights = {
                 k: v for k, v in shard_weights.items() if not _is_expert_key(k)
             }
+        if _switch_module_paths:
+            _take_split_expert_tensors(shard_weights, _switch_module_paths, _split_expert_buffer)
         # Pre-fix per-layer bits before load to prevent shape mismatch
         # ValueError on JANG mixed-precision models (fixes #62, #63).
         _pre_fix_bits_from_shard(
@@ -5063,9 +5204,14 @@ def _load_jang_v2_vlm(
             from vmlx_engine.jangh.payload import validate_payload
 
             _jangtq2_loaded_keys.update(validate_payload(model, shard_weights.items()))
+        _vlm_loaded_keys.update(shard_weights.keys())
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
+
+    _vlm_loaded_keys.update(f"{p}.{part}" for p, parts in _split_expert_buffer.items() for part in parts)
+    _load_split_expert_stacks(model, _split_expert_buffer)
+    _split_expert_buffer.clear()
 
     if _is_jangtq2:
         from vmlx_engine.jangh.payload import validate_complete_payload
@@ -5197,6 +5343,10 @@ def _load_jang_v2_vlm(
 
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s")
+    try:
+        _audit_unloaded_parameters(model, _vlm_loaded_keys, label=f"JANG v2 VLM {path.name}")
+    except Exception as _audit_err:  # advisory only; never fail a load on the audit itself
+        logger.debug("unloaded-parameter audit skipped: %s", _audit_err)
 
     return model, _load_jang_vlm_processor(path, model)
 

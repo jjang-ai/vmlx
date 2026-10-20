@@ -3,13 +3,14 @@
  *
  *   'off'      — plain autoregressive decode (AR). The bundle's MTP head is
  *                loaded nowhere; the engine receives --disable-native-mtp.
- *   'adaptive' — the engine's adaptive speculative policy. It starts every
- *                request at the bundle's capability ceiling, measures the
- *                completed verify-cycle cost against its own AR baseline, steps
- *                the draft depth down (D3 -> D1 -> AR) when a window loses,
- *                re-probes with backoff, and promotes back when the deeper rung
- *                wins. The request/bundle sampler is never changed: greedy
- *                requests use identity verification, sampled requests use
+ *   'adaptive' — the engine's adaptive speculative policy. The engine chooses
+ *                the draft depth itself: it measures the completed verify-cycle
+ *                cost against its own AR baseline, promotes toward the verifier
+ *                ceiling when a deeper rung wins, steps down (-> D1 -> AR) when a
+ *                window loses, and re-probes with backoff. Bundle stamps, tuning
+ *                sidecars and family defaults only pick the starting rung.
+ *                The request/bundle sampler is never changed: greedy requests
+ *                use identity verification, sampled requests use
  *                rejection-sampling acceptance (`compatible-only`).
  *
  * There is deliberately NO user-facing depth (D1/D2/D3), no "fixed" policy and

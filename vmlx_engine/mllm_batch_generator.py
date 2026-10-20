@@ -5886,6 +5886,26 @@ def _lm_supports_position_ids(lm: Any) -> bool:
     return "position_ids" in sig.parameters
 
 
+def _lm_supports_prefill_last_logits(lm: Any) -> bool:
+    """Whether ``lm.__call__`` itself honors ``prefill_last_logits_only``.
+
+    Keyed on a marker the implementing ``__call__`` carries (vendored Qwen3.5
+    LanguageModel and its native-MTP patch), not on ``**kwargs``: a family that
+    overrides ``__call__`` and forwards kwargs could otherwise choke on, or
+    silently drop, the flag.
+    """
+    call = getattr(type(lm), "__call__", None)
+    return bool(getattr(call, "_vmlx_prefill_last_logits_only", False))
+
+
+def _with_prefill_last_logits(lm: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """kwargs for a prompt forward whose caller samples only the last row."""
+    if _lm_supports_prefill_last_logits(lm):
+        kwargs = dict(kwargs)
+        kwargs["prefill_last_logits_only"] = True
+    return kwargs
+
+
 def _call_lm_prefix_without_logits(
     lm: Any,
     input_ids: mx.array,
@@ -6790,7 +6810,9 @@ _NATIVE_MTP_CYCLE_TRACE = os.environ.get("VMLX_NATIVE_MTP_CYCLE_TRACE", "").stri
 
 
 # Model types whose unseen profiles seed at the configured depth (live AR/D1/D2/D3 receipts; see below).
-_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset({"qwen4_exp", "nemotron_h", "nemotron_h_v2"})
+_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset(
+    {"qwen4_exp", "nemotron_h", "nemotron_h_v2", "qwen3_5_moe", "qwen3_5_moe_text"}
+)
 
 
 def _native_mtp_unseen_start_depth(
@@ -6820,7 +6842,16 @@ def _native_mtp_unseen_start_depth(
     AR control at both ends (38.4/38.0 then 38.6/38.3 tok/s, clocks within 5 %):
     D1 42.0/43.9, D2 49.7/48.5, D3 49.3/51.4 tok/s (+29-35 % at D2/D3), d1
     acceptance ~90 %. Bolt shares the type but carries no head, so it never
-    reaches this point. No other family inherits this.
+    reaches this point.
+
+    qwen3_5_moe (Ornith-1.5-122B, routed-MoE Qwen3.5) is the third, 2026-10-19,
+    once its head's routed experts actually loaded (jang_loader split-expert
+    stacks; before that the head drafted through random experts at 21-27 %
+    acceptance and lost at every depth). App argv, JANGH2, fixed D1 with prompt
+    priming vs AR in the same run (GPU clock 1,581-1,589 MHz): long greedy 59.4
+    vs 47.5 tok/s, long sampled 55.6 vs 46.7, short greedy 58.3 vs 50.6, short
+    sampled 50.5 vs 50.9, acceptance 71.0 %; greedy text equal to AR. No other
+    family inherits this.
     """
     if str(model_type or "").lower() not in _NATIVE_MTP_MEASURED_COLD_START_TYPES:
         return None
@@ -13543,7 +13574,7 @@ class MLLMBatchGenerator:
                 self._store_glm_native_boundary(request, cache)
                 # Final chunk: get logits from last token
                 last_chunk = input_ids[:, processed:]
-                output = lm(last_chunk, **_lm_kwargs_for(processed, seq_len))
+                output = lm(last_chunk, **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)))
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -13627,9 +13658,15 @@ class MLLMBatchGenerator:
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
                             )
-                        output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
+                        output = lm(
+                            input_ids[:, processed:],
+                            **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)),
+                        )
                 else:
-                    output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
+                    output = lm(
+                        input_ids,
+                        **_with_prefill_last_logits(lm, _lm_kwargs_for(0, seq_len)),
+                    )
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
                     logger.info("restore fingerprint WARM(text-path) first-token logits for %s: %s", request.request_id, _diag_logits_fp(output))
                     _total = int(getattr(request, "_cached_tokens", 0) or 0) + int(seq_len)
@@ -18304,6 +18341,12 @@ class MLLMBatchGenerator:
             "qwen3_5",
             "qwen3_5_text",
             "qwen3_5_vl",
+            # Routed-MoE Qwen3.5 (Ornith-1.5-122B) builds its head from the same
+            # patched MTPModule (qwen35_vl._register_moe_mtp_classes): one
+            # attention layer + routed MoE, fed the pre-norm trunk hidden at t
+            # and token t+1, one KVCache per head layer.
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
         }:
             drop_context(self.language_model)
             return False
@@ -18390,7 +18433,11 @@ class MLLMBatchGenerator:
 
         # Resolve the AR-vs-MTP decision BEFORE the MTP seed forward below:
         # a skipped activation must not pay the extra hidden-state forward.
-        from .native_mtp import native_mtp_effective_depth, native_mtp_max_depth
+        from .native_mtp import (
+            native_mtp_adaptive_ceiling,
+            native_mtp_effective_depth,
+            native_mtp_max_depth,
+        )
 
         depth, depth_source = native_mtp_effective_depth()
         depth = max(1, min(native_mtp_max_depth(), depth))
@@ -18421,8 +18468,11 @@ class MLLMBatchGenerator:
             if store is None:
                 store = self._native_mtp_profiles = NativeMTPProfileStore()
             sampled_profile = request_profile_key[0] == "sampled"
+            # The resolved depth is where Adaptive starts; its ladder may climb
+            # to the verifier ceiling unless an explicit env depth limits it.
             configured_ladder_depth = min(
-                depth, _native_mtp_depth_ceiling_for_request(request)
+                native_mtp_adaptive_ceiling(depth, depth_source),
+                _native_mtp_depth_ceiling_for_request(request),
             )
             # The process profile chooses a FRESH request's start. A scheduled
             # recovery/calibration already has a request-local AR baseline and
@@ -18612,8 +18662,15 @@ class MLLMBatchGenerator:
             getattr(request, "num_tokens", 0) or 0
         )
         # A learned start is advisory, not a reduction of the user's ceiling.
+        # Under Adaptive the resolved depth (default / tuning / bundle stamp /
+        # family default) is only the starting rung: the ladder top is the
+        # verifier ceiling (native_mtp_adaptive_ceiling). Fixed policy and an
+        # explicit env depth keep the resolved depth as the top.
+        _resolved_depth, _resolved_source = native_mtp_effective_depth()
         state.ladder_depth = max(1, min(
-            int(native_mtp_effective_depth()[0]), state.depth_ceiling,
+            native_mtp_adaptive_ceiling(_resolved_depth, _resolved_source)
+            if _native_mtp_adaptive_policy() else int(_resolved_depth),
+            state.depth_ceiling,
         ))
         if (
             depth > 1

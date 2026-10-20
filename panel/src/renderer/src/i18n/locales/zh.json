@@ -1046,7 +1046,7 @@
       "nativeMtpBlockedFallback": "检测到原生 MTP 权重，但此 bundle 未通过运行时兼容性门槛。自回归解码保持激活。",
       "nativeMtpHint": "当 bundle 通过运行时门槛时使用模型保留的 MTP 头。自适应 MTP 每步起草多个 token，与模型精确验证，并与普通解码自我对比。没有兼容 MTP 头的模型使用普通自回归解码。",
       "nativeMtpMode": "原生 MTP",
-      "nativeMtpModeTooltip": "自适应 MTP：引擎从 bundle 的草稿上限开始，将每个验证窗口与自身 AR 基线比较，窗口失利时降到深度 1 再降到 AR，带退避重新探测，更深档位获胜时再升回。请求/bundle 的采样永不改变。AR（关闭 MTP）：普通自回归解码。",
+      "nativeMtpModeTooltip": "自适应 MTP：草稿深度由引擎自行选择。它将每个验证窗口与自身 AR 基线比较，更深档位获胜时升至验证上限，窗口失利时降到深度 1 再降到 AR，并带退避重新探测。bundle 设置不会固定深度。请求/bundle 的采样永不改变。AR（关闭 MTP）：普通自回归解码。",
       "nativeMtpModeAdaptive": "自适应 MTP",
       "nativeMtpModeAr": "AR（关闭 MTP）",
       "nativeMtpAdaptiveNote": "自适应 MTP 会监测解码性能；当测得的额外开销超过收益时，可以降低草稿深度或回退到普通解码。它不会固定或改写 temperature、top-p、top-k 或 min-p。greedy 请求按同一性验证；采样请求使用拒绝采样接受，因此输出分布就是模型自身的分布。实时深度、接受率和回退原因显示在性能面板。",

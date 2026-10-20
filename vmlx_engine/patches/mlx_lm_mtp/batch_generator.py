@@ -1041,7 +1041,11 @@ def _effective_depth_resolution(gen_batch: Any, *, adaptive_ceiling: bool = Fals
         # adaptive search limit. Explicit limits and family fallbacks retain
         # their existing meaning. Apply the same rollback checks below to the
         # expanded range; starting depth remains D1 and promotions cost-tested.
-        if adaptive_ceiling and _adaptive_depth_enabled() and "vmlx_mtp_tuning.json" in source:
+        # Every advisory source (default, tuning sidecar, bundle
+        # recommended_num_drafts stamp, family default) only seeds the start;
+        # only an explicit env depth limits the adaptive search.
+        if (adaptive_ceiling and _adaptive_depth_enabled()
+                and not str(source or "").startswith("VML") and source != "resolution_error"):
             depth = native_mtp_max_depth()
     except Exception:
         depth = 1

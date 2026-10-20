@@ -119,6 +119,23 @@ def install_jangh(model: nn.Module, config: dict) -> int:
                                   rotation_gate_up=gu["rotation"], rotation_down=dn["rotation"])
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
+        import os as _os
+
+        if (D, I, E) == (3072, 1024, 256) and gu["rotation"] == dn["rotation"] == "hadamard32" \
+                and _os.environ.get("JANGH_ORNITH_EXPERT_TILES", "1").strip() != "0":
+            # Expert-aligned NAX prefill tiles at this geometry (Ornith-1.5-122B): same tq_gather_qmm_nax arithmetic as
+            # the generic sorted route, only the tile -> row plan differs, so outputs are bit-identical (measured,
+            # tests/test_jangh_expert_tiles_d3072.py); expert GEMMs 1.10-1.29x faster at 2-4k-row prefill segments.
+            # switch._use_expert_tiles re-checks shapes, bits, rotation and NAX on every call.
+            replacement.use_expert_tiles = True
+        if (D, I, E) == (3072, 1024, 256) and dn["rotation"] == "hadamard32":
+            # Decode/sorted switch by TOKENS from the measured crossover at this geometry (M5 Max, synthetic codes,
+            # sorted route with expert tiles): per-row gather wins at every count through 96 tokens (8 tokens: 0.54 vs
+            # 5.54 ms per layer; 48: 2.39 vs 5.41; 96: 4.63 vs 4.79) and loses from 128 (6.16 vs 5.69). The legacy
+            # 64-routed-row rule sent every 8-96-token forward (8-row MTP verify windows, short prefill suffixes) down
+            # the sorted route: an 8-row verify measured 202 ms vs 38 ms at 6 rows on Ornith JANGH2.
+            raw = _os.environ.get("JANGH_ORNITH_DECODE_MAX_TOKENS", "").strip()
+            replacement.decode_max_tokens = int(raw) if raw.isdigit() else 96
         replacements.append((mod, replacement))
     if mlp_prepared:
         # resolved only when relu2 stacks exist: the installer contract tests run this body in a namespace that
