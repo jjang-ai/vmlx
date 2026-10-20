@@ -119,6 +119,15 @@ def install_jangh(model: nn.Module, config: dict) -> int:
                                   rotation_gate_up=gu["rotation"], rotation_down=dn["rotation"])
         replacement.is_jangh = True
         replacement.is_jangtq2 = True
+        import os as _os
+
+        if (D, I, E) == (3072, 1024, 256) and gu["rotation"] == dn["rotation"] == "hadamard32" \
+                and _os.environ.get("JANGH_ORNITH_EXPERT_TILES", "1").strip() != "0":
+            # Expert-aligned NAX prefill tiles at this geometry (Ornith-1.5-122B): same tq_gather_qmm_nax arithmetic as
+            # the generic sorted route, only the tile -> row plan differs, so outputs are bit-identical (measured,
+            # tests/test_jangh_expert_tiles_d3072.py); expert GEMMs 1.10-1.29x faster at 2-4k-row prefill segments.
+            # switch._use_expert_tiles re-checks shapes, bits, rotation and NAX on every call.
+            replacement.use_expert_tiles = True
         replacements.append((mod, replacement))
     if mlp_prepared:
         # resolved only when relu2 stacks exist: the installer contract tests run this body in a namespace that
