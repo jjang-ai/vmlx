@@ -5886,6 +5886,26 @@ def _lm_supports_position_ids(lm: Any) -> bool:
     return "position_ids" in sig.parameters
 
 
+def _lm_supports_prefill_last_logits(lm: Any) -> bool:
+    """Whether ``lm.__call__`` itself honors ``prefill_last_logits_only``.
+
+    Keyed on a marker the implementing ``__call__`` carries (vendored Qwen3.5
+    LanguageModel and its native-MTP patch), not on ``**kwargs``: a family that
+    overrides ``__call__`` and forwards kwargs could otherwise choke on, or
+    silently drop, the flag.
+    """
+    call = getattr(type(lm), "__call__", None)
+    return bool(getattr(call, "_vmlx_prefill_last_logits_only", False))
+
+
+def _with_prefill_last_logits(lm: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """kwargs for a prompt forward whose caller samples only the last row."""
+    if _lm_supports_prefill_last_logits(lm):
+        kwargs = dict(kwargs)
+        kwargs["prefill_last_logits_only"] = True
+    return kwargs
+
+
 def _call_lm_prefix_without_logits(
     lm: Any,
     input_ids: mx.array,
@@ -13543,7 +13563,7 @@ class MLLMBatchGenerator:
                 self._store_glm_native_boundary(request, cache)
                 # Final chunk: get logits from last token
                 last_chunk = input_ids[:, processed:]
-                output = lm(last_chunk, **_lm_kwargs_for(processed, seq_len))
+                output = lm(last_chunk, **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)))
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -13627,9 +13647,15 @@ class MLLMBatchGenerator:
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
                             )
-                        output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
+                        output = lm(
+                            input_ids[:, processed:],
+                            **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)),
+                        )
                 else:
-                    output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
+                    output = lm(
+                        input_ids,
+                        **_with_prefill_last_logits(lm, _lm_kwargs_for(0, seq_len)),
+                    )
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
                     logger.info("restore fingerprint WARM(text-path) first-token logits for %s: %s", request.request_id, _diag_logits_fp(output))
                     _total = int(getattr(request, "_cached_tokens", 0) or 0) + int(seq_len)

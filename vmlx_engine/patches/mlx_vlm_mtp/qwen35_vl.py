@@ -1132,6 +1132,7 @@ def _patch_language_model(qlang: Any) -> None:
             )
 
         position_ids = kwargs.pop("position_ids", None)
+        prefill_last_logits_only = bool(kwargs.pop("prefill_last_logits_only", False))
         pixel_values = kwargs.pop("pixel_values", None)
         image_grid_thw = kwargs.pop("image_grid_thw", None)
         video_grid_thw = kwargs.pop("video_grid_thw", None)
@@ -1252,6 +1253,11 @@ def _patch_language_model(qlang: Any) -> None:
         if not return_logits:
             return hidden
         normed = self.model.norm(hidden)
+        if prefill_last_logits_only and not return_hidden and normed.shape[1] > 1:
+            # Same contract as the vendored LanguageModel.__call__: prompt
+            # prefill samples only the last row (prompt capture above already
+            # consumed the full hidden).
+            normed = normed[:, -1:, :]
         if self.args.tie_word_embeddings:
             logits = self.model.embed_tokens.as_linear(normed)
         else:
@@ -1330,6 +1336,7 @@ def _patch_language_model(qlang: Any) -> None:
         return predicate
 
     cls.__init__ = __init__
+    __call__._vmlx_prefill_last_logits_only = True
     cls.__call__ = __call__
     cls.mtp_forward = mtp_forward
     cls.make_mtp_cache = make_mtp_cache

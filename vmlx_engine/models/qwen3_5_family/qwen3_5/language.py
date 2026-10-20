@@ -832,6 +832,7 @@ class LanguageModel(nn.Module):
         **kwargs,
     ):
         position_ids = kwargs.pop("position_ids", None)
+        prefill_last_logits_only = bool(kwargs.pop("prefill_last_logits_only", False))
         pixel_values = kwargs.pop("pixel_values", None)
         image_grid_thw = kwargs.pop("image_grid_thw", None)
         video_grid_thw = kwargs.pop("video_grid_thw", None)
@@ -910,6 +911,13 @@ class LanguageModel(nn.Module):
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
         )
+        if prefill_last_logits_only and out.shape[1] > 1:
+            # Prompt prefill: the caller samples only the last row. The head is
+            # 248k x hidden, so projecting every prompt row cost ~5% of a cold
+            # 8k-32k Ornith prefill and a (rows x vocab) transient. The trunk,
+            # KV and recurrent state are untouched; the kept row goes through
+            # the same one-row head kernel every decode step uses.
+            out = out[:, -1:, :]
         if self.args.tie_word_embeddings:
             out = self.model.embed_tokens.as_linear(out)
         else:
@@ -960,3 +968,8 @@ class LanguageModel(nn.Module):
             return True
 
         return predicate
+
+
+# Engine capability marker (mllm_batch_generator._lm_supports_prefill_last_logits): this exact __call__ honors
+# prefill_last_logits_only. Subclasses that override __call__ do not inherit the marker.
+LanguageModel.__call__._vmlx_prefill_last_logits_only = True
