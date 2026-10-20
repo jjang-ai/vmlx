@@ -18385,28 +18385,6 @@ class MLLMBatchGenerator:
             extra_keys=getattr(request, "_cache_extra_keys", None),
         )
 
-    def _decode_position_kwargs(self, input_tokens: mx.array, cache: List[Any]) -> Dict[str, Any]:
-        """``position_ids`` exactly as the AR decode step forms them, for every forward that emits decode rows.
-
-        The native-MTP seed, verify and replay forwards must rotate their rows the way AR decode does or greedy MTP
-        drifts from AR at long context: AR passes absolute 3-axis text positions (the M-RoPE rotary path), while a
-        forward without ``position_ids`` takes the fused 1-D text RoPE, which rounds differently as positions grow
-        (Ornith-1.5-122B greedy diverged from AR within five tokens at 32k and 112k prompt tokens, matched below 2k).
-        """
-        if not _lm_supports_position_ids(self.language_model):
-            return {}
-        position_ids = _absolute_text_position_ids(input_tokens, cache, self.language_model)
-        if position_ids is None:
-            return {}
-        row_deltas = _request_rope_delta_rows(
-            self.language_model,
-            getattr(self, "active_batch", None),
-            int(position_ids.shape[1]),
-        )
-        if row_deltas is not None:
-            position_ids = position_ids + row_deltas[None, :, :]
-        return {"position_ids": position_ids}
-
     def _seed_native_mtp_from_prefill(
         self,
         request: MLLMBatchRequest,
@@ -18593,7 +18571,6 @@ class MLLMBatchGenerator:
             first_tok[:, None],
             cache=cache,
             return_hidden=True,
-            **self._decode_position_kwargs(first_tok[:, None], cache),
         )
         if _diag_fingerprints_enabled():
             self._diag_decode_fingerprint(locals().get("batch"), locals().get("req") or locals().get("request"), cache if "cache" in locals() else None, output, "def _seed_native_mtp_from_prefill(")
@@ -18777,7 +18754,6 @@ class MLLMBatchGenerator:
                 replay_input,
                 cache=cache,
                 return_hidden=True,
-                **self._decode_position_kwargs(replay_input, cache),
             )
         if _diag_fingerprints_enabled():
             self._diag_decode_fingerprint(locals().get("batch"), locals().get("req") or locals().get("request"), cache if "cache" in locals() else None, output, "def _replay_native_mtp_confirmed_tokens(")
@@ -18848,7 +18824,6 @@ class MLLMBatchGenerator:
                 inputs[None, :],
                 cache=cache,
                 return_hidden=True,
-                **self._decode_position_kwargs(inputs[None, :], cache),
                 **verify_kwargs,
             )
             if _diag_fingerprints_enabled():
@@ -19669,7 +19644,21 @@ class MLLMBatchGenerator:
                     model_type=getattr(self, "_model_type", None),
                 )
         _posid_t0 = time.perf_counter() if trace else 0.0
-        lm_kwargs.update(self._decode_position_kwargs(input_tokens, cache))
+        if _lm_supports_position_ids(self.language_model):
+            position_ids = _absolute_text_position_ids(
+                input_tokens,
+                cache,
+                self.language_model,
+            )
+            if position_ids is not None:
+                _row_deltas = _request_rope_delta_rows(
+                    self.language_model,
+                    getattr(self, "active_batch", None),
+                    int(position_ids.shape[1]),
+                )
+                if _row_deltas is not None:
+                    position_ids = position_ids + _row_deltas[None, :, :]
+                lm_kwargs["position_ids"] = position_ids
         if trace:
             self._decode_trace_posid_s = getattr(
                 self, "_decode_trace_posid_s", 0.0
