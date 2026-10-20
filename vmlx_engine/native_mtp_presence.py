@@ -6,13 +6,18 @@ the committed history plus the proposals preceding each verification row.
 
 import mlx.core as mx
 
-from .utils.token_logits_processors import normalize_logit_bias
+from .utils.token_logits_processors import make_openai_token_penalty_processor
 
 
 class NativeMTPPresence:
-    def __init__(self, presence_penalty, logit_bias=None):
+    def __init__(self, presence_penalty, logit_bias=None, *, processor=None):
         self.presence = float(presence_penalty)
-        self.bias = normalize_logit_bias(logit_bias)
+        # Share the AR processor's committed adjustment state. A bias present
+        # at prefill and a presence penalty added later must round in that
+        # order, rather than recomputing their sum in Python precision.
+        self.processor = processor or make_openai_token_penalty_processor(
+            presence_penalty=self.presence, logit_bias=logit_bias
+        )
         self._shape = None
         self._history = []
 
@@ -20,26 +25,6 @@ class NativeMTPPresence:
         width = int(logits.shape[-1])
         shape = (width, logits.dtype)
         if shape != self._shape:
-            if any(token >= width for token in self.bias):
-                raise ValueError("logit_bias token is outside vocabulary size")
-            self._unseen_adjustment = mx.zeros((width,), dtype=logits.dtype)
-            self._seen_adjustment = mx.full(
-                (width,), -self.presence, dtype=logits.dtype
-            )
-            if self.bias:
-                indices = mx.array(sorted(self.bias), dtype=mx.int32)
-                # Round each combined adjustment once, like the AR processor.
-                self._unseen_adjustment = mx.put_along_axis(
-                    self._unseen_adjustment, indices,
-                    mx.array([self.bias[t] for t in sorted(self.bias)], dtype=logits.dtype),
-                    axis=0,
-                )
-                self._seen_adjustment = mx.put_along_axis(
-                    self._seen_adjustment, indices,
-                    mx.array([self.bias[t] - self.presence for t in sorted(self.bias)],
-                             dtype=logits.dtype),
-                    axis=0,
-                )
             self._shape = shape
             self._history = []
             self._seen_tokens = set()
@@ -61,6 +46,10 @@ class NativeMTPPresence:
             self._seen_tokens.update(additions)
         self._history = history
 
+        # Zero logits expose the exact adjustment without subtraction or
+        # another rounding of the target logits. Only committed tokens enter
+        # this processor; hypothetical proposals stay in the row-local graph.
+        adjustment = self.processor(history, mx.zeros((width,), dtype=logits.dtype))
         seen = self._seen != 0
         columns = mx.arange(width)
         rows = []
@@ -68,9 +57,12 @@ class NativeMTPPresence:
             if i:
                 # No host read of a proposed token and no mutation of the
                 # committed-history mask: rejected proposals cannot persist.
-                seen = seen | (columns == drafts[i - 1].reshape(()))
-            adjustment = mx.where(
-                seen, self._seen_adjustment, self._unseen_adjustment
-            )
+                proposed = columns == drafts[i - 1].reshape(())
+                adjustment = adjustment + mx.where(
+                    proposed & ~seen,
+                    mx.array(-self.presence, dtype=logits.dtype),
+                    mx.array(0, dtype=logits.dtype),
+                )
+                seen = seen | proposed
             rows.append(logits[i] + adjustment)
         return mx.stack(rows)

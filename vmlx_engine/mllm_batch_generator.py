@@ -17877,7 +17877,8 @@ class MLLMBatchGenerator:
                     from .native_mtp_presence import NativeMTPPresence
 
                     transform = NativeMTPPresence(
-                        presence, getattr(request, "logit_bias", None)
+                        presence, getattr(request, "logit_bias", None),
+                        processor=openai_processor,
                     )
 
                     def target_presence_logits(logits, output_tokens, drafts=()):

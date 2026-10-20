@@ -85,6 +85,40 @@ def test_presence_sampler_preserves_target_law_and_separate_proposal_law():
     assert not bool(mx.array_equal(proposal_lp, target_lps[0]))
 
 
+@pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16, mx.float32])
+def test_presence_keeps_incremental_bias_rounding_across_seed_and_rejection(dtype):
+    raw = mx.zeros((1, 4), dtype=dtype)
+    bias = {1: 1.49, 2: -.49}
+    processor = make_openai_token_penalty_processor(
+        presence_penalty=1.5, logit_bias=bias
+    )
+    processor([0], raw)  # actual first-token AR prefill
+    native = NativeMTPPresence(1.5, bias, processor=processor)
+    reference = make_openai_token_penalty_processor(
+        presence_penalty=1.5, logit_bias=bias
+    )
+    reference([0], raw)
+    assert bool(mx.array_equal(native(raw, [0, 1]), reference([0, 1], raw)))
+    matrix = mx.broadcast_to(raw, (3, 4))
+    actual = native(matrix, [0, 1], [mx.array([2]), mx.array([2])])
+    expected = mx.concatenate([
+        reference([0, 1], raw),
+        reference([0, 1, 2], raw),
+        reference([0, 1, 2, 2], raw),
+    ])
+    assert bool(mx.array_equal(actual, expected))
+    # Both proposals rejected; their adjustment must not contaminate AR's
+    # shared committed state when a different correction is appended.
+    reference = make_openai_token_penalty_processor(
+        presence_penalty=1.5, logit_bias=bias
+    )
+    reference([0], raw)
+    reference([0, 1], raw)
+    assert bool(mx.array_equal(
+        native(raw, [0, 1, 3]), reference([0, 1, 3], raw)
+    ))
+
+
 @pytest.mark.parametrize("depth", [1, 3])
 @pytest.mark.parametrize("fused", [False, True])
 def test_presence_seed_verify_rejection_and_queue_match_sequential_target(monkeypatch, depth, fused):
