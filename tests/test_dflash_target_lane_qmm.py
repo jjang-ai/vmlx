@@ -39,3 +39,14 @@ def test_global_off_switch(monkeypatch):
     assert not lane and why == "VMLX_LANE_QMM=0"
     monkeypatch.setenv("VMLX_MIMO_LANE_QMM", "1")
     assert _dflash_target_lane_qmm(True, "mimo_v2", True)[0] is False
+
+
+def test_native_mtp_lane_qmm_is_opt_in(monkeypatch):
+    from vmlx_engine.models.mllm import _native_mtp_lane_qmm_requested
+
+    monkeypatch.delenv("VMLX_NATIVE_MTP_LANE_QMM", raising=False)
+    assert not _native_mtp_lane_qmm_requested()
+    monkeypatch.setenv("VMLX_NATIVE_MTP_LANE_QMM", "1")
+    assert _native_mtp_lane_qmm_requested()
+    monkeypatch.setenv("VMLX_NATIVE_MTP_LANE_QMM", "0")
+    assert not _native_mtp_lane_qmm_requested()

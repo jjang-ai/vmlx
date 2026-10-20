@@ -576,6 +576,13 @@ def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: boo
     return True, ""
 
 
+def _native_mtp_lane_qmm_requested() -> bool:
+    """VMLX_NATIVE_MTP_LANE_QMM=1: route a native-MTP target's affine projections through the lane matmul (A/B)."""
+    import os
+
+    return os.environ.get("VMLX_NATIVE_MTP_LANE_QMM", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
 def _is_mimo_v2_runtime_object_or_name(model: Any, model_name: Any = None) -> bool:
     """Return true when an MLLM-loaded object is the MiMo-V2 runtime.
 
@@ -4936,6 +4943,15 @@ class MLXMultimodalLM:
                 )
                 if not _lane and _why:
                     logger.info("DFlash2 target lane matmul: not installed (%s)", _why)
+                if not _lane and _native_mtp_lane_qmm_requested():
+                    # Diagnostic opt-in for native-MTP verify (Ornith-1.5-122B: 83 % of a JANGH2 token's bytes are
+                    # dense 8-bit projections, so a row-count-independent kernel could make 2..4-row verifies cost
+                    # about one AR step). AR steps run the same lane kernel, so greedy MTP still equals greedy AR.
+                    from ..native_mtp import native_mtp_active_model_path
+
+                    _lane = native_mtp_active_model_path() is not None
+                    logger.info("Native-MTP lane matmul requested (VMLX_NATIVE_MTP_LANE_QMM=1): %s",
+                                "installing" if _lane else "native MTP runtime not active, skipped")
                 if _lane:
                     import time as _time
                     from ..metal import lane_qmm
