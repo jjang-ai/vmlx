@@ -4557,8 +4557,17 @@ def _load_dspark_runtime(model: Any, model_path: str | Path) -> dict | None:
         raise ValueError("DSpark drafter taps layers the target does not have")
     # MoE targets: stay below the expert sort threshold (minicpm_target.preferred_max_draft: 6 at top-8), where the
     # stock multi-row block is row-exact and ~1.7x cheaper than the per-row route the threshold needs.
-    max_draft = max(1, min(int(spec.get("max_draft", target.preferred_max_draft)), MAX_VERIFY_ROWS - 1,
-                           int(target.preferred_max_draft)))
+    # The width is chosen per round (dspark.generate.choose_width / ARFallback); this is only the verifier ceiling. A
+    # bundle's speculative.max_draft stamp is advisory and never lowers it (no stamped depth caps an adaptive drafter).
+    max_draft = max(1, min(MAX_VERIFY_ROWS - 1, int(target.preferred_max_draft)))
+    if spec.get("max_draft") is not None:
+        try:
+            stamped = int(spec["max_draft"])
+        except (TypeError, ValueError):
+            stamped = None
+        if stamped is not None and stamped < max_draft:
+            logger.info("DSpark: bundle speculative.max_draft=%d is advisory; per-round width stays adaptive up to %d",
+                        stamped, max_draft)
     logger.info(
         "DSpark drafter loaded from %s: block %d, taps %s, max draft %d per round",
         drafter_dir, drafter.block, drafter.target_layer_ids, max_draft,

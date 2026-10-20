@@ -525,6 +525,9 @@ def load_nemotron_bolt_vl(bundle):
                 from . import nemotron_mamba_rollback
                 nemotron_mamba_rollback.apply()
     language_model = None
+    from ..native_mtp import set_native_mtp_drafter_max_depth
+
+    set_native_mtp_drafter_max_depth(None)
     lilicorr_dir = Path(bundle) / "lilicorr"
     if mtp is None and lilicorr_dir.is_dir() and os.environ.get("VMLX_NEMOTRON_LILICORR", "0").strip() == "1":
         # Opt-in until a live A/B qualifies it (offline greedy tau 2.8-4.9 on this target, ledger B12).
@@ -534,6 +537,9 @@ def load_nemotron_bolt_vl(bundle):
         drafter = LiLiCorrDrafter(lilicorr_dir)
         nemotron_mamba_rollback.apply()
         language_model = LiLiCorrLanguageModel(text, drafter)
+        # One drafter pass proposes block - 1 path tokens, verified byte-exact at D7 (ledger B13): Adaptive's ladder
+        # may climb there instead of stopping at the recursive-head default D3.
+        set_native_mtp_drafter_max_depth(int(drafter.block) - 1)
         logger.info("Nemotron-3.5-Bolt LiLiCorr drafter attached (block %d, taps %s, window %d)",
                     drafter.block, drafter.layer_ids, drafter.window)
     model = Model(text, bundle, config, mtp=mtp, language_model=language_model)

@@ -2015,10 +2015,9 @@ def stream_dflash2_generate(
             draft,
             tokenizer,
             prompt,
-            # Qwen3.8's published/runtime-validated DFlash2 lane is block 5.
-            # The checkpoint's training maximum is larger, but using it as
-            # the serving block makes four-row verification become seq8 and
-            # cuts throughput roughly in half on M5 Max.
+            # The drafter's trained block: input to _dflash2_block_plan, whose
+            # _BlockChooser picks the verify width per cycle from measured
+            # costs (e.g. 3/5/8/16). Not a fixed serving width.
             block_size=int(draft.config.block_size),
             max_tokens=int(max_tokens),
             temperature=float(temperature),

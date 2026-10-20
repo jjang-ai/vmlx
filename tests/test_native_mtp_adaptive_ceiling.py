@@ -39,3 +39,48 @@ def test_explicit_env_depth_stays_a_limit(source):
 def test_raised_verifier_ceiling_is_the_adaptive_top(monkeypatch):
     monkeypatch.setenv("VMLX_NATIVE_MTP_MAX_DEPTH", "5")
     assert native_mtp_adaptive_ceiling(1, "bundle:recommended_num_drafts") == native_mtp_max_depth() == 5
+
+
+@pytest.fixture
+def _no_max_env(monkeypatch):
+    from vmlx_engine import native_mtp
+
+    monkeypatch.delenv("VMLX_NATIVE_MTP_MAX_DEPTH", raising=False)
+    monkeypatch.delenv("VMLINUX_NATIVE_MTP_MAX_DEPTH", raising=False)
+    native_mtp.set_native_mtp_drafter_max_depth(None)
+    yield native_mtp
+    native_mtp.set_native_mtp_drafter_max_depth(None)
+
+
+def test_block_drafter_raises_the_adaptive_top(_no_max_env):
+    # LiLiCorr (block 8) proposes 7 path tokens per pass, verified byte-exact at D7: Adaptive may climb to D7.
+    native_mtp = _no_max_env
+    native_mtp.set_native_mtp_drafter_max_depth(7)
+    assert native_mtp.native_mtp_max_depth() == 7
+    assert native_mtp.native_mtp_adaptive_ceiling(1, "default") == 7
+    assert native_mtp.native_mtp_adaptive_ceiling(3, "VMLX_NATIVE_MTP_DEPTH") == 3
+
+
+def test_explicit_max_env_beats_drafter_depth(_no_max_env, monkeypatch):
+    native_mtp = _no_max_env
+    native_mtp.set_native_mtp_drafter_max_depth(7)
+    monkeypatch.setenv("VMLX_NATIVE_MTP_MAX_DEPTH", "4")
+    assert native_mtp.native_mtp_max_depth() == 4
+
+
+def test_drafter_depth_never_lowers_the_default_and_clears_on_reload(_no_max_env):
+    native_mtp = _no_max_env
+    native_mtp.set_native_mtp_drafter_max_depth(1)
+    assert native_mtp.native_mtp_max_depth() == 3
+    native_mtp.set_native_mtp_drafter_max_depth(7)
+    native_mtp.deactivate_native_mtp()
+    assert native_mtp.native_mtp_max_depth() == 3
+    native_mtp.set_native_mtp_drafter_max_depth(7)
+    native_mtp.maybe_apply_native_mtp("/nonexistent/bundle", allow_runtime=False)
+    assert native_mtp.native_mtp_max_depth() == 3
+
+
+def test_drafter_depth_capped_at_hard_ceiling(_no_max_env):
+    native_mtp = _no_max_env
+    native_mtp.set_native_mtp_drafter_max_depth(15)
+    assert native_mtp.native_mtp_max_depth() == native_mtp._NATIVE_MTP_DEPTH_HARD_CEILING

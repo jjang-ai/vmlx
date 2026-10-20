@@ -29,18 +29,42 @@ _NATIVE_MTP_DEPTH_HARD_CEILING = 8
 _NATIVE_MTP_DEFAULT_MAX_DEPTH = 3
 
 
+# Depth a loaded BLOCK drafter verified exactly (one drafter pass proposes the whole block), when deeper than the
+# recursive single-head default. Set by the family wrapper that attaches it; cleared on every native-MTP (re)apply.
+_ACTIVE_DRAFTER_MAX_DEPTH: int | None = None
+
+
+def set_native_mtp_drafter_max_depth(depth: int | None) -> None:
+    """Declare the loaded block drafter's verified depth so Adaptive may climb to it (None clears).
+
+    Nemotron-3.5-Bolt LiLiCorr drafts ``block - 1`` = 7 path tokens per pass; its fixed-D7 arm was byte-identical to
+    AR live (ledger nemotron35-bolt B13) while Adaptive, held at the recursive-head default D3, could not reach the
+    depth its code workload measured fastest at (D7 79.0 tok/s).
+    """
+    global _ACTIVE_DRAFTER_MAX_DEPTH
+    _ACTIVE_DRAFTER_MAX_DEPTH = (
+        max(1, min(_NATIVE_MTP_DEPTH_HARD_CEILING, int(depth))) if depth else None
+    )
+
+
 def native_mtp_max_depth() -> int:
-    """Resolve the configured native-MTP depth ceiling (default 3)."""
+    """Resolve the verifier depth ceiling: the top rung Adaptive may climb to.
+
+    An explicit VMLX/VMLINUX_NATIVE_MTP_MAX_DEPTH wins. Otherwise 3 (recursive drafting through one trained head),
+    raised to a loaded block drafter's verified depth (set_native_mtp_drafter_max_depth). No bundle stamp, tuning
+    sidecar or family default lowers it (native_mtp_adaptive_ceiling).
+    """
     raw = os.environ.get(
         "VMLINUX_NATIVE_MTP_MAX_DEPTH",
         os.environ.get("VMLX_NATIVE_MTP_MAX_DEPTH", ""),
     ).strip()
+    default = max(_NATIVE_MTP_DEFAULT_MAX_DEPTH, _ACTIVE_DRAFTER_MAX_DEPTH or 0)
     if not raw:
-        return _NATIVE_MTP_DEFAULT_MAX_DEPTH
+        return default
     try:
         value = int(raw)
     except ValueError:
-        return _NATIVE_MTP_DEFAULT_MAX_DEPTH
+        return default
     return max(1, min(_NATIVE_MTP_DEPTH_HARD_CEILING, value))
 
 
@@ -1255,6 +1279,7 @@ def native_mtp_active_model_path() -> Path | None:
 def deactivate_native_mtp() -> None:
     global _ACTIVE_NATIVE_MTP_MODEL_PATH
     _ACTIVE_NATIVE_MTP_MODEL_PATH = None
+    set_native_mtp_drafter_max_depth(None)
     try:
         _set_mtp_active(False)
     except Exception:
@@ -1276,6 +1301,7 @@ def maybe_apply_native_mtp(
 ) -> dict[str, Any]:
     """Apply sanitize/runtime patches before loading a native-MTP bundle."""
     global _ACTIVE_NATIVE_MTP_MODEL_PATH
+    set_native_mtp_drafter_max_depth(None)
     status = inspect_native_mtp_bundle(model_path)
     runtime_adapter = status.get("runtime_adapter", "mlx_lm_mtp_patch")
     if runtime_adapter in _WRAPPER_HEAD_ADAPTERS.values():
