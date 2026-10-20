@@ -1057,8 +1057,8 @@
       "specDecodeIncompatVlm": "VLM speculative decoding requires a matched DFlash2 draft. Other draft models are omitted at launch for VLM requests.",
       "draftModel": "Draft Model",
       "draftModelTooltip": "Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.",
-      "draftTokensPerStep": "Draft Tokens per Step",
-      "draftTokensPerStepTooltip": "Number of tokens the draft model proposes per speculative decoding step. Higher values = more potential speedup but lower acceptance rate. Sweet spot is typically 2-5.",
+      "draftTokensPerStep": "Initial Draft Width",
+      "draftTokensPerStepTooltip": "Starting width for an external draft model. Adaptive decoding measures verification and drafting costs, adjusts the width, and falls back to ordinary decoding when faster. This is not a fixed depth or a ceiling.",
       "preAlphaHeader": "⚠ Pre-Alpha — localhost loopback only",
       "preAlphaWarnBody1": "This feature is under active development and is not safe to expose on any network you don't fully control.",
       "preAlphaWarnBody2": "Known gaps: cluster secret is sent plaintext over the wire (no TLS, no HMAC); worker crash recovery is not implemented; coordinator-loss re-election recovery is a stub; protocol has no version handshake; tensor parallelism is stubbed.",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "Use the bundled DFlash2 drafter ({{name}})",
       "useBundledDflash2Tooltip": "On by default when the model bundle includes a DFlash2 drafter. A Draft model entered below takes precedence. Off = the bundle's native MTP (Adaptive/AR) is used instead.",
       "nativeMtpOffForDrafter": "Native MTP is off while a DFlash2 drafter is selected (the two cannot share a decode step). Clear the Draft model or turn the bundled drafter off to use Adaptive MTP again.",
-      "dflash2AdaptiveBlockNote": "DFlash2 adapts its verification block size using the plan for the detected model. Draft Tokens per Step does not apply."
+      "dflash2AdaptiveBlockNote": "DFlash2 selects its verification width adaptively. The initial draft width setting does not apply."
     },
     "create": {
       "title": "Create Session",

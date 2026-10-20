@@ -298,7 +298,8 @@ class MLXLanguageModel:
                 draft_model_arg = get_draft_model()
                 num_draft = get_num_draft_tokens()
                 if draft_model_arg is not None:
-                    validate_draft_tokenizer(self.tokenizer)
+                    if not validate_draft_tokenizer(self.tokenizer):
+                        raise ValueError("Draft and target tokenizers are incompatible")
         except ImportError:
             pass
 
@@ -309,6 +310,12 @@ class MLXLanguageModel:
             from mlx_lm import stream_generate as sg
             from ..logprobs import format_token_logprobs_for_output
 
+            adaptive_kwargs = {}
+            if draft_model_arg is not None:
+                from ..adaptive_speculative import adaptive_stream_generate as sg
+                from ..speculative import record_standard_runtime_stats
+                record_standard_runtime_stats({})
+                adaptive_kwargs["on_stats"] = record_standard_runtime_stats
             output_tokens: list[int] = []
             output_logprobs: list[dict] = []
             output_text = ""
@@ -321,6 +328,7 @@ class MLXLanguageModel:
                 logits_processors=logits_processors,
                 draft_model=draft_model_arg,
                 num_draft_tokens=num_draft,
+                **adaptive_kwargs,
             ):
                 # Each resp.text is a new segment from the streaming detokenizer
                 output_text += resp.text
@@ -463,15 +471,21 @@ class MLXLanguageModel:
                     spec_kwargs["draft_model"] = draft_model
                     spec_kwargs["num_draft_tokens"] = get_num_draft_tokens()
                     # Validate tokenizer compatibility on first use
-                    validate_draft_tokenizer(self.tokenizer)
+                    if not validate_draft_tokenizer(self.tokenizer):
+                        raise ValueError("Draft and target tokenizers are incompatible")
                     logger.info(
-                        f"Speculative decoding active: draft_tokens={get_num_draft_tokens()}"
+                        f"Adaptive speculative decoding active: starting_width={get_num_draft_tokens()}"
                     )
         except ImportError:
             pass
 
         from ..utils.prefill_step import prefill_step_size
 
+        if spec_kwargs:
+            from ..adaptive_speculative import adaptive_stream_generate as stream_generate
+            from ..speculative import record_standard_runtime_stats
+            record_standard_runtime_stats({})
+            spec_kwargs["on_stats"] = record_standard_runtime_stats
         for response in stream_generate(
             self.model,
             self.tokenizer,

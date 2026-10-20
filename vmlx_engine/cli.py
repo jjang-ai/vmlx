@@ -4539,9 +4539,9 @@ Examples:
         "--num-draft-tokens",
         type=int,
         default=3,
-        help="Number of tokens the draft model proposes per speculative decoding step. "
-             "Higher values = more potential speedup but lower acceptance rate. "
-             "Typical sweet spot is 2-5. (default: 3)",
+        help="Starting draft width for an ordinary external drafter (default: 3). "
+             "Adaptive decoding adjusts width using measured wall cost, including AR fallback. "
+             "This does not fix or cap runtime depth; custom DFlash lanes choose their own widths.",
     )
     # Native MTP has exactly two product modes, matching the app's single "Native MTP" control:
     #   Adaptive (default when the bundle carries a supported head): engine-governed depth ladder from the bundle's

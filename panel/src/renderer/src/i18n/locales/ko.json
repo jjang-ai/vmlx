@@ -1057,8 +1057,8 @@
       "specDecodeIncompatVlm": "투기적 디코딩은 멀티모달 (VLM) 모델과 호환되지 않습니다. VLM 요청의 경우 시작 시 드래프트 모델이 생략됩니다.",
       "draftModel": "드래프트 모델",
       "draftModelTooltip": "작은 드래프트 모델의 경로 또는 HuggingFace 이름입니다. 메인 모델과 동일한 토크나이저를 사용해야 합니다. 예: Llama 3 타깃 모델에는 mlx-community/Llama-3.2-1B-Instruct-4bit. 비워 두면 투기적 디코딩이 비활성화됩니다.",
-      "draftTokensPerStep": "스텝당 드래프트 토큰",
-      "draftTokensPerStepTooltip": "투기적 디코딩 스텝당 드래프트 모델이 제안하는 토큰 수입니다. 값이 클수록 잠재적 속도 향상은 크지만 수락률은 낮아집니다. 최적 값은 보통 2-5입니다.",
+      "draftTokensPerStep": "초기 드래프트 폭",
+      "draftTokensPerStepTooltip": "외부 드래프트 모델의 시작 폭입니다. 적응형 디코딩은 초안 생성과 검증 비용을 측정해 폭을 조절하고, 일반 디코딩이 더 빠르면 전환합니다. 고정 깊이나 상한이 아닙니다.",
       "preAlphaHeader": "⚠ 프리-알파 — 로컬호스트 루프백 전용",
       "preAlphaWarnBody1": "이 기능은 활발히 개발 중이며 완전히 통제하지 못하는 네트워크에 노출하는 것은 안전하지 않습니다.",
       "preAlphaWarnBody2": "알려진 공백: 클러스터 시크릿이 평문으로 전송됩니다 (TLS 없음, HMAC 없음). 워커 충돌 복구 미구현. 코디네이터 손실 재선출 복구는 스텁. 프로토콜에 버전 핸드셰이크 없음. 텐서 병렬은 스텁입니다.",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "번들에 포함된 DFlash2 드래프터 사용({{name}})",
       "useBundledDflash2Tooltip": "모델 번들에 DFlash2 드래프터가 있으면 기본으로 켜집니다. 아래에 입력한 드래프트 모델이 우선합니다. 끄면 번들의 네이티브 MTP(Adaptive/AR)를 사용합니다.",
       "nativeMtpOffForDrafter": "DFlash2 드래프터가 선택된 동안 네이티브 MTP는 꺼집니다(같은 디코딩 단계를 공유할 수 없음). Adaptive MTP로 돌아가려면 드래프트 모델을 비우거나 번들 드래프터를 끄세요.",
-      "dflash2AdaptiveBlockNote": "DFlash2는 감지된 모델의 계획에 따라 검증 블록 크기를 조정합니다. 단계당 드래프트 토큰 수는 적용되지 않습니다."
+      "dflash2AdaptiveBlockNote": "DFlash2는 검증 폭을 적응적으로 선택합니다. 초기 드래프트 폭 설정은 적용되지 않습니다."
     },
     "create": {
       "title": "세션 생성",

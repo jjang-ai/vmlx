@@ -1057,8 +1057,8 @@
       "specDecodeIncompatVlm": "投機的デコードはマルチモーダル (VLM) モデルと互換性がありません。VLM リクエストでは起動時にドラフトモデルは省略されます。",
       "draftModel": "ドラフトモデル",
       "draftModelTooltip": "小さなドラフトモデルのパスまたは HuggingFace 名。メインモデルと同じトークナイザーを使用する必要があります。例: Llama 3 ターゲットモデルには mlx-community/Llama-3.2-1B-Instruct-4bit。空のままにすると投機的デコードを無効化します。",
-      "draftTokensPerStep": "ステップあたりのドラフトトークン",
-      "draftTokensPerStepTooltip": "投機的デコードステップごとにドラフトモデルが提案するトークン数。値が大きいほど潜在的な高速化は増えますが受理率は下がります。最適値は通常 2-5 です。",
+      "draftTokensPerStep": "初期ドラフト幅",
+      "draftTokensPerStepTooltip": "外部ドラフトモデルの開始幅です。適応型デコードはドラフト生成と検証のコストを測定して幅を調整し、通常のデコードが速い場合は切り替えます。固定深度や上限ではありません。",
       "preAlphaHeader": "⚠ プレアルファ — localhost ループバックのみ",
       "preAlphaWarnBody1": "この機能は活発に開発中であり、完全に管理できないネットワークに公開するのは安全ではありません。",
       "preAlphaWarnBody2": "既知の欠落: クラスターシークレットは平文で送信されます（TLS なし、HMAC なし）。ワーカーのクラッシュ回復は未実装。コーディネーター喪失時の再選出回復はスタブ。プロトコルにバージョンハンドシェイクがない。テンソル並列はスタブです。",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "同梱の DFlash2 ドラフター（{{name}}）を使用",
       "useBundledDflash2Tooltip": "モデルバンドルに DFlash2 ドラフターが含まれる場合は既定でオン。下で指定したドラフトモデルが優先されます。オフにするとバンドルのネイティブ MTP（Adaptive/AR）が使われます。",
       "nativeMtpOffForDrafter": "DFlash2 ドラフター選択中はネイティブ MTP がオフです（同じデコードステップを共有できません）。Adaptive MTP に戻すには、ドラフトモデルを空にするか同梱ドラフターをオフにしてください。",
-      "dflash2AdaptiveBlockNote": "DFlash2 は検出されたモデルに応じたプランで検証ブロックのサイズを調整します。「ステップあたりのドラフトトークン数」は適用されません。"
+      "dflash2AdaptiveBlockNote": "DFlash2は検証幅を適応的に選択します。初期ドラフト幅の設定は適用されません。"
     },
     "create": {
       "title": "セッションを作成",

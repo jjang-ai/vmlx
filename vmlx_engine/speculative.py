@@ -2,8 +2,8 @@
 """
 Speculative Decoding support for vmlx-engine.
 
-Enables speculative decoding using a smaller draft model to accelerate
-token generation by 20-90% with zero quality loss.
+Uses a smaller draft model with target verification. Throughput depends on
+the workload and measured drafting/verification costs.
 
 The draft model proposes N tokens, then the target model verifies them
 in a single forward pass. Accepted tokens skip individual decode steps.
@@ -34,7 +34,7 @@ class SpeculativeConfig:
 
     Attributes:
         model: Draft model name/path (HuggingFace or local)
-        num_tokens: Number of tokens to draft per step (default: 3)
+        num_tokens: Starting draft width for adaptive exploration (default: 3)
         disable_by_batch_size: Disable spec decoding when batch > N (0 = never disable)
         enabled: Whether speculative decoding is currently enabled
     """
@@ -63,6 +63,12 @@ _spec_config: Optional[SpeculativeConfig] = None
 _draft_model: Any = None
 _draft_tokenizer: Any = None
 _spec_kind = "standard"
+_standard_runtime_stats: dict = {}
+
+
+def record_standard_runtime_stats(stats: dict) -> None:
+    global _standard_runtime_stats
+    _standard_runtime_stats = stats
 
 
 def get_spec_config() -> Optional[SpeculativeConfig]:
@@ -239,6 +245,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
         ValueError: If model cannot be loaded
     """
     global _spec_config, _draft_model, _draft_tokenizer, _spec_kind
+    record_standard_runtime_stats({})
 
     _spec_config = config
 
@@ -329,7 +336,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
     width_description = (
         "draft width selected by runtime"
         if _spec_kind == "dflash2"
-        else f"num_draft_tokens={config.num_tokens}"
+        else f"adaptive starting width={config.num_tokens}"
     )
     logger.info(
         f"Draft model loaded in {load_time:.2f}s: {config.model} "
@@ -355,6 +362,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
 def unload_draft_model() -> None:
     """Unload the draft model and free memory."""
     global _draft_model, _draft_tokenizer, _spec_config, _spec_kind
+    record_standard_runtime_stats({})
 
     if _draft_model is not None:
         logger.info("Unloading draft model")
@@ -410,7 +418,7 @@ def should_use_speculative(
 
 
 def get_num_draft_tokens() -> int:
-    """Get the configured number of draft tokens per step."""
+    """Get the configured starting width, never a fixed runtime depth."""
     if _spec_config is None:
         return 0
     return _spec_config.num_tokens
@@ -469,7 +477,7 @@ def get_spec_stats() -> dict:
     # Their controller (or an explicit diagnostic override) owns the actual
     # width; per-request stats report observed widths. Do not turn a stored
     # seed such as 5 into a false fixed-depth health claim.
-    runtime_width = _spec_kind == "dflash2"
+    runtime_width = _spec_kind in ("dflash2", "standard")
     return {
         "speculative_decoding": {
             "enabled": is_speculative_enabled(),
@@ -478,6 +486,7 @@ def get_spec_stats() -> dict:
             "num_draft_tokens_scope": "runtime_selected" if runtime_width else "fixed",
             "configured_num_draft_tokens": _spec_config.num_tokens,
             "draft_model_loaded": _draft_model is not None,
+            **({"runtime": dict(_standard_runtime_stats)} if _spec_kind == "standard" else {}),
             "disable_by_batch_size": _spec_config.disable_by_batch_size if _spec_config else 0,
         }
     }

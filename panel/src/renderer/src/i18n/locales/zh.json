@@ -1057,8 +1057,8 @@
       "specDecodeIncompatVlm": "推测解码与多模态 (VLM) 模型不兼容。VLM 请求启动时省略草稿模型。",
       "draftModel": "草稿模型",
       "draftModelTooltip": "小型草稿模型的路径或 HuggingFace 名称。必须与主模型使用相同的分词器。示例：Llama 3 目标模型可用 mlx-community/Llama-3.2-1B-Instruct-4bit。留空则禁用推测解码。",
-      "draftTokensPerStep": "每步草稿 token 数",
-      "draftTokensPerStepTooltip": "每个推测解码步骤中草稿模型提出的 token 数。值越高潜在加速越大，但接受率越低。最佳值通常为 2-5。",
+      "draftTokensPerStep": "初始草稿宽度",
+      "draftTokensPerStepTooltip": "外部草稿模型的起始宽度。自适应解码会测量草稿生成和验证成本，调整宽度，并在普通解码更快时回退。这不是固定深度或上限。",
       "preAlphaHeader": "⚠ 预览版 — 仅限 localhost 环回",
       "preAlphaWarnBody1": "此功能正在积极开发中，在您无法完全控制的任何网络上暴露它都不安全。",
       "preAlphaWarnBody2": "已知缺口：集群密钥以明文在线路上发送（无 TLS、无 HMAC）；工作节点崩溃恢复未实现；协调器丢失重选恢复是桩代码；协议无版本握手；张量并行是桩代码。",
@@ -1119,7 +1119,7 @@
       "useBundledDflash2": "使用内置的 DFlash2 草稿模型（{{name}}）",
       "useBundledDflash2Tooltip": "模型包包含 DFlash2 草稿模型时默认开启。下方填写的草稿模型优先。关闭后使用模型包自带的原生 MTP（自适应/AR）。",
       "nativeMtpOffForDrafter": "选择 DFlash2 草稿模型时原生 MTP 关闭（两者不能共享同一解码步骤）。清空草稿模型或关闭内置草稿模型即可恢复自适应 MTP。",
-      "dflash2AdaptiveBlockNote": "DFlash2 根据检测到的模型所用的方案自适应调整验证块大小。“每步草稿 token 数”不适用。"
+      "dflash2AdaptiveBlockNote": "DFlash2 自适应选择验证宽度。初始草稿宽度设置不适用。"
     },
     "create": {
       "title": "创建会话",
