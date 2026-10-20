@@ -287,6 +287,28 @@ describe('v14 lifts existing sessions off the stale cache index', () => {
 })
 
 describe('declared sampling modes', () => {
+  it('reads embedded JANG defaults and modes when no sidecar exists', () => {
+    const embedded = { chat: {
+      sampling_defaults: { temperature: 1, top_p: .95, repetition_penalty: 1 },
+      sampling_modes: { instruct: { temperature: .7, top_p: .8, presence_penalty: 1.5 } },
+    } }
+    for (const key of ['jang_config', 'jang']) {
+      const result = resolveBundleGenerationDefaults(
+        { temperature: .2 }, undefined, { [key]: embedded },
+      )!
+      expect(result.temperature).toBe(1)
+      expect(result.source).toBe('jang_config')
+      expect(result.samplingModes?.instruct_nothinking).toEqual({
+        temperature: .7, topP: .8, presencePenalty: 1.5,
+      })
+    }
+    const sidecar = resolveBundleGenerationDefaults({}, {
+      chat: { sampling_defaults: { temperature: .4 } },
+    }, { jang_config: embedded })!
+    expect(sidecar.temperature).toBe(.4)
+    expect(sidecar.samplingModes).toBeUndefined()
+  })
+
   it('normalizes the declared instruct alias while preferring the canonical key', () => {
     const modes = { instruct: { temperature: .7, presence_penalty: 1.5 } }
     const result = resolveBundleGenerationDefaults({}, { chat: { sampling_modes: modes } }, {})!

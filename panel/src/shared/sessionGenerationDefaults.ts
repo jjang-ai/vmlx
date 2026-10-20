@@ -83,7 +83,10 @@ export function resolveBundleGenerationDefaults(
     if (Object.keys(defaults).length > 0) defaults.source = 'generation_config'
   }
 
-  const jang = objectRecord(jangConfig)
+  // Affine bundles may embed their JANG contract in config.json instead of
+  // shipping a sidecar. Preserve sidecar precedence, as the engine does.
+  const model = objectRecord(modelConfig)
+  const jang = objectRecord(jangConfig ?? model?.jang_config ?? model?.jang)
   const modes = objectRecord(jang?.chat?.sampling_modes)
   if (modes) {
     const samplingModes: NonNullable<BundleGenerationDefaults['samplingModes']> = {}
