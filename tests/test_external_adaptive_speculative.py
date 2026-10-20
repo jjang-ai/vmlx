@@ -73,6 +73,28 @@ class WidthSequence(AdaptiveDraftWidth):
         self.width = [0, 0, 1, 4, 2, 3][self.cycles % 6]
 
 
+def test_shape_sensitive_target_preserves_decode_decisions(monkeypatch):
+    """Block arithmetic must not replace an arbitrary target's AR decisions."""
+    import mlx.core as mx
+    import vmlx_engine.adaptive_speculative as adaptive
+
+    class ShapeSensitiveTarget(CausalModel):
+        def __call__(self, tokens, cache):
+            logits = super().__call__(tokens, cache)
+            return mx.roll(logits, 1, axis=-1) if tokens.shape[1] > 1 else logits
+
+    monkeypatch.setattr(adaptive, "AdaptiveDraftWidth", WidthSequence)
+    prompt = [2, 4, 3]
+    expected = list(prompt)
+    for _ in range(61):
+        expected.append((sum(expected) + 1) % 11)
+    stats = []
+    rows = list(adaptive_generate_step(mx.array(prompt), ShapeSensitiveTarget(),
+                CausalModel(), max_tokens=61, on_stats=stats.append))
+    assert [row[0] for row in rows] == expected[len(prompt):]
+    assert stats[0]["verification_mode"] == "sequential_target_decode"
+
+
 @pytest.mark.parametrize("shift", [0, 1, 5])
 def test_verification_rollback_and_ar_catchup_are_causal(monkeypatch, shift):
     import mlx.core as mx
@@ -126,8 +148,29 @@ def test_processors_see_only_causal_target_contexts(monkeypatch):
     result = list(adaptive_generate_step(mx.array(prompt), CausalModel(), CausalModel(),
                   max_tokens=21, logits_processors=[processor]))
     tokens = [x[0] for x in result]
-    assert tokens == [i % 11 for i in range(2, 23)]
-    assert calls == [prompt + tokens[:i] for i in range(21)]
+    assert tokens == [i % 11 for i in range(1, 22)]
+    assert calls == [prompt[-1:] + tokens[:i] for i in range(21)]
+
+
+def test_processor_history_matches_upstream_ar_after_prefill(monkeypatch):
+    import mlx.core as mx
+    from mlx_lm.generate import generate_step
+    import vmlx_engine.adaptive_speculative as adaptive
+    monkeypatch.setattr(adaptive, "AdaptiveDraftWidth", WidthSequence)
+    from vmlx_engine.utils.token_logits_processors import make_openai_token_penalty_processor
+    prompt = mx.array([2, 4, 3, 5, 3, 3])
+
+    def processors():
+        return [make_openai_token_penalty_processor(
+            presence_penalty=1.5, frequency_penalty=.3, logit_bias={"3": 2})]
+
+    reference = list(generate_step(prompt, CausalModel(), max_tokens=21,
+                     prefill_step_size=2, logits_processors=processors()))
+    actual = list(adaptive_generate_step(prompt, CausalModel(), CausalModel(5),
+                  max_tokens=21, prefill_step_size=2, logits_processors=processors()))
+    assert [int(x[0]) for x in actual] == [int(x[0]) for x in reference]
+    for a, b in zip(actual, reference):
+        assert mx.array_equal(a[1], b[1]).item()
 
 
 def test_sampled_tokens_follow_target_not_draft_distribution(monkeypatch):

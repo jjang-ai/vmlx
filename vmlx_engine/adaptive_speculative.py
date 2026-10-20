@@ -4,6 +4,10 @@
 The verifier uses target-sampled token matching, as mlx-lm does. A proposal
 never changes the target distribution or advances a target logits processor.
 The configured draft count seeds exploration; it does not fix its width.
+
+Arbitrary target architectures have no row-exact block-verification contract.
+Use their ordinary one-token decode calls for verification. Specialized
+native MTP/DFlash/DSpark adapters own their separately qualified fast paths.
 """
 
 from collections import Counter, defaultdict, deque
@@ -91,6 +95,7 @@ class AdaptiveDraftWidth:
 
     def snapshot(self):
         return {"policy": "adaptive", "starting_width": self.seed,
+                "verification_mode": "sequential_target_decode",
                 "verification_allocation_limit": self.max_width,
                 "selected_width": self.width, "cycles": self.cycles,
                 "drafted_tokens": self.drafted, "accepted_draft_tokens": self.accepted,
@@ -101,7 +106,7 @@ class AdaptiveDraftWidth:
 
 def adaptive_generate_step(prompt, model, draft_model, *, num_draft_tokens=3,
                            max_tokens=256, sampler=None, logits_processors=None,
-                           prompt_cache=None, prefill_step_size=512, on_stats=None):
+                           prompt_cache=None, prefill_step_size=2048, on_stats=None):
     """Yield (target token, target logprobs, accepted proposal) with safe rewind."""
     import mlx.core as mx
     from mlx_lm.models import cache
@@ -112,6 +117,9 @@ def adaptive_generate_step(prompt, model, draft_model, *, num_draft_tokens=3,
     history = prompt.tolist()
     if not history:
         raise ValueError("External speculative decoding requires a non-empty prompt")
+    # mlx-lm's AR generator prefills all but the final prompt token before
+    # starting logits processors. Preserve that same processor input contract.
+    processor_start = len(history) - 1
     if prompt_cache is None:
         target_cache = cache.make_prompt_cache(model)
         draft_cache = cache.make_prompt_cache(draft_model)
@@ -161,11 +169,20 @@ def adaptive_generate_step(prompt, model, draft_model, *, num_draft_tokens=3,
                 draft_offset = len(context)
                 token, _ = sample(logits)
                 proposals.append(token)
-            logits = forward(model, target_cache, [history[-1]] + proposals)
+            # A generic multi-row forward can change QMM/attention reduction
+            # order and even greedy decisions. Keep the target's decode
+            # arithmetic until an architecture has its own qualified block
+            # verifier. Proposal costs remain included in adaptive selection.
+            rows = []
+            for candidate in [history[-1]] + proposals:
+                row = forward(model, target_cache, [candidate])
+                mx.eval(row)
+                rows.append(row)
+            logits = mx.concatenate(rows, axis=0) if len(rows) > 1 else rows[0]
             mx.eval(logits)
             outputs = []
             for i in range(width + 1):
-                token, lp = sample(logits[i], history + proposals[:i])
+                token, lp = sample(logits[i], history[processor_start:] + proposals[:i])
                 accepted = i < width and token == proposals[i]
                 outputs.append((token, lp, accepted))
                 if not accepted:
