@@ -3146,7 +3146,6 @@ class TestNativeMtpAutodetect:
         [
             ({"repetition_penalty": 1.1}, "repetition_penalty=1.1"),
             ({"frequency_penalty": 0.5}, "frequency_penalty=0.5"),
-            ({"presence_penalty": -0.5}, "presence_penalty=-0.5"),
         ],
     )
     def test_mllm_native_mtp_falls_back_for_history_dependent_penalties(

@@ -46,6 +46,26 @@ def test_explicit_zero_and_cli_defaults_win(mode_server, monkeypatch):
     assert target['top_k'] == 7 and target['presence_penalty'] == 0
 
 
+def test_embedded_instruct_mode_alias_and_canonical_precedence(mode_server):
+    from pathlib import Path
+
+    root = Path(mode_server._model_path)
+    (root / 'jang_config.json').unlink()
+    (root / 'config.json').write_text(json.dumps({'jang_config': {'chat': {
+        'sampling_modes': {'instruct': {'temperature': .7, 'presence_penalty': 1.5}},
+    }}}))
+    target = {'enable_thinking': False}
+    mode_server._apply_bundle_sampling_mode(target, SimpleNamespace())
+    assert target['temperature'] == .7
+    assert target['presence_penalty'] == 1.5
+    mode_server._jang_sampling_modes_cache[mode_server._model_path][
+        'instruct_nothinking'
+    ] = {'temperature': .6}
+    target = {'enable_thinking': False}
+    mode_server._apply_bundle_sampling_mode(target, SimpleNamespace())
+    assert target['temperature'] == .6
+
+
 def test_greedy_stays_greedy_without_inherited_filters(mode_server):
     target = {'enable_thinking': False, 'temperature': 0.}
     mode_server._apply_bundle_sampling_mode(target, SimpleNamespace(temperature=0.))

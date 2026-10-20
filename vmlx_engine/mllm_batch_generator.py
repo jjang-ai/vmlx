@@ -17844,15 +17844,14 @@ class MLLMBatchGenerator:
             # This wrapper now owns the raw-logit -> processed -> normalized
             # transition, so callers must not normalize before invoking it.
             sampler_with_processors._vmlx_accepts_logits = True
-            # Static bias is compatible with native MTP, unlike history-based
-            # penalties. Keep greedy verification greedy and use the same biased
-            # distribution for speculative acceptance as for the actual draw.
+            # Target presence penalties are applied causally in seed/verify;
+            # proposal sampling keeps its own unpenalized distribution.
+            # Static bias retains its existing shared draft/target path.
             # Leave the unwrapped/default sampler path below unchanged.
             if (
                 openai_processor is not None
                 and len(logits_processors) == 1
                 and not float(getattr(request, "frequency_penalty", 0.0) or 0.0)
-                and not float(getattr(request, "presence_penalty", 0.0) or 0.0)
             ):
                 sampler_with_processors._vmlx_is_greedy = _native_mtp_sampler_is_greedy(base_sampler)
                 for attr in ("temp", "top_p", "top_k", "min_p", "min_tokens_to_keep",
@@ -17870,10 +17869,24 @@ class MLLMBatchGenerator:
                     # draw inputs. Never add the bias a second time here.
                     return accept_lp_for(base_sampler, logprobs)
 
-                sampler_with_processors._vmlx_mtp_preprocess_logits = biased_logits
                 sampler_with_processors._vmlx_mtp_base_sampler = base_sampler
                 sampler_with_processors._vmlx_acceptance_logprobs = processed_acceptance_logprobs
                 sampler_with_processors._vmlx_acceptance_batch_contract = processed_acceptance_logprobs
+                presence = float(getattr(request, "presence_penalty", 0.0) or 0.0)
+                if presence:
+                    from .native_mtp_presence import NativeMTPPresence
+
+                    transform = NativeMTPPresence(
+                        presence, getattr(request, "logit_bias", None)
+                    )
+
+                    def target_presence_logits(logits, output_tokens, drafts=()):
+                        return transform(logits, prompt_list + list(output_tokens), drafts)
+
+                    sampler_with_processors._vmlx_mtp_history_logits = target_presence_logits
+                    sampler_with_processors._vmlx_mtp_proposal_sampler = base_sampler
+                else:
+                    sampler_with_processors._vmlx_mtp_preprocess_logits = biased_logits
             request._cached_sampler = sampler_with_processors
             return sampler_with_processors
 
@@ -18126,7 +18139,9 @@ class MLLMBatchGenerator:
         if float(getattr(request, "frequency_penalty", 0.0) or 0.0) != 0.0:
             return f"frequency_penalty={getattr(request, 'frequency_penalty', None)!r} is not 0.0"
         if float(getattr(request, "presence_penalty", 0.0) or 0.0) != 0.0:
-            return f"presence_penalty={getattr(request, 'presence_penalty', None)!r} is not 0.0"
+            sampler = self._make_request_sampler(request)
+            if not hasattr(sampler, "_vmlx_mtp_history_logits"):
+                return "presence_penalty requires a supported causal target sampler"
         if request is None:
             return "request missing"
         return None
@@ -18175,6 +18190,7 @@ class MLLMBatchGenerator:
         extending the draft chain is worth another forward.
         """
         sampler = self._make_request_sampler(request)
+        sampler = getattr(sampler, "_vmlx_mtp_proposal_sampler", sampler)
         forward_probe = start_native_mtp_forward_probe(
             request, "head", mx, inputs=(hidden_state, next_token),
             model_type=getattr(self, "_model_type", None),
@@ -18460,6 +18476,7 @@ class MLLMBatchGenerator:
                 ),
                 prompt_tokens=prompt_token_count,
                 has_tools=_native_mtp_request_has_tools(request),
+                presence_penalty=float(getattr(request, "presence_penalty", 0.0) or 0.0),
             )
             # Lazy fallback: some fixtures build the generator via __new__
             # and never run __init__ (same class of construction the
@@ -18583,7 +18600,16 @@ class MLLMBatchGenerator:
             logger.debug("Native MTP seed skipped: model did not return hidden states")
             return False
 
-        next_tok, next_lp = _native_mtp_sample_one(logits[:, -1, :], sampler)
+        seed_logits = logits[:, -1, :]
+        seed_sampler = sampler
+        history_logits = getattr(sampler, "_vmlx_mtp_history_logits", None)
+        if history_logits is not None:
+            # The seed consumes the first sampled token before it is emitted.
+            seed_logits = history_logits(
+                seed_logits, request.output_tokens + [first_id]
+            )
+            seed_sampler = sampler._vmlx_mtp_base_sampler
+        next_tok, next_lp = _native_mtp_sample_one(seed_logits, seed_sampler)
         # Materialize the seed forward NOW so the wall below is a real AR step,
         # not graph-build time.  First measurement shipped without this eval
         # and read 2.3ms for a ~30ms forward — a baseline that would demote
@@ -18950,6 +18976,16 @@ class MLLMBatchGenerator:
 
         depth = len(state.drafts)
         trace_t0 = _native_mtp_trace_start()
+        target_logits = logits[:, -(depth + 1) :, :].reshape(depth + 1, -1)
+        target_sampler = sampler
+        history_logits = getattr(sampler, "_vmlx_mtp_history_logits", None)
+        if history_logits is not None:
+            # The queue is empty here: next_main is already in output_tokens.
+            # Row i may see only the first i proposals, including the bonus row.
+            target_logits = history_logits(
+                target_logits, request.output_tokens, state.drafts
+            )
+            target_sampler = sampler._vmlx_mtp_base_sampler
         # ONE device round-trip per cycle: sample the verify rows, compare them
         # against the drafts, and count the leading accepted run -- all on
         # device -- then read back a single small bundle.  The original path
@@ -18959,7 +18995,7 @@ class MLLMBatchGenerator:
         fused_decision = (
             _NATIVE_MTP_FUSED_SYNC
             and bool(state.drafts)
-            and _native_mtp_sampler_is_greedy(sampler)
+            and _native_mtp_sampler_is_greedy(target_sampler)
         )
         precomputed_accepted = None
         if fused_decision:
@@ -18970,8 +19006,8 @@ class MLLMBatchGenerator:
                 fused_draft_ids,
                 precomputed_accepted,
             ) = _native_mtp_sample_and_decide(
-                logits[:, -(depth + 1) :, :].reshape(depth + 1, -1),
-                sampler,
+                target_logits,
+                target_sampler,
                 state.drafts,
                 depth,
             )
@@ -18979,8 +19015,8 @@ class MLLMBatchGenerator:
             _native_mtp_trace_stop(state.stats, "sample_ms", trace_t0)
         else:
             target_tokens, target_lps, target_ids = _native_mtp_sample_rows(
-                logits[:, -(depth + 1) :, :].reshape(depth + 1, -1),
-                sampler,
+                target_logits,
+                target_sampler,
                 also_eval=(tuple(state.drafts) if _NATIVE_MTP_FUSED_SYNC else ()),
             )
             _native_mtp_trace_stop(state.stats, "sample_ms", trace_t0)

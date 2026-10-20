@@ -3910,9 +3910,10 @@ def _apply_bundle_sampling_mode(target: dict, request: Any) -> None:
         chat = _read_bundle_json(bundle_path, "jang_config.json").get("chat")
         modes = chat.get("sampling_modes") if isinstance(chat, dict) else None
         _jang_sampling_modes_cache[bundle_path] = modes if isinstance(modes, dict) else {}
-    mode = _jang_sampling_modes_cache[bundle_path].get(
-        "thinking" if enabled else "instruct_nothinking"
-    )
+    modes = _jang_sampling_modes_cache[bundle_path]
+    mode = modes.get("thinking" if enabled else "instruct_nothinking")
+    if not enabled and not isinstance(mode, dict):
+        mode = modes.get("instruct")
     if not isinstance(mode, dict):
         return
     import math

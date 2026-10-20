@@ -287,6 +287,18 @@ describe('v14 lifts existing sessions off the stale cache index', () => {
 })
 
 describe('declared sampling modes', () => {
+  it('normalizes the declared instruct alias while preferring the canonical key', () => {
+    const modes = { instruct: { temperature: .7, presence_penalty: 1.5 } }
+    const result = resolveBundleGenerationDefaults({}, { chat: { sampling_modes: modes } }, {})!
+    expect(result.samplingModes?.instruct_nothinking).toEqual({
+      temperature: .7, presencePenalty: 1.5,
+    })
+    const canonical = resolveBundleGenerationDefaults({}, { chat: { sampling_modes: {
+      ...modes, instruct_nothinking: { temperature: .6 },
+    } } }, {})!
+    expect(canonical.samplingModes?.instruct_nothinking).toEqual({ temperature: .6 })
+  })
+
   it('keeps thinking and nonthinking contracts separate without changing the base defaults', () => {
     const result = resolveBundleGenerationDefaults({}, { chat: {
       sampling_defaults: { temperature: 1, top_p: .95 },

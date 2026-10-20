@@ -28,6 +28,14 @@ def _observe_profitable(store, key, depth=2, value=45.0, ar=30.0, n=None):
 
 
 class TestProfileKey:
+    def test_presence_targets_do_not_reuse_neutral_cost_profiles(self):
+        args = dict(temperature=.7, restored_prefix=False, prompt_tokens=100)
+        neutral = profile_key(**args)
+        penalized = profile_key(**args, presence_penalty=1.5)
+        negative = profile_key(**args, presence_penalty=-.5)
+        assert len(neutral) == 4
+        assert len({neutral, penalized, negative}) == 3
+
     def test_sampler_class_split(self):
         greedy = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=100)
         sampled = profile_key(temperature=0.7, restored_prefix=False, prompt_tokens=100)

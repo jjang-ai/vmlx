@@ -55,7 +55,7 @@ AR_VERDICT_TTL_S = 300.0
 
 _CTX_BUCKETS = ((2048, "short"), (16384, "medium"))
 
-ProfileKey = Tuple[str, bool, str, bool]
+ProfileKey = Tuple[Any, ...]
 
 
 def profile_key(
@@ -64,6 +64,7 @@ def profile_key(
     restored_prefix: bool,
     prompt_tokens: int,
     has_tools: bool = False,
+    presence_penalty: float = 0.0,
 ) -> ProfileKey:
     sampler_class = "greedy" if float(temperature or 0.0) <= 0.0 else "sampled"
     bucket = "long"
@@ -71,7 +72,10 @@ def profile_key(
         if int(prompt_tokens or 0) < limit:
             bucket = name
             break
-    return (sampler_class, bool(restored_prefix), bucket, bool(has_tools))
+    key = (sampler_class, bool(restored_prefix), bucket, bool(has_tools))
+    # Preserve existing neutral profiles, while a penalized target learns its
+    # own acceptance/cost history instead of borrowing a different distribution.
+    return key + (float(presence_penalty),) if presence_penalty else key
 
 
 @dataclass

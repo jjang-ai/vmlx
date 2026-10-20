@@ -89,6 +89,7 @@ export function resolveBundleGenerationDefaults(
     const samplingModes: NonNullable<BundleGenerationDefaults['samplingModes']> = {}
     for (const key of ['thinking', 'instruct_nothinking'] as const) {
       const raw = objectRecord(modes[key])
+        ?? (key === 'instruct_nothinking' ? objectRecord(modes.instruct) : undefined)
       if (!raw) continue
       const mode: ModeSamplingDefaults = {}
       for (const [wire, field, low, high] of [
