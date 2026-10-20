@@ -14076,6 +14076,23 @@ def _health_status_value() -> str:
     return "healthy" if _engine is not None else "no_model"
 
 
+def _loaded_gdn_dispatch_status() -> dict:
+    """Snapshot existing counters without importing MLX or constructing a graph."""
+    import sys
+
+    module = sys.modules.get("vmlx_engine.metal.gdn_packed")
+    stats = getattr(module, "STATS", None)
+    available = isinstance(stats, dict)
+    return {
+        "scope": "process_cumulative_graph_dispatch",
+        "module_loaded": module is not None,
+        "counters_available": available,
+        "packed_calls": stats.get("packed_calls", 0) if available else None,
+        "stock_calls": stats.get("stock_calls", 0) if available else None,
+        "note": "Graph dispatch counts; not GPU timings or completed execution counts.",
+    }
+
+
 def _loaded_dspark_health_status(engine) -> dict | None:
     """Report the loaded VLM drafter, not the unrelated generic draft registry."""
     if engine is None or getattr(engine, "_loaded", False) is not True:
@@ -14348,6 +14365,7 @@ async def health():
         )
     if _model_type != "image":
         result["active_parsers"] = _active_parser_health_status()
+        result["gdn_dispatch"] = _loaded_gdn_dispatch_status()
     scheduler_stats: dict[str, Any] = {}
     if scheduler:
         try:
