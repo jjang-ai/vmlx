@@ -52,6 +52,23 @@ def verify_fence_every() -> int:
             _VERIFY_FENCE = 0
     return _VERIFY_FENCE
 
+def _qwen35_mtp_post_norm_hidden(model: Any) -> bool:
+    """Whether the native-MTP head is fed the trunk hidden AFTER the final norm.
+
+    Measured on Ornith-1.5-122B JANGH2 (routed-MoE Qwen3.5), teacher-forced greedy acceptance of the bundle's head over
+    1,023 positions: code 71.5 % pre-norm vs 76.6 % post-norm, prose 70.4 vs 73.6 % (the vLLM Qwen3-Next / Qwen3.5
+    drafter also receives the normed stream; the bundle's offline BF16 control scored post 70.1 vs pre 67.4 %). Dense
+    Qwen3.5 heads keep the pre-norm input until measured. ``VMLX_QWEN35_MTP_HIDDEN=pre|post`` overrides. Only the
+    trunk hidden entering the head changes: chained drafts already feed the head's own mtp.norm output, and every
+    draft is verified by the target, so outputs are unchanged."""
+
+    raw = os.environ.get("VMLX_QWEN35_MTP_HIDDEN", "").strip().lower()
+    if raw in {"pre", "post"}:
+        return raw == "post"
+    args = getattr(model, "args", None)
+    return int(getattr(args, "num_experts", 0) or 0) > 0
+
+
 def _qwen35_mtp_draft_head_disabled() -> bool:
     """Explicit kill switch for the Qwen3.5/3.8 proposal head."""
 
@@ -1233,37 +1250,46 @@ def _patch_language_model(qlang: Any) -> None:
                 )
                 self._vmlx_text_rope_only = False
 
+        capture = (
+            not return_hidden
+            and inputs_embeds is None
+            and capture_requested(self)
+        )
+        # Always take the trunk output BEFORE the final norm here: this path
+        # applies model.norm exactly once below. (A capture-armed forward used
+        # to get the already-normed output from the fast trunk call and then
+        # normed it again, so arming prompt priming changed the logits.)
         hidden = self.model(
             inputs,
             cache=cache,
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
             n_confirmed=n_confirmed,
-            return_unnormed=force_text_rope
-            or return_hidden
-            or not return_logits
-            or n_confirmed > 0,
+            return_unnormed=True,
         )
-        if (
-            not return_hidden
-            and inputs_embeds is None
-            and capture_requested(self)
-        ):
-            capture_prefill(self, inputs, hidden, cache)
+        post_norm_head_input = _qwen35_mtp_post_norm_hidden(self)
+        normed = None
+        if capture:
+            normed = self.model.norm(hidden)
+            capture_prefill(self, inputs, normed if post_norm_head_input else hidden, cache)
         if not return_logits:
             return hidden
-        normed = self.model.norm(hidden)
+        if normed is None:
+            normed = self.model.norm(hidden)
+        head_input = normed
         if prefill_last_logits_only and not return_hidden and normed.shape[1] > 1:
             # Same contract as the vendored LanguageModel.__call__: prompt
             # prefill samples only the last row (prompt capture above already
             # consumed the full hidden).
-            normed = normed[:, -1:, :]
+            head_input = normed[:, -1:, :]
         if self.args.tie_word_embeddings:
-            logits = self.model.embed_tokens.as_linear(normed)
+            logits = self.model.embed_tokens.as_linear(head_input)
         else:
-            logits = self.lm_head(normed)
+            logits = self.lm_head(head_input)
         if return_hidden:
-            return logits, hidden
+            # Every return_hidden consumer feeds the native-MTP head (seed,
+            # verify, replay): hand it the trunk hidden the policy selects.
+            return logits, (normed if post_norm_head_input else hidden)
         return qlang.LanguageModelOutput(logits=logits)
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache, return_hidden=False):
