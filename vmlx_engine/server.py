@@ -885,6 +885,7 @@ def _refresh_loaded_max_prompt_tokens(reason: str) -> int:
     # deep sleep and wake. Drop both metadata snapshots only at load refresh;
     # ordinary requests must not rewrite defaults underneath active work.
     _jang_sampling_defaults_cache.clear()
+    _jang_sampling_modes_cache.clear()
     _generation_defaults_cache.clear()
 
     _declared = 0
@@ -2430,6 +2431,7 @@ def _dsv4_completion_internal_max_tokens(max_tokens: int, request: Any) -> int:
 
 
 _jang_sampling_defaults_cache: dict[str, dict] = {}
+_jang_sampling_modes_cache: dict[str, dict] = {}
 _generation_defaults_cache: dict[str, dict] = {}
 
 
@@ -3896,6 +3898,50 @@ def _forward_openai_token_controls(target: dict, request: Any) -> None:
     logit_bias = getattr(request, "logit_bias", None)
     if logit_bias is not None:
         target["logit_bias"] = dict(logit_bias)
+
+
+def _apply_bundle_sampling_mode(target: dict, request: Any) -> None:
+    """Apply declared on/off defaults after reasoning routing, never over user values."""
+    enabled = target.get("enable_thinking")
+    if enabled is not True and enabled is not False:
+        return
+    bundle_path = _model_path or getattr(request, "model", "")
+    if bundle_path not in _jang_sampling_modes_cache:
+        chat = _read_bundle_json(bundle_path, "jang_config.json").get("chat")
+        modes = chat.get("sampling_modes") if isinstance(chat, dict) else None
+        _jang_sampling_modes_cache[bundle_path] = modes if isinstance(modes, dict) else {}
+    mode = _jang_sampling_modes_cache[bundle_path].get(
+        "thinking" if enabled else "instruct_nothinking"
+    )
+    if not isinstance(mode, dict):
+        return
+    import math
+
+    cli_defaults = {
+        "temperature": _default_temperature, "top_p": _default_top_p,
+        "top_k": _default_top_k, "min_p": _default_min_p,
+        "repetition_penalty": _default_repetition_penalty,
+    }
+    bounds = {
+        "temperature": (0, 2), "top_p": (0, 1), "top_k": (0, float("inf")),
+        "min_p": (0, 1), "repetition_penalty": (0, float("inf")),
+        "presence_penalty": (-2, 2), "frequency_penalty": (-2, 2),
+    }
+    for key, (low, high) in bounds.items():
+        if getattr(request, key, None) is not None or cli_defaults.get(key) is not None:
+            continue
+        if _native_mtp_sampling_policy == "greedy-only" and key in {"temperature", "top_p", "top_k", "min_p"}:
+            continue
+        value = mode.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            continue
+        if not low <= value <= high or (key == "repetition_penalty" and value == 0):
+            continue
+        target[key] = int(value) if key == "top_k" else float(value)
+    _normalize_deterministic_sampling_filters(
+        target, request_top_p=getattr(request, "top_p", None),
+        request_top_k=getattr(request, "top_k", None),
+    )
 
 
 def _log_resolved_sampling_kwargs(
@@ -17964,6 +18010,7 @@ async def create_anthropic_message(
     # Kwargs-parity telemetry (campaign #181 arm A5): this was the ONLY
     # dialect that never logged its resolved kwargs, so cross-dialect parity
     # was unprovable for Anthropic-shaped requests.
+    _apply_bundle_sampling_mode(_msg_kwargs, chat_req)
     _log_resolved_sampling_kwargs(
         "/v1/messages",
         chat_req.model or _resolve_model_name(),
@@ -18934,6 +18981,7 @@ async def ollama_chat(fastapi_request: Request):
     if _extra_o:
         chat_kwargs["chat_template_kwargs"] = _extra_o
 
+    _apply_bundle_sampling_mode(chat_kwargs, chat_req)
     _log_resolved_sampling_kwargs(
         "/api/chat",
         chat_req.model or _resolve_model_name(),
@@ -21379,6 +21427,7 @@ async def create_chat_completion(
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
 
+    _apply_bundle_sampling_mode(chat_kwargs, request)
     _log_resolved_sampling_kwargs(
         "/v1/chat/completions",
         request.model or _resolve_model_name(),
@@ -24909,6 +24958,7 @@ async def create_response(
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
 
+    _apply_bundle_sampling_mode(chat_kwargs, request)
     _log_resolved_sampling_kwargs(
         "/v1/responses",
         request.model or _resolve_model_name(),

@@ -285,3 +285,25 @@ describe('v14 lifts existing sessions off the stale cache index', () => {
     expect(source).not.toContain('config.maxCacheBlocks = config.maxCacheBlocks ?? 1000')
   })
 })
+
+describe('declared sampling modes', () => {
+  it('keeps thinking and nonthinking contracts separate without changing the base defaults', () => {
+    const result = resolveBundleGenerationDefaults({}, { chat: {
+      sampling_defaults: { temperature: 1, top_p: .95 },
+      sampling_modes: {
+        thinking: { temperature: 1, presence_penalty: 0 },
+        instruct_nothinking: { temperature: .7, top_p: .8, top_k: 20, presence_penalty: 1.5 },
+        unknown: { temperature: 2 },
+      },
+    } }, {})!
+    expect(result.temperature).toBe(1)
+    expect(result.samplingModes).toEqual({
+      thinking: { temperature: 1, presencePenalty: 0 },
+      instruct_nothinking: { temperature: .7, topP: .8, topK: 20, presencePenalty: 1.5 },
+    })
+    // Hydration must not persist the selected mode as a user or CLI override.
+    const config = applyBundleGenerationDefaultsToSessionConfig({}, result)
+    expect(config.defaultTemperature).toBe(100)
+    expect(config).not.toHaveProperty('presencePenalty')
+  })
+})

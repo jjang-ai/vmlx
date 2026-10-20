@@ -1,3 +1,4 @@
+import type { BundleGenerationDefaults } from "../../../../shared/sessionGenerationDefaults"
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AlertTriangle, X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
@@ -104,6 +105,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     [session.config],
   )
   const [overrides, setOverrides] = useState<ChatOverrides>({})
+  const [samplingModes, setSamplingModes] = useState<BundleGenerationDefaults['samplingModes']>(undefined)
   const [modelDefaults, setModelDefaults] = useState<Partial<ChatOverrides>>(
     () => persistedModelDefaults,
   )
@@ -139,8 +141,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const hydrationKey = `${chatId}\u0000${session.modelPath}\u0000${session.config || ''}\u0000${session.remoteUrl || ''}`
   const hydrationCurrent = hydratedKey === hydrationKey
   const displayedDefaultsState = hydrationCurrent ? defaultsState : 'loading'
-  const displayedModelDefaults = hydrationCurrent ? modelDefaults : persistedModelDefaults
   const displayedOverrides = hydrationCurrent ? overrides : {}
+  const selectedMode = displayedOverrides.enableThinking === true ? 'thinking'
+    : displayedOverrides.enableThinking === false ? 'instruct_nothinking' : undefined
+  const displayedModelDefaults = {
+    ...(hydrationCurrent ? modelDefaults : persistedModelDefaults),
+    ...(hydrationCurrent && selectedMode ? samplingModes?.[selectedMode] : undefined),
+  }
   const isRemote = session.type === 'remote'
   const effectiveWireApi = displayedOverrides.wireApi ?? (isRemote ? 'completions' : 'responses')
   const configuredReasoningParser = (() => {
@@ -246,6 +253,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setCompatibilityHydrationFailure(false)
     setOverridesLoaded(false)
     setModelDefaults(persistedModelDefaults)
+    setSamplingModes(undefined)
     setOverrides({})
     setDetectedFamily(undefined)
     setDetectedToolParser(undefined)
@@ -270,6 +278,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     }).then((result) => {
       if (!stillCurrent()) return
       const generation = result.generationDefaults
+      setSamplingModes(generation?.samplingModes)
       const detected = result.detectedConfig
       setThinkingBudgetSupported(generation?.thinkingBudgetSupported)
       setDetectedFamily(detected?.family)
@@ -903,7 +912,7 @@ function statusToneClass(status: string): string {
             )}
             <SliderField
               label={t('chat.settings.frequencyPenalty')}
-              value={displayedOverrides.frequencyPenalty ?? 0}
+              value={displayedOverrides.frequencyPenalty ?? displayedModelDefaults.frequencyPenalty ?? 0}
               onChange={v => {
                 const sanitized = sanitizeOpenAiTokenPenaltyOverride(v)
                 if (sanitized != null) update('frequencyPenalty', sanitized)
@@ -914,7 +923,7 @@ function statusToneClass(status: string): string {
             />
             <SliderField
               label={t('chat.settings.presencePenalty')}
-              value={displayedOverrides.presencePenalty ?? 0}
+              value={displayedOverrides.presencePenalty ?? displayedModelDefaults.presencePenalty ?? 0}
               onChange={v => {
                 const sanitized = sanitizeOpenAiTokenPenaltyOverride(v)
                 if (sanitized != null) update('presencePenalty', sanitized)
