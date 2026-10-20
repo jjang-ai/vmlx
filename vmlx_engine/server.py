@@ -10920,9 +10920,12 @@ def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
                 try:
                     from .native_mtp import native_mtp_effective_depth
 
+                    from .native_mtp import native_mtp_adaptive_ceiling
+
                     depth, source = native_mtp_effective_depth()
                     status["effective_depth"] = depth
                     status["effective_depth_source"] = source
+                    status["adaptive_ceiling"] = native_mtp_adaptive_ceiling(depth, source)
                 except Exception:
                     pass
         if active and loaded_adapter == "nemotron_lilicorr":

@@ -18433,7 +18433,11 @@ class MLLMBatchGenerator:
 
         # Resolve the AR-vs-MTP decision BEFORE the MTP seed forward below:
         # a skipped activation must not pay the extra hidden-state forward.
-        from .native_mtp import native_mtp_effective_depth, native_mtp_max_depth
+        from .native_mtp import (
+            native_mtp_adaptive_ceiling,
+            native_mtp_effective_depth,
+            native_mtp_max_depth,
+        )
 
         depth, depth_source = native_mtp_effective_depth()
         depth = max(1, min(native_mtp_max_depth(), depth))
@@ -18464,8 +18468,11 @@ class MLLMBatchGenerator:
             if store is None:
                 store = self._native_mtp_profiles = NativeMTPProfileStore()
             sampled_profile = request_profile_key[0] == "sampled"
+            # The resolved depth is where Adaptive starts; its ladder may climb
+            # to the verifier ceiling unless an explicit env depth limits it.
             configured_ladder_depth = min(
-                depth, _native_mtp_depth_ceiling_for_request(request)
+                native_mtp_adaptive_ceiling(depth, depth_source),
+                _native_mtp_depth_ceiling_for_request(request),
             )
             # The process profile chooses a FRESH request's start. A scheduled
             # recovery/calibration already has a request-local AR baseline and
@@ -18655,8 +18662,15 @@ class MLLMBatchGenerator:
             getattr(request, "num_tokens", 0) or 0
         )
         # A learned start is advisory, not a reduction of the user's ceiling.
+        # Under Adaptive the resolved depth (default / tuning / bundle stamp /
+        # family default) is only the starting rung: the ladder top is the
+        # verifier ceiling (native_mtp_adaptive_ceiling). Fixed policy and an
+        # explicit env depth keep the resolved depth as the top.
+        _resolved_depth, _resolved_source = native_mtp_effective_depth()
         state.ladder_depth = max(1, min(
-            int(native_mtp_effective_depth()[0]), state.depth_ceiling,
+            native_mtp_adaptive_ceiling(_resolved_depth, _resolved_source)
+            if _native_mtp_adaptive_policy() else int(_resolved_depth),
+            state.depth_ceiling,
         ))
         if (
             depth > 1

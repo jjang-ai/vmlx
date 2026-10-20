@@ -801,6 +801,28 @@ def _runtime_validation_block_reason(
     return None
 
 
+def native_mtp_depth_is_explicit(source: str | None) -> bool:
+    """True for a VMLX/VMLINUX_NATIVE_MTP_DEPTH env (or --native-mtp-depth) override."""
+    return str(source or "").startswith("VML")
+
+
+def native_mtp_adaptive_ceiling(depth: int, source: str | None) -> int:
+    """Top rung of the Adaptive depth ladder.
+
+    Adaptive governs the draft depth itself. Every advisory depth -- the generic
+    default, a bundle tuning sidecar, a bundle's ``mtp.recommended_num_drafts``
+    stamp, a family default -- only chooses where Adaptive STARTS; promotion
+    probes may always climb to the verifier ceiling and the value controller /
+    AR-safety valve demote when a deeper rung loses. (Treating the stamp as a cap
+    pinned Ornith-1.5-122B, whose converter stamps 1, at D1 while D2 measured
+    faster on 5 of 6 workload classes.) Only an explicit env / CLI depth -- a
+    diagnostic lever the app never sends -- stays a limit.
+    """
+    if native_mtp_depth_is_explicit(source):
+        return max(1, min(native_mtp_max_depth(), int(depth or 1)))
+    return native_mtp_max_depth()
+
+
 def native_mtp_effective_depth(
     model_path: str | Path | None = None,
 ) -> tuple[int, str]:
@@ -1057,6 +1079,7 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         and runtime_validation_block_reason is None
     )
     effective_depth, effective_depth_source = native_mtp_effective_depth(bundle_path)
+    adaptive_ceiling = native_mtp_adaptive_ceiling(effective_depth, effective_depth_source)
 
     has_vision_config = bool(cfg.get("vision_config")) or bool(
         isinstance(cfg.get("text_config"), dict)
@@ -1183,6 +1206,8 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         "runtime_validation_blocked": bool(runtime_validation_block_reason),
         "effective_depth": effective_depth if runtime_available else None,
         "effective_depth_source": effective_depth_source if runtime_available else None,
+        # Adaptive's top rung (effective_depth above is where it starts).
+        "adaptive_ceiling": adaptive_ceiling if runtime_available else None,
         "runtime_scope": runtime_scope,
         "vl_runtime_available": vl_runtime_available,
         "runtime_bundle_has_mtp": runtime_bundle_has_mtp,
