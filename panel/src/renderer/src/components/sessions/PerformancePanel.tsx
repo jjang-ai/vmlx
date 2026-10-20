@@ -935,8 +935,8 @@ export function formatWeightQuant(
   const q = health.quantization
   const qf = health.quantization_format
   if (q?.mixed_precision) {
-    const label = q.runtime_component_label || q.profile || q.weight_format?.toUpperCase() || 'Mixed precision'
-    return `${label} mixed${q.actual_bits != null ? ` (${q.actual_bits} bpw)` : ''}`
+    const label = q.runtime_component_label || q.profile || q.weight_format?.toUpperCase()
+    return `${label ? `${label} mixed` : 'Mixed precision'}${q.actual_bits != null ? ` (${q.actual_bits} bpw)` : ''}`
   }
   const bits =
     q?.actual_bits ??
