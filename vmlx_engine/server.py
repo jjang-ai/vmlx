@@ -11037,7 +11037,19 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or profile_bits
         or q_cfg.get("bits")
     )
-    mixed_precision = q_jang.get("method") == "mixed"
+    # MLX per-module overrides are also authoritative without a JANG
+    # sidecar. The global bit width is a fallback, not a whole-model
+    # precision (e.g. Flash-Next affine experts at 2/3/4 bits, default 8).
+    declared_widths = {
+        value["bits"]
+        for value in q_cfg.values()
+        if isinstance(value, dict)
+        and type(value.get("bits")) in (int, float)
+        and value["bits"] > 0
+    }
+    if type(q_cfg.get("bits")) in (int, float) and q_cfg["bits"] > 0:
+        declared_widths.add(q_cfg["bits"])
+    mixed_precision = q_jang.get("method") == "mixed" or len(declared_widths) > 1
     if mixed_precision:
         # The config default describes fallback modules, not the whole bundle.
         # Mixed affine/MXFP4 bundles may have no single target bit width.

@@ -53,6 +53,32 @@ def test_affine_metadata_retained():
     assert result["mixed_precision"] is False
 
 
+def test_affine_per_module_widths_do_not_report_fallback_as_global_precision():
+    # Flash-Next affine bundles store the loader's actual overrides directly
+    # in config.quantization, without a separate jang_config.json sidecar.
+    result = status({"quantization": {
+        "bits": 8, "group_size": 64,
+        "language_model.embed_tokens": {"bits": 8, "group_size": 64},
+        "language_model.layers.0.mlp.switch_mlp.gate_proj": {"bits": 4, "group_size": 64},
+        "language_model.layers.1.mlp.switch_mlp.down_proj": {"bits": 2, "group_size": 64},
+    }})
+    assert result["codec"] == "affine_quantized_matmul"
+    assert result["mixed_precision"] is True
+    assert result["config_bits"] == 8
+    assert "target_bits" not in result
+    assert "actual_bits" not in result
+
+
+def test_uniform_module_overrides_do_not_claim_mixed_precision():
+    result = status({"quantization": {
+        "bits": 4, "group_size": 64,
+        "model.q_proj": {"bits": 4, "group_size": 32},
+        "model.k_proj": {"bits": 4, "group_size": 64},
+    }})
+    assert result["mixed_precision"] is False
+    assert result["target_bits"] == 4
+
+
 def test_declaration_without_tq2_modules_does_not_claim_loaded_codec():
     result = status({"jangtq": {"version": 2}, "quantization": {"mode": "affine", "bits": 8}})
     assert result["codec"] == "affine_quantized_matmul"
