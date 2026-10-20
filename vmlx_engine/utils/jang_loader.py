@@ -797,7 +797,9 @@ def _load_split_expert_stacks(model, buffer: dict) -> int:
                 )
             stacked = mx.stack([got[e] for e in range(n_experts)])
             current = module[part]
-            if tuple(stacked.shape) != tuple(current.shape) or stacked.dtype != current.dtype:
+            # Packed codes must match the module's packed layout exactly; scales / biases take the bundle's dtype
+            # (load_weights replaces the init arrays, as for every other quantized layer).
+            if tuple(stacked.shape) != tuple(current.shape) or (part == "weight" and stacked.dtype != current.dtype):
                 raise RuntimeError(
                     f"jang_loader: split experts of {switch_path}.{part}: stacked {tuple(stacked.shape)} {stacked.dtype} "
                     f"!= module {tuple(current.shape)} {current.dtype}"

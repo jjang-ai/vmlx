@@ -34,7 +34,7 @@ class _Root(nn.Module):
         self.language_model.mtp.layers = [_Head()]
 
 
-def _bundle_tensors(bits=4, gs=64, seed=0):
+def _bundle_tensors(bits=4, gs=64, seed=0, scale_dtype=None):
     """Per-expert quantized triplets as a JANG writer stores them (keys after the MTP sanitize rename)."""
     mx.random.seed(seed)
     out, dense = {}, {}
@@ -42,6 +42,8 @@ def _bundle_tensors(bits=4, gs=64, seed=0):
         for e in range(E):
             w = mx.random.normal((o, i)) * 0.05
             q, s, b = mx.quantize(w, group_size=gs, bits=bits)
+            if scale_dtype is not None:                  # JANG bundles store bf16 scales / biases
+                s, b = s.astype(scale_dtype), b.astype(scale_dtype)
             base = f"language_model.mtp.layers.0.mlp.experts.{e}.{proj}"
             out[f"{base}.weight"], out[f"{base}.scales"], out[f"{base}.biases"] = q, s, b
             dense[(proj, e)] = mx.dequantize(q, s, b, group_size=gs, bits=bits)
@@ -69,9 +71,10 @@ def _quantized_root(bits=4, gs=64):
     return root
 
 
-def test_stacks_in_numeric_order_and_loads():
+@pytest.mark.parametrize("scale_dtype", [None, mx.bfloat16])
+def test_stacks_in_numeric_order_and_loads(scale_dtype):
     root = _quantized_root()
-    tensors, dense = _bundle_tensors()
+    tensors, dense = _bundle_tensors(scale_dtype=scale_dtype)
     switch_paths = {p for p, _ in root.named_modules() if p.endswith(("switch_mlp.gate_proj", "switch_mlp.up_proj",
                                                                       "switch_mlp.down_proj"))}
     assert len(switch_paths) == 3
