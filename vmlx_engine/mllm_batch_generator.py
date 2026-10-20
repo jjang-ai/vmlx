@@ -18304,6 +18304,12 @@ class MLLMBatchGenerator:
             "qwen3_5",
             "qwen3_5_text",
             "qwen3_5_vl",
+            # Routed-MoE Qwen3.5 (Ornith-1.5-122B) builds its head from the same
+            # patched MTPModule (qwen35_vl._register_moe_mtp_classes): one
+            # attention layer + routed MoE, fed the pre-norm trunk hidden at t
+            # and token t+1, one KVCache per head layer.
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
         }:
             drop_context(self.language_model)
             return False
