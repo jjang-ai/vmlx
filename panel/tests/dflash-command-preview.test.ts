@@ -4,6 +4,20 @@ import { buildCommandPreview } from '../src/renderer/src/components/sessions/Ses
 import { DEFAULT_CONFIG } from '../src/renderer/src/components/sessions/SessionConfigForm'
 
 describe('actual DFlash2 command preview', () => {
+  it('mirrors LiLiCorr opt-in and preserves old native-MTP sessions as AR', () => {
+    const bolt = { family: 'nemotron-h', isMultimodal: true,
+      architectureHints: { nemotronImageOnly: true },
+      nativeMtp: { supported: true, adapter: 'nemotron_lilicorr' as const, defaultMode: 'off' as const } }
+    const config = { ...DEFAULT_CONFIG, nativeMtpMode: 'adaptive' as const }
+    const off = buildCommandPreview('/models/bolt', config, bolt)
+    expect(off).toContain('VMLX_NEMOTRON_LILICORR=0 ')
+    expect(off).toContain('--disable-native-mtp')
+    const adaptive = buildCommandPreview('/models/bolt', { ...config, lilicorrMode: 'adaptive' }, bolt)
+    expect(adaptive).toContain('VMLX_NEMOTRON_LILICORR=1 ')
+    expect(adaptive).toContain('--native-mtp-depth-policy')
+    expect(adaptive).not.toContain('--disable-native-mtp')
+    expect(adaptive).not.toMatch(/--native-mtp-depth\s/)
+  })
   const detected = { family: 'glm5-next', isMultimodal: true, nativeGlmSsd: true }
   it('shows the bundled drafter, non-batched lane, and saved SSD settings', () => {
     const preview = buildCommandPreview('/models/target', { ...DEFAULT_CONFIG,

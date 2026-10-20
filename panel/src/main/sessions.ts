@@ -115,7 +115,7 @@ import {
   splitAdditionalArgs,
   finitePositiveInteger,
 } from '../shared/launchArgValues'
-import { buildNativeMtpLaunchArgs, resolveNativeMtpStartupMode } from '../shared/nativeMtpLaunchArgs'
+import { buildNativeMtpLaunchArgs, buildNativeMtpLaunchEnvironment, nativeMtpSessionChoice, resolveNativeMtpStartupMode } from '../shared/nativeMtpLaunchArgs'
 import { planSessionConfigSave } from '../shared/sessionConfigLifecycle'
 import { findBundledDflash2Drafter, isDflash2DrafterSelection } from './dflash2Bundle'
 import { bundledDsparkDefault, findBundledDsparkDrafter } from './dsparkBundle'
@@ -3359,6 +3359,13 @@ export class SessionManager extends EventEmitter {
       '/usr/local/bin',
     ].join(':')
     const spawnEnv: Record<string, string | undefined> = { ...process.env, PATH: `${extraPath}:${process.env.PATH || ''}` }
+    Object.assign(spawnEnv, buildNativeMtpLaunchEnvironment({
+      supported: freshDetectedConfig?.nativeMtp?.supported === true,
+      adapter: freshDetectedConfig?.nativeMtp?.adapter,
+      mode: nativeMtpSessionChoice(config, freshDetectedConfig?.nativeMtp?.adapter),
+      modelDefaultMode: freshDetectedConfig?.nativeMtp?.defaultMode,
+      externalSpeculativeActive: args.includes('--disable-native-mtp'),
+    }))
     // The Python CLI defaults mx.compile back ON for affine JANG bundles when
     // --enable-jit is absent. Production Auto now preserves Laguna's native
     // full/sliding cache and does not install selective TurboQuant, so cache
@@ -3878,7 +3885,7 @@ export class SessionManager extends EventEmitter {
     'mcpEnabledServers', 'mcpDisabledServers', 'mcpEnabledTools', 'mcpDisabledTools',
     'servedModelName',
     'speculativeModel', 'numDraftTokens', 'useBundledDflash2', 'useBundledDspark', 'smelt', 'smeltExperts',
-    'nativeMtpMode',
+    'nativeMtpMode', 'lilicorrMode',
     'omniBackend',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
@@ -5551,7 +5558,7 @@ export class SessionManager extends EventEmitter {
     // sampling for stochastic). Off is ordinary AR with the same sampler.
     const nativeMtp = (detected as any).nativeMtp
     if (!dsv4Active && nativeMtp?.supported) {
-      const mode = (config as any).nativeMtpMode
+      const mode = nativeMtpSessionChoice(config, nativeMtp.adapter)
       if (compatibleExternalSpeculative) {
         // An external drafter and the bundle's own MTP heads are two
         // speculative decoders bidding for the same decode step. Shipping both

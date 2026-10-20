@@ -32,6 +32,14 @@ export type NativeMtpMode = 'adaptive' | 'off'
 /** Values that may still exist in persisted session rows. */
 export type LegacyNativeMtpMode = NativeMtpMode | 'auto' | 'deterministic'
 
+/** Old saved native-MTP defaults were not a choice to enable Bolt's drafter. */
+export function nativeMtpSessionChoice(
+  config: { nativeMtpMode?: LegacyNativeMtpMode; lilicorrMode?: NativeMtpMode },
+  adapter?: string,
+): LegacyNativeMtpMode | undefined {
+  return adapter === 'nemotron_lilicorr' ? config.lilicorrMode : config.nativeMtpMode
+}
+
 /** The only sampling policy the app ever launches. */
 export const NATIVE_MTP_SAMPLING_POLICY = 'compatible-only' as const
 
@@ -109,4 +117,15 @@ export function buildNativeMtpLaunchArgs(input: NativeMtpLaunchPolicyInput): str
     '--native-mtp-sampling-policy',
     NATIVE_MTP_SAMPLING_POLICY,
   ]
+}
+
+/** Attach Bolt's optional block drafter only for the session's adaptive mode. */
+export function buildNativeMtpLaunchEnvironment(
+  input: NativeMtpLaunchPolicyInput & { adapter?: string },
+): Record<string, string> {
+  if (!input.supported || input.adapter !== 'nemotron_lilicorr') return {}
+  return {
+    VMLX_NEMOTRON_LILICORR:
+      resolveNativeMtpMode(input) === 'adaptive' && !input.externalSpeculativeActive ? '1' : '0',
+  }
 }

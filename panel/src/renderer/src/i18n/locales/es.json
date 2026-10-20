@@ -1044,6 +1044,7 @@
       "powerModeScope": "Este ajuste no mide la velocidad de la GPU.",
       "nativeMtp": "MTP nativo",
       "nativeMtpBlockedFallback": "Se detectaron pesos MTP nativos, pero este bundle no ha pasado la puerta de compatibilidad del runtime. La decodificación autorregresiva permanece activa.",
+      "lilicorrHint": "Este paquete incluye un drafter LiLiCorr independiente. AR es el modo predeterminado; elige MTP adaptativo para activarlo. El motor elige cuántos tokens proponer y vuelve a AR cuando el coste es mayor. El muestreo no cambia.",
       "nativeMtpHint": "Usa la cabeza MTP preservada del modelo cuando el bundle pasó la puerta del runtime. MTP adaptativo redacta varios tokens por paso, los verifica exactamente contra el modelo y se mide contra la decodificación normal. Los modelos sin cabeza MTP compatible usan decodificación autorregresiva normal.",
       "nativeMtpMode": "MTP nativo",
       "nativeMtpModeTooltip": "MTP adaptativo: el motor elige la profundidad de borrador por sí mismo. Mide cada ventana de verificación contra su propia línea base AR, sube hacia el límite del verificador cuando gana un nivel más profundo, baja a profundidad 1 y luego a AR cuando una ventana pierde, y vuelve a sondear con retroceso. Ningún ajuste del bundle fija la profundidad. El muestreo de la solicitud/bundle nunca cambia. AR (MTP desactivado): decodificación autorregresiva normal.",

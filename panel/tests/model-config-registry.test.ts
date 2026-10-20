@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { loadLocalModelPaths } from './helpers/local-model-paths'
@@ -3019,6 +3019,29 @@ describe('Nemotron image-only native runtime controls', () => {
     const detected = detectModelConfigFromDir(bundle(false))
     expect(detected.nativeMtp).toBeUndefined()
     expect(detected.architectureHints?.nemotronImageOnly).toBe(true)
+  })
+  it('exposes a complete Bolt LiLiCorr bundle as an optional adaptive runtime', () => {
+    const dir = bundle(false)
+    const draft = join(dir, 'lilicorr')
+    mkdirSync(draft)
+    writeFileSync(join(draft, 'config.json'), JSON.stringify({
+      architectures: ['LiLiCorrDraftModel'], block_size: 8,
+      dflash_config: { lilicorr_enabled: true },
+    }))
+    writeFileSync(join(draft, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: { 'fc.weight': 'draft.safetensors' },
+    }))
+    expect(detectModelConfigFromDir(dir).nativeMtp).toBeUndefined()
+    writeFileSync(join(draft, 'draft.safetensors'), Buffer.from([1]))
+    expect(detectModelConfigFromDir(dir).nativeMtp).toMatchObject({
+      adapter: 'nemotron_lilicorr', supported: true, defaultMode: 'off',
+      depth: 3, depthSource: 'runtime-default', runtimeScope: 'text+vl',
+    })
+    writeFileSync(join(draft, 'config.json'), JSON.stringify({
+      architectures: ['DifferentDraftModel'], block_size: 8,
+      dflash_config: { lilicorr_enabled: true },
+    }))
+    expect(detectModelConfigFromDir(dir).nativeMtp).toBeUndefined()
   })
   it('does not classify Nano Omni as the image-only wrapper', () => {
     const detected = detectModelConfigFromDir(bundle(true, true))

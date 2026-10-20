@@ -1044,6 +1044,7 @@
       "powerModeScope": "此设置并不测量 GPU 速度。",
       "nativeMtp": "原生 MTP",
       "nativeMtpBlockedFallback": "检测到原生 MTP 权重，但此 bundle 未通过运行时兼容性门槛。自回归解码保持激活。",
+      "lilicorrHint": "此模型包包含独立的 LiLiCorr 草稿模型。默认使用 AR；选择自适应 MTP 可启用它。引擎自动选择草稿宽度，在开销较大时回退到 AR，不改变采样设置。",
       "nativeMtpHint": "当 bundle 通过运行时门槛时使用模型保留的 MTP 头。自适应 MTP 每步起草多个 token，与模型精确验证，并与普通解码自我对比。没有兼容 MTP 头的模型使用普通自回归解码。",
       "nativeMtpMode": "原生 MTP",
       "nativeMtpModeTooltip": "自适应 MTP：草稿深度由引擎自行选择。它将每个验证窗口与自身 AR 基线比较，更深档位获胜时升至验证上限，窗口失利时降到深度 1 再降到 AR，并带退避重新探测。bundle 设置不会固定深度。请求/bundle 的采样永不改变。AR（关闭 MTP）：普通自回归解码。",

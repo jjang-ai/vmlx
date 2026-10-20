@@ -43,7 +43,7 @@ import {
   filterAdditionalArgs,
   finitePositiveInteger,
 } from '../../../../shared/launchArgValues'
-import { buildNativeMtpLaunchArgs, resolveNativeMtpStartupMode } from '../../../../shared/nativeMtpLaunchArgs'
+import { buildNativeMtpLaunchArgs, buildNativeMtpLaunchEnvironment, nativeMtpSessionChoice, resolveNativeMtpStartupMode } from '../../../../shared/nativeMtpLaunchArgs'
 
 interface Session {
   id: string
@@ -291,7 +291,7 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
 export function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; cacheSubtype?: string; family?: string; nativeGlmSsd?: boolean; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null,
+  detected?: { toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; cacheSubtype?: string; family?: string; nativeGlmSsd?: boolean; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; nativeMtp?: { supported?: boolean; adapter?: 'nemotron_lilicorr'; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null,
   detectedDflash2Path = '',
   hasBundledDrafter = false,
   explicitDflash2?: boolean,
@@ -545,7 +545,7 @@ export function buildCommandPreview(
   if (!dsv4Active && nativeMtp?.supported) {
     parts.push(...buildNativeMtpLaunchArgs({
       supported: true,
-      mode: (config as any).nativeMtpMode,
+      mode: nativeMtpSessionChoice(config, nativeMtp.adapter),
       modelDefaultMode: nativeMtp.defaultMode,
       externalSpeculativeActive: compatibleExternalSpeculative,
     }))
@@ -591,7 +591,15 @@ export function buildCommandPreview(
   const quote = (value: string) => /^[A-Za-z0-9_./:=@,+%-]+$/.test(value)
     ? value : "'" + value.replace(/'/g, "'\"'\"'") + "'"
   const command = parts.map((part, index) => index === 0 ? part : quote(part)).join(' \\\n  ')
-  return (config.apiKey ? '# Set VLLM_API_KEY in the environment before running.\n' : '') + command
+  const env = buildNativeMtpLaunchEnvironment({
+    supported: nativeMtp?.supported === true,
+    adapter: nativeMtp?.adapter,
+    mode: nativeMtpSessionChoice(config, nativeMtp?.adapter),
+    modelDefaultMode: nativeMtp?.defaultMode,
+    externalSpeculativeActive: parts.includes('--disable-native-mtp'),
+  })
+  const prefix = Object.entries(env).map(([key, value]) => `${key}=${quote(value)} `).join('')
+  return (config.apiKey ? '# Set VLLM_API_KEY in the environment before running.\n' : '') + prefix + command
 }
 
 export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
@@ -604,7 +612,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
   const [previewMetadataState, setPreviewMetadataState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; nativeGlmSsd?: boolean; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; nativeGlmSsd?: boolean; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; maxContextLength?: number; nativeMtp?: { supported?: boolean; adapter?: 'nemotron_lilicorr'; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null>(null)
   const [previewDrafters, setPreviewDrafters] = useState<Array<{ path: string; bundled?: boolean }>>([])
   const [previewDspark, setPreviewDspark] = useState<false | { default: boolean }>(false)
   const explicitDflash2 = useDflash2Selection(config.speculativeModel || '')

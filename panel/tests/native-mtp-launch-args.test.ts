@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildNativeMtpLaunchArgs,
+  buildNativeMtpLaunchEnvironment,
+  nativeMtpSessionChoice,
   normalizeNativeMtpMode,
   resolveNativeMtpMode,
   resolveNativeMtpStartupMode,
@@ -9,6 +11,25 @@ import {
 const ADAPTIVE = ['--native-mtp-depth-policy', 'adaptive', '--native-mtp-sampling-policy', 'compatible-only']
 
 describe('native MTP launch args — two product modes', () => {
+  it('attaches LiLiCorr only for an explicit adaptive session, without a depth override', () => {
+    const input = { supported: true, adapter: 'nemotron_lilicorr', modelDefaultMode: 'off' as const }
+    expect(buildNativeMtpLaunchEnvironment(input)).toEqual({ VMLX_NEMOTRON_LILICORR: '0' })
+    expect(buildNativeMtpLaunchEnvironment({ ...input, mode: 'adaptive' }))
+      .toEqual({ VMLX_NEMOTRON_LILICORR: '1' })
+    expect(buildNativeMtpLaunchEnvironment({ ...input, mode: 'off' }))
+      .toEqual({ VMLX_NEMOTRON_LILICORR: '0' })
+    expect(buildNativeMtpLaunchEnvironment({ ...input, mode: 'adaptive', externalSpeculativeActive: true }))
+      .toEqual({ VMLX_NEMOTRON_LILICORR: '0' })
+    expect(buildNativeMtpLaunchEnvironment({ ...input, adapter: undefined })).toEqual({})
+    expect(buildNativeMtpLaunchArgs({ ...input, mode: 'adaptive' })).toEqual(ADAPTIVE)
+    const oldSession = { nativeMtpMode: 'adaptive' as const }
+    const mode = nativeMtpSessionChoice(oldSession, input.adapter)
+    expect(buildNativeMtpLaunchEnvironment({ ...input, mode }))
+      .toEqual({ VMLX_NEMOTRON_LILICORR: '0' })
+    expect(nativeMtpSessionChoice(oldSession)).toBe('adaptive')
+    expect(nativeMtpSessionChoice({ ...oldSession, lilicorrMode: 'adaptive' }, input.adapter))
+      .toBe('adaptive')
+  })
   it('adaptive emits the adaptive policy, compatible-only sampling and NO depth', () => {
     expect(buildNativeMtpLaunchArgs({ supported: true, mode: 'adaptive' })).toEqual(ADAPTIVE)
     // --native-mtp-depth is the engine's explicit VMLINUX_NATIVE_MTP_DEPTH

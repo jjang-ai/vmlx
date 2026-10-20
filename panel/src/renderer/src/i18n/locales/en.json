@@ -1044,6 +1044,7 @@
       "powerModeScope": "This setting does not measure GPU speed.",
       "nativeMtp": "Native MTP",
       "nativeMtpBlockedFallback": "Native MTP weights were detected, but this bundle has not passed the runtime compatibility gate. Autoregressive decode remains active.",
+      "lilicorrHint": "This bundle includes a separate LiLiCorr drafter. AR is the default; choose Adaptive MTP to enable it. The engine chooses the draft width and falls back to AR when drafting costs more. Sampling settings stay unchanged.",
       "nativeMtpHint": "Uses the model's preserved MTP head when the bundle passed the runtime gate. Adaptive MTP drafts several tokens per step, verifies them against the model exactly, and measures itself against plain decode. Models without a compatible MTP head use ordinary autoregressive decode.",
       "nativeMtpMode": "Native MTP",
       "nativeMtpModeTooltip": "Adaptive MTP: the engine chooses the draft depth itself. It measures each verify window against its own AR baseline, climbs toward the verifier ceiling when a deeper rung wins, steps down to depth 1 and then to AR when a window loses, and re-probes with backoff. No bundle setting fixes the depth. The request/bundle sampler is never changed. AR (MTP off): plain autoregressive decode.",
