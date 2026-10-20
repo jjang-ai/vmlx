@@ -197,6 +197,11 @@ class _TargetAdapter:
         self.media_embeds = None
         self.media_positions = None
         self.rope_delta = 0
+        modules = getattr(language_model, "named_modules", None)
+        if callable(modules):
+            for _, module in modules():
+                if getattr(module, "is_jangtq2_dense", False):
+                    module.row_exact_verify = True
 
     @property
     def layers(self):
@@ -218,6 +223,17 @@ class _TargetAdapter:
         return {"position_ids": (mx.arange(start, start + rows) + int(self.rope_delta))[None]}
 
     def __call__(self, inputs, cache=None):
+        if not self.last_row_logits and inputs.shape[1] > 1:
+            from .metal.row_exact_qmv import row_exact_verify_scope
+
+            # Wide sorted MLP/SDPA reductions can change a near-tied target
+            # argmax relative to AR. Cover the chooser's actual window;
+            # neither its width choices nor the drafter's arithmetic changes.
+            with row_exact_verify_scope(rows=int(inputs.shape[1]), required=True):
+                return self._forward(inputs, cache)
+        return self._forward(inputs, cache)
+
+    def _forward(self, inputs, cache=None):
         if self.last_row_logits:
             # prompt prefill (one call per chunk inside the dflash runtime's loop): cooperative cancel point
             from .utils.generation_cancellation import raise_if_generation_cancelled

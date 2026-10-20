@@ -29,9 +29,9 @@ from vmlx_engine.metal.qwen35_gdn_gate_terms import (
     qwen35_gated_delta_decode,
 )
 
-from vmlx_engine.metal.row_exact_qmv import MAX_ROWS as _ROW_EXACT_MAX_ROWS
 from vmlx_engine.metal.row_exact_qmv import (
     attend_rows_in_pairs, rotary_rows_like_decode, row_exact_scope_active,
+    row_exact_scope_rows,
 )
 
 logger = logging.getLogger(__name__)
@@ -493,7 +493,7 @@ def _patch_attention_text_rope(qlang: Any) -> None:
         position_embeddings=None,
     ):
         if (
-            x.shape[0] == 1 and 1 < x.shape[1] <= _ROW_EXACT_MAX_ROWS
+            x.shape[0] == 1 and 1 < x.shape[1] <= row_exact_scope_rows()
             and row_exact_scope_active()
         ):
             return _row_exact_attention(self, qlang, x, cache, position_ids, position_embeddings)
@@ -1014,7 +1014,7 @@ def _patch_qwen_model(qlang: Any) -> None:
         position_embeddings = None
         if position_ids is not None and getattr(position_ids, "ndim", 0) == 3:
             fa_layer = self.layers[self.fa_idx]
-            if 1 < h.shape[1] <= _ROW_EXACT_MAX_ROWS and row_exact_scope_active():
+            if 1 < h.shape[1] <= row_exact_scope_rows() and row_exact_scope_active():
                 # Verify rows: each angle as its one-row decode forward forms it.
                 position_embeddings = rotary_rows_like_decode(
                     fa_layer.self_attn.rotary_emb, position_ids, h

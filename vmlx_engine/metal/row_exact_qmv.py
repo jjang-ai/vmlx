@@ -801,7 +801,7 @@ def row_exact_qmv(x, weight, scales, biases, *, group_size: int, bits: int, mode
     for dim in x.shape[:-1]:
         rows *= int(dim)
     out_dim = weight.shape[0]
-    if _efficient_rows(bits) < rows <= MAX_ROWS:
+    if _efficient_rows(bits) < rows <= row_exact_scope_rows():
         return _row_blocks(x, rows, in_dim, out_dim, weight, scales, biases, group_size, bits, mode)
     variants = _variants(rows, in_dim, out_dim, bits, group_size, x.dtype)
     if not variants:
@@ -838,11 +838,19 @@ import mlx.nn as nn
 _SCOPE: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "vmlx_row_exact_verify_qmv", default=False
 )
+_SCOPE_ROWS: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "vmlx_row_exact_verify_rows", default=MAX_ROWS
+)
 _INSTALLED = {"done": False}
 
 
 def row_exact_scope_active() -> bool:
     return _SCOPE.get()
+
+
+def row_exact_scope_rows() -> int:
+    """Arithmetic coverage for this verify call, not a draft-depth limit."""
+    return _SCOPE_ROWS.get()
 
 
 _PAIR_CAUSAL_MASKS: "dict[tuple[int, str], mx.array]" = {}
@@ -1014,7 +1022,7 @@ def row_exact_linear(x, weight, bias=None):
     rows = 1
     for dim in x.shape[:-1]:
         rows *= int(dim)
-    if not 2 <= rows <= MAX_ROWS or weight.dtype != x.dtype:
+    if not 2 <= rows <= row_exact_scope_rows() or weight.dtype != x.dtype:
         return None
     out_dim, in_dim = weight.shape
 
@@ -1058,7 +1066,7 @@ def _dense_rows(x, weight, bias=None):
     rows = 1
     for dim in x.shape[:-1]:
         rows *= int(dim)
-    if not 1 <= rows <= MAX_ROWS:
+    if not 1 <= rows <= row_exact_scope_rows():
         return None
     out_dim, in_dim = weight.shape
     x2d = x.reshape(rows, in_dim)
@@ -1110,17 +1118,26 @@ def _install() -> None:
 
 
 @contextlib.contextmanager
-def row_exact_verify_scope():
-    """Route 2..MAX_ROWS-row affine projections through the row-exact kernel."""
-    if not row_exact_qmv_requested():
+def row_exact_verify_scope(*, rows: int = MAX_ROWS, required: bool = False):
+    """Keep a target verify window on decode arithmetic.
+
+    Existing native-MTP callers retain their family policy and coverage.
+    DFlash supplies its actual adaptive window and requires exact arithmetic;
+    wide projections use bounded kernel launches without limiting draft depth.
+    """
+    if rows < 2:
+        raise ValueError("row-exact verify coverage must include at least two rows")
+    if not required and not row_exact_qmv_requested():
         yield False
         return
     _install()
     token = _SCOPE.set(True)
+    rows_token = _SCOPE_ROWS.set(int(rows))
     env_token = _SCOPE_ENV.set((os.environ.get("VMLX_ROW_EXACT_QMV_ORDER", "multi,plain"),
                                 os.environ.get("VMLX_ROW_EXACT_QMV_REG", "").strip()))
     try:
         yield True
     finally:
         _SCOPE_ENV.reset(env_token)
+        _SCOPE_ROWS.reset(rows_token)
         _SCOPE.reset(token)

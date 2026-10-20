@@ -30,9 +30,9 @@ ROTATIONS = ("none", "hadamard32")
 
 def _row_exact_rows(rows: int) -> bool:
     """Inside a row-exact verify forward and within its row limit."""
-    from ..metal.row_exact_qmv import MAX_ROWS, row_exact_scope_active
+    from ..metal.row_exact_qmv import row_exact_scope_active, row_exact_scope_rows
 
-    return rows <= MAX_ROWS and row_exact_scope_active()
+    return rows <= row_exact_scope_rows() and row_exact_scope_active()
 
 
 class TQLinear(nn.Module):
