@@ -109,7 +109,7 @@ import {
 } from "../../shared/chatMetrics";
 import { RemoteRequestMetrics } from "../../shared/remoteRequestMetrics";
 import { stripRedundantNamespacedToolPreview } from "../../shared/namespacedToolScaffold";
-import { replayPersistedAssistantHistory } from "../../shared/toolHistoryReplay";
+import { hasCompletedAssistantGeneration, replayPersistedAssistantHistory } from "../../shared/toolHistoryReplay";
 import {
   historyIsStableAcrossToolAuthorization,
   shouldReplayHistoricalReasoning,
@@ -1921,6 +1921,7 @@ export function registerChatHandlers(
             !msgContent.trim()
             && !_hasOaiToolCalls
             && !_hasReasoningContent
+            && !hasCompletedAssistantGeneration(m)
           ) continue; // Skip entirely empty aborted messages
         }
         // Detect JSON content arrays (multimodal messages with images)

@@ -87,6 +87,17 @@ function reasoningItem(text: string): any {
   }
 }
 
+/** A completed request can have no displayable text (for example rejected
+ * native tool markup). Its assistant boundary still separates user turns. */
+export function hasCompletedAssistantGeneration(message: PersistedAssistantToolHistory): boolean {
+  try {
+    const record = JSON.parse(typeof message.generationRecordJson === 'string' ? message.generationRecordJson : '{}')
+    return record.status === 'completed' && Array.isArray(record.passes) && record.passes.length > 0
+  } catch {
+    return false
+  }
+}
+
 /**
  * Rebuild one persisted assistant row into model-visible history.
  *
@@ -147,6 +158,11 @@ export function replayPersistedAssistantHistory(
   }
 
   if (calls.length === 0) {
+    if (!content.trim() && !segments[0]?.trim() && hasCompletedAssistantGeneration(message)) {
+      return [useResponsesApi
+        ? { type: 'message', role: 'assistant', content: '' }
+        : { role: 'assistant', content: '' }]
+    }
     if (useResponsesApi) {
       // A persisted reasoning-only assistant row usually means the previous
       // turn hit an answer-recovery/output-budget edge and produced no visible

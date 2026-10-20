@@ -4,6 +4,29 @@ import { replayPersistedAssistantHistory } from '../src/shared/toolHistoryReplay
 import { REASONING_WITHOUT_ANSWER_NOTICE } from '../src/shared/responsesStreamRecovery'
 
 describe('persisted assistant tool-history replay', () => {
+  it.each([true, false])('preserves a completed empty generation boundary (Responses=%s)', (responses) => {
+    const rejected = {
+      content: '',
+      generationRecordJson: JSON.stringify({
+        status: 'completed', passes: [{ submittedAt: 123 }], finishReason: 'incomplete',
+      }),
+    }
+    const prior = { role: 'user', content: 'Diagnostic control sequence' }
+    const followup = { role: 'user', content: 'Answer the separate history question' }
+    const history = [prior, ...replayPersistedAssistantHistory(rejected, responses), followup]
+    expect(history.map(item => item.role)).toEqual(['user', 'assistant', 'user'])
+    expect(history[1]).toEqual(responses
+      ? { type: 'message', role: 'assistant', content: '' }
+      : { role: 'assistant', content: '' })
+  })
+
+  it.each(['{}', '{broken', JSON.stringify({ status: 'pending', passes: [] }),
+    JSON.stringify({ status: 'completed', passes: [] })])('does not invent a generation for an empty placeholder %s', (record) => {
+    for (const wire of [true, false]) expect(replayPersistedAssistantHistory({
+      content: '', generationRecordJson: record,
+    }, wire)).toEqual([])
+  })
+
   it('keeps a diagnostic reasoning-only bubble out of model history on both wires', () => {
     const exhausted = {
       content: REASONING_WITHOUT_ANSWER_NOTICE,
