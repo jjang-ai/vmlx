@@ -119,3 +119,14 @@ def test_layout_mismatch_fails_closed():
 def test_no_split_keys_is_a_noop():
     root = _quantized_root()
     assert jl._load_split_expert_stacks(root, {}) == 0
+
+
+def test_unloaded_parameter_audit_names_the_dropped_stack(caplog):
+    root = _quantized_root()
+    names = {n for n, _ in __import__("mlx.utils", fromlist=["tree_flatten"]).tree_flatten(root.parameters())}
+    loaded = {n for n in names if ".switch_mlp." not in n}
+    with caplog.at_level("WARNING"):
+        missing = jl._audit_unloaded_parameters(root, loaded, label="test")
+    assert missing and all(".switch_mlp." in n for n in missing)
+    assert "not loaded from the bundle" in caplog.text
+    assert jl._audit_unloaded_parameters(root, names, label="test") == []

@@ -813,6 +813,28 @@ def _load_split_expert_stacks(model, buffer: dict) -> int:
     return len(items)
 
 
+def _audit_unloaded_parameters(model, loaded_keys: set, *, label: str) -> list[str]:
+    """ADVISORY: model parameters that no bundle tensor was loaded into (they keep their init values).
+
+    ``load_weights(strict=False)`` silently drops keys that match no module, so a renamed or differently laid-out
+    tensor group leaves its module at random init with no error (Ornith's MTP routed experts ran that way). This
+    never refuses a load; it names what was not loaded, loudly, so the next such drop is visible on the first run.
+    """
+    from mlx.utils import tree_flatten
+
+    missing = [name for name, _ in tree_flatten(model.parameters()) if name not in loaded_keys]
+    if missing:
+        logger.warning(
+            "%s: %d model parameters were not loaded from the bundle and keep their initial values "
+            "(first: %s). If any of these are trained weights, the bundle layout is not being mapped.",
+            label, len(missing), ", ".join(missing[:12]),
+        )
+    else:
+        logger.info("%s: every model parameter was loaded from the bundle", label)
+    model._vmlx_unloaded_parameters = list(missing)
+    return missing
+
+
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
     """Return on-disk quant module paths that may correspond to a VLM module."""
     candidates = {module_path, f"model.{module_path}"}
@@ -4835,6 +4857,7 @@ def _load_jang_v2_vlm(
     _affine1_expanded_count = 0
     _jangtq2_loaded_keys = set()
     _split_expert_buffer: dict = {}
+    _vlm_loaded_keys: set = set()
     _switch_module_paths = {
         path for path, _module in model.named_modules()
         if path.endswith((".switch_mlp.gate_proj", ".switch_mlp.up_proj", ".switch_mlp.down_proj"))
@@ -5179,10 +5202,12 @@ def _load_jang_v2_vlm(
             from vmlx_engine.jangh.payload import validate_payload
 
             _jangtq2_loaded_keys.update(validate_payload(model, shard_weights.items()))
+        _vlm_loaded_keys.update(shard_weights.keys())
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
 
+    _vlm_loaded_keys.update(f"{p}.{part}" for p, parts in _split_expert_buffer.items() for part in parts)
     _load_split_expert_stacks(model, _split_expert_buffer)
     _split_expert_buffer.clear()
 
@@ -5316,6 +5341,10 @@ def _load_jang_v2_vlm(
 
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s")
+    try:
+        _audit_unloaded_parameters(model, _vlm_loaded_keys, label=f"JANG v2 VLM {path.name}")
+    except Exception as _audit_err:  # advisory only; never fail a load on the audit itself
+        logger.debug("unloaded-parameter audit skipped: %s", _audit_err)
 
     return model, _load_jang_vlm_processor(path, model)
 
