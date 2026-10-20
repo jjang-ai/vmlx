@@ -430,12 +430,18 @@ def _row_exact_attention(self, qlang, x, cache, position_ids, position_embedding
     if cache is not None:
         keys, values = cache.update_and_fetch(keys, values)
     if isinstance(keys, mx.array) and isinstance(values, mx.array):
-        output = attend_rows_in_pairs(
-            lambda q, k, v, m: qlang.scaled_dot_product_attention(
-                q, k, v, cache=cache, scale=self.scale, mask=m,
-            ),
-            queries, keys, values,
-        )
+        from vmlx_engine.metal.qwen35_flash_decode import verify_attention
+
+        def _pairs(q, k, v):
+            return attend_rows_in_pairs(
+                lambda qq, kk, vv, m: qlang.scaled_dot_product_attention(
+                    qq, kk, vv, cache=cache, scale=self.scale, mask=m,
+                ),
+                q, k, v,
+            )
+
+        # Rows over a long cache take the split-key flash kernel exactly as their decode steps do.
+        output = verify_attention(queries, keys, values, self.scale, _pairs)
     else:  # quantized KV storage: stock multi-query kernel
         output = qlang.scaled_dot_product_attention(
             queries, keys, values, cache=cache, scale=self.scale, mask="causal",
@@ -545,14 +551,18 @@ def _patch_attention_text_rope(qlang: Any) -> None:
         if cache is not None:
             keys, values = cache.update_and_fetch(keys, values)
 
-        output = qlang.scaled_dot_product_attention(
-            queries,
-            keys,
-            values,
-            cache=cache,
-            scale=self.scale,
-            mask=mask,
-        )
+        from vmlx_engine.metal.qwen35_flash_decode import decode_attention
+
+        output = decode_attention(queries, keys, values, self.scale, mask)
+        if output is None:
+            output = qlang.scaled_dot_product_attention(
+                queries,
+                keys,
+                values,
+                cache=cache,
+                scale=self.scale,
+                mask=mask,
+            )
         output = output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
 
         return self.o_proj(output * qlang.mx.sigmoid(gate))

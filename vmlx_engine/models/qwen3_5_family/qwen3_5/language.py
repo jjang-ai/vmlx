@@ -93,6 +93,11 @@ def _qwen35_scaled_dot_product_attention(
     scale: float,
     mask: Optional[mx.array],
 ) -> mx.array:
+    from vmlx_engine.metal.qwen35_flash_decode import decode_attention
+
+    flash = decode_attention(queries, keys, values, scale, mask)
+    if flash is not None:
+        return flash
     if _qwen35_force_fused_prefill(queries, keys, values, cache, mask):
         return mx.fast.scaled_dot_product_attention(
             queries,

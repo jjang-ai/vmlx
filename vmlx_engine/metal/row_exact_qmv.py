@@ -905,23 +905,91 @@ def rotary_rows_like_decode(rotary, position_ids: mx.array, x=None) -> tuple[mx.
     return cos, sin
 
 
+@lru_cache(maxsize=1)
+def _gpu_class() -> str:
+    try:
+        info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+        return str(info.get("architecture", ""))[-1:]
+    except Exception:
+        return ""
+
+
+def _vector_sdpa_class(n_keys: int, gqa: int, rows: int, masked: bool, head_dim: int, value_dim: int):
+    """The kernel and key-block count MLX 0.32.3's vector SDPA uses for ``rows`` (1-2) queries over ``n_keys`` keys.
+
+    Mirrors mlx/backend/metal/scaled_dot_product_attention.cpp: the 1-pass / 2-pass dispatch (``k >= 1024`` on 'd' /
+    's' GPUs, or GQA with ``k >= 4096``), the one-query unmasked GQA kernel (``gqa 8`` at D 64 / 128, ``gqa 12 / 16``
+    at D 128, ``k >= 8192``) and the 2-pass block count, which steps with the key count (M5 Max 's': 64 / 128 at
+    1,025 / 256 at 8,193 / 512 at 32,769 / 1,024 at 65,537 keys). A query's reduction order depends only on this
+    class, so a row inside a pair equals its decode step exactly when both calls share it.
+    """
+    devc = _gpu_class()
+    if not ((devc in ("d", "s") and n_keys >= 1024) or (gqa > 1 and n_keys >= 4096)):
+        return ("1pass",)
+    gqa_dims = (gqa == 8 and head_dim in (64, 128)) or (gqa in (12, 16) and head_dim == 128)
+    variant = "gqa" if (not masked and rows == 1 and head_dim == value_dim and gqa_dims and n_keys >= 8192) else "plain"
+    n_simds = gqa * rows
+    if devc == "s":
+        blocks = 64
+        if n_keys > 1024 and n_simds > 4:
+            blocks = 128 if n_keys <= 8192 else 256 if n_keys <= 32768 else 512 if n_keys <= 65536 else 1024
+    elif devc == "d":
+        blocks = 128
+        if n_simds <= 2 and n_keys > 8192:
+            blocks = 256
+        elif n_simds >= 6:
+            if 16384 <= n_keys < 65536:
+                blocks = 512
+            elif n_keys >= 65536:
+                blocks = 1024
+    else:
+        blocks = 64 if n_simds >= 4 else 32
+    try:
+        env_blocks = int(os.environ.get("MLX_SDPA_BLOCKS", "0") or 0)
+    except ValueError:
+        env_blocks = 0
+    if env_blocks > 0:
+        blocks = ((env_blocks + 31) // 32) * 32
+    return ("2pass", variant, blocks)
+
+
 def attend_rows_in_pairs(attend, queries, keys, values, row_masks=None):
     """Attend S verify rows like their decode steps.
 
-    MLX keeps its single-query vector SDPA for up to two queries (measured
-    bit-exact against decode) and switches to the full kernel, whose reduction
-    order differs, from three. Row ``r`` sees keys up to and including itself.
+    MLX keeps its single-query vector SDPA for up to two queries and switches
+    to the full kernel, whose reduction order differs, from three. Row ``r``
+    sees keys up to and including itself. Two rows share one call only when
+    MLX would give each of them the same kernel and key-block count as its own
+    decode step (``_vector_sdpa_class``); otherwise each row is attended alone
+    over exactly its own keys, which is its decode step. (Pairing blindly broke
+    exactness at the block-count steps -- 1,024 / 8,192 / 32,768 keys on M5 Max
+    -- and on every row past 8,192 keys where decode uses MLX's GQA kernel.)
     ``attend(q, k, v, mask)`` is the model's own SDPA call; ``row_masks``
     optionally supplies extra additive rows ``[..., S, T]`` (e.g. a sparse
-    index mask), sliced per pair.
+    index mask), sliced per row group.
     """
     S = queries.shape[2]
     T = keys.shape[2]
     start = T - S
+    gqa = max(1, int(queries.shape[1]) // max(1, int(keys.shape[1])))
+    head_dim, value_dim = int(queries.shape[-1]), int(values.shape[-1])
+    masked = row_masks is not None
+
+    def _single(row):
+        end = start + row + 1
+        mask = None if row_masks is None else row_masks[..., row:row + 1, :end]
+        return attend(queries[:, :, row:row + 1], keys[:, :, :end], values[:, :, :end], mask)
+
     outs = []
     for first in range(0, S, 2):
         count = min(2, S - first)
         end = start + first + count
+        if count == 2:
+            in_pair = _vector_sdpa_class(end, gqa, 2, True, head_dim, value_dim)
+            if not (in_pair == _vector_sdpa_class(end - 1, gqa, 1, masked, head_dim, value_dim)
+                    == _vector_sdpa_class(end, gqa, 1, masked, head_dim, value_dim)):
+                outs.extend((_single(first), _single(first + 1)))
+                continue
         mask = None if row_masks is None else row_masks[..., first:first + count, :end]
         if count == 2:
             causal = pair_causal_mask(end, queries.dtype)
