@@ -111,9 +111,10 @@ def apply() -> bool:
         Mixer.__call__ = __call__
         Mixer._vmlx_original_call = original
 
-        # Attention: MLX keeps its single-query vector SDPA for up to two queries (bit-exact with decode) and
-        # switches kernels from three, so a depth-3 verify (4 rows) differed from AR first at the first attention
-        # block (Super layer 7, measured). Inside the verify scope, attend rows in pairs like their decode steps.
+        # Even a depth-one verify has two queries. At long context MLX can use
+        # different GQA kernels/reduction orders for two queries and solo decode.
+        # Route every multi-row verify through the dispatch-aware helper, which
+        # pairs rows only when their kernel classes match the solo calls.
         Attention = nemotron_h.NemotronHAttention
         original_attention = Attention.__call__
         sdpa = nemotron_h.scaled_dot_product_attention
@@ -122,7 +123,7 @@ def apply() -> bool:
             from vmlx_engine.metal.row_exact_qmv import attend_rows_in_pairs, row_exact_scope_active
 
             B, L, _ = x.shape
-            if L <= 2 or cache is None or not row_exact_scope_active():
+            if L <= 1 or cache is None or not row_exact_scope_active():
                 return original_attention(self, x, mask=mask, cache=cache)
             # Pair slicing synthesizes a causal mask; it must not silently
             # replace an explicit padding/additive mask or unmasked attention.

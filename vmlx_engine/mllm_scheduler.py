@@ -3510,6 +3510,12 @@ class MLLMScheduler:
             )
 
             if finish_response is not None:
+                # A terminal verified-token burst needs the same request-owned
+                # phase receipt as the single-response path below.
+                _mtp = getattr(getattr(self.batch_generator, "_stats", None), "last_native_mtp", None)
+                if isinstance(_mtp, dict) and str(_mtp.get("request_id")) == str(request_id):
+                    from .request_telemetry import mtp_spec_stats
+                    output.spec_stats = mtp_spec_stats(_mtp)
                 if getattr(finish_response, "prompt_cache", None) is not None:
                     request._extracted_cache = finish_response.prompt_cache
                     # The media clean-store lane keys by a BLOCK-ALIGNED
