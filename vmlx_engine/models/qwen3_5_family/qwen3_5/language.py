@@ -4,7 +4,10 @@ from typing import Any, Optional
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.activations import swiglu
-from mlx_lm.models.gated_delta import gated_delta_update
+# Packed Dk=128 recurrence (mlx-lm 0.32.0 kernel, bit-identical to the pinned 0.31.3 kernel on this device:
+# tests/test_gdn_packed.py). Same signature; ineligible shapes and VMLX_GDN_PACKED=0 take the stock kernel. The
+# native-MTP patch's _process_chunk resolves qlang.gated_delta_update, i.e. this binding.
+from vmlx_engine.metal.gdn_packed import gated_delta_update
 
 from vmlx_engine.metal.quantized_projection_group import (
     QuantizedProjectionGroup,
