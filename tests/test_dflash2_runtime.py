@@ -41,7 +41,7 @@ def test_custom_drafter_health_does_not_report_configured_count_as_live_depth():
             assert spec.get_num_draft_tokens() == configured
 
 
-def test_standard_drafter_health_identifies_fixed_count():
+def test_standard_drafter_health_distinguishes_seed_from_runtime_width():
     import vmlx_engine.speculative as spec
 
     config = spec.SpeculativeConfig(model="external-drafter", num_tokens=4)
@@ -49,8 +49,9 @@ def test_standard_drafter_health_identifies_fixed_count():
          patch.object(spec, "_spec_kind", "standard"), \
          patch.object(spec, "_draft_model", object()):
         stats = spec.get_spec_stats()["speculative_decoding"]
-        assert stats["num_draft_tokens"] == 4
-        assert stats["num_draft_tokens_scope"] == "fixed"
+        assert stats["num_draft_tokens"] is None
+        assert stats["num_draft_tokens_scope"] == "runtime_selected"
+        assert stats["configured_num_draft_tokens"] == 4
 
 
 def test_simple_engine_counts_multi_token_mllm_chunks_cumulatively():
