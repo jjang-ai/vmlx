@@ -69,3 +69,16 @@ def test_d3072_tiles_bitwise_equal_generic(gu, dn):
     np.testing.assert_array_equal(np.asarray(h1.astype(mx.float32)), np.asarray(h0.astype(mx.float32)))
     np.testing.assert_array_equal(np.asarray(y1.astype(mx.float32)), np.asarray(y0.astype(mx.float32)))
     mx.clear_cache()
+
+
+def test_ornith_decode_route_by_tokens():
+    # Installer sets decode_max_tokens=96 at this geometry: 8-96-token forwards stay on the per-row gather route
+    # (measured faster at every count there); the sorted route starts at 97 tokens.
+    m = SimpleNamespace(decode_max_tokens=96)
+    use_sorted = switch.TQSwitchGLU._use_sorted
+    assert not use_sorted(m, 1 * 8, 8)
+    assert not use_sorted(m, 8 * 8, 8)          # 8-row MTP verify window: was sorted under the 64-row rule
+    assert not use_sorted(m, 96 * 8, 8)
+    assert use_sorted(m, 97 * 8, 8)
+    legacy = SimpleNamespace()
+    assert use_sorted(legacy, 8 * 8, 8)          # families without a measured crossover keep the legacy rule
