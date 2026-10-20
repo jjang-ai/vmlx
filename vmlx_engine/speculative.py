@@ -138,7 +138,12 @@ def find_bundled_dflash2(model_path: str) -> str | None:
 
 
 def resolve_num_draft_tokens(model: str, requested: int) -> int:
-    """Return the verifier width the selected draft runtime will actually use."""
+    """Resolve the legacy configured count, not a custom runtime's live width.
+
+    DFlash runtimes select their own verify widths per cycle. This compatibility
+    value is not passed to those decoders and must not be reported as their
+    effective draft count.
+    """
     if not _is_dflash2_model(model):
         return requested
 
@@ -321,9 +326,14 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
         raise ValueError(f"Cannot load draft model: {e}") from e
 
     load_time = time.time() - start_time
+    width_description = (
+        "draft width selected by runtime"
+        if _spec_kind == "dflash2"
+        else f"num_draft_tokens={config.num_tokens}"
+    )
     logger.info(
         f"Draft model loaded in {load_time:.2f}s: {config.model} "
-        f"(num_draft_tokens={config.num_tokens})"
+        f"({width_description})"
     )
 
     # Log memory after draft model load
@@ -455,11 +465,18 @@ def get_spec_stats() -> dict:
     if _spec_config is None:
         return {"speculative_decoding": "not_configured"}
 
+    # The custom DFlash/DFlash2 lanes ignore the legacy configured count.
+    # Their controller (or an explicit diagnostic override) owns the actual
+    # width; per-request stats report observed widths. Do not turn a stored
+    # seed such as 5 into a false fixed-depth health claim.
+    runtime_width = _spec_kind == "dflash2"
     return {
         "speculative_decoding": {
             "enabled": is_speculative_enabled(),
             "draft_model": _spec_config.model if _spec_config else None,
-            "num_draft_tokens": _spec_config.num_tokens if _spec_config else 0,
+            "num_draft_tokens": None if runtime_width else _spec_config.num_tokens,
+            "num_draft_tokens_scope": "runtime_selected" if runtime_width else "fixed",
+            "configured_num_draft_tokens": _spec_config.num_tokens,
             "draft_model_loaded": _draft_model is not None,
             "disable_by_batch_size": _spec_config.disable_by_batch_size if _spec_config else 0,
         }

@@ -23,6 +23,36 @@ def test_standard_draft_preserves_requested_width():
     assert resolve_num_draft_tokens("ordinary-draft", requested=3) == 3
 
 
+def test_custom_drafter_health_does_not_report_configured_count_as_live_depth():
+    import vmlx_engine.speculative as spec
+
+    # Both DFlash2 and MiMo DFlash use this serving kind, regardless of the
+    # legacy value held in SpeculativeConfig.
+    for configured in (5, 8):
+        config = spec.SpeculativeConfig(model="bundled-drafter", num_tokens=configured)
+        with patch.object(spec, "_spec_config", config), \
+             patch.object(spec, "_spec_kind", "dflash2"), \
+             patch.object(spec, "_draft_model", object()):
+            stats = spec.get_spec_stats()["speculative_decoding"]
+            assert stats["enabled"]
+            assert stats["num_draft_tokens"] is None
+            assert stats["num_draft_tokens_scope"] == "runtime_selected"
+            assert stats["configured_num_draft_tokens"] == configured
+            assert spec.get_num_draft_tokens() == configured
+
+
+def test_standard_drafter_health_identifies_fixed_count():
+    import vmlx_engine.speculative as spec
+
+    config = spec.SpeculativeConfig(model="external-drafter", num_tokens=4)
+    with patch.object(spec, "_spec_config", config), \
+         patch.object(spec, "_spec_kind", "standard"), \
+         patch.object(spec, "_draft_model", object()):
+        stats = spec.get_spec_stats()["speculative_decoding"]
+        assert stats["num_draft_tokens"] == 4
+        assert stats["num_draft_tokens_scope"] == "fixed"
+
+
 def test_simple_engine_counts_multi_token_mllm_chunks_cumulatively():
     from vmlx_engine.engine.simple import _advance_mllm_completion_tokens
 
