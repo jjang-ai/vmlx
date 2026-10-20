@@ -1855,7 +1855,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {nativeMtpMode === 'adaptive' && !dflash2Speculative && (
           <InfoNote text={t('sessions.config.nativeMtpAdaptiveNote')} />
         )}
-        {nativeMtpMode === 'off' && detectedNativeMtp?.defaultMode === 'off' && (
+        {nativeMtpMode === 'off' && detectedNativeMtp?.defaultMode === 'off' &&
+          detectedNativeMtp?.adapter !== 'nemotron_lilicorr' && (
           <InfoNote text={t('sessions.config.nativeMtpDefaultOffNote')} />
         )}
         <InfoNote text={t('sessions.config.nativeMtpDetectedNote', { scope: detectedNativeMtp?.runtimeScope || 'text', cache: detectedNativeMtp?.nativeCacheType || detectedCacheSubtype || detectedCacheType || 'unknown', depthSource: detectedNativeMtp?.depthSource || 'default' })} />
