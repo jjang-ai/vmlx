@@ -6526,6 +6526,7 @@ class MLXMultimodalLM:
                         top_p=float(kwargs.get("top_p", 1.0)),
                         top_k=int(kwargs.get("top_k", 0)),
                         stop=kwargs.get("stop"),
+                        use_cache=kwargs.get("use_cache", True),
                     )
                     return
             except ImportError:
@@ -7336,7 +7337,9 @@ class MLXMultimodalLM:
         def _make_draft():
             return [KVCache() for _ in drafter.layers]
 
-        resume = _dsession.lookup(model_key, key_ids, tokenizer, target.make_cache, _make_draft)
+        use_cache = kwargs.get("use_cache", True)
+        resume = (_dsession.lookup(model_key, key_ids, tokenizer, target.make_cache, _make_draft)
+                  if use_cache else None)
         cache_len = int(resume["cache_len"]) if resume is not None else 0
         if resume is not None and resume.get("load_s") is not None:
             # SSD restore receipt (the SSD-only RAM policy reads every resumed turn from SSD): time, bytes, rate.
@@ -7370,7 +7373,7 @@ class MLXMultimodalLM:
             if media is None:
                 return 0
             return active_delta if int(cut) >= int(media["media_end"]) else None
-        cuts = _dsession.snapshot_cuts(tokenizer, prompt_ids, cache_len)
+        cuts = _dsession.snapshot_cuts(tokenizer, prompt_ids, cache_len) if use_cache else []
         snapshots = []
         dchunks = _dsession.ChunkWriter(_dsession.ssd_parent(resume))
 
@@ -7430,7 +7433,7 @@ class MLXMultimodalLM:
                                           parent=parent)
                 parent = _dsession.chain_after(parent, receipt)   # a full write becomes the next entries' parent
         forwarded = list(session.get("forwarded") or [])
-        if _dsession.reuse_enabled() and len(forwarded) > cache_len and session.get("target_cache") is not None:
+        if use_cache and _dsession.reuse_enabled() and len(forwarded) > cache_len and session.get("target_cache") is not None:
             # Session keys: the prompt's key ids (media positions carry the media identity) + the generated tokens.
             turn_tokens = key_ids + forwarded[len(prompt_ids):] if len(forwarded) >= len(prompt_ids) else forwarded
             receipt = _dsession.store({"kind": "turn", "tokens": turn_tokens, "cache_len": len(forwarded),
@@ -7530,7 +7533,9 @@ class MLXMultimodalLM:
         gen_eos = (self.config.get("eos_token_id") if isinstance(self.config, dict) else getattr(self.config, "eos_token_id", None))
         eos |= set(gen_eos if isinstance(gen_eos, list) else ([gen_eos] if gen_eos is not None else []))
         model_key = (id(target), id(drafter))
-        resume = _ms.lookup(model_key, key_ids, tokenizer, target.model.make_cache, eos, need_draft=drafter is not None)
+        use_cache = kwargs.get("use_cache", True)
+        resume = (_ms.lookup(model_key, key_ids, tokenizer, target.model.make_cache, eos, need_draft=drafter is not None)
+                  if use_cache else None)
         cache_len = int(resume["cache_len"]) if resume is not None else 0
         if resume is not None and resume.get("load_s") is not None:
             _restored = 0
@@ -7555,7 +7560,7 @@ class MLXMultimodalLM:
         elif has_media:
             logger.info("MiMo DFlash media: every media token is inside the restored %d-token prefix; towers skipped",
                         cache_len)
-        cuts = _ms.snapshot_cuts(tokenizer, prompt_ids, cache_len)
+        cuts = _ms.snapshot_cuts(tokenizer, prompt_ids, cache_len) if use_cache else []
         snapshots = []
         chunks = _ms.ChunkWriter(_ms.ssd_parent(resume))
 
@@ -7640,7 +7645,7 @@ class MLXMultimodalLM:
         # The cache holds every emitted token but the last; when a pipelined AR step already forwarded the final EOS
         # (st.eos_forwarded) it holds that too -- either way the entry's key is the prompt + every emitted token.
         expect = len(prompt_ids) + len(emitted) - (0 if st.eos_forwarded else 1)
-        if (_ms.reuse_enabled() and session.get("target_cache") is not None and forwarded > cache_len
+        if (use_cache and _ms.reuse_enabled() and session.get("target_cache") is not None and forwarded > cache_len
                 and forwarded == expect):
             receipt = _ms.store({"kind": "turn", "tokens": key_ids + emitted, "cache_len": forwarded,
                                  "target_cache": session["target_cache"], "draft_context": session["taps"],
@@ -7920,6 +7925,7 @@ class MLXMultimodalLM:
                 prompt_tokens=_df2_media["prompt_tokens"] if _df2_media else None,
                 media=_df2_media,
                 stop=kwargs.get("stop"),
+                use_cache=kwargs.get("use_cache", True),
             ):
                 emitted = len(getattr(chunk, "tokens", []) or [])
                 token_count += emitted

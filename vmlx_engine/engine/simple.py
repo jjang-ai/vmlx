@@ -765,9 +765,11 @@ class SimpleEngine(BaseEngine):
         _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
-        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
-        # doesn't leak into self._model.generate which would reject it.
-        kwargs.pop("_bypass_prefix_cache", None)
+        # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
+        # Translate the server's request-local bypass to its cache contract;
+        # ordinary LLM wrappers must not receive the internal routing kwarg.
+        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+            kwargs["use_cache"] = False
         request_seed = kwargs.pop("seed", None)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
         self._raise_if_prompt_over_limit(
@@ -843,9 +845,11 @@ class SimpleEngine(BaseEngine):
         _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
-        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
-        # doesn't leak into self._model.generate which would reject it.
-        kwargs.pop("_bypass_prefix_cache", None)
+        # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
+        # Translate the server's request-local bypass to its cache contract;
+        # ordinary LLM wrappers must not receive the internal routing kwarg.
+        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+            kwargs["use_cache"] = False
         request_seed = kwargs.pop("seed", None)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
         self._raise_if_prompt_over_limit(
@@ -1028,9 +1032,11 @@ class SimpleEngine(BaseEngine):
                 spec_stats=getattr(final, "spec_stats", None) if final is not None else None,
             )
 
-        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
-        # doesn't leak into self._model.generate which would reject it.
-        kwargs.pop("_bypass_prefix_cache", None)
+        # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
+        # Translate the server's request-local bypass to its cache contract;
+        # ordinary LLM wrappers must not receive the internal routing kwarg.
+        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+            kwargs["use_cache"] = False
 
         # Convert tools for template if provided
         template_tools = convert_tools_for_template(tools) if tools else None
@@ -1262,9 +1268,11 @@ class SimpleEngine(BaseEngine):
         _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py): chat routes too
         if not self._loaded:
             await self.start()
-        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
-        # doesn't leak into self._model.generate which would reject it.
-        kwargs.pop("_bypass_prefix_cache", None)
+        # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
+        # Translate the server's request-local bypass to its cache contract;
+        # ordinary LLM wrappers must not receive the internal routing kwarg.
+        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+            kwargs["use_cache"] = False
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None

@@ -866,6 +866,7 @@ def _stream_generate_resumable(
     prompt_tokens: Optional[list] = None,
     media: Optional[dict] = None,
     stop=None,
+    use_cache: bool = True,
 ) -> Iterator[Any]:
     """The dflash==0.1.0 ``_stream_generate`` loop with session resume.
 
@@ -931,12 +932,13 @@ def _stream_generate_resumable(
     # placeholder token ids are the same for every image. They may still
     # resume a text-only entry (its prefix precedes any media).
     model_key = base_key + (media["salt"],) if media is not None and not per_item_media else base_key
+    reuse_prefix = use_cache and _prefix_reuse_enabled()
     resume = None
-    if _prefix_reuse_enabled():
+    if reuse_prefix:
         resume = _SESSION_STORE.take_matching(model_key, key_list)
         if resume is None and media is not None and not per_item_media:
             resume = _SESSION_STORE.take_matching(base_key, prompt_list)
-    if resume is None and _prefix_reuse_enabled() and _SESSION_SSD is not None:
+    if resume is None and reuse_prefix and _SESSION_SSD is not None:
         try:
             _im_start = tokenizer.convert_tokens_to_ids("<|im_start|>")
         except Exception:
@@ -957,7 +959,7 @@ def _stream_generate_resumable(
                 "DFlash2 SSD hit: %s entry, %d of %d prompt tokens restored in %.2fs",
                 resume["kind"], resume["cache_len"], len(prompt_list), resume["load_s"],
             )
-    if resume is None and _prefix_reuse_enabled():
+    if resume is None and reuse_prefix:
         misses = _SESSION_STORE.describe_misses(model_key, key_list)
         if misses:
             logger.info(
@@ -1017,7 +1019,7 @@ def _stream_generate_resumable(
     # diverge in its last few tokens and never match.
     boundary_cut = (
         _assistant_tag_cut(tokenizer, prompt_list, cache_len)
-        if _prefix_reuse_enabled()
+        if reuse_prefix
         else None
     )
     # A second snapshot at the end of the system message (the first
@@ -1028,7 +1030,7 @@ def _stream_generate_resumable(
     # they end after the first user message, which differs per conversation.
     system_cut = (
         _system_end_cut(tokenizer, prompt_list, cache_len)
-        if _prefix_reuse_enabled()
+        if reuse_prefix
         else None
     )
     if system_cut is not None and boundary_cut is not None and system_cut >= boundary_cut:
@@ -1096,7 +1098,7 @@ def _stream_generate_resumable(
             # assistant tag); a cut costs one extra chunk boundary.
             cuts = [(c, k) for c, k in ((system_cut, "system"), (boundary_cut, "boundary")) if c is not None]
             from .glm_dflash2 import ssd_only_ram_release_enabled as _ssd_only
-            if _prefix_reuse_enabled() and _SESSION_SSD is not None and _ssd_only():
+            if reuse_prefix and _SESSION_SSD is not None and _ssd_only():
                 _taken = {c for c, _ in cuts}
                 cuts += [(c, "chunk") for c in _chunk_snapshot_cuts(
                     cache_len, boundary_cut if boundary_cut is not None else len(prompt_list), _chunk_snapshot_every(),
@@ -1274,7 +1276,7 @@ def _stream_generate_resumable(
 
         def _checkpoint() -> None:
             nonlocal _terminal_write, _ssd_parent
-            if not _prefix_reuse_enabled():
+            if not reuse_prefix:
                 return
             correction = _checkpoint_correction(cycle_committed, cycle_kept)
             if correction is not None:
@@ -1971,6 +1973,7 @@ def stream_dflash2_generate(
     prompt_tokens: Optional[list] = None,
     media: Optional[dict] = None,
     stop=None,
+    use_cache: bool = True,
 ) -> Iterator[Any]:
     """Yield upstream DFlash2 chunks using vMLX's hybrid Qwen target.
 
@@ -2013,7 +2016,7 @@ def stream_dflash2_generate(
             yield from stream_glm_dflash2(model, tokenizer, draft, prompt, max_tokens=int(max_tokens),
                                           temperature=float(temperature), top_p=float(top_p), top_k=int(top_k),
                                           stop=stop, prompt_tokens=prompt_tokens, media=media,
-                                          sampling_controls=controls)
+                                          sampling_controls=controls, use_cache=use_cache)
         return
 
     adapter = _adapter_for(model)
@@ -2043,5 +2046,6 @@ def stream_dflash2_generate(
             prompt_tokens=prompt_tokens,
             media=media,
             stop=stop,
+            use_cache=use_cache,
             prefill_step_size=prefill_step_size(),
         )

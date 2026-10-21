@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import pytest
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -91,7 +92,8 @@ def test_qwen_mtp_model_wrapper_accepts_upstream_capture_contract():
     assert FakeQwenModel()(None, capture_layer_ids=None, hidden_sink=None) == "original"
 
 
-def test_stream_chat_routes_text_only_dflash2_before_mlx_vlm_generator():
+@pytest.mark.parametrize("use_cache", [True, False])
+def test_stream_chat_routes_text_only_dflash2_before_mlx_vlm_generator(use_cache):
     from concurrent.futures import Future
     from vmlx_engine.models.mllm import MLXMultimodalLM
 
@@ -155,9 +157,11 @@ def test_stream_chat_routes_text_only_dflash2_before_mlx_vlm_generator():
                 frequency_penalty=.2,
                 presence_penalty=.3,
                 stop=["END"],
+                use_cache=use_cache,
             )
         )
 
+    assert bridge.call_args.kwargs["use_cache"] is use_cache
     bridge.assert_called_once()
     ordinary.assert_not_called()
     assert [output.text for output in outputs] == ["one", " two"]

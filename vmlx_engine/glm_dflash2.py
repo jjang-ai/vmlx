@@ -1353,7 +1353,7 @@ def _glm_stable_root(tokenizer, prompt_ids) -> int:
 
 
 def stream_glm_dflash2(model, tokenizer, draft, prompt: str, *, max_tokens: int, temperature: float, top_p: float = 1.0,
-                       top_k: int = 0, stop=None, prompt_tokens=None, media=None, sampling_controls=None):
+                       top_k: int = 0, stop=None, prompt_tokens=None, media=None, sampling_controls=None, use_cache: bool = True):
     """Server lane: yields upstream ``dflash.model_mlx.GenerationResponse`` chunks (text segment, tokens, accepted = tokens
     emitted this cycle, drafted = verify width - 1) for a glm5_next target. ``media``: an image plan (see
     ``_dflash2_rounds``) with ``prompt_tokens`` set to its processor-expanded ids."""
@@ -1374,7 +1374,7 @@ def stream_glm_dflash2(model, tokenizer, draft, prompt: str, *, max_tokens: int,
     target = target_for(model, draft.config.target_layer_ids)
     st = SpecStats(); tic = time.perf_counter(); n = 0
     store = (prefix_store_for(target)
-             if os.environ.get("VMLX_GLM_DFLASH2_PREFIX_CACHE", "1") != "0" else None)
+             if use_cache and os.environ.get("VMLX_GLM_DFLASH2_PREFIX_CACHE", "1") != "0" else None)
     from vmlx_engine.utils.prefill_step import prefill_step_size
     for new, drafted in _dflash2_rounds(target, draft, list(prompt_tokens), int(max_tokens), eos, float(temperature),
                                         float(top_p), int(top_k), prefill_step=prefill_step_size(),
