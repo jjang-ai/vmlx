@@ -115,10 +115,11 @@ async def test_native_rejected_call_stream_has_typed_terminal(monkeypatch, surfa
         assert len(errors) == 1
         assert errors[0]['code'] == ('tool_calls_required' if choice != 'auto' else 'tool_calls_rejected')
         assert not [c for e in events for c in e.get('choices', []) if c.get('finish_reason')]
-        usage = [e['usage'] for e in events if e.get('usage')]
+        usage = [e['usage'] for e in events if e.get('usage') and not e.get('error')]
         assert len(usage) == 1
         assert usage[0]['prompt_tokens'] == 10
         assert usage[0]['completion_tokens'] == 20
+        assert next(e['usage'] for e in events if e.get('error')) == usage[0]
     else:
         terminals = [e for e in events if e.get('type') in {'response.completed', 'response.failed', 'response.incomplete'}]
         assert len(terminals) == 1

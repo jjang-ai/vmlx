@@ -182,7 +182,7 @@ def test_tiny_qwen4_verify_rows_equal_decode_steps(bits, width):
 
 
 @pytest.mark.parametrize("positions", ["text", "mrope"])
-@pytest.mark.parametrize("width", [2, 3, 4])
+@pytest.mark.parametrize("width", [2, 3, 4, 16])
 def test_qwen35_attention_verify_rows_equal_decode_steps(positions, width):
     """Qwen3.5/3.8 dense attention (27B path): fused text RoPE per row, hoisted
     M-RoPE angles formed like decode, and paired single-query SDPA."""
@@ -230,7 +230,9 @@ def test_qwen35_attention_verify_rows_equal_decode_steps(positions, width):
         steps.append(out)
     candidate = KVCache()
     mx.eval(call(prefix, candidate, 0))
-    with R.row_exact_verify_scope():
+    with R.row_exact_verify_scope(
+        rows=max(R.MAX_ROWS, width), required=width > R.MAX_ROWS
+    ):
         verify = call(rows, candidate, 9, verify=True)
     mx.eval(verify)
     for r in range(width):

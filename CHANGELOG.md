@@ -4,6 +4,20 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.81] - 2026-10-20
+
+- Let native MTP, DFlash2 and DSpark choose draft work adaptively within their verified limits. Treat bundle and tuning depths as starting points, with measured ordinary-decoding fallback and re-entry.
+- Add explicit Adaptive LiLiCorr controls for compatible Nemotron Bolt bundles. Preserve the existing off-by-default behavior and saved session choice.
+- Correct native verification at long-context attention dispatch boundaries and Qwen DFlash2 verification across wider blocks. Preserve causal presence-penalty arithmetic and rejected-token rollback.
+- Honor model-declared thinking and non-thinking sampling presets across the app and all four chat APIs, including embedded JANG configuration. Keep explicit request overrides.
+- Improve Ornith 1.5 loading, prefill and long-context attention, including split expert layouts, hidden-state normalization and idempotent MTP patch installation.
+- Improve Qwen 27B dense multi-row decoding and keep MiMo verification on its qualified MLX kernels. Throughput gains depend on the bundle, sampling, context and workload; adaptive operation does not guarantee faster requests or improved prefill.
+- Preserve speculative SSD parent chains and native media positions across restores. Reduce duplicate hybrid-cache payload work while retaining background persistence and safe tool continuations.
+- Report runtime-selected draft widths, scoped native MTP acceptance, mixed weight precision and observed GDN dispatch accurately. Keep cached prompt throughput distinct from newly computed prefill.
+- Explain suppressed model tool markup without emitting premature success. Preserve consumed token/cache usage on API errors and completed empty assistant boundaries in subsequent chat history.
+- Make generic external drafting adaptive and verify sequentially to preserve ordinary target arithmetic. This compatibility path can be slower than ordinary decoding and does not support persistent prefix caching.
+- Preserve small file sizes in built-in directory listings.
+
 ## [1.6.80] - 2026-10-18
 
 - Add native Qwen Image 2.1 and Turbo generation/reference editing, with bundle-derived variants, alpha-preserving inputs, regional masks and model-specific controls. Keep saved image operations and settings consistent across mode changes and restart.

@@ -110,15 +110,24 @@ class TQSwitchGLU(nn.Module):
 
     def _use_expert_tiles(self, x, kk):
         g, u, d = self.gate_proj, self.up_proj, self.down_proj
+        if not (EXPERT_TILES == "1" or getattr(self, "use_expert_tiles", False)):
+            return False
+        D, I = g.input_dims, g.output_dims
+        if (D, I) == (4096, 2048):                 # GLM-5.3 (E=288) / MiMo-V2.6 (E=256)
+            down_bits = (2, 3, 4) if g.num_experts == 256 else (2, 3)
+            experts = (256, 288)
+        elif (D, I) == (3072, 1024):               # Ornith-1.5-122B (qwen3_5_moe, E=256)
+            down_bits = (2, 3)
+            experts = (256,)
+        else:
+            return False
         return (
-            (EXPERT_TILES == "1" or getattr(self, "use_expert_tiles", False))
-            and x.dtype == mx.bfloat16 and x.shape[-1] == 4096 and kk == 8
-            and g.num_experts in (256, 288)
-            and (g.input_dims, g.output_dims) == (4096, 2048)
-            and (u.input_dims, u.output_dims, u.num_experts) == (4096, 2048, g.num_experts)
-            and (d.input_dims, d.output_dims, d.num_experts) == (2048, 4096, g.num_experts)
+            x.dtype == mx.bfloat16 and x.shape[-1] == D and kk == 8
+            and g.num_experts in experts
+            and (u.input_dims, u.output_dims, u.num_experts) == (D, I, g.num_experts)
+            and (d.input_dims, d.output_dims, d.num_experts) == (I, D, g.num_experts)
             and g.bits == u.bits and g.bits in (2, 3)
-            and d.bits in ((2, 3, 4) if g.num_experts == 256 else (2, 3))
+            and d.bits in down_bits
             and g.rotated and u.rotated and d.rotated and K.nax_available()
         )
 

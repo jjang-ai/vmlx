@@ -197,6 +197,11 @@ class _TargetAdapter:
         self.media_embeds = None
         self.media_positions = None
         self.rope_delta = 0
+        modules = getattr(language_model, "named_modules", None)
+        if callable(modules):
+            for _, module in modules():
+                if getattr(module, "is_jangtq2_dense", False):
+                    module.row_exact_verify = True
 
     @property
     def layers(self):
@@ -218,6 +223,17 @@ class _TargetAdapter:
         return {"position_ids": (mx.arange(start, start + rows) + int(self.rope_delta))[None]}
 
     def __call__(self, inputs, cache=None):
+        if not self.last_row_logits and inputs.shape[1] > 1:
+            from .metal.row_exact_qmv import row_exact_verify_scope
+
+            # Wide sorted MLP/SDPA reductions can change a near-tied target
+            # argmax relative to AR. Cover the chooser's actual window;
+            # neither its width choices nor the drafter's arithmetic changes.
+            with row_exact_verify_scope(rows=int(inputs.shape[1]), required=True):
+                return self._forward(inputs, cache)
+        return self._forward(inputs, cache)
+
+    def _forward(self, inputs, cache=None):
         if self.last_row_logits:
             # prompt prefill (one call per chunk inside the dflash runtime's loop): cooperative cancel point
             from .utils.generation_cancellation import raise_if_generation_cancelled
@@ -383,6 +399,69 @@ def _rebuild_draft_hidden(hidden, resume, cache_len, delta_size, hidden_offset, 
         if hidden_limit is not None:
             hidden = hidden[:, -hidden_limit:]
     return hidden, cache_len + delta_size - int(hidden.shape[1])
+
+
+# ---------------------------------------------------------------------------
+# Draft-vocabulary cut for the drafter's head (opt-in, VMLX_DFLASH2_DRAFT_VOCAB)
+# ---------------------------------------------------------------------------
+#
+# The DFlash2 drafter proposes through the TARGET's lm_head (248,320 x 5,120, 8-bit on the 27B: ~1.27 GB read per draft
+# round for bs rows).  Both reference engines project draft logits through a prefix of the head only (one keeps rows
+# [0, 98304); the other adds the specials [248032, 248320)), verify with the full head, and report an acceptance loss
+# <= 0.36 % of tokens.  Exactness: only the PROPOSAL changes; the target verifies every draft with its full head, so the
+# greedy output is the target argmax and speculative sampling stays distribution-exact for any proposal law (q is zero
+# outside the kept rows and the drafts are drawn from that q).  Rows are sliced (contiguous views), never copied.
+DRAFT_VOCAB_SEGMENTS = {"tf": ((0, 98304), (248032, 248320)), "prefix": ((0, 98304),)}
+
+
+def draft_vocab_segments(vocab: int):
+    import os
+
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_VOCAB", "off").strip().lower()
+    segs = DRAFT_VOCAB_SEGMENTS.get(raw)
+    if segs is None or any(hi > vocab or lo >= hi for lo, hi in segs):
+        return None
+    return segs
+
+
+def install_draft_vocab_cut(draft: Any, segments) -> bool:
+    """Replace ``draft.compute_logits`` by a version that projects only ``segments`` of the bound head's rows and
+    returns full-width logits with -inf elsewhere (the candidate selector keeps working on token ids).  Reads the
+    head through ``draft.lm_head`` at call time (bound per request)."""
+    import math
+
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    if getattr(draft, "_vmlx_vocab_cut", None) is not None:
+        return True
+    cfg = draft.config
+    segs = tuple((int(lo), int(hi)) for lo, hi in segments)
+
+    def compute_logits(hidden):
+        head = draft.lm_head
+        if not isinstance(head, nn.QuantizedLinear) or "bias" in head:
+            return type(draft).compute_logits(draft, hidden)        # unknown head: the full projection
+        lead = hidden.shape[:-1]
+        parts = []
+        for lo, hi in segs:
+            parts.append(mx.quantized_matmul(hidden, head["weight"][lo:hi], head["scales"][lo:hi], head["biases"][lo:hi],
+                                             transpose=True, group_size=head.group_size, bits=head.bits))
+        vocab = int(head["weight"].shape[0])
+        out = mx.full((*lead, vocab), -math.inf, dtype=parts[0].dtype)
+        cap = cfg.final_logit_softcapping
+        for (lo, hi), part in zip(segs, parts):
+            part = part * cfg.output_multiplier
+            if cap is not None and cap > 0:
+                part = mx.tanh(part / cap) * cap
+            out[..., lo:hi] = part
+        # Apply transforms only to retained rows: tanh(-inf) is finite, so
+        # softcapping the masked tensor would reopen excluded vocabulary.
+        return out
+
+    draft.compute_logits = compute_logits
+    draft._vmlx_vocab_cut = segs
+    return True
 
 
 def _adapter_for(model: Any) -> _TargetAdapter:
@@ -1281,8 +1360,9 @@ def _stream_generate_resumable(
 
         # Verify width per cycle (see _dflash2_block_plan / _BlockChooser):
         # the width with the best predicted tokens per measured second.
-        widths = _dflash2_block_plan(block_size, _lane_flat(adapter))
-        chooser = _BlockChooser(widths, cost=_width_costs(adapter, widths))
+        _codebook = _codebook_mlp(adapter)
+        widths = _dflash2_block_plan(block_size, _lane_flat(adapter), codebook=_codebook)
+        chooser = _BlockChooser(widths, cost=_width_costs(adapter, widths), first_widest=_codebook)
         after_ar = False
 
         def _ar_step(tok_arr, history):
@@ -1598,7 +1678,7 @@ class _BlockChooser:
     ar_burst = 8
     ar_alpha = 0.3
 
-    def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None):
+    def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None, first_widest: bool = False):
         # ``low`` may be the whole tuple of candidate widths (from
         # _dflash2_block_plan); (low, high) is kept for the two-width callers.
         if isinstance(low, (tuple, list)):
@@ -1606,7 +1686,14 @@ class _BlockChooser:
         else:
             widths = (int(low),) if high is None or high <= low else (int(low), int(high))
         self.widths = widths
-        self.width = widths[0]
+        # The first cycle of a request runs the WIDEST window: it observes every draft position once, so the expected
+        # tokens of the deep widths are estimated from this text, not from the prior. Starting narrow (the old
+        # widths[0]) saw two positions per cycle and climbed to width 16 only after ~12 cycles on code: 12 of 23 cycles
+        # of a 122-token code reply ran at width 3 (74.8 tok/s) where the (5, 8, 16) plan ran 15 of 16 at width 16
+        # (83.7 tok/s). One wide cycle costs ~110 ms once per request (~0.1 ms per token of a 384-token reply).
+        # Dense codebook-MLP targets only (``first_widest``, measured on JANGH2): Qwen3.8-27B JANG_4D, whose verify
+        # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
+        self.width = widths[-1] if first_widest else widths[0]
         self._last_timed: dict = {}
         top = max(self.widths)
         self.trials = [0.0] * top          # index k = draft position k (1-based)
@@ -1792,7 +1879,26 @@ def _lane_flat(adapter: Any) -> bool:
     return flat
 
 
-def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
+def _codebook_mlp(adapter: Any) -> bool:
+    """True when the target has dense JANGH codebook projections (jangh.dense.TQLinear, e.g. Qwen3.8-27B JANGH2's 2-bit
+    MLP): their verify cost grows steeply with rows below the sorted-tile threshold, which is what the narrow width 3
+    and the widest first cycle were measured on."""
+    cached = getattr(adapter, "_vmlx_codebook_mlp", None)
+    if cached is not None:
+        return cached
+    found = False
+    try:
+        found = any(type(m).__name__ == "TQLinear" for _n, m in adapter._target.named_modules())
+    except Exception:
+        found = False
+    try:
+        adapter._vmlx_codebook_mlp = found
+    except Exception:
+        pass
+    return found
+
+
+def _dflash2_block_plan(trained_max: int, lane_flat: bool = False, codebook: bool = False) -> tuple:
     """Candidate verify widths for one request, smallest first.
 
     DFlash2 drafts a whole block (``bs-1`` masked positions) in ONE drafter
@@ -1816,12 +1922,34 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False) -> tuple:
             return (fixed,)
         except ValueError:
             pass
+    # A/B tool: an explicit candidate list (e.g. "3,5,8,16"), each clipped to 2..2*trained; the chooser still picks.
+    plan = os.environ.get("VMLX_DFLASH2_WIDTHS", "").strip()
+    if plan:
+        try:
+            widths = sorted({max(2, min(int(w), 2 * trained)) for w in plan.split(",") if w.strip()})
+            if widths:
+                return tuple(widths)
+        except ValueError:
+            pass
     if lane_flat:
         # Verify cost is ~flat (lane matmul on every projection): width 5 is
         # dominated by the trained width, which costs the same and drafts
         # deeper.  Measured JANG_4D: fixed 8 prose 44.3 vs (5,8,16) 38-41,
         # because the model sent many prose cycles to 5.
+        # In practice unreachable: _lane_flat counts the vocabulary head lane_qmm.install keeps on MLX. Do NOT change
+        # that without a served A/B: making JANG_4D lane-flat (8, 16) measured story 37.1 -> 32.7-33.0 (2026-10-19).
         return (trained, 2 * trained)
+    # Not lane-flat (a dense codebook MLP, e.g. JANGH2): verify cost grows with rows below the sorted-tile threshold,
+    # and since 1-5-row calls share each weight read (jangh.kernels.gather_qmv_rows) a 3-row round costs ~59 ms against
+    # 77 for 5 rows and 38 ms per in-lane AR token, so on prose (p ~ 0.3 per position) width 3 beats both AR and
+    # width 5: served JANGH2 story 35.0 / 34.9 tok/s with (3, 5, 8, 16) vs 29.2 / 30.4 with (5, 8, 16) and the AR lane
+    # 29.6 / 29.9 (2026-10-19 A/B, 2 reps at 1294-1333 MHz). Code keeps width 16 once the first cycle has observed
+    # every position (see _BlockChooser: the first cycle of a request runs the widest window).
+    if codebook:
+        return tuple(sorted({3, min(5, trained), trained, 2 * trained}))
+    # Other non-flat targets keep (5, trained, 2*trained). Qwen3.8-27B JANG_4D (affine on the lane matmul, head on MLX)
+    # measured worse with width 3 (story 37.1 -> 35.7-36.1, 3 reps) and worse still with (8, 16) (32.7-33.0): its verify
+    # costs 62-70 ms at 5 rows vs 71-78 at 8 (A/B 2026-10-19 at matched 1,302-1,387 MHz).
     return tuple(sorted({min(5, trained), trained, 2 * trained}))
 
 
@@ -1903,10 +2031,9 @@ def stream_dflash2_generate(
             draft,
             tokenizer,
             prompt,
-            # Qwen3.8's published/runtime-validated DFlash2 lane is block 5.
-            # The checkpoint's training maximum is larger, but using it as
-            # the serving block makes four-row verification become seq8 and
-            # cuts throughput roughly in half on M5 Max.
+            # The drafter's trained block: input to _dflash2_block_plan, whose
+            # _BlockChooser picks the verify width per cycle from measured
+            # costs (e.g. 3/5/8/16). Not a fixed serving width.
             block_size=int(draft.config.block_size),
             max_tokens=int(max_tokens),
             temperature=float(temperature),

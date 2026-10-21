@@ -247,6 +247,31 @@ def test_load_dspark_runtime_contract(tmp_path, monkeypatch):
     assert _load_dspark_runtime(model, root) is None
 
 
+@pytest.mark.parametrize("stamped", [1, 3, 99])
+def test_stamped_max_draft_never_lowers_the_adaptive_width_ceiling(tmp_path, stamped):
+    # The width is chosen per round; a bundle's speculative.max_draft stamp is advisory, never a hard depth.
+    root = _bundle(tmp_path)
+    stamp = json.loads((root / "jang_config.json").read_text())
+    stamp["speculative"]["max_draft"] = stamped
+    (root / "jang_config.json").write_text(json.dumps(stamp))
+    assert _load_dspark_runtime(_tiny_model(), root)["max_draft"] == 7
+
+
+def test_moe_cost_preference_does_not_cap_adaptive_width(tmp_path):
+    """The expensive eighth verify row is exact; its cost is not a hard depth limit."""
+    target = _tiny_moe_target()
+    root = _bundle(tmp_path, hidden=64)
+    config = json.loads((root / "config.json").read_text())
+    config["text_config"] = _moe_text_config()
+    (root / "config.json").write_text(json.dumps(config))
+    runtime = _load_dspark_runtime(target.model, root)
+    assert runtime["target"].preferred_max_draft == 6
+    assert runtime["max_draft"] == 7
+    # A confidence/acceptance history that makes the full supported width
+    # worthwhile must be able to reach it rather than being clipped at six.
+    assert choose_width([0.99] * 7, runtime["max_draft"]) == 7
+
+
 @pytest.mark.parametrize(
     "kwargs, outcome",
     [

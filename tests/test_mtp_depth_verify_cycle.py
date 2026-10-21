@@ -1122,7 +1122,7 @@ class TestDepthGating:
         assert _effective_depth_resolution(batch)[0] == (recommended if safe else 1)
         assert _effective_depth_resolution(batch, adaptive_ceiling=True)[0] == ((3 if adaptive else recommended) if safe else 1)
 
-    @pytest.mark.parametrize("source", ["VMLINUX_NATIVE_MTP_DEPTH", "VMLX_NATIVE_MTP_DEPTH", "family", "resolution_error"])
+    @pytest.mark.parametrize("source", ["VMLINUX_NATIVE_MTP_DEPTH", "VMLX_NATIVE_MTP_DEPTH", "resolution_error"])
     def test_adaptive_keeps_explicit_and_safety_limits(self, monkeypatch, source):
         from types import SimpleNamespace
         from vmlx_engine import native_mtp
@@ -1132,6 +1132,20 @@ class TestDepthGating:
         monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (1, source))
         batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: True)])
         assert _effective_depth_resolution(batch, adaptive_ceiling=True) == (1, source)
+
+    @pytest.mark.parametrize("source", ["family", "family_default:hy_v3", "bundle:recommended_num_drafts", "default"])
+    def test_adaptive_advisory_depths_only_seed_the_start(self, monkeypatch, source):
+        # Adaptive governs depth: a family default or a bundle stamp chooses the start, never the ladder top.
+        from types import SimpleNamespace
+        from vmlx_engine import native_mtp
+        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
+        monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (1, source))
+        monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
+        batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: True)])
+        assert _effective_depth_resolution(batch, adaptive_ceiling=True) == (3, source)
+        assert _effective_depth_resolution(batch) == (1, source)
 
     def test_non_trimmable_cache_forces_depth_1(self, monkeypatch):
         """Depth > 1 needs partial rollback, which only trimmable KV supports.

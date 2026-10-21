@@ -30,11 +30,13 @@ export interface MtpTemperatureNoticeInput {
 }
 
 /**
- * Read `nativeMtpMode` out of a session config (stored as a JSON string) and
- * normalize legacy spellings. Absent/unreadable means "not chosen".
+ * Read the adapter's saved choice and normalize legacy spellings.
+ * Absent/unreadable means "not chosen"; legacy native defaults do not opt
+ * a separate LiLiCorr drafter in.
  */
 export function parseSessionNativeMtpMode(
   sessionConfig: string | Record<string, unknown> | undefined,
+  adapter?: string,
 ): 'adaptive' | 'off' | undefined {
   if (!sessionConfig) return undefined
   let parsed: unknown = sessionConfig
@@ -46,7 +48,8 @@ export function parseSessionNativeMtpMode(
     }
   }
   if (!parsed || typeof parsed !== 'object') return undefined
-  return normalizeNativeMtpMode((parsed as Record<string, unknown>).nativeMtpMode)
+  const key = adapter === 'nemotron_lilicorr' ? 'lilicorrMode' : 'nativeMtpMode'
+  return normalizeNativeMtpMode((parsed as Record<string, unknown>)[key])
 }
 
 export function resolveMtpTemperatureNotice(

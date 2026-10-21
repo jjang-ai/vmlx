@@ -267,6 +267,7 @@ interface HealthData {
     depth_policy?: string
     effective_depth?: number | null
     effective_depth_source?: string | null
+    adaptive_ceiling?: number | null
     runtime_reason?: string
     runtime_scope?: string
     vl_runtime_available?: boolean
@@ -495,9 +496,11 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             {health.mtp?.effective_depth && health.mtp.runtime_available && health.mtp.mode !== 'ar' && (
               <InfoCard
                 label={t('sessions.performance.mtpDepth')}
-                value={health.mtp.effective_depth_source === 'default'
-                  ? t('sessions.performance.mtpDepthDefaultValue', { depth: health.mtp.effective_depth })
-                  : `D${health.mtp.effective_depth}`}
+                value={health.mtp.mode === 'adaptive' && health.mtp.adaptive_ceiling
+                  ? `D${health.mtp.adaptive_ceiling}`
+                  : health.mtp.effective_depth_source === 'default'
+                    ? t('sessions.performance.mtpDepthDefaultValue', { depth: health.mtp.effective_depth })
+                    : `D${health.mtp.effective_depth}`}
               />
             )}
             {health.mtp?.runtime_scope && health.mtp.runtime_available && (
@@ -932,8 +935,8 @@ export function formatWeightQuant(
   const q = health.quantization
   const qf = health.quantization_format
   if (q?.mixed_precision) {
-    const label = q.runtime_component_label || q.profile || q.weight_format?.toUpperCase() || 'Mixed precision'
-    return `${label} mixed${q.actual_bits != null ? ` (${q.actual_bits} bpw)` : ''}`
+    const label = q.runtime_component_label || q.profile || q.weight_format?.toUpperCase()
+    return `${label ? `${label} mixed` : 'Mixed precision'}${q.actual_bits != null ? ` (${q.actual_bits} bpw)` : ''}`
   }
   const bits =
     q?.actual_bits ??

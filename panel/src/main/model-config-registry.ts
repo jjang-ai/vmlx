@@ -226,6 +226,7 @@ export interface DetectedConfig {
   quantizationLabel?: string
   nativeMtp?: {
     supported: boolean
+    adapter?: 'nemotron_lilicorr'
     depth: number
     depthSource?: string
     runtimeScope: 'text' | 'text+vl'
@@ -1427,6 +1428,37 @@ function detectNativeMtpCapability(
 
   const declaredDrafts = declaredNativeMtpDrafts(jangCfg)
   const configuredMtp = configuredNativeMtpLayers(parsedConfig, jangCfg)
+  // Bolt has no native mtp.* head. Its separately bundled LiLiCorr drafter
+  // implements the same adaptive verifier contract, but remains opt-in.
+  if (nemotronImageOnly && configuredMtp.layers <= 0) {
+    try {
+      const dir = join(modelPath, 'lilicorr')
+      const draft = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
+      const index = JSON.parse(readFileSync(join(dir, 'model.safetensors.index.json'), 'utf8'))
+      const shards = [...new Set(Object.values(index.weight_map || {}))]
+      if (
+        draft.architectures?.includes('LiLiCorrDraftModel') &&
+        draft.dflash_config?.lilicorr_enabled === true &&
+        draft.block_size === 8 &&
+        shards.length > 0 &&
+        shards.every(shard => typeof shard === 'string' && basename(shard) === shard &&
+          shard.endsWith('.safetensors') && existsSync(join(dir, shard)))
+      ) {
+        return {
+          supported: true,
+          adapter: 'nemotron_lilicorr',
+          depth: 3,
+          depthSource: 'runtime-default',
+          runtimeScope: 'text+vl',
+          nativeCacheType: 'hybrid_ssm_v1',
+          requiresDeterministicSampling: false,
+          defaultMode: 'off',
+        }
+      }
+    } catch {
+      // An incomplete drafter must not advertise an available runtime.
+    }
+  }
   if (configuredMtp.layers <= 0) return undefined
 
   try {

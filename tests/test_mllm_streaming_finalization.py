@@ -124,6 +124,33 @@ def test_prefill_receipt_survives_single_and_coalesced_outputs(coalesced):
     assert outputs[0].prefill_usage == receipt
 
 
+@pytest.mark.parametrize("coalesced", [False, True])
+@pytest.mark.parametrize("matching_request", [False, True])
+def test_terminal_mtp_receipt_survives_burst_without_cross_request_leak(
+    coalesced, matching_request
+):
+    scheduler = _scheduler("mtp-terminal")
+    scheduler.batch_generator = SimpleNamespace(_stats=SimpleNamespace(last_native_mtp={
+        "request_id": "mtp-terminal" if matching_request else "previous-request",
+        "cycles": 55, "drafted_tokens": 67, "accepted_tokens": 43,
+        "final_depth": 1, "finish_reason": "length",
+        "scope": "last_native_mtp_phase",
+    }))
+    responses = [_response("mtp-terminal", 0)] if coalesced else []
+    responses.append(_response("mtp-terminal", 99, "length"))
+    outputs, finished = scheduler._process_batch_responses(responses)
+    assert finished == {"mtp-terminal"}
+    terminal = outputs[-1]
+    assert terminal.finished and terminal.finish_reason == "length"
+    if matching_request:
+        assert terminal.spec_stats["cycles"] == 55
+        assert terminal.spec_stats["accepted"] == 43
+        assert terminal.spec_stats["final_depth"] == 1
+        assert terminal.spec_stats["scope"] == "last_native_mtp_phase"
+    else:
+        assert terminal.spec_stats is None
+
+
 @pytest.mark.parametrize("code", ["prompt_too_long", "media_controls_unmeetable", "media_input_invalid", None])
 @pytest.mark.parametrize("after_token", [False, True])
 def test_error_sentinel_is_not_generated_or_detokenized(code, after_token):

@@ -885,6 +885,7 @@ def _refresh_loaded_max_prompt_tokens(reason: str) -> int:
     # deep sleep and wake. Drop both metadata snapshots only at load refresh;
     # ordinary requests must not rewrite defaults underneath active work.
     _jang_sampling_defaults_cache.clear()
+    _jang_sampling_modes_cache.clear()
     _generation_defaults_cache.clear()
 
     _declared = 0
@@ -2192,6 +2193,7 @@ def _main_pass_finish_reason(
     content_was_emitted: bool,
     accumulated_reasoning: str,
     answer_pass_pending: bool,
+    tool_calls_rejected: bool = False,
 ) -> str | None:
     """Return only a terminal reason that is final for the external stream.
 
@@ -2208,8 +2210,10 @@ def _main_pass_finish_reason(
     """
     if not finished:
         return None
-    if bool((accumulated_reasoning or "").strip()) and not content_was_emitted:
-        # A reasoning-only terminal still needs a diagnostic warning. Hold the
+    if (
+        bool((accumulated_reasoning or "").strip()) or tool_calls_rejected
+    ) and not content_was_emitted:
+        # A reasoning-only or rejected-tool terminal needs a diagnostic. Hold the
         # terminal until that warning can be emitted, then send exactly one
         # authoritative finish chunk. This also covers the bounded answer-pass
         # case, whose first-stage finish is internal.
@@ -2430,6 +2434,7 @@ def _dsv4_completion_internal_max_tokens(max_tokens: int, request: Any) -> int:
 
 
 _jang_sampling_defaults_cache: dict[str, dict] = {}
+_jang_sampling_modes_cache: dict[str, dict] = {}
 _generation_defaults_cache: dict[str, dict] = {}
 
 
@@ -3896,6 +3901,51 @@ def _forward_openai_token_controls(target: dict, request: Any) -> None:
     logit_bias = getattr(request, "logit_bias", None)
     if logit_bias is not None:
         target["logit_bias"] = dict(logit_bias)
+
+
+def _apply_bundle_sampling_mode(target: dict, request: Any) -> None:
+    """Apply declared on/off defaults after reasoning routing, never over user values."""
+    enabled = target.get("enable_thinking")
+    if enabled is not True and enabled is not False:
+        return
+    bundle_path = _model_path or getattr(request, "model", "")
+    if bundle_path not in _jang_sampling_modes_cache:
+        chat = _read_bundle_json(bundle_path, "jang_config.json").get("chat")
+        modes = chat.get("sampling_modes") if isinstance(chat, dict) else None
+        _jang_sampling_modes_cache[bundle_path] = modes if isinstance(modes, dict) else {}
+    modes = _jang_sampling_modes_cache[bundle_path]
+    mode = modes.get("thinking" if enabled else "instruct_nothinking")
+    if not enabled and not isinstance(mode, dict):
+        mode = modes.get("instruct")
+    if not isinstance(mode, dict):
+        return
+    import math
+
+    cli_defaults = {
+        "temperature": _default_temperature, "top_p": _default_top_p,
+        "top_k": _default_top_k, "min_p": _default_min_p,
+        "repetition_penalty": _default_repetition_penalty,
+    }
+    bounds = {
+        "temperature": (0, 2), "top_p": (0, 1), "top_k": (0, float("inf")),
+        "min_p": (0, 1), "repetition_penalty": (0, float("inf")),
+        "presence_penalty": (-2, 2), "frequency_penalty": (-2, 2),
+    }
+    for key, (low, high) in bounds.items():
+        if getattr(request, key, None) is not None or cli_defaults.get(key) is not None:
+            continue
+        if _native_mtp_sampling_policy == "greedy-only" and key in {"temperature", "top_p", "top_k", "min_p"}:
+            continue
+        value = mode.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            continue
+        if not low <= value <= high or (key == "repetition_penalty" and value == 0):
+            continue
+        target[key] = int(value) if key == "top_k" else float(value)
+    _normalize_deterministic_sampling_filters(
+        target, request_top_p=getattr(request, "top_p", None),
+        request_top_k=getattr(request, "top_k", None),
+    )
 
 
 def _log_resolved_sampling_kwargs(
@@ -8765,6 +8815,19 @@ def _first_unquoted_marker_pos(text: str, marker: str) -> int:
         start = pos + 1
 
 
+def _record_suppressed_tool_markup() -> None:
+    """Explain hidden control text once, including unfinished native calls."""
+    diagnostic = (
+        "The model emitted tool-call markup while tool calls were disabled for "
+        "this request. The markup was hidden and no tool was executed."
+    )
+    bucket = _TOOL_CALL_DROP_DIAGNOSTICS.get()
+    # Cleanup runs on every streaming tick. A partial call may never reach the
+    # parser's rejection path, but must not leave an unexplained empty success.
+    if bucket is not None and diagnostic not in bucket:
+        _record_tool_call_drop(diagnostic)
+
+
 def _clean_suppressed_tool_markup_for_display(
     output_text: str, request: ChatCompletionRequest | ResponsesRequest | None = None
 ) -> str:
@@ -8778,6 +8841,7 @@ def _clean_suppressed_tool_markup_for_display(
         tool_calls = None
         cleaned_text = output_text
     if tool_calls:
+        _record_suppressed_tool_markup()
         return _strip_tool_markup_residue_for_display(cleaned_text or "")
 
     marker_positions = [
@@ -8788,6 +8852,7 @@ def _clean_suppressed_tool_markup_for_display(
     if not marker_positions:
         return output_text
 
+    _record_suppressed_tool_markup()
     marker_start = min(marker_positions)
     visible_prefix = output_text[:marker_start].rstrip()
     suppressed_suffix = output_text[marker_start:]
@@ -10920,9 +10985,12 @@ def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
                 try:
                     from .native_mtp import native_mtp_effective_depth
 
+                    from .native_mtp import native_mtp_adaptive_ceiling
+
                     depth, source = native_mtp_effective_depth()
                     status["effective_depth"] = depth
                     status["effective_depth_source"] = source
+                    status["adaptive_ceiling"] = native_mtp_adaptive_ceiling(depth, source)
                 except Exception:
                     pass
         if active and loaded_adapter == "nemotron_lilicorr":
@@ -11034,7 +11102,19 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or profile_bits
         or q_cfg.get("bits")
     )
-    mixed_precision = q_jang.get("method") == "mixed"
+    # MLX per-module overrides are also authoritative without a JANG
+    # sidecar. The global bit width is a fallback, not a whole-model
+    # precision (e.g. Flash-Next affine experts at 2/3/4 bits, default 8).
+    declared_widths = {
+        value["bits"]
+        for value in q_cfg.values()
+        if isinstance(value, dict)
+        and type(value.get("bits")) in (int, float)
+        and value["bits"] > 0
+    }
+    if type(q_cfg.get("bits")) in (int, float) and q_cfg["bits"] > 0:
+        declared_widths.add(q_cfg["bits"])
+    mixed_precision = q_jang.get("method") == "mixed" or len(declared_widths) > 1
     if mixed_precision:
         # The config default describes fallback modules, not the whole bundle.
         # Mixed affine/MXFP4 bundles may have no single target bit width.
@@ -14061,6 +14141,23 @@ def _health_status_value() -> str:
     return "healthy" if _engine is not None else "no_model"
 
 
+def _loaded_gdn_dispatch_status() -> dict:
+    """Snapshot existing counters without importing MLX or constructing a graph."""
+    import sys
+
+    module = sys.modules.get("vmlx_engine.metal.gdn_packed")
+    stats = getattr(module, "STATS", None)
+    available = isinstance(stats, dict)
+    return {
+        "scope": "process_cumulative_graph_dispatch",
+        "module_loaded": module is not None,
+        "counters_available": available,
+        "packed_calls": stats.get("packed_calls", 0) if available else None,
+        "stock_calls": stats.get("stock_calls", 0) if available else None,
+        "note": "Graph dispatch counts; not GPU timings or completed execution counts.",
+    }
+
+
 def _loaded_dspark_health_status(engine) -> dict | None:
     """Report the loaded VLM drafter, not the unrelated generic draft registry."""
     if engine is None or getattr(engine, "_loaded", False) is not True:
@@ -14333,6 +14430,7 @@ async def health():
         )
     if _model_type != "image":
         result["active_parsers"] = _active_parser_health_status()
+        result["gdn_dispatch"] = _loaded_gdn_dispatch_status()
     scheduler_stats: dict[str, Any] = {}
     if scheduler:
         try:
@@ -17931,6 +18029,7 @@ async def create_anthropic_message(
     # Kwargs-parity telemetry (campaign #181 arm A5): this was the ONLY
     # dialect that never logged its resolved kwargs, so cross-dialect parity
     # was unprovable for Anthropic-shaped requests.
+    _apply_bundle_sampling_mode(_msg_kwargs, chat_req)
     _log_resolved_sampling_kwargs(
         "/v1/messages",
         chat_req.model or _resolve_model_name(),
@@ -18901,6 +19000,7 @@ async def ollama_chat(fastapi_request: Request):
     if _extra_o:
         chat_kwargs["chat_template_kwargs"] = _extra_o
 
+    _apply_bundle_sampling_mode(chat_kwargs, chat_req)
     _log_resolved_sampling_kwargs(
         "/api/chat",
         chat_req.model or _resolve_model_name(),
@@ -21346,6 +21446,7 @@ async def create_chat_completion(
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
 
+    _apply_bundle_sampling_mode(chat_kwargs, request)
     _log_resolved_sampling_kwargs(
         "/v1/chat/completions",
         request.model or _resolve_model_name(),
@@ -24876,6 +24977,7 @@ async def create_response(
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
 
+    _apply_bundle_sampling_mode(chat_kwargs, request)
     _log_resolved_sampling_kwargs(
         "/v1/responses",
         request.model or _resolve_model_name(),
@@ -27642,6 +27744,7 @@ async def stream_chat_completion(
                                 content_was_emitted=content_was_emitted,
                                 accumulated_reasoning=accumulated_reasoning,
                                 answer_pass_pending=_answer_pass_pending,
+                                tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
                             ),
                         )
                     ],
@@ -27781,9 +27884,14 @@ async def stream_chat_completion(
                                 content=content if content else None
                             ),
                             logprobs=chunk_logprobs,
-                            finish_reason=output.finish_reason
-                            if output.finished
-                            else None,
+                            finish_reason=_main_pass_finish_reason(
+                                output.finish_reason,
+                                finished=bool(output.finished),
+                                content_was_emitted=content_was_emitted,
+                                accumulated_reasoning="",
+                                answer_pass_pending=False,
+                                tool_calls_rejected=_TOOL_CALL_REJECTED.get(),
+                            ),
                         )
                     ],
                 )
@@ -28855,6 +28963,18 @@ async def stream_chat_completion(
             empty_output_error = _reasoning_only_chat_error_payload(
                 response_id, tool_calls_rejected=_TOOL_CALL_REJECTED.get()
             )
+            error_usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            if cached_tokens > 0 or cache_detail:
+                error_usage.prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=cached_tokens, cache_detail=cache_detail
+                )
+            # Native adapters terminate on this error and cannot consume the
+            # later Chat usage tail. Carry the same actual counts on the error.
+            empty_output_error["usage"] = error_usage.model_dump(exclude_none=True)
             if _is_pending_required_tool_choice(request):
                 # This branch returns before the later required-tool check.
                 # Keep the parser diagnostic, but report the unmet request
@@ -28877,15 +28997,6 @@ async def stream_chat_completion(
                 + "\n\n"
             )
             if include_usage:
-                error_usage = Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
-                if cached_tokens > 0 or cache_detail:
-                    error_usage.prompt_tokens_details = PromptTokensDetails(
-                        cached_tokens=cached_tokens, cache_detail=cache_detail
-                    )
                 error_usage_chunk = ChatCompletionChunk(
                     id=response_id, created=_created_ts, model=request.model,
                     choices=[], usage=error_usage,

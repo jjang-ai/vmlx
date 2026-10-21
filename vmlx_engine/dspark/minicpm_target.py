@@ -21,8 +21,8 @@ Three forwards over the module's own vendored Qwen3.5 layers:
   At the threshold (8 rows x top-8) the experts switch to the sorted
   gather_qmm and the rows are NOT exact; verify then runs each row's block as
   its own one-row call (exact by construction, ~1.7x the stock block's cost
-  at 6-8 rows on the real 35B). ``preferred_max_draft`` keeps DSpark below the
-  threshold (6 drafts at top-8).
+  at 6-8 rows on the real 35B). ``preferred_max_draft`` describes that cost
+  threshold (6 drafts at top-8); it does not cap the adaptive serving lane.
 - ``rollback``: rejected rows are undone by trimming the attention KV and
   replaying the GatedDeltaNet recurrence over the accepted rows only, from
   the state the verify started from (captured through the vendored GDN's

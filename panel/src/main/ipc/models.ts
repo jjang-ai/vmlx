@@ -152,6 +152,7 @@ async function fetchHfPath(
 
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
+  samplingModes?: import("../../shared/sessionGenerationDefaults").BundleGenerationDefaults["samplingModes"];
   doSample?: boolean;
   temperature?: number;
   topP?: number;

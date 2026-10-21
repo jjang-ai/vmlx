@@ -121,6 +121,8 @@ export interface ServerConfig {
   // normalize to 'adaptive'; legacy nativeMtpDepth/Override/AutoSamplingPolicy
   // keys in old rows are ignored.
   nativeMtpMode?: 'adaptive' | 'off' | 'auto' | 'deterministic'
+  /** Separate choice: old native-MTP defaults did not opt into Bolt's drafter. */
+  lilicorrMode?: 'adaptive' | 'off'
 
   // Generation defaults
   defaultTemperature?: number

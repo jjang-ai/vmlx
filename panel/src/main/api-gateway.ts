@@ -1843,6 +1843,15 @@ export class ApiGateway extends EventEmitter {
     return Object.keys(details).length ? { vmlx_usage: details } : {};
   }
 
+  private ollamaErrorUsage(usage: any): Record<string, unknown> {
+    if (!usage || typeof usage !== "object") return {};
+    return {
+      ...(usage.prompt_tokens != null ? {prompt_eval_count: usage.prompt_tokens} : {}),
+      ...(usage.completion_tokens != null ? {eval_count: usage.completion_tokens} : {}),
+      ...this.ollamaUsageDetails(usage),
+    };
+  }
+
   private async handleOllamaChat(
     req: IncomingMessage,
     res: ServerResponse,
@@ -2078,7 +2087,9 @@ export class ApiGateway extends EventEmitter {
                 // [DONE] marker; emitting done:true/stop here would falsely
                 // report a failed reasoning-only turn as successful.
                 done = true;
-                if (!this.writeJsonLine(res, { error: streamError })) {
+                if (!this.writeJsonLine(res, {
+                  error: streamError, ...this.ollamaErrorUsage(parsed.usage),
+                })) {
                   proxyRes.destroy();
                   return;
                 }
@@ -2426,7 +2437,9 @@ export class ApiGateway extends EventEmitter {
               const streamError = this.openAIStreamErrorToOllama(chunk);
               if (streamError) {
                 streamDone = true;
-                if (!this.writeJsonLine(res, { error: streamError })) {
+                if (!this.writeJsonLine(res, {
+                  error: streamError, ...this.ollamaErrorUsage(chunk.usage),
+                })) {
                   proxyRes.destroy();
                   return;
                 }

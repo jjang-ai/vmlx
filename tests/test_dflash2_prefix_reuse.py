@@ -464,3 +464,31 @@ def test_chunk_snapshot_cuts_and_parent_choice():
     assert _parent_below([], 3000, None) is None
     system = {"len": 1500, "sig": "s", "depth": 1}
     assert _parent_below(chunks, 9000, system)["sig"] == "b"               # not the shorter system entry
+
+
+def test_chain_after_advances_past_kept_but_not_restored_parent():
+    from concurrent.futures import Future
+    from vmlx_engine.dspark.session import chain_after
+
+    parent = {"sig": "old", "len": 4, "depth": 0, "delta_compatible": False}
+    receipt = Future()
+    receipt.vmlx_ssd_ref = {"sig": "new", "len": 8, "depth": 0, "generation": "new-state"}
+    receipt.set_result({"durable": True})
+    advanced = chain_after(parent, receipt)
+    assert advanced["sig"] == "new" and advanced["receipt"] is receipt
+
+
+def test_chain_after_kept_or_failed_full_receipt_preserves_live_parent():
+    from concurrent.futures import Future
+    from vmlx_engine.dspark.session import chain_after
+
+    parent = {"sig": "live", "len": 4, "depth": 1, "generation": "live-state"}
+    kept = Future()
+    kept.vmlx_ssd_ref = {"sig": "kept", "len": 8, "depth": 0,
+                         "generation": "different-state", "delta_compatible": False}
+    kept.set_result({"durable": True})
+    assert chain_after(parent, kept) is parent
+    failed = Future()
+    failed.vmlx_ssd_ref = {"sig": "failed", "len": 8, "depth": 0, "generation": "new-state"}
+    failed.set_result({"durable": False})
+    assert chain_after(parent, failed) is parent

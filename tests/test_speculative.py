@@ -404,7 +404,9 @@ class TestSpecStats(unittest.TestCase):
         self.assertTrue(sd["enabled"])
         self.assertTrue(sd["draft_model_loaded"])
         self.assertEqual(sd["draft_model"], "draft-model")
-        self.assertEqual(sd["num_draft_tokens"], 4)
+        self.assertIsNone(sd["num_draft_tokens"])
+        self.assertEqual(sd["configured_num_draft_tokens"], 4)
+        self.assertEqual(sd["num_draft_tokens_scope"], "runtime_selected")
 
 
 # ---------------------------------------------------------------------------
@@ -580,7 +582,7 @@ class TestLLMDraftModelWiring(unittest.TestCase):
             resp.finish_reason = "stop"
             yield resp
 
-        with patch("mlx_lm.stream_generate", side_effect=fake_stream_generate):
+        with patch("vmlx_engine.adaptive_speculative.adaptive_stream_generate", side_effect=fake_stream_generate):
             from vmlx_engine.models.llm import MLXLanguageModel
             model = MLXLanguageModel.__new__(MLXLanguageModel)
             model.model = MagicMock()
@@ -792,7 +794,9 @@ class TestSpeculativeWithServerHealth(unittest.TestCase):
         self.assertTrue(sd["enabled"])
         self.assertTrue(sd["draft_model_loaded"])
         self.assertEqual(sd["draft_model"], "draft-model")
-        self.assertEqual(sd["num_draft_tokens"], 4)
+        self.assertIsNone(sd["num_draft_tokens"])
+        self.assertEqual(sd["configured_num_draft_tokens"], 4)
+        self.assertEqual(sd["num_draft_tokens_scope"], "runtime_selected")
 
 
 # ---------------------------------------------------------------------------
@@ -971,7 +975,8 @@ class TestEdgeCases(unittest.TestCase):
         self.assertIsNotNone(spec.get_draft_model())
         stats = spec.get_spec_stats()
         self.assertTrue(stats["speculative_decoding"]["enabled"])
-        self.assertEqual(stats["speculative_decoding"]["num_draft_tokens"], 7)
+        self.assertIsNone(stats["speculative_decoding"]["num_draft_tokens"])
+        self.assertEqual(stats["speculative_decoding"]["configured_num_draft_tokens"], 7)
 
 
 if __name__ == "__main__":

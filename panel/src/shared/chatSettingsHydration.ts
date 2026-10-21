@@ -9,6 +9,7 @@ export interface GenerationDefaultsLike {
 }
 
 export interface ChatSettingsGenerationDefaults {
+  samplingModes?: import("./sessionGenerationDefaults").BundleGenerationDefaults["samplingModes"]
   doSample?: boolean
   temperature?: number
   topP?: number

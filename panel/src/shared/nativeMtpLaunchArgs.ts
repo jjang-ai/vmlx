@@ -3,13 +3,14 @@
  *
  *   'off'      — plain autoregressive decode (AR). The bundle's MTP head is
  *                loaded nowhere; the engine receives --disable-native-mtp.
- *   'adaptive' — the engine's adaptive speculative policy. It starts every
- *                request at the bundle's capability ceiling, measures the
- *                completed verify-cycle cost against its own AR baseline, steps
- *                the draft depth down (D3 -> D1 -> AR) when a window loses,
- *                re-probes with backoff, and promotes back when the deeper rung
- *                wins. The request/bundle sampler is never changed: greedy
- *                requests use identity verification, sampled requests use
+ *   'adaptive' — the engine's adaptive speculative policy. The engine chooses
+ *                the draft depth itself: it measures the completed verify-cycle
+ *                cost against its own AR baseline, promotes toward the verifier
+ *                ceiling when a deeper rung wins, steps down (-> D1 -> AR) when a
+ *                window loses, and re-probes with backoff. Bundle stamps, tuning
+ *                sidecars and family defaults only pick the starting rung.
+ *                The request/bundle sampler is never changed: greedy requests
+ *                use identity verification, sampled requests use
  *                rejection-sampling acceptance (`compatible-only`).
  *
  * There is deliberately NO user-facing depth (D1/D2/D3), no "fixed" policy and
@@ -30,6 +31,14 @@ export type NativeMtpMode = 'adaptive' | 'off'
 
 /** Values that may still exist in persisted session rows. */
 export type LegacyNativeMtpMode = NativeMtpMode | 'auto' | 'deterministic'
+
+/** Old saved native-MTP defaults were not a choice to enable Bolt's drafter. */
+export function nativeMtpSessionChoice(
+  config: { nativeMtpMode?: LegacyNativeMtpMode; lilicorrMode?: NativeMtpMode },
+  adapter?: string,
+): LegacyNativeMtpMode | undefined {
+  return adapter === 'nemotron_lilicorr' ? config.lilicorrMode : config.nativeMtpMode
+}
 
 /** The only sampling policy the app ever launches. */
 export const NATIVE_MTP_SAMPLING_POLICY = 'compatible-only' as const
@@ -108,4 +117,15 @@ export function buildNativeMtpLaunchArgs(input: NativeMtpLaunchPolicyInput): str
     '--native-mtp-sampling-policy',
     NATIVE_MTP_SAMPLING_POLICY,
   ]
+}
+
+/** Attach Bolt's optional block drafter only for the session's adaptive mode. */
+export function buildNativeMtpLaunchEnvironment(
+  input: NativeMtpLaunchPolicyInput & { adapter?: string },
+): Record<string, string> {
+  if (!input.supported || input.adapter !== 'nemotron_lilicorr') return {}
+  return {
+    VMLX_NEMOTRON_LILICORR:
+      resolveNativeMtpMode(input) === 'adaptive' && !input.externalSpeculativeActive ? '1' : '0',
+  }
 }

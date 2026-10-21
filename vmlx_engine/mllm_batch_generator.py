@@ -486,6 +486,7 @@ _MLLM_MEDIA_PREFIX_CACHE_DEFAULT_FAMILIES = frozenset(
         "gemma4_unified",
         "step3p7",
         "dots3_note",
+        "minicpmv4_7",
     }
 )
 
@@ -5885,6 +5886,26 @@ def _lm_supports_position_ids(lm: Any) -> bool:
     return "position_ids" in sig.parameters
 
 
+def _lm_supports_prefill_last_logits(lm: Any) -> bool:
+    """Whether ``lm.__call__`` itself honors ``prefill_last_logits_only``.
+
+    Keyed on a marker the implementing ``__call__`` carries (vendored Qwen3.5
+    LanguageModel and its native-MTP patch), not on ``**kwargs``: a family that
+    overrides ``__call__`` and forwards kwargs could otherwise choke on, or
+    silently drop, the flag.
+    """
+    call = getattr(type(lm), "__call__", None)
+    return bool(getattr(call, "_vmlx_prefill_last_logits_only", False))
+
+
+def _with_prefill_last_logits(lm: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """kwargs for a prompt forward whose caller samples only the last row."""
+    if _lm_supports_prefill_last_logits(lm):
+        kwargs = dict(kwargs)
+        kwargs["prefill_last_logits_only"] = True
+    return kwargs
+
+
 def _call_lm_prefix_without_logits(
     lm: Any,
     input_ids: mx.array,
@@ -6789,7 +6810,9 @@ _NATIVE_MTP_CYCLE_TRACE = os.environ.get("VMLX_NATIVE_MTP_CYCLE_TRACE", "").stri
 
 
 # Model types whose unseen profiles seed at the configured depth (live AR/D1/D2/D3 receipts; see below).
-_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset({"qwen4_exp", "nemotron_h", "nemotron_h_v2"})
+_NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset(
+    {"qwen4_exp", "nemotron_h", "nemotron_h_v2", "qwen3_5_moe", "qwen3_5_moe_text"}
+)
 
 
 def _native_mtp_unseen_start_depth(
@@ -6819,7 +6842,16 @@ def _native_mtp_unseen_start_depth(
     AR control at both ends (38.4/38.0 then 38.6/38.3 tok/s, clocks within 5 %):
     D1 42.0/43.9, D2 49.7/48.5, D3 49.3/51.4 tok/s (+29-35 % at D2/D3), d1
     acceptance ~90 %. Bolt shares the type but carries no head, so it never
-    reaches this point. No other family inherits this.
+    reaches this point.
+
+    qwen3_5_moe (Ornith-1.5-122B, routed-MoE Qwen3.5) is the third, 2026-10-19,
+    once its head's routed experts actually loaded (jang_loader split-expert
+    stacks; before that the head drafted through random experts at 21-27 %
+    acceptance and lost at every depth). App argv, JANGH2, fixed D1 with prompt
+    priming vs AR in the same run (GPU clock 1,581-1,589 MHz): long greedy 59.4
+    vs 47.5 tok/s, long sampled 55.6 vs 46.7, short greedy 58.3 vs 50.6, short
+    sampled 50.5 vs 50.9, acceptance 71.0 %; greedy text equal to AR. No other
+    family inherits this.
     """
     if str(model_type or "").lower() not in _NATIVE_MTP_MEASURED_COLD_START_TYPES:
         return None
@@ -10799,7 +10831,7 @@ class MLLMBatchGenerator:
         # after the forbidden region when it fits under N-1, else before it,
         # else none.
         family = str(getattr(self, "_model_type", "") or "").lower()
-        if family in {"qwen3_5", "qwen3_5_moe", "qwen4_exp"}:
+        if family in {"qwen3_5", "qwen3_5_moe", "qwen4_exp", "minicpmv4_7"}:
             span = self._media_placeholder_span(token_ids)
         else:
             span = None
@@ -11297,7 +11329,7 @@ class MLLMBatchGenerator:
         # + 1 image = 12 s TTFT, cached 0). The conditioned-tail runner still
         # validates ids/embeddings/positions and falls back to a full prefill.
         return str(getattr(self, "_model_type", "") or "").lower() in {
-            "qwen3_5", "qwen3_5_moe", "qwen4_exp",
+            "qwen3_5", "qwen3_5_moe", "qwen4_exp", "minicpmv4_7",
         }
 
     def _decline_unsupported_hybrid_media_tail(
@@ -13542,7 +13574,7 @@ class MLLMBatchGenerator:
                 self._store_glm_native_boundary(request, cache)
                 # Final chunk: get logits from last token
                 last_chunk = input_ids[:, processed:]
-                output = lm(last_chunk, **_lm_kwargs_for(processed, seq_len))
+                output = lm(last_chunk, **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)))
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -13626,9 +13658,15 @@ class MLLMBatchGenerator:
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
                             )
-                        output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
+                        output = lm(
+                            input_ids[:, processed:],
+                            **_with_prefill_last_logits(lm, _lm_kwargs_for(processed, seq_len)),
+                        )
                 else:
-                    output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
+                    output = lm(
+                        input_ids,
+                        **_with_prefill_last_logits(lm, _lm_kwargs_for(0, seq_len)),
+                    )
                 if _diag_fingerprints_enabled() and int(getattr(request, "_cached_tokens", 0) or 0) > 0:
                     logger.info("restore fingerprint WARM(text-path) first-token logits for %s: %s", request.request_id, _diag_logits_fp(output))
                     _total = int(getattr(request, "_cached_tokens", 0) or 0) + int(seq_len)
@@ -14496,11 +14534,28 @@ class MLLMBatchGenerator:
             cached = int(cached_tokens)
             if cached <= 0 or cached >= total:
                 return False
+            # MiniCPM uses canvas crop sizes, not Qwen image/video grids.
+            # Rebuild from this request's processor metadata, never a plan
+            # left on the shared language model by an earlier request.
+            rope_kwargs = {}
+            attention_mask = None
+            if str(getattr(self, "_model_type", "")).lower() == "minicpmv4_7":
+                extra = getattr(request, "extra_kwargs", None) or {}
+                attention_mask = getattr(request, "attention_mask", None)
+                rope_kwargs = {
+                    key: extra[key]
+                    for key in (
+                        "mm_token_type_ids", "target_sizes",
+                        "target_sizes_videos", "downsample_mode",
+                    )
+                    if key in extra
+                }
             position_ids, rope_deltas = rope_index(
                 ids,
                 getattr(request, "image_grid_thw", None),
                 getattr(request, "video_grid_thw", None),
-                None,
+                attention_mask,
+                **rope_kwargs,
             )
             if position_ids is None or getattr(position_ids, "ndim", 0) != 3 or int(position_ids.shape[-1]) != total:
                 return False
@@ -14509,6 +14564,10 @@ class MLLMBatchGenerator:
             request._mrope_tail_position_ids = tail  # type: ignore[attr-defined]
             request._mrope_tail_rope_deltas = rope_deltas  # type: ignore[attr-defined]
             request._mrope_full_position_ids = position_ids  # type: ignore[attr-defined]
+            # A restored media prefix takes the text-only prefill branch.
+            # That branch bypasses the media hook which normally records
+            # MiniCPM's per-request decode offset for the subsequent batch.
+            _record_request_rope_delta(lm, request)
             logger.info(
                 "VLM HYBRID media hit: text tail of %d token(s) keeps mRoPE positions for %s (first=%s, last=%s)",
                 total - cached,
@@ -16006,6 +16065,18 @@ class MLLMBatchGenerator:
                                             len(_full_remaining),
                                             _qwen_tail["kind"],
                                         )
+                                    elif (
+                                        str(getattr(self, "_model_type", "")).lower() == "minicpmv4_7"
+                                        and not self._mrope_tail_position_ids(
+                                            req, getattr(req, "input_ids", None), int(block_table.num_tokens)
+                                        )
+                                    ):
+                                        self._discard_request_cache_hit(
+                                            req,
+                                            reason="minicpm_canvas_positions_unavailable",
+                                            attempted_cached_tokens=int(block_table.num_tokens),
+                                        )
+                                        continue
                                     elif _full_remaining:
                                         self._mrope_tail_position_ids(
                                             req, getattr(req, "input_ids", None), int(block_table.num_tokens)
@@ -17773,15 +17844,14 @@ class MLLMBatchGenerator:
             # This wrapper now owns the raw-logit -> processed -> normalized
             # transition, so callers must not normalize before invoking it.
             sampler_with_processors._vmlx_accepts_logits = True
-            # Static bias is compatible with native MTP, unlike history-based
-            # penalties. Keep greedy verification greedy and use the same biased
-            # distribution for speculative acceptance as for the actual draw.
+            # Target presence penalties are applied causally in seed/verify;
+            # proposal sampling keeps its own unpenalized distribution.
+            # Static bias retains its existing shared draft/target path.
             # Leave the unwrapped/default sampler path below unchanged.
             if (
                 openai_processor is not None
                 and len(logits_processors) == 1
                 and not float(getattr(request, "frequency_penalty", 0.0) or 0.0)
-                and not float(getattr(request, "presence_penalty", 0.0) or 0.0)
             ):
                 sampler_with_processors._vmlx_is_greedy = _native_mtp_sampler_is_greedy(base_sampler)
                 for attr in ("temp", "top_p", "top_k", "min_p", "min_tokens_to_keep",
@@ -17799,10 +17869,25 @@ class MLLMBatchGenerator:
                     # draw inputs. Never add the bias a second time here.
                     return accept_lp_for(base_sampler, logprobs)
 
-                sampler_with_processors._vmlx_mtp_preprocess_logits = biased_logits
                 sampler_with_processors._vmlx_mtp_base_sampler = base_sampler
                 sampler_with_processors._vmlx_acceptance_logprobs = processed_acceptance_logprobs
                 sampler_with_processors._vmlx_acceptance_batch_contract = processed_acceptance_logprobs
+                presence = float(getattr(request, "presence_penalty", 0.0) or 0.0)
+                if presence:
+                    from .native_mtp_presence import NativeMTPPresence
+
+                    transform = NativeMTPPresence(
+                        presence, getattr(request, "logit_bias", None),
+                        processor=openai_processor,
+                    )
+
+                    def target_presence_logits(logits, output_tokens, drafts=()):
+                        return transform(logits, prompt_list + list(output_tokens), drafts)
+
+                    sampler_with_processors._vmlx_mtp_history_logits = target_presence_logits
+                    sampler_with_processors._vmlx_mtp_proposal_sampler = base_sampler
+                else:
+                    sampler_with_processors._vmlx_mtp_preprocess_logits = biased_logits
             request._cached_sampler = sampler_with_processors
             return sampler_with_processors
 
@@ -18055,7 +18140,9 @@ class MLLMBatchGenerator:
         if float(getattr(request, "frequency_penalty", 0.0) or 0.0) != 0.0:
             return f"frequency_penalty={getattr(request, 'frequency_penalty', None)!r} is not 0.0"
         if float(getattr(request, "presence_penalty", 0.0) or 0.0) != 0.0:
-            return f"presence_penalty={getattr(request, 'presence_penalty', None)!r} is not 0.0"
+            sampler = self._make_request_sampler(request)
+            if not hasattr(sampler, "_vmlx_mtp_history_logits"):
+                return "presence_penalty requires a supported causal target sampler"
         if request is None:
             return "request missing"
         return None
@@ -18104,6 +18191,7 @@ class MLLMBatchGenerator:
         extending the draft chain is worth another forward.
         """
         sampler = self._make_request_sampler(request)
+        sampler = getattr(sampler, "_vmlx_mtp_proposal_sampler", sampler)
         forward_probe = start_native_mtp_forward_probe(
             request, "head", mx, inputs=(hidden_state, next_token),
             model_type=getattr(self, "_model_type", None),
@@ -18270,6 +18358,12 @@ class MLLMBatchGenerator:
             "qwen3_5",
             "qwen3_5_text",
             "qwen3_5_vl",
+            # Routed-MoE Qwen3.5 (Ornith-1.5-122B) builds its head from the same
+            # patched MTPModule (qwen35_vl._register_moe_mtp_classes): one
+            # attention layer + routed MoE, fed the pre-norm trunk hidden at t
+            # and token t+1, one KVCache per head layer.
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
         }:
             drop_context(self.language_model)
             return False
@@ -18356,7 +18450,11 @@ class MLLMBatchGenerator:
 
         # Resolve the AR-vs-MTP decision BEFORE the MTP seed forward below:
         # a skipped activation must not pay the extra hidden-state forward.
-        from .native_mtp import native_mtp_effective_depth, native_mtp_max_depth
+        from .native_mtp import (
+            native_mtp_adaptive_ceiling,
+            native_mtp_effective_depth,
+            native_mtp_max_depth,
+        )
 
         depth, depth_source = native_mtp_effective_depth()
         depth = max(1, min(native_mtp_max_depth(), depth))
@@ -18379,6 +18477,7 @@ class MLLMBatchGenerator:
                 ),
                 prompt_tokens=prompt_token_count,
                 has_tools=_native_mtp_request_has_tools(request),
+                presence_penalty=float(getattr(request, "presence_penalty", 0.0) or 0.0),
             )
             # Lazy fallback: some fixtures build the generator via __new__
             # and never run __init__ (same class of construction the
@@ -18387,8 +18486,11 @@ class MLLMBatchGenerator:
             if store is None:
                 store = self._native_mtp_profiles = NativeMTPProfileStore()
             sampled_profile = request_profile_key[0] == "sampled"
+            # The resolved depth is where Adaptive starts; its ladder may climb
+            # to the verifier ceiling unless an explicit env depth limits it.
             configured_ladder_depth = min(
-                depth, _native_mtp_depth_ceiling_for_request(request)
+                native_mtp_adaptive_ceiling(depth, depth_source),
+                _native_mtp_depth_ceiling_for_request(request),
             )
             # The process profile chooses a FRESH request's start. A scheduled
             # recovery/calibration already has a request-local AR baseline and
@@ -18420,6 +18522,22 @@ class MLLMBatchGenerator:
                     ),
                 )
             if depth <= 0:
+                # A loaded head is capability, not proof that this request
+                # used MTP. Publish adaptive AR decisions through the same
+                # health/performance field as the eligibility gate above.
+                stats = getattr(self, "_stats", None)
+                if stats is not None:
+                    stats.last_native_mtp_skip = {
+                        "uid": str(request.request_id),
+                        "request_id": request.request_id,
+                        "reason": (
+                            "adaptive_unseen_ar: workload has no measured MTP advantage"
+                            if profile_seed == "unseen_ar"
+                            else f"adaptive_{profile_seed}: measured AR preference"
+                        ),
+                        "profile_key": list(request_profile_key),
+                        "configured_depth": configured_ladder_depth,
+                    }
                 # A learned loss chooses AR initially, not forever. Keep the
                 # same measured recovery schedule used after an in-request
                 # loss; it gathers real AR steps before probing. Unknown
@@ -18483,7 +18601,16 @@ class MLLMBatchGenerator:
             logger.debug("Native MTP seed skipped: model did not return hidden states")
             return False
 
-        next_tok, next_lp = _native_mtp_sample_one(logits[:, -1, :], sampler)
+        seed_logits = logits[:, -1, :]
+        seed_sampler = sampler
+        history_logits = getattr(sampler, "_vmlx_mtp_history_logits", None)
+        if history_logits is not None:
+            # The seed consumes the first sampled token before it is emitted.
+            seed_logits = history_logits(
+                seed_logits, request.output_tokens + [first_id]
+            )
+            seed_sampler = sampler._vmlx_mtp_base_sampler
+        next_tok, next_lp = _native_mtp_sample_one(seed_logits, seed_sampler)
         # Materialize the seed forward NOW so the wall below is a real AR step,
         # not graph-build time.  First measurement shipped without this eval
         # and read 2.3ms for a ~30ms forward — a baseline that would demote
@@ -18562,8 +18689,15 @@ class MLLMBatchGenerator:
             getattr(request, "num_tokens", 0) or 0
         )
         # A learned start is advisory, not a reduction of the user's ceiling.
+        # Under Adaptive the resolved depth (default / tuning / bundle stamp /
+        # family default) is only the starting rung: the ladder top is the
+        # verifier ceiling (native_mtp_adaptive_ceiling). Fixed policy and an
+        # explicit env depth keep the resolved depth as the top.
+        _resolved_depth, _resolved_source = native_mtp_effective_depth()
         state.ladder_depth = max(1, min(
-            int(native_mtp_effective_depth()[0]), state.depth_ceiling,
+            native_mtp_adaptive_ceiling(_resolved_depth, _resolved_source)
+            if _native_mtp_adaptive_policy() else int(_resolved_depth),
+            state.depth_ceiling,
         ))
         if (
             depth > 1
@@ -18843,6 +18977,16 @@ class MLLMBatchGenerator:
 
         depth = len(state.drafts)
         trace_t0 = _native_mtp_trace_start()
+        target_logits = logits[:, -(depth + 1) :, :].reshape(depth + 1, -1)
+        target_sampler = sampler
+        history_logits = getattr(sampler, "_vmlx_mtp_history_logits", None)
+        if history_logits is not None:
+            # The queue is empty here: next_main is already in output_tokens.
+            # Row i may see only the first i proposals, including the bonus row.
+            target_logits = history_logits(
+                target_logits, request.output_tokens, state.drafts
+            )
+            target_sampler = sampler._vmlx_mtp_base_sampler
         # ONE device round-trip per cycle: sample the verify rows, compare them
         # against the drafts, and count the leading accepted run -- all on
         # device -- then read back a single small bundle.  The original path
@@ -18852,7 +18996,7 @@ class MLLMBatchGenerator:
         fused_decision = (
             _NATIVE_MTP_FUSED_SYNC
             and bool(state.drafts)
-            and _native_mtp_sampler_is_greedy(sampler)
+            and _native_mtp_sampler_is_greedy(target_sampler)
         )
         precomputed_accepted = None
         if fused_decision:
@@ -18863,8 +19007,8 @@ class MLLMBatchGenerator:
                 fused_draft_ids,
                 precomputed_accepted,
             ) = _native_mtp_sample_and_decide(
-                logits[:, -(depth + 1) :, :].reshape(depth + 1, -1),
-                sampler,
+                target_logits,
+                target_sampler,
                 state.drafts,
                 depth,
             )
@@ -18872,8 +19016,8 @@ class MLLMBatchGenerator:
             _native_mtp_trace_stop(state.stats, "sample_ms", trace_t0)
         else:
             target_tokens, target_lps, target_ids = _native_mtp_sample_rows(
-                logits[:, -(depth + 1) :, :].reshape(depth + 1, -1),
-                sampler,
+                target_logits,
+                target_sampler,
                 also_eval=(tuple(state.drafts) if _NATIVE_MTP_FUSED_SYNC else ()),
             )
             _native_mtp_trace_stop(state.stats, "sample_ms", trace_t0)
@@ -20403,6 +20547,7 @@ class MLLMBatchGenerator:
                 if str(getattr(self, "_model_type", "")) not in {
                     "qwen4_exp", "qwen4_exp_text", "qwen3_5", "qwen3_5_text",
                     "qwen3_5_moe", "qwen3_5_moe_text",
+                    "minicpmv4_7",
                 } or not self._mrope_tail_position_ids(
                     position_request, full_ids, ck_len
                 ):
@@ -21154,7 +21299,7 @@ class MLLMBatchGenerator:
         rejected so their caller can retain the safe terminal snapshot.
         """
         family = str(getattr(self, "_model_type", "") or "").lower()
-        if family not in {"qwen3_5", "qwen3_5_moe"}:
+        if family not in {"qwen3_5", "qwen3_5_moe", "minicpmv4_7"}:
             return None
         if not full_tokens or len(tokens) >= len(full_tokens):
             return None

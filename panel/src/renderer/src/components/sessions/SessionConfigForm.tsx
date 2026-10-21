@@ -1,7 +1,7 @@
 import { useDflash2Selection } from '../../hooks/useDflash2Selection'
 import { PowerModeStatus } from './PowerModeStatus'
 import { DEFAULT_BLOCK_DISK_CACHE_PERCENT } from '../../../../shared/cacheDefaults'
-import { resolveNativeMtpMode } from '../../../../shared/nativeMtpLaunchArgs'
+import { nativeMtpSessionChoice, resolveNativeMtpMode } from '../../../../shared/nativeMtpLaunchArgs'
 import { useEffect, useState, useRef } from 'react'
 import { QWEN38_27B_DFLASH2_REPO, isQwen38Dense27b } from '../../../../shared/dflash2Drafter'
 import { Modal } from '../ui/Modal'
@@ -90,6 +90,7 @@ export interface SessionConfig {
   useBundledDspark?: boolean
   numDraftTokens: number
   nativeMtpMode?: 'adaptive' | 'off' | 'auto' | 'deterministic'
+  lilicorrMode?: 'adaptive' | 'off'
   smelt: boolean
   smeltExperts: number
   flashMoe: boolean
@@ -193,6 +194,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   useBundledDflash2: true,
   numDraftTokens: 3,
   nativeMtpMode: undefined,
+  lilicorrMode: undefined,
   smelt: false,
   smeltExperts: 50,
   flashMoe: false,
@@ -326,6 +328,7 @@ interface SessionConfigFormProps {
   /** Native MTP capability from config/index metadata */
   detectedNativeMtp?: {
     supported?: boolean
+    adapter?: 'nemotron_lilicorr'
     depth?: number
     depthSource?: string
     runtimeScope?: string
@@ -628,7 +631,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const nativeOmniStage1 = omniBackendVisible && (config.omniBackend || 'stage1') === 'stage1'
   // Legacy 'auto'/'deterministic' rows display as the mode they will launch as.
   const nativeMtpMode = resolveNativeMtpMode({
-    mode: config.nativeMtpMode,
+    mode: nativeMtpSessionChoice(config, detectedNativeMtp?.adapter),
     modelDefaultMode: detectedNativeMtp?.defaultMode,
   })
   const hasDeclaredSamplingDefaults =
@@ -1833,12 +1836,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {nativeMtpSupported && (
           <>
-        <PerformanceHint text={t('sessions.config.nativeMtpHint')} />
+        <PerformanceHint text={t(detectedNativeMtp?.adapter === 'nemotron_lilicorr'
+          ? 'sessions.config.lilicorrHint' : 'sessions.config.nativeMtpHint')} />
         <SelectField settingKey="nativeMtpMode"
-          label={t('sessions.config.nativeMtpMode')}
+          label={detectedNativeMtp?.adapter === 'nemotron_lilicorr' ? 'LiLiCorr' : t('sessions.config.nativeMtpMode')}
           tooltip={t('sessions.config.nativeMtpModeTooltip')}
           value={nativeMtpMode}
-          onChange={v => onChange('nativeMtpMode', v as 'adaptive' | 'off')}
+          onChange={v => onChange(detectedNativeMtp?.adapter === 'nemotron_lilicorr'
+            ? 'lilicorrMode' : 'nativeMtpMode', v as 'adaptive' | 'off')}
           options={[
             { value: 'adaptive', label: t('sessions.config.nativeMtpModeAdaptive') },
             { value: 'off', label: t('sessions.config.nativeMtpModeAr') },
@@ -1850,7 +1855,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {nativeMtpMode === 'adaptive' && !dflash2Speculative && (
           <InfoNote text={t('sessions.config.nativeMtpAdaptiveNote')} />
         )}
-        {nativeMtpMode === 'off' && detectedNativeMtp?.defaultMode === 'off' && (
+        {nativeMtpMode === 'off' && detectedNativeMtp?.defaultMode === 'off' &&
+          detectedNativeMtp?.adapter !== 'nemotron_lilicorr' && (
           <InfoNote text={t('sessions.config.nativeMtpDefaultOffNote')} />
         )}
         <InfoNote text={t('sessions.config.nativeMtpDetectedNote', { scope: detectedNativeMtp?.runtimeScope || 'text', cache: detectedNativeMtp?.nativeCacheType || detectedCacheSubtype || detectedCacheType || 'unknown', depthSource: detectedNativeMtp?.depthSource || 'default' })} />

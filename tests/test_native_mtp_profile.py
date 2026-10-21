@@ -28,6 +28,14 @@ def _observe_profitable(store, key, depth=2, value=45.0, ar=30.0, n=None):
 
 
 class TestProfileKey:
+    def test_presence_targets_do_not_reuse_neutral_cost_profiles(self):
+        args = dict(temperature=.7, restored_prefix=False, prompt_tokens=100)
+        neutral = profile_key(**args)
+        penalized = profile_key(**args, presence_penalty=1.5)
+        negative = profile_key(**args, presence_penalty=-.5)
+        assert len(neutral) == 4
+        assert len({neutral, penalized, negative}) == 3
+
     def test_sampler_class_split(self):
         greedy = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=100)
         sampled = profile_key(temperature=0.7, restored_prefix=False, prompt_tokens=100)
@@ -450,6 +458,28 @@ class TestSeedPathIntegration:
             req, [object()], first_token, [None])
         assert getattr(req, "_native_mtp_ar_tier", None) is None
 
+    def test_adaptive_ar_decision_reaches_request_health_snapshot(self, monkeypatch):
+        for learned in (False, True):
+            generator, req, first_token = self._build_generator(monkeypatch)
+            store = generator._native_mtp_profiles = NativeMTPProfileStore()
+            key = profile_key(temperature=0.0, restored_prefix=False, prompt_tokens=2)
+            if learned:
+                store.observe(key, final_depth=1, fallback_to_ar=True,
+                              fallback_reason="cost", finish_reason="fallback_to_ar")
+            assert not generator._seed_native_mtp_from_prefill(
+                req, [object()], first_token, [None])
+            snapshot = generator._stats.to_dict()
+            skip = snapshot["last_native_mtp_skip"]
+            assert skip is not None
+            assert skip["request_id"] == req.request_id
+            assert skip["uid"] == req.request_id
+            assert skip["reason"].startswith(
+                "adaptive_profile_ar" if learned else "adaptive_unseen_ar")
+            assert skip["profile_key"] == list(key)
+            assert skip["configured_depth"] == 3
+            assert snapshot["last_native_mtp"] is None
+            assert not hasattr(req, "_native_mtp_state")
+
     def test_learned_ar_start_respects_reentry_disabled(self, monkeypatch):
         generator, req, first_token = self._build_generator(monkeypatch)
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_AR_REENTRY", "0")
@@ -645,3 +675,15 @@ class TestUnseenStartDepthPolicy:
         for family in ("qwen3_5", "glm5_next", "hy_v3", None, ""):
             assert gen._native_mtp_unseen_start_depth(family, sampled_profile=False, depth=3) is None
             assert gen._native_mtp_unseen_start_depth(family, sampled_profile=True, depth=3) is None
+
+
+def test_qwen3_5_moe_unseen_profiles_seed_at_configured_depth(monkeypatch):
+    # Ornith-1.5-122B (routed-MoE Qwen3.5): measured cold start once the head's experts loaded; dense Qwen3.5 stays AR.
+    from vmlx_engine import mllm_batch_generator as mbg
+
+    monkeypatch.setattr(mbg, "_NATIVE_MTP_STOCHASTIC_ACCEPT", True)
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=False, depth=1) == 1
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=True, depth=2) == 2
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5", sampled_profile=False, depth=1) is None
+    monkeypatch.setattr(mbg, "_NATIVE_MTP_STOCHASTIC_ACCEPT", False)
+    assert mbg._native_mtp_unseen_start_depth("qwen3_5_moe", sampled_profile=True, depth=2) is None

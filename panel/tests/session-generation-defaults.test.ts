@@ -285,3 +285,59 @@ describe('v14 lifts existing sessions off the stale cache index', () => {
     expect(source).not.toContain('config.maxCacheBlocks = config.maxCacheBlocks ?? 1000')
   })
 })
+
+describe('declared sampling modes', () => {
+  it('reads embedded JANG defaults and modes when no sidecar exists', () => {
+    const embedded = { chat: {
+      sampling_defaults: { temperature: 1, top_p: .95, repetition_penalty: 1 },
+      sampling_modes: { instruct: { temperature: .7, top_p: .8, presence_penalty: 1.5 } },
+    } }
+    for (const key of ['jang_config', 'jang']) {
+      const result = resolveBundleGenerationDefaults(
+        { temperature: .2 }, undefined, { [key]: embedded },
+      )!
+      expect(result.temperature).toBe(1)
+      expect(result.source).toBe('jang_config')
+      expect(result.samplingModes?.instruct_nothinking).toEqual({
+        temperature: .7, topP: .8, presencePenalty: 1.5,
+      })
+    }
+    const sidecar = resolveBundleGenerationDefaults({}, {
+      chat: { sampling_defaults: { temperature: .4 } },
+    }, { jang_config: embedded })!
+    expect(sidecar.temperature).toBe(.4)
+    expect(sidecar.samplingModes).toBeUndefined()
+  })
+
+  it('normalizes the declared instruct alias while preferring the canonical key', () => {
+    const modes = { instruct: { temperature: .7, presence_penalty: 1.5 } }
+    const result = resolveBundleGenerationDefaults({}, { chat: { sampling_modes: modes } }, {})!
+    expect(result.samplingModes?.instruct_nothinking).toEqual({
+      temperature: .7, presencePenalty: 1.5,
+    })
+    const canonical = resolveBundleGenerationDefaults({}, { chat: { sampling_modes: {
+      ...modes, instruct_nothinking: { temperature: .6 },
+    } } }, {})!
+    expect(canonical.samplingModes?.instruct_nothinking).toEqual({ temperature: .6 })
+  })
+
+  it('keeps thinking and nonthinking contracts separate without changing the base defaults', () => {
+    const result = resolveBundleGenerationDefaults({}, { chat: {
+      sampling_defaults: { temperature: 1, top_p: .95 },
+      sampling_modes: {
+        thinking: { temperature: 1, presence_penalty: 0 },
+        instruct_nothinking: { temperature: .7, top_p: .8, top_k: 20, presence_penalty: 1.5 },
+        unknown: { temperature: 2 },
+      },
+    } }, {})!
+    expect(result.temperature).toBe(1)
+    expect(result.samplingModes).toEqual({
+      thinking: { temperature: 1, presencePenalty: 0 },
+      instruct_nothinking: { temperature: .7, topP: .8, topK: 20, presencePenalty: 1.5 },
+    })
+    // Hydration must not persist the selected mode as a user or CLI override.
+    const config = applyBundleGenerationDefaultsToSessionConfig({}, result)
+    expect(config.defaultTemperature).toBe(100)
+    expect(config).not.toHaveProperty('presencePenalty')
+  })
+})

@@ -4,7 +4,10 @@ from typing import Any, Optional
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.activations import swiglu
-from mlx_lm.models.gated_delta import gated_delta_update
+# Packed Dk=128 recurrence (mlx-lm 0.32.0 kernel, bit-identical to the pinned 0.31.3 kernel on this device:
+# tests/test_gdn_packed.py). Same signature; ineligible shapes and VMLX_GDN_PACKED=0 take the stock kernel. The
+# native-MTP patch's _process_chunk resolves qlang.gated_delta_update, i.e. this binding.
+from vmlx_engine.metal.gdn_packed import gated_delta_update
 
 from vmlx_engine.metal.quantized_projection_group import (
     QuantizedProjectionGroup,
@@ -90,6 +93,11 @@ def _qwen35_scaled_dot_product_attention(
     scale: float,
     mask: Optional[mx.array],
 ) -> mx.array:
+    from vmlx_engine.metal.qwen35_flash_decode import decode_attention
+
+    flash = decode_attention(queries, keys, values, scale, mask)
+    if flash is not None:
+        return flash
     if _qwen35_force_fused_prefill(queries, keys, values, cache, mask):
         return mx.fast.scaled_dot_product_attention(
             queries,
@@ -832,6 +840,7 @@ class LanguageModel(nn.Module):
         **kwargs,
     ):
         position_ids = kwargs.pop("position_ids", None)
+        prefill_last_logits_only = bool(kwargs.pop("prefill_last_logits_only", False))
         pixel_values = kwargs.pop("pixel_values", None)
         image_grid_thw = kwargs.pop("image_grid_thw", None)
         video_grid_thw = kwargs.pop("video_grid_thw", None)
@@ -910,6 +919,13 @@ class LanguageModel(nn.Module):
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
         )
+        if prefill_last_logits_only and out.shape[1] > 1:
+            # Prompt prefill: the caller samples only the last row. The head is
+            # 248k x hidden, so projecting every prompt row cost ~5% of a cold
+            # 8k-32k Ornith prefill and a (rows x vocab) transient. The trunk,
+            # KV and recurrent state are untouched; the kept row goes through
+            # the same one-row head kernel every decode step uses.
+            out = out[:, -1:, :]
         if self.args.tie_word_embeddings:
             out = self.model.embed_tokens.as_linear(out)
         else:
@@ -960,3 +976,8 @@ class LanguageModel(nn.Module):
             return True
 
         return predicate
+
+
+# Engine capability marker (mllm_batch_generator._lm_supports_prefill_last_logits): this exact __call__ honors
+# prefill_last_logits_only. Subclasses that override __call__ do not inherit the marker.
+LanguageModel.__call__._vmlx_prefill_last_logits_only = True

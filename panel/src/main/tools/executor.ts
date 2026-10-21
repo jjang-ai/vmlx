@@ -399,8 +399,7 @@ function listDirectory(path: string, recursive: boolean, workingDir: string): To
       } else {
         try {
           const stat = statSync(itemPath)
-          const kb = (stat.size / 1024).toFixed(1)
-          entries.push(`${indent}${item.name}  (${kb} KB)`)
+          entries.push(`${indent}${item.name}  (${formatBytes(stat.size)})`)
         } catch {
           entries.push(`${indent}${item.name}`)
         }

@@ -1,4 +1,15 @@
-export interface BundleGenerationDefaults {
+export interface ModeSamplingDefaults {
+  temperature?: number
+  topP?: number
+  topK?: number
+  minP?: number
+  repeatPenalty?: number
+  presencePenalty?: number
+  frequencyPenalty?: number
+}
+
+export interface BundleGenerationDefaults extends ModeSamplingDefaults {
+  samplingModes?: Partial<Record<'thinking' | 'instruct_nothinking', ModeSamplingDefaults>>
   doSample?: boolean
   temperature?: number
   topP?: number
@@ -72,7 +83,34 @@ export function resolveBundleGenerationDefaults(
     if (Object.keys(defaults).length > 0) defaults.source = 'generation_config'
   }
 
-  const jang = objectRecord(jangConfig)
+  // Affine bundles may embed their JANG contract in config.json instead of
+  // shipping a sidecar. Preserve sidecar precedence, as the engine does.
+  const model = objectRecord(modelConfig)
+  const jang = objectRecord(jangConfig ?? model?.jang_config ?? model?.jang)
+  const modes = objectRecord(jang?.chat?.sampling_modes)
+  if (modes) {
+    const samplingModes: NonNullable<BundleGenerationDefaults['samplingModes']> = {}
+    for (const key of ['thinking', 'instruct_nothinking'] as const) {
+      const raw = objectRecord(modes[key])
+        ?? (key === 'instruct_nothinking' ? objectRecord(modes.instruct) : undefined)
+      if (!raw) continue
+      const mode: ModeSamplingDefaults = {}
+      for (const [wire, field, low, high] of [
+        ['temperature', 'temperature', 0, 2], ['top_p', 'topP', 0, 1],
+        ['top_k', 'topK', 0, Infinity], ['min_p', 'minP', 0, 1],
+        ['repetition_penalty', 'repeatPenalty', Number.MIN_VALUE, Infinity],
+        ['presence_penalty', 'presencePenalty', -2, 2],
+        ['frequency_penalty', 'frequencyPenalty', -2, 2],
+      ] as const) {
+        const value = finiteNumber(raw[wire])
+        if (value != null && value >= low && value <= high) {
+          mode[field] = field === 'topK' ? Math.floor(value) : value
+        }
+      }
+      if (Object.keys(mode).length) samplingModes[key] = mode
+    }
+    if (Object.keys(samplingModes).length) defaults.samplingModes = samplingModes
+  }
   const sampling = objectRecord(jang?.chat?.sampling_defaults)
   if (sampling) {
     // JANG chat metadata owns sampling mode. A generation_config do_sample
