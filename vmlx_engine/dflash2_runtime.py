@@ -1730,6 +1730,12 @@ class _BlockChooser:
         self.ar_outliers_skipped = 0
         self.spec_since_ar = 0
         self._reprobe_pending = False
+        # Width costs may be reused, but the previous request's AR rate is not
+        # a current baseline. A temporary scheduling slowdown can leave it
+        # inflated after normal service resumes, making slower verify cycles
+        # win for most of the next reply. Re-measure one complete AR burst
+        # after the initial draft cycle before comparing the two paths.
+        self._request_ar_pending = True
 
     def _accept_probs(self, w: int) -> list[float]:
         out, prev = [], self.prior_p
@@ -1752,7 +1758,7 @@ class _BlockChooser:
         if any(w not in self.cost for w in self.widths):
             return ("spec", self.width)    # still seeding width costs
         t_ar = self.cost.get("ar")
-        if t_ar is None:
+        if t_ar is None or self._request_ar_pending:
             return ("ar", self.ar_burst)   # one AR measurement before comparing
         if self.ar_reprobe_cycles > 0 and self.spec_since_ar >= self.ar_reprobe_cycles:
             self.spec_since_ar = 0
@@ -1800,7 +1806,14 @@ class _BlockChooser:
             return
         per = seconds / tokens
         c = self.cost.get("ar")
-        if c is None:
+        if self._request_ar_pending:
+            # Replace a prior request's baseline in either direction. The
+            # within-request outlier filter must not reject a real change in
+            # scheduling/context cost. Cut and first-compile bursts above do
+            # not satisfy this measurement.
+            self.cost["ar"] = per
+            self._request_ar_pending = False
+        elif c is None:
             self.cost["ar"] = per
         elif reprobe:
             self.cost["ar"] = 0.3 * c + 0.7 * per

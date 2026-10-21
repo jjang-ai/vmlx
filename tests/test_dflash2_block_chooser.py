@@ -226,6 +226,34 @@ def test_stale_ar_cost_is_reprobed_and_a_stalled_burst_is_skipped(monkeypatch):
     assert "ar" in actions and shared["ar"] < 0.1
 
 
+def test_new_request_remeasures_ar_after_transient_scheduling_slowdown():
+    # H2 live recovery: normal priorities returned, but the previous request's
+    # 32.3 ms AR estimate made ~48 ms / 2-token verification look faster.
+    shared = {5: 0.0484, 16: 0.1107, 32: 0.1936, "ar": 0.0323,
+              "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    assert c.next_action() == ("spec", 5)  # preserve the initial draft/checkpoint
+    c.observe(5, 2, 0.0484)
+    assert c.next_action() == ("ar", 8)
+    c.observe_ar(8 * 0.0185, 8)
+    assert abs(shared["ar"] - 0.0185) < 1e-9
+    assert c.next_action() == ("ar", 8)
+
+
+def test_new_request_ar_measurement_handles_slowdown_and_ignores_cut_burst():
+    shared = {5: 0.0484, 16: 0.1107, 32: 0.1936, "ar": 0.005,
+              "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 2, 0.0484)
+    assert c.next_action() == ("ar", 8)
+    c.observe_ar(0.5, 1)  # EOS/max-token cut is not a valid new baseline
+    assert shared["ar"] == 0.005
+    assert c.next_action() == ("ar", 8)
+    c.observe_ar(8 * 0.0323, 8)
+    assert abs(shared["ar"] - 0.0323) < 1e-9
+    assert c.ar_outliers_skipped == 0  # a new request can have genuinely changed cost
+
+
 def test_block_plan_env_candidate_list_is_clipped_sorted_and_optional(monkeypatch):
     from vmlx_engine.dflash2_runtime import _dflash2_block_plan
 
