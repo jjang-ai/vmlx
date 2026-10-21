@@ -19,6 +19,7 @@ import {
 } from '../../../../shared/reasoningParserAliases'
 import { useTranslation } from '../../i18n'
 import { formatModelBytes, formatResidentLoad } from './loadProgressFormat'
+import { sessionMatchesModelPath } from '../../../../shared/sessionUtils'
 
 interface Session {
   id: string
@@ -46,7 +47,7 @@ interface SessionViewProps {
 export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const { t } = useTranslation()
   const { showToast } = useToast()
-  const { setMode } = useAppState()
+  const { state, setMode, dispatch } = useAppState()
   const [session, setSession] = useState<Session | null>(null)
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [showChatList, setShowChatList] = useState(false)
@@ -65,9 +66,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
 
   // Load session and its chats
   useEffect(() => {
+    let cancelled = false
     const loadSession = async () => {
       try {
         const s = await window.api.sessions.get(sessionId)
+        if (cancelled) return
         setSession(s)
         setJangLabel(undefined)
         setMissingChatTemplate(false)
@@ -83,8 +86,18 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             // from racing a separate get/create pair into duplicate chats.
             try {
               const title = t('sessions.view.defaultChatTitle', { date: new Date().toLocaleString() })
-              const chat = await window.api.chat.ensureForModel(title, s.modelPath)
+              // Re-entering Servers must preserve the conversation selected
+              // in Chat, rather than replacing it with the newest empty chat.
+              const selected = state.activeSessionId === s.id && state.activeChatId
+                ? await window.api.chat.get(state.activeChatId)
+                : null
+              if (cancelled) return
+              const chat = selected && sessionMatchesModelPath(selected.modelPath, s.modelPath)
+                ? selected
+                : await window.api.chat.ensureForModel(title, s.modelPath)
+              if (cancelled) return
               setCurrentChatId(chat.id)
+              dispatch({ type: 'OPEN_CHAT', chatId: chat.id, sessionId: s.id })
             } catch (_) { /* will show empty state */ }
           }
           // Detect effective reasoning parser for chat settings UI
@@ -93,6 +106,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             const cfg = s.config ? JSON.parse(s.config) : {}
             if (!s.modelPath.startsWith('remote://')) {
               const detected = await window.api.models.detectConfig(s.modelPath)
+              if (cancelled) return
               const effective = resolveEffectiveReasoningParser({
                 configuredParser: cfg.reasoningParser,
                 detectedParser: detected?.reasoningParser,
@@ -115,6 +129,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           if (!s.modelPath.startsWith('remote://')) {
             try {
               const models = await window.api.models.scan()
+              if (cancelled) return
               const match = models.find((m: any) => m.path === s.modelPath)
               setMissingChatTemplate(match?.hasChatTemplate === false)
               if (match?.quantization && match.quantization.startsWith('JANG')) {
@@ -188,6 +203,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
     })
 
     return () => {
+      cancelled = true
       unsubHealth()
       unsubStarting()
       unsubReady()
@@ -195,7 +211,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
       unsubError()
       unsubStandby?.()
     }
-  }, [sessionId])
+  }, [sessionId, dispatch])
 
   const handleNewChat = async () => {
     if (!session) return
@@ -203,6 +219,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
       const title = t('sessions.view.defaultChatTitle', { date: new Date().toLocaleString() })
       const chat = await window.api.chat.create(title, 'default', undefined, session.modelPath)
       setCurrentChatId(chat.id)
+      dispatch({ type: 'OPEN_CHAT', chatId: chat.id, sessionId: session.id })
       setShowChatList(false)
     } catch (error) {
       showToast('error', t('sessions.view.toast.failedToStartChat'), (error as Error).message)
@@ -211,6 +228,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
 
   const handleChatSelect = (chatId: string) => {
     setCurrentChatId(chatId)
+    dispatch({ type: 'OPEN_CHAT', chatId, sessionId })
     setShowChatList(false)
   }
 
