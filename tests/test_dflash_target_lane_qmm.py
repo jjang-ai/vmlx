@@ -8,6 +8,7 @@ from vmlx_engine.models.mllm import _dflash_target_lane_qmm
 def _clean_env(monkeypatch):
     monkeypatch.delenv("VMLX_LANE_QMM", raising=False)
     monkeypatch.delenv("VMLX_MIMO_LANE_QMM", raising=False)
+    monkeypatch.delenv("VMLX_QWEN_MOE_LANE_QMM", raising=False)
 
 
 def test_default_targets_take_the_lane():
@@ -16,6 +17,17 @@ def test_default_targets_take_the_lane():
 
 def test_no_dflash2_no_lane():
     assert _dflash_target_lane_qmm(False, "qwen3_5", False) == (False, "")
+
+
+@pytest.mark.parametrize("family", ["qwen3_5_moe", "qwen3_5_moe_text"])
+def test_qwen_moe_keeps_native_kernels_with_explicit_lane_control(monkeypatch, family):
+    lane, why = _dflash_target_lane_qmm(True, family, False)
+    assert not lane and "MoE keeps MLX kernels" in why
+    monkeypatch.setenv("VMLX_QWEN_MOE_LANE_QMM", "1")
+    assert _dflash_target_lane_qmm(True, family, False) == (True, "")
+    assert _dflash_target_lane_qmm(False, family, False) == (False, "")
+    monkeypatch.setenv("VMLX_LANE_QMM", "0")
+    assert _dflash_target_lane_qmm(True, family, False) == (False, "VMLX_LANE_QMM=0")
 
 
 def test_glm5_next_keeps_native_kernels():

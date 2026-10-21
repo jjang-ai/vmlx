@@ -557,6 +557,9 @@ def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: boo
     cost is those projections (Qwen3.8 27B). It is not used for:
     - glm5_next: it corrupts the target from the first token (served DFlash2 lane answered "17 x 15" for 17 x 19 at
       temperature 0; VMLX_LANE_QMM=0 restored the exact answer, 2026-10-10);
+    - qwen3_5_moe: wider verifies benefit, but single-token forwards are slower and low-acceptance text spends
+      most tokens in adaptive AR fallback. Keep native kernels until a full workload qualifies the lane;
+      VMLX_QWEN_MOE_LANE_QMM=1 opts into the comparison without changing draft-width adaptation.
     - MiMo-V2: its verify cost is routed-expert reads (~4.5-5 ms per extra row), not its 99 affine projections, so the
       flat cost paid only at 8 rows (59.1 vs 61.2 ms) while one-row steps got slower (20.99 -> 22.81 ms) and so did
       2-4-row verifies (same process, 2026-10-18). With the drafter-confidence cut most rounds are 1-4 rows; served
@@ -571,6 +574,10 @@ def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: boo
         return False, "VMLX_LANE_QMM=0"
     if lm_type == "glm5_next":
         return False, "glm5_next keeps its native kernels"
+    if lm_type in {"qwen3_5_moe", "qwen3_5_moe_text"} and os.environ.get(
+        "VMLX_QWEN_MOE_LANE_QMM", "0"
+    ).strip().lower() not in ("1", "on", "true", "yes"):
+        return False, "Qwen3.5 MoE keeps MLX kernels; VMLX_QWEN_MOE_LANE_QMM=1 opts into the lane"
     if is_mimo_v2 and os.environ.get("VMLX_MIMO_LANE_QMM", "0").strip().lower() not in ("1", "on", "true", "yes"):
         return False, "MiMo-V2 keeps MLX kernels; VMLX_MIMO_LANE_QMM=1 restores the lane"
     return True, ""
