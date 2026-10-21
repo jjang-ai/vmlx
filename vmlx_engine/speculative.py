@@ -139,6 +139,13 @@ def find_bundled_dflash2(model_path: str) -> str | None:
         if child.name.startswith(".") or not child.is_dir():
             continue
         if _is_dflash2_model(str(child)) and (child / "config.json").is_file():
+            from .bundled_draft import validate_bundled_draft
+
+            try:
+                validate_bundled_draft(child, root)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                logger.warning("Ignoring invalid bundled drafter %s: %s", child, exc)
+                continue
             return str(child)
     return None
 
@@ -293,19 +300,30 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
                 set_mtp_active(True)
                 apply_mlx_vlm_mtp_patch()
 
-            original_download = dflash_runtime.snapshot_download
-            if Path(resolved_draft).is_dir():
-                dflash_runtime.snapshot_download = lambda model_id, **_kwargs: model_id
-            try:
-                draft_model = dflash_runtime.load_draft(resolved_draft)
-            finally:
-                dflash_runtime.snapshot_download = original_download
+            stored_config = json.loads((Path(resolved_draft) / "config.json").read_text())
+            stored_quant = stored_config.get("quantization") or stored_config.get("quantization_config")
+            if stored_quant:
+                from .dflash2_loader import load_quantized_dflash2
+
+                draft_model = load_quantized_dflash2(resolved_draft)
+            else:
+                original_download = dflash_runtime.snapshot_download
+                if Path(resolved_draft).is_dir():
+                    dflash_runtime.snapshot_download = lambda model_id, **_kwargs: model_id
+                try:
+                    draft_model = dflash_runtime.load_draft(resolved_draft)
+                finally:
+                    dflash_runtime.snapshot_download = original_download
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
-            nn.quantize(draft_model, group_size=64, bits=draft_bits)
+            if not stored_quant:
+                nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
-            logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
+            if stored_quant:
+                logger.info("DFlash2 drafter loaded with stored quantization: %s (target %s)", stored_quant, target_type or "unknown")
+            else:
+                logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
             if target_type != "glm5_next":
                 from .dflash2_runtime import draft_vocab_segments, install_draft_vocab_cut
 

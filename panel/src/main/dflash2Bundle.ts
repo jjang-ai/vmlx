@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { configDeclaresDflash2, configDeclaresMimoDflash, looksLikeDflash2Drafter } from '../shared/dflash2Drafter'
+import { bundledDraftFits } from './bundledDraft'
 
 function modelTypeOf(dir: string): string {
   try {
@@ -35,7 +36,7 @@ export function findBundledDflash2Drafter(modelPath: string | undefined | null):
     if (entry.startsWith('.')) continue
     const cfg = join(root, entry, 'config.json')
     try {
-      if (existsSync(cfg) && drafterConfigOnDflash2Lane(JSON.parse(readFileSync(cfg, 'utf8')), root)) {
+      if (existsSync(cfg) && drafterConfigOnDflash2Lane(JSON.parse(readFileSync(cfg, 'utf8')), root) && bundledDraftFits(join(root, entry), root)) {
         return join(root, entry)
       }
     } catch {
