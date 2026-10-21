@@ -1,10 +1,11 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
 import { bundledDsparkDefault, configDeclaresDspark, findBundledDsparkDrafter } from '../src/main/dsparkBundle'
 import { buildCommandPreview } from '../src/renderer/src/components/sessions/SessionSettings'
 import { DEFAULT_CONFIG } from '../src/renderer/src/components/sessions/SessionConfigForm'
+import { addDraftAdmissionWeights } from './helpers/draftAdmissionFixture'
 
 function bundle(drafter: Record<string, unknown> | null, dir = 'dspark', stamp?: Record<string, unknown>): string {
   const root = mkdtempSync(join(tmpdir(), 'dspark-bundle-'))
@@ -13,11 +14,26 @@ function bundle(drafter: Record<string, unknown> | null, dir = 'dspark', stamp?:
   if (drafter) {
     mkdirSync(join(root, dir))
     writeFileSync(join(root, dir, 'config.json'), JSON.stringify(drafter))
+    addDraftAdmissionWeights(root, dir)
   }
   return root
 }
 
 describe('bundled DSpark drafter detection', () => {
+  it('rejects config-only, truncated and target-incompatible drafts', () => {
+    const root = bundle({ architectures: ['Qwen3DSparkModel'] })
+    const file = join(root, 'dspark', 'model.safetensors')
+    const valid = readFileSync(file)
+    unlinkSync(file)
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    writeFileSync(file, valid.subarray(0, 64))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    writeFileSync(file, valid)
+    const cfg = JSON.parse(readFileSync(join(root, 'config.json'), 'utf8'))
+    cfg.text_config.hidden_size = 64
+    writeFileSync(join(root, 'config.json'), JSON.stringify(cfg))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+  })
   it('recognizes the openbmb (MiniCPM-V-4.7) and SpecForge (Naive N0.5) drafter configs', () => {
     expect(configDeclaresDspark({ architectures: ['Qwen3DSparkModel'] })).toBe(true)
     expect(configDeclaresDspark({ architectures: ['DSparkDraftModel'] })).toBe(true)

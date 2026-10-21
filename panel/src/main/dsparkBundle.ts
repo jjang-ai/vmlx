@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
+import { bundledDraftFits } from './bundledDraft'
 
 /**
  * True when a drafter config.json declares DSpark: openbmb's MiniCPM-V-4.7 drafters (`Qwen3DSparkModel`,
@@ -46,7 +47,8 @@ export function findBundledDsparkDrafter(modelPath: string | undefined | null): 
   if (method && method !== 'dspark') return null
   const drafter = resolve(root, String(spec.drafter_path || 'dspark'))
   try {
-    if (configDeclaresDspark(JSON.parse(readFileSync(join(drafter, 'config.json'), 'utf8')))) return drafter
+    if (configDeclaresDspark(JSON.parse(readFileSync(join(drafter, 'config.json'), 'utf8'))) &&
+        bundledDraftFits(drafter, root)) return drafter
   } catch {
     // A bundle without its declared drafter stays on plain decoding.
   }

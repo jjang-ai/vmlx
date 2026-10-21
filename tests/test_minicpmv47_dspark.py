@@ -247,6 +247,24 @@ def test_load_dspark_runtime_contract(tmp_path, monkeypatch):
     assert _load_dspark_runtime(model, root) is None
 
 
+@pytest.mark.parametrize("truncate", [False, True])
+def test_dspark_admission_rejects_incomplete_weights_before_target_hooks(tmp_path, monkeypatch, truncate):
+    from vmlx_engine.model_bundle_integrity import BundleIntegrityError
+
+    root = _bundle(tmp_path)
+    weights = root / "dspark" / "model.safetensors"
+    if truncate:
+        weights.write_bytes(weights.read_bytes()[:64])
+    else:
+        weights.unlink()
+    def unexpected_target(*args, **kwargs):
+        pytest.fail("Invalid draft must be rejected before target hooks are attached")
+    monkeypatch.setattr("vmlx_engine.dspark.minicpm_target.MiniCPMDSparkTarget", unexpected_target)
+    error = BundleIntegrityError if truncate else ValueError
+    with pytest.raises(error):
+        _load_dspark_runtime(None, root)
+
+
 @pytest.mark.parametrize("stamped", [1, 3, 99])
 def test_stamped_max_draft_never_lowers_the_adaptive_width_ceiling(tmp_path, stamped):
     # The width is chosen per round; a bundle's speculative.max_draft stamp is advisory, never a hard depth.

@@ -19,6 +19,7 @@ vi.mock('../src/main/database', () => ({ db }))
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => '/tmp', isPackaged: false },
   powerSaveBlocker: { isStarted: () => false, start: () => 1, stop: () => undefined } }))
 import { SessionManager } from '../src/main/sessions'
+import { addDraftAdmissionWeights } from './helpers/draftAdmissionFixture'
 const dirs: string[] = []
 function bundle(stampDefault: boolean | null, drafter = true): string {
   const dir = mkdtempSync(join(tmpdir(), 'vmlx-dspark-launch-'))
@@ -30,6 +31,7 @@ function bundle(stampDefault: boolean | null, drafter = true): string {
   if (drafter) {
     mkdirSync(join(dir, 'dspark'))
     writeFileSync(join(dir, 'dspark', 'config.json'), JSON.stringify({ architectures: ['Qwen3DSparkModel'], dflash_config: { projector_type: 'dspark' } }))
+    addDraftAdmissionWeights(dir, 'dspark')
   }
   return dir
 }

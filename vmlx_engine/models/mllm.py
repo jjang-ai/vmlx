@@ -4549,6 +4549,12 @@ def _load_dspark_runtime(model: Any, model_path: str | Path) -> dict | None:
     if not _config_declares_dspark(dcfg_raw):
         logger.info("%s/config.json does not declare a DSpark drafter; serving AR", drafter_dir)
         return None
+    from ..bundled_draft import validate_bundled_draft
+
+    # Admit real, target-compatible weights before allocating a drafter or
+    # attaching hooks to the target. The caller retains ordinary decoding on
+    # failure; Electron uses the same header check for its default lane.
+    validate_bundled_draft(drafter_dir, root)
     from ..dspark import load_drafter
     from ..dspark.minicpm_target import MAX_VERIFY_ROWS, MiniCPMDSparkTarget
 
