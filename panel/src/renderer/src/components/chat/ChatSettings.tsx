@@ -136,6 +136,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [detectedNativeMtpSupported, setDetectedNativeMtpSupported] = useState<boolean | undefined>(undefined)
   const [detectedNativeMtpDefaultMode, setDetectedNativeMtpDefaultMode] = useState<'auto' | 'off' | undefined>(undefined)
   const [detectedNativeMtpAdapter, setDetectedNativeMtpAdapter] = useState<string | undefined>(undefined)
+  const [runtimeNativeMtpAvailable, setRuntimeNativeMtpAvailable] = useState(false)
   const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
   const [messageCount, setMessageCount] = useState(0)
   const loadRequestRef = useRef(0)
@@ -150,6 +151,22 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     ...(hydrationCurrent && selectedMode ? samplingModes?.[selectedMode] : undefined),
   }
   const isRemote = session.type === 'remote'
+  useEffect(() => {
+    let active = true
+    setRuntimeNativeMtpAvailable(false)
+    if (!isRemote && session.status === 'running') {
+      void window.api.performance.health({ host: session.host, port: session.port }).then(health => {
+        if (!active) return
+        const sameProcess = session.pid != null && health?.runtime_provenance?.pid === session.pid
+        setRuntimeNativeMtpAvailable(sameProcess && health?.model_loaded === true &&
+          health?.mtp?.runtime_available === true && health?.mtp?.request_policy !== 'disabled' &&
+          health?.speculative_decoding?.enabled !== true)
+      }).catch(() => {
+        if (active) setRuntimeNativeMtpAvailable(false)
+      })
+    }
+    return () => { active = false }
+  }, [isRemote, session.host, session.port, session.pid, session.status, session.modelPath])
   const effectiveWireApi = displayedOverrides.wireApi ?? (isRemote ? 'completions' : 'responses')
   const configuredReasoningParser = (() => {
     try {
@@ -192,6 +209,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const mtpTemperatureNotice = resolveMtpTemperatureNotice({
     isRemote,
     nativeMtpSupported: detectedNativeMtpSupported === true,
+    runtimeAvailable: runtimeNativeMtpAvailable,
     mode: nativeMtpMode,
     modelDefaultMode: detectedNativeMtpDefaultMode,
     temperature: displayedTemperature,

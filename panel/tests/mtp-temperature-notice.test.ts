@@ -17,6 +17,12 @@ describe('MTP temperature disclosure (adaptive never pins the sampler)', () => {
     expect(resolveMtpTemperatureNotice({ nativeMtpSupported: true, mode: undefined, temperature: 0 })).toBeNull()
   })
 
+  it('does not claim MTP is active when the loaded runtime disabled it for an external drafter', () => {
+    expect(resolveMtpTemperatureNotice({ nativeMtpSupported: true, runtimeAvailable: false, mode: 'adaptive', temperature: 0.6 })).toBeNull()
+    expect(resolveMtpTemperatureNotice({ nativeMtpSupported: true, runtimeAvailable: true, mode: 'adaptive', temperature: 0.6 }))
+      .toEqual({ kind: 'active', temperature: 0.6 })
+  })
+
   it('discloses a nonzero temperature as honored with rejection-sampling verification', () => {
     for (const mode of ['adaptive', 'auto', 'deterministic', undefined]) {
       expect(resolveMtpTemperatureNotice({ nativeMtpSupported: true, mode, temperature: 0.7 }))

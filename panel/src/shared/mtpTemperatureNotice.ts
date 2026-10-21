@@ -21,6 +21,8 @@ export interface MtpTemperatureNoticeInput {
   isRemote?: boolean
   /** True only when the bundle really carries native MTP heads. */
   nativeMtpSupported: boolean
+  /** Loaded runtime can disable MTP, including when an external drafter wins. */
+  runtimeAvailable?: boolean
   /** Session `nativeMtpMode` (new or legacy spelling). */
   mode: string | undefined
   /** Bundle-level measured default from model detection. */
@@ -55,7 +57,7 @@ export function parseSessionNativeMtpMode(
 export function resolveMtpTemperatureNotice(
   input: MtpTemperatureNoticeInput,
 ): MtpTemperatureNotice | null {
-  if (input.isRemote || !input.nativeMtpSupported) return null
+  if (input.isRemote || !input.nativeMtpSupported || input.runtimeAvailable === false) return null
   const mode = input.mode === 'off'
     ? 'off'
     : input.mode === 'adaptive' || input.mode === 'deterministic'
