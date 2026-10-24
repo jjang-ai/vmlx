@@ -459,6 +459,29 @@ class SingleBatchGenerator:
             if getattr(cache_obj, "left_padding", None) is not None:
                 cloned.left_padding = cls._clone_array(cache_obj.left_padding)
             return cloned
+        if type(cache_obj).__name__ == "DeepseekV41Cache":
+            # Deep-copy the N-1 boundary: window + compressed pools + pend + Engram pos/history.
+            try:
+                from jang_tools.dsv4_1.mlx_model import DeepseekV41Cache, _SeqState
+
+                cl = DeepseekV41Cache(_SeqState(), cache_obj._idx, cache_obj._ratio)
+                cl.window = cls._clone_array(cache_obj.window) if cache_obj.window is not None else None
+                ckv = cache_obj.compress_kv.view()
+                if ckv is not None:
+                    cl.compress_kv.buf = cls._clone_array(ckv)
+                    cl.compress_kv.n = int(cache_obj.compress_kv.n)
+                ikv = cache_obj.index_k.view()
+                if ikv is not None:
+                    cl.index_k.buf = cls._clone_array(ikv)
+                    cl.index_k.n = int(cache_obj.index_k.n)
+                cl.pend_kv = cls._clone_array(cache_obj.pend_kv) if cache_obj.pend_kv is not None else None
+                cl.pend_score = (cls._clone_array(cache_obj.pend_score)
+                                 if cache_obj.pend_score is not None else None)
+                cl._seq.pos = int(cache_obj._seq.pos)
+                cl._seq.history = cache_obj._seq.history.copy()
+                return cl
+            except Exception:
+                return None
         if type(cache_obj).__name__ == "ZayaNoStateCache":
             return cache_obj.extract(0)
         return None
@@ -469,6 +492,7 @@ class SingleBatchGenerator:
             return any(cls._cache_needs_prompt_snapshot(c) for c in cache_obj.caches)
         return type(cache_obj).__name__ in {
             "DeepseekV4Cache",
+            "DeepseekV41Cache",
             "Glm5KDACache",
             "Glm5MLACache",
             "MiniMaxM3SparseCache",

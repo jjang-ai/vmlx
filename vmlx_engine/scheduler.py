@@ -2097,7 +2097,9 @@ class Scheduler:
 
     @staticmethod
     def _is_dsv4_cache_class_name(class_name: str) -> bool:
-        return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
+        # DeepseekV41Cache is the V4.1 composite cache: same opaque state/meta_state/trim contract as
+        # DSV4, so it rides the DSV4 disk-only block-cache + prompt-boundary-snapshot reuse path.
+        return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache", "DeepseekV41Cache"}
 
     @staticmethod
     def _is_dsv4_cache_object(cache: Any) -> bool:
