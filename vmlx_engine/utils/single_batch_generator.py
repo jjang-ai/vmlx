@@ -155,6 +155,11 @@ class _Request:
     image_grid_thw: Any = None
     pixel_values_videos: Any = None
     video_grid_thw: Any = None
+    # DeepSeek-V4.1-Flash VL (additive, text-routed). images = jang_tools.dsv41
+    # vision.ImageInput list; token_types = per-token list (>=0 on image spans).
+    # Spliced on the FIRST (single) prefill forward, then cleared like M3's.
+    dsv41_vl_images: Any = None
+    dsv41_vl_token_types: Any = None
     prefill_started: Optional[float] = None
     prefill_usage: Optional[dict] = None
     # Mixed-SWA: (boundary, {layer_idx: RotatingKVCache snapshot}) captured at
@@ -697,6 +702,8 @@ class SingleBatchGenerator:
         image_grid_thw: Optional[list[Any]] = None,
         pixel_values_videos: Optional[list[Any]] = None,
         video_grid_thw: Optional[list[Any]] = None,
+        dsv41_vl_images: Optional[list[Any]] = None,
+        dsv41_vl_token_types: Optional[list[Any]] = None,
         gen_prompt_lens: Optional[list[int]] = None,
         stable_root_splits: Optional[list[int]] = None,
     ):
@@ -709,6 +716,8 @@ class SingleBatchGenerator:
         image_grid_thw = image_grid_thw or [None] * len(prompts)
         pixel_values_videos = pixel_values_videos or [None] * len(prompts)
         video_grid_thw = video_grid_thw or [None] * len(prompts)
+        dsv41_vl_images = dsv41_vl_images or [None] * len(prompts)
+        dsv41_vl_token_types = dsv41_vl_token_types or [None] * len(prompts)
         all_tokens = all_tokens or [[] for _ in prompts]
         samplers = samplers or [None] * len(prompts)
         logits_processors = logits_processors or [self.logits_processors] * len(prompts)
@@ -734,6 +743,8 @@ class SingleBatchGenerator:
             grid,
             pv_video,
             video_grid,
+            dsv41_images,
+            dsv41_ttypes,
             gen_prompt_len,
             stable_root_split,
         ) in zip(
@@ -748,6 +759,8 @@ class SingleBatchGenerator:
             image_grid_thw,
             pixel_values_videos,
             video_grid_thw,
+            dsv41_vl_images,
+            dsv41_vl_token_types,
             gen_prompt_lens,
             stable_root_splits,
         ):
@@ -773,6 +786,8 @@ class SingleBatchGenerator:
                 image_grid_thw=grid,
                 pixel_values_videos=pv_video,
                 video_grid_thw=video_grid,
+                dsv41_vl_images=dsv41_images,
+                dsv41_vl_token_types=dsv41_ttypes,
                 gen_prompt_len=int(gen_prompt_len or 0),
                 stable_root_split=int(stable_root_split or 0),
             )
@@ -785,6 +800,26 @@ class SingleBatchGenerator:
 
     def _model_call(self, tokens: list[int], req: _Request):
         arr = mx.array([tokens], dtype=mx.int32)
+        # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings on the
+        # start_pos-0 prefill forward. The model contract requires every image
+        # span in one start_pos-0 prefill, which holds when the whole prompt is
+        # one chunk (typical VL prompts). token_types is per-token and sliced to
+        # this chunk; images are passed only at pos==0. Cleared once fully
+        # consumed so decode stays on the byte-identical text path.
+        if req.dsv41_vl_images is not None:
+            tt_full = req.dsv41_vl_token_types or []
+            pos = len(req.context_tokens)
+            tt_chunk = list(tt_full[pos : pos + len(tokens)])
+            imgs = req.dsv41_vl_images if pos == 0 else None
+            if pos + len(tokens) >= len(tt_full):
+                req.dsv41_vl_images = None
+                req.dsv41_vl_token_types = None
+            return self.model(
+                arr,
+                cache=req.cache,
+                images=imgs,
+                token_types=(tt_chunk or None),
+            )
         # M3 VL: vision tensors are present ONLY on the first prefill forward
         # (set by _start_request when req.pixel_values is not None). After this
         # single forward they are cleared so decode never re-passes them, leaving

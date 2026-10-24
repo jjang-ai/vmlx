@@ -177,6 +177,10 @@ class Request:
     image_grid_thw: Optional[Any] = None  # Grid info for Qwen-VL models
     pixel_values_videos: Optional[Any] = None  # Processed video tensors (mx.array)
     video_grid_thw: Optional[Any] = None  # Temporal/spatial video grid
+    # DeepSeek-V4.1-Flash VL (text-routed): images = jang_tools.dsv41 vision
+    # ImageInput list; token_types = per-token list (>=0 on image-span tokens).
+    dsv41_vl_images: Optional[Any] = None
+    dsv41_vl_token_types: Optional[Any] = None
     attention_mask: Optional[Any] = None  # Attention mask for multimodal input
     multimodal_kwargs: Optional[Dict[str, Any]] = None  # Model-specific kwargs
     is_multimodal: bool = False  # Flag indicating this is a multimodal request

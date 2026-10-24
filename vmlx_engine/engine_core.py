@@ -444,6 +444,8 @@ class EngineCore:
         image_grid_thw: Optional[Any] = None,
         pixel_values_videos: Optional[Any] = None,
         video_grid_thw: Optional[Any] = None,
+        dsv41_vl_images: Optional[Any] = None,
+        dsv41_vl_token_types: Optional[Any] = None,
         prompt_token_ids: Optional[List[int]] = None,
         cache_extra_keys: Optional[Any] = None,
         dsv4_thinking_soft_cap: Optional[int] = None,
@@ -500,6 +502,17 @@ class EngineCore:
             request.pixel_values_videos = pixel_values_videos
         if video_grid_thw is not None:
             request.video_grid_thw = video_grid_thw
+
+        # DeepSeek-V4.1-Flash VL (text-routed, additive). The prompt_token_ids
+        # above already carry the expanded image spans; attach the ImageInput
+        # list + per-token token_types the model splices at the start_pos-0
+        # prefill. Vision-conditioned prefills are NOT prefix-cached (a plain
+        # text prefix with the same ids but no image must never replay it), so
+        # force bypass — far simpler and safe vs. M3's salted-media replay.
+        if dsv41_vl_images is not None:
+            request.dsv41_vl_images = dsv41_vl_images
+            request.dsv41_vl_token_types = dsv41_vl_token_types
+            bypass_prefix_cache = True
 
         # MiniMax-M3 VL is text-routed, but its image/video placeholders are
         # content-dependent just like the generic MLLM path. Mix the shared

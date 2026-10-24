@@ -9234,6 +9234,21 @@ class Scheduler:
                         insert_kwargs["gen_prompt_lens"] = [
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
                         ]
+                    # DeepSeek-V4.1-Flash VL (additive): attach the ImageInput
+                    # list + per-token token_types the model splices at the
+                    # start_pos-0 prefill. Only ever set on a V4.1 VL request
+                    # (add_request forced cache bypass, so tokens_to_process is
+                    # the full expanded prompt and lands in one SBG prefill).
+                    _dsv41_imgs = getattr(request, "dsv41_vl_images", None)
+                    if (
+                        _dsv41_imgs is not None
+                        and self.batch_generator.__class__.__name__
+                        == "SingleBatchGenerator"
+                    ):
+                        insert_kwargs["dsv41_vl_images"] = [_dsv41_imgs]
+                        insert_kwargs["dsv41_vl_token_types"] = [
+                            getattr(request, "dsv41_vl_token_types", None)
+                        ]
                     # Producer-side pp/s clock for generators that emit no
                     # usage.vmlx_prefill receipt of their own (stock mlx_lm
                     # BatchGenerator: native-MTP text models, max_num_seqs>1;
