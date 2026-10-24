@@ -276,6 +276,13 @@ def _validate_standard_shard_sets(paths: list[Path], root: Path) -> None:
         ).add(int(match.group("number")))
 
     for (parent, prefix), totals in grouped.items():
+        # When the directory ships a safetensors index, it is authoritative and
+        # `_validate_indexes` checks every referenced shard is present with matching
+        # keys. Skip the filename "-of-N" heuristic there: it is a fallback for
+        # index-less bundles and misfires on JANG's two-track naming (control shards
+        # "model-NNN-of-MMM" alongside routed-expert shards "model-routed-NNN").
+        if any(not p.name.startswith("._") for p in parent.glob("*.safetensors.index.json")):
+            continue
         relative = (parent / prefix).relative_to(root).as_posix()
         if len(totals) != 1:
             declared = ", ".join(str(total) for total in sorted(totals))
@@ -421,10 +428,16 @@ def _scan_bundle(root: Path, *, repair: bool) -> dict[str, Any]:
     # macOS writes AppleDouble sidecars ("._name.safetensors") next to real
     # shards on external exFAT/FAT volumes; they are resource-fork metadata,
     # not weights, and must never participate in shard discovery.
+    #
+    # The DSV4.1 "engram/" subdir holds the two disk-resident FP8 n-gram tables
+    # (named like model-000{47,48}-of-00048 because they are the unmodified
+    # source shards), read directly by the runtime -- not a standard weight
+    # shard set, so exclude it from shard discovery/validation.
     shard_paths = sorted(
         path
         for path in root.rglob("*.safetensors")
         if not path.name.startswith("._")
+        and "engram" not in path.relative_to(root).parts[:-1]
     )
     if not shard_paths:
         raise BundleIntegrityError(f"{root}: no safetensors weight files found")

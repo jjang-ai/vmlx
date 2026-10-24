@@ -1462,6 +1462,23 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _finalize_loaded_model(_m, _t)
 
+                # DeepSeek V4.1-Flash (deepseek_v41): V4-family backbone + Engram
+                # taps + vision + dSpark heads. Routed through the validated
+                # jang_tools.dsv41 runtime wrapped in the engine Model contract.
+                if _mt == "deepseek_v41" or _tc_mt == "deepseek_v41":
+                    logger.info(
+                        "DSV4.1-Flash bundle detected — routing through the "
+                        "native DSV4.1 runtime wrapper (jang_tools.dsv41)."
+                    )
+                    from ..loaders.load_jangtq_dsv41 import load_jangtq_dsv41_model
+
+                    _m, _t = load_jangtq_dsv41_model(
+                        local_model_path,
+                        skip_params_eval=False,
+                    )
+                    _inject_chat_template_if_missing(_t, local_model_path)
+                    return _finalize_loaded_model(_m, _t)
+
                 # Laguna (poolside): 33B/3B agentic-coding MoE,
                 # model_type=laguna. mlx_lm has no native laguna class so
                 # the generic loader can't resolve it. Route through

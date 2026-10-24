@@ -803,6 +803,30 @@ def register_all(registry=None):
         )
     )
 
+    # ── DeepSeek V4.1-Flash (deepseek_v41) ── V4-family backbone + Engram taps
+    # + vision + dSpark MTP. Served through the validated jang_tools.dsv41
+    # runtime (loaders/load_jangtq_dsv41). Generic KV cache for now (cache_subtype
+    # left default); the TurboQuant/SSD tiers + dSpark speculative path attach in a
+    # follow-up once DeepseekV41Cache serialization/trim lands.
+    _register(
+        ModelConfig(
+            family_name="deepseek_v4_1",
+            model_types=["deepseek_v41"],
+            cache_type="kv",
+            eos_tokens=[
+                "<｜end▁of▁sentence｜>",
+                "<｜User｜>",
+                "<｜Assistant｜>",
+                "<｜latest_reminder｜>",
+            ],
+            tool_parser="dsml",
+            reasoning_parser="deepseek_r1",
+            think_in_template=True,
+            supports_thinking=True,
+            priority=20,
+        )
+    )
+
     # ── dots3-note (dots3_note) ── 280B/16B-active omni MoE (RedNote dots
     # studio), 512K ctx. Hybrid dual-geometry MLA: 13 full/DSA layers (128
     # heads, kv_lora 512) + 33 sliding layers (64 heads, kv_lora 1024,
