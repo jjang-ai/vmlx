@@ -3841,12 +3841,16 @@ class Scheduler:
             _cls = type(_model_for_sniff)
             _cls_name = _cls.__name__.lower()
             _mod_name = (_cls.__module__ or "").lower()
+            # Match DSV4 (jang_tools.dsv4.mlx_model) but NOT DSV4.1
+            # (jang_tools.dsv4_1.mlx_model): a bare "dsv4" substring matches
+            # "dsv4_1", which would route V4.1 onto the DSV4-composite snapshot
+            # path (hardcoded DeepseekV4Cache). V4.1 has its own cache + reuse.
             _is_dsv4 = (
-                "dsv4" in _mod_name
-                or "deepseek_v4" in _mod_name
+                ".dsv4." in _mod_name
+                or "deepseek_v4." in _mod_name
                 or "deepseekv4" in _cls_name
-                or "dsv4" in _cls_name
-            )
+                or _cls_name == "dsv4"
+            ) and "dsv4_1" not in _mod_name
             if _is_dsv4:
                 from .utils.dsv4_batch_generator import DSV4BatchGenerator
                 logger.info(
