@@ -2153,6 +2153,11 @@ class Scheduler:
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
                 "Glm5KDACache",
                 "Glm5MLACache",
+                # DSV4.1 per-layer composite cache: MLA latent sliding-window KV +
+                # compressed-global pool + indexer state + Engram position. Not a
+                # KVCache subclass and not an SSM companion cache -- opaque
+                # state/meta_state/trim, like the openPangu/GLM5 composite caches.
+                "DeepseekV41Cache",
             }:
                 return False
             if cache_types and cache_types == kv_types:
