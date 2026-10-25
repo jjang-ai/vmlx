@@ -96,7 +96,15 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         boundary = {}
 
         def _on_boundary(_sess):
-            boundary["snapshot"] = self._clone_dsv41_prompt_boundary(req)
+            snap = self._clone_dsv41_prompt_boundary(req)
+            # Carry the draft-window seed of the boundary's last positions, so a later prefix hit
+            # on this entry drafts with a full window (DSparkRunner.prefill reseeds from it).
+            tail_fn = getattr(self._dspark, "main_tail", None)
+            tail = tail_fn() if callable(tail_fn) else None
+            if snap and tail is not None and int(tail[1]) + int(tail[0].shape[1]) == int(snap[0].offset):
+                snap[0]._seq.dspark_tail = (mx.array(tail[0]), int(tail[1]))
+                mx.eval(snap[0]._seq.dspark_tail[0])
+            boundary["snapshot"] = snap
 
         prompt = list(req.prompt_tokens)
         with self._stream_context():
