@@ -58,13 +58,22 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
 
     # --- decode override ------------------------------------------------------
     def _start_request(self, req) -> Response:
-        if not self._use_dspark(req):
-            return super()._start_request(req)  # VL or no draft -> inherited AR path
+        start_offset = int(getattr(req.cache[0], "offset", 0) or 0) if getattr(req, "cache", None) else 0
+        # Coexistence with the engine prefix cache, both correct:
+        #  - PREFIX HIT (restored prefix): delegate to the inherited AR path, which continues from the
+        #    restored composite cache coherently and re-stores -> per-tool-call cache reuse works.
+        #  - VL / no draft: AR path.
+        #  - COLD, text, draft present: DSpark on its OWN runtime Session (fast decode, 4-bit ~890MB
+        #    cache, output == greedy). It does not populate the engine prefix cache (driving a restored
+        #    DSpark continuation off the composite MLA+DSA+engram prefix is not yet bit-correct — the
+        #    index_k pool restore mismatches; tracked). So DSpark = raw decode speed; the AR path is the
+        #    one with full 890MB + prefix-cache reuse.
+        if not self._use_dspark(req) or start_offset > 0:
+            return super()._start_request(req)
         self._refresh_thread_stream()
         req.prefill_usage = None
         req.prefill_started = time.perf_counter()
         req.prompt_processed = True
-        # DSpark owns its own runtime Session; the engine cache (req.cache) is unused for decode.
         req._dspark_stream = self._runner.stream(
             list(req.prompt_tokens), req.max_tokens, eos_ids=set(self.stop_tokens))
         req._dspark_on = True
@@ -100,8 +109,8 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             req.finish_reason = "stop"  # stream ended without a stop/length trigger
         resp = Response(uid=req.uid, token=current, logprobs=None, finish_reason=req.finish_reason,
                         current_state=req.current_state, match_sequence=req.match_sequence,
-                        prompt_cache=None, all_tokens=list(req.context_tokens),
-                        prompt_cache_snapshot=None, prefill_usage=req.prefill_usage,
+                        prompt_cache=req.cache, all_tokens=list(req.context_tokens),
+                        prompt_cache_snapshot=getattr(req, 'prompt_cache_snapshot', None), prefill_usage=req.prefill_usage,
                         mixed_swa_boundary=None, stable_root_snapshot=None, boundary_checkpoints=None)
         if req.finish_reason is not None:
             self._request = None
