@@ -9075,6 +9075,21 @@ class BlockAwarePrefixCache:
                                 cache._vmlx_dsv4_keep = int(meta[0]) if meta else 0
                             except Exception:
                                 cache._vmlx_dsv4_keep = 0
+                        elif class_name == "DeepseekV41Cache":
+                            # Order-independent setters; a stale/foreign entry raises here.
+                            cache.state = state
+                            cache.meta_state = meta
+                            # Every DSV4.1 layer records the sequence position. It must equal
+                            # the token count this block table claims, or the restored state
+                            # sits at a different boundary than the key (the pre-fix N-under-
+                            # N-1 entries, a chain whose terminal state is from a shorter
+                            # entry). Feeding the tail onto it would shift every position.
+                            if int(cache.offset) != int(block_table.num_tokens):
+                                raise ValueError(
+                                    "DSV4.1 restored offset "
+                                    f"{int(cache.offset)} != block table "
+                                    f"{int(block_table.num_tokens)} tokens"
+                                )
                         else:
                             cache.state = state
                             try:

@@ -522,6 +522,24 @@ class SingleBatchGenerator:
         return type(cache_obj).__name__ in {"Glm5KDACache", "Glm5MLACache"}
 
     @classmethod
+    def _cache_uses_dsv41(cls, cache_obj) -> bool:
+        if isinstance(cache_obj, (list, tuple)):
+            return any(cls._cache_uses_dsv41(c) for c in cache_obj)
+        return type(cache_obj).__name__ == "DeepseekV41Cache"
+
+    def _clone_dsv41_prompt_boundary(self, req: "_Request"):
+        """DeepSeek-V4.1: clone the cache at the exact N-1 prompt boundary.
+
+        The scheduler stores the prompt snapshot under ``prompt_tokens[:-1]`` and re-feeds the last
+        prompt token on a hit, so the snapshot must hold exactly N-1 tokens. The generic path below
+        clones AFTER the final prompt token was consumed (N tokens under an N-1 key): every hit then
+        re-fed that token at position N (duplicated ``<think>``, shifted positions / compressor groups /
+        Engram n-grams). Only called before the last prompt token is fed."""
+        if not req.cache or not any(int(getattr(c, "offset", 0) or 0) > 0 for c in req.cache):
+            return None  # nothing before the final token (one-token prompt): no reusable boundary
+        return self._clone_admissible_prompt_cache_snapshot(req.cache)
+
+    @classmethod
     def _cache_uses_m3_msa(cls, cache_obj) -> bool:
         if isinstance(cache_obj, mlx_cache.CacheList):
             return any(cls._cache_uses_m3_msa(c) for c in cache_obj.caches)
@@ -931,6 +949,13 @@ class SingleBatchGenerator:
                     # indexer and rotating state before admitting another chunk.
                     # Keep this boundary on the generator's concrete stream.
                     mx.eval([entry.state for entry in req.cache])
+                elif getattr(self.model, "model_type", None) == "deepseek_v41":
+                    # Same reason for DSV4.1: without a per-chunk eval the whole prompt stays one lazy
+                    # graph and the clear_cache below frees nothing. Evaluate the 4-bit pools / window
+                    # / compressor state directly (no dequantized .state round-trip).
+                    from jang_tools.dsv41.dspark import _session_arrays
+
+                    mx.eval(_session_arrays(req.cache[0]._seq) if req.cache else [])
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
                     req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
@@ -1389,6 +1414,7 @@ class SingleBatchGenerator:
                 req.mixed_swa_boundary = self._capture_mixed_swa_boundary(req)
         uses_openpangu = self._cache_uses_openpangu(req.cache)
         uses_glm5_next = self._cache_uses_glm5_next(req.cache)
+        uses_dsv41 = self._cache_uses_dsv41(req.cache)
         # openPangu and GLM each own a path-dependent native state unit. Capture
         # the immutable N-1 boundary BEFORE the final prompt token is consumed;
         # post-decode convolution/recurrent/indexer state cannot be rewound.
@@ -1420,6 +1446,9 @@ class SingleBatchGenerator:
             typed_prompt_snapshot = self._clone_admissible_prompt_cache_snapshot(
                 req.cache
             )
+        elif uses_dsv41:
+            # Exact N-1 boundary, captured before the final prompt token is fed (see helper).
+            typed_prompt_snapshot = self._clone_dsv41_prompt_boundary(req)
         last_token = int(req.prompt_tokens[-1])
         req.prompt_processed = True
         self._compute_next_from_input(req, last_token)
@@ -1431,7 +1460,7 @@ class SingleBatchGenerator:
         req.context_tokens.append(last_token)
         prompt_cache_snapshot = (
             typed_prompt_snapshot
-            if uses_openpangu or uses_glm5_next or typed_prompt_snapshot is not None
+            if uses_openpangu or uses_glm5_next or uses_dsv41 or typed_prompt_snapshot is not None
             else self._clone_admissible_prompt_cache_snapshot(req.cache)
         )
         req.prompt_cache_snapshot = prompt_cache_snapshot

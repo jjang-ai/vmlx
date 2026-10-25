@@ -3786,6 +3786,8 @@ class Scheduler:
         if float(sampling_params.temperature or 0.0) == 0.0:
             try:
                 setattr(sampler, "_vmlx_accepts_logits", True)
+                # Read only by the DSV4.1 DSpark generator: speculative verify is greedy-exact.
+                setattr(sampler, "_vmlx_greedy", True)
             except Exception:
                 pass
 
@@ -3913,7 +3915,10 @@ class Scheduler:
         except Exception as _mtp_gen_err:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
 
-        if getattr(self.model, "_dspark", None) is not None:
+        if (
+            getattr(self.model, "_dspark", None) is not None
+            and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
+        ):
             # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode via the validated
             # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
             # only engages when a draft is present; the default AR path is never affected.
@@ -4066,6 +4071,12 @@ class Scheduler:
                 top_k=params.top_k,
                 seed=int(seed),
             )
+        if float(params.temperature or 0.0) == 0.0:
+            try:
+                # Seeded argmax is still argmax; read only by the DSV4.1 DSpark generator.
+                setattr(sampler, "_vmlx_greedy", True)
+            except Exception:
+                pass
         request._seeded_sampler = sampler
         return sampler
 
@@ -9198,10 +9209,11 @@ class Scheduler:
                             ]
                     else:
                         single_batch_cached_prefix: Optional[List[int]] = None
-                        if (
-                            cache_to_use is not None
-                            and self.batch_generator.__class__.__name__
-                            == "SingleBatchGenerator"
+                        if cache_to_use is not None and self.batch_generator.__class__.__name__ in (
+                            # The DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
+                            # the restored prefix as its context too (all_tokens / prefix store).
+                            "SingleBatchGenerator",
+                            "DSV41DSparkGenerator",
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)
