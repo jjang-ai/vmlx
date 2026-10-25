@@ -12,12 +12,20 @@ import numpy as np
 import pytest
 import mlx.core as mx
 
-mx.set_default_device(mx.cpu)
 
 mlx_model = pytest.importorskip("jang_tools.dsv4_1.mlx_model")
 
 from vmlx_engine.paged_cache import PagedCacheManager  # noqa: E402
 from vmlx_engine.prefix_cache import BlockAwarePrefixCache  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _cpu_only():
+    """CPU only (another process owns the GPU); restore the previous default afterwards."""
+    prev = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    yield
+    mx.set_default_device(prev)
 
 BLOCK = 64
 

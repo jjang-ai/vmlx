@@ -13,13 +13,21 @@ from types import SimpleNamespace
 import mlx.core as mx
 import pytest
 
-mx.set_default_device(mx.cpu)
 
 mlx_model = pytest.importorskip("jang_tools.dsv4_1.mlx_model")
 dspark = pytest.importorskip("jang_tools.dsv41.dspark")
 
 from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator  # noqa: E402
 from vmlx_engine.utils.dsv41_dspark_generator import DSV41DSparkGenerator  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _cpu_only():
+    """CPU only (another process owns the GPU); restore the previous default afterwards."""
+    prev = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    yield
+    mx.set_default_device(prev)
 
 V = 37
 
