@@ -59,15 +59,15 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
     # --- decode override ------------------------------------------------------
     def _start_request(self, req) -> Response:
         start_offset = int(getattr(req.cache[0], "offset", 0) or 0) if getattr(req, "cache", None) else 0
-        # Coexistence with the engine prefix cache, both correct:
-        #  - PREFIX HIT (restored prefix): delegate to the inherited AR path, which continues from the
-        #    restored composite cache coherently and re-stores -> per-tool-call cache reuse works.
+        # Hybrid coexistence (both paths correct):
+        #  - PREFIX HIT (restored prefix): delegate to the inherited AR path -> coherent continuation +
+        #    per-tool-call cache reuse (PROVEN). DSpark decode directly off the scheduler's PAGED-block
+        #    reconstruction emits empty output (a paged-reconstruction/continuation interaction; the
+        #    isolated store/restore+continue works — scratchpad/repro_dspark_restore.py — so the core
+        #    DSpark-restore logic is correct, but the server paged path needs alignment). Tracked.
         #  - VL / no draft: AR path.
-        #  - COLD, text, draft present: DSpark on its OWN runtime Session (fast decode, 4-bit ~890MB
-        #    cache, output == greedy). It does not populate the engine prefix cache (driving a restored
-        #    DSpark continuation off the composite MLA+DSA+engram prefix is not yet bit-correct — the
-        #    index_k pool restore mismatches; tracked). So DSpark = raw decode speed; the AR path is the
-        #    one with full 890MB + prefix-cache reuse.
+        #  - COLD text with a draft: DSpark on its own runtime Session (fast decode, 4-bit ~890MB,
+        #    output == greedy).
         if not self._use_dspark(req) or start_offset > 0:
             return super()._start_request(req)
         self._refresh_thread_stream()
