@@ -43,13 +43,16 @@ class FakeRuntime:
     def __init__(self, n_layers=3):
         self.args = SimpleNamespace(num_hidden_layers=n_layers, compress_ratios=[0, 2, 1][:n_layers])
         self.forwards = []
+        self.lookaheads = []
 
     def new_session(self):
         return mlx_model._SeqState()
 
-    def forward(self, ids, sess, all_logits=False, return_hidden=False, images=None, token_types=None):
+    def forward(self, ids, sess, all_logits=False, return_hidden=False, images=None, token_types=None,
+                engram_lookahead=None):
         ids = [int(t) for t in ids]
         self.forwards.append((sess.pos, list(ids)))
+        self.lookaheads.append(None if engram_lookahead is None else list(engram_lookahead))
         rows = mx.array(ids, dtype=mx.float32).reshape(1, -1, 1)
         for c in sess.caches:
             c.window = rows if c.window is None else mx.concatenate([c.window, rows], axis=1)
@@ -188,6 +191,8 @@ def test_dspark_output_equals_ar_and_seeds_only_last_window():
         # chunked prefill: prompt[:-1] in chunks of 3, then the last token alone
         prefill = [f for f in rt.forwards if f[0] < len(prompt)]
         assert [len(f[1]) for f in prefill] == [3, 3, 3, 1, 1]
+        # every prefill chunk but the last hands the next forward's ids over as engram lookahead
+        assert rt.lookaheads[: len(prefill)] == [f[1] for f in prefill[1:]] + [None]
 
 
 @pytest.mark.parametrize(

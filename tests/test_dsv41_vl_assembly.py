@@ -131,7 +131,8 @@ class RecordingRuntime:
         self.args = SimpleNamespace(num_hidden_layers=2, compress_ratios=[0, 1])
         self.calls = []
 
-    def forward(self, ids, sess, all_logits=False, return_hidden=False, images=None, token_types=None):
+    def forward(self, ids, sess, all_logits=False, return_hidden=False, images=None, token_types=None,
+                engram_lookahead=None):
         start = sess.pos
         self.calls.append((start, len(ids), [(im.start, len(im.types), im.tag) for im in images or []],
                            None if token_types is None else list(token_types)))
