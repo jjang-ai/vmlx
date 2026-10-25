@@ -819,7 +819,7 @@ def register_all(registry=None):
                 "<｜Assistant｜>",
                 "<｜latest_reminder｜>",
             ],
-            tool_parser="dsml",
+            tool_parser="deepseek_v41",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
             supports_thinking=True,

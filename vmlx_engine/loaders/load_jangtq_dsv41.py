@@ -65,9 +65,20 @@ def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
         return
 
     def apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
-                            enable_thinking=True, reasoning_effort="high", **_):
+                            enable_thinking=True, reasoning_effort="high", tools=None, **_):
         mode = "thinking" if enable_thinking else "chat"
-        prompt = enc.encode_messages(list(messages), thinking_mode=mode, reasoning_effort=reasoning_effort)
+        msgs = [dict(m) for m in messages]
+        # V4.1 renders tools natively (render_tools) ONLY inside a system message
+        # (encode_messages reads msg["tools"]). The server passes tools here as a
+        # kwarg; attach them to a leading system turn so the native DSML tool
+        # schema is rendered (otherwise the server injects a generic fallback
+        # schema and the model emits a non-DSML call -> 422).
+        if tools:
+            if msgs and msgs[0].get("role") == "system":
+                msgs[0]["tools"] = tools
+            else:
+                msgs = [{"role": "system", "content": "", "tools": tools}] + msgs
+        prompt = enc.encode_messages(msgs, thinking_mode=mode, reasoning_effort=reasoning_effort)
         if tokenize:
             try:
                 return tokenizer.encode(prompt)

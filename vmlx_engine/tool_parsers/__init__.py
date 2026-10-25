@@ -54,6 +54,7 @@ from .atem_tool_parser import AtemToolParser  # Muse Glimmer ATEM format
 from .auto_tool_parser import AutoToolParser
 from .deepseek_tool_parser import DeepSeekToolParser
 from .dsml_tool_parser import DSMLToolParser  # DeepSeek V4 DSML format
+from .dsml_v41_tool_parser import DSMLV41ToolParser  # DeepSeek V4.1 DSML (leading-space tags)
 from .functionary_tool_parser import FunctionaryToolParser
 from .granite_tool_parser import GraniteToolParser
 from .hermes_tool_parser import HermesToolParser
