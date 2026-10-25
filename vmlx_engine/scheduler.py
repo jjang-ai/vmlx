@@ -9418,6 +9418,15 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        # DSV4.1 VL: the cache-free retry prefills the whole prompt, so it must
+                        # carry every image (the cached attempt may have omitted covered ones).
+                        if getattr(request, "dsv41_vl_images", None) is not None and isinstance(
+                            self.batch_generator, SingleBatchGenerator
+                        ):
+                            insert_kwargs["dsv41_vl_images"] = [request.dsv41_vl_images]
+                            insert_kwargs["dsv41_vl_token_types"] = [
+                                getattr(request, "dsv41_vl_token_types", None)
+                            ]
                         request._vmlx_prefill_insert = (
                             time.perf_counter(),
                             len(tokens_to_process),
