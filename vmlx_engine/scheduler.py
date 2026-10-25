@@ -3913,6 +3913,31 @@ class Scheduler:
         except Exception as _mtp_gen_err:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
 
+        if getattr(self.model, "_dspark", None) is not None:
+            # V4.1 DSpark draft attached (VMLX_DSV41_DSPARK=1): speculative decode via the validated
+            # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
+            # only engages when a draft is present; the default AR path is never affected.
+            try:
+                from .utils.dsv41_dspark_generator import DSV41DSparkGenerator
+                logger.info("DSV4.1 dSpark draft attached — using DSV41DSparkGenerator (speculative decode)")
+                return DSV41DSparkGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=None,
+                    prefill_batch_size=1,
+                    completion_batch_size=1,
+                    prefill_step_size=self.config.prefill_step_size,
+                    prompt_snapshot_max_bytes=_prompt_snapshot_max_bytes,
+                    mixed_swa_boundary_capture=self._mixed_swa_inline_capture_wanted(),
+                    mixed_swa_capture_block_size=int(
+                        getattr(self.block_aware_cache, "block_size", 64) or 64
+                    ),
+                )
+            except Exception as _dspark_gen_err:
+                logger.warning("DSV4.1 dSpark generator init failed (%s); AR SingleBatchGenerator", _dspark_gen_err)
+
         if int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1:
             logger.info(
                 "max_num_seqs=1 — using vMLX SingleBatchGenerator "
