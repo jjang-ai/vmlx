@@ -23,6 +23,7 @@ def load_jangtq_dsv41_model(model_path: str, *, skip_params_eval: bool = False) 
     from jang_tools.dsv4_1.mlx_model import load_deepseek_v41
 
     model, raw_tokenizer = load_deepseek_v41(model_path, skip_params_eval=skip_params_eval)
+    _maybe_load_dsv41_dspark(model, Path(model_path))
 
     # A standard engine tokenizer (chat template / eos / detokenizer) over the bundle files.
     tokenizer = None
@@ -43,6 +44,38 @@ def load_jangtq_dsv41_model(model_path: str, *, skip_params_eval: bool = False) 
 
     _attach_chat_encoder(tokenizer, Path(model_path))
     return model, tokenizer
+
+
+def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
+    """Load the bundle's self-contained dSpark MTP draft and attach it as ``model._dspark`` so a V4.1
+    spec-decode generator can drive it (DECODE_DSPARK_METHODS.md M1). Gated by ``VMLX_DSV41_DSPARK``
+    (default OFF) until the generator lands; loading is additive and does not touch the AR path."""
+    import json
+    import os
+
+    if os.environ.get("VMLX_DSV41_DSPARK", "0").strip().lower() in {"", "0", "false", "off", "no"}:
+        return
+    try:
+        cfg = json.loads((bundle / "config.json").read_text())
+    except Exception as exc:  # pragma: no cover
+        logger.warning("DSV4.1: cannot read config.json for dSpark gate (%s)", exc)
+        return
+    rt = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    if not rt.get("bundle_has_mtp"):
+        logger.info("DSV4.1: VMLX_DSV41_DSPARK set but bundle advertises no MTP draft; serving AR-only")
+        return
+    try:
+        from jang_tools.dsv41.dspark import load_dspark
+
+        runtime = getattr(model, "runtime", None)
+        if runtime is None:
+            logger.warning("DSV4.1: model wrapper exposes no .runtime; cannot attach dSpark draft")
+            return
+        ds = load_dspark(str(bundle), runtime.args, runtime.model.embed, runtime.model.head)
+        model._dspark = ds
+        logger.info("DSV4.1: dSpark MTP draft attached (model._dspark), bs=%s", getattr(ds, "bs", "?"))
+    except Exception as exc:  # pragma: no cover
+        logger.warning("DSV4.1: dSpark draft load failed (%s); serving AR-only", exc)
 
 
 def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
