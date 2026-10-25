@@ -58,24 +58,27 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
 
     # --- decode override ------------------------------------------------------
     def _start_request(self, req) -> Response:
-        start_offset = int(getattr(req.cache[0], "offset", 0) or 0) if getattr(req, "cache", None) else 0
-        # Hybrid coexistence (both paths correct):
-        #  - PREFIX HIT (restored prefix): delegate to the inherited AR path -> coherent continuation +
-        #    per-tool-call cache reuse (PROVEN). DSpark decode directly off the scheduler's PAGED-block
-        #    reconstruction emits empty output (a paged-reconstruction/continuation interaction; the
-        #    isolated store/restore+continue works — scratchpad/repro_dspark_restore.py — so the core
-        #    DSpark-restore logic is correct, but the server paged path needs alignment). Tracked.
-        #  - VL / no draft: AR path.
-        #  - COLD text with a draft: DSpark on its own runtime Session (fast decode, 4-bit ~890MB,
-        #    output == greedy).
-        if not self._use_dspark(req) or start_offset > 0:
-            return super()._start_request(req)
+        if not self._use_dspark(req):
+            return super()._start_request(req)  # VL or no draft -> inherited AR path
+        if req.cache is None:
+            req.cache = self._make_new_cache()
         self._refresh_thread_stream()
         req.prefill_usage = None
         req.prefill_started = time.perf_counter()
         req.prompt_processed = True
-        req._dspark_stream = self._runner.stream(
-            list(req.prompt_tokens), req.max_tokens, eos_ids=set(self.stop_tokens))
+        # DSpark drives the ENGINE cache (req.cache duck-types the runtime Session) for BOTH cold and
+        # prefix-HIT requests, so DSpark output populates the prefix cache AND a restored prefix is
+        # CONTINUED by DSpark (not re-prefilled). On a hit the scheduler restores req.cache and passes
+        # only the uncached tail as prompt_tokens; prefill() forwards it from the session's absolute
+        # pos. The clean prompt-boundary snapshot (pre-decode) is stored to the prefix cache.
+        from jang_tools.dsv4_1.mlx_model import _relink
+        seq = _relink(req.cache)
+        sess, pending, c = self._runner.prefill(list(req.prompt_tokens), session=seq)
+        try:
+            req.prompt_cache_snapshot = self._clone_admissible_prompt_cache_snapshot(req.cache)
+        except Exception:
+            req.prompt_cache_snapshot = None
+        req._dspark_stream = self._runner.decode_stream(sess, pending, c, req.max_tokens, eos_ids=set(self.stop_tokens))
         req._dspark_on = True
         req.next_token = self._pull(req)  # first committed token (int) or None
         return self._emit_dspark(req)

@@ -471,14 +471,15 @@ class SingleBatchGenerator:
 
                 cl = DeepseekV41Cache(_SeqState(), cache_obj._idx, cache_obj._ratio)
                 cl.window = cls._clone_array(cache_obj.window) if cache_obj.window is not None else None
+                # compress_kv/index_k are 4-bit QuantGrowBuffers (no `.buf`): clone by re-quantizing
+                # the dequantized view via load_dense (sets wq/scales/biases + n). The old `.buf=`
+                # path left wq=None -> view() None -> an EMPTY restored pool (the DSpark-restore bug).
                 ckv = cache_obj.compress_kv.view()
                 if ckv is not None:
-                    cl.compress_kv.buf = cls._clone_array(ckv)
-                    cl.compress_kv.n = int(cache_obj.compress_kv.n)
+                    cl.compress_kv.load_dense(cls._clone_array(ckv))
                 ikv = cache_obj.index_k.view()
                 if ikv is not None:
-                    cl.index_k.buf = cls._clone_array(ikv)
-                    cl.index_k.n = int(cache_obj.index_k.n)
+                    cl.index_k.load_dense(cls._clone_array(ikv))
                 cl.pend_kv = cls._clone_array(cache_obj.pend_kv) if cache_obj.pend_kv is not None else None
                 cl.pend_score = (cls._clone_array(cache_obj.pend_score)
                                  if cache_obj.pend_score is not None else None)
