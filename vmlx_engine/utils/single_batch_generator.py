@@ -799,7 +799,7 @@ class SingleBatchGenerator:
     def insert_segments(self, segments, *args, **kwargs):
         return self.insert([sum(seg, []) for seg in segments], *args, **kwargs)
 
-    def _model_call(self, tokens: list[int], req: _Request):
+    def _model_call(self, tokens: list[int], req: _Request, lookahead: Optional[list[int]] = None):
         arr = mx.array([tokens], dtype=mx.int32)
         # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings on the
         # start_pos-0 prefill forward. The model contract requires every image
@@ -854,6 +854,10 @@ class SingleBatchGenerator:
                 pixel_values_videos=pv_video,
                 video_grid_thw=video_grid,
             )
+        if lookahead and getattr(self.model, "model_type", None) == "deepseek_v41":
+            # DeepSeek-V4.1: the next prefill chunk's Engram rows (random SSD
+            # reads) are fetched while this chunk computes.
+            return self.model(arr, cache=req.cache, engram_lookahead=lookahead)
         return self.model(arr, cache=req.cache)
 
     def _prefill(self, tokens: list[int], req: _Request) -> None:
@@ -916,7 +920,11 @@ class SingleBatchGenerator:
             if _phase_trace:
                 _valve_done = time.perf_counter()
             with self._stream_context():
-                self._model_call(chunk, req)
+                self._model_call(
+                    chunk,
+                    req,
+                    lookahead=tokens[pos + n : pos + n + self.prefill_step_size],
+                )
                 if getattr(self.model, "model_type", None) == "naive_n05_flash":
                     # synchronize only waits for submitted work; it does not
                     # evaluate the lazy cache graph. Realize native nested KV,
@@ -1254,16 +1262,27 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+
+        def _chunk_len(at: int) -> int:
+            n = min(step, len(tokens) - at)
+            # Keep at least two tokens in the final chunk when possible so
+            # the final prompt token is not treated like a standalone decode
+            # step before the first sampled token.
+            if len(tokens) - (at + n) == 1 and n > 1:
+                n -= 1
+            return n
+
         with self._stream_context():
             while len(tokens) - pos > step:
-                n = min(step, len(tokens) - pos)
-                # Keep at least two tokens in the final chunk when possible so
-                # the final prompt token is not treated like a standalone decode
-                # step before the first sampled token.
-                if len(tokens) - (pos + n) == 1 and n > 1:
-                    n -= 1
+                n = _chunk_len(pos)
                 chunk = tokens[pos : pos + n]
-                logits = self._model_call(chunk, req)  # forwards+clears pixel_values
+                nxt = pos + n
+                lookahead = (
+                    tokens[nxt : nxt + _chunk_len(nxt)]
+                    if len(tokens) - nxt > step
+                    else tokens[nxt:]
+                )
+                logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
                 (logits,) = self._eval_on_stream(logits)
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
