@@ -9265,10 +9265,13 @@ class Scheduler:
                     # (add_request forced cache bypass, so tokens_to_process is
                     # the full expanded prompt and lands in one SBG prefill).
                     _dsv41_imgs = getattr(request, "dsv41_vl_images", None)
-                    if (
-                        _dsv41_imgs is not None
-                        and self.batch_generator.__class__.__name__
-                        == "SingleBatchGenerator"
+                    # isinstance, not an exact class-name match: the DSV4.1 DSpark
+                    # generator subclasses SingleBatchGenerator. The old name check
+                    # silently dropped the images whenever DSpark was on (default),
+                    # so the generator saw a text-only request and decoded the image
+                    # span without pixels ("red" image answered "White").
+                    if _dsv41_imgs is not None and isinstance(
+                        self.batch_generator, SingleBatchGenerator
                     ):
                         insert_kwargs["dsv41_vl_images"] = [_dsv41_imgs]
                         insert_kwargs["dsv41_vl_token_types"] = [
