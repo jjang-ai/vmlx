@@ -31,12 +31,34 @@ def _adaptive_enabled() -> bool:
     return os.environ.get("VMLX_DSV41_DSPARK_ADAPTIVE", "1").strip().lower() not in {"", "0", "false", "off", "no"}
 
 
+# Prefill chunk with the draft resident. The draft adds 8.3 GB, which puts a 2048-token chunk's
+# active memory plus the allocator cache over Metal's recommended working set (222.7 GiB on a
+# 256 GB machine), and the GPU slows down. Draft resident, 12k-token cold prompt: chunk 2048
+# 545 pp/s, 1536 643, 1024 708, 768 684. Without the draft 2048 stays best (~770).
+# VMLX_DSV41_DSPARK_PREFILL_STEP overrides.
+_DRAFT_PREFILL_STEP = 1024
+
+
+def _draft_prefill_step(configured: int) -> int:
+    try:
+        override = int(os.environ.get("VMLX_DSV41_DSPARK_PREFILL_STEP", "0"))
+    except ValueError:
+        override = 0
+    if override > 0:
+        return override
+    return min(int(configured), _DRAFT_PREFILL_STEP)
+
+
 class DSV41DSparkGenerator(SingleBatchGenerator):
     """SingleBatchGenerator that decodes V4.1 via DSpark speculation when a draft is attached."""
 
     def __init__(self, model, *args, **kwargs):
         super().__init__(model, *args, **kwargs)
         from jang_tools.dsv41.dspark import DSparkRunner
+
+        # Applies to the DSpark prefill and to this generator's inherited AR prefill (VL turns), which
+        # run with the same draft resident.
+        self.prefill_step_size = _draft_prefill_step(self.prefill_step_size)
 
         self._dspark = getattr(model, "_dspark", None)
         self._runtime = getattr(model, "runtime", None)
