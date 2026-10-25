@@ -667,9 +667,11 @@ def _record_metal_ws_model_baseline(reason: str = "model_loaded") -> None:
     # working set (115 GB on this box) and vmmap shows them NONVOL, so the OS
     # cannot reclaim them either. Advisory only -- this never refuses a request.
     try:
-        from vmlx_engine.mlx_memory import apply_serving_cache_limit
+        from vmlx_engine.mlx_memory import apply_serving_cache_limit, model_cache_limit_floor_bytes
 
-        apply_serving_cache_limit(int(active), mx=mx, log=logger)
+        apply_serving_cache_limit(
+            int(active), mx=mx, log=logger, floor_bytes=model_cache_limit_floor_bytes(_model_path)
+        )
     except Exception as exc:  # noqa: BLE001 - must never break model load
         logger.warning("Could not bound MLX allocator cache after load: %s", exc)
 
