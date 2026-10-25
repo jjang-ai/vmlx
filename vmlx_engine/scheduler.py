@@ -890,6 +890,8 @@ class Scheduler:
         # ZAYA's CCA CacheList are first-class typed cache contracts, not SSM
         # companion-cache rows.
         self._uses_dsv4_cache = self._model_uses_dsv4_cache(model)
+        # DSV4.1 rides the DSV4 composite store, but its per-layer class is DeepseekV41Cache.
+        self._uses_dsv41_cache = self._model_type_for_runtime == "deepseek_v41"
         self._uses_zaya_cache = (
             self._model_type_for_runtime == "zaya"
             or self._model_uses_zaya_cache(model)
@@ -1865,6 +1867,8 @@ class Scheduler:
                     if self._uses_openpangu_cache
                     else "MiniMaxM3SparseCache"
                     if self._uses_m3_msa_cache
+                    else "DeepseekV41Cache"
+                    if getattr(self, "_uses_dsv41_cache", False)
                     else None
                 ),
                 required_cache_classes=(

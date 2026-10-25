@@ -465,27 +465,13 @@ class SingleBatchGenerator:
                 cloned.left_padding = cls._clone_array(cache_obj.left_padding)
             return cloned
         if type(cache_obj).__name__ == "DeepseekV41Cache":
-            # Deep-copy the N-1 boundary: window + compressed pools + pend + Engram pos/history.
+            # Bit-exact compact copy: 4-bit pools copied as stored (no dequant/re-quant round-trip).
+            # Whole-list snapshots go through clone_cache_list in _clone_prompt_cache_snapshot so all
+            # layers share one copied _SeqState (one Engram history, not one per layer).
             try:
-                from jang_tools.dsv4_1.mlx_model import DeepseekV41Cache, _SeqState
+                from jang_tools.dsv4_1.mlx_model import clone_cache_list
 
-                cl = DeepseekV41Cache(_SeqState(), cache_obj._idx, cache_obj._ratio)
-                cl.window = cls._clone_array(cache_obj.window) if cache_obj.window is not None else None
-                # compress_kv/index_k are 4-bit QuantGrowBuffers (no `.buf`): clone by re-quantizing
-                # the dequantized view via load_dense (sets wq/scales/biases + n). The old `.buf=`
-                # path left wq=None -> view() None -> an EMPTY restored pool (the DSpark-restore bug).
-                ckv = cache_obj.compress_kv.view()
-                if ckv is not None:
-                    cl.compress_kv.load_dense(cls._clone_array(ckv))
-                ikv = cache_obj.index_k.view()
-                if ikv is not None:
-                    cl.index_k.load_dense(cls._clone_array(ikv))
-                cl.pend_kv = cls._clone_array(cache_obj.pend_kv) if cache_obj.pend_kv is not None else None
-                cl.pend_score = (cls._clone_array(cache_obj.pend_score)
-                                 if cache_obj.pend_score is not None else None)
-                cl._seq.pos = int(cache_obj._seq.pos)
-                cl._seq.history = cache_obj._seq.history.copy()
-                return cl
+                return clone_cache_list([cache_obj])[0]
             except Exception:
                 return None
         if type(cache_obj).__name__ == "ZayaNoStateCache":
@@ -551,6 +537,14 @@ class SingleBatchGenerator:
     def _clone_prompt_cache_snapshot(cls, cache):
         if not cache or not any(cls._cache_needs_prompt_snapshot(c) for c in cache):
             return None
+        if all(type(c).__name__ == "DeepseekV41Cache" for c in cache):
+            try:
+                from jang_tools.dsv4_1.mlx_model import clone_cache_list
+
+                return clone_cache_list(list(cache))
+            except Exception as exc:
+                logger.warning("DSV4.1 prompt snapshot clone failed: %s", exc)
+                return None
         cloned = [cls._clone_cache_object(c) for c in cache]
         if any(c is None for c in cloned):
             return None
