@@ -157,7 +157,22 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                         mixed_swa_boundary=None, stable_root_snapshot=None, boundary_checkpoints=None)
         if req.finish_reason is not None:
             self._request = None
+            self._log_dspark_stats(req)
         return resp
+
+    @staticmethod
+    def _log_dspark_stats(req) -> None:
+        st = getattr(req, "_dspark_stats", None) or {}
+        if not st:
+            return
+        logger.info(
+            "DSV4.1 DSpark request %s: emitted=%s steps=%s spec_steps=%s ar_steps=%s accept=%s/%s "
+            "spec_ms_per_tok=%s ar_ms_per_tok=%s",
+            req.uid, st.get("emitted"), st.get("steps"), st.get("spec_steps"), st.get("ar_steps"),
+            st.get("accepted"), st.get("drafted"),
+            None if st.get("spec_s_per_tok") is None else round(st["spec_s_per_tok"] * 1000, 2),
+            None if st.get("ar_s_per_tok") is None else round(st["ar_s_per_tok"] * 1000, 2),
+        )
 
     def _yield_current_and_schedule_next(self, req, *, prompt_cache_snapshot=None) -> Response:
         if getattr(req, "_dspark_on", False):
