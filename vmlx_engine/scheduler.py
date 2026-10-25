@@ -3914,7 +3914,7 @@ class Scheduler:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
 
         if getattr(self.model, "_dspark", None) is not None:
-            # V4.1 DSpark draft attached (VMLX_DSV41_DSPARK=1): speculative decode via the validated
+            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode via the validated
             # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
             # only engages when a draft is present; the default AR path is never affected.
             try:

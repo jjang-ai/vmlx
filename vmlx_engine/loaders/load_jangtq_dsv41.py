@@ -48,12 +48,14 @@ def load_jangtq_dsv41_model(model_path: str, *, skip_params_eval: bool = False) 
 
 def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
     """Load the bundle's self-contained dSpark MTP draft and attach it as ``model._dspark`` so a V4.1
-    spec-decode generator can drive it (DECODE_DSPARK_METHODS.md M1). Gated by ``VMLX_DSV41_DSPARK``
-    (default OFF) until the generator lands; loading is additive and does not touch the AR path."""
+    spec-decode generator can drive it (DECODE_DSPARK_METHODS.md M1). DSpark adaptive is now the
+    DEFAULT (per Eric 2026-10-25: 50+ tok/s easy code) — the generator + prefix-cache coexistence are
+    proven; set ``VMLX_DSV41_DSPARK=0`` to force the plain AR path. Loading is additive (the draft is a
+    separate attached module) and the generator still falls back to AR per-request for VL turns."""
     import json
     import os
 
-    if os.environ.get("VMLX_DSV41_DSPARK", "0").strip().lower() in {"", "0", "false", "off", "no"}:
+    if os.environ.get("VMLX_DSV41_DSPARK", "1").strip().lower() in {"0", "false", "off", "no"}:
         return
     try:
         cfg = json.loads((bundle / "config.json").read_text())
