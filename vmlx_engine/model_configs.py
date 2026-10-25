@@ -805,9 +805,11 @@ def register_all(registry=None):
 
     # ── DeepSeek V4.1-Flash (deepseek_v41) ── V4-family backbone + Engram taps
     # + vision + dSpark MTP. Served through the validated jang_tools.dsv41
-    # runtime (loaders/load_jangtq_dsv41). Generic KV cache for now (cache_subtype
-    # left default); the TurboQuant/SSD tiers + dSpark speculative path attach in a
-    # follow-up once DeepseekV41Cache serialization/trim lands.
+    # runtime (loaders/load_jangtq_dsv41) on SingleBatchGenerator, or the DSpark
+    # generator for greedy requests when the bundle ships the draft. Cache:
+    # DeepseekV41Cache (4-bit compressed/index pools, exact N-1 prompt-boundary
+    # snapshots, bit-exact format-v2 serialization) on the DSV4 composite paged /
+    # SSD block store; not trimmable. CLI policy: cli._apply_dsv41_runtime_policy.
     _register(
         ModelConfig(
             family_name="deepseek_v4_1",

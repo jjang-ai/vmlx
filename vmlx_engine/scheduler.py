@@ -2100,6 +2100,19 @@ class Scheduler:
             logger.debug("Runtime cache layout logging skipped: %s", exc)
 
     @staticmethod
+    def _is_dsv4_model_class(cls: Any) -> bool:
+        """DSV4-Flash model class (jang_tools.dsv4.mlx_model, mlx_lm.models.deepseek_v4), never V4.1.
+
+        Matched on module path components: a bare "dsv4" substring also matches "dsv4_1" (V4.1 would
+        be routed onto the DSV4-composite generator with its hardcoded DeepseekV4Cache), and the
+        previous "deepseek_v4." substring missed "mlx_lm.models.deepseek_v4" (no trailing dot)."""
+        cls_name = (getattr(cls, "__name__", "") or "").lower()
+        mod_parts = set((getattr(cls, "__module__", "") or "").lower().split("."))
+        if mod_parts & {"dsv4_1", "deepseek_v41", "deepseek_v4_1"} or "deepseekv41" in cls_name:
+            return False
+        return bool(mod_parts & {"dsv4", "deepseek_v4"}) or "deepseekv4" in cls_name or cls_name == "dsv4"
+
+    @staticmethod
     def _is_dsv4_cache_class_name(class_name: str) -> bool:
         # DeepseekV41Cache is the V4.1 composite cache: same opaque state/meta_state/trim contract as
         # DSV4, so it rides the DSV4 disk-only block-cache + prompt-boundary-snapshot reuse path.
@@ -3846,19 +3859,7 @@ class Scheduler:
             # Sniff the model class name + module path. DSV4 model class
             # comes from jang_tools.dsv4.mlx_model.{Model,DeepseekV4Model}.
             _model_for_sniff = getattr(self.model, "_model", self.model)
-            _cls = type(_model_for_sniff)
-            _cls_name = _cls.__name__.lower()
-            _mod_name = (_cls.__module__ or "").lower()
-            # Match DSV4 (jang_tools.dsv4.mlx_model) but NOT DSV4.1
-            # (jang_tools.dsv4_1.mlx_model): a bare "dsv4" substring matches
-            # "dsv4_1", which would route V4.1 onto the DSV4-composite snapshot
-            # path (hardcoded DeepseekV4Cache). V4.1 has its own cache + reuse.
-            _is_dsv4 = (
-                ".dsv4." in _mod_name
-                or "deepseek_v4." in _mod_name
-                or "deepseekv4" in _cls_name
-                or _cls_name == "dsv4"
-            ) and "dsv4_1" not in _mod_name
+            _is_dsv4 = Scheduler._is_dsv4_model_class(type(_model_for_sniff))
             if _is_dsv4:
                 from .utils.dsv4_batch_generator import DSV4BatchGenerator
                 logger.info(

@@ -19,6 +19,8 @@ differs, so this subclass just overrides the markers/regexes with the spaced for
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from typing import Any
 
 from .dsml_tool_parser import DSML_PREFIX, DSMLToolParser
 from . import ToolParserManager
@@ -63,3 +65,23 @@ class DSMLV41ToolParser(DSMLToolParser):
         DSML_OPEN_PREFIX,
         f"</{DSML_PREFIX}",
     )
+
+    def _canonical_encoding_module(self, request: Any | None):
+        """V4.1's canonical parser is the bundle's own ``encoding/encoding.py``.
+
+        The inherited lookup searches for a DSV4 ``encoding_dsv4.py`` (including ~/models and
+        /Volumes); when a DSV4 bundle is present on the machine, its V4 parser rejects V4.1's
+        spaced DSML and that rejection is terminal, so every V4.1 tool call failed. Use only the
+        selected V4.1 bundle's encoder; no bundle path -> no canonical parser (strict regex only)."""
+        if isinstance(request, dict):
+            model_path = request.get("model_path")
+        else:
+            model_path = getattr(request, "model_path", None)
+        if not model_path or not (Path(model_path) / "encoding" / "encoding.py").is_file():
+            return None
+        try:
+            from vmlx_engine.models.deepseek_v4_1.dsv41_vl_preprocess import _encoding
+
+            return _encoding(str(model_path))
+        except Exception:
+            return None
