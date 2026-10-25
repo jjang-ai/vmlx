@@ -619,6 +619,10 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'dots3_note': 'dots3_note',
   // ── DeepSeek family ──
   'deepseek_v4': 'deepseek-v4',
+  // V4.1-Flash reuses the DSV4 launch profile (single-batch SBG, text-routed native
+  // VL — NO mlx_vlm --is-mllm, no auto-drafter). Tool calls use the deepseek_v41
+  // parser at the engine; a dedicated 'deepseek-v4.1' family can carry that later.
+  'deepseek_v41': 'deepseek-v4',
   'deepseek_v3': 'deepseek-v3',
   'deepseek_v32': 'deepseek-v3',
   'deepseek_v2': 'deepseek-v2',
