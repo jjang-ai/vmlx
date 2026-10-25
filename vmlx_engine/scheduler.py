@@ -13341,6 +13341,8 @@ class Scheduler:
         )
         if generator_cls == "SingleBatchGenerator":
             generator_path = "single_active"
+        elif generator_cls == "DSV41DSparkGenerator":
+            generator_path = "dsv41_dspark"
         elif generator_cls == "DSV4BatchGenerator":
             generator_path = "dsv4"
         elif generator_cls == "BatchGenerator":
@@ -13447,7 +13449,7 @@ class Scheduler:
                     stats["batch_generator"].update(native_mtp_stats)
             except Exception as exc:
                 logger.debug("Native MTP telemetry snapshot unavailable: %s", exc)
-        elif generator_cls in {"SingleBatchGenerator", "DSV4BatchGenerator"}:
+        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
             stats["batch_generator"].update(
                 {
                     "prompt_snapshot_max_bytes": getattr(
@@ -13533,6 +13535,8 @@ class Scheduler:
             )
             if generator_cls == "SingleBatchGenerator":
                 engine_path = "single_active"
+            elif generator_cls == "DSV41DSparkGenerator":
+                engine_path = "dsv41_dspark"
             elif generator_cls == "DSV4BatchGenerator":
                 engine_path = "dsv4"
             elif generator_cls == "BatchGenerator":
@@ -13544,10 +13548,10 @@ class Scheduler:
             base["batch_generator"] = {
                 "class": generator_cls,
                 "path": engine_path,
-                "single_active_decode": engine_path == "single_active",
+                "single_active_decode": engine_path in {"single_active", "dsv41_dspark"},
                 "max_num_seqs": self.config.max_num_seqs,
             }
-            if generator_cls in {"SingleBatchGenerator", "DSV4BatchGenerator"}:
+            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
                 base["batch_generator"].update(
                     {
                         "prompt_snapshot_max_bytes": getattr(
