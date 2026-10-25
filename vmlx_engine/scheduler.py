@@ -9137,6 +9137,30 @@ class Scheduler:
                 _cache_fallback_reason = "media_placeholders_outside_cached_prefix"
             if _m3vl_active and not _m3vl_cache_replay:
                 tokens_to_process = list(request.prompt_token_ids)
+            # DeepSeek-V4.1 VL with a media-salted prefix hit: the restored state already holds
+            # every image whose span ends inside the cached prefix. If ALL images are covered the
+            # tail is plain text (no vision tensors; DSpark-eligible). A span straddling the
+            # boundary cannot be resumed -> release the hit and prefill the whole prompt.
+            _dsv41_vl_covered = False
+            _dsv41_vl_imgs_req = getattr(request, "dsv41_vl_images", None)
+            if _dsv41_vl_imgs_req is not None and cache_to_use is not None:
+                _cached = max(0, int(getattr(request, "cached_tokens", 0) or 0))
+                _spans = [(int(i.start), int(i.start) + len(i.types)) for i in _dsv41_vl_imgs_req]
+                if _cached > 0 and all(e <= _cached for _, e in _spans):
+                    _dsv41_vl_covered = True
+                elif any(s < _cached < e for s, e in _spans):
+                    logger.info(
+                        "Request %s: DSV4.1 VL cached prefix ends inside an image span; "
+                        "releasing hit for a full vision prefill",
+                        request.request_id,
+                    )
+                    self._release_unusable_paged_hit(request)
+                    cache_to_use = None
+                    request.prompt_cache = None
+                    request.cached_tokens = 0
+                    request.remaining_tokens = request.prompt_token_ids
+                    tokens_to_process = list(request.prompt_token_ids)
+                    _cache_fallback_reason = "dsv41_vl_image_span_outside_cached_prefix"
 
             try:
                 try:
@@ -9276,18 +9300,20 @@ class Scheduler:
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
                         ]
                     # DeepSeek-V4.1-Flash VL (additive): attach the ImageInput
-                    # list + per-token token_types the model splices at the
-                    # start_pos-0 prefill. Only ever set on a V4.1 VL request
-                    # (add_request forced cache bypass, so tokens_to_process is
-                    # the full expanded prompt and lands in one SBG prefill).
+                    # list + per-token token_types (full-prompt positions); the
+                    # generator splices each image into the chunk holding its
+                    # span. Skipped when a media-salted hit already covers every
+                    # image (the tail is text-only).
                     _dsv41_imgs = getattr(request, "dsv41_vl_images", None)
                     # isinstance, not an exact class-name match: the DSV4.1 DSpark
                     # generator subclasses SingleBatchGenerator. The old name check
                     # silently dropped the images whenever DSpark was on (default),
                     # so the generator saw a text-only request and decoded the image
                     # span without pixels ("red" image answered "White").
-                    if _dsv41_imgs is not None and isinstance(
-                        self.batch_generator, SingleBatchGenerator
+                    if (
+                        _dsv41_imgs is not None
+                        and not _dsv41_vl_covered
+                        and isinstance(self.batch_generator, SingleBatchGenerator)
                     ):
                         insert_kwargs["dsv41_vl_images"] = [_dsv41_imgs]
                         insert_kwargs["dsv41_vl_token_types"] = [

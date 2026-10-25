@@ -813,18 +813,22 @@ class SingleBatchGenerator:
 
     def _model_call(self, tokens: list[int], req: _Request, lookahead: Optional[list[int]] = None):
         arr = mx.array([tokens], dtype=mx.int32)
-        # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings on the
-        # start_pos-0 prefill forward. The model contract requires every image
-        # span in one start_pos-0 prefill, which holds when the whole prompt is
-        # one chunk (typical VL prompts). token_types is per-token and sliced to
-        # this chunk; images are passed only at pos==0. Cleared once fully
+        # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings into the
+        # chunk that holds each image span. ImageInput.start is absolute in the
+        # full prompt while the model writes h[0, start:...] of THIS chunk, so
+        # pass only the images whose span lies inside the chunk, with chunk-
+        # relative starts (_dsv41_vl_chunk_len never lets a chunk split an
+        # image). The old code passed every image only on the pos==0 chunk, so
+        # an image after the first prefill chunk was dropped (or overran it).
+        # token_types is per-token and sliced to this chunk. Cleared once fully
         # consumed so decode stays on the byte-identical text path.
         if req.dsv41_vl_images is not None:
             tt_full = req.dsv41_vl_token_types or []
             pos = len(req.context_tokens)
-            tt_chunk = list(tt_full[pos : pos + len(tokens)])
-            imgs = req.dsv41_vl_images if pos == 0 else None
-            if pos + len(tokens) >= len(tt_full):
+            end = pos + len(tokens)
+            tt_chunk = list(tt_full[pos:end])
+            imgs = self._dsv41_vl_chunk_images(req.dsv41_vl_images, pos, end)
+            if end >= len(tt_full) - 1:  # the final prompt token is never an image token
                 req.dsv41_vl_images = None
                 req.dsv41_vl_token_types = None
             return self.model(
@@ -872,6 +876,38 @@ class SingleBatchGenerator:
             return self.model(arr, cache=req.cache, engram_lookahead=lookahead)
         return self.model(arr, cache=req.cache)
 
+    @staticmethod
+    def _dsv41_vl_spans(images):
+        return [(int(img.start), int(img.start) + len(img.types)) for img in images or ()]
+
+    @classmethod
+    def _dsv41_vl_chunk_images(cls, images, pos: int, end: int):
+        """Images whose span lies in [pos, end), re-based to the chunk (start - pos)."""
+        import dataclasses
+
+        out = []
+        for img, (s, e) in zip(images or (), cls._dsv41_vl_spans(images)):
+            if pos <= s and e <= end:
+                out.append(dataclasses.replace(img, start=s - pos))
+            elif s < end and e > pos:
+                raise ValueError(
+                    f"DSV4.1 VL image span [{s}, {e}) straddles prefill chunk [{pos}, {end})"
+                )
+        return out or None
+
+    @classmethod
+    def _dsv41_vl_chunk_len(cls, req: "_Request", n: int) -> int:
+        """Shrink or extend a prefill chunk so it never splits an image span."""
+        images = getattr(req, "dsv41_vl_images", None)
+        if not images:
+            return n
+        pos = len(req.context_tokens)
+        end = pos + n
+        for s, e in cls._dsv41_vl_spans(images):
+            if s < end < e:
+                end = s if s > pos else e  # stop before the image, or take all of it
+        return max(1, end - pos)
+
     def _prefill(self, tokens: list[int], req: _Request) -> None:
         if not tokens:
             return
@@ -905,6 +941,8 @@ class SingleBatchGenerator:
         pos = 0
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
+            if req.dsv41_vl_images is not None:
+                n = min(self._dsv41_vl_chunk_len(req, n), len(tokens) - pos)
             chunk = tokens[pos : pos + n]
             if _phase_trace:
                 _chunk_t0 = time.perf_counter()

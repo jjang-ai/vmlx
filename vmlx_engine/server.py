@@ -21499,6 +21499,18 @@ async def create_chat_completion(
     if has_media:
         chat_kwargs["images"] = images if images else None
         chat_kwargs["videos"] = videos if videos else None
+        if (
+            images
+            and not engine.is_mllm
+            and hasattr(engine, "_dsv41_vl_preprocess")  # the engine that pops this kwarg
+            and _dsv41_vl_media_ok(engine)
+        ):
+            # DeepSeek-V4.1 VL renders images in their ORIGINAL turns; the text route above
+            # stripped them out of `messages`, so hand the engine the client's placement.
+            chat_kwargs["_dsv41_vl_source_messages"] = [
+                m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else dict(m)
+                for m in request.messages
+            ]
     if request.image_token_budget:
         chat_kwargs["image_token_budget"] = request.image_token_budget
     # Video controls — passed regardless of has_media since MLLM models

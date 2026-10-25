@@ -16,9 +16,9 @@ exact tensors the model perceives:
 
 This module reproduces that preprocessing inside the engine so the server feeds
 the SingleBatchGenerator identical ``input_ids`` / ``images`` / ``token_types``.
-The image spans MUST land in a single start_pos-0 prefill (model.py contract),
-which holds whenever the whole prompt fits one prefill chunk; VL prompts
-(one image ~= a few hundred span tokens + text) comfortably do.
+The SingleBatchGenerator splices each image into the prefill chunk that holds
+its span (chunk-relative start; chunks never split an image), so images may sit
+anywhere in a long multi-turn prompt.
 """
 
 from __future__ import annotations
@@ -172,6 +172,101 @@ def _inject_extra_images(messages: List[dict], extra_images: List[Any]) -> List[
     return out + [{"role": "user", "content": placeholders}]
 
 
+def _image_parts(content: Any) -> List[dict]:
+    if not isinstance(content, list):
+        return []
+    return [
+        p for p in _normalize_messages_for_encoding([{"role": "user", "content": content}])[0]["content"]
+        if isinstance(p, dict) and p.get("type") == "image_url"
+    ]
+
+
+def _is_user_turn(msg: Any) -> bool:
+    # Tool results rendered as user-shaped turns carry this marker (api.utils).
+    return isinstance(msg, dict) and msg.get("role") == "user" and msg.get("type") != "function_call_output"
+
+
+def anchor_images_to_turns(
+    messages: List[dict], source_messages: Optional[List[dict]]
+) -> Optional[Tuple[List[dict], int]]:
+    """Put each client user turn's image parts back into the matching user turn of ``messages``.
+
+    The server's text route strips image parts (``extract_multimodal_content``) and the old code
+    re-injected every image into the LAST user turn, so a conversation with an image in turn 1 was
+    re-rendered as if the image had been sent with the latest question. ``source_messages`` are the
+    client messages before stripping; user turns are matched by ordinal (normalization never adds,
+    drops or reorders user turns). When the stripped text equals the source's text parts joined
+    with "\n" (no rewrite happened) the source's own part order is restored; otherwise the images
+    go first, then the (rewritten) text -- in the right turn either way. Returns (messages, n_placed)
+    or None when the turns cannot be matched."""
+    if not source_messages:
+        return None
+    src = [m for m in source_messages if isinstance(m, dict) and m.get("role") == "user"]
+    dst = [i for i, m in enumerate(messages) if _is_user_turn(m)]
+    if len(src) != len(dst):
+        return None
+    out = [dict(m) for m in messages]
+    placed = 0
+    for sm, i in zip(src, dst):
+        content = sm.get("content")
+        imgs = _image_parts(content)
+        if not imgs:
+            continue
+        ordered = _normalize_messages_for_encoding([{"role": "user", "content": content}])[0]["content"]
+        texts = [p.get("text", "") for p in ordered if isinstance(p, dict) and p.get("type") in ("text", "input_text")]
+        cur = out[i].get("content")
+        if isinstance(cur, str) and cur == "\n".join(texts):
+            out[i]["content"] = [
+                p if p.get("type") != "input_text" else {"type": "text", "text": p.get("text", "")}
+                for p in ordered
+                if isinstance(p, dict) and p.get("type") in ("text", "input_text", "image_url")
+            ]
+        else:
+            rest = cur if isinstance(cur, list) else ([{"type": "text", "text": cur}] if cur else [])
+            out[i]["content"] = imgs + rest
+        placed += len(imgs)
+    return out, placed
+
+
+def _attach_tools(messages: List[dict], tools: Optional[list]) -> List[dict]:
+    """Same tool placement as the text path's apply_chat_template shim (loaders/load_jangtq_dsv41):
+    the encoder renders tools only from a leading system message."""
+    if not tools:
+        return messages
+    msgs = [dict(m) for m in messages]
+    if msgs and msgs[0].get("role") == "system":
+        msgs[0]["tools"] = tools
+    else:
+        msgs = [{"role": "system", "content": "", "tools": tools}] + msgs
+    return msgs
+
+
+def media_cache_extra_keys(images: List[Any]) -> Optional[dict]:
+    """Prefix-cache salt for a VL request: SHA-256 over every image's pixels + geometry, in prompt order.
+
+    Image spans are runs of the same placeholder token id, so token ids alone cannot tell two images
+    apart; the salt keeps vision-conditioned state from being reused for different pixels while letting
+    the same conversation (same images, more turns) hit its own earlier prompt boundary."""
+    if not images:
+        return None
+    import hashlib
+
+    import mlx.core as mx
+    import numpy as np
+
+    h = hashlib.sha256(b"vmlx-dsv41-vl-media-v1")
+    for img in images:
+        patches = getattr(img, "patches", None)
+        h.update(repr((int(img.n_vit_h), int(img.n_vit_w), len(img.types))).encode())
+        h.update(np.asarray(img.types, np.int16).tobytes())
+        if patches is not None:
+            arr = patches
+            if arr.dtype in (mx.bfloat16, mx.float16):
+                arr = arr.view(mx.uint16)
+            h.update(np.asarray(arr).tobytes())
+    return {"dsv41_vl_media": h.hexdigest()[:32]}
+
+
 def preprocess_dsv41_vl(
     model: Any,
     model_path: str,
@@ -180,6 +275,8 @@ def preprocess_dsv41_vl(
     extra_images: Optional[List[Any]] = None,
     enable_thinking: Optional[bool] = None,
     reasoning_effort: Any = None,
+    tools: Optional[list] = None,
+    source_messages: Optional[List[dict]] = None,
 ) -> Optional[Tuple[List[int], List[Any], List[int]]]:
     """Return ``(input_ids, images, token_types)`` for a V4.1 VL request.
 
@@ -202,15 +299,28 @@ def preprocess_dsv41_vl(
     if messages_have_image(messages):
         norm_msgs = _normalize_messages_for_encoding(messages)
     elif extra_images:
-        norm_msgs = _normalize_messages_for_encoding(
-            _inject_extra_images(messages, list(extra_images))
-        )
+        anchored = anchor_images_to_turns(messages, source_messages)
+        if anchored is not None and anchored[1] == len(extra_images):
+            norm_msgs = _normalize_messages_for_encoding(anchored[0])
+        else:
+            if source_messages:
+                logger.warning(
+                    "DSV4.1 VL: could not re-anchor %d image(s) to their original turns; "
+                    "placing them in the last user turn",
+                    len(extra_images),
+                )
+            norm_msgs = _normalize_messages_for_encoding(
+                _inject_extra_images(messages, list(extra_images))
+            )
     else:
         return None
+    # The text path renders through the loader's apply_chat_template shim, whose reasoning_effort
+    # default is "high"; render image turns identically (and with the same tools) so an image turn
+    # and its text continuation share one prompt format (and a prefix-cache boundary).
     prompt, mm = enc.encode_messages(
-        norm_msgs,
+        _attach_tools(norm_msgs, tools),
         thinking_mode=thinking_mode,
-        reasoning_effort=reasoning_effort,
+        reasoning_effort=reasoning_effort if reasoning_effort is not None else "high",
         return_multi_modal_data=True,
     )
     raw_images = (mm or {}).get("images") or []

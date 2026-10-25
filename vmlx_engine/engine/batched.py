@@ -620,6 +620,8 @@ class BatchedEngine(BaseEngine):
         *,
         enable_thinking: bool | None = None,
         reasoning_effort: Any = None,
+        tools: list | None = None,
+        source_messages: list | None = None,
     ):
         """Return (input_ids, images, token_types) for a V4.1 VL request, or None."""
         from ..models.deepseek_v4_1.dsv41_vl_preprocess import preprocess_dsv41_vl
@@ -634,6 +636,8 @@ class BatchedEngine(BaseEngine):
             extra_images=images or None,
             enable_thinking=enable_thinking,
             reasoning_effort=reasoning_effort,
+            tools=tools,
+            source_messages=source_messages,
         )
 
     def _use_simple_mllm_media_fallback(
@@ -3062,6 +3066,8 @@ class BatchedEngine(BaseEngine):
             messages,
             kwargs.pop("_vmlx_qwen4_specific_tool_name", None),
         )
+        # DSV4.1 VL: the client's messages with image parts still in place (server-side).
+        _dsv41_vl_source_messages = kwargs.pop("_dsv41_vl_source_messages", None)
 
         messages = self._video_frame_fallback_messages(
             messages,
@@ -3198,8 +3204,15 @@ class BatchedEngine(BaseEngine):
         # expanded input_ids + ImageInput list + per-token token_types and stash
         # them for the text engine path. No-op (unchanged request) when inactive.
         if self._dsv41_vl_active(all_images):
+            # Same render inputs as the text path (tools, reasoning effort), and the
+            # client's original image placement so each image stays in its own turn.
             _d = self._dsv41_vl_preprocess(
-                messages, all_images, enable_thinking=thinking_enabled
+                messages,
+                all_images,
+                enable_thinking=thinking_enabled,
+                reasoning_effort=(extra_tpl or {}).get("reasoning_effort", reasoning_effort),
+                tools=template_tools,
+                source_messages=_dsv41_vl_source_messages,
             )
             if _d is not None:
                 _d_ids, _d_imgs, _d_ttypes = _d
@@ -3264,6 +3277,8 @@ class BatchedEngine(BaseEngine):
             messages,
             kwargs.pop("_vmlx_qwen4_specific_tool_name", None),
         )
+        # DSV4.1 VL: the client's messages with image parts still in place (server-side).
+        _dsv41_vl_source_messages = kwargs.pop("_dsv41_vl_source_messages", None)
 
         messages = self._video_frame_fallback_messages(
             messages,
@@ -3393,8 +3408,15 @@ class BatchedEngine(BaseEngine):
         # DeepSeek-V4.1-Flash VL (additive, gated): see chat() — stash expanded
         # ids + images + token_types; no-op when inactive.
         if self._dsv41_vl_active(all_images):
+            # Same render inputs as the text path (tools, reasoning effort), and the
+            # client's original image placement so each image stays in its own turn.
             _d = self._dsv41_vl_preprocess(
-                messages, all_images, enable_thinking=thinking_enabled
+                messages,
+                all_images,
+                enable_thinking=thinking_enabled,
+                reasoning_effort=(extra_tpl or {}).get("reasoning_effort", reasoning_effort),
+                tools=template_tools,
+                source_messages=_dsv41_vl_source_messages,
             )
             if _d is not None:
                 _d_ids, _d_imgs, _d_ttypes = _d
