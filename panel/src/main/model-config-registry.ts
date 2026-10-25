@@ -620,8 +620,9 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── DeepSeek family ──
   'deepseek_v4': 'deepseek-v4',
   // V4.1-Flash reuses the DSV4 launch profile (single-batch SBG, text-routed native
-  // VL — NO mlx_vlm --is-mllm, no auto-drafter). Tool calls use the deepseek_v41
-  // parser at the engine; a dedicated 'deepseek-v4.1' family can carry that later.
+  // VL — NO mlx_vlm --is-mllm, no auto-drafter). The deepseek_v41 model_type overrides
+  // only the tool parser to the native leading-space DSML dialect (see detectModelConfigFromDir),
+  // so tool calls match `vmlx serve`; everything else stays on the deepseek-v4 profile.
   'deepseek_v41': 'deepseek-v4',
   'deepseek_v3': 'deepseek-v3',
   'deepseek_v32': 'deepseek-v3',
@@ -2185,6 +2186,11 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           if (config) {
             let detected = configToDetected(familyName, config)
             detected.maxContextLength = maxContextLength
+            // DeepSeek-V4.1 rides the deepseek-v4 family (same cache / native-VL / launch
+            // special-cases), but its native tool calls use the LEADING-SPACE DSML dialect ->
+            // the deepseek_v41 parser, not the DSV4 `dsml`. Override only the parser so in-app
+            // tool calls match the `vmlx serve` native contract; the family stays deepseek-v4.
+            if (modelType === 'deepseek_v41') detected.toolParser = 'deepseek_v41'
             // The BUNDLE's own template outranks the registry default for the
             // thinking-toggle capability: the answer is not uniform within a
             // family. Measured on disk, MiniMax-M2.7-JANG_K-CRACK READS
