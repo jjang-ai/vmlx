@@ -5,6 +5,21 @@ Engine-side contract for DeepSeek-V4.1-Flash (`model_type: deepseek_v41`, family
 covers Engram I/O, the prefix-cache contract and measured results, and
 `DECODE_DSPARK_METHODS.md` covers the DSpark decode methods.
 
+## Speed-critical engine pieces
+
+Each item removes a measured cause of slowness; jangq `RUNTIME_SERVING.md` opens with the full ledger
+(runtime and engine).
+- Allocator-cache floor 16 GB for `deepseek_v41`: the generic 4 GB cap made every 2048-token chunk free
+  and re-create its Metal buffers (21k cold prompt 475 → 769 pp/s).
+- 1024-token prefill chunks while the DSpark draft is resident: 2048 crossed Metal's recommended working
+  set and slowed the GPU ~30% (545 → 708 pp/s).
+- `engram_lookahead`: each chunk hands the runtime the next chunk, so its SSD Engram reads overlap this
+  chunk's compute.
+- `prompt_end`: lets the runtime's layers 21-39 skip prompt rows the prefill end no longer reads (100k
+  875 → 1584 pp/s, exact at the N-1 snapshot).
+- DSpark generator: one verify forward per step with in-place partial-accept commit and a governor that
+  never runs below AR; the runtime's fused decode kernels make each verify row cost what a 1-row decode does.
+
 ## Loading and generator selection
 
 - `vmlx_engine/loaders/load_jangtq_dsv41.py` loads the bundle through
