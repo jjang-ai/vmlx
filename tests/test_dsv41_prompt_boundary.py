@@ -44,14 +44,16 @@ class FakeRuntime:
         self.args = SimpleNamespace(num_hidden_layers=n_layers, compress_ratios=[0, 2, 1][:n_layers])
         self.forwards = []
         self.lookaheads = []
+        self.prompt_ends = []
 
     def new_session(self):
         return mlx_model._SeqState()
 
     def forward(self, ids, sess, all_logits=False, return_hidden=False, images=None, token_types=None,
-                engram_lookahead=None):
+                engram_lookahead=None, prompt_end=None):
         ids = [int(t) for t in ids]
         self.forwards.append((sess.pos, list(ids)))
+        self.prompt_ends.append(prompt_end)
         self.lookaheads.append(None if engram_lookahead is None else list(engram_lookahead))
         rows = mx.array(ids, dtype=mx.float32).reshape(1, -1, 1)
         for c in sess.caches:
@@ -147,6 +149,8 @@ def test_cold_snapshot_is_exact_n_minus_one(gen_cls):
     assert first.prefill_usage and first.prefill_usage["tokens"] == len(prompt)
     # all_tokens carries the whole prompt plus the emitted token
     assert first.all_tokens[: len(prompt)] == prompt
+    # suffix pruning: every body chunk knows the body ends at the N-1 boundary; the last token does not
+    assert rt.prompt_ends[:4] == [len(prompt) - 1, len(prompt) - 1, None, None]
 
 
 @pytest.mark.parametrize("gen_cls", [SingleBatchGenerator, DSV41DSparkGenerator])
@@ -165,6 +169,8 @@ def test_prefix_hit_snapshot_is_exact_n_minus_one(gen_cls):
     assert all(int(c.offset) == len(prompt) - 1 for c in snap)
     assert _window_tokens(snap) == prompt[:-1]
     assert first.all_tokens[: len(prompt)] == prompt
+    # the body's prompt_end is absolute (restored prefix + uncached body)
+    assert rt.prompt_ends[1:3] == [len(prompt) - 1, None]
 
 
 def test_dspark_output_equals_ar_and_seeds_only_last_window():

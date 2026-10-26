@@ -811,8 +811,13 @@ class SingleBatchGenerator:
     def insert_segments(self, segments, *args, **kwargs):
         return self.insert([sum(seg, []) for seg in segments], *args, **kwargs)
 
-    def _model_call(self, tokens: list[int], req: _Request, lookahead: Optional[list[int]] = None):
+    def _model_call(self, tokens: list[int], req: _Request, lookahead: Optional[list[int]] = None,
+                    prompt_end: Optional[int] = None):
         arr = mx.array([tokens], dtype=mx.int32)
+        # DeepSeek-V4.1 prefill: prompt_end (absolute cache position where this prefill ends) lets the
+        # late layers skip prompt rows the prefill's last token no longer reads (jang_tools.dsv41
+        # Model.prune_rows); the cache state at prompt_end is the same as a full prefill's.
+        dsv41_kw = {"prompt_end": prompt_end} if prompt_end is not None else {}
         # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings into the
         # chunk that holds each image span. ImageInput.start is absolute in the
         # full prompt while the model writes h[0, start:...] of THIS chunk, so
@@ -836,6 +841,7 @@ class SingleBatchGenerator:
                 cache=req.cache,
                 images=imgs,
                 token_types=(tt_chunk or None),
+                **dsv41_kw,
             )
         # M3 VL: vision tensors are present ONLY on the first prefill forward
         # (set by _start_request when req.pixel_values is not None). After this
@@ -870,10 +876,10 @@ class SingleBatchGenerator:
                 pixel_values_videos=pv_video,
                 video_grid_thw=video_grid,
             )
-        if lookahead and getattr(self.model, "model_type", None) == "deepseek_v41":
+        if (lookahead or dsv41_kw) and getattr(self.model, "model_type", None) == "deepseek_v41":
             # DeepSeek-V4.1: the next prefill chunk's Engram rows (random SSD
             # reads) are fetched while this chunk computes.
-            return self.model(arr, cache=req.cache, engram_lookahead=lookahead)
+            return self.model(arr, cache=req.cache, engram_lookahead=lookahead or None, **dsv41_kw)
         return self.model(arr, cache=req.cache)
 
     @staticmethod
@@ -938,6 +944,12 @@ class SingleBatchGenerator:
             and getattr(self.model, "model_type", None) == "naive_n05_flash"
         )
 
+        # DSV4.1: every chunk of this prefill knows where it ends (suffix pruning; logits are discarded).
+        _prompt_end = None
+        if getattr(self.model, "model_type", None) == "deepseek_v41" and req.cache:
+            _seq = getattr(req.cache[0], "_seq", None)
+            if _seq is not None:
+                _prompt_end = int(_seq.pos) + len(tokens)
         pos = 0
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
@@ -974,6 +986,7 @@ class SingleBatchGenerator:
                     chunk,
                     req,
                     lookahead=tokens[pos + n : pos + n + self.prefill_step_size],
+                    prompt_end=_prompt_end,
                 )
                 if getattr(self.model, "model_type", None) == "naive_n05_flash":
                     # synchronize only waits for submitted work; it does not
