@@ -120,6 +120,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [profileName, setProfileName] = useState('')
   const [showProfileSave, setShowProfileSave] = useState(false)
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>(undefined)
+  const [detectedArchitectureHints, setDetectedArchitectureHints] = useState<Record<string, unknown> | undefined>(undefined)
   const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
   const [detectedReasoningParser, setDetectedReasoningParser] = useState<string | undefined>(undefined)
   const [detectedSupportsThinking, setDetectedSupportsThinking] = useState<boolean | undefined>(undefined)
@@ -224,6 +225,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const dsv4TopPMismatch = hydrationCurrent && shouldWarnDsv4TopP(
     detectedFamily,
     displayedTopP,
+    detectedArchitectureHints,
   )
   const topKSliderMax = Math.min(
     TOP_K_MAX,
@@ -275,6 +277,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setSamplingModes(undefined)
     setOverrides({})
     setDetectedFamily(undefined)
+    setDetectedArchitectureHints(undefined)
     setDetectedToolParser(undefined)
     setDetectedReasoningParser(undefined)
     setDetectedSupportsThinking(undefined)
@@ -303,6 +306,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       const detected = result.detectedConfig
       setThinkingBudgetSupported(generation?.thinkingBudgetSupported)
       setDetectedFamily(detected?.family)
+      setDetectedArchitectureHints(detected?.architectureHints)
       setDetectedToolParser(detected?.toolParser)
       setDetectedReasoningParser(detected?.reasoningParser)
       setDetectedSupportsThinking(detected?.supportsThinking)

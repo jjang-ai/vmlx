@@ -2190,7 +2190,12 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             // special-cases), but its native tool calls use the LEADING-SPACE DSML dialect ->
             // the deepseek_v41 parser, not the DSV4 `dsml`. Override only the parser so in-app
             // tool calls match the `vmlx serve` native contract; the family stays deepseek-v4.
-            if (modelType === 'deepseek_v41') detected.toolParser = 'deepseek_v41'
+            if (modelType === 'deepseek_v41') {
+              detected.toolParser = 'deepseek_v41'
+              // Variant tag for V4-only advisories (the DSV4-0731 top-p 0.95 looping advice does not apply:
+              // V4.1's release sampling defaults are temperature 1.0 / top_p 1.0).
+              detected.architectureHints = { ...(detected.architectureHints ?? {}), deepseekVariant: 'v4.1' }
+            }
             // The BUNDLE's own template outranks the registry default for the
             // thinking-toggle capability: the answer is not uniform within a
             // family. Measured on disk, MiniMax-M2.7-JANG_K-CRACK READS

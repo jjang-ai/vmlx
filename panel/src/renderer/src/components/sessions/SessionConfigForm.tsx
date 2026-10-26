@@ -658,6 +658,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const dsv4TopPMismatch = shouldWarnDsv4TopP(
     normalizedDetectedFamily,
     Number(config.defaultTopP) / 100,
+    detectedArchitectureHints,
   )
 
   const toggleSection = (section: keyof typeof expandedSections) => {

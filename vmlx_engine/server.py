@@ -4938,6 +4938,11 @@ def _loaded_runtime_modalities() -> list[str]:
         return modalities
     if _m3_vl_media_ok(_engine):
         return ["text", "vision", "video"]
+    # DeepSeek-V4.1 runs its in-bundle vision tower on the text route (not an MLLM engine), so the MLLM check
+    # below never saw it: /capabilities said ["text"] and the panel refused image attachments although
+    # /v1/chat/completions serves them (_dsv41_vl_media_ok gates the same requests). Image-only (no video config).
+    if _dsv41_vl_media_ok(_engine):
+        return ["text", "vision"]
     modalities = _loaded_mllm_modalities()
     if modalities is not None:
         return modalities
