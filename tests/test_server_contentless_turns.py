@@ -193,3 +193,36 @@ def test_multimodal_engine_drops_when_its_processor_refuses(monkeypatch):
 def test_no_engine_keeps_the_drop(monkeypatch):
     server = _with_engine(monkeypatch, None)
     assert server._drop_contentless_assistant_turns(HISTORY) == [HISTORY[0], HISTORY[2]]
+
+
+def test_chat_path_extraction_keeps_the_turn_for_the_template_aware_drop_to_decide(monkeypatch):
+    """/v1/chat/completions (and streaming Ollama) run extract_multimodal_content first; it used to drop every
+    empty assistant turn itself, so the template-aware drop never saw one (live DeepSeek-V4.1 A/B, 2026-10-26)."""
+    from vmlx_engine.api.utils import extract_multimodal_content
+
+    request = [
+        {"role": "user", "content": "find the logs"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "run one more command"},
+    ]
+    extracted, _, _ = extract_multimodal_content(request)
+    assert [m["role"] for m in extracted] == ["user", "assistant", "user"]
+
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=False)))
+    assert [m["role"] for m in server._drop_contentless_assistant_turns(extracted)] == ["user", "assistant", "user"]
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=True)))
+    assert [m["role"] for m in server._drop_contentless_assistant_turns(extracted)] == ["user", "user"]
+
+
+def test_thinking_off_strip_keeps_a_reasoning_only_turn_the_template_renders(monkeypatch):
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=False)))
+    monkeypatch.setattr(server, "_template_keeps_prior_reasoning", lambda request_thinking: False)
+    history = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "", "reasoning_content": "unfinished"},
+        {"role": "user", "content": "again"},
+    ]
+    assert server._strip_prior_reasoning_for_thinking_off(history)[1] == {"role": "assistant", "content": ""}
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=True)))
+    monkeypatch.setattr(server, "_template_keeps_prior_reasoning", lambda request_thinking: False)
+    assert [m["role"] for m in server._strip_prior_reasoning_for_thinking_off(history)] == ["user", "user"]

@@ -1144,20 +1144,13 @@ def extract_multimodal_content(
         else:
             tool_calls = getattr(msg, "tool_calls", None)
 
-        # Some strict templates (notably Mistral Medium 3.5 / Pixtral-style)
-        # reject assistant turns whose content is empty and which carry no
-        # tool_calls. Such turns can appear after aborted generations, failed
-        # retries, or UI persistence of a placeholder assistant row. They carry
-        # no semantic history, and keeping them can crash prompt rendering.
-        # Preserve tool-call-only assistant turns: those are valid OpenAI
-        # history anchors and are required for tool-result continuation.
-        if role == "assistant" and not tool_calls and not reasoning_content:
-            empty_content = (
-                content == ""
-                or (isinstance(content, list) and len(content) == 0)
-            )
-            if empty_content:
-                continue
+        # An assistant turn with empty content and no tool_calls is kept here
+        # (content ""). Strict templates (Mistral Medium 3.5 / Pixtral-style)
+        # reject it, but dropping it here dropped it for every template: the
+        # neighbouring user turns merged and the next prompt stopped extending
+        # the cached one (a full re-prefill on DeepSeek-V4.1). The server's
+        # request prep drops it only for a renderer that refuses it
+        # (server._drop_contentless_assistant_turns, after this extraction).
 
         if role == "assistant" and tool_calls:
             if preserve_native_format:

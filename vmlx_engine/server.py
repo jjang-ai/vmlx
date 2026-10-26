@@ -1774,7 +1774,8 @@ def _strip_prior_reasoning_for_thinking_off(
 
     Chat, Responses, and Anthropic share this boundary. Preserve assistant
     tool-call anchors even when visible content is empty so following tool
-    results never become orphaned; drop only empty non-tool assistant turns.
+    results never become orphaned; drop empty non-tool assistant turns only
+    when the template refuses them (_template_renders_contentless_assistant).
     """
     from .models.mimo_v26_contract import read_mimo_v26_contract
     if read_mimo_v26_contract(_model_path or _model_name) is not None:
@@ -1808,9 +1809,9 @@ def _strip_prior_reasoning_for_thinking_off(
             or content == ""
             or (isinstance(content, list) and len(content) == 0)
         )
-        if empty_content and not has_tool_calls:
+        if empty_content and not has_tool_calls and not _template_renders_contentless_assistant():
             continue
-        if empty_content and has_tool_calls:
+        if empty_content:
             msg["content"] = ""
         cleaned.append(msg)
 
