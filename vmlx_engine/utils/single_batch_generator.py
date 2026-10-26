@@ -155,6 +155,11 @@ class _Request:
     image_grid_thw: Any = None
     pixel_values_videos: Any = None
     video_grid_thw: Any = None
+    # DeepSeek-V4.1-Flash VL (additive, text-routed). images = jang_tools.dsv41
+    # vision.ImageInput list; token_types = per-token list (>=0 on image spans).
+    # Spliced on the FIRST (single) prefill forward, then cleared like M3's.
+    dsv41_vl_images: Any = None
+    dsv41_vl_token_types: Any = None
     prefill_started: Optional[float] = None
     prefill_usage: Optional[dict] = None
     # Mixed-SWA: (boundary, {layer_idx: RotatingKVCache snapshot}) captured at
@@ -459,6 +464,16 @@ class SingleBatchGenerator:
             if getattr(cache_obj, "left_padding", None) is not None:
                 cloned.left_padding = cls._clone_array(cache_obj.left_padding)
             return cloned
+        if type(cache_obj).__name__ == "DeepseekV41Cache":
+            # Bit-exact compact copy: 4-bit pools copied as stored (no dequant/re-quant round-trip).
+            # Whole-list snapshots go through clone_cache_list in _clone_prompt_cache_snapshot so all
+            # layers share one copied _SeqState (one Engram history, not one per layer).
+            try:
+                from jang_tools.dsv4_1.mlx_model import clone_cache_list
+
+                return clone_cache_list([cache_obj])[0]
+            except Exception:
+                return None
         if type(cache_obj).__name__ == "ZayaNoStateCache":
             return cache_obj.extract(0)
         return None
@@ -469,6 +484,7 @@ class SingleBatchGenerator:
             return any(cls._cache_needs_prompt_snapshot(c) for c in cache_obj.caches)
         return type(cache_obj).__name__ in {
             "DeepseekV4Cache",
+            "DeepseekV41Cache",
             "Glm5KDACache",
             "Glm5MLACache",
             "MiniMaxM3SparseCache",
@@ -492,6 +508,24 @@ class SingleBatchGenerator:
         return type(cache_obj).__name__ in {"Glm5KDACache", "Glm5MLACache"}
 
     @classmethod
+    def _cache_uses_dsv41(cls, cache_obj) -> bool:
+        if isinstance(cache_obj, (list, tuple)):
+            return any(cls._cache_uses_dsv41(c) for c in cache_obj)
+        return type(cache_obj).__name__ == "DeepseekV41Cache"
+
+    def _clone_dsv41_prompt_boundary(self, req: "_Request"):
+        """DeepSeek-V4.1: clone the cache at the exact N-1 prompt boundary.
+
+        The scheduler stores the prompt snapshot under ``prompt_tokens[:-1]`` and re-feeds the last
+        prompt token on a hit, so the snapshot must hold exactly N-1 tokens. The generic path below
+        clones AFTER the final prompt token was consumed (N tokens under an N-1 key): every hit then
+        re-fed that token at position N (duplicated ``<think>``, shifted positions / compressor groups /
+        Engram n-grams). Only called before the last prompt token is fed."""
+        if not req.cache or not any(int(getattr(c, "offset", 0) or 0) > 0 for c in req.cache):
+            return None  # nothing before the final token (one-token prompt): no reusable boundary
+        return self._clone_admissible_prompt_cache_snapshot(req.cache)
+
+    @classmethod
     def _cache_uses_m3_msa(cls, cache_obj) -> bool:
         if isinstance(cache_obj, mlx_cache.CacheList):
             return any(cls._cache_uses_m3_msa(c) for c in cache_obj.caches)
@@ -503,6 +537,14 @@ class SingleBatchGenerator:
     def _clone_prompt_cache_snapshot(cls, cache):
         if not cache or not any(cls._cache_needs_prompt_snapshot(c) for c in cache):
             return None
+        if all(type(c).__name__ == "DeepseekV41Cache" for c in cache):
+            try:
+                from jang_tools.dsv4_1.mlx_model import clone_cache_list
+
+                return clone_cache_list(list(cache))
+            except Exception as exc:
+                logger.warning("DSV4.1 prompt snapshot clone failed: %s", exc)
+                return None
         cloned = [cls._clone_cache_object(c) for c in cache]
         if any(c is None for c in cloned):
             return None
@@ -673,6 +715,8 @@ class SingleBatchGenerator:
         image_grid_thw: Optional[list[Any]] = None,
         pixel_values_videos: Optional[list[Any]] = None,
         video_grid_thw: Optional[list[Any]] = None,
+        dsv41_vl_images: Optional[list[Any]] = None,
+        dsv41_vl_token_types: Optional[list[Any]] = None,
         gen_prompt_lens: Optional[list[int]] = None,
         stable_root_splits: Optional[list[int]] = None,
     ):
@@ -685,6 +729,8 @@ class SingleBatchGenerator:
         image_grid_thw = image_grid_thw or [None] * len(prompts)
         pixel_values_videos = pixel_values_videos or [None] * len(prompts)
         video_grid_thw = video_grid_thw or [None] * len(prompts)
+        dsv41_vl_images = dsv41_vl_images or [None] * len(prompts)
+        dsv41_vl_token_types = dsv41_vl_token_types or [None] * len(prompts)
         all_tokens = all_tokens or [[] for _ in prompts]
         samplers = samplers or [None] * len(prompts)
         logits_processors = logits_processors or [self.logits_processors] * len(prompts)
@@ -710,6 +756,8 @@ class SingleBatchGenerator:
             grid,
             pv_video,
             video_grid,
+            dsv41_images,
+            dsv41_ttypes,
             gen_prompt_len,
             stable_root_split,
         ) in zip(
@@ -724,6 +772,8 @@ class SingleBatchGenerator:
             image_grid_thw,
             pixel_values_videos,
             video_grid_thw,
+            dsv41_vl_images,
+            dsv41_vl_token_types,
             gen_prompt_lens,
             stable_root_splits,
         ):
@@ -749,6 +799,8 @@ class SingleBatchGenerator:
                 image_grid_thw=grid,
                 pixel_values_videos=pv_video,
                 video_grid_thw=video_grid,
+                dsv41_vl_images=dsv41_images,
+                dsv41_vl_token_types=dsv41_ttypes,
                 gen_prompt_len=int(gen_prompt_len or 0),
                 stable_root_split=int(stable_root_split or 0),
             )
@@ -759,8 +811,38 @@ class SingleBatchGenerator:
     def insert_segments(self, segments, *args, **kwargs):
         return self.insert([sum(seg, []) for seg in segments], *args, **kwargs)
 
-    def _model_call(self, tokens: list[int], req: _Request):
+    def _model_call(self, tokens: list[int], req: _Request, lookahead: Optional[list[int]] = None,
+                    prompt_end: Optional[int] = None):
         arr = mx.array([tokens], dtype=mx.int32)
+        # DeepSeek-V4.1 prefill: prompt_end (absolute cache position where this prefill ends) lets the
+        # late layers skip prompt rows the prefill's last token no longer reads (jang_tools.dsv41
+        # Model.prune_rows); the cache state at prompt_end is the same as a full prefill's.
+        dsv41_kw = {"prompt_end": prompt_end} if prompt_end is not None else {}
+        # DeepSeek-V4.1-Flash VL (text-routed): splice vision embeddings into the
+        # chunk that holds each image span. ImageInput.start is absolute in the
+        # full prompt while the model writes h[0, start:...] of THIS chunk, so
+        # pass only the images whose span lies inside the chunk, with chunk-
+        # relative starts (_dsv41_vl_chunk_len never lets a chunk split an
+        # image). The old code passed every image only on the pos==0 chunk, so
+        # an image after the first prefill chunk was dropped (or overran it).
+        # token_types is per-token and sliced to this chunk. Cleared once fully
+        # consumed so decode stays on the byte-identical text path.
+        if req.dsv41_vl_images is not None:
+            tt_full = req.dsv41_vl_token_types or []
+            pos = len(req.context_tokens)
+            end = pos + len(tokens)
+            tt_chunk = list(tt_full[pos:end])
+            imgs = self._dsv41_vl_chunk_images(req.dsv41_vl_images, pos, end)
+            if end >= len(tt_full) - 1:  # the final prompt token is never an image token
+                req.dsv41_vl_images = None
+                req.dsv41_vl_token_types = None
+            return self.model(
+                arr,
+                cache=req.cache,
+                images=imgs,
+                token_types=(tt_chunk or None),
+                **dsv41_kw,
+            )
         # M3 VL: vision tensors are present ONLY on the first prefill forward
         # (set by _start_request when req.pixel_values is not None). After this
         # single forward they are cleared so decode never re-passes them, leaving
@@ -794,7 +876,43 @@ class SingleBatchGenerator:
                 pixel_values_videos=pv_video,
                 video_grid_thw=video_grid,
             )
+        if (lookahead or dsv41_kw) and getattr(self.model, "model_type", None) == "deepseek_v41":
+            # DeepSeek-V4.1: the next prefill chunk's Engram rows (random SSD
+            # reads) are fetched while this chunk computes.
+            return self.model(arr, cache=req.cache, engram_lookahead=lookahead or None, **dsv41_kw)
         return self.model(arr, cache=req.cache)
+
+    @staticmethod
+    def _dsv41_vl_spans(images):
+        return [(int(img.start), int(img.start) + len(img.types)) for img in images or ()]
+
+    @classmethod
+    def _dsv41_vl_chunk_images(cls, images, pos: int, end: int):
+        """Images whose span lies in [pos, end), re-based to the chunk (start - pos)."""
+        import dataclasses
+
+        out = []
+        for img, (s, e) in zip(images or (), cls._dsv41_vl_spans(images)):
+            if pos <= s and e <= end:
+                out.append(dataclasses.replace(img, start=s - pos))
+            elif s < end and e > pos:
+                raise ValueError(
+                    f"DSV4.1 VL image span [{s}, {e}) straddles prefill chunk [{pos}, {end})"
+                )
+        return out or None
+
+    @classmethod
+    def _dsv41_vl_chunk_len(cls, req: "_Request", n: int) -> int:
+        """Shrink or extend a prefill chunk so it never splits an image span."""
+        images = getattr(req, "dsv41_vl_images", None)
+        if not images:
+            return n
+        pos = len(req.context_tokens)
+        end = pos + n
+        for s, e in cls._dsv41_vl_spans(images):
+            if s < end < e:
+                end = s if s > pos else e  # stop before the image, or take all of it
+        return max(1, end - pos)
 
     def _prefill(self, tokens: list[int], req: _Request) -> None:
         if not tokens:
@@ -826,9 +944,17 @@ class SingleBatchGenerator:
             and getattr(self.model, "model_type", None) == "naive_n05_flash"
         )
 
+        # DSV4.1: every chunk of this prefill knows where it ends (suffix pruning; logits are discarded).
+        _prompt_end = None
+        if getattr(self.model, "model_type", None) == "deepseek_v41" and req.cache:
+            _seq = getattr(req.cache[0], "_seq", None)
+            if _seq is not None:
+                _prompt_end = int(_seq.pos) + len(tokens)
         pos = 0
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
+            if req.dsv41_vl_images is not None:
+                n = min(self._dsv41_vl_chunk_len(req, n), len(tokens) - pos)
             chunk = tokens[pos : pos + n]
             if _phase_trace:
                 _chunk_t0 = time.perf_counter()
@@ -856,13 +982,25 @@ class SingleBatchGenerator:
             if _phase_trace:
                 _valve_done = time.perf_counter()
             with self._stream_context():
-                self._model_call(chunk, req)
+                self._model_call(
+                    chunk,
+                    req,
+                    lookahead=tokens[pos + n : pos + n + self.prefill_step_size],
+                    prompt_end=_prompt_end,
+                )
                 if getattr(self.model, "model_type", None) == "naive_n05_flash":
                     # synchronize only waits for submitted work; it does not
                     # evaluate the lazy cache graph. Realize native nested KV,
                     # indexer and rotating state before admitting another chunk.
                     # Keep this boundary on the generator's concrete stream.
                     mx.eval([entry.state for entry in req.cache])
+                elif getattr(self.model, "model_type", None) == "deepseek_v41":
+                    # Same reason for DSV4.1: without a per-chunk eval the whole prompt stays one lazy
+                    # graph and the clear_cache below frees nothing. Evaluate the 4-bit pools / window
+                    # / compressor state directly (no dequantized .state round-trip).
+                    from jang_tools.dsv41.dspark import _session_arrays
+
+                    mx.eval(_session_arrays(req.cache[0]._seq) if req.cache else [])
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
                     req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
@@ -1194,16 +1332,27 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+
+        def _chunk_len(at: int) -> int:
+            n = min(step, len(tokens) - at)
+            # Keep at least two tokens in the final chunk when possible so
+            # the final prompt token is not treated like a standalone decode
+            # step before the first sampled token.
+            if len(tokens) - (at + n) == 1 and n > 1:
+                n -= 1
+            return n
+
         with self._stream_context():
             while len(tokens) - pos > step:
-                n = min(step, len(tokens) - pos)
-                # Keep at least two tokens in the final chunk when possible so
-                # the final prompt token is not treated like a standalone decode
-                # step before the first sampled token.
-                if len(tokens) - (pos + n) == 1 and n > 1:
-                    n -= 1
+                n = _chunk_len(pos)
                 chunk = tokens[pos : pos + n]
-                logits = self._model_call(chunk, req)  # forwards+clears pixel_values
+                nxt = pos + n
+                lookahead = (
+                    tokens[nxt : nxt + _chunk_len(nxt)]
+                    if len(tokens) - nxt > step
+                    else tokens[nxt:]
+                )
+                logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
                 (logits,) = self._eval_on_stream(logits)
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
@@ -1310,6 +1459,7 @@ class SingleBatchGenerator:
                 req.mixed_swa_boundary = self._capture_mixed_swa_boundary(req)
         uses_openpangu = self._cache_uses_openpangu(req.cache)
         uses_glm5_next = self._cache_uses_glm5_next(req.cache)
+        uses_dsv41 = self._cache_uses_dsv41(req.cache)
         # openPangu and GLM each own a path-dependent native state unit. Capture
         # the immutable N-1 boundary BEFORE the final prompt token is consumed;
         # post-decode convolution/recurrent/indexer state cannot be rewound.
@@ -1341,6 +1491,9 @@ class SingleBatchGenerator:
             typed_prompt_snapshot = self._clone_admissible_prompt_cache_snapshot(
                 req.cache
             )
+        elif uses_dsv41:
+            # Exact N-1 boundary, captured before the final prompt token is fed (see helper).
+            typed_prompt_snapshot = self._clone_dsv41_prompt_boundary(req)
         last_token = int(req.prompt_tokens[-1])
         req.prompt_processed = True
         self._compute_next_from_input(req, last_token)
@@ -1352,7 +1505,7 @@ class SingleBatchGenerator:
         req.context_tokens.append(last_token)
         prompt_cache_snapshot = (
             typed_prompt_snapshot
-            if uses_openpangu or uses_glm5_next or typed_prompt_snapshot is not None
+            if uses_openpangu or uses_glm5_next or uses_dsv41 or typed_prompt_snapshot is not None
             else self._clone_admissible_prompt_cache_snapshot(req.cache)
         )
         req.prompt_cache_snapshot = prompt_cache_snapshot

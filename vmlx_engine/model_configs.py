@@ -803,6 +803,32 @@ def register_all(registry=None):
         )
     )
 
+    # ── DeepSeek V4.1-Flash (deepseek_v41) ── V4-family backbone + Engram taps
+    # + vision + dSpark MTP. Served through the validated jang_tools.dsv41
+    # runtime (loaders/load_jangtq_dsv41) on SingleBatchGenerator, or the DSpark
+    # generator for greedy requests when the bundle ships the draft. Cache:
+    # DeepseekV41Cache (4-bit compressed/index pools, exact N-1 prompt-boundary
+    # snapshots, bit-exact format-v2 serialization) on the DSV4 composite paged /
+    # SSD block store; not trimmable. CLI policy: cli._apply_dsv41_runtime_policy.
+    _register(
+        ModelConfig(
+            family_name="deepseek_v4_1",
+            model_types=["deepseek_v41"],
+            cache_type="kv",
+            eos_tokens=[
+                "<｜end▁of▁sentence｜>",
+                "<｜User｜>",
+                "<｜Assistant｜>",
+                "<｜latest_reminder｜>",
+            ],
+            tool_parser="deepseek_v41",
+            reasoning_parser="deepseek_r1",
+            think_in_template=True,
+            supports_thinking=True,
+            priority=20,
+        )
+    )
+
     # ── dots3-note (dots3_note) ── 280B/16B-active omni MoE (RedNote dots
     # studio), 512K ctx. Hybrid dual-geometry MLA: 13 full/DSA layers (128
     # heads, kv_lora 512) + 33 sliding layers (64 heads, kv_lora 1024,

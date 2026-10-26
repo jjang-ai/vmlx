@@ -459,6 +459,26 @@ class DSMLToolParser(ToolParser):
             return False
         return self._arguments_match_schema(decoded, schema)
 
+    def _canonical_encoding_module(self, request: Any | None):
+        """The bundle's canonical encoder module (``parse_message_from_completion_text``), or None.
+        DSV4: the encoding_dsv4.py located by loaders.dsv4_chat_encoder."""
+        try:
+            from vmlx_engine.loaders.dsv4_chat_encoder import (
+                _load_encoding_dsv4_module,
+            )
+        except Exception:
+            return None
+        try:
+            if isinstance(request, dict):
+                model_path = request.get("model_path")
+            else:
+                model_path = getattr(request, "model_path", None)
+            return _load_encoding_dsv4_module(
+                model_path=Path(model_path) if model_path else None
+            )
+        except Exception:
+            return None
+
     def _encoding_dsv4_parse_status(
         self,
         model_output: str,
@@ -472,21 +492,8 @@ class DSMLToolParser(ToolParser):
         the bytes or produced a non-actionable call.  That rejection is final;
         callers must not execute a regex-only interpretation.
         """
-        try:
-            from vmlx_engine.loaders.dsv4_chat_encoder import (
-                _load_encoding_dsv4_module,
-            )
-        except Exception:
-            return False, None
-        try:
-            if isinstance(request, dict):
-                model_path = request.get("model_path")
-            else:
-                model_path = getattr(request, "model_path", None)
-            enc = _load_encoding_dsv4_module(
-                model_path=Path(model_path) if model_path else None
-            )
-        except Exception:
+        enc = self._canonical_encoding_module(request)
+        if enc is None:
             return False, None
         parse_fn = getattr(enc, "parse_message_from_completion_text", None)
         if parse_fn is None:
@@ -503,7 +510,7 @@ class DSMLToolParser(ToolParser):
         # rely on catching TypeError and accidentally hiding a TypeError raised
         # *inside* the canonical parser.
         parser_text = model_output
-        canonical_tool_calls_open = f"<{DSML_PREFIX}tool_calls>"
+        canonical_tool_calls_open = self.TOOL_CALLS_OPEN
         if parser_text.startswith(canonical_tool_calls_open):
             # Server parse sites intentionally strip display/reasoning text.
             # The production encoder, however, recognizes a tool-call turn by

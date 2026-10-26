@@ -890,6 +890,8 @@ class Scheduler:
         # ZAYA's CCA CacheList are first-class typed cache contracts, not SSM
         # companion-cache rows.
         self._uses_dsv4_cache = self._model_uses_dsv4_cache(model)
+        # DSV4.1 rides the DSV4 composite store, but its per-layer class is DeepseekV41Cache.
+        self._uses_dsv41_cache = self._model_type_for_runtime == "deepseek_v41"
         self._uses_zaya_cache = (
             self._model_type_for_runtime == "zaya"
             or self._model_uses_zaya_cache(model)
@@ -1865,6 +1867,8 @@ class Scheduler:
                     if self._uses_openpangu_cache
                     else "MiniMaxM3SparseCache"
                     if self._uses_m3_msa_cache
+                    else "DeepseekV41Cache"
+                    if getattr(self, "_uses_dsv41_cache", False)
                     else None
                 ),
                 required_cache_classes=(
@@ -2096,8 +2100,23 @@ class Scheduler:
             logger.debug("Runtime cache layout logging skipped: %s", exc)
 
     @staticmethod
+    def _is_dsv4_model_class(cls: Any) -> bool:
+        """DSV4-Flash model class (jang_tools.dsv4.mlx_model, mlx_lm.models.deepseek_v4), never V4.1.
+
+        Matched on module path components: a bare "dsv4" substring also matches "dsv4_1" (V4.1 would
+        be routed onto the DSV4-composite generator with its hardcoded DeepseekV4Cache), and the
+        previous "deepseek_v4." substring missed "mlx_lm.models.deepseek_v4" (no trailing dot)."""
+        cls_name = (getattr(cls, "__name__", "") or "").lower()
+        mod_parts = set((getattr(cls, "__module__", "") or "").lower().split("."))
+        if mod_parts & {"dsv4_1", "deepseek_v41", "deepseek_v4_1"} or "deepseekv41" in cls_name:
+            return False
+        return bool(mod_parts & {"dsv4", "deepseek_v4"}) or "deepseekv4" in cls_name or cls_name == "dsv4"
+
+    @staticmethod
     def _is_dsv4_cache_class_name(class_name: str) -> bool:
-        return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
+        # DeepseekV41Cache is the V4.1 composite cache: same opaque state/meta_state/trim contract as
+        # DSV4, so it rides the DSV4 disk-only block-cache + prompt-boundary-snapshot reuse path.
+        return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache", "DeepseekV41Cache"}
 
     @staticmethod
     def _is_dsv4_cache_object(cache: Any) -> bool:
@@ -2153,6 +2172,11 @@ class Scheduler:
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
                 "Glm5KDACache",
                 "Glm5MLACache",
+                # DSV4.1 per-layer composite cache: MLA latent sliding-window KV +
+                # compressed-global pool + indexer state + Engram position. Not a
+                # KVCache subclass and not an SSM companion cache -- opaque
+                # state/meta_state/trim, like the openPangu/GLM5 composite caches.
+                "DeepseekV41Cache",
             }:
                 return False
             if cache_types and cache_types == kv_types:
@@ -3779,6 +3803,8 @@ class Scheduler:
         if float(sampling_params.temperature or 0.0) == 0.0:
             try:
                 setattr(sampler, "_vmlx_accepts_logits", True)
+                # Read only by the DSV4.1 DSpark generator: speculative verify is greedy-exact.
+                setattr(sampler, "_vmlx_greedy", True)
             except Exception:
                 pass
 
@@ -3833,15 +3859,7 @@ class Scheduler:
             # Sniff the model class name + module path. DSV4 model class
             # comes from jang_tools.dsv4.mlx_model.{Model,DeepseekV4Model}.
             _model_for_sniff = getattr(self.model, "_model", self.model)
-            _cls = type(_model_for_sniff)
-            _cls_name = _cls.__name__.lower()
-            _mod_name = (_cls.__module__ or "").lower()
-            _is_dsv4 = (
-                "dsv4" in _mod_name
-                or "deepseek_v4" in _mod_name
-                or "deepseekv4" in _cls_name
-                or "dsv4" in _cls_name
-            )
+            _is_dsv4 = Scheduler._is_dsv4_model_class(type(_model_for_sniff))
             if _is_dsv4:
                 from .utils.dsv4_batch_generator import DSV4BatchGenerator
                 logger.info(
@@ -3901,6 +3919,34 @@ class Scheduler:
                 return generator
         except Exception as _mtp_gen_err:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
+
+        if (
+            getattr(self.model, "_dspark", None) is not None
+            and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
+        ):
+            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode via the validated
+            # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
+            # only engages when a draft is present; the default AR path is never affected.
+            try:
+                from .utils.dsv41_dspark_generator import DSV41DSparkGenerator
+                logger.info("DSV4.1 dSpark draft attached — using DSV41DSparkGenerator (speculative decode)")
+                return DSV41DSparkGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=None,
+                    prefill_batch_size=1,
+                    completion_batch_size=1,
+                    prefill_step_size=self.config.prefill_step_size,
+                    prompt_snapshot_max_bytes=_prompt_snapshot_max_bytes,
+                    mixed_swa_boundary_capture=self._mixed_swa_inline_capture_wanted(),
+                    mixed_swa_capture_block_size=int(
+                        getattr(self.block_aware_cache, "block_size", 64) or 64
+                    ),
+                )
+            except Exception as _dspark_gen_err:
+                logger.warning("DSV4.1 dSpark generator init failed (%s); AR SingleBatchGenerator", _dspark_gen_err)
 
         if int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1:
             logger.info(
@@ -4030,6 +4076,12 @@ class Scheduler:
                 top_k=params.top_k,
                 seed=int(seed),
             )
+        if float(params.temperature or 0.0) == 0.0:
+            try:
+                # Seeded argmax is still argmax; read only by the DSV4.1 DSpark generator.
+                setattr(sampler, "_vmlx_greedy", True)
+            except Exception:
+                pass
         request._seeded_sampler = sampler
         return sampler
 
@@ -9086,6 +9138,30 @@ class Scheduler:
                 _cache_fallback_reason = "media_placeholders_outside_cached_prefix"
             if _m3vl_active and not _m3vl_cache_replay:
                 tokens_to_process = list(request.prompt_token_ids)
+            # DeepSeek-V4.1 VL with a media-salted prefix hit: the restored state already holds
+            # every image whose span ends inside the cached prefix. If ALL images are covered the
+            # tail is plain text (no vision tensors; DSpark-eligible). A span straddling the
+            # boundary cannot be resumed -> release the hit and prefill the whole prompt.
+            _dsv41_vl_covered = False
+            _dsv41_vl_imgs_req = getattr(request, "dsv41_vl_images", None)
+            if _dsv41_vl_imgs_req is not None and cache_to_use is not None:
+                _cached = max(0, int(getattr(request, "cached_tokens", 0) or 0))
+                _spans = [(int(i.start), int(i.start) + len(i.types)) for i in _dsv41_vl_imgs_req]
+                if _cached > 0 and all(e <= _cached for _, e in _spans):
+                    _dsv41_vl_covered = True
+                elif any(s < _cached < e for s, e in _spans):
+                    logger.info(
+                        "Request %s: DSV4.1 VL cached prefix ends inside an image span; "
+                        "releasing hit for a full vision prefill",
+                        request.request_id,
+                    )
+                    self._release_unusable_paged_hit(request)
+                    cache_to_use = None
+                    request.prompt_cache = None
+                    request.cached_tokens = 0
+                    request.remaining_tokens = request.prompt_token_ids
+                    tokens_to_process = list(request.prompt_token_ids)
+                    _cache_fallback_reason = "dsv41_vl_image_span_outside_cached_prefix"
 
             try:
                 try:
@@ -9162,10 +9238,11 @@ class Scheduler:
                             ]
                     else:
                         single_batch_cached_prefix: Optional[List[int]] = None
-                        if (
-                            cache_to_use is not None
-                            and self.batch_generator.__class__.__name__
-                            == "SingleBatchGenerator"
+                        if cache_to_use is not None and self.batch_generator.__class__.__name__ in (
+                            # The DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
+                            # the restored prefix as its context too (all_tokens / prefix store).
+                            "SingleBatchGenerator",
+                            "DSV41DSparkGenerator",
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)
@@ -9222,6 +9299,26 @@ class Scheduler:
                     if self._insert_accepts_gen_prompt_lens():
                         insert_kwargs["gen_prompt_lens"] = [
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
+                        ]
+                    # DeepSeek-V4.1-Flash VL (additive): attach the ImageInput
+                    # list + per-token token_types (full-prompt positions); the
+                    # generator splices each image into the chunk holding its
+                    # span. Skipped when a media-salted hit already covers every
+                    # image (the tail is text-only).
+                    _dsv41_imgs = getattr(request, "dsv41_vl_images", None)
+                    # isinstance, not an exact class-name match: the DSV4.1 DSpark
+                    # generator subclasses SingleBatchGenerator. The old name check
+                    # silently dropped the images whenever DSpark was on (default),
+                    # so the generator saw a text-only request and decoded the image
+                    # span without pixels ("red" image answered "White").
+                    if (
+                        _dsv41_imgs is not None
+                        and not _dsv41_vl_covered
+                        and isinstance(self.batch_generator, SingleBatchGenerator)
+                    ):
+                        insert_kwargs["dsv41_vl_images"] = [_dsv41_imgs]
+                        insert_kwargs["dsv41_vl_token_types"] = [
+                            getattr(request, "dsv41_vl_token_types", None)
                         ]
                     # Producer-side pp/s clock for generators that emit no
                     # usage.vmlx_prefill receipt of their own (stock mlx_lm
@@ -9321,6 +9418,15 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        # DSV4.1 VL: the cache-free retry prefills the whole prompt, so it must
+                        # carry every image (the cached attempt may have omitted covered ones).
+                        if getattr(request, "dsv41_vl_images", None) is not None and isinstance(
+                            self.batch_generator, SingleBatchGenerator
+                        ):
+                            insert_kwargs["dsv41_vl_images"] = [request.dsv41_vl_images]
+                            insert_kwargs["dsv41_vl_token_types"] = [
+                                getattr(request, "dsv41_vl_token_types", None)
+                            ]
                         request._vmlx_prefill_insert = (
                             time.perf_counter(),
                             len(tokens_to_process),
@@ -13235,6 +13341,8 @@ class Scheduler:
         )
         if generator_cls == "SingleBatchGenerator":
             generator_path = "single_active"
+        elif generator_cls == "DSV41DSparkGenerator":
+            generator_path = "dsv41_dspark"
         elif generator_cls == "DSV4BatchGenerator":
             generator_path = "dsv4"
         elif generator_cls == "BatchGenerator":
@@ -13341,7 +13449,7 @@ class Scheduler:
                     stats["batch_generator"].update(native_mtp_stats)
             except Exception as exc:
                 logger.debug("Native MTP telemetry snapshot unavailable: %s", exc)
-        elif generator_cls in {"SingleBatchGenerator", "DSV4BatchGenerator"}:
+        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
             stats["batch_generator"].update(
                 {
                     "prompt_snapshot_max_bytes": getattr(
@@ -13427,6 +13535,8 @@ class Scheduler:
             )
             if generator_cls == "SingleBatchGenerator":
                 engine_path = "single_active"
+            elif generator_cls == "DSV41DSparkGenerator":
+                engine_path = "dsv41_dspark"
             elif generator_cls == "DSV4BatchGenerator":
                 engine_path = "dsv4"
             elif generator_cls == "BatchGenerator":
@@ -13438,10 +13548,10 @@ class Scheduler:
             base["batch_generator"] = {
                 "class": generator_cls,
                 "path": engine_path,
-                "single_active_decode": engine_path == "single_active",
+                "single_active_decode": engine_path in {"single_active", "dsv41_dspark"},
                 "max_num_seqs": self.config.max_num_seqs,
             }
-            if generator_cls in {"SingleBatchGenerator", "DSV4BatchGenerator"}:
+            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
                 base["batch_generator"].update(
                     {
                         "prompt_snapshot_max_bytes": getattr(

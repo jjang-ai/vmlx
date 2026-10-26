@@ -1391,7 +1391,9 @@ class PrefixCacheManager:
 
 
 def _is_dsv4_cache_class(class_name: str) -> bool:
-    return (class_name or "") in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
+    # DeepseekV41Cache shares DSV4's composite opaque-state contract (see scheduler
+    # ._is_dsv4_cache_class_name): same block-store tag + reconstruct path.
+    return (class_name or "") in {"DeepseekV4Cache", "PoolQuantizedV4Cache", "DeepseekV41Cache"}
 
 
 def _is_minimax_m3_cache_class(class_name: str) -> bool:
@@ -8995,6 +8997,15 @@ class BlockAwarePrefixCache:
                             )
 
                             cache_cls = PoolQuantizedV4Cache
+                        elif class_name == "DeepseekV41Cache":
+                            # DSV4.1 composite cache: its ctor accepts the
+                            # sliding_window/compress_ratio kwargs below and its
+                            # state/meta_state setters are order-independent, so the
+                            # generic `else: cache.state=..; cache.meta_state=..` path
+                            # restores it correctly (no pool_quant / local_quant_meta).
+                            from jang_tools.dsv4_1.mlx_model import DeepseekV41Cache
+
+                            cache_cls = DeepseekV41Cache
 
                         # Both DeepseekV4Cache.state and
                         # PoolQuantizedV4Cache.storage_state retain the arrays
@@ -9064,6 +9075,21 @@ class BlockAwarePrefixCache:
                                 cache._vmlx_dsv4_keep = int(meta[0]) if meta else 0
                             except Exception:
                                 cache._vmlx_dsv4_keep = 0
+                        elif class_name == "DeepseekV41Cache":
+                            # Order-independent setters; a stale/foreign entry raises here.
+                            cache.state = state
+                            cache.meta_state = meta
+                            # Every DSV4.1 layer records the sequence position. It must equal
+                            # the token count this block table claims, or the restored state
+                            # sits at a different boundary than the key (the pre-fix N-under-
+                            # N-1 entries, a chain whose terminal state is from a shorter
+                            # entry). Feeding the tail onto it would shift every position.
+                            if int(cache.offset) != int(block_table.num_tokens):
+                                raise ValueError(
+                                    "DSV4.1 restored offset "
+                                    f"{int(cache.offset)} != block table "
+                                    f"{int(block_table.num_tokens)} tokens"
+                                )
                         else:
                             cache.state = state
                             try:

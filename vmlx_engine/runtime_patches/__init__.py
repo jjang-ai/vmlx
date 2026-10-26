@@ -15,6 +15,7 @@ never corrupts the bundle.
 Registered patches (auto-installed on ``import vmlx_engine.runtime_patches``):
   * ``kimi_k25_mla``          — Kimi K2.6 fp32 MLA L==1 SDPA cast
   * ``deepseek_v4_register``  — DSV4 mlx_lm.models.deepseek_v4 registration
+  * ``deepseek_v4_1_register`` — DSV4.1-Flash mlx_lm.models.deepseek_v41 registration
   * ``gemma4_vision``         — Gemma 4 mixed pixel_values list coercion
   * ``gemma4_processing``     — Gemma 4 tiny RGB image layout inference
 """
@@ -23,6 +24,7 @@ Registered patches (auto-installed on ``import vmlx_engine.runtime_patches``):
 # model load path walks config.json.model_type. Safe: each installer guards
 # against already-patched state internally.
 from . import deepseek_v4_register  # noqa: F401
+from . import deepseek_v4_1_register  # noqa: F401
 from . import gemma4_processing as _gemma4_processing
 from . import gemma4_vision as _gemma4_vision
 from . import kimi_k25_mla as _kimi_k25_mla

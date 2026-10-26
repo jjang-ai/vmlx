@@ -31,6 +31,7 @@ GENERIC_INDEX_TARGET_TOKENS = 262144
 DSV4_DEFAULT_TIMEOUT_SECONDS = 900
 _SLOW_FAMILY_TIMEOUTS = {
     "deepseek_v4": DSV4_DEFAULT_TIMEOUT_SECONDS,
+    "deepseek_v4_1": DSV4_DEFAULT_TIMEOUT_SECONDS,
     "minimax_m3": 900,
     "openpangu_v2": 900,
     # Hybrid SSM+attention families chunk their prefill, so a long prompt takes
@@ -833,6 +834,48 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
         "the DSV4 runtime wrapper before inference.",
         dsv4_pool_quant,
     )
+    return True, tuple(changes)
+
+
+def _apply_dsv41_runtime_policy(args, logger):
+    """DeepSeek-V4.1-Flash (family deepseek_v4_1) serve/bench gates.
+
+    V4.1 runs one sequence through the jang_tools.dsv41 runtime (SingleBatchGenerator / DSpark
+    generator over a path-dependent DeepseekV41Cache), so: one sequence, continuous batching on, no
+    generic KV quantization (the runtime keeps its own 4-bit pools), and no JIT / smelt / flash-MoE /
+    distributed / external drafter. The family is slow enough to need the long request timeout
+    (applied through _SLOW_FAMILY_TIMEOUTS). Does NOT apply any DSV4 (deepseek_v4) environment or
+    cache policy."""
+    changes = []
+    if getattr(args, "continuous_batching", True) is False:
+        args.continuous_batching = True
+        changes.append("continuous_batching=off->on")
+    if getattr(args, "max_num_seqs", 1) != 1:
+        changes.append(f"max_num_seqs={args.max_num_seqs}->1")
+        logger.warning(
+            "DSV4.1-Flash detected — overriding --max-num-seqs %s to 1: the runtime decodes one "
+            "sequence (SingleBatchGenerator / DSpark), mlx_lm BatchGenerator cannot drive DeepseekV41Cache.",
+            args.max_num_seqs,
+        )
+        args.max_num_seqs = 1
+    if getattr(args, "kv_cache_quantization", "none") not in (None, "none"):
+        changes.append(f"kv_quant={args.kv_cache_quantization}->none")
+        args.kv_cache_quantization = "none"
+        args.kv_cache_quantization_explicit = True
+    for flag, label in (("enable_jit", "enable_jit"), ("smelt", "smelt"), ("flash_moe", "flash_moe"),
+                        ("distributed", "distributed")):
+        if getattr(args, flag, False):
+            setattr(args, flag, False)
+            changes.append(f"{label}=off")
+            logger.warning("DSV4.1-Flash detected — ignoring --%s (unsupported for this runtime).",
+                           flag.replace("_", "-"))
+    if getattr(args, "speculative_model", None):
+        args.speculative_model = None
+        changes.append("speculative_model=off")
+        logger.warning("DSV4.1-Flash detected — ignoring --speculative-model; the bundle's own "
+                       "dSpark draft is used (VMLX_DSV41_DSPARK=0 disables it).")
+    if changes:
+        logger.info("DSV4.1-Flash runtime policy: %s", ", ".join(changes))
     return True, tuple(changes)
 
 
@@ -1940,6 +1983,8 @@ def serve_command(args):
             # (scheduler.py: deepseek_v4_v10_delta nested-state serialization) for
             # the mixed RotatingKVCache / DeepseekV4Cache layer layout. The default
             # path performs full prefill and does not publish reusable state.
+        elif _mc.family_name == "deepseek_v4_1":
+            _apply_dsv41_runtime_policy(args, logger)
         elif (
             _mc.family_name == "zaya"
             or getattr(_mc, "cache_subtype", None) == "zaya_cca"
@@ -2255,7 +2300,7 @@ def serve_command(args):
                         # Family-level exclusions (already hard-disabled JIT above
                         # for DSV4/M3, but be defensive: never default-on for them).
                         _excluded_family = _mc.family_name in {
-                            "deepseek_v4", "minimax_m3", "minimax_m3_vl",
+                            "deepseek_v4", "deepseek_v4_1", "minimax_m3", "minimax_m3_vl",
                             # openpangu_v2: dynamic DSA top-k + growing conv
                             # states — same mx.compile hazard class as M3 MSA
                             # (autodetect block above also forces JIT off).
@@ -3227,6 +3272,8 @@ def bench_command(args):
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
+        elif _mc.family_name == "deepseek_v4_1":
+            _apply_dsv41_runtime_policy(args, logger)
     except Exception as exc:
         logger.debug("Bench model runtime policy lookup failed: %s", exc)
 

@@ -667,9 +667,11 @@ def _record_metal_ws_model_baseline(reason: str = "model_loaded") -> None:
     # working set (115 GB on this box) and vmmap shows them NONVOL, so the OS
     # cannot reclaim them either. Advisory only -- this never refuses a request.
     try:
-        from vmlx_engine.mlx_memory import apply_serving_cache_limit
+        from vmlx_engine.mlx_memory import apply_serving_cache_limit, model_cache_limit_floor_bytes
 
-        apply_serving_cache_limit(int(active), mx=mx, log=logger)
+        apply_serving_cache_limit(
+            int(active), mx=mx, log=logger, floor_bytes=model_cache_limit_floor_bytes(_model_path)
+        )
     except Exception as exc:  # noqa: BLE001 - must never break model load
         logger.warning("Could not bound MLX allocator cache after load: %s", exc)
 
@@ -4219,6 +4221,29 @@ def _m3_vl_media_ok(engine) -> bool:
 def _m3_vl_image_ok(engine) -> bool:
     """Backward-compatible name for callers/tests from the image-only lane."""
     return _m3_vl_media_ok(engine)
+
+
+def _dsv41_vl_media_ok(engine) -> bool:
+    """True iff a gated DeepSeek-V4.1-Flash VL build is wired in the engine.
+
+    Additive + gated: lets image requests through the text-routed (is_mllm=False)
+    V4.1 path instead of being rejected, exactly like :func:`_m3_vl_media_ok`.
+    Returns False for every non-V4.1 model and for a V4.1 bundle with no vision
+    tower, so the existing reject behavior is unchanged there.
+    """
+    try:
+        from .models.deepseek_v4_1.dsv41_vl_preprocess import (
+            dsv41_vl_enabled,
+            is_dsv41_vl_model,
+        )
+    except Exception:
+        return False
+    if not dsv41_vl_enabled():
+        return False
+    model = getattr(engine, "_model", None)
+    if model is None:
+        return False
+    return is_dsv41_vl_model(model)
 
 
 def _messages_have_multimodal(messages) -> bool:
@@ -17860,6 +17885,7 @@ async def create_anthropic_message(
         _messages_have_multimodal(chat_req.messages)
         and not engine.is_mllm
         and not _m3_vl_media_ok(engine)
+        and not _dsv41_vl_media_ok(engine)
     ):
         _reject_unsupported_multimodal("/v1/messages")
 
@@ -18819,6 +18845,7 @@ async def ollama_chat(fastapi_request: Request):
         _messages_have_multimodal(chat_req.messages)
         and not engine.is_mllm
         and not _m3_vl_media_ok(engine)
+        and not _dsv41_vl_media_ok(engine)
     ):
         _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
@@ -21157,6 +21184,12 @@ async def create_chat_completion(
             m for m in _chat_requested_modalities
             if str(m).lower() not in ("image", "vision", "video")
         }
+    elif _chat_requested_modalities and _dsv41_vl_media_ok(engine):
+        # DeepSeek-V4.1-Flash VL (image-only) is served by the text-routed path.
+        _chat_requested_modalities = {
+            m for m in _chat_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _chat_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/chat/completions",
@@ -21220,7 +21253,12 @@ async def create_chat_completion(
     # text-only runtime — passing the modality set would instead let an omni
     # runtime that advertises audio return silently and drop the media.
     has_media = bool(images or videos) or bool(_chat_requested_modalities)
-    if has_media and not engine.is_mllm and not _m3_vl_media_ok(engine):
+    if (
+        has_media
+        and not engine.is_mllm
+        and not _m3_vl_media_ok(engine)
+        and not _dsv41_vl_media_ok(engine)
+    ):
         _reject_unsupported_multimodal("/v1/chat/completions")
 
     # Handle response_format - inject system prompt if needed
@@ -21463,6 +21501,18 @@ async def create_chat_completion(
     if has_media:
         chat_kwargs["images"] = images if images else None
         chat_kwargs["videos"] = videos if videos else None
+        if (
+            images
+            and not engine.is_mllm
+            and hasattr(engine, "_dsv41_vl_preprocess")  # the engine that pops this kwarg
+            and _dsv41_vl_media_ok(engine)
+        ):
+            # DeepSeek-V4.1 VL renders images in their ORIGINAL turns; the text route above
+            # stripped them out of `messages`, so hand the engine the client's placement.
+            chat_kwargs["_dsv41_vl_source_messages"] = [
+                m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else dict(m)
+                for m in request.messages
+            ]
     if request.image_token_budget:
         chat_kwargs["image_token_budget"] = request.image_token_budget
     # Video controls — passed regardless of has_media since MLLM models

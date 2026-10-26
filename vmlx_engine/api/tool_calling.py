@@ -492,7 +492,30 @@ def check_and_inject_fallback_tools(
             rendered_by_name[normalized["name"]] = normalized
         return bool(expected_by_name) and rendered_by_name == expected_by_name
 
-    _dsv4_has_native_tool_contract = _dsv4_has_exact_native_tool_contract()
+    def _dsv41_has_native_tool_contract() -> bool:
+        """DeepSeek-V4.1 renders tools via its own encoding.py render_tools (spaced
+        DSML tags: ``<｜DSML｜ calls>`` / `` invoke`` / `` parameter``, plus a
+        ``### Available Tool Schemas`` JSON block). Detect that native grammar so the
+        server does NOT prepend a generic fallback schema (which would make the model
+        emit a non-DSML call -> 422)."""
+        if not is_dsv4_prompt:
+            return False
+        frags = (
+            "## Tools",
+            "<｜DSML｜ calls>",
+            '<｜DSML｜ invoke name="$TOOL_NAME">',
+            '<｜DSML｜ parameter name="$PARAMETER_NAME" string="true|false">',
+            "### Available Tool Schemas",
+            "You MUST strictly follow the above defined tool name and parameter "
+            "schemas to invoke tool calls.",
+        )
+        if any(fragment not in instruction_prompt for fragment in frags):
+            return False
+        return bool(tool_names) and all(name in instruction_prompt for name in tool_names)
+
+    _dsv4_has_native_tool_contract = (
+        _dsv4_has_exact_native_tool_contract() or _dsv41_has_native_tool_contract()
+    )
 
     def _lfm2_has_exact_native_tool_schema() -> bool:
         """Validate Liquid's bounded native JSON catalog against this request."""

@@ -20,6 +20,7 @@ from .utils.terminal_persistence import (
     with_admission_wait as _with_admission_wait,
 )
 import asyncio
+import os
 import logging
 import time
 import uuid
@@ -444,6 +445,8 @@ class EngineCore:
         image_grid_thw: Optional[Any] = None,
         pixel_values_videos: Optional[Any] = None,
         video_grid_thw: Optional[Any] = None,
+        dsv41_vl_images: Optional[Any] = None,
+        dsv41_vl_token_types: Optional[Any] = None,
         prompt_token_ids: Optional[List[int]] = None,
         cache_extra_keys: Optional[Any] = None,
         dsv4_thinking_soft_cap: Optional[int] = None,
@@ -500,6 +503,37 @@ class EngineCore:
             request.pixel_values_videos = pixel_values_videos
         if video_grid_thw is not None:
             request.video_grid_thw = video_grid_thw
+
+        # DeepSeek-V4.1-Flash VL (text-routed, additive). The prompt_token_ids
+        # above already carry the expanded image spans; attach the ImageInput
+        # list + per-token token_types the generator splices per prefill chunk.
+        # Image spans are runs of one placeholder id, so token ids cannot tell
+        # two images apart: salt every cache key of this request with a hash of
+        # the pixels (like M3's media fingerprint). The same conversation (same
+        # images, more turns) then hits its own earlier prompt boundary, and a
+        # text-only or different-image prompt can never replay vision state.
+        # VMLX_DSV41_VL_PREFIX_CACHE=0 restores the old full bypass.
+        if dsv41_vl_images is not None:
+            request.dsv41_vl_images = dsv41_vl_images
+            request.dsv41_vl_token_types = dsv41_vl_token_types
+            _dsv41_salt = None
+            if os.environ.get("VMLX_DSV41_VL_PREFIX_CACHE", "1").strip().lower() not in {
+                "0", "false", "off", "no"
+            }:
+                try:
+                    from .models.deepseek_v4_1.dsv41_vl_preprocess import media_cache_extra_keys
+
+                    _dsv41_salt = media_cache_extra_keys(dsv41_vl_images)
+                except Exception as exc:  # never reuse unsalted vision state
+                    logger.warning("DSV4.1 VL media cache key failed (%s); bypassing prefix cache", exc)
+            if _dsv41_salt:
+                merged = dict(cache_extra_keys) if isinstance(cache_extra_keys, dict) else (
+                    {"request": repr(cache_extra_keys)} if cache_extra_keys is not None else {}
+                )
+                merged.update(_dsv41_salt)
+                cache_extra_keys = merged
+            else:
+                bypass_prefix_cache = True
 
         # MiniMax-M3 VL is text-routed, but its image/video placeholders are
         # content-dependent just like the generic MLLM path. Mix the shared

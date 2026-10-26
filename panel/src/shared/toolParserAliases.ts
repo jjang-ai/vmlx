@@ -23,6 +23,10 @@ const TOOL_PARSER_CANONICAL_ALIASES: Record<string, string> = {
   // glm47 arg_key/arg_value XML and the engine registers the literal name as
   // a glm47 alias. Canonicalize to a name every released engine also knows.
   glm_xml_args: 'glm47',
+  // DeepSeek-V4.1 uses the LEADING-SPACE DSML dialect (`<｜DSML｜ calls>`), parsed by the engine's
+  // deepseek_v41 parser (registered as deepseek_v41 / dsml_v41). The space-less `dsml` parser of the
+  // DSV4 family mis-parses it, so V4.1 must launch with the v41 parser.
+  dsml_v41: 'deepseek_v41',
 }
 
 export const TOOL_PARSERS_FOR_CLI = new Set([
@@ -46,6 +50,7 @@ export const TOOL_PARSERS_FOR_CLI = new Set([
   'gemma3n',
   'xml_function',
   'dsml',
+  'deepseek_v41',
   'zaya_xml',
   'hunyuan',
   'openpangu',

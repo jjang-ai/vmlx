@@ -933,6 +933,22 @@ class DiskCacheManager:
                                         state[2],
                                     )
                                 )
+                            elif c == "DeepseekV41Cache":
+                                # DSV4.1 composite cache: never rebuild it as an empty KVCache
+                                # (the model would then fall back to a stale shared session).
+                                # Stale (pre-v2) or malformed entries raise -> miss.
+                                try:
+                                    from jang_tools.dsv4_1.mlx_model import DeepseekV41Cache
+
+                                    cache.append(DeepseekV41Cache.from_state(state, meta_state))
+                                except Exception as exc:
+                                    logger.warning(
+                                        "Disk cache DeepseekV41Cache entry rejected (%s); treating as miss",
+                                        exc,
+                                    )
+                                    with self._stats_lock:
+                                        self.misses += 1
+                                    return None
                             else:
                                 import mlx_lm.models.cache as _cache_mod
                                 cls = getattr(_cache_mod, c, _KVC)

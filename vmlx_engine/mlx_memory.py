@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -220,6 +221,28 @@ def mlx_active_memory_bytes() -> int | None:
 _CACHE_LIMIT_FRACTION = 0.05
 _CACHE_LIMIT_FLOOR_BYTES = 512 * 1024 * 1024
 _CACHE_LIMIT_CEIL_BYTES = 4 * 1024 * 1024 * 1024
+
+# Some families need more allocator scratch than the generic bound to prefill at
+# speed. DeepSeek-V4.1-Flash: a 2048-token prefill chunk's transient buffers
+# exceed 4 GB, so under the generic bound the allocator frees and re-creates
+# Metal buffers inside every chunk. Measured on a 21k-token cold prompt (M5
+# Ultra): 4 GB bound 475 pp/s, 16 GB 769 pp/s, MLX default 772 pp/s. The engine
+# still clears the cache after every chunk, so the idle footprint is unchanged.
+_FAMILY_CACHE_LIMIT_FLOOR_BYTES = {
+    "deepseek_v41": 16 * 1024 * 1024 * 1024,
+}
+
+
+def model_cache_limit_floor_bytes(model_path: str | Path | None) -> int | None:
+    """Allocator-cache floor declared for the bundle's family (config model_type), or None."""
+    if model_path is None:
+        return None
+    try:
+        cfg = json.loads((Path(model_path) / "config.json").read_text())
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+    model_type = str(cfg.get("model_type") or "").lower()
+    return _FAMILY_CACHE_LIMIT_FLOOR_BYTES.get(model_type)
 
 
 def resolve_serving_cache_limit_bytes(
@@ -543,12 +566,15 @@ def apply_serving_cache_limit(
     *,
     mx: Any | None = None,
     log: logging.Logger | None = None,
+    floor_bytes: int | None = None,
 ) -> int | None:
     """Bound MLX's allocator cache for the serving path. Advisory, never fatal.
 
     Returns the limit applied, or None when the MLX build exposes no setter.
     ``VMLX_MLX_CACHE_LIMIT_MB`` overrides the computed value (0 = leave MLX's
-    default alone, for A/B measurement).
+    default alone, for A/B measurement). ``floor_bytes`` (a family floor, see
+    ``model_cache_limit_floor_bytes``) raises the computed default only, never
+    an explicit override.
     """
     active_log = log or logger
     if mx is None:
@@ -559,6 +585,8 @@ def apply_serving_cache_limit(
             return None
 
     limit = configured_serving_cache_limit_bytes(model_resident_bytes)
+    if limit is not None and floor_bytes and os.environ.get("VMLX_MLX_CACHE_LIMIT_MB") is None:
+        limit = max(int(limit), int(floor_bytes))
     if limit is None:
         active_log.info(
             "MLX allocator cache left at the MLX default "
