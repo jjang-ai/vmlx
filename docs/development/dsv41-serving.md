@@ -32,13 +32,27 @@ covers Engram I/O, the prefix-cache contract and measured results, and
   the GPU slows down (2048: 545 pp/s, 1024: 708). `VMLX_DSV41_DSPARK_PREFILL_STEP`
   overrides.
 
+## Decode
+
+- DSpark (`jang_tools.dsv41.dspark.DSparkRunner`) runs one verify forward per step. Partial accepts
+  are committed in place (`DSV41.commit_prefix`) rather than with a second forward, and a wall-clock
+  governor keeps every step at or above AR speed. Logits come from an fp32 LM-head input, as in the
+  reference; bf16 logits tied too often for greedy decoding to be stable.
+- Output equals greedy AR except at near-ties (AR top-2 margin below ~0.05): a multi-row verify and a
+  1-row decode differ in the last bits of the bf16 backbone.
+- `vmlx_engine/metal/row_exact_qmv.py` (row-exact multi-row QMV) works on MLX 0.32.4 but is not wired
+  for V4.1. Its verify cost is dominated by routed experts and attention, so it gave no measurable
+  speedup and does not make verify bit-identical to decode.
+- Serving decode (M5 Ultra, 256 tokens, thinking off): code 60.8, code2 51.1, structured 82.4,
+  prose 29.5 tok/s (AR ~30).
+
 ## Prefix cache
 
 - Prompt-boundary snapshots are taken at N-1 prompt tokens, before the last token, and
   reconstruction rejects a restored offset that disagrees with the block table.
 - Stored entries (RAM and block-disk L2) keep the compressed-KV pools in their 4-bit packed
-  form (format v2): ~0.9 KB/token plus ~5 MB of fixed windows, so ~0.9 GB for a 1M-token
-  entry. Older entries are rejected, never migrated. DSpark snapshots also carry the draft
+  form (format v2): measured 900 B/token marginal (12.0 / 33.1 / 117.5 MiB at 8k / 32k / 128k),
+  so ~0.89 GiB for a 1M-token entry, the same as the resident cache. Older entries are rejected, never migrated. DSpark snapshots also carry the draft
   windows' last 128 positions, so drafting after a hit starts with a full window.
 - VL requests salt their cache keys with a hash of the image pixels. A hit that covers every
   image leaves a text-only tail (DSpark eligible); a different image misses.
