@@ -1627,15 +1627,73 @@ def _canonicalize_mimo_v26_tool_history(messages: list[dict]) -> list[dict]:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+_CONTENTLESS_TURN_PROBE: dict = {}
+
+
+def _template_renders_contentless_assistant() -> bool:
+    """Whether every loaded chat renderer accepts an assistant turn with content "" and no tool call.
+
+    Read-only probe of the loaded renderers (the tokenizer's and, for a multimodal engine, the processor's, which
+    renders first there): user / assistant("") / user with thinking off and on. Mistral's template raises on that
+    turn, so it keeps the drop. A renderer that accepts it keeps the turn: dropping it merges the neighbouring user
+    turns, so the next prompt no longer extends the one already cached and the whole conversation re-prefills
+    (DeepSeek-V4.1 terminal-agent loop, 2026-10-26: the turn after a reasoning-only `length` reply re-prefilled
+    3.4k / 5.6k tokens, 5.4 / 9.1 s TTFT, against 1-4 s for every other turn). Cached per loaded template; no engine
+    or a failed probe keeps the drop (the previous behaviour).
+    """
+    eng = _engine
+    if eng is None:
+        return False
+    renderers = []
+    tok = getattr(eng, "tokenizer", None)
+    for candidate in (tok, getattr(tok, "_tokenizer", None), getattr(tok, "tokenizer", None)):
+        if candidate is not None and hasattr(candidate, "apply_chat_template"):
+            renderers.append(candidate)
+            break
+    processor = getattr(eng, "_processor", None) if getattr(eng, "_is_mllm", False) else None
+    if processor is not None and hasattr(processor, "apply_chat_template"):
+        renderers.append(processor)
+    if not renderers:
+        return False
+    key = tuple((id(r), hash(str(getattr(r, "chat_template", None)))) for r in renderers)
+    cached = _CONTENTLESS_TURN_PROBE.get(key)
+    if cached is not None:
+        return cached
+    probe = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "c"},
+    ]
+    renders = True
+    try:
+        from .utils.chat_template_kwargs import build_chat_template_kwargs, model_type_of
+
+        model_type = model_type_of(getattr(eng, "model", None))
+        for renderer in renderers:
+            for thinking in (False, True):
+                kwargs = build_chat_template_kwargs(enable_thinking=thinking, model_type=model_type)
+                if not isinstance(renderer.apply_chat_template(probe, **kwargs), str):
+                    renders = False
+    except Exception as exc:  # noqa: BLE001 - read-only probe; a refusal or failure keeps the drop
+        logger.debug("contentless assistant turn template probe failed: %s", exc)
+        renders = False
+    _CONTENTLESS_TURN_PROBE[key] = renders
+    logger.info("Chat template %s an empty non-tool assistant turn: such replayed turns are %s",
+                "renders" if renders else "refuses", "kept" if renders else "dropped")
+    return renders
+
+
 def _drop_contentless_assistant_turns(messages: list) -> list:
-    """Drop replayed assistant turns that carry neither text nor a tool call.
+    """Drop replayed assistant turns that carry neither text nor a tool call, when the template refuses them.
 
     A reply that spends its whole budget on reasoning finishes with `length`
     and an empty answer -- the never-empty contract permits that -- and
-    replaying it hands the chat template an assistant message it refuses to
+    replaying it hands the chat template an assistant message it may refuse to
     render (Mistral raises TemplateError; filling with "" is rejected exactly
-    like a missing key, verified against the real tokenizer). Dropping is the
-    honest repair; a tool-call-only turn is valid and left alone.
+    like a missing key, verified against the real tokenizer). For such a
+    template dropping is the honest repair; a tool-call-only turn is valid and
+    left alone. A template that renders the turn keeps it (content normalised
+    to ""), see _template_renders_contentless_assistant.
 
     Every dialect's request prep must call this: chat and /v1/responses build
     messages in separate functions, and Anthropic and streaming Ollama build
@@ -1647,16 +1705,20 @@ def _drop_contentless_assistant_turns(messages: list) -> list:
         # MiMo's native template accepts reasoning-only and empty assistant
         # turns. The Mistral compatibility workaround must not erase them.
         return messages
-    return [
-        _msg
-        for _msg in messages
-        if not (
+
+    def contentless(_msg) -> bool:
+        return (
             isinstance(_msg, dict)
             and _msg.get("role") == "assistant"
             and not _msg.get("content")
             and not _msg.get("tool_calls")
         )
-    ]
+
+    if not any(contentless(_msg) for _msg in messages):
+        return messages
+    if _template_renders_contentless_assistant():
+        return [dict(_msg, content="") if contentless(_msg) else _msg for _msg in messages]
+    return [_msg for _msg in messages if not contentless(_msg)]
 
 
 _PRIOR_REASONING_PROBE: dict = {}
@@ -1712,7 +1774,8 @@ def _strip_prior_reasoning_for_thinking_off(
 
     Chat, Responses, and Anthropic share this boundary. Preserve assistant
     tool-call anchors even when visible content is empty so following tool
-    results never become orphaned; drop only empty non-tool assistant turns.
+    results never become orphaned; drop empty non-tool assistant turns only
+    when the template refuses them (_template_renders_contentless_assistant).
     """
     from .models.mimo_v26_contract import read_mimo_v26_contract
     if read_mimo_v26_contract(_model_path or _model_name) is not None:
@@ -1746,9 +1809,9 @@ def _strip_prior_reasoning_for_thinking_off(
             or content == ""
             or (isinstance(content, list) and len(content) == 0)
         )
-        if empty_content and not has_tool_calls:
+        if empty_content and not has_tool_calls and not _template_renders_contentless_assistant():
             continue
-        if empty_content and has_tool_calls:
+        if empty_content:
             msg["content"] = ""
         cleaned.append(msg)
 
@@ -21242,13 +21305,13 @@ async def create_chat_completion(
     # string or a list of chunks in content or a list of tool calls") and the
     # caller gets a 500 for echoing back the turn we handed them.
     #
-    # DROP the turn rather than filling it. Setting content to "" does NOT work:
-    # Mistral's template rejects the empty string exactly as it rejects a missing
-    # key (verified by rendering both shapes through the real tokenizer). A turn
-    # that produced neither text nor a tool call carries no information, so
-    # dropping it is also the honest repair -- injecting a placeholder would put
-    # words in the assistant's mouth. Verified that the resulting consecutive
-    # user turns still render on Mistral, Qwen3.8, Nanbeige and Muse.
+    # For such a template DROP the turn rather than filling it. Setting content to
+    # "" does NOT work: Mistral's template rejects the empty string exactly as it
+    # rejects a missing key (verified by rendering both shapes through the real
+    # tokenizer). Injecting a placeholder would put words in the assistant's
+    # mouth. Verified that the resulting consecutive user turns still render on
+    # Mistral, Qwen3.8, Nanbeige and Muse. A template that renders the empty turn
+    # keeps it (content "") so the prompt still extends the cached one.
     #
     # A tool-call-only assistant turn is left alone: it is valid without content.
     messages = _drop_contentless_assistant_turns(messages)
@@ -23776,10 +23839,11 @@ def _responses_input_to_messages(
                 },
             )
 
-    # Drop assistant turns that carry neither text nor a tool call. A reply that
-    # spends its whole budget on reasoning finishes with `length` and an empty
-    # answer -- the never-empty contract permits that -- and replaying it hands
-    # the chat template an assistant message it refuses to render: Mistral's
+    # Drop assistant turns that carry neither text nor a tool call when the
+    # template refuses them. A reply that spends its whole budget on reasoning
+    # finishes with `length` and an empty answer -- the never-empty contract
+    # permits that -- and replaying it hands the chat template an assistant
+    # message it may refuse to render: Mistral's
     # raises TemplateError("Assistant message must have a string or a list of
     # chunks in content or a list of tool calls"), so the caller gets a 500 for
     # echoing back the turn we gave them.
