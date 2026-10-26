@@ -46,6 +46,11 @@ MAX_TENSOR_DIM = 65536 * 4  # 256K — defensive 4x
 # (batch, heads, seq, head_dim). State trees with >6 ndim are corruption.
 MAX_TENSOR_NDIM = 6
 
+# DeepSeek-V4 block-disk records name their nested state tensors layer_<i>_dsv4_state_<j>. Their rows grow
+# with the context (V4.1 pools / n-gram history: ~one row per token), so they are bounded by the cache offset
+# cap, as in validate_cache_record, instead of the generic 256K axis cap.
+_DSV4_STATE_HEADER_NAME = re.compile(r"^layer_\d+_dsv4_state_\d+$")
+
 _TQ_PACKED_HEADER_NAME = re.compile(
     r"^(?:tq_\d+|cl_\d+_\d+)_(?:ck|cv)_(?:indices_packed|qjl_packed)$"
 )
@@ -1744,9 +1749,10 @@ def validate_safetensors_header(
                 and len(shape) == 1
                 and _TQ_PACKED_HEADER_NAME.fullmatch(name) is not None
             )
-            if dim > MAX_TENSOR_DIM and not packed_tq_vector:
+            limit = MAX_CACHE_OFFSET if _DSV4_STATE_HEADER_NAME.fullmatch(name) else MAX_TENSOR_DIM
+            if dim > limit and not packed_tq_vector:
                 return False, (
-                    f"header entry {name!r}: dim[{axis}]={dim} > {MAX_TENSOR_DIM}"
+                    f"header entry {name!r}: dim[{axis}]={dim} > {limit}"
                 )
             n *= dim
         nbytes = n * bytes_per_elem
