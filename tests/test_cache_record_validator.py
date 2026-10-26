@@ -760,3 +760,27 @@ def test_plain_kv_keeps_generic_dim_cap_at_long_context():
         [("kv", bogus, _stub_tensor((1, 8, 64, 128)))], expected_num_layers=1, source="test:kv-cap",
     )
     assert not ok
+
+
+def test_header_validator_accepts_long_context_dsv4_state(tmp_path):
+    """A DeepSeek-V4.1 block-disk record of a 924k-token prompt carries ~924k-row state tensors
+    (pools / n-gram history). The 256K axis cap rejected it, so every SSD restore above ~262k tokens
+    was a full re-prefill; dsv4 state entries are bounded by the cache offset cap instead."""
+    from vmlx_engine.cache_record_validator import validate_safetensors_header, MAX_CACHE_OFFSET
+
+    rows = 923_823
+    nbytes = rows * 8
+    path = tmp_path / "dsv41_1m.safetensors"
+    _write_safetensors_header(path, {
+        "layer_0_dsv4_state_1": {"dtype": "I64", "shape": [rows], "data_offsets": [0, nbytes]},
+    }, total_data_size=nbytes)
+    ok, reason = validate_safetensors_header(str(path))
+    assert ok, reason
+
+    too_long = MAX_CACHE_OFFSET + 1
+    path2 = tmp_path / "dsv41_over.safetensors"
+    _write_safetensors_header(path2, {
+        "layer_0_dsv4_state_1": {"dtype": "U8", "shape": [too_long], "data_offsets": [0, too_long]},
+    }, total_data_size=too_long)
+    ok, reason = validate_safetensors_header(str(path2))
+    assert not ok and "dim" in reason.lower()
