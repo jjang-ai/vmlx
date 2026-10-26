@@ -33,6 +33,9 @@ covers Engram I/O, the prefix-cache contract and measured results, and
   overrides.
 - With the runtime's group-major `wo_a` (jangq 66966c2) served cold prefill with DSpark on is
   822 / 933 / 872 pp/s at 1.6k / 6.5k / 26.5k tokens.
+- Long context: the runtime's indexer uses this repo's `metal/dsa_index_scores.dsa_pool_index_scores`
+  kernel for prefill (optional import from jang_tools) plus a block top-k; to 100k tokens cold prefill
+  averages 821 pp/s, and the full 1M averages 332 pp/s.
 
 ## Decode
 
@@ -53,8 +56,8 @@ covers Engram I/O, the prefix-cache contract and measured results, and
 - Prompt-boundary snapshots are taken at N-1 prompt tokens, before the last token, and
   reconstruction rejects a restored offset that disagrees with the block table.
 - Stored entries (RAM and block-disk L2) keep the compressed-KV pools in their 4-bit packed
-  form (format v2): measured 900 B/token marginal (12.0 / 33.1 / 117.5 MiB at 8k / 32k / 128k),
-  so ~0.89 GiB for a 1M-token entry, the same as the resident cache. Older entries are rejected, never migrated. DSpark snapshots also carry the draft
+  form (format v2). Measured at a real 1M-token context: 905 MiB resident, 909 MiB stored
+  (949 MB; 905 B/token), the same as the resident cache. Older entries are rejected, never migrated. DSpark snapshots also carry the draft
   windows' last 128 positions, so drafting after a hit starts with a full window.
 - VL requests salt their cache keys with a hash of the image pixels. A hit that covers every
   image leaves a text-only tail (DSpark eligible); a different image misses.
