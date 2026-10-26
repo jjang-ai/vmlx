@@ -58,7 +58,14 @@ export function sanitizeOpenAiTokenPenaltyOverride(value: unknown): number | und
   return finiteInClosedRange(value, OPENAI_TOKEN_PENALTY_MIN, OPENAI_TOKEN_PENALTY_MAX)
 }
 
-export function shouldWarnDsv4TopP(family: unknown, topP: unknown): boolean {
+export function shouldWarnDsv4TopP(
+  family: unknown,
+  topP: unknown,
+  architectureHints?: Record<string, unknown> | null,
+): boolean {
+  // DeepSeek-V4.1 rides the deepseek-v4 family profile, but the 0.95 advice comes from DSV4-0731 looping
+  // measurements; V4.1's release default is top_p 1.0.
+  if (architectureHints?.deepseekVariant === 'v4.1') return false
   const number = finiteNumber(topP)
   return family === 'deepseek-v4' &&
     number != null &&

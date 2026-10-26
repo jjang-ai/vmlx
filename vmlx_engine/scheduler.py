@@ -610,6 +610,17 @@ def _native_mtp_spec_stats_for(uid) -> Optional[dict]:
     return None
 
 
+def _tag_sampling_params(sampler, params, seed=None) -> None:
+    """Record the mlx_lm make_sampler parameters on the sampler (read only by the DSV4.1 DSpark generator, whose sampled
+    speculation reproduces that sampler's distribution: temperature, then top_p / min_p / top_k on log-probabilities)."""
+    try:
+        setattr(sampler, "_vmlx_sampling", {
+            "temperature": float(params.temperature or 0.0), "top_p": float(params.top_p or 0.0),
+            "min_p": float(params.min_p or 0.0), "top_k": int(params.top_k or 0), "seed": seed})
+    except Exception:
+        pass
+
+
 @dataclass
 class SchedulerConfig:
     """Configuration for the scheduler."""
@@ -3807,6 +3818,8 @@ class Scheduler:
                 setattr(sampler, "_vmlx_greedy", True)
             except Exception:
                 pass
+        if not getattr(self, "_uses_m3_msa_cache", False):
+            _tag_sampling_params(sampler, sampling_params)
 
         # Build logits processors (e.g., repetition penalty).
         #
@@ -4082,6 +4095,7 @@ class Scheduler:
                 setattr(sampler, "_vmlx_greedy", True)
             except Exception:
                 pass
+        _tag_sampling_params(sampler, params, seed=int(seed))
         request._seeded_sampler = sampler
         return sampler
 

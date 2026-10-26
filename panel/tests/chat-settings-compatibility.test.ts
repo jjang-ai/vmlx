@@ -22,6 +22,9 @@ describe('chat settings cross-family compatibility warnings', () => {
     expect(shouldWarnDsv4TopP('deepseek-v4', 1)).toBe(true)
     expect(shouldWarnDsv4TopP('qwen3', 1)).toBe(false)
     expect(shouldWarnDsv4TopP('deepseek-v4', undefined)).toBe(false)
+    // DeepSeek-V4.1 rides the deepseek-v4 profile but its release default is top_p 1.0
+    expect(shouldWarnDsv4TopP('deepseek-v4', 1, { deepseekVariant: 'v4.1' })).toBe(false)
+    expect(shouldWarnDsv4TopP('deepseek-v4', 1, {})).toBe(true)
   })
 
   it('does not warn for empty chats', () => {
