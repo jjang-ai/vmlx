@@ -726,3 +726,37 @@ def test_header_validator_rejects_missing_file(tmp_path):
 if __name__ == "__main__":
     import sys as _sys
     _sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_dsv41_long_context_state_rows_accepted():
+    """DeepSeek-V4.1 pools and n-gram history hold ~one row per token: a 1M-token prefix entry
+    has ~1M-row state tensors. They must pass (a 256K per-dim cap turned every V4.1 entry above
+    ~262k tokens into a cache miss); the offset cap and byte caps still bound them."""
+    (validate_cache_record, _, _, _, MAX_TENSOR_DIM) = _import_validator()
+    from vmlx_engine.cache_record_validator import MAX_CACHE_OFFSET
+    rows = 923_823  # measured: a 924k-token DSV4.1 prompt
+    state = {
+        "compress_kv": _stub_tensor((1, rows, 64), itemsize=4),  # 4-bit packed rows
+        "compress_scales": _stub_tensor((1, rows, 8)),
+        "history": _stub_tensor((rows,), itemsize=8),
+    }
+    ok, reason, _ = validate_cache_record(
+        [("deepseek_v4", state, "{}", "DeepseekV4Cache", {"sliding_window": 128, "compress_ratio": 1})],
+        expected_num_layers=1, source="test:dsv41-1m",
+    )
+    assert ok, reason
+    too_long = {"compress_kv": _stub_tensor((1, MAX_CACHE_OFFSET + 1, 64), itemsize=4)}
+    ok, reason, _ = validate_cache_record(
+        [("deepseek_v4", too_long, "{}", "DeepseekV4Cache", {})],
+        expected_num_layers=1, source="test:dsv4-over-offset",
+    )
+    assert not ok and "dim" in reason.lower()
+
+
+def test_plain_kv_keeps_generic_dim_cap_at_long_context():
+    (validate_cache_record, _, _, _, MAX_TENSOR_DIM) = _import_validator()
+    bogus = _stub_tensor((1, 8, 923_823, 128))
+    ok, _, _ = validate_cache_record(
+        [("kv", bogus, _stub_tensor((1, 8, 64, 128)))], expected_num_layers=1, source="test:kv-cap",
+    )
+    assert not ok

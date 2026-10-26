@@ -89,8 +89,12 @@ def _validate_tensor(
     *,
     label: str,
     layer_idx: int,
+    max_dim: int = MAX_TENSOR_DIM,
 ) -> Tuple[bool, int, str]:
-    """Validate a single tensor's shape + byte size. Returns (ok, bytes, reason)."""
+    """Validate a single tensor's shape + byte size. Returns (ok, bytes, reason).
+
+    ``max_dim`` bounds every dimension; callers whose tensors legitimately grow with the
+    token count (DeepSeek-V4 compressed pools and n-gram history) pass a token-scale bound."""
     if t is None:
         return True, 0, ""
     shape = getattr(t, "shape", None)
@@ -105,9 +109,9 @@ def _validate_tensor(
         d = int(dim)
         if d < 0:
             return False, 0, f"layer {layer_idx} {label}: dim[{axis}]={d} < 0"
-        if d > MAX_TENSOR_DIM:
+        if d > max_dim:
             return False, 0, (
-                f"layer {layer_idx} {label}: dim[{axis}]={d} > {MAX_TENSOR_DIM}"
+                f"layer {layer_idx} {label}: dim[{axis}]={d} > {max_dim}"
             )
     nbytes = _tensor_byte_size(t)
     if nbytes > MAX_TENSOR_BYTES:
@@ -728,9 +732,14 @@ def validate_cache_record(
                     f"layer {i} 'deepseek_v4': len={len(entry)} < 2"
                 ), total_bytes
             # State is a nested tree (dict/list/tuple of tensors). Walk it.
+            # DeepSeek-V4 / V4.1 state rows grow with the context: the compressed-KV and index
+            # pools hold up to one row per token (V4.1 ratio-1 layers) and V4.1 carries the n-gram
+            # history, so a 1M-token entry has ~1M-row tensors. Bound them by the cache offset cap
+            # instead of the generic 256K per-dimension cap (which rejected every V4.1 prefix
+            # entry above ~262k tokens as a cache miss). Byte caps still apply.
             for j, t in enumerate(_walk_tensors(entry[1])):
                 ok, nb, reason = _validate_tensor(
-                    t, label=f"dsv4_state_t{j}", layer_idx=i
+                    t, label=f"dsv4_state_t{j}", layer_idx=i, max_dim=MAX_CACHE_OFFSET
                 )
                 if not ok:
                     return False, reason, total_bytes
