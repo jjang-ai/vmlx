@@ -156,12 +156,27 @@ def dsa_index_scores(q: mx.array, k: mx.array, w: mx.array, *, enabled: bool = T
     return _launch(q, k, w, H=H, L=L, D=D, Lk=Lk, qs_layout=False, k_axis=2, scale=None, fi=fi)
 
 
-def dsa_pool_index_scores(q: mx.array, pool_keys: mx.array, head_w: mx.array, scale: float, *, enabled: bool = True):
+def dsa_pool_index_scores(q: mx.array, pool_keys: mx.array, head_w: mx.array, scale: float, *, enabled: bool = True,
+                          bf16_operands: bool = False):
     """GLM-5.3 layout. q (1, S, H, D) fp32, pool_keys (1, P, D) fp32, head_w (1, S, H) fp32 -> (1, S, P) fp32 =
     sum_h head_w * relu((q . pool_key) * scale) — the indexer's pool scores before the visibility mask; None when not
-    admitted (same admission and tail padding as dsa_index_scores)."""
+    admitted (same admission and tail padding as dsa_index_scores).
+
+    bf16_operands=True: the caller states that q and pool_keys hold bf16 values (bf16 arrays, or fp32 arrays upcast
+    from bf16 — DeepSeek-V4.1 scores in bf16). The scores then run on the M5 matrix units (dsa_index_scores_mpp.py,
+    ~4x faster at 100k keys) when Metal 4 tensor ops are present and VMLX_DSA_MPP_INDEX is not 0; otherwise bf16
+    arrays are upcast (exactly) to fp32 for this kernel. Callers that leave it False (GLM-5.3, true fp32) keep this
+    kernel bit for bit."""
     if not enabled or mx.default_device() != mx.gpu or not mx.metal.is_available():
         return None
+    if bf16_operands:
+        from .dsa_index_scores_mpp import dsa_pool_index_scores_mpp
+        bf = lambda a: a if a.dtype == mx.bfloat16 else a.astype(mx.bfloat16)  # noqa: E731 - exact for bf16 values
+        out = dsa_pool_index_scores_mpp(bf(q), bf(pool_keys), head_w, scale)
+        if out is not None:
+            return out
+        f32 = lambda a: a if a.dtype == mx.float32 else a.astype(mx.float32)  # noqa: E731
+        q, pool_keys, head_w = f32(q), f32(pool_keys), f32(head_w)
     if q.ndim != 4 or pool_keys.ndim != 3 or head_w.ndim != 3:
         return None
     B, S, H, D = q.shape

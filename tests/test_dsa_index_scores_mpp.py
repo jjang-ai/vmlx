@@ -2,7 +2,8 @@
 
 out[s, p] = sum_h w[s, h] * relu(scale * q[s, h] . k[p]) from bf16 q / k with fp32 accumulation. For bf16-valued
 operands the products are exact in fp32, so the result must match an fp64 reference of the same bf16 values to fp32
-accumulation accuracy, keep clamped row / column tails right, and select the same top-512 pools as the fp32 kernel.
+accumulation accuracy, keep clamped row / column tails right, select the same top-512 pools as the fp32 kernel, and be
+reachable from dsa_pool_index_scores only when the caller states bf16 operands.
 """
 import numpy as np
 import pytest
@@ -100,6 +101,25 @@ def test_admission():
     assert M.dsa_pool_index_scores_mpp(q, k, w, 1.0, enabled=False) is None
     assert M.dsa_pool_index_scores_mpp(q[..., :120], k[..., :120], w, 1.0) is None               # D % 32
     assert M.dsa_pool_index_scores_mpp(mx.concatenate([q, q]), k, w, 1.0) is None                # batch 2
+
+
+def test_pool_index_scores_prefers_mpp_only_for_bf16_operands(monkeypatch):
+    q, k, w = _inputs(100, 999, seed=3)
+    qf, kf = q.astype(mx.float32), k.astype(mx.float32)
+    mpp = M.dsa_pool_index_scores_mpp(q, k, w, 1.0)
+    fp32 = dsa_pool_index_scores(qf, kf, w, 1.0)
+    # default (GLM-5.3): the fp32 kernel, bit for bit
+    assert mx.array_equal(dsa_pool_index_scores(qf, kf, w, 1.0), fp32).item()
+    # bf16 operands, as fp32 or bf16 arrays: the matrix-unit kernel
+    assert mx.array_equal(dsa_pool_index_scores(qf, kf, w, 1.0, bf16_operands=True), mpp).item()
+    assert mx.array_equal(dsa_pool_index_scores(q, k, w, 1.0, bf16_operands=True), mpp).item()
+    # VMLX_DSA_MPP_INDEX=0: the fp32 kernel (bf16 arrays upcast exactly)
+    monkeypatch.setenv("VMLX_DSA_MPP_INDEX", "0")
+    assert M.dsa_pool_index_scores_mpp(q, k, w, 1.0) is None
+    assert mx.array_equal(dsa_pool_index_scores(q, k, w, 1.0, bf16_operands=True), fp32).item()
+    assert mx.array_equal(dsa_pool_index_scores(qf, kf, w, 1.0, bf16_operands=True), fp32).item()
+    # disabled: the caller's stock path
+    assert dsa_pool_index_scores(q, k, w, 1.0, enabled=False, bf16_operands=True) is None
 
 
 def test_fp32_operands_rounded_to_bf16_stay_within_bf16_input_tolerance():
