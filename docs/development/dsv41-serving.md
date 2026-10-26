@@ -31,6 +31,8 @@ covers Engram I/O, the prefix-cache contract and measured results, and
   resident, a 2048-token chunk's working set exceeds Metal's recommended working set and
   the GPU slows down (2048: 545 pp/s, 1024: 708). `VMLX_DSV41_DSPARK_PREFILL_STEP`
   overrides.
+- With the runtime's group-major `wo_a` (jangq 66966c2) served cold prefill with DSpark on is
+  822 / 933 / 872 pp/s at 1.6k / 6.5k / 26.5k tokens.
 
 ## Decode
 
