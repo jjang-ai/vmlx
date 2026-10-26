@@ -5791,6 +5791,8 @@ _TOOL_CALL_MARKERS = [
     "<｜DSML｜tool",  # DSV4 can flush this short prefix before `_c...`
     "<｜DSML｜tool_c",  # DSV4 DSML wrapper prefix before inner invoke
     "<｜DSML｜invoke",  # DSV4 native tool-call format
+    "<｜DSML｜ calls",  # DSV4.1 native wrapper (V4.1 tag names carry a leading space)
+    "<｜DSML｜ invoke",  # DSV4.1 bare invoke
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
