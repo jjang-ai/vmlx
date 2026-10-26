@@ -3,6 +3,7 @@
 The vMLX panel's default chat wire is /v1/responses. Its media guard knew the M3-VL carve-out only, so a V4.1 VL
 build answered image turns with HTTP 400 "the loaded runtime is text-only" while /v1/chat/completions served them
 (live Electron run of the DeepSeek-V4.1 JANGHT bundle, 2026-10-26)."""
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -30,8 +31,8 @@ def _request(server_mod):
         {"type": "input_image", "image_url": RED}]}])
 
 
-@pytest.mark.asyncio
-async def test_responses_hands_dsv41_images_to_the_engine(tmp_path, monkeypatch):
+def test_responses_hands_dsv41_images_to_the_engine(tmp_path, monkeypatch):
+    # Plain asyncio.run: no async test plugin needed.
     from fastapi import Request
     from vmlx_engine import server
     (tmp_path / "config.json").write_text('{"model_type":"deepseek_v41"}')
@@ -41,7 +42,7 @@ async def test_responses_hands_dsv41_images_to_the_engine(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "get_engine", lambda: _engine(seen))
     monkeypatch.setattr(server, "_dsv41_vl_media_ok", lambda engine: True)
     with pytest.raises(Exception):
-        await server.create_response(_request(server), Request({"type": "http", "headers": []}))
+        asyncio.run(server.create_response(_request(server), Request({"type": "http", "headers": []})))
     assert seen, "the request never reached the engine"
     kw = seen[0]
     assert kw.get("images") and len(kw["images"]) == 1
@@ -50,8 +51,7 @@ async def test_responses_hands_dsv41_images_to_the_engine(tmp_path, monkeypatch)
     assert all(not isinstance(m.get("content"), list) for m in kw["messages"])  # text route
 
 
-@pytest.mark.asyncio
-async def test_responses_still_rejects_images_on_text_only_runtime(tmp_path, monkeypatch):
+def test_responses_still_rejects_images_on_text_only_runtime(tmp_path, monkeypatch):
     from fastapi import HTTPException, Request
     from vmlx_engine import server
     (tmp_path / "config.json").write_text('{"model_type":"deepseek_v41"}')
@@ -61,5 +61,5 @@ async def test_responses_still_rejects_images_on_text_only_runtime(tmp_path, mon
     monkeypatch.setattr(server, "get_engine", lambda: _engine(seen))
     monkeypatch.setattr(server, "_dsv41_vl_media_ok", lambda engine: False)
     with pytest.raises(HTTPException) as err:
-        await server.create_response(_request(server), Request({"type": "http", "headers": []}))
+        asyncio.run(server.create_response(_request(server), Request({"type": "http", "headers": []})))
     assert err.value.status_code == 400 and not seen
