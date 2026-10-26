@@ -34,8 +34,10 @@ covers Engram I/O, the prefix-cache contract and measured results, and
 - With the runtime's group-major `wo_a` (jangq 66966c2) served cold prefill with DSpark on is
   822 / 933 / 872 pp/s at 1.6k / 6.5k / 26.5k tokens.
 - Long context: the runtime's indexer uses this repo's `metal/dsa_index_scores.dsa_pool_index_scores`
-  kernel for prefill (optional import from jang_tools) plus a block top-k; to 100k tokens cold prefill
-  averages 821 pp/s, and the full 1M averages 332 pp/s.
+  for prefill (optional import from jang_tools) with `bf16_operands=True`, which runs
+  `metal/dsa_index_scores_mpp.py` on the M5 matrix units (~4.3x the fp32 simdgroup kernel; falls back
+  to it elsewhere), plus a block top-k for prefill rows. Cold prefill to 100k averages 884 pp/s (88–100k
+  window 910). `bf16_operands` is opt-in, so GLM-5.3 and other callers are unchanged.
 
 ## Decode
 
