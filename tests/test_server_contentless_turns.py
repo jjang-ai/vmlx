@@ -122,3 +122,74 @@ def test_responses_chain_replay_drops_the_stored_reasoning_only_turn():
         with server._responses_history_lock:
             server._responses_history.pop("resp_test_f2", None)
             server._responses_was_reasoning_only.discard("resp_test_f2")
+
+
+class _Renderer:
+    """A chat renderer that refuses (Mistral-style) or renders an empty assistant turn."""
+
+    def __init__(self, refuses: bool, template: str = "t"):
+        self.refuses = refuses
+        self.chat_template = template
+        self.calls = 0
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.calls += 1
+        out = []
+        for m in messages:
+            if m["role"] == "assistant" and not m.get("content") and not m.get("tool_calls"):
+                if self.refuses:
+                    raise ValueError("Assistant message must have a string or a list of chunks in content")
+            out.append(f"<{m['role']}>{m.get('content', '')}")
+        return "".join(out) + "<assistant>"
+
+
+class _Engine:
+    def __init__(self, tokenizer, processor=None):
+        self.tokenizer = tokenizer
+        self._processor = processor
+        self._is_mllm = processor is not None
+        self.model = None
+
+
+def _with_engine(monkeypatch, engine):
+    import vmlx_engine.server as server
+
+    monkeypatch.setattr(server, "_engine", engine)
+    monkeypatch.setattr(server, "_CONTENTLESS_TURN_PROBE", {}, raising=False)
+    return server
+
+
+HISTORY = [
+    {"role": "user", "content": "find the logs"},
+    {"role": "assistant"},  # a reasoning-only `length` reply, content dropped by model_dump(exclude_none)
+    {"role": "user", "content": "run one more command"},
+]
+
+
+def test_template_that_refuses_the_empty_turn_keeps_the_drop(monkeypatch):
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=True)))
+    assert server._drop_contentless_assistant_turns(HISTORY) == [HISTORY[0], HISTORY[2]]
+
+
+def test_template_that_renders_the_empty_turn_keeps_it_so_the_prompt_extends_the_cached_one(monkeypatch):
+    tok = _Renderer(refuses=False)
+    server = _with_engine(monkeypatch, _Engine(tok))
+    kept = server._drop_contentless_assistant_turns(HISTORY)
+    assert kept == [HISTORY[0], {"role": "assistant", "content": ""}, HISTORY[2]]
+    assert HISTORY[1] == {"role": "assistant"}, "the caller's message must not be mutated"
+    # The kept history renders as the previous prompt plus the new turns: the prefix cache can extend it.
+    previous = tok.apply_chat_template(HISTORY[:1])[: -len("<assistant>")]
+    assert tok.apply_chat_template(kept).startswith(previous + "<assistant>")
+    calls = tok.calls
+    server._drop_contentless_assistant_turns(HISTORY)
+    assert tok.calls == calls, "the probe is cached per template"
+
+
+def test_multimodal_engine_drops_when_its_processor_refuses(monkeypatch):
+    server = _with_engine(monkeypatch, _Engine(_Renderer(refuses=False), processor=_Renderer(refuses=True)))
+    assert server._drop_contentless_assistant_turns(HISTORY) == [HISTORY[0], HISTORY[2]]
+
+
+def test_no_engine_keeps_the_drop(monkeypatch):
+    server = _with_engine(monkeypatch, None)
+    assert server._drop_contentless_assistant_turns(HISTORY) == [HISTORY[0], HISTORY[2]]
