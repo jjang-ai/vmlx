@@ -144,6 +144,12 @@ def _mlx_qmv_header() -> str | None:
 
 def _traversal_matches(impl: str) -> bool:
     compact = re.sub(r"\s+", " ", impl)
+    # MLX 0.32.4 generalized `bits == 2 ? 1 : 2` to `bits <= 2 ? 1 : 2` (1-bit support); identical for
+    # the 2..8-bit weights this kernel admits. Strip the trailing comment it carries before matching.
+    compact = re.sub(r"//[^;{}]*?(?= constexpr)", "", compact)
+    if "constexpr int packs_per_thread = bits <= 2 ? 1 : 2;" in compact:
+        compact = compact.replace("constexpr int packs_per_thread = bits <= 2 ? 1 : 2;",
+                                  "constexpr int packs_per_thread = bits == 2 ? 1 : 2;")
     needles = (
         "constexpr int packs_per_thread = bits == 2 ? 1 : 2;",
         "constexpr int num_simdgroups = 2;",
