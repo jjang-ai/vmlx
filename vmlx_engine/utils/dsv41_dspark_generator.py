@@ -9,8 +9,10 @@ validated ``jang_tools.dsv41.dspark.DSparkRunner.stream`` generator on ``model.r
 its own runtime ``Session`` + checkpoint/restore and the no-refeed fast path — DECODE_DSPARK_METHODS
 M1). Output is token-identical to plain greedy; speculation only changes throughput (code ~1.9x).
 
-Greedy text only: a request carrying vision tensors, a non-greedy sampler, logits processors or a
-logprobs request falls back to the inherited AR path (per request), so those turns serve correctly.
+Text requests, greedy or sampled: a temperature > 0 request runs exact sampled speculation
+(jang_tools.dsv41.dspark.SpecSampler: the AR sampler's temperature / top_p / min_p / top_k distribution,
+position-keyed Gumbel noise, coupled drafting). A request carrying vision tensors, logits processors (repetition /
+frequency / presence penalty, logit_bias) or a logprobs request falls back to the inherited AR path (per request).
 """
 
 from __future__ import annotations
@@ -92,8 +94,31 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             return False
         return True
 
+    def _spec_sampler(self, req):
+        """(ok, SpecSampler | None): greedy -> (True, None); a temperature > 0 sampler built by the scheduler's
+        make_sampler (tagged _vmlx_sampling) without logits processors / logprobs -> (True, SpecSampler);
+        anything else -> (False, None), the AR path."""
+        if self._is_greedy(req):
+            return True, None
+        if os.environ.get("VMLX_DSV41_DSPARK_SAMPLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return False, None
+        sampler = req.sampler or self.sampler
+        spec = getattr(sampler, "_vmlx_sampling", None)
+        if not isinstance(spec, dict) or not float(spec.get("temperature", 0.0)) > 0:
+            return False, None
+        if req.logits_processors or self._logprobs_required(req):
+            return False, None
+        from jang_tools.dsv41.dspark import SpecSampler
+
+        return True, SpecSampler(spec["temperature"], top_p=spec.get("top_p", 0.0), min_p=spec.get("min_p", 0.0),
+                                 top_k=spec.get("top_k", 0), seed=spec.get("seed"))
+
     def _use_dspark(self, req) -> bool:
-        return self._runner is not None and not self._is_vl(req) and self._is_greedy(req)
+        if self._runner is None or self._is_vl(req):
+            return False
+        ok, sampler = self._spec_sampler(req)
+        req._dspark_sampler = sampler
+        return ok
 
     # --- decode override ------------------------------------------------------
     def _start_request(self, req) -> Response:
@@ -145,7 +170,7 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         req._dspark_stats = {}
         req._dspark_stream = self._runner.decode_stream(
             sess, pending, c, req.max_tokens, eos_ids=set(t for t in self.stop_tokens if isinstance(t, int)),
-            stats=req._dspark_stats,
+            stats=req._dspark_stats, sampler=getattr(req, "_dspark_sampler", None),
         )
         req._dspark_on = True
         req.next_token = self._pull(req)  # first committed token (int) or None
