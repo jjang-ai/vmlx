@@ -86,6 +86,11 @@ Each item removes a measured cause of slowness; jangq `RUNTIME_SERVING.md` opens
   form (format v2). Measured at a real 1M-token context: 905 MiB resident, 909 MiB stored
   (949 MB; 905 B/token), the same as the resident cache. Older entries are rejected, never migrated. DSpark snapshots also carry the draft
   windows' last 128 positions, so drafting after a hit starts with a full window.
+- Long prompts: `deepseek_v4` state tensors are bounded by the cache offset cap (2M rows), not the generic 256K
+  per-dimension cap, in both the record validator (#332) and the SSD header validator (#334). Before, every V4.1
+  entry above ~262k tokens was rejected and re-prefilled. Measured on a 924k-token prompt: cold 1352 s; repeat from
+  RAM 5.8 s (923,823 cached); after a server restart, from SSD 6.5 s (3,609 blocks, 849 MB on disk); same answer in
+  all three. The persist at 1M takes ~3.9 s in the background.
 - VL requests salt their cache keys with a hash of the image pixels. A hit that covers every
   image leaves a text-only tail (DSpark eligible); a different image misses.
   `VMLX_DSV41_VL_PREFIX_CACHE=0` restores the old bypass.
