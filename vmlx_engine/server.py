@@ -4348,6 +4348,9 @@ def _responses_modalities_unsupported_after_m3_vl_carveout(
     engine,
     modalities: set[str],
 ) -> set[str]:
+    if modalities and _dsv41_vl_media_ok(engine):
+        # DeepSeek-V4.1 VL: images only, served on the text route (same gate as /v1/chat/completions).
+        return {m for m in modalities if str(m).lower() not in ("image", "vision")}
     if not modalities or not _m3_vl_media_ok(engine):
         return set(modalities or set())
     return {
@@ -24674,10 +24677,19 @@ async def create_response(
             "/v1/responses",
             _responses_requested_modalities,
         )
+    # DeepSeek-V4.1 VL (text-routed, image-only): the panel's default wire is /v1/responses, which
+    # rejected V4.1 images as "text-only" while /v1/chat/completions served them.
+    _dsv41_resp_vl = bool(
+        _responses_has_media
+        and not engine.is_mllm
+        and _dsv41_vl_media_ok(engine)
+        and _normalize_modality_set(_responses_input_requested_modalities(request.input)) <= {"image", "vision"}
+    )
     if (
         _responses_has_media
         and not engine.is_mllm
         and _loaded_omni_modalities() is None
+        and not _dsv41_resp_vl
         and not _m3_vl_response_media_supported(
             engine,
             _responses_input_requested_modalities(request.input),
@@ -24692,7 +24704,7 @@ async def create_response(
     # picks up multimodal content at request time — so we must preserve the array
     # for omni bundles too, otherwise input_image gets collapsed to text and the
     # encoder never sees the image.
-    _preserve_mm = bool(engine.is_mllm)
+    _preserve_mm = bool(engine.is_mllm) or _dsv41_resp_vl
     _native_omni_resp = False
     if not _preserve_mm:
         _resp_modalities_for_preserve = _responses_input_requested_modalities(request.input)
@@ -24847,6 +24859,16 @@ async def create_response(
         "top_p": _resolve_top_p(request.top_p, request.model),
         "max_prompt_tokens": _responses_max_prompt_tokens,
     }
+    if _dsv41_resp_vl:
+        # Same hand-off as /v1/chat/completions: text messages with the images extracted, the images, and the
+        # client's messages with the image parts in place (the V4.1 encoder renders each image in its own turn).
+        _dsv41_src = [dict(m) for m in messages]
+        messages, _dsv41_imgs, _ = extract_multimodal_content(
+            messages, preserve_native_format=engine.preserve_native_tool_format
+        )
+        if _dsv41_imgs and hasattr(engine, "_dsv41_vl_preprocess"):
+            chat_kwargs["images"] = _dsv41_imgs
+            chat_kwargs["_dsv41_vl_source_messages"] = _dsv41_src
     if request.seed is not None:
         chat_kwargs["seed"] = request.seed
     _response_text_format = None
