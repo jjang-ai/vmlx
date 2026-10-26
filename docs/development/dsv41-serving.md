@@ -38,6 +38,13 @@ covers Engram I/O, the prefix-cache contract and measured results, and
   `metal/dsa_index_scores_mpp.py` on the M5 matrix units (~4.3x the fp32 simdgroup kernel; falls back
   to it elsewhere), plus a block top-k for prefill rows. Cold prefill to 100k averages 884 pp/s (88–100k
   window 910). `bf16_operands` is opt-in, so GLM-5.3 and other callers are unchanged.
+- Prompt-suffix pruning: `SingleBatchGenerator._prefill` passes every chunk the absolute cache position
+  where that prefill call ends (`_model_call(..., prompt_end=)`, DSV4.1 only), and the runtime's layers
+  21-39 run only the trailing rows the prefill's last token still reads (jangq `Model.prune_rows`). The
+  cache at that position, and so the N-1 snapshot, matches a full prefill. Cold prefill without the
+  draft: 8k / 32k / 100k 1452 / 1641 / 1584 pp/s (875 at 100k without). `VMLX_DSV41_SUFFIX_PRUNE=0`
+  disables it in the runtime.
+- Served cold prefill with DSpark on (2026-10-26): 845 / 1331 / 1554 pp/s at 1.6k / 6.5k / 26.5k.
 
 ## Decode
 
@@ -50,8 +57,11 @@ covers Engram I/O, the prefix-cache contract and measured results, and
 - `vmlx_engine/metal/row_exact_qmv.py` (row-exact multi-row QMV) works on MLX 0.32.4 but is not wired
   for V4.1. Its verify cost is dominated by routed experts and attention, so it gave no measurable
   speedup and does not make verify bit-identical to decode.
-- Serving decode (M5 Ultra, 256 tokens, thinking off): code 60.8, code2 51.1, structured 82.4,
-  prose 29.5 tok/s (AR ~30).
+- The runtime's fused decode kernels (jangq `metal_decode.py`: per-layer async eval, bf16 router GEMV,
+  2-dispatch MoE, fused hyper-connection stage; bit-exact, `VMLX_DSV41_{LAYER_ASYNC,ROUTER_GEMV,FUSED_MOE,FUSED_HC}=0`
+  disable) cover decode and DSpark verify rows. AR decode 29.0 -> 39.2 tok/s at 2k context, 26.0 -> 34.3 at 100k.
+- Serving decode (M5 Ultra, 256 tokens, thinking off, 2026-10-26): code 90.2, code2 62.3, structured 111.9,
+  prose 38.7 tok/s; TTFT 0.21-0.46 s.
 
 ## Prefix cache
 
