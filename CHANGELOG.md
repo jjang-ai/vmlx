@@ -4,6 +4,17 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.82] - 2026-10-27
+
+- Add DeepSeek-V4.1-Flash-1017 serving for compatible JANG affine and JANGHT bundles, with native Engram, image inputs, DSML tool calls and model-derived sampling defaults.
+- Route V4.1 reasoning effort through its numeric budget contract across the chat APIs, and preserve tool-result and empty assistant history boundaries.
+- Enable compatible bundled DSpark drafts with adaptive greedy or sampled decoding; image turns, unsupported processors and logprobs use ordinary decoding.
+- Preserve V4.1 prompt-boundary state in RAM and paged SSD caches, including compact 4-bit pools and long-context disk records. Report prefill progress during DSpark requests.
+- Include the matching JANG 2.5.51 runtime and V4.1 decode/prefill kernels. Performance depends on bundle, hardware, context and sampling; no universal speedup is claimed.
+- Refresh adaptive DFlash ordinary-decoding baselines and validate compatible bundled affine drafts before selection. Preserve request cache-bypass settings and shared chat selection.
+- Restore the architecture-hint type used by chat settings.
+- Release validation uses focused model-free checks and package inspection. No models were downloaded or loaded for this checkpoint; new full-model runtime qualification was not performed.
+
 ## [1.6.81] - 2026-10-20
 
 - Let native MTP, DFlash2 and DSpark choose draft work adaptively within their verified limits. Treat bundle and tuning depths as starting points, with measured ordinary-decoding fallback and re-entry.

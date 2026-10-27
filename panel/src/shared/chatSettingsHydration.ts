@@ -23,6 +23,7 @@ export interface ChatSettingsGenerationDefaults {
 
 export interface ChatSettingsDetectedConfig {
   family?: string
+  architectureHints?: Record<string, string | number | boolean>
   toolParser?: string
   reasoningParser?: string
   supportsThinking?: boolean
