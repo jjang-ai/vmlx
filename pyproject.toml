@@ -276,4 +276,4 @@ constraint-dependencies = [
 
 # Pin the JANG source for reproducible runtime and quantization tools (jangq main with the DeepSeek-V4.1 runtime: #30, #32).
 [tool.uv.sources]
-jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "f7849d4e8ef91840fd009304fa38dbc940b4ccca", subdirectory = "jang-tools" }
+jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "64231a4144d024a044e5359c77f5be4713080e9a", subdirectory = "jang-tools" }
