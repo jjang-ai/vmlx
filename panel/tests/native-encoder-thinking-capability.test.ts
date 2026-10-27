@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
@@ -31,6 +31,16 @@ describe('native encoder thinking capability', () => {
       encoder, reasoning: { supported: true, modes },
     } }))
     expect(detectModelConfigFromDir(dir).honorsEnableThinking).toBe(false)
+  })
+  it('exposes DSV4.1 thinking through the bundle encoder, with no Jinja template', () => {
+    const dir = bundle('deepseek_v41', { tokenizer_class: 'PreTrainedTokenizerFast' })
+    mkdirSync(join(dir, 'encoding'))
+    writeFileSync(join(dir, 'encoding', 'encoding.py'), 'def encode_messages(messages, thinking_mode): ...\n')
+    expect(detectModelConfigFromDir(dir)).toMatchObject({ honorsEnableThinking: true, supportsThinking: true,
+      reasoningParser: 'deepseek_r1', toolParser: 'deepseek_v41' })
+  })
+  it('keeps DSV4.1 without its encoder on template evidence', () => {
+    expect(detectModelConfigFromDir(bundle('deepseek_v41', {})).honorsEnableThinking).toBe(false)
   })
   it('preserves genuine template support', () => {
     expect(detectModelConfigFromDir(bundle('qwen2', { chat_template: '{% if enable_thinking %}think{% endif %}' })).honorsEnableThinking).toBe(true)

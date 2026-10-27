@@ -2211,6 +2211,12 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
                 // Looking only for enable_thinking in Jinja hides working
                 // controls for a translated native dialect.
                 detected.honorsEnableThinking = true
+              } else if (modelType === 'deepseek_v41' && existsSync(join(modelPath, 'encoding', 'encoding.py'))) {
+                // V4.1 ships no Jinja template: the server renders every turn
+                // through the bundle's encoding.py and maps enable_thinking to
+                // its chat / thinking mode. A tokenizer_config.json without a
+                // chat_template is not evidence that the toggle is ignored.
+                detected.honorsEnableThinking = true
               } else if (readsIt !== undefined) detected.honorsEnableThinking = readsIt
             }
             if (configMarksTurboQuant(parsed)) {
