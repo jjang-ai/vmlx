@@ -37,6 +37,7 @@ from ..utils.chat_template_kwargs import (
     model_type_of,
     build_chat_template_kwargs,
     ensure_thinking_off_sentinel,
+    template_kwarg_strip_order,
 )
 from ..utils.multi_eos import collect_multi_eos_ids
 from ..utils.tokenizer import (
@@ -2589,12 +2590,8 @@ class BatchedEngine(BaseEngine):
                     # Progressively strip non-essential kwargs to preserve tools/thinking
                     # when only extra kwargs (e.g. thinking_budget) cause failures.
                     # Strip order: extra kwargs first, then tools, then enable_thinking.
-                    strip_order = [
-                        k for k in template_kwargs
-                        if k not in ("tokenize", "add_generation_prompt")
-                    ]
-                    # Reverse so we strip least important first (extra kwargs added last)
-                    for key in reversed(strip_order):
+                    strip_order = template_kwarg_strip_order(template_kwargs)
+                    for key in strip_order:
                         del template_kwargs[key]
                         try:
                             prompt = renderer.apply_chat_template(messages, **template_kwargs)
