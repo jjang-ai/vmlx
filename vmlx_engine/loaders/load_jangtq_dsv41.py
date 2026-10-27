@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,48 @@ def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
         logger.warning("DSV4.1: dSpark draft load failed (%s); serving AR-only", exc)
 
 
+# The same text as the Swift runtime's DeepseekV4ChatEncoder.requiredToolChoiceReminder for V4.1.
+_REQUIRED_TOOL_REMINDER = (
+    "The active API tool_choice is required for this assistant turn. "
+    "Call exactly one available tool now using a <\uff5cDSML\uff5c calls> block. "
+    "Do not answer in prose before the tool result."
+)
+
+
+def _required_tool_reminder(tool_choice, tools) -> Optional[str]:
+    """The latest_reminder text for a required / named ``tool_choice`` with tools present, else None.
+
+    The bundle encoder has no tool_choice parameter, and without a cue the model often answers in prose (the server
+    then fails the request). Like the Swift runtime, the turn carries a ``latest_reminder`` naming the function when
+    the choice names one or only one tool is available."""
+    if not tools:
+        return None
+    if tool_choice == "required":
+        name = None
+    elif isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        name = ((tool_choice.get("function") or {}).get("name") or "").strip() or None
+        if name is None:
+            return None
+    else:
+        return None
+    if name is None:
+        names = {((t.get("function") or t).get("name") or "").strip() for t in tools if isinstance(t, dict)}
+        names.discard("")
+        name = next(iter(names)) if len(names) == 1 else None
+    return _REQUIRED_TOOL_REMINDER + (f" Use the `{name}` function." if name else "")
+
+
+def _with_reminder(msgs: list, content: str) -> list:
+    """Insert a latest_reminder after the last user / developer / tool message (appended when there is none), unless
+    the conversation already ends with one. The encoder merges tool results into user turns, so in a tool loop the
+    reminder follows the latest results, where the Swift runtime (which inserts after merging) puts it too."""
+    if msgs and msgs[-1].get("role") == "latest_reminder":
+        return msgs
+    tail = max((i for i, m in enumerate(msgs) if m.get("role") in ("user", "developer", "tool")), default=None)
+    at = len(msgs) if tail is None else tail + 1
+    return msgs[:at] + [{"role": "latest_reminder", "content": content}] + msgs[at:]
+
+
 def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
     """V4.1 ships a custom prompt encoder (encoding/encoding.py), not an HF chat_template. Attach an
     ``apply_chat_template`` shim that delegates to its ``encode_messages`` so the server's chat path
@@ -109,7 +151,7 @@ def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
     # thinking_budget (from max_thinking_tokens / budget_tokens) is ignored: V4.1 steers reasoning depth
     # with the numeric reasoning effort only (the server logs that once per request).
     def apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
-                            enable_thinking=True, reasoning_effort=None, tools=None, **_):
+                            enable_thinking=True, reasoning_effort=None, tools=None, tool_choice=None, **_):
         thinking_on = bool(enable_thinking) and not is_thinking_off_effort(reasoning_effort)
         mode = "thinking" if thinking_on else "chat"
         msgs = [dict(m) for m in messages]
@@ -123,6 +165,9 @@ def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
                 msgs[0]["tools"] = tools
             else:
                 msgs = [{"role": "system", "content": "", "tools": tools}] + msgs
+        reminder = _required_tool_reminder(tool_choice, tools)
+        if reminder:
+            msgs = _with_reminder(msgs, reminder)
         prompt = enc.encode_messages(msgs, thinking_mode=mode, reasoning_effort=encoder_effort(reasoning_effort))
         if tokenize:
             ids = tokenizer.encode(prompt)  # mlx_lm wrapper -> list[int]; raw tokenizers.Tokenizer -> Encoding
