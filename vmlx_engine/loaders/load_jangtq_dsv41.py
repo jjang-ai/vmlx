@@ -112,14 +112,22 @@ def _required_tool_reminder(tool_choice, tools) -> Optional[str]:
 
 
 def _with_reminder(msgs: list, content: str) -> list:
-    """Insert a latest_reminder after the last user / developer / tool message (appended when there is none), unless
-    the conversation already ends with one. The encoder merges tool results into user turns, so in a tool loop the
-    reminder follows the latest results, where the Swift runtime (which inserts after merging) puts it too."""
-    if msgs and msgs[-1].get("role") == "latest_reminder":
+    """Insert a latest_reminder right before the turn the model answers: the last user / developer message, or the
+    first of the trailing tool results (the encoder merges consecutive tool results into one user turn, so the run is
+    kept whole). It then renders before that turn, as in the encoder's own fixtures, and the prompt still ends with
+    the assistant rail. After the turn instead, the encoder writes the rail first and the prompt ends with the
+    reminder text: in chat mode JANGHT then often ends the turn at once (greedy: 3 of 6 cases produced nothing, so
+    the server answered 400). Appended when there is no such turn; not added twice."""
+    turn = max((i for i, m in enumerate(msgs) if m.get("role") in ("user", "developer", "tool")), default=None)
+    if turn is None:
+        if msgs and msgs[-1].get("role") == "latest_reminder":
+            return msgs
+        return msgs + [{"role": "latest_reminder", "content": content}]
+    while turn > 0 and msgs[turn].get("role") == "tool" and msgs[turn - 1].get("role") == "tool":
+        turn -= 1
+    if turn > 0 and msgs[turn - 1].get("role") == "latest_reminder":
         return msgs
-    tail = max((i for i, m in enumerate(msgs) if m.get("role") in ("user", "developer", "tool")), default=None)
-    at = len(msgs) if tail is None else tail + 1
-    return msgs[:at] + [{"role": "latest_reminder", "content": content}] + msgs[at:]
+    return msgs[:turn] + [{"role": "latest_reminder", "content": content}] + msgs[turn:]
 
 
 def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
