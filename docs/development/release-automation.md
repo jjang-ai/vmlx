@@ -187,6 +187,9 @@ output-quality limitation. Neither limitation becomes a passing universal
 model-quality or fresh all-protocol claim. Owning source hashes, changed-path
 coverage and artifact closure remain required; both-flavor packaging,
 signing/notarization, installed smoke and exact-byte promotion remain pending.
+Pass its private envelope through the candidate workflow’s optional
+`scoped_prepackage_receipt` input. The same production build driver validates
+it; omitting the input retains the original archived-build evidence path.
 
 ### 3. Exact-byte promotion
 

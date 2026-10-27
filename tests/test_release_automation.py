@@ -255,6 +255,9 @@ def test_workflows_are_manual_pinned_and_keep_secret_boundaries():
     assert 'export VMLX_R20_EXPECTED_PREFLIGHT_SHA256="$preflight_sha"' in candidate
     assert "jjang-ai/jangq" in candidate
     assert "private_evidence_root" in candidate
+    assert "if: ${{ !inputs.scoped_prepackage_receipt }}" in candidate
+    assert "VMLX_SCOPED_PREPACKAGE_RECEIPT: ${{ inputs.scoped_prepackage_receipt }}" in candidate
+    assert '[[ "$SCOPED_PREPACKAGE_RECEIPT" == "$PRIVATE_EVIDENCE_ROOT/"* ]]' in candidate
     assert "private_evidence_root }}" not in candidate.split("Upload immutable release candidate", 1)[1]
     assert "vars.APPLE_NOTARY_KEYCHAIN_PROFILE" in candidate
     assert "vars.APPLE_USE_EXISTING_SIGNING_IDENTITY" in candidate
