@@ -1458,7 +1458,8 @@ class Scheduler:
                     "but prefix cache is disabled — quantization has no effect without prefix cache"
                 )
 
-        if self._uses_dsv4_cache and self.config.use_paged_cache:
+        # DSV4.1 exempt: it stores plain DeepseekV41Cache states on the terminal block, never V4.0 delta records.
+        if self._uses_dsv4_cache and not getattr(self, "_uses_dsv41_cache", False) and self.config.use_paged_cache:
             # DSV4's native delta records are cut at a HARD-CODED 256 tokens
             # (DSV4_NATIVE_BLOCK_SIZE); the store cutter walks the CONFIGURED
             # block size and demands an exact interval match per block. Any
@@ -1541,7 +1542,14 @@ class Scheduler:
                         )
                         dsv4_scope = ""
                         zaya_scope = ""
-                        if self._uses_dsv4_cache:
+                        if getattr(self, "_uses_dsv41_cache", False):
+                            # DSV4.1's own scope: the V4.0 env knobs below (DSV4_LONG_CTX, DSV4_POOL_QUANT,
+                            # trimmed-cache override) do not affect it; its state format is DeepseekV41Cache v2.
+                            dsv4_scope = (
+                                ":dsv41_cache_schema=deepseek_v41_fmt2"
+                                f":dsv41_paged_block_size={self.config.paged_cache_block_size}"
+                            )
+                        elif self._uses_dsv4_cache:
                             # Include the unsafe-override env in the scope so
                             # safe/default runs can NEVER share namespace with
                             # `VMLX_DSV4_TRUST_TRIMMED_CACHE=1` debug runs that
@@ -4310,6 +4318,10 @@ class Scheduler:
         """
         if not self._uses_dsv4_cache:
             return False
+        if getattr(self, "_uses_dsv41_cache", False):
+            # DSV4.1 exempt: its generator always captures the exact N-1 snapshot (the cost this threshold
+            # avoids is already paid) and has no V4.0 extended decode chain to seed, so storing it is free.
+            return False
         prompt_tokens = list(request.prompt_token_ids or [])
         gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
         if 0 < gpl < len(prompt_tokens):
@@ -6642,7 +6654,8 @@ class Scheduler:
                 request_id=str(request.request_id),
             )
 
-        if self._uses_dsv4_cache:
+        # V4.0-only operator guard (DSV4_MAX_PREFILL_TOKENS for its SWA+CSA/HCA Python path); DSV4.1 exempt.
+        if self._uses_dsv4_cache and not getattr(self, "_uses_dsv41_cache", False):
             from vmlx_engine.utils.dsv4_batch_generator import (
                 dsv4_max_prefill_tokens,
             )
@@ -7847,6 +7860,8 @@ class Scheduler:
 
             if (
                 not self._uses_dsv4_cache
+                # DSV4.1 exempt: the prediction uses V4.0 token ids and a V4.0 delta-capturing prefill.
+                or getattr(self, "_uses_dsv41_cache", False)
                 or self.block_aware_cache is None
                 or not self.config.enable_prefix_cache
                 or finish_reason != "stop"

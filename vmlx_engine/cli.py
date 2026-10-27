@@ -844,8 +844,11 @@ def _apply_dsv41_runtime_policy(args, logger):
     generator over a path-dependent DeepseekV41Cache), so: one sequence, continuous batching on, no
     generic KV quantization (the runtime keeps its own 4-bit pools), and no JIT / smelt / flash-MoE /
     distributed / external drafter. The family is slow enough to need the long request timeout
-    (applied through _SLOW_FAMILY_TIMEOUTS). Does NOT apply any DSV4 (deepseek_v4) environment or
-    cache policy."""
+    (applied through _SLOW_FAMILY_TIMEOUTS). Sets no DSV4 (deepseek_v4) environment or CLI cache policy.
+    In the scheduler V4.1 does share the DSV4 composite cache store (DeepseekV41Cache is in its cache-class set:
+    no generic KV quantization, typed paged/SSD records, prompt-boundary snapshots); the V4.0-only gates (256-token
+    snapshot threshold and paged block size, DSV4_* block namespace and prefill guard, idle shadow re-key) are
+    split off on ``Scheduler._uses_dsv41_cache``."""
     changes = []
     if getattr(args, "continuous_batching", True) is False:
         args.continuous_batching = True
