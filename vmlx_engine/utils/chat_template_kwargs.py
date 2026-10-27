@@ -80,6 +80,23 @@ def build_chat_template_kwargs(
     return kwargs
 
 
+# Dropped last, in this order, by a failing render's kwarg-strip retry: the tool schema matters more than any
+# unknown extra kwarg, and the thinking switch more than the tool schema.
+_STRIP_LAST_CHAT_TEMPLATE_KWARGS = ("tools", "thinking", "enable_thinking")
+
+
+def template_kwarg_strip_order(kwargs: Mapping[str, Any]) -> list[str]:
+    """Order in which a failing ``apply_chat_template`` retry drops kwargs, one at a time.
+
+    Extra kwargs go first (most recently added first), then ``tools``, then the thinking switch;
+    ``tokenize`` / ``add_generation_prompt`` are never dropped. Dropping ``tools`` before an extra kwarg
+    that a template rejects (e.g. an effort value it asserts on) removed the native tool schema, so the
+    model answered with a non-native tool call and the request failed tool parsing."""
+    keys = [k for k in kwargs if k not in RESERVED_CHAT_TEMPLATE_KWARGS]
+    extras = [k for k in reversed(keys) if k not in _STRIP_LAST_CHAT_TEMPLATE_KWARGS]
+    return extras + [k for k in _STRIP_LAST_CHAT_TEMPLATE_KWARGS if k in kwargs]
+
+
 def trailing_open_think_index(prompt: str) -> int:
     """Index of the generation prompt's open ``<think>`` rail, or -1.
 

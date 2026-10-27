@@ -196,6 +196,30 @@ def _estimate_state_memory(state: Any, _seen: set[int] | None = None) -> int:
     return 0
 
 
+def clone_dsv41_cache_at(cache: list[Any], target_len: int) -> list[Any] | None:
+    """Independent copy of a DeepSeek-V4.1 layer-cache list that sits exactly at ``target_len`` tokens.
+
+    DeepseekV41Cache layers share one sequence state (position + Engram history) and cannot be trimmed,
+    so a stored prefix is valid only at the exact boundary it was captured at. Returns None (no store /
+    clean miss) for a mixed list, a list at another position, or a copy that fails."""
+    if not cache or not all(type(layer).__name__ == "DeepseekV41Cache" for layer in cache):
+        return None
+    offsets = {int(getattr(layer, "offset", -1)) for layer in cache}
+    if offsets != {int(target_len)}:
+        logger.info(
+            "DSV4.1 cache at offset(s) %s, not the %d-token boundary; not reusing it (cannot be trimmed)",
+            sorted(offsets), int(target_len),
+        )
+        return None
+    try:
+        from jang_tools.dsv4_1.mlx_model import clone_cache_list
+
+        return clone_cache_list(list(cache))
+    except Exception as exc:
+        logger.warning("DSV4.1 cache copy failed (%s); not reusing it", exc)
+        return None
+
+
 def estimate_kv_cache_memory(cache: list[Any], *, resident: bool = True) -> int:
     """
     Estimate retained cache bytes, or logical snapshot bytes with resident=False.
@@ -546,6 +570,10 @@ class MemoryAwarePrefixCache:
         def _safe(layer) -> bool:
             if type(layer).__name__ in {"Glm5KDACache", "Glm5MLACache"}:
                 return True
+            # DeepSeek-V4.1: _truncate_cache copies the whole layer list as one unit (shared sequence
+            # state) at the stored boundary, so the hit never aliases the stored entry.
+            if type(layer).__name__ == "DeepseekV41Cache":
+                return True
             # openPangu exact-boundary composite: safe only because
             # _truncate_cache has a dedicated full-length clone that preserves
             # inner KV, DSA indexer, rotating metadata, and all conv states.
@@ -839,6 +867,12 @@ class MemoryAwarePrefixCache:
             clone.values = _copy_positional_slice(full_v[..., :length, :])
             clone.offset = int(length)
             return clone
+
+        if any(type(layer).__name__ == "DeepseekV41Cache" for layer in cache):
+            # DeepSeek-V4.1: one sequence state (position, Engram history) shared by every layer, and not
+            # trimmable (sliding window + compressor groups are path state). Only a whole-list copy at the
+            # stored boundary is valid; any reduction is a clean miss.
+            return clone_dsv41_cache_at(cache, target_len) if allow_cumulative_clone else None
 
         truncated = []
         for layer_cache in cache:

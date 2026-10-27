@@ -60,3 +60,62 @@ def test_env_off_keeps_ar(monkeypatch):
     g = _gen()
     r = _req(_sampler(_vmlx_sampling={"temperature": 1.0, "top_p": 1.0, "min_p": 0.0, "top_k": 0, "seed": None}))
     assert not g._use_dspark(r)
+
+
+# --- samplers built by the REAL vmlx_engine.sampling.make_sampler -------------------------------------------------
+from vmlx_engine.sampling import make_sampler  # noqa: E402
+from vmlx_engine.scheduler import _tag_sampling_params  # noqa: E402
+
+
+def _real(temp, top_p=0.0, top_k=0, min_p=0.0, seed=None, scheduler_tags=True):
+    """A sampler as the scheduler builds it: make_sampler, plus the scheduler's tags when requested."""
+    s = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k, seed=seed)
+    if scheduler_tags:
+        params = SimpleNamespace(temperature=temp, top_p=top_p, min_p=min_p, top_k=top_k)
+        _tag_sampling_params(s, params, seed=seed)
+    return s
+
+
+@pytest.mark.parametrize("scheduler_tags", [True, False])
+def test_real_greedy_sampler_is_greedy(scheduler_tags):
+    g = _gen()
+    r = _req(_real(0.0, scheduler_tags=scheduler_tags))
+    assert g._is_greedy(r)
+    assert g._use_dspark(r) and r._dspark_sampler is None
+
+
+@pytest.mark.parametrize("kw", [
+    {"temp": 0.7, "top_k": 40},            # compact top-k sampler: tagged accepts_logits, still sampled
+    {"temp": 0.7, "top_p": 0.9},           # mlx_lm sampler
+    {"temp": 0.7, "top_k": 40, "seed": 7},  # seeded compact top-k
+    {"temp": 0.7, "top_p": 0.9, "seed": 7},  # seeded log-prob sampler
+])
+def test_real_sampled_samplers_take_sampled_speculation(kw):
+    g = _gen()
+    s = _real(**kw)
+    r = _req(s)
+    assert not g._is_greedy(r)
+    assert g._use_dspark(r)
+    spec = r._dspark_sampler
+    assert isinstance(spec, SpecSampler)
+    assert spec.temperature == pytest.approx(0.7)
+    assert spec.top_k == kw.get("top_k", 0)
+    assert spec.top_p == pytest.approx(kw.get("top_p", 0.0))
+    if "seed" in kw:
+        assert spec.seed == kw["seed"]
+
+
+def test_accepts_logits_tag_alone_is_not_greedy():
+    """The scheduler/patch layers may set _vmlx_accepts_logits on a sampled sampler; it must stay sampled."""
+    g = _gen()
+    s = _real(0.7, top_k=40)
+    s._vmlx_accepts_logits = True
+    assert not g._is_greedy(_req(s))
+
+
+def test_untagged_real_sampled_sampler_takes_ar():
+    """Without the scheduler's _vmlx_sampling record the distribution is unknown: AR, never greedy."""
+    g = _gen()
+    r = _req(_real(0.7, top_p=0.9, scheduler_tags=False))
+    assert not g._is_greedy(r)
+    assert not g._use_dspark(r)

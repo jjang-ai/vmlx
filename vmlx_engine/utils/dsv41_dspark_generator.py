@@ -4,15 +4,18 @@
 Selected (scheduler) only when a bundle's dSpark draft is attached as ``model._dspark`` (default-on
 for bundles that ship the draft; ``VMLX_DSV41_DSPARK=0`` disables it) and max_num_seqs == 1. It subclasses
 ``SingleBatchGenerator`` to reuse its request lifecycle (insert/remove/Response/stop machinery) and
-overrides only the decode path: instead of SBG's one-token engine-cache forward, it drives the
-validated ``jang_tools.dsv41.dspark.DSparkRunner.stream`` generator on ``model.runtime`` (which owns
-its own runtime ``Session`` + checkpoint/restore and the no-refeed fast path — DECODE_DSPARK_METHODS
-M1). Output is token-identical to plain greedy; speculation only changes throughput (code ~1.9x).
+overrides only the decode path: it prefills the request's ENGINE cache with
+``jang_tools.dsv41.dspark.DSparkRunner.prefill(session=<engine DeepseekV41Cache list>)`` (so the prompt
+boundary snapshot and the prefix cache see the same state as the AR path) and then drives
+``DSparkRunner.decode_stream`` on that session (no-refeed fast path, DECODE_DSPARK_METHODS M1).
 
-Text requests, greedy or sampled: a temperature > 0 request runs exact sampled speculation
-(jang_tools.dsv41.dspark.SpecSampler: the AR sampler's temperature / top_p / min_p / top_k distribution,
-position-keyed Gumbel noise, coupled drafting). A request carrying vision tensors, logits processors (repetition /
-frequency / presence penalty, logit_bias) or a logprobs request falls back to the inherited AR path (per request).
+Greedy requests (temperature == 0) produce the backbone's greedy tokens; speculation only changes
+throughput. A temperature > 0 request runs exact sampled speculation (jang_tools.dsv41.dspark.SpecSampler:
+the AR sampler's temperature / top_p / min_p / top_k distribution, Gumbel noise keyed by the request seed and
+the absolute position, coupled drafting); the adaptive governor's plain AR steps draw from the same
+position-keyed noise, so a fixed ``seed`` reproduces the same tokens whatever the governor chooses.
+A request carrying vision tensors, logits processors (repetition / frequency / presence penalty, logit_bias)
+or a logprobs request falls back to the inherited AR path (per request).
 """
 
 from __future__ import annotations
@@ -78,15 +81,32 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                     or getattr(req, "pixel_values_videos", None) is not None
                     or getattr(req, "dsv41_vl_images", None) is not None)
 
+    @staticmethod
+    def _sampler_temperature(sampler):
+        """The temperature the scheduler built ``sampler`` with, or None when it is unrecorded."""
+        spec = getattr(sampler, "_vmlx_sampling", None)
+        if isinstance(spec, dict) and spec.get("temperature") is not None:
+            return float(spec["temperature"])
+        temp = getattr(sampler, "temp", None)  # vmlx_engine.sampling stamps every sampler it builds
+        if isinstance(temp, (int, float)) and not isinstance(temp, bool):
+            return float(temp)
+        return None
+
     def _is_greedy(self, req) -> bool:
-        """Whether this request is greedy (plain argmax, no logits processor, no logprobs): DSpark then
-        accepts a draft iff it equals the backbone's argmax. Sampled requests (temperature > 0 with
-        top-p / top-k / min-p) take the exact sampled path (_spec_sampler); a logits processor
-        (repetition / frequency / presence penalty, logit_bias) or a logprobs request takes the
-        inherited AR path, which applies them per token. The scheduler tags greedy samplers
-        (``_vmlx_greedy`` / ``_vmlx_accepts_logits`` are set only for temperature == 0)."""
+        """True only for a temperature == 0 request without logits processors or logprobs.
+
+        Greedy means argmax: the scheduler tags it ``_vmlx_greedy`` (vmlx_engine.sampling tags it
+        ``_vmlx_is_greedy``) and records temperature 0. ``_vmlx_accepts_logits`` is NOT a greedy marker:
+        make_sampler also sets it on the compact top-k sampler (temperature > 0, top_k > 0, min_p == 0),
+        and treating that as greedy decoded a sampled top_k request greedily. Sampled requests
+        (temperature > 0 with top-p / top-k / min-p) take the exact sampled path (_spec_sampler); logits
+        processors (repetition / frequency / presence penalty, logit_bias) and logprobs requests take the
+        inherited AR path, which applies them per token."""
         sampler = req.sampler or self.sampler
-        greedy = bool(getattr(sampler, "_vmlx_greedy", False) or getattr(sampler, "_vmlx_accepts_logits", False))
+        if getattr(sampler, "_vmlx_greedy", False) is True or getattr(sampler, "_vmlx_is_greedy", False) is True:
+            greedy = True
+        else:
+            greedy = self._sampler_temperature(sampler) == 0.0
         if not greedy:
             return False
         if req.logits_processors:
@@ -173,12 +193,14 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         }
         req.prefill_started = None
         req._dspark_stats = {}
+        # SingleBatchGenerator emits at least one token whatever max_tokens says (its length check runs
+        # after the first token); keep that contract so the stream always yields a first token.
         req._dspark_stream = self._runner.decode_stream(
-            sess, pending, c, req.max_tokens, eos_ids=set(t for t in self.stop_tokens if isinstance(t, int)),
+            sess, pending, c, max(1, int(req.max_tokens)), eos_ids=set(t for t in self.stop_tokens if isinstance(t, int)),
             stats=req._dspark_stats, sampler=getattr(req, "_dspark_sampler", None),
         )
         req._dspark_on = True
-        req.next_token = self._pull(req)  # first committed token (int) or None
+        req.next_token = self._pull(req)  # first committed token (always an int, max_new >= 1)
         return self._emit_dspark(req)
 
     def _pull(self, req):
@@ -194,14 +216,10 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
     def _emit_dspark(self, req) -> Response:
         current = req.next_token
         if current is None:
-            # Stream produced nothing (e.g. empty generation): finish cleanly.
-            self._request = None
-            return Response(uid=req.uid, token=(req.output_tokens[-1] if req.output_tokens else 0),
-                            logprobs=None, finish_reason="stop", current_state=req.current_state,
-                            match_sequence=req.match_sequence, prompt_cache=None,
-                            all_tokens=list(req.context_tokens), prompt_cache_snapshot=None,
-                            prefill_usage=req.prefill_usage, mixed_swa_boundary=None,
-                            stable_root_snapshot=None, boundary_checkpoints=None)
+            # decode_stream runs with max_new >= 1, so its first pull always yields a token, and a later
+            # call happens only after a token whose lookahead pull returned a token (a None lookahead
+            # finishes the request below). Never fabricate a token here.
+            raise RuntimeError(f"DSV4.1 DSpark stream for request {req.uid} produced no token")
         # Pull the NEXT token now (one-token lookahead parity with SBG) to know if the stream ended.
         req.next_token = self._pull(req)
         req.output_tokens.append(current)

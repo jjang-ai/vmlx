@@ -33,6 +33,7 @@ from ..utils.chat_template_kwargs import (
     model_type_of,
     build_chat_template_kwargs,
     ensure_thinking_off_sentinel,
+    template_kwarg_strip_order,
 )
 from ..utils.generation_cancellation import (
     GenerationCancelled,
@@ -1149,12 +1150,9 @@ class SimpleEngine(BaseEngine):
                         prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
                     except Exception as template_err:
                         # Progressively strip non-essential kwargs to preserve tools/thinking
-                        strip_order = [
-                            k for k in tpl_kwargs
-                            if k not in ("tokenize", "add_generation_prompt")
-                        ]
+                        strip_order = template_kwarg_strip_order(tpl_kwargs)
                         prompt = None
-                        for key in reversed(strip_order):
+                        for key in strip_order:
                             del tpl_kwargs[key]
                             try:
                                 prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
@@ -1519,12 +1517,9 @@ class SimpleEngine(BaseEngine):
                 # Progressively strip non-essential kwargs to preserve tools/thinking.
                 # Strip order: extra kwargs first, then tools, then enable_thinking.
                 logger.warning(f"Chat template first attempt failed (will retry with fewer kwargs): {template_err}")
-                strip_order = [
-                    k for k in template_kwargs
-                    if k not in ("tokenize", "add_generation_prompt")
-                ]
+                strip_order = template_kwarg_strip_order(template_kwargs)
                 prompt = None
-                for key in reversed(strip_order):
+                for key in strip_order:
                     del template_kwargs[key]
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **template_kwargs)

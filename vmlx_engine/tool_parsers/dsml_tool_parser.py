@@ -83,7 +83,6 @@ class DSMLToolParser(ToolParser):
     # Streaming state markers — we buffer until we see a complete `<invoke …>…</invoke>`
     # and stop emitting content between the opening `<｜DSML｜invoke` and its close.
     INVOKE_OPEN_PREFIX = f"<{DSML_PREFIX}invoke "
-    INVOKE_CLOSE = f"</{DSML_PREFIX}invoke>"
     DSML_OPEN_PREFIX = f"<{DSML_PREFIX}"
     TOOL_CALLS_OPEN = f"<{DSML_PREFIX}tool_calls>"
     TOOL_CALLS_CLOSE = f"</{DSML_PREFIX}tool_calls>"

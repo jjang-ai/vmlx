@@ -15,6 +15,7 @@ The scheduler follows vLLM's design with:
 """
 
 from .persistence_outcome import LEDGER as _PERSIST
+import json
 import logging
 import os
 import random
@@ -1457,7 +1458,8 @@ class Scheduler:
                     "but prefix cache is disabled — quantization has no effect without prefix cache"
                 )
 
-        if self._uses_dsv4_cache and self.config.use_paged_cache:
+        # DSV4.1 exempt: it stores plain DeepseekV41Cache states on the terminal block, never V4.0 delta records.
+        if self._uses_dsv4_cache and not getattr(self, "_uses_dsv41_cache", False) and self.config.use_paged_cache:
             # DSV4's native delta records are cut at a HARD-CODED 256 tokens
             # (DSV4_NATIVE_BLOCK_SIZE); the store cutter walks the CONFIGURED
             # block size and demands an exact interval match per block. Any
@@ -1540,7 +1542,14 @@ class Scheduler:
                         )
                         dsv4_scope = ""
                         zaya_scope = ""
-                        if self._uses_dsv4_cache:
+                        if getattr(self, "_uses_dsv41_cache", False):
+                            # DSV4.1's own scope: the V4.0 env knobs below (DSV4_LONG_CTX, DSV4_POOL_QUANT,
+                            # trimmed-cache override) do not affect it; its state format is DeepseekV41Cache v2.
+                            dsv4_scope = (
+                                ":dsv41_cache_schema=deepseek_v41_fmt2"
+                                f":dsv41_paged_block_size={self.config.paged_cache_block_size}"
+                            )
+                        elif self._uses_dsv4_cache:
                             # Include the unsafe-override env in the scope so
                             # safe/default runs can NEVER share namespace with
                             # `VMLX_DSV4_TRUST_TRIMMED_CACHE=1` debug runs that
@@ -2130,6 +2139,19 @@ class Scheduler:
         return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache", "DeepseekV41Cache"}
 
     @staticmethod
+    def _dsv41_state_dict_pos(state_dict: Any) -> Optional[int]:
+        """Sequence position recorded in an extracted DeepseekV41Cache state dict (meta_state "pos")."""
+        try:
+            meta = state_dict.get("meta_state")
+            if isinstance(meta, (tuple, list)) and len(meta) == 1:
+                meta = meta[0]
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            return int(meta["pos"]) if isinstance(meta, dict) and "pos" in meta else None
+        except Exception:
+            return None
+
+    @staticmethod
     def _is_dsv4_cache_object(cache: Any) -> bool:
         try:
             return any(
@@ -2172,6 +2194,7 @@ class Scheduler:
                 t for t in cache_types
                 if t == "KVCache" or t.endswith("KVCache") or t == "MiniMaxM3SparseCache"
             }
+            # DSV4 / DSV4.1 composite caches (DeepseekV41Cache included) are typed caches, not SSM companions.
             if any(Scheduler._is_dsv4_cache_class_name(t) for t in cache_types):
                 return False
             # openPangu v2 owns a path-dependent composite cache: MLA latent KV,
@@ -2183,11 +2206,6 @@ class Scheduler:
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
                 "Glm5KDACache",
                 "Glm5MLACache",
-                # DSV4.1 per-layer composite cache: MLA latent sliding-window KV +
-                # compressed-global pool + indexer state + Engram position. Not a
-                # KVCache subclass and not an SSM companion cache -- opaque
-                # state/meta_state/trim, like the openPangu/GLM5 composite caches.
-                "DeepseekV41Cache",
             }:
                 return False
             if cache_types and cache_types == kv_types:
@@ -3937,9 +3955,9 @@ class Scheduler:
             getattr(self.model, "_dspark", None) is not None
             and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
         ):
-            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode via the validated
-            # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
-            # only engages when a draft is present; the default AR path is never affected.
+            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode with
+            # DSparkRunner.prefill(session=<engine cache>) + decode_stream. Subclasses SingleBatchGenerator (same
+            # ctor), so it only engages when a draft is present; the default AR path is never affected.
             try:
                 from .utils.dsv41_dspark_generator import DSV41DSparkGenerator
                 logger.info("DSV4.1 dSpark draft attached — using DSV41DSparkGenerator (speculative decode)")
@@ -4295,6 +4313,10 @@ class Scheduler:
         deferred path, which logs the skip.
         """
         if not self._uses_dsv4_cache:
+            return False
+        if getattr(self, "_uses_dsv41_cache", False):
+            # DSV4.1 exempt: its generator always captures the exact N-1 snapshot (the cost this threshold
+            # avoids is already paid) and has no V4.0 extended decode chain to seed, so storing it is free.
             return False
         prompt_tokens = list(request.prompt_token_ids or [])
         gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
@@ -5862,6 +5884,15 @@ class Scheduler:
             except Exception:
                 return arr
 
+        if any(type(c).__name__ == "DeepseekV41Cache" for c in raw_cache):
+            # DeepSeek-V4.1: never rebuilt as a V4.0 DeepseekV4Cache (its 3-tuple state setter rejected the
+            # V4.1 state and the store was silently dropped). DeepseekV41Cache cannot be trimmed, so it is
+            # stored only when it already sits at the N-1 boundary (the generator's prompt snapshot),
+            # copied as one unit because every layer shares the sequence position and Engram history.
+            from .memory_cache import clone_dsv41_cache_at
+
+            return clone_dsv41_cache_at(list(raw_cache), target_len)
+
         truncated = []
         for layer_cache in raw_cache:
             # Guard: skip dicts (extracted state dicts, not live cache objects).
@@ -6619,7 +6650,8 @@ class Scheduler:
                 request_id=str(request.request_id),
             )
 
-        if self._uses_dsv4_cache:
+        # V4.0-only operator guard (DSV4_MAX_PREFILL_TOKENS for its SWA+CSA/HCA Python path); DSV4.1 exempt.
+        if self._uses_dsv4_cache and not getattr(self, "_uses_dsv41_cache", False):
             from vmlx_engine.utils.dsv4_batch_generator import (
                 dsv4_max_prefill_tokens,
             )
@@ -7824,6 +7856,8 @@ class Scheduler:
 
             if (
                 not self._uses_dsv4_cache
+                # DSV4.1 exempt: the prediction uses V4.0 token ids and a V4.0 delta-capturing prefill.
+                or getattr(self, "_uses_dsv41_cache", False)
                 or self.block_aware_cache is None
                 or not self.config.enable_prefix_cache
                 or finish_reason != "stop"
@@ -9253,8 +9287,9 @@ class Scheduler:
                     else:
                         single_batch_cached_prefix: Optional[List[int]] = None
                         if cache_to_use is not None and self.batch_generator.__class__.__name__ in (
-                            # The DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
-                            # the restored prefix as its context too (all_tokens / prefix store).
+                            # Class names, not isinstance (tests drive this with stand-in generator classes):
+                            # the DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs the
+                            # restored prefix as its context too (all_tokens / prefix store), so list it.
                             "SingleBatchGenerator",
                             "DSV41DSparkGenerator",
                         ):
@@ -11561,6 +11596,24 @@ class Scheduler:
                                                 break
                                             state = sd.get("state")
                                             cls_name = sd.get("class_name", "")
+                                            if cls_name == "DeepseekV41Cache":
+                                                # DSV4.1 is never rebuilt as a V4.0 DeepseekV4Cache and
+                                                # cannot be trimmed: keep the layer only when its recorded
+                                                # position already equals the shortened key's N-1 target.
+                                                _v41_pos = self._dsv41_state_dict_pos(sd)
+                                                if _v41_pos == target:
+                                                    truncated_dicts.append(sd)
+                                                    continue
+                                                logger.info(
+                                                    "Skipping DSV4.1 paged cache store for %s: state is at "
+                                                    "position %s, the generation-prompt-stripped key needs "
+                                                    "%d (DeepseekV41Cache cannot be trimmed)",
+                                                    request_id,
+                                                    _v41_pos,
+                                                    target,
+                                                )
+                                                trunc_ok = False
+                                                break
                                             if self._is_dsv4_cache_class_name(cls_name) and state is not None:
                                                 try:
                                                     from jang_tools.dsv4.mlx_model import (
@@ -13348,6 +13401,7 @@ class Scheduler:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get scheduler statistics."""
+        # Exact class names on purpose: these label which generator ran (DSpark vs plain SBG).
         generator_cls = (
             self.batch_generator.__class__.__name__
             if self.batch_generator is not None
@@ -13542,6 +13596,7 @@ class Scheduler:
             except Exception:
                 pass
         if base is not None:
+            # Exact class names on purpose: these label which generator ran (DSpark vs plain SBG).
             generator_cls = (
                 self.batch_generator.__class__.__name__
                 if self.batch_generator is not None
