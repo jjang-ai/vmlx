@@ -217,7 +217,7 @@ def test_prefill_realizes_each_native_chunk_on_owned_stream(monkeypatch):
     generator = sbg.SingleBatchGenerator(model, prefill_step_size=4)
     cache = model.make_cache()
     req = SimpleNamespace(cache=cache, context_tokens=[], logits_processors=[],
-                          pixel_values=None, pixel_values_videos=None)
+                          pixel_values=None, pixel_values_videos=None, dsv41_vl_images=None)
     real_eval = mx.eval
     boundaries = []
     def observed_eval(*values):
@@ -244,7 +244,7 @@ def test_prefill_materialization_failure_stops_before_next_chunk(monkeypatch):
     generator = sbg.SingleBatchGenerator(model, prefill_step_size=4)
     cache = model.make_cache()
     req = SimpleNamespace(cache=cache, context_tokens=[], logits_processors=[],
-                          pixel_values=None, pixel_values_videos=None)
+                          pixel_values=None, pixel_values_videos=None, dsv41_vl_images=None)
     def fail(*values):
         raise RuntimeError('native cache evaluation failed')
     monkeypatch.setattr(mx, 'eval', fail)
