@@ -98,9 +98,10 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         Greedy means argmax: the scheduler tags it ``_vmlx_greedy`` (vmlx_engine.sampling tags it
         ``_vmlx_is_greedy``) and records temperature 0. ``_vmlx_accepts_logits`` is NOT a greedy marker:
         make_sampler also sets it on the compact top-k sampler (temperature > 0, top_k > 0, min_p == 0),
-        and treating that as greedy decoded a sampled top_k request greedily. Logits processors
-        (repetition / frequency / presence penalty, logit_bias) and logprobs requests take the inherited
-        AR path, which applies them per token."""
+        and treating that as greedy decoded a sampled top_k request greedily. Sampled requests
+        (temperature > 0 with top-p / top-k / min-p) take the exact sampled path (_spec_sampler); logits
+        processors (repetition / frequency / presence penalty, logit_bias) and logprobs requests take the
+        inherited AR path, which applies them per token."""
         sampler = req.sampler or self.sampler
         if getattr(sampler, "_vmlx_greedy", False) is True or getattr(sampler, "_vmlx_is_greedy", False) is True:
             greedy = True
@@ -128,7 +129,11 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             return False, None
         if req.logits_processors or self._logprobs_required(req):
             return False, None
-        from jang_tools.dsv41.dspark import SpecSampler
+        try:
+            from jang_tools.dsv41.dspark import SpecSampler
+        except ImportError:  # a jang_tools without the exact sampled path (before jangq #30): decode AR
+            logger.warning("DSV4.1 DSpark: installed jang_tools has no SpecSampler; sampled requests decode AR")
+            return False, None
 
         return True, SpecSampler(spec["temperature"], top_p=spec.get("top_p", 0.0), min_p=spec.get("min_p", 0.0),
                                  top_k=spec.get("top_k", 0), seed=spec.get("seed"))
