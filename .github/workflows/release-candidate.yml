@@ -16,6 +16,9 @@ on:
       private_evidence_root:
         description: Absolute private evidence root on the release runner
         required: true
+      scoped_prepackage_receipt:
+        description: Optional absolute private scoped acceptance envelope on the release runner
+        required: false
 
 permissions:
   contents: read
@@ -38,6 +41,7 @@ jobs:
           SOURCE_SHA_INPUT: ${{ inputs.source_sha }}
           JANG_SHA_INPUT: ${{ inputs.jang_sha }}
           PRIVATE_EVIDENCE_ROOT: ${{ inputs.private_evidence_root }}
+          SCOPED_PREPACKAGE_RECEIPT: ${{ inputs.scoped_prepackage_receipt }}
         run: |
           set -euo pipefail
           [[ "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -51,6 +55,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [[ -n "$SCOPED_PREPACKAGE_RECEIPT" ]]; then
+            [[ "$SCOPED_PREPACKAGE_RECEIPT" == "$PRIVATE_EVIDENCE_ROOT/"* ]]
+            test -f "$SCOPED_PREPACKAGE_RECEIPT"
+          fi
 
       - name: Check out exact vMLX source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -142,6 +150,7 @@ jobs:
           /opt/homebrew/bin/npm ci
 
       - name: Restore exact-head retained prepackage evidence
+        if: ${{ !inputs.scoped_prepackage_receipt }}
         working-directory: vmlx
         env:
           SOURCE_SHA_INPUT: ${{ inputs.source_sha }}
@@ -181,6 +190,7 @@ jobs:
         working-directory: vmlx
         env:
           VMLX_RELEASE_SCOPE: r20_production
+          VMLX_SCOPED_PREPACKAGE_RECEIPT: ${{ inputs.scoped_prepackage_receipt }}
           VMLX_R20_PRIVATE_EVIDENCE_ROOT: ${{ inputs.private_evidence_root }}
           VMLX_R20_EXPECTED_VERSION: ${{ inputs.version }}
           VMLX_JANG_TOOLS_SOURCE: ${{ github.workspace }}/jangq/jang-tools

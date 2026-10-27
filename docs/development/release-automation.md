@@ -179,6 +179,18 @@ separate source-bound receipts with visual, streaming API, and runtime-identity
 artifacts. Missing evidence remains a build failure; schema validation does not
 replace review of the artifacts or the later installed-build checks.
 
+Schema v4 is the explicitly scoped DeepSeek-V4.1 checkpoint: JANG affine and
+JANGHT have separate source-bound visual, API, runtime and turn records. It
+distinguishes retained JANGHT API-result captures from current affine raw SSE,
+and keeps the accepted history-conditioned image-color error visible as an
+output-quality limitation. Neither limitation becomes a passing universal
+model-quality or fresh all-protocol claim. Owning source hashes, changed-path
+coverage and artifact closure remain required; both-flavor packaging,
+signing/notarization, installed smoke and exact-byte promotion remain pending.
+Pass its private envelope through the candidate workflow’s optional
+`scoped_prepackage_receipt` input. The same production build driver validates
+it; omitting the input retains the original archived-build evidence path.
+
 ### 3. Exact-byte promotion
 
 Run `Publish exact release candidate` with the successful candidate run ID and
