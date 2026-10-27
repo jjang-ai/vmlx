@@ -10,10 +10,12 @@ All notable changes to vMLX Engine will be documented in this file.
 - Route V4.1 reasoning effort through its numeric budget contract across the chat APIs, and preserve tool-result and empty assistant history boundaries.
 - Enable compatible bundled DSpark drafts with adaptive greedy or sampled decoding; image turns, unsupported processors and logprobs use ordinary decoding.
 - Preserve V4.1 prompt-boundary state in RAM and paged SSD caches, including compact 4-bit pools and long-context disk records. Report prefill progress during DSpark requests.
-- Include the matching JANG 2.5.51 runtime and V4.1 decode/prefill kernels. Performance depends on bundle, hardware, context and sampling; no universal speedup is claimed.
+- Include the matching JANG 2.5.52 runtime and V4.1 decode/prefill kernels. Performance depends on bundle, hardware, context and sampling; no universal speedup is claimed.
 - Refresh adaptive DFlash ordinary-decoding baselines and validate compatible bundled affine drafts before selection. Preserve request cache-bypass settings and shared chat selection.
-- Restore the architecture-hint type used by chat settings.
-- Release validation uses focused model-free checks and package inspection. No models were downloaded or loaded for this checkpoint; new full-model runtime qualification was not performed.
+- Restore the architecture-hint type used by chat settings and expose thinking controls for V4.1 bundles with native encoders.
+- Preserve Anthropic matched-stop metadata; place required-tool reminders before the active turn so native encoder prompts end on the assistant rail.
+- Improve short DSpark prompt prefill without changing long-context memory bounds, and correct the governor cost estimator so missed drafts do not disproportionately favor ordinary decoding.
+- Preserve retained source-bound model evidence alongside focused regression and package checks; no universal throughput or full cross-runtime parity guarantee is made.
 
 ## [1.6.81] - 2026-10-20
 

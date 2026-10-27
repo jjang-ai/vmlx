@@ -97,7 +97,7 @@ dependencies = [
     # promotion from optional [mxtq] to a hard dependency. The PyPI package
     # is named `jang` (not `jang-tools` — that's the local repo dir name);
     # `import jang_tools` works because that's the package import name.
-    "jang>=2.5.51",
+    "jang>=2.5.52",
     # PyTorch — REQUIRED for Nemotron-3-Nano-Omni multimodal dispatch.
     # `jang_tools.nemotron_omni_chat._import_torch()` lazy-imports torch on
     # the FIRST image / audio / video request to an Omni bundle; without
@@ -146,7 +146,7 @@ ui = [
 # pinning `vmlx[mxtq]` in their requirements; the real install is now a
 # hard dependency above so plain `pip install vmlx` works for all bundles.
 mxtq = [
-    "jang>=2.5.51",
+    "jang>=2.5.52",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -199,7 +199,7 @@ audio = [
 # (intentionally same pin) so `pip install vmlx[jang]` is a
 # friendly alias. Pin tracks the hard dep above — bump in lockstep.
 jang = [
-    "jang>=2.5.51",
+    "jang>=2.5.52",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
 image = [
@@ -277,4 +277,4 @@ constraint-dependencies = [
 # Pin the JANG source for reproducible runtime and quantization tools (jangq main with the DeepSeek-V4.1 runtime:
 # #30, #32, #33 cleanup, #34 sampled-noise fix, #36 decode kernels).
 [tool.uv.sources]
-jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "b3d21c2fc9628db132cdb462409cf94785579103", subdirectory = "jang-tools" }
+jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "aa6106f8e6cb9c34831a0686e0287650beff1d5a", subdirectory = "jang-tools" }
