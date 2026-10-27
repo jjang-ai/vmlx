@@ -9810,6 +9810,7 @@ class Scheduler:
             ):
                 is_stop = True
             string_stop_truncate = -1  # >=0 when string stop matched
+            matched_stop = None
 
             if not is_stop:
                 # Capture text start so we can diff after adding all tokens
@@ -9861,6 +9862,7 @@ class Scheduler:
                             idx = full_text.find(stop_str, search_start)
                             if idx >= 0:
                                 string_stop_truncate = idx
+                                matched_stop = stop_str
                                 new_text = ""
                                 break
             else:
@@ -9936,6 +9938,7 @@ class Scheduler:
                 detok.finalize()
                 if string_stop_truncate >= 0:
                     output.output_text = detok.text[:string_stop_truncate]
+                    output.stop_sequence = matched_stop
                 else:
                     output.output_text = detok.text
                 request.output_text = output.output_text

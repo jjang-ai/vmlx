@@ -3718,9 +3718,9 @@ class MLLMScheduler:
                         # the same response on every miss -- any request with
                         # a stop list re-added one token forever and hung the
                         # server -- and skipped other rows' responses on a hit.
-                        hits = [at for at in (full_text.find(s, search_start) for s in stops) if at >= 0]
+                        hits = [(at, s) for s in stops for at in [full_text.find(s, search_start)] if at >= 0]
                         if hits:
-                            stop_at = min(hits)
+                            stop_at, request._stop_matched = min(hits, key=lambda h: h[0])
                             string_stop_truncate = stop_at
                             new_text = full_text[emitted:stop_at] if stop_at > emitted else ""
                             emitted = max(emitted, stop_at)
@@ -3832,11 +3832,11 @@ class MLLMScheduler:
                         if last_think_end >= 0:
                             search_start = max(search_start, last_think_end + len('</think>'))
                         hits = [] if in_think else [
-                            at for stop in request.sampling_params.stop if stop
+                            (at, stop) for stop in request.sampling_params.stop if stop
                             for at in [final_text.find(stop, search_start)] if at >= 0
                         ]
                         if hits:
-                            string_stop_truncate = min(hits)
+                            string_stop_truncate, request._stop_matched = min(hits, key=lambda h: h[0])
                             output.new_text += final_text[_emitted:string_stop_truncate]
                             finish_reason = output.finish_reason = request.finish_reason = "stop"
                             request.status = RequestStatus.FINISHED_STOPPED
@@ -3848,6 +3848,7 @@ class MLLMScheduler:
                     output.new_text += final_text_delta
                 if string_stop_truncate >= 0:
                     output.output_text = detok.text[:string_stop_truncate]
+                    output.stop_sequence = getattr(request, "_stop_matched", None)
                 else:
                     output.output_text = detok.text
                 request.output_text = output.output_text

@@ -363,6 +363,7 @@ class MLXLanguageModel:
         # Note: output_text is generated tokens only (no prompt echo)
         finish_reason = "length"
         stop_truncated = False
+        matched_stop = None
         if stop and output_text:
             for stop_seq in stop:
                 idx = output_text.find(stop_seq)
@@ -370,6 +371,7 @@ class MLXLanguageModel:
                     output_text = output_text[:idx]
                     finish_reason = "stop"
                     stop_truncated = True
+                    matched_stop = stop_seq
                     break
 
         # Tokenize after truncation to get accurate token count
@@ -386,6 +388,7 @@ class MLXLanguageModel:
             tokens=tokens,
             logprobs=output_logprobs if want_logprobs else None,
             finish_reason=finish_reason,
+            stop_sequence=matched_stop,
         )
 
     def stream_generate(

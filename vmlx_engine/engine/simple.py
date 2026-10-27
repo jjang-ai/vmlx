@@ -378,12 +378,14 @@ class SimpleEngine(BaseEngine):
             verbose=False,
         )
         finish_reason = "length"
+        matched_stop = None
         if stop and output_text:
             for stop_seq in stop:
                 index = output_text.find(stop_seq)
                 if index >= 0:
                     output_text = output_text[:index]
                     finish_reason = "stop"
+                    matched_stop = stop_seq
                     break
         try:
             tokens = tokenizer.encode(output_text)
@@ -399,6 +401,7 @@ class SimpleEngine(BaseEngine):
             prompt_tokens=prompt_tokens,
             completion_tokens=len(tokens),
             finish_reason=finish_reason,
+            stop_sequence=matched_stop,
         )
 
     def _mimo_thinking_off_logits_processors(

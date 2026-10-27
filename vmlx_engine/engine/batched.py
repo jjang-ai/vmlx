@@ -2733,6 +2733,7 @@ class BatchedEngine(BaseEngine):
                 cached_tokens=getattr(output, "cached_tokens", 0),
                 cache_detail=getattr(output, "cache_detail", "") or "",
                 finish_reason=output.finish_reason,
+                stop_sequence=getattr(output, "stop_sequence", None),
             )
 
         # Use LLM engine for text-only
@@ -2817,6 +2818,7 @@ class BatchedEngine(BaseEngine):
             cached_tokens=getattr(output, "cached_tokens", 0),
             cache_detail=getattr(output, "cache_detail", "") or "",
             finish_reason=output.finish_reason,
+            stop_sequence=getattr(output, "stop_sequence", None),
         )
 
     async def stream_generate(
@@ -2929,6 +2931,7 @@ class BatchedEngine(BaseEngine):
                     cache_detail=getattr(output, "cache_detail", "") or "",
                     finished=output.finished,
                     finish_reason=output.finish_reason,
+                    stop_sequence=getattr(output, "stop_sequence", None),
                 )
             _drain_request_diagnostics(request_id)
             return
@@ -3020,6 +3023,7 @@ class BatchedEngine(BaseEngine):
                 cache_detail=getattr(output, "cache_detail", "") or "",
                 finished=output.finished,
                 finish_reason=output.finish_reason,
+                stop_sequence=getattr(output, "stop_sequence", None),
             )
 
     async def chat(
