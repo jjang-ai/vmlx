@@ -87,3 +87,12 @@ def test_block_size_and_namespace_split_in_source():
     v40 = src.index(":dsv4_cache_schema=deepseek_v4_v10_delta")
     assert v41 < v40  # the V4.1 branch is checked first (V4.1 also matches _uses_dsv4_cache)
     assert scheduler_mod  # module import keeps the inspected source current
+
+
+def test_dsv41_model_is_not_hybrid():
+    """DeepseekV41Cache is answered by the DSV4 class-name check (the old separate entry was unreachable)."""
+    mlx_model = pytest.importorskip("jang_tools.dsv4_1.mlx_model")
+    seq = mlx_model._SeqState()
+    model = SimpleNamespace(make_cache=lambda: [mlx_model.DeepseekV41Cache(seq, i, r) for i, r in enumerate((0, 2))])
+    assert Scheduler._is_hybrid_model(model) is False
+    assert Scheduler._model_uses_dsv4_cache(model) is True

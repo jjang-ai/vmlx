@@ -2194,6 +2194,7 @@ class Scheduler:
                 t for t in cache_types
                 if t == "KVCache" or t.endswith("KVCache") or t == "MiniMaxM3SparseCache"
             }
+            # DSV4 / DSV4.1 composite caches (DeepseekV41Cache included) are typed caches, not SSM companions.
             if any(Scheduler._is_dsv4_cache_class_name(t) for t in cache_types):
                 return False
             # openPangu v2 owns a path-dependent composite cache: MLA latent KV,
@@ -2205,11 +2206,6 @@ class Scheduler:
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
                 "Glm5KDACache",
                 "Glm5MLACache",
-                # DSV4.1 per-layer composite cache: MLA latent sliding-window KV +
-                # compressed-global pool + indexer state + Engram position. Not a
-                # KVCache subclass and not an SSM companion cache -- opaque
-                # state/meta_state/trim, like the openPangu/GLM5 composite caches.
-                "DeepseekV41Cache",
             }:
                 return False
             if cache_types and cache_types == kv_types:
@@ -3959,9 +3955,9 @@ class Scheduler:
             getattr(self.model, "_dspark", None) is not None
             and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
         ):
-            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode via the validated
-            # DSparkRunner.stream on model.runtime. Subclasses SingleBatchGenerator (same ctor), so it
-            # only engages when a draft is present; the default AR path is never affected.
+            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode with
+            # DSparkRunner.prefill(session=<engine cache>) + decode_stream. Subclasses SingleBatchGenerator (same
+            # ctor), so it only engages when a draft is present; the default AR path is never affected.
             try:
                 from .utils.dsv41_dspark_generator import DSV41DSparkGenerator
                 logger.info("DSV4.1 dSpark draft attached — using DSV41DSparkGenerator (speculative decode)")
@@ -9290,11 +9286,10 @@ class Scheduler:
                             ]
                     else:
                         single_batch_cached_prefix: Optional[List[int]] = None
-                        if cache_to_use is not None and self.batch_generator.__class__.__name__ in (
-                            # The DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
-                            # the restored prefix as its context too (all_tokens / prefix store).
-                            "SingleBatchGenerator",
-                            "DSV41DSparkGenerator",
+                        # isinstance: the DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
+                        # the restored prefix as its context too (all_tokens / prefix store).
+                        if cache_to_use is not None and isinstance(
+                            self.batch_generator, SingleBatchGenerator
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)
@@ -13404,6 +13399,7 @@ class Scheduler:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get scheduler statistics."""
+        # Exact class names on purpose: these label which generator ran (DSpark vs plain SBG).
         generator_cls = (
             self.batch_generator.__class__.__name__
             if self.batch_generator is not None
@@ -13598,6 +13594,7 @@ class Scheduler:
             except Exception:
                 pass
         if base is not None:
+            # Exact class names on purpose: these label which generator ran (DSpark vs plain SBG).
             generator_cls = (
                 self.batch_generator.__class__.__name__
                 if self.batch_generator is not None
