@@ -124,6 +124,46 @@ def test_shim_keeps_tools_with_out_of_set_effort(fake_bundle):
     assert call["messages"][0] == {"role": "system", "content": "", "tools": tools}
 
 
+_TOOLS = [{"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "function": {"name": "calc"}}]
+
+
+@pytest.mark.parametrize("tool_choice,tools,named", [
+    ("required", _TOOLS, None),
+    ({"type": "function", "function": {"name": "calc"}}, _TOOLS, "calc"),
+    ("required", _TOOLS[:1], "get_weather"),  # one tool available: named like the Swift runtime
+])
+def test_shim_required_tool_choice_adds_latest_reminder(fake_bundle, tool_choice, tools, named):
+    tok, enc = _shim(fake_bundle)
+    msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "a"}, {"role": "user", "content": "go"}]
+    tok.apply_chat_template(msgs, enable_thinking=False, tools=tools, tool_choice=tool_choice)
+    sent = enc.CALLS[-1]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user", "latest_reminder"]
+    text = sent[-1]["content"]
+    assert text.startswith("The active API tool_choice is required for this assistant turn. ")
+    assert "<\uff5cDSML\uff5c calls>" in text
+    assert text.endswith(f" Use the `{named}` function.") if named else text.endswith("before the tool result.")
+    assert msgs[-1] == {"role": "user", "content": "go"}  # the caller's list is not mutated
+
+
+def test_shim_reminder_follows_the_latest_tool_results(fake_bundle):
+    tok, enc = _shim(fake_bundle)
+    msgs = [{"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "type": "function",
+                                                                  "function": {"name": "get_weather", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c", "content": "18C"}]
+    tok.apply_chat_template(msgs, enable_thinking=False, tools=_TOOLS, tool_choice="required")
+    assert [m["role"] for m in enc.CALLS[-1]["messages"]] == ["system", "user", "assistant", "tool", "latest_reminder"]
+
+
+@pytest.mark.parametrize("tool_choice,tools", [("auto", _TOOLS), ("none", _TOOLS), (None, _TOOLS), ("required", None),
+                                               ({"type": "function", "function": {"name": " "}}, _TOOLS)])
+def test_shim_no_reminder_otherwise(fake_bundle, tool_choice, tools):
+    tok, enc = _shim(fake_bundle)
+    tok.apply_chat_template([{"role": "user", "content": "hi"}], enable_thinking=False, tools=tools,
+                            tool_choice=tool_choice)
+    assert all(m["role"] != "latest_reminder" for m in enc.CALLS[-1]["messages"])
+
+
 def test_shim_tokenize_returns_ids(fake_bundle):
     tok, _ = _shim(fake_bundle)
     ids = tok.apply_chat_template([{"role": "user", "content": "x"}], tokenize=True)
