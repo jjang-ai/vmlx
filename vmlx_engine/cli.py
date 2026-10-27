@@ -865,6 +865,17 @@ def _apply_dsv41_runtime_policy(args, logger):
         changes.append(f"kv_quant={args.kv_cache_quantization}->none")
         args.kv_cache_quantization = "none"
         args.kv_cache_quantization_explicit = True
+    # Prefix-cache index as the app launches V4.1 (panel sessions.ts: 256-token blocks, 4,097 blocks = 1,048,576
+    # tokens, the family's context). The generic sizing gave a CLI engine 64-token blocks indexing 262,144 tokens,
+    # and the block size is part of the V4.1 SSD namespace, so CLI and app records never matched.
+    if (not getattr(args, "paged_cache_block_size_explicit", False)
+            and getattr(args, "paged_cache_block_size", None) != DSV4_PAGED_CACHE_BLOCK_SIZE):
+        changes.append(f"block_size={getattr(args, 'paged_cache_block_size', None)}->{DSV4_PAGED_CACHE_BLOCK_SIZE}")
+        args.paged_cache_block_size = DSV4_PAGED_CACHE_BLOCK_SIZE
+    if (not getattr(args, "max_cache_blocks_explicit", False)
+            and getattr(args, "max_cache_blocks", None) != DSV4_MAX_CACHE_BLOCKS):
+        changes.append(f"max_blocks={getattr(args, 'max_cache_blocks', None)}->{DSV4_MAX_CACHE_BLOCKS}")
+        args.max_cache_blocks = DSV4_MAX_CACHE_BLOCKS
     for flag, label in (("enable_jit", "enable_jit"), ("smelt", "smelt"), ("flash_moe", "flash_moe"),
                         ("distributed", "distributed")):
         if getattr(args, flag, False):
@@ -5057,6 +5068,9 @@ Examples:
     if args.command in ("serve", "bench"):
         args.max_cache_blocks_explicit = _argv_has_option(
             sys.argv[1:], "--max-cache-blocks"
+        )
+        args.paged_cache_block_size_explicit = _argv_has_option(
+            sys.argv[1:], "--paged-cache-block-size"
         )
 
     if args.command == "serve":
