@@ -305,6 +305,8 @@ class RequestOutput:
     # Finished request's speculative stats (native MTP record), for
     # /health.last_request.speculative (vmlx_engine.request_telemetry).
     spec_stats: dict | None = None
+    # The user stop string that ended the generation (Anthropic `stop_sequence`).
+    stop_sequence: Optional[str] = None
 
     @property
     def usage(self) -> Dict[str, int]:

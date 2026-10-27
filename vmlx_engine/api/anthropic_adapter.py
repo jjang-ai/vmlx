@@ -1026,8 +1026,9 @@ class AnthropicStreamAdapter:
 
         return events
 
-    def finalize(self) -> list[str]:
-        """Generate closing events for the stream."""
+    def finalize(self, stop_sequence: str | None = None) -> list[str]:
+        """Generate closing events for the stream. `stop_sequence` is the user stop string that ended the
+        generation, when one did (the Chat Completions chunks only say "stop")."""
         if self._finalized:
             return []
         # Guard: if stream errored before any data was emitted, don't send
@@ -1048,8 +1049,11 @@ class AnthropicStreamAdapter:
             stop_reason = "max_tokens"
         elif self._finish_reason == "tool_calls" or self._tool_block_open:
             stop_reason = "tool_use"
+        elif stop_sequence:
+            stop_reason = "stop_sequence"
         else:
             stop_reason = "end_turn"
+            stop_sequence = None
 
         # Close the one active block before the message terminal sequence.
         self._close_open_blocks(events)
@@ -1065,7 +1069,10 @@ class AnthropicStreamAdapter:
             }))
         events.append(self._sse("message_delta", {
             "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "delta": {
+                "stop_reason": stop_reason,
+                "stop_sequence": stop_sequence if stop_reason == "stop_sequence" else None,
+            },
             "usage": usage,
         }))
 

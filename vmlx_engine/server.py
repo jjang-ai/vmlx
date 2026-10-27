@@ -5569,6 +5569,18 @@ def _attach_effective_tools_for_tool_parsing(request: Any, tools: list[Any]) -> 
         logger.debug("Failed to attach effective tool schema set for parser context")
 
 
+def _note_stop_sequence(request: Any, output: Any) -> None:
+    """Remember the user stop string that ended the generation, for Anthropic's
+    `stop_reason: "stop_sequence"` / `stop_sequence` (the OpenAI chunk only says "stop")."""
+    seq = getattr(output, "stop_sequence", None)
+    if request is None or not seq:
+        return
+    try:
+        object.__setattr__(request, "_vmlx_stop_sequence", seq)
+    except Exception:
+        logger.debug("Failed to attach the matched stop sequence")
+
+
 def tool_schema_allows_null(fn_schema: Any, key: str) -> bool:
     """Whether a tool's JSON Schema declares ``key`` as nullable: ``type`` is or
     contains ``"null"``, ``nullable: true``, or an ``anyOf``/``oneOf`` branch
@@ -18251,7 +18263,9 @@ async def create_anthropic_message(
                     for event in adapter.process_chunk(chunk_str):
                         yield event
             finally:
-                for event in adapter.finalize():
+                for event in adapter.finalize(
+                    stop_sequence=getattr(chat_req, "_vmlx_stop_sequence", None)
+                ):
                     yield event
 
         return StreamingResponse(generate(), media_type="text/event-stream")
@@ -18353,11 +18367,15 @@ async def create_anthropic_message(
         # Build Anthropic response
         content = []
         stop_reason = "end_turn"
+        stop_sequence = None
 
         if finish_reason == "tool_calls":
             stop_reason = "tool_use"
         elif finish_reason == "length":
             stop_reason = "max_tokens"
+        elif getattr(chat_req, "_vmlx_stop_sequence", None):
+            stop_reason = "stop_sequence"
+            stop_sequence = chat_req._vmlx_stop_sequence
 
         if reasoning_text:
             content.append({"type": "thinking", "thinking": reasoning_text})
@@ -18390,7 +18408,7 @@ async def create_anthropic_message(
             "content": content,
             "model": resolved_name,
             "stop_reason": stop_reason,
-            "stop_sequence": None,
+            "stop_sequence": stop_sequence,
             "usage": _anthropic_usage_block(
                 {
                     "prompt_tokens": prompt_tokens,
@@ -27439,6 +27457,7 @@ async def stream_chat_completion(
                     return
                 yield ": keep-alive\n\n"
                 continue
+            _note_stop_sequence(request, output)
 
             # Check if client disconnected
             if _nonstream_disconnect_event.is_set() or (
@@ -28790,6 +28809,7 @@ async def stream_chat_completion(
                 if answer_output is None:
                     yield ": keep-alive\n\n"
                     continue
+                _note_stop_sequence(request, answer_output)
                 if fastapi_request and await fastapi_request.is_disconnected():
                     logger.info(
                         "Client disconnected during %s answer pass, aborting %s",

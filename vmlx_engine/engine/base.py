@@ -47,6 +47,8 @@ class GenerationOutput:
     # /health.last_request.speculative (vmlx_engine.request_telemetry).
     spec_stats: dict | None = None
     reasoning_tokens: int | None = None
+    # The user stop string that ended the generation (Anthropic `stop_sequence`).
+    stop_sequence: str | None = None
 
 
 class BaseEngine(ABC):
