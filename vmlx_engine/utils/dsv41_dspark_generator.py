@@ -74,6 +74,22 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         else:
             logger.warning("DSV4.1 DSpark generator constructed without a draft/runtime; AR fallback")
 
+    def request_progress(self, uid: int):
+        """Positions written into this request's DSV4.1 session (``_SeqState.pos``), or None.
+
+        DSpark prefills the whole prompt inside one ``DSparkRunner.prefill`` call, which advances the session
+        chunk by chunk while no output token exists. Without this the server's stream guard read 0 for a long
+        prefill and killed it as wedged once its grace windows ran out: a 1.04M-token prompt (512-token chunks)
+        died at ~2,760 s, three 900 s windows, just short of its first token. Integer reads only: the liveness
+        probe calls this from outside the model thread. Covers the inherited AR prefill (VL turns) too."""
+        req = self._find(uid)
+        if req is None:
+            return None
+        try:
+            return max(0, int(req.cache[0]._seq.pos))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return None
+
     # --- per-request routing -------------------------------------------------
     @staticmethod
     def _is_vl(req) -> bool:
