@@ -9286,10 +9286,12 @@ class Scheduler:
                             ]
                     else:
                         single_batch_cached_prefix: Optional[List[int]] = None
-                        # isinstance: the DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs
-                        # the restored prefix as its context too (all_tokens / prefix store).
-                        if cache_to_use is not None and isinstance(
-                            self.batch_generator, SingleBatchGenerator
+                        if cache_to_use is not None and self.batch_generator.__class__.__name__ in (
+                            # Class names, not isinstance (tests drive this with stand-in generator classes):
+                            # the DSV4.1 DSpark generator subclasses SingleBatchGenerator and needs the
+                            # restored prefix as its context too (all_tokens / prefix store), so list it.
+                            "SingleBatchGenerator",
+                            "DSV41DSparkGenerator",
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)

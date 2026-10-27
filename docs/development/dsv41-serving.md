@@ -37,9 +37,10 @@ Each item removes a measured cause of slowness; jangq `RUNTIME_SERVING.md` opens
   position-keyed noise, so a fixed `seed` gives the same tokens whatever the governor does. Image turns,
   logits processors (repetition / frequency / presence penalty, logit_bias) and logprobs take the inherited
   AR path. `VMLX_DSV41_DSPARK_SAMPLED=0` sends sampled requests to AR.
-- Behavioural checks that must include the DSpark generator use `isinstance(..., SingleBatchGenerator)`. The
-  telemetry in `Scheduler.get_stats` and the cache stats compare exact class names on purpose: they report
-  which generator ran (`dsv41_dspark` vs `single_active`).
+- The scheduler identifies generators by class name (its unit tests drive it with stand-in classes), so a
+  check that must cover the DSpark generator lists `DSV41DSparkGenerator` next to `SingleBatchGenerator`
+  (restored-prefix context, prompt-snapshot telemetry). The telemetry in `Scheduler.get_stats` and the cache
+  stats label them separately (`dsv41_dspark` vs `single_active`).
 - The CLI policy for `deepseek_v4_1` serves one sequence, with no JIT, smelt or flash-MoE,
   and a 900 s request timeout.
 
