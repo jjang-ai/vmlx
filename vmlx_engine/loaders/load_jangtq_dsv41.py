@@ -84,24 +84,34 @@ def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
     """V4.1 ships a custom prompt encoder (encoding/encoding.py), not an HF chat_template. Attach an
     ``apply_chat_template`` shim that delegates to its ``encode_messages`` so the server's chat path
     (which calls ``renderer.apply_chat_template(messages, enable_thinking=..., tokenize=False)``)
-    renders the native thinking/tool format."""
-    enc_path = bundle / "encoding" / "encoding.py"
-    if not enc_path.exists():
+    renders the native thinking/tool format. The module is the one ``dsv41_vl_preprocess`` uses for
+    image turns (``chat_encoding.load_bundle_encoding``), so both paths render with the same code."""
+    from ..models.deepseek_v4_1.chat_encoding import (
+        encoder_effort,
+        is_thinking_off_effort,
+        load_bundle_encoding,
+    )
+
+    if not (bundle / "encoding" / "encoding.py").exists():
         logger.warning("DSV4.1: no encoding/encoding.py in bundle; chat endpoint will need a template")
         return
     try:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("dsv41_bundle_encoding", enc_path)
-        enc = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(enc)
+        enc = load_bundle_encoding(bundle)
     except Exception as exc:  # pragma: no cover
         logger.warning("DSV4.1: failed to load bundle encoding (%s); chat endpoint unavailable", exc)
         return
 
+    # add_generation_prompt is accepted but not applied: encode_messages always ends a user/tool turn with
+    # the assistant rail (`<｜Assistant｜><think>` or `</think>`). That keeps the engine's measured
+    # generation-prompt length at 0 for V4.1, which is what its prefix cache needs: the stored state is the
+    # exact N-1 prompt boundary (DeepseekV41Cache cannot be trimmed), and N-1 already drops the trailing
+    # `<think>` / `</think>` token, so the next turn's history (`<｜Assistant｜></think>answer...`) extends it.
+    # thinking_budget (from max_thinking_tokens / budget_tokens) is ignored: V4.1 steers reasoning depth
+    # with the numeric reasoning effort only (the server logs that once per request).
     def apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
-                            enable_thinking=True, reasoning_effort="high", tools=None, **_):
-        mode = "thinking" if enable_thinking else "chat"
+                            enable_thinking=True, reasoning_effort=None, tools=None, **_):
+        thinking_on = bool(enable_thinking) and not is_thinking_off_effort(reasoning_effort)
+        mode = "thinking" if thinking_on else "chat"
         msgs = [dict(m) for m in messages]
         # V4.1 renders tools natively (render_tools) ONLY inside a system message
         # (encode_messages reads msg["tools"]). The server passes tools here as a
@@ -113,12 +123,10 @@ def _attach_chat_encoder(tokenizer, bundle: Path) -> None:
                 msgs[0]["tools"] = tools
             else:
                 msgs = [{"role": "system", "content": "", "tools": tools}] + msgs
-        prompt = enc.encode_messages(msgs, thinking_mode=mode, reasoning_effort=reasoning_effort)
+        prompt = enc.encode_messages(msgs, thinking_mode=mode, reasoning_effort=encoder_effort(reasoning_effort))
         if tokenize:
-            try:
-                return tokenizer.encode(prompt)
-            except Exception:
-                return tokenizer.encode(prompt).ids
+            ids = tokenizer.encode(prompt)  # mlx_lm wrapper -> list[int]; raw tokenizers.Tokenizer -> Encoding
+            return list(getattr(ids, "ids", ids))
         return prompt
 
     # Attach to the wrapper and its inner HF tokenizer so the server's renderer discovery finds it.

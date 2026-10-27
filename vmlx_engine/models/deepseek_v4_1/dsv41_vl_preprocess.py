@@ -23,20 +23,15 @@ anywhere in a long multi-turn prompt.
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
-from pathlib import Path
 from typing import Any, List, Optional, Tuple
+
+from .chat_encoding import encoder_effort, is_thinking_off_effort, load_bundle_encoding
 
 logger = logging.getLogger(__name__)
 
-_TRUE = {"1", "true", "on", "yes"}
 _FALSE = {"0", "false", "off", "no"}
-
-# Process-wide cache of each bundle's encoding/encoding.py module. The module is
-# stateless across requests; loading it (exec of the bundle file) is not free.
-_ENCODING_CACHE: dict[str, Any] = {}
 
 
 def dsv41_vl_enabled() -> bool:
@@ -96,22 +91,6 @@ def messages_have_image(messages: List[dict]) -> bool:
             if any(k in item for k in ("image", "image_url")):
                 return True
     return False
-
-
-def _encoding(model_path: str):
-    mod = _ENCODING_CACHE.get(model_path)
-    if mod is not None:
-        return mod
-    p = Path(model_path) / "encoding" / "encoding.py"
-    if not p.exists():
-        raise FileNotFoundError(f"deepseek_v41 VL: no encoding module at {p}")
-    spec = importlib.util.spec_from_file_location(
-        f"dsv41_encoding_{abs(hash(model_path))}", p
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    _ENCODING_CACHE[model_path] = mod
-    return mod
 
 
 def _normalize_messages_for_encoding(messages: List[dict]) -> List[dict]:
@@ -294,8 +273,8 @@ def preprocess_dsv41_vl(
 
     from jang_tools.dsv41.vision import prepare_vl_inputs
 
-    enc = _encoding(model_path)
-    thinking_mode = "thinking" if enable_thinking else "chat"
+    enc = load_bundle_encoding(model_path)
+    thinking_mode = "thinking" if enable_thinking and not is_thinking_off_effort(reasoning_effort) else "chat"
     if messages_have_image(messages):
         norm_msgs = _normalize_messages_for_encoding(messages)
     elif extra_images:
@@ -314,13 +293,13 @@ def preprocess_dsv41_vl(
             )
     else:
         return None
-    # The text path renders through the loader's apply_chat_template shim, whose reasoning_effort
-    # default is "high"; render image turns identically (and with the same tools) so an image turn
-    # and its text continuation share one prompt format (and a prefix-cache boundary).
+    # Render image turns exactly like the loader's apply_chat_template shim renders text turns (same
+    # effort normalization: an int budget 1..100 or the encoder default, and the same tools) so an image
+    # turn and its text continuation share one prompt format (and a prefix-cache boundary).
     prompt, mm = enc.encode_messages(
         _attach_tools(norm_msgs, tools),
         thinking_mode=thinking_mode,
-        reasoning_effort=reasoning_effort if reasoning_effort is not None else "high",
+        reasoning_effort=encoder_effort(reasoning_effort),
         return_multi_modal_data=True,
     )
     raw_images = (mm or {}).get("images") or []

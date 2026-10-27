@@ -34,7 +34,6 @@ class DSMLV41ToolParser(DSMLToolParser):
     TOOL_CALLS_OPEN = f"<{DSML_PREFIX} calls>"
     TOOL_CALLS_CLOSE = f"</{DSML_PREFIX} calls>"
     INVOKE_OPEN_PREFIX = f"<{DSML_PREFIX} invoke "
-    INVOKE_CLOSE = f"</{DSML_PREFIX} invoke>"
     DSML_OPEN_PREFIX = f"<{DSML_PREFIX}"
 
     NATIVE_MARKERS = (
@@ -80,8 +79,8 @@ class DSMLV41ToolParser(DSMLToolParser):
         if not model_path or not (Path(model_path) / "encoding" / "encoding.py").is_file():
             return None
         try:
-            from vmlx_engine.models.deepseek_v4_1.dsv41_vl_preprocess import _encoding
+            from vmlx_engine.models.deepseek_v4_1.chat_encoding import load_bundle_encoding
 
-            return _encoding(str(model_path))
+            return load_bundle_encoding(model_path)
         except Exception:
             return None

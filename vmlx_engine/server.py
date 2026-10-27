@@ -3141,6 +3141,70 @@ def _is_loaded_dsv4_model(model: str = "") -> bool:
         return False
 
 
+def _is_loaded_dsv41_model(model: str = "") -> bool:
+    """Return whether the current loaded model resolves to DeepSeek-V4.1 (family deepseek_v4_1)."""
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        key = _model_path or _model_name or model or ""
+        cfg = get_model_config_registry().lookup(key)
+        return getattr(cfg, "family_name", "") == "deepseek_v4_1"
+    except Exception:
+        return False
+
+
+def _apply_dsv41_reasoning_policy(
+    gen_kwargs: dict,
+    ct_kwargs: dict,
+    request: Any,
+    model: str = "",
+    *,
+    endpoint: str = "",
+) -> None:
+    """DeepSeek-V4.1: give the bundle encoder an effort it accepts, on every endpoint.
+
+    The encoder takes an int 1..100 or low/high/max and asserts on anything else ("medium", "xhigh", ...),
+    which used to surface as a 500 on image turns, a silent fallback to "high" on text turns, and a 422 on
+    tool turns (the kwarg-strip retry dropped ``tools`` first). Map the caller's effort through the Swift
+    runtime's ladder (models.deepseek_v4_1.chat_encoding.reasoning_budget) into an int budget. A generic
+    ``thinking_mode=reasoning`` (inferred "medium") keeps the bundle default, like DSV4. ``none`` and the
+    other thinking-off spellings select the chat rail. Thinking-token budgets (max_thinking_tokens,
+    Anthropic thinking.budget_tokens, Responses reasoning.budget_tokens) do not apply: V4.1 steers depth
+    with this effort only, so they are logged once per request and dropped from the template kwargs."""
+    if not _is_loaded_dsv41_model(model):
+        return
+    from .models.deepseek_v4_1.chat_encoding import encoder_effort, is_thinking_off_effort
+
+    raw_ct = dict(_default_chat_template_kwargs or {})
+    raw_ct.update(getattr(request, "chat_template_kwargs", None) or {})
+    requested = _dsv4_requested_reasoning_effort(request, raw_ct)
+    if is_thinking_off_effort(requested):
+        gen_kwargs["enable_thinking"] = False
+        ct_kwargs["enable_thinking"] = False
+        if hasattr(request, "enable_thinking"):
+            request.enable_thinking = False
+        gen_kwargs.pop("reasoning_effort", None)
+        ct_kwargs.pop("reasoning_effort", None)
+    else:
+        budget = encoder_effort(requested)
+        if budget is None:
+            gen_kwargs.pop("reasoning_effort", None)
+            ct_kwargs.pop("reasoning_effort", None)
+        else:
+            gen_kwargs["reasoning_effort"] = budget
+            ct_kwargs["reasoning_effort"] = budget
+    ct_kwargs.pop("thinking_budget", None)
+    _mtt = getattr(request, "max_thinking_tokens", None)
+    if _mtt is not None:
+        logger.info(
+            "DSV4.1%s: thinking budget %s ignored (max_thinking_tokens / thinking.budget_tokens / "
+            "reasoning.budget_tokens); this model steers reasoning depth with reasoning_effort only "
+            "(1-100 or minimal/low/medium/high/xhigh/max).",
+            f" ({endpoint})" if endpoint else "",
+            _mtt,
+        )
+
+
 def _preserves_native_system_order(model: str = "") -> bool:
     """Use loaded bundle metadata to select templates that preserve role order."""
     from .models.mimo_v26_contract import read_mimo_v26_contract
@@ -15968,6 +16032,7 @@ def _cache_contract_render_and_tokenize(
     if dry_request.max_thinking_tokens is not None and dry_request.enable_thinking is not False:
         ct_kwargs["thinking_budget"] = int(dry_request.max_thinking_tokens)
 
+    _apply_dsv41_reasoning_policy({}, ct_kwargs, dry_request, model or "")
     _normalize_minimax_m3_thinking_mode(
         ct_kwargs,
         dry_request,
@@ -18111,6 +18176,8 @@ async def create_anthropic_message(
         _msg_kwargs["tools"] = convert_tools_for_template(_msg_effective_tools)
         _msg_kwargs["_vmlx_tools_present"] = True
 
+    _apply_dsv41_reasoning_policy(
+        _msg_kwargs, _ct_kwargs, chat_req, chat_req.model or "", endpoint="/v1/messages")
     _normalize_minimax_m3_thinking_mode(
         _ct_kwargs, chat_req, _model_path or _model_name or chat_req.model)
     _normalize_openpangu_thinking(
@@ -19078,6 +19145,9 @@ async def ollama_chat(fastapi_request: Request):
             _ollama_ct_kwargs["reasoning_effort"] = _stable_effort_o
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
+
+    _apply_dsv41_reasoning_policy(
+        chat_kwargs, _ollama_ct_kwargs, chat_req, chat_req.model or "", endpoint="/api/chat")
 
     # MiniMax-M3 and openPangu use family-native template switches rather than
     # the public enable_thinking kwarg. Keep streaming /api/chat identical to
@@ -21524,6 +21594,8 @@ async def create_chat_completion(
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
+    _apply_dsv41_reasoning_policy(
+        chat_kwargs, _ct_kwargs, request, request.model or "", endpoint="/v1/chat/completions")
     _normalize_minimax_m3_thinking_mode(
         _ct_kwargs, request, _model_path or _model_name or request.model)
     _normalize_openpangu_thinking(
@@ -25087,6 +25159,8 @@ async def create_response(
             f"messages={len(messages) if messages else 0}"
         )
 
+    _apply_dsv41_reasoning_policy(
+        chat_kwargs, _ct_kwargs, request, request.model or "", endpoint="/v1/responses")
     _normalize_minimax_m3_thinking_mode(
         _ct_kwargs, request, _model_path or _model_name or request.model)
     _normalize_openpangu_thinking(
