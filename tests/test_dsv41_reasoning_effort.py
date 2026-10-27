@@ -127,51 +127,18 @@ def test_shim_keeps_tools_with_out_of_set_effort(fake_bundle):
 _TOOLS = [{"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "function": {"name": "calc"}}]
 
 
-@pytest.mark.parametrize("tool_choice,tools,named", [
-    ("required", _TOOLS, None),
-    ({"type": "function", "function": {"name": "calc"}}, _TOOLS, "calc"),
-    ("required", _TOOLS[:1], "get_weather"),  # one tool available: named like the Swift runtime
-])
-def test_shim_required_tool_choice_adds_latest_reminder(fake_bundle, tool_choice, tools, named):
+@pytest.mark.parametrize("tool_choice", ["required", {"type": "function", "function": {"name": "calc"}}, "auto", "none"])
+def test_shim_tool_choice_adds_nothing_to_the_prompt(fake_bundle, tool_choice):
+    # Like every model whose template does not read tool_choice: the messages reach the encoder unchanged (the server
+    # enforces "required" after generation); no injected reminder text.
     tok, enc = _shim(fake_bundle)
     msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "a"}, {"role": "user", "content": "go"}]
-    tok.apply_chat_template(msgs, enable_thinking=False, tools=tools, tool_choice=tool_choice)
-    sent = enc.CALLS[-1]["messages"]
-    # right before the turn being answered, so the prompt still ends with the assistant rail
-    assert [m["role"] for m in sent] == ["system", "user", "assistant", "latest_reminder", "user"]
-    text = sent[3]["content"]
-    assert text.startswith("The active API tool_choice is required for this assistant turn. ")
-    assert "<\uff5cDSML\uff5c calls>" in text
-    assert text.endswith(f" Use the `{named}` function.") if named else text.endswith("before the tool result.")
-    assert msgs[-1] == {"role": "user", "content": "go"}  # the caller's list is not mutated
-
-
-def test_shim_reminder_precedes_the_latest_tool_results_as_one_run(fake_bundle):
-    tok, enc = _shim(fake_bundle)
-    call = {"type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
-    msgs = [{"role": "user", "content": "weather?"},
-            {"role": "assistant", "content": "", "tool_calls": [dict(call, id="c1"), dict(call, id="c2")]},
-            {"role": "tool", "tool_call_id": "c1", "content": "18C"}, {"role": "tool", "tool_call_id": "c2", "content": "9C"}]
-    tok.apply_chat_template(msgs, enable_thinking=False, tools=_TOOLS, tool_choice="required")
-    # the encoder merges consecutive tool results into one user turn: the reminder goes before the run, not inside it
-    assert [m["role"] for m in enc.CALLS[-1]["messages"]] == ["system", "user", "assistant", "latest_reminder",
-                                                              "tool", "tool"]
-
-
-def test_shim_reminder_not_added_twice(fake_bundle):
-    tok, enc = _shim(fake_bundle)
-    msgs = [{"role": "latest_reminder", "content": "r"}, {"role": "user", "content": "go"}]
-    tok.apply_chat_template(msgs, enable_thinking=False, tools=_TOOLS, tool_choice="required")
-    assert [m["role"] for m in enc.CALLS[-1]["messages"]] == ["system", "latest_reminder", "user"]
-
-
-@pytest.mark.parametrize("tool_choice,tools", [("auto", _TOOLS), ("none", _TOOLS), (None, _TOOLS), ("required", None),
-                                               ({"type": "function", "function": {"name": " "}}, _TOOLS)])
-def test_shim_no_reminder_otherwise(fake_bundle, tool_choice, tools):
-    tok, enc = _shim(fake_bundle)
-    tok.apply_chat_template([{"role": "user", "content": "hi"}], enable_thinking=False, tools=tools,
-                            tool_choice=tool_choice)
-    assert all(m["role"] != "latest_reminder" for m in enc.CALLS[-1]["messages"])
+    plain = tok.apply_chat_template(msgs, enable_thinking=False, tools=_TOOLS)
+    sent_plain = enc.CALLS[-1]["messages"]
+    chosen = tok.apply_chat_template(msgs, enable_thinking=False, tools=_TOOLS, tool_choice=tool_choice)
+    assert chosen == plain
+    assert enc.CALLS[-1]["messages"] == sent_plain
+    assert all(m["role"] != "latest_reminder" for m in sent_plain)
 
 
 def test_shim_tokenize_returns_ids(fake_bundle):
@@ -196,19 +163,16 @@ def test_real_bundle_encoder_accepts_every_effort(effort):
 
 
 @pytest.mark.skipif(not os.environ.get("DSV41_BUNDLE"), reason="set DSV41_BUNDLE to a V4.1 bundle directory")
-@pytest.mark.parametrize("thinking,rail", [(False, "<\uff5cAssistant\uff5c></think>"), (True, "<\uff5cAssistant\uff5c><think>")])
-def test_real_bundle_required_tool_choice_ends_with_the_assistant_rail(thinking, rail):
+@pytest.mark.parametrize("thinking", [False, True])
+def test_real_bundle_required_tool_choice_renders_the_plain_prompt(thinking):
     from vmlx_engine.loaders.load_jangtq_dsv41 import _attach_chat_encoder
 
     tok = _Tok()
     _attach_chat_encoder(tok, Path(os.environ["DSV41_BUNDLE"]))
-    call = {"type": "function", "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}}
-    for msgs in ([{"role": "user", "content": "Hello there!"}],
-                 [{"role": "user", "content": "Paris and Tokyo?"}, {"role": "assistant", "content": "",
-                  "tool_calls": [dict(call, id="c1")]}, {"role": "tool", "tool_call_id": "c1", "content": "18C"}]):
-        prompt = tok.apply_chat_template(msgs, enable_thinking=thinking, tools=_TOOLS, tool_choice="required")
-        assert "<\uff5clatest_reminder\uff5c>The active API tool_choice is required" in prompt
-        assert prompt.endswith(rail), prompt[-200:]
+    msgs = [{"role": "user", "content": "Hello there!"}]
+    plain = tok.apply_chat_template(msgs, enable_thinking=thinking, tools=_TOOLS)
+    assert tok.apply_chat_template(msgs, enable_thinking=thinking, tools=_TOOLS, tool_choice="required") == plain
+    assert "latest_reminder" not in plain
 
 
 # --- the image path ---------------------------------------------------------------------------------------------
