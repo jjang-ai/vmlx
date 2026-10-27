@@ -16,6 +16,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Preserve Anthropic matched-stop metadata; place required-tool reminders before the active turn so native encoder prompts end on the assistant rail.
 - Improve short DSpark prompt prefill without changing long-context memory bounds, and correct the governor cost estimator so missed drafts do not disproportionately favor ordinary decoding.
 - Preserve retained source-bound model evidence alongside focused regression and package checks; no universal throughput or full cross-runtime parity guarantee is made.
+- Known limitation: a history-conditioned image-color error was observed on the affine bundle and reproduced through the raw API; fresh image requests answered correctly. This release does not guarantee visual answer accuracy.
 
 ## [1.6.81] - 2026-10-20
 

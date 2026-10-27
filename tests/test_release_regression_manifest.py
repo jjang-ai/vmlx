@@ -16604,3 +16604,77 @@ def test_scoped_capture_reader_requires_real_chunk_payloads_and_terminal():
     assert not _is_captured_chat_event_stream(encode([rows[0], rows[-1]]))
     assert not _is_captured_chat_event_stream(b'{"status":"PASS","summary":"all good"}')
     assert not _is_captured_chat_event_stream(b'null')
+
+
+def _dsv41_checkpoint_fixture(tmp_path, monkeypatch):
+    runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
+    data.update(schema=runner.SCOPED_DSV41_SCHEMA, models=sorted(runner.SCOPED_DSV41_MODELS))
+    data['receipts'] = {k: v for k, v in data['receipts'].items() if k in runner.SCOPED_DSV41_RECEIPTS}
+    entry = json.loads(json.dumps(data['receipts']['ARTIFACT_FORMAT']))
+    original = json.loads((path.parent / entry['receipt']['path']).read_text())
+    original['owner'] = 'QUALITY_LIMITS'
+
+    def write(name, value):
+        p = path.parent / name
+        p.write_text(value if isinstance(value, str) else json.dumps(value))
+        return {'path': name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+
+    entry['receipt'] = write('QUALITY_LIMITS.json', original)
+    data['receipts']['QUALITY_LIMITS'] = entry
+    terminal = write('current.sse',
+        'data: {"type":"response.output_text.delta","delta":"Red"}\n\n'
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n')
+    retained = write('retained-api.json', {'checks': {k: {'result': 'PASS'} for k in
+        ['chat_usage_stream_cached', 'responses_stream_usage', 'anthropic_messages']}})
+    color = write('color-error.json', {'expected': 'red', 'observed': 'Purple', 'status': 'FAIL'})
+    scope_path = path.parent / 'scope.json'
+    scope = json.loads(scope_path.read_text())
+    proof = data['receipts']['MEDIA_UI']['artifacts']
+    scope.update(models=data['models'], required_receipts=sorted(runner.SCOPED_DSV41_RECEIPTS),
+        retained_stream_capture_limits=['deepseek-v41-janght'],
+        quality_limits=[{'id': 'history_conditioned_color', 'model': 'deepseek-v41-affine',
+                         'category': 'output_quality', 'description': 'Accepted known color error', 'evidence': color}],
+        model_evidence={name: {'source_commit': provenance['source']['commit'],
+            'api_capture_kind': 'raw_streams' if name.endswith('affine') else 'retained_results',
+            'visual': [proof[1]], 'api': [terminal if name.endswith('affine') else retained],
+            'runtime_identity': [proof[0]], 'turns': [proof[0]], 'review': [proof[0]]}
+            for name in runner.SCOPED_DSV41_MODELS})
+
+    def validate():
+        data['scope_document'] = write('scope.json', scope)
+        path.write_text(json.dumps(data))
+        return runner.validate_scoped_prepackage(root, path, provenance=provenance, expected_version='1.6.74')
+
+    return runner, path, data, scope, validate
+
+
+def test_scoped_dsv41_checkpoint_binds_both_formats_and_keeps_limits(tmp_path, monkeypatch):
+    runner, path, data, scope, validate = _dsv41_checkpoint_fixture(tmp_path, monkeypatch)
+    result = validate()
+    assert result['status'] == 'pass'
+    assert result['models'] == sorted(runner.SCOPED_DSV41_MODELS)
+    assert result['retained_stream_capture_limits'] == ['deepseek-v41-janght']
+    assert result['quality_limits'][0]['id'] == 'history_conditioned_color'
+    assert result['pending_stages'] == runner.SCOPED_PENDING_STAGES
+    del scope['model_evidence']['deepseek-v41-janght']
+    assert validate()['status'] == 'fail'
+
+
+def test_scoped_dsv41_checkpoint_rejects_erased_limits_and_missing_stream(tmp_path, monkeypatch):
+    _, path, data, scope, validate = _dsv41_checkpoint_fixture(tmp_path, monkeypatch)
+    assert validate()['status'] == 'pass'
+    for key in ['quality_limits', 'retained_stream_capture_limits']:
+        saved = scope.pop(key)
+        assert validate()['status'] == 'fail'
+        scope[key] = saved
+    row = scope['model_evidence']['deepseek-v41-affine']
+    row['api'] = scope['model_evidence']['deepseek-v41-janght']['api']
+    assert validate()['status'] == 'fail'
+
+
+def test_scoped_dsv41_completed_stream_rejects_truncation_and_summaries():
+    from tests.cross_matrix.run_release_regression_manifest import _is_completed_responses_stream
+    assert not _is_completed_responses_stream(b'{"status":"PASS"}')
+    assert not _is_completed_responses_stream(b'data: {"type":"response.output_text.delta","delta":"hi"}\n')
+    assert not _is_completed_responses_stream(b'data: {"type":"response.completed"}\n')
+    assert not _is_completed_responses_stream(b'data: null\n')

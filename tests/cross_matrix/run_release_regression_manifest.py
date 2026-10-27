@@ -442,6 +442,13 @@ SCOPED_DSPARK_RECEIPTS = {
     "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
     "GLM_DFLASH_INTEGRATION", "NATIVE_EOS_CLASSIFICATION",
 }
+SCOPED_DSV41_SCHEMA = "vmlx-scoped-prepackage-v4"
+SCOPED_DSV41_MODELS = {"deepseek-v41-affine", "deepseek-v41-janght"}
+SCOPED_DSV41_RECEIPTS = {
+    "PROVENANCE", "SETTINGS", "CACHE_API", "MEDIA_UI", "REGRESSION",
+    "ARTIFACT_FORMAT", "PARSER", "REASONING", "GENERATION", "TOOL_CALL",
+    "FAMILY_DETECTION", "JANG_COMPAT", "QUALITY_LIMITS",
+}
 SCOPED_REQUIRED_RECEIPTS = {
     "PROVENANCE", "SETTINGS", "CACHE_API", "MEDIA_UI", "QUOTA", "REGRESSION",
     "NATIVE_MTP", "API_CACHE", "API_SURFACE", "MCP", "JANG_COMPAT",
@@ -485,6 +492,70 @@ def _is_captured_chat_event_stream(raw: bytes) -> bool:
         return False
 
 
+def _is_completed_responses_stream(raw: bytes) -> bool:
+    """Recognize actual Responses SSE bytes, including a completed terminal event."""
+    try:
+        events = [json.loads(line[6:]) for line in raw.splitlines()
+                  if line.startswith(b"data: ") and line[6:] != b"[DONE]"]
+        return (bool(events) and all(isinstance(e, dict) for e in events)
+                and events[-1].get("type") == "response.completed"
+                and any(e.get("type") in {
+                    "response.output_text.delta", "response.function_call_arguments.delta",
+                    "response.reasoning_summary_text.delta",
+                } for e in events))
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _validate_dsv41_scope(scope: dict, bound_file) -> list[dict]:
+    """The approved checkpoint distinguishes retained results from fresh raw streams.
+
+    This does not certify new JANGHT raw-stream coverage or universal model
+    quality. The exact retained-data limit and accepted color error stay visible.
+    Packaging, notarization, installed smoke and publication remain downstream.
+    """
+    if scope.get("retained_stream_capture_limits") != ["deepseek-v41-janght"]:
+        raise ValueError("DSV4.1 retained stream-capture limitation must be explicit")
+    models = scope.get("model_evidence", {})
+    if not isinstance(models, dict) or set(models) != SCOPED_DSV41_MODELS:
+        raise ValueError("DSV4.1 requires separate evidence for both quant formats")
+    for name, row in models.items():
+        expected = "raw_streams" if name == "deepseek-v41-affine" else "retained_results"
+        if row.get("api_capture_kind") != expected:
+            raise ValueError(f"{name}: incorrect API capture classification")
+        if not re.fullmatch(r"[0-9a-f]{40}", row.get("source_commit", "")):
+            raise ValueError(f"{name}: missing original source identity")
+        for surface in ("visual", "api", "runtime_identity", "turns", "review"):
+            refs = row.get(surface)
+            if not isinstance(refs, list) or not refs:
+                raise ValueError(f"{name}: missing {surface} evidence")
+            paths = [bound_file(ref) for ref in refs]
+            if surface == "visual" and not all(
+                p.read_bytes().startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")) for p in paths
+            ):
+                raise ValueError(f"{name}: visual evidence is not image bytes")
+            if surface == "api":
+                if expected == "raw_streams":
+                    if not any(_is_completed_responses_stream(p.read_bytes()) for p in paths):
+                        raise ValueError(f"{name}: missing completed raw Responses stream")
+                else:
+                    results = [json.loads(p.read_bytes()) for p in paths]
+                    required = {"chat_usage_stream_cached", "responses_stream_usage", "anthropic_messages"}
+                    if not any(isinstance(d, dict) and required <= set(d.get("checks", {}))
+                               and all(d["checks"][k].get("result") == "PASS" for k in required)
+                               for d in results):
+                        raise ValueError(f"{name}: missing retained streaming/API results")
+    limits = scope.get("quality_limits")
+    if (not isinstance(limits, list) or len(limits) != 1
+            or limits[0].get("id") != "history_conditioned_color"
+            or limits[0].get("model") != "deepseek-v41-affine"
+            or limits[0].get("category") != "output_quality"
+            or not limits[0].get("description")):
+        raise ValueError("DSV4.1 checkpoint requires its explicit accepted color-quality limit")
+    bound_file(limits[0].get("evidence"))
+    return [{key: limit[key] for key in ("id", "model", "category")} for limit in limits]
+
+
 def validate_scoped_prepackage(
     root: Path, path: Path, *, provenance: dict, expected_version: str,
 ) -> dict:
@@ -501,14 +572,17 @@ def validate_scoped_prepackage(
         data = json.loads(raw)
         result["receipt_sha256"] = hashlib.sha256(raw).hexdigest()
         evidence_root = path.resolve().parent
-        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA}:
+        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA}:
             raise ValueError("unsupported scoped prepackage schema")
+        dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
         required_receipts = SCOPED_REQUIRED_RECEIPTS | (SCOPED_DFLASH_RECEIPTS if expanded else set())
         if dspark:
             required_receipts |= SCOPED_DSPARK_RECEIPTS
+        if dsv41:
+            required_models, required_receipts = SCOPED_DSV41_MODELS, SCOPED_DSV41_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:
@@ -545,6 +619,9 @@ def validate_scoped_prepackage(
             raise ValueError("scope document omits required models/acceptance owners")
         if not scope.get("authority") or not scope.get("limits"):
             raise ValueError("scope requires explicit user authority and measured limits")
+        if dsv41:
+            result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
+            result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
         exclusions = data.get("exclusions")
         if not isinstance(exclusions, list):
             raise ValueError("historical exclusions must be explicit")
