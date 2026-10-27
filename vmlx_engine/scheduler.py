@@ -15,6 +15,7 @@ The scheduler follows vLLM's design with:
 """
 
 from .persistence_outcome import LEDGER as _PERSIST
+import json
 import logging
 import os
 import random
@@ -2128,6 +2129,19 @@ class Scheduler:
         # DeepseekV41Cache is the V4.1 composite cache: same opaque state/meta_state/trim contract as
         # DSV4, so it rides the DSV4 disk-only block-cache + prompt-boundary-snapshot reuse path.
         return class_name in {"DeepseekV4Cache", "PoolQuantizedV4Cache", "DeepseekV41Cache"}
+
+    @staticmethod
+    def _dsv41_state_dict_pos(state_dict: Any) -> Optional[int]:
+        """Sequence position recorded in an extracted DeepseekV41Cache state dict (meta_state "pos")."""
+        try:
+            meta = state_dict.get("meta_state")
+            if isinstance(meta, (tuple, list)) and len(meta) == 1:
+                meta = meta[0]
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            return int(meta["pos"]) if isinstance(meta, dict) and "pos" in meta else None
+        except Exception:
+            return None
 
     @staticmethod
     def _is_dsv4_cache_object(cache: Any) -> bool:
@@ -5861,6 +5875,15 @@ class Scheduler:
                 return result
             except Exception:
                 return arr
+
+        if any(type(c).__name__ == "DeepseekV41Cache" for c in raw_cache):
+            # DeepSeek-V4.1: never rebuilt as a V4.0 DeepseekV4Cache (its 3-tuple state setter rejected the
+            # V4.1 state and the store was silently dropped). DeepseekV41Cache cannot be trimmed, so it is
+            # stored only when it already sits at the N-1 boundary (the generator's prompt snapshot),
+            # copied as one unit because every layer shares the sequence position and Engram history.
+            from .memory_cache import clone_dsv41_cache_at
+
+            return clone_dsv41_cache_at(list(raw_cache), target_len)
 
         truncated = []
         for layer_cache in raw_cache:
@@ -11561,6 +11584,24 @@ class Scheduler:
                                                 break
                                             state = sd.get("state")
                                             cls_name = sd.get("class_name", "")
+                                            if cls_name == "DeepseekV41Cache":
+                                                # DSV4.1 is never rebuilt as a V4.0 DeepseekV4Cache and
+                                                # cannot be trimmed: keep the layer only when its recorded
+                                                # position already equals the shortened key's N-1 target.
+                                                _v41_pos = self._dsv41_state_dict_pos(sd)
+                                                if _v41_pos == target:
+                                                    truncated_dicts.append(sd)
+                                                    continue
+                                                logger.info(
+                                                    "Skipping DSV4.1 paged cache store for %s: state is at "
+                                                    "position %s, the generation-prompt-stripped key needs "
+                                                    "%d (DeepseekV41Cache cannot be trimmed)",
+                                                    request_id,
+                                                    _v41_pos,
+                                                    target,
+                                                )
+                                                trunc_ok = False
+                                                break
                                             if self._is_dsv4_cache_class_name(cls_name) and state is not None:
                                                 try:
                                                     from jang_tools.dsv4.mlx_model import (
