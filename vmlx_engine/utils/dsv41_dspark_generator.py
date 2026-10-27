@@ -43,14 +43,36 @@ def _adaptive_enabled() -> bool:
 _DRAFT_PREFILL_STEP = 1024
 
 
-def _draft_prefill_step(configured: int) -> int:
+# A prompt (or uncached tail) of up to this many tokens runs as ONE chunk while the session stays short: every
+# chunk passes over all routed experts, so a 1.4k-token prompt split 1024 + 380 paid that pass twice. Measured
+# (DeepSeek-V4.1 JANGHT, M5 Max 128 GB, draft resident, warm server, unique text, two interleaved pairs of 3): ~1.35k
+# tokens 507 -> 541 pp/s (median). Past _SHORT_CHUNK_MAX_CONTEXT the step stays: 2048-token chunks over a long context
+# outgrow the working set (they failed past 512k on a 128 GB machine).
+_SHORT_PROMPT_ONE_CHUNK = 2048
+_SHORT_CHUNK_MAX_CONTEXT = 65536
+
+
+def _prefill_override() -> int:
     try:
-        override = int(os.environ.get("VMLX_DSV41_DSPARK_PREFILL_STEP", "0"))
+        return max(0, int(os.environ.get("VMLX_DSV41_DSPARK_PREFILL_STEP", "0")))
     except ValueError:
-        override = 0
+        return 0
+
+
+def _draft_prefill_step(configured: int) -> int:
+    override = _prefill_override()
     if override > 0:
         return override
     return min(int(configured), _DRAFT_PREFILL_STEP)
+
+
+def _prompt_chunk(n_tokens: int, start: int, step: int) -> int:
+    """Chunk size for one DSpark prefill of n_tokens from position start (VMLX_DSV41_DSPARK_PREFILL_STEP wins)."""
+    if _prefill_override() > 0:
+        return step
+    if step < n_tokens <= _SHORT_PROMPT_ONE_CHUNK and start + n_tokens <= _SHORT_CHUNK_MAX_CONTEXT:
+        return n_tokens
+    return step
 
 
 class DSV41DSparkGenerator(SingleBatchGenerator):
@@ -197,7 +219,7 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         with self._stream_context():
             sess, pending, c = self._runner.prefill(
                 prompt, session=seq, on_boundary=_on_boundary,
-                chunk_size=self.prefill_step_size,
+                chunk_size=_prompt_chunk(len(prompt), int(getattr(seq, "pos", 0) or 0), self.prefill_step_size),
             )
             mx.eval(pending)
         req.prompt_cache_snapshot = boundary.get("snapshot")
