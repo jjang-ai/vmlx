@@ -13,7 +13,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Include the matching JANG 2.5.52 runtime and V4.1 decode/prefill kernels. Performance depends on bundle, hardware, context and sampling; no universal speedup is claimed.
 - Refresh adaptive DFlash ordinary-decoding baselines and validate compatible bundled affine drafts before selection. Preserve request cache-bypass settings and shared chat selection.
 - Restore the architecture-hint type used by chat settings and expose thinking controls for V4.1 bundles with native encoders.
-- Preserve Anthropic matched-stop metadata; place required-tool reminders before the active turn so native encoder prompts end on the assistant rail.
+- Preserve Anthropic matched-stop metadata and return the standard API error when a required tool call is absent.
 - Improve short DSpark prompt prefill without changing long-context memory bounds, and correct the governor cost estimator so missed drafts do not disproportionately favor ordinary decoding.
 - Preserve retained source-bound model evidence alongside focused regression and package checks; no universal throughput or full cross-runtime parity guarantee is made.
 - Known limitation: a history-conditioned image-color error was observed on the affine bundle and reproduced through the raw API; fresh image requests answered correctly. This release does not guarantee visual answer accuracy.
