@@ -244,19 +244,6 @@ class JTMixedSwitchGLU(nn.Module):
         lead, kk = x.shape[:-1], indices.shape[-1]
         x2 = x.reshape(-1, self.D); idx2 = indices.reshape(-1, kk).astype(mx.int32); w2 = scores.reshape(-1, kk).astype(mx.float32)
         if idx2.size < SORT_THRESHOLD or not nax_prefill():
-            if x2.shape[0] > 1 and self.gu_fmt == "jangt" and self.dn_fmt == "jangt" and \
-                    os.environ.get("JANGT_GROUPED_DECODE", "0") == "1":       # env read per call: in-process A/B
-                # few-row decode: each expert decoded once per pass of the rows routed to it; bit-identical to the v3
-                # route (moe_kernels grouped kernels, tests/test_jangt_grouped_decode.py). OFF by default: measured on
-                # DeepSeek-V4.1 JANGHT (E=384, top-6, K=1/1.5, M5 Max) 2.7x SLOWER than v3 (40 layers, 6 rows: 69.5 vs
-                # 26.1 ms; 2 rows 20.3 vs 9.6), consecutive rows share ~1 of 36 slots, so a pass is mostly one row
-                # carrying the register footprint of RP rows.
-                U = self._unit(); order = MK._group_order(idx2)
-                h = MK.gather_gate_up_swiglu_grouped(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32,
-                                                     limit=self.limit, order=order)
-                y = MK.gather_down_weighted_grouped(MK.rotate_rows(h, U["sv_dn"], idx2.reshape(-1)), h, idx2, w2, U,
-                                                    order=order).astype(x.dtype)
-                return y.reshape(*lead, self.D)
             # JANGT gate/up feeding a JANGH down: rotate the activations in the gate/up epilogue (one dispatch less)
             ro = (self.gu_fmt == "jangt" and self.dn_fmt != "jangt" and self.I % 32 == 0
                   and os.environ.get("JANGT_ROT_OUT_DECODE", "0") == "1")   # measured neutral (-0.6%), off

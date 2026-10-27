@@ -79,10 +79,11 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                     or getattr(req, "dsv41_vl_images", None) is not None)
 
     def _is_greedy(self, req) -> bool:
-        """DSpark verification is greedy-exact only: it accepts a draft iff it equals the backbone's
-        argmax. Any sampler other than plain argmax (temperature/top-p/top-k/min-p), any logits
-        processor (repetition / frequency / presence penalty, logit_bias) or a logprobs request must
-        take the inherited AR path, which applies them per token. The scheduler tags greedy samplers
+        """Whether this request is greedy (plain argmax, no logits processor, no logprobs): DSpark then
+        accepts a draft iff it equals the backbone's argmax. Sampled requests (temperature > 0 with
+        top-p / top-k / min-p) take the exact sampled path (_spec_sampler); a logits processor
+        (repetition / frequency / presence penalty, logit_bias) or a logprobs request takes the
+        inherited AR path, which applies them per token. The scheduler tags greedy samplers
         (``_vmlx_greedy`` / ``_vmlx_accepts_logits`` are set only for temperature == 0)."""
         sampler = req.sampler or self.sampler
         greedy = bool(getattr(sampler, "_vmlx_greedy", False) or getattr(sampler, "_vmlx_accepts_logits", False))
@@ -108,7 +109,11 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             return False, None
         if req.logits_processors or self._logprobs_required(req):
             return False, None
-        from jang_tools.dsv41.dspark import SpecSampler
+        try:
+            from jang_tools.dsv41.dspark import SpecSampler
+        except ImportError:  # a jang_tools without the exact sampled path (before jangq #30): decode AR
+            logger.warning("DSV4.1 DSpark: installed jang_tools has no SpecSampler; sampled requests decode AR")
+            return False, None
 
         return True, SpecSampler(spec["temperature"], top_p=spec.get("top_p", 0.0), min_p=spec.get("min_p", 0.0),
                                  top_k=spec.get("top_k", 0), seed=spec.get("seed"))
