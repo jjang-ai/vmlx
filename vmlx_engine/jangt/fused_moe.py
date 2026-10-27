@@ -254,7 +254,8 @@ def jt_moe_decode(x, idx, w, experts, shared, limit: float):
     if _STATE["disabled"] or not requested() or not _eligible(x, idx, experts, shared):
         return None
     y = _run(x, idx, w, experts, shared, float(limit))
-    key = (x.shape[1], experts.I, idx.shape[1], float(limit), experts._unit()["K"], experts._unit()["K_dn"])
+    # Rows are part of the shape: each row count is checked against the stock path on its first use.
+    key = (x.shape[0], x.shape[1], experts.I, idx.shape[1], float(limit), experts._unit()["K"], experts._unit()["K_dn"])
     if key not in _STATE["checked"]:
         ref = mx.concatenate([_stock_row(x[i:i + 1], idx[i:i + 1], w[i:i + 1], experts, shared, float(limit))
                               for i in range(x.shape[0])], axis=0)

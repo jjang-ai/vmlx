@@ -68,3 +68,17 @@ def test_not_eligible_returns_none():
     aff = SimpleNamespace(w1=nn.QuantizedLinear(D, F, bias=False, group_size=64, bits=8), w3=shared.w3, w2=shared.w2)
     x = mx.zeros((1, D), mx.bfloat16)
     assert FM.jt_moe_decode(x, mx.zeros((1, 6), mx.int32), mx.zeros((1, 6)), m, aff, 10.0) is None     # affine shared
+
+
+def test_each_row_count_is_self_checked_once():
+    """The bit-identity self-check is keyed by the row count too: a 1-row admission does not cover 2 rows."""
+    FM._STATE["disabled"] = False
+    FM._STATE["checked"].clear()
+    m, shared = _layer(1, 1.5, 0, 10.0, seed=3)
+    rng = np.random.default_rng(3)
+    for R in (1, 2, 2):
+        x = mx.array((rng.standard_normal((R, D)) * 0.7).astype(np.float32)).astype(mx.bfloat16)
+        idx = mx.array(np.stack([rng.choice(E, 6, replace=False) for _ in range(R)]).astype(np.int32))
+        w = mx.array(rng.uniform(0.05, 0.5, size=(R, 6)).astype(np.float32))
+        assert FM.jt_moe_decode(x, idx, w, m, shared, 10.0) is not None
+    assert sorted(k[0] for k in FM._STATE["checked"]) == [1, 2]

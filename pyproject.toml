@@ -274,6 +274,6 @@ constraint-dependencies = [
     "mlx-audio==0.5.8; sys_platform == 'darwin'",
 ]
 
-# Pin the published JANG 2.5.50 source for reproducible runtime and quantization tools.
+# Pin the JANG source for reproducible runtime and quantization tools (jangq main with the DeepSeek-V4.1 runtime: #30, #32).
 [tool.uv.sources]
-jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "6dd1268e864a36bf40ee176c7e98b67336df14f2", subdirectory = "jang-tools" }
+jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "f7849d4e8ef91840fd009304fa38dbc940b4ccca", subdirectory = "jang-tools" }
