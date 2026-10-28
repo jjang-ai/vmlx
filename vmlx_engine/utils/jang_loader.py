@@ -2022,6 +2022,13 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
 
     ensure_spark2_5_runtime_registered(path, config=config)
 
+    if "minimax_m3_vl" in model_types:
+        # vMLX-owned runtime installed as mlx_lm.models.minimax_m3_vl (the CLI registers it at startup too; this covers
+        # direct load_jang_model callers). Idempotent; defers to an upstream package when one exists.
+        from ..models.minimax_m3.minimax_m3_register import register_minimax_m3_runtime
+
+        register_minimax_m3_runtime()
+
     if "naive_n05_flash" in model_types:
         from ..models.naive_n05_flash.register import register_naive_n05_flash_runtime
 
@@ -6666,6 +6673,9 @@ def _rebuild_minimax_m3_switch_experts(model, config: dict | None) -> int:
         text_cfg.get("intermediate_size") or config.get("intermediate_size") or 0
     )
 
+    from vmlx_engine.jangh.switch import TQSwitchLinear
+    from vmlx_engine.jangt.switch import JTSwitchLinear
+
     rebuilt = 0
     for name, module in list(model.named_modules()):
         if ".switch_mlp." not in name:
@@ -6673,6 +6683,8 @@ def _rebuild_minimax_m3_switch_experts(model, config: dict | None) -> int:
         proj_name = name.rsplit(".", 1)[-1]
         if proj_name not in {"gate_proj", "up_proj", "down_proj"}:
             continue
+        if isinstance(module, (JTSwitchLinear, TQSwitchLinear)):
+            continue                    # JANGHT units installed by the model (install_jangt): not affine stacks
         override = _minimax_m3_switch_quant_override(config, name)
         if override is None:
             continue

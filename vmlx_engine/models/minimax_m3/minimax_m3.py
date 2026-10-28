@@ -49,8 +49,12 @@ def swiglu(x_linear, x_glu, alpha: float = 1.702, limit: float = 7.0):
 class SwiGLU(nn.Module):
     """SwitchGLU activation: called as (x = up projection, gate)."""
 
+    def __init__(self, alpha: float = 1.702, limit: float = 7.0):
+        super().__init__()
+        self.alpha, self.limit = alpha, limit
+
     def __call__(self, x, gate):
-        return swiglu(x, gate)
+        return swiglu(x, gate, self.alpha, self.limit)
 
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
@@ -100,6 +104,10 @@ class ModelArgs(BaseModelArgs):
     image_token_index: int = 200025
     video_token_index: int = 200026
     projector_hidden_size: int = 6144
+    # JANGHT bundles: config.json's top-level "jangt" block and per-module "quantization" contract (routed experts are
+    # trellis JANGT / Hadamard JANGH units, vmlx_engine.jangt). None for every other bundle.
+    jangt: Optional[dict] = None
+    quantization: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, params):
@@ -123,6 +131,8 @@ class ModelArgs(BaseModelArgs):
         merged["video_token_index"] = params.get("video_token_index", 200026)
         merged["projector_hidden_size"] = params.get(
             "projector_hidden_size", merged.get("hidden_size", 6144))
+        merged["jangt"] = params.get("jangt") or None
+        merged["quantization"] = params.get("quantization") if params.get("jangt") else None
         allowed = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in merged.items() if k in allowed})
 
@@ -313,7 +323,7 @@ class SparseMoeBlock(nn.Module):
             args.hidden_size,
             args.intermediate_size,
             args.num_local_experts,
-            activation=SwiGLU(),
+            activation=SwiGLU(args.swiglu_alpha, args.swiglu_limit),
             bias=False,
         )
         self.shared_experts = SwiGLUOAIMLP(args.hidden_size, args.shared_intermediate_size,
@@ -323,7 +333,11 @@ class SparseMoeBlock(nn.Module):
         inds, scores = group_expert_select(
             self.gate(x), self.e_score_correction_bias, self.top_k, 1, 1,
             self.routed_scaling_factor, self.norm_topk_prob)
-        y = (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
+        if getattr(self.switch_mlp, "is_jangt", False):
+            # JANGHT: trellis / Hadamard routed experts, gather + SwiGLU-OAI + router-weighted sum in one call
+            y = self.switch_mlp.routed(x, inds, scores)
+        else:
+            y = (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
         # group_expert_select returns float32 scores, which promote the MoE output
         # (and thus the whole residual stream from layer 3 on) to float32 — forcing
         # every downstream attention/MLP matmul into float32 (~2x slower than bf16).
@@ -387,6 +401,14 @@ class Model(nn.Module):
         self.model = MiniMaxM3Model(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        if args.jangt:
+            # JANGHT: every routed stack becomes a JTMixedSwitchGLU BEFORE quantization (the loader's nn.quantize then
+            # hands each {"mode": "jangt", ...} entry to the installed unit). The activation is M3's own SwiGLU-OAI.
+            from vmlx_engine.jangt.switch import install_jangt
+
+            self.jangt_modules = install_jangt(self, {
+                "jangt": args.jangt, "quantization": args.quantization,
+                "swiglu_kind": "oai", "swiglu_alpha": args.swiglu_alpha, "swiglu_limit": args.swiglu_limit})
         # VL vision stack (additive — only when the bundle declares vision_config).
         if getattr(args, "vision_config", None):
             try:
