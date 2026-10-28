@@ -47,17 +47,24 @@ def is_source_checkpoint(weights: dict) -> bool:
     return any(k.endswith((".weight_scale_inv", ".weight_packed")) for k in weights)
 
 
+def convert_mxfp8_linears(model: nn.Module, weights: dict) -> None:
+    """In place: every ``X.weight`` + ``X.weight_scale_inv`` pair becomes ``X.weight`` (the e4m3 bytes viewed as
+    uint32) + ``X.scales``, and those modules of ``model`` become mxfp8 QuantizedLinear."""
+    mxfp8 = set()
+    for k in [k for k in weights if k.endswith(".weight_scale_inv")]:
+        base = k[: -len(".weight_scale_inv")]
+        weights[base + ".scales"] = weights.pop(k)
+        weights[base + ".weight"] = mx.view(weights[base + ".weight"], mx.uint32)
+        mxfp8.add(base)
+    nn.quantize(model, class_predicate=lambda path, m: MXFP8 if path in mxfp8 else False)
+
+
 def convert(model: nn.Module, weights: dict) -> dict:
     """Rewrite sanitized checkpoint weights into MLX quantized layouts and
     quantize ``model``'s modules to match. ``weights`` uses the model's names
     (``model.layers.N.mlp.experts.E.w1.weight_packed`` etc.)."""
     out = dict(weights)
-    mxfp8 = set()
-    for k in [k for k in out if k.endswith(".weight_scale_inv")]:
-        base = k[: -len(".weight_scale_inv")]
-        out[base + ".scales"] = out.pop(k)
-        out[base + ".weight"] = mx.view(out[base + ".weight"], mx.uint32)
-        mxfp8.add(base)
+    convert_mxfp8_linears(model, out)
 
     experts: dict = {}
     for k in [k for k in out if ".mlp.experts." in k]:
@@ -75,7 +82,6 @@ def convert(model: nn.Module, weights: dict) -> dict:
         g = mx.stack([per[e]["weight_global_scale"].reshape(()) for e in range(n)]).astype(mx.float32)
         out[base + ".inv_global_scale"] = 1.0 / g
 
-    nn.quantize(model, class_predicate=lambda path, m: MXFP8 if path in mxfp8 else False)
     for layer in model.model.layers:
         sw = getattr(layer.mlp, "switch_mlp", None)
         if sw is None:
