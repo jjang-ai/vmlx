@@ -169,14 +169,24 @@ class MiniMaxM3DSparkTarget:
         return self.lm_head(out), feats
 
     # ------------------------------------------------------------------ prefill / AR
-    def prefill(self, ids: mx.array, cache, taps: Sequence[int], prefill_step: Optional[int]):
+    def prefill(self, ids: mx.array, cache, taps: Sequence[int], prefill_step: Optional[int],
+                keep_last: Optional[int] = None):
         """Returns (last-row logits (V,), tap features (1, P, n_taps * H) or None). Chunking = the served M3 prompt
-        path: chunks of ``prefill_step`` while more than one chunk remains, never leaving a lone final token."""
+        path: chunks of ``prefill_step`` while more than one chunk remains, never leaving a lone final token.
+        ``keep_last``: return only the features of the last ``keep_last`` rows (a sliding-window drafter never reads
+        older ones; M3.1's taps are 61 KB per row, so a long prompt's full set would be gigabytes)."""
         from ..utils.generation_cancellation import raise_if_generation_cancelled
 
         length = int(ids.shape[1])
         step = max(1, int(prefill_step or length or 1))
         feats = []
+
+        def keep(f):
+            feats.append(f)
+            if keep_last:
+                held = sum(int(a.shape[1]) for a in feats)
+                while feats and held - int(feats[0].shape[1]) >= keep_last:
+                    held -= int(feats.pop(0).shape[1])
 
         def chunk_len(at: int) -> int:
             n = min(step, length - at)
@@ -192,13 +202,18 @@ class MiniMaxM3DSparkTarget:
             mx.eval([c.state for c in cache])
             if f is not None:
                 mx.eval(f)
-                feats.append(f)
+                keep(f)
             pos += n
         raise_if_generation_cancelled()
         logits, f = self._stock(ids[:, pos:], cache, taps, logits=True)
         if f is not None:
-            feats.append(f)
-        return logits[0, -1], (mx.concatenate(feats, axis=1) if feats else None)
+            keep(f)
+        if not feats:
+            return logits[0, -1], None
+        out = mx.concatenate(feats, axis=1)
+        if keep_last and int(out.shape[1]) > keep_last:
+            out = out[:, -keep_last:]
+        return logits[0, -1], out
 
     def prefill_segment(self, ids: mx.array, cache, taps: Sequence[int], prefill_step: Optional[int]):
         """Forward a prompt segment that ends at a snapshot cut (no logits), in ``prefill_step`` chunks."""

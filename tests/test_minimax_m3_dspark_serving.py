@@ -177,8 +177,10 @@ def test_text_generator_equals_single_batch_generator(tmp_path, release_drafter_
     drafter = rt["drafter"].inner
     _, hit_tokens, _, _ = _drive(gen, [prompt[cached:]], caches=[restored(snap)], contexts=[prompt[:cached]])
     assert hit_tokens == hit_ref and len(hit_ref) == 24
-    # The previous request's drafter context covered the restored prefix: carried over (rows from position 0).
-    assert drafter.ctx_base == 0 and gen._draft_memory[2] == 0
+    # The previous request's drafter context covered the restored prefix: carried over. It starts where the cold
+    # prompt's kept window started (the drafter's sliding window of 64 rows before the prompt end).
+    window = drafter.sliding_window
+    assert drafter.ctx_base == len(prompt) - window == gen._draft_memory[2]
     # Without a covering context the drafter starts empty at the restored position; the output is unchanged.
     gen._draft_memory = None
     _, cold_draft, _, _ = _drive(gen, [prompt[cached:]], caches=[restored(snap)], contexts=[prompt[:cached]])

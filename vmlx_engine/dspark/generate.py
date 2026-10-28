@@ -14,6 +14,7 @@ P_target(draft) instead of 1[argmax = draft].
 
 from __future__ import annotations
 
+import inspect
 import os
 import time
 from dataclasses import dataclass, field
@@ -318,9 +319,16 @@ def iter_dspark(
         start = cut
         if on_snapshot is not None:
             on_snapshot(cut, cache, drafter.context_caches())
-    logits, feats = target.prefill(mx.array([ids[start:]]), cache, taps, prefill_step)
+    # A sliding-window drafter never reads context rows more than ``sliding_window`` positions back: a target that
+    # can (``keep_last``) returns only those prompt rows, and the drafter context starts at the first one.
+    window = int(getattr(drafter, "sliding_window", 0) or 0)
+    extra = {"keep_last": window} if window and "keep_last" in inspect.signature(target.prefill).parameters else {}
+    logits, feats = target.prefill(mx.array([ids[start:]]), cache, taps, prefill_step, **extra)
     anchor = choose(logits[None]).reshape(1)
     if feats is not None:
+        skipped = len(ids) - start - int(feats.shape[1])
+        if skipped > 0:
+            drafter.reset(base=start + skipped)
         drafter.add_context(feats)
     mx.eval(anchor, *drafter.context_arrays())
     forwarded.extend(ids[start:])

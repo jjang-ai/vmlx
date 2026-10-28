@@ -529,6 +529,31 @@ def test_released_geometry_blocks_of_128_top_16_past_2048_tokens(release_drafter
     assert 0 < stats.accepted < stats.drafted
 
 
+def test_prefill_keeps_only_the_drafter_window_of_tap_rows(target, release_drafter_dir):
+    """A sliding-window drafter never reads context rows further back than its window, so the prompt's tap features
+    are kept only for the last ``window`` rows (exactly those rows of the full set) and the drafter context starts
+    there; the output still equals AR."""
+    prompt = mx.array([_ids(773, 81)])
+    full_cache, kept_cache = target.make_cache(), target.make_cache()
+    lg_full, full = target.prefill(prompt, full_cache, DRAFT_TAPS, 256)
+    lg_kept, kept = target.prefill(prompt, kept_cache, DRAFT_TAPS, 256, keep_last=64)
+    assert full.shape[1] == 773 and kept.shape[1] == 64
+    assert _eq(kept, full[:, -64:]) and _eq(lg_full, lg_kept) and not _cache_problems(kept_cache, full_cache)
+    drafter = load_drafter(release_drafter_dir)
+    assert drafter.sliding_window == 64
+    ids = _ids(773, 82)
+    reference = generate_ar(target, ids, 20, set(), prefill_step=256)
+    session = {}
+    from vmlx_engine.dspark import iter_dspark
+
+    out = []
+    for chunk in iter_dspark(target, drafter, ids, 20, set(), prefill_step=256, max_draft=8, session=session):
+        out.extend(chunk)
+        if len(out) == 1:
+            assert drafter.ctx_base == 773 - 64 and drafter.ctx_len == 773
+    assert out == reference and drafter.ctx_len == len(session["forwarded"])
+
+
 def test_dspark_stops_at_eos_like_ar(target, release_drafter_dir):
     prompt = _ids(517, 41)
     free = generate_ar(target, prompt, 30, set(), prefill_step=256)
