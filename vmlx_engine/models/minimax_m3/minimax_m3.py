@@ -21,16 +21,36 @@ Created by Jinho Jang (eric@jangq.ai).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlx_lm.models.base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
-from mlx_lm.models.gpt_oss import SwiGLU, swiglu
 from mlx_lm.models.deepseek_v3 import group_expert_select
 
 EAGLE3_AUX_LAYERS = (2, 30, 57)
+
+
+# SwiGLU-OAI as M3 applies it (upstream MiniMaxM3VLExperts._apply_gate): gate
+# clipped from above, linear part clipped to [-limit, limit], plus one. Defined
+# here instead of imported from mlx_lm.models.gpt_oss, which mlx-lm 0.32 removed
+# (its switch_layers.SwiGLU is the plain SiLU gate, not this). Same op order as
+# mlx-lm 0.31.3's version, so outputs are bit-identical.
+@partial(mx.compile, shapeless=True)
+def swiglu(x_linear, x_glu, alpha: float = 1.702, limit: float = 7.0):
+    x_glu = mx.clip(x_glu, a_min=None, a_max=limit)
+    x_linear = mx.clip(x_linear, a_min=-limit, a_max=limit)
+    out_glu = x_glu * mx.sigmoid(alpha * x_glu)
+    return out_glu * (x_linear + 1)
+
+
+class SwiGLU(nn.Module):
+    """SwitchGLU activation: called as (x = up projection, gate)."""
+
+    def __call__(self, x, gate):
+        return swiglu(x, gate)
 
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
@@ -160,34 +180,36 @@ class Indexer(nn.Module):
         q_pos = mx.arange(offset, offset + Sq).reshape(1, 1, Sq, 1)
         k_pos = mx.arange(Sk).reshape(1, 1, 1, Sk)
         scores = mx.where(k_pos > q_pos, -mx.inf, scores)
-        # pad Sk to a block multiple, max-pool per block, max over heads
+        # pad Sk to a block multiple, max-pool per block. Each indexer head is
+        # one KV group and keeps its own selection (upstream MiniMaxM3VLIndexer):
+        # pooling over heads here gave all groups one shared top-k, which differs
+        # from the reference once context passes topk * block (2048) tokens.
         n_blocks = (Sk + self.block - 1) // self.block
         pad = n_blocks * self.block - Sk
         if pad:
             scores = mx.concatenate(
                 [scores, mx.full((B, self.nh, Sq, pad), -mx.inf, dtype=scores.dtype)], axis=-1)
         scores = scores.reshape(B, self.nh, Sq, n_blocks, self.block)
-        block_scores = scores.max(axis=-1).max(axis=1)            # [B, Sq, n_blocks]
+        block_scores = scores.max(axis=-1)                         # [B, G, Sq, n_blocks]
         # force the local block(s) of each query to always win
         q_block = ((q_pos.reshape(1, Sq) ) // self.block)         # [1, Sq]
         if self.local > 0:
-            loc = mx.arange(self.local).reshape(1, 1, self.local)
-            local_idx = mx.maximum(q_block.reshape(1, Sq, 1) - loc, 0)  # [1,Sq,local]
-            local_idx = mx.broadcast_to(local_idx, (B, Sq, self.local))
+            loc = mx.arange(self.local).reshape(1, 1, 1, self.local)
+            local_idx = mx.maximum(q_block.reshape(1, 1, Sq, 1) - loc, 0)  # [1,1,Sq,local]
+            local_idx = mx.broadcast_to(local_idx, (B, self.nh, Sq, self.local))
             block_scores = mx.put_along_axis(
                 block_scores, local_idx, mx.array(mx.inf, dtype=block_scores.dtype), axis=-1)
         keep = min(self.topk, n_blocks)
         if keep >= n_blocks:
             # all blocks visible -> only causal matters; return None (full attn)
             return None
-        # top-k blocks per query
-        top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,Sq,keep]
-        # build [B,1,Sq,n_blocks] keep-bias then expand to keys
-        block_keep = mx.full((B, Sq, n_blocks), -mx.inf, dtype=mx.float32)
+        # top-k blocks per query and group
+        top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,G,Sq,keep]
+        # build [B,G,Sq,n_blocks] keep-bias then expand to keys
+        block_keep = mx.full((B, self.nh, Sq, n_blocks), -mx.inf, dtype=mx.float32)
         block_keep = mx.put_along_axis(block_keep, top_idx, mx.array(0.0, dtype=mx.float32), axis=-1)
-        # expand block -> key, drop pad, add head axis
-        key_bias = mx.repeat(block_keep, self.block, axis=-1)[:, :, :Sk]   # [B,Sq,Sk]
-        key_bias = key_bias.reshape(B, 1, Sq, Sk)
+        # expand block -> key, drop pad
+        key_bias = mx.repeat(block_keep, self.block, axis=-1)[..., :Sk]   # [B,G,Sq,Sk]
         # also enforce causal here (selected future blocks shouldn't leak)
         key_bias = mx.where(k_pos > q_pos, -mx.inf, key_bias)
         return key_bias
@@ -225,21 +247,44 @@ class Attention(nn.Module):
         if cache is not None:
             k, v = cache.update_and_fetch(k, v)
         # MSA selection (additive block mask), computed from the SAME hidden x
-        attn_mask = mask
-        if self.indexer is not None:
-            block_bias = self.indexer(x, cache, off)
-            if block_bias is not None:
-                # block_bias is built as float32 (0.0 / -inf). SDPA requires the
-                # mask dtype to promote to the bf16 compute/output dtype, else it
-                # raises "[scaled_dot_product_attention] Mask type must promote to
-                # output type bfloat16" once the indexer fires past the
-                # index_topk_blocks*index_block_size (=2048) token threshold.
-                # 0.0 and -inf are exactly representable in bf16, so the cast is
-                # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
-                # gated by context length, NOT cache mode.)
-                attn_mask = block_bias.astype(q.dtype)  # already causal + block-restricted
-        o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=attn_mask)
+        block_bias = self.indexer(x, cache, off) if self.indexer is not None else None
+        if block_bias is None:
+            o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
+        else:
+            # block_bias is built as float32 (0.0 / -inf). SDPA requires the
+            # mask dtype to promote to the bf16 compute/output dtype, else it
+            # raises "[scaled_dot_product_attention] Mask type must promote to
+            # output type bfloat16" once the indexer fires past the
+            # index_topk_blocks*index_block_size (=2048) token threshold.
+            # 0.0 and -inf are exactly representable in bf16, so the cast is
+            # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
+            # gated by context length, NOT cache mode.)
+            bias = block_bias.astype(q.dtype)  # [B, G, L, Sk], already causal
+            if isinstance(mask, mx.array):  # batch padding etc.
+                bias = bias + mask.astype(q.dtype)
+            o = self._grouped_attention(q, k, v, bias)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
+
+    def _grouped_attention(self, q, k, v, bias):
+        """Attention where each KV group has its own key mask.
+
+        Query heads are contiguous per KV head, so folding the groups into the
+        batch axis gives one SDPA call whose [B*G, 1, L, Sk] mask broadcasts over
+        the group's query heads; a dense per-head mask would be 16x larger.
+        """
+        B, H, L, D = q.shape
+        G, Sk = bias.shape[1], k.shape[2]
+        if G != self.n_kv:  # indexer heads that do not line up with KV heads
+            bias = mx.repeat(bias, H // G, axis=1)
+            return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=bias)
+        o = mx.fast.scaled_dot_product_attention(
+            q.reshape(B * G, H // G, L, D),
+            k.reshape(B * G, 1, Sk, D),
+            v.reshape(B * G, 1, Sk, D),
+            scale=self.scale,
+            mask=bias.reshape(B * G, 1, L, Sk),
+        )
+        return o.reshape(B, H, L, D)
 
 
 class SwiGLUOAIMLP(nn.Module):
