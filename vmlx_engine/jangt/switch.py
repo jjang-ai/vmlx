@@ -148,10 +148,8 @@ class JTMixedSwitchGLU(nn.Module):
         if self.act != "silu":
             # the JANGH kernels' fused epilogue is SiLU only: gate and up as two single-weight passes (fp32 out), then
             # the variant in fp32
-            hg = K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids, g.bits, x_per_dispatch=False,
-                              slot_fastest=x2.shape[0] > 1)
-            hu = K.gather_qmv(xh, u.tq2_packed, u.tq2_scales, u._cb, ids, u.bits, x_per_dispatch=False,
-                              slot_fastest=x2.shape[0] > 1)
+            hg, hu = (K.gather_qmv(xh, p.tq2_packed, p.tq2_scales, p._cb, ids, p.bits, x_per_dispatch=False,
+                                   slot_fastest=x2.shape[0] > 1) for p in (g, u))
             return MK.act_mlx(hg, hu, self.act, self.limit, self.alpha)
         return K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids,
                             g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit,
