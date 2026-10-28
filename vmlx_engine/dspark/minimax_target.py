@@ -15,14 +15,14 @@ module gives them for vMLX's MiniMax-M3 runtime (``models/minimax_m3``):
 - ``verify``: T = k + 1 rows whose logits are exactly the logits T sequential
   one-token decode steps produce. Per layer:
     * projections (q / k / v / o, index q / k, dense MLP, shared expert, router,
-      lm_head): every row on decode arithmetic. Affine-quantized projections run
-      the multi-row kernel of ``metal/row_exact_qmv`` (MLX's own one-row ``qmv``
-      transcribed for several rows, admitted only after a bit-equality check
-      against stock one-row calls; one weight read per block of <= 4 rows).
-      Every other projection (MXFP8 / NVFP4 / float / custom) runs as one-row
-      calls: MLX's multi-row kernels for those reduce in a different order
-      (measured: MXFP8, float and affine all differ from their one-row results
-      at 2..8 rows), so a one-row call is the only form equal to decode.
+      lm_head): every row on decode arithmetic. MLX's own multi-row kernels
+      reduce in a different order than its one-row kernels (measured: affine,
+      MXFP8 and float all differ at 2..8 rows), so affine projections run
+      ``metal/row_exact_qmv`` and MXFP8 / MXFP4 projections
+      ``metal/row_exact_fp_qmv``: MLX's one-row kernel transcribed for up to four
+      rows sharing one weight walk, admitted per shape only after a bit-equality
+      check against stock one-row calls. Every other projection (float,
+      unadmitted shapes, custom modules) runs as one-row calls.
     * attention, per row: each row attends exactly the keys a decode step at its
       position sees (the cache prefix up to and including itself), with the MSA
       selection a decode step makes there -- the indexer scores that row's index
@@ -231,17 +231,12 @@ class MiniMaxM3DSparkTarget:
         rows = int(x.shape[1])
         if rows == 1:
             return module(x)
-        if (isinstance(module, nn.QuantizedLinear) and getattr(module, "mode", "affine") == "affine"
-                and "biases" in module and _row_exact_kernel_enabled()):
-            from ..metal.row_exact_qmv import row_exact_qmv
-
+        kernel = self._multi_row_kernel(module)
+        if kernel is not None:
             outs, batched = [], 0
             for start, size in _blocks(rows, _ROWS_PER_LAUNCH):
                 xb = x[:, start:start + size]
-                y = None
-                if size > 1:
-                    y = row_exact_qmv(xb, module["weight"], module["scales"], module["biases"],
-                                      group_size=int(module.group_size), bits=int(module.bits), mode="affine")
+                y = kernel(xb) if size > 1 else None
                 if y is None:
                     y = mx.concatenate([module(_row(xb, r)) for r in range(size)], axis=1)
                 else:
@@ -253,6 +248,25 @@ class MiniMaxM3DSparkTarget:
             return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=1)
         self.verify_paths["linear_rows"] += 1
         return mx.concatenate([module(_row(x, r)) for r in range(rows)], axis=1)
+
+    @staticmethod
+    def _multi_row_kernel(module):
+        """A multi-row kernel whose every row equals the one-row call (admitted per shape by bit-equality), or None."""
+        if not isinstance(module, nn.QuantizedLinear) or not _row_exact_kernel_enabled():
+            return None
+        mode = str(getattr(module, "mode", "affine") or "affine")
+        gs, bits = int(module.group_size), int(module.bits)
+        if mode == "affine" and "biases" in module:
+            from ..metal.row_exact_qmv import row_exact_qmv
+
+            return lambda xb: row_exact_qmv(xb, module["weight"], module["scales"], module["biases"],
+                                            group_size=gs, bits=bits, mode="affine")
+        if mode in ("mxfp8", "mxfp4"):
+            from ..metal.row_exact_fp_qmv import row_exact_fp_qmv
+
+            return lambda xb: row_exact_fp_qmv(xb, module["weight"], module["scales"], group_size=gs, bits=bits,
+                                               mode=mode)
+        return None
 
     def _logits(self, out: mx.array) -> mx.array:
         if self.tied:

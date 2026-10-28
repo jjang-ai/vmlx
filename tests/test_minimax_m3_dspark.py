@@ -201,6 +201,9 @@ def test_verify_rows_equal_sequential_decode_steps(target, prompt_len, width):
     assert not _cache_problems(cache, ref)
     paths = target.verify_paths
     assert paths["linear_batched"] > 0 and paths["linear_rows"] > 0      # both projection routes ran
+    from vmlx_engine.metal.row_exact_fp_qmv import _ADMITTED as fp_admitted
+
+    assert any(v is not None and k[3] == "mxfp8" for k, v in fp_admitted.items())   # MXFP8 q / o on the fp kernel
     if width * TOPK >= 64:
         assert paths["routed_rows"] > 0 and paths["routed_batched"] == 0
     else:
