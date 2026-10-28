@@ -193,6 +193,88 @@ def test_text_generator_equals_single_batch_generator(tmp_path, release_drafter_
     assert proc_tokens == ref_tokens and gen._request is None
 
 
+def test_text_generator_hands_per_request_spec_stats_to_the_scheduler(tmp_path):
+    """Each finished DSpark request's stats reach RequestOutput.spec_stats (-> /health last_request.speculative, the
+    Perf panel) with the MiniCPM lane's keys, once; plain-path requests and other generators report none."""
+    from vmlx_engine.dspark.runtime import load_dspark_runtime
+    from vmlx_engine.scheduler import _text_lane_dspark_spec_stats_for
+    from vmlx_engine.utils.dspark_text_generator import DSparkTextGenerator
+    from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+    model = _model(seed=14)
+    rt = load_dspark_runtime(model, _bundle(tmp_path))
+    object.__setattr__(model, "_vmlx_dspark_runtime", rt)
+    prompt = _ids(300, 41)
+    gen = DSparkTextGenerator(model, sampler=_greedy(), max_tokens=20, prefill_step_size=128, stop_tokens=[])
+    uid, tokens, finish, _ = _drive(gen, [prompt], max_tokens=20)
+    assert finish == "length" and len(tokens) == 20
+    spec = _text_lane_dspark_spec_stats_for(gen, uid)
+    last = gen.last_dspark_stats
+    assert spec is not None and spec["kind"] == "dspark" and spec["lane"] == "minimax-text"
+    assert spec["rounds"] == spec["cycles"] == last["rounds"] > 0
+    assert spec["emitted_per_cycle"] == last["tokens_per_round"] and spec["tokens"] == last["tokens"]
+    assert spec["acceptance"] == last["acceptance"] and spec["generation_tps"] == last["decode_tok_s"]
+    assert spec["widths"] and all(isinstance(k, str) for k in spec["widths"])
+    assert {int(k): v for k, v in spec["widths"].items()} == last["widths"]
+    assert _text_lane_dspark_spec_stats_for(gen, uid) is None            # handed over once
+
+    def keep(tokens_so_far, logits):
+        return logits
+    uid2, _, _, _ = _drive(gen, [prompt], max_tokens=20, processors=[[keep]])   # plain path: no DSpark round
+    assert uid2 != uid and _text_lane_dspark_spec_stats_for(gen, uid2) is None
+    plain = SingleBatchGenerator(model, sampler=_greedy(), max_tokens=8, prefill_step_size=128, stop_tokens=[])
+    uid3, _, _, _ = _drive(plain, [prompt], max_tokens=8)
+    assert _text_lane_dspark_spec_stats_for(plain, uid3) is None
+    assert _text_lane_dspark_spec_stats_for(None, uid3) is None
+
+
+def test_scheduler_attaches_text_lane_spec_stats_to_the_finishing_output(monkeypatch):
+    """_process_batch_responses puts the generator's stats on the finishing RequestOutput only (the producer
+    request_telemetry reads output.spec_stats into last_request.speculative)."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler
+
+    request = Request(request_id="dspark-stats", prompt=[1, 2], sampling_params=SamplingParams(max_tokens=3))
+    request.prompt_token_ids = [1, 2]
+    request.num_prompt_tokens = 2
+    popped = []
+
+    class _Gen:
+        def pop_spec_stats(self, uid):
+            popped.append(uid)
+            return {"kind": "dspark", "lane": "minimax-text", "rounds": 2}
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.config = SimpleNamespace(enable_prefix_cache=False)
+    scheduler.uid_to_request_id = {1: request.request_id}
+    scheduler.running = {request.request_id: request}
+    scheduler.batch_generator = _Gen()
+    scheduler.stop_tokens = {0}
+    scheduler._pld_spec_enabled = False
+    scheduler.total_completion_tokens = 0
+    scheduler.num_requests_processed = 0
+
+    class _Detok:
+        text = ""
+
+        def add_token(self, token):
+            self.text += "x"
+
+        def finalize(self):
+            pass
+
+    monkeypatch.setattr(Scheduler, "_get_detokenizer", lambda *args: _Detok())
+    monkeypatch.setattr(Scheduler, "_advance_request_state_machine", lambda *args: None)
+    monkeypatch.setattr(Scheduler, "_queue_dsv4_shadow_rekey", lambda *args: None)
+    seen = []
+    for token, finish in [(3, None), (0, "stop")]:
+        outputs, _ = scheduler._process_batch_responses([SimpleNamespace(uid=1, token=token, finish_reason=finish)])
+        seen.append(outputs[0].spec_stats)
+    assert seen == [None, {"kind": "dspark", "lane": "minimax-text", "rounds": 2}] and popped == [1]
+
+
 def test_text_generator_stops_like_the_plain_path(tmp_path):
     from vmlx_engine.dspark.runtime import load_dspark_runtime
     from vmlx_engine.utils.dspark_text_generator import DSparkTextGenerator

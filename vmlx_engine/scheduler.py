@@ -611,6 +611,18 @@ def _native_mtp_spec_stats_for(uid) -> Optional[dict]:
     return None
 
 
+def _text_lane_dspark_spec_stats_for(generator, uid) -> Optional[dict]:
+    """The finished request's DSpark stats from the MiniMax-M3 text lane (DSparkTextGenerator.pop_spec_stats), as
+    last_request.speculative. None for any other generator and for requests that took the plain path."""
+    pop = getattr(generator, "pop_spec_stats", None)
+    if not callable(pop):
+        return None
+    try:
+        return pop(uid)
+    except Exception:  # noqa: BLE001 - telemetry must never fail a request
+        return None
+
+
 def _tag_sampling_params(sampler, params, seed=None) -> None:
     """Record the mlx_lm make_sampler parameters on the sampler (read only by the DSV4.1 DSpark generator, whose sampled
     speculation reproduces that sampler's distribution: temperature, then top_p / min_p / top_k on log-probabilities)."""
@@ -9935,7 +9947,10 @@ class Scheduler:
                     or getattr(request, "_vmlx_prefill_usage", None)
                 ),
                 spec_stats=(
-                    _native_mtp_spec_stats_for(response.uid)
+                    (
+                        _native_mtp_spec_stats_for(response.uid)
+                        or _text_lane_dspark_spec_stats_for(self.batch_generator, response.uid)
+                    )
                     if getattr(response, "finish_reason", None) is not None
                     else None
                 ),

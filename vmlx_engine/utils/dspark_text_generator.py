@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import OrderedDict
 
 import mlx.core as mx
 
@@ -48,6 +49,10 @@ class DSparkTextGenerator(SingleBatchGenerator):
         # (tokens the drafter context was built from, context caches, base position), from the previous request.
         self._draft_memory = None
         self.last_dspark_stats = None
+        # Finished requests' speculative stats keyed by generator uid, popped by the scheduler into
+        # RequestOutput.spec_stats (-> /health last_request.speculative, the Perf panel). Bounded: a request that ends
+        # without a finishing Response (string stop / abort -> remove()) leaves an entry nobody pops.
+        self._spec_stats: OrderedDict = OrderedDict()
         if self._dspark is None:
             logger.warning("DSpark text generator constructed without a runtime; plain decoding")
 
@@ -200,7 +205,21 @@ class DSparkTextGenerator(SingleBatchGenerator):
             if policy is not None:
                 summary["adaptive_costs"] = policy.cost_snapshot()
             self.last_dspark_stats = summary
+            # Same keys as the MiniCPM DSpark lane's spec_stats (models/mllm.py: the Perf panel's Last-request card
+            # reads kind / lane / cycles / emitted_per_cycle / acceptance / ar_tokens / widths).
+            self._spec_stats[req.uid] = {
+                "kind": "dspark", "lane": "minimax-text", **summary,
+                "cycles": summary["rounds"], "emitted_per_cycle": summary["tokens_per_round"],
+                "widths": {str(k): v for k, v in summary["widths"].items()},
+                "generation_tps": summary.get("decode_tok_s"),
+            }
+            while len(self._spec_stats) > 16:
+                self._spec_stats.popitem(last=False)
             logger.info("DSpark text request %s: %s", req.uid, summary)
+
+    def pop_spec_stats(self, uid):
+        """The speculative stats of the finished DSpark request ``uid`` (once), or None (plain-path request)."""
+        return self._spec_stats.pop(uid, None)
 
     def _yield_current_and_schedule_next(self, req, *, prompt_cache_snapshot=None) -> Response:
         if getattr(req, "_dspark_on", False):
