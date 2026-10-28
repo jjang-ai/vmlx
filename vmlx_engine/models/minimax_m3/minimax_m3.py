@@ -3,11 +3,11 @@
 
 Implements the real MiniMax Sparse Attention (MSA): a Lightning Indexer selects
 top-k 128-token key blocks per query (per GQA group), and the main branch attends
-only the selected blocks (msa.py: a block-sparse Metal kernel for decode; the
-additive block-mask path of transformers PR #46600 stays as the reference /
-fallback and for prefill). At context <= topk*block (=2048) every block is
-selected, so it reduces to full causal attention (matches the validated probe,
-top1 0.654). The indexer keys live in MiniMaxM3SparseCache alongside K/V.
+only the selected blocks (msa.py: block-sparse Metal kernels for decode and
+prefill; the additive block-mask path of transformers PR #46600 stays as the
+reference / fallback). At context <= topk*block (=2048) every block is selected,
+so it reduces to full causal attention (matches the validated probe, top1 0.654).
+The indexer keys live in MiniMaxM3SparseCache alongside K/V.
 
 Other blocks reuse proven mlx-lm code (validated against the torch oracle):
   swigluoai = gpt_oss.swiglu ; router = deepseek_v3.group_expert_select ;
@@ -291,6 +291,8 @@ class Attention(nn.Module):
                 return msa.decode_kernel_attention(q, k, v, block_bias, self.scale)
             if path == "gather":
                 return msa.gathered_attention(q, k, v, block_bias, self.scale)
+            if path == "kernel":
+                return msa.kernel_attention(q, k, v, block_bias, self.scale)
             block_bias = block_bias.dense_bias()
         # block_bias is built as float32 (0.0 / -inf). SDPA requires the
         # mask dtype to promote to the bf16 compute/output dtype, else it
