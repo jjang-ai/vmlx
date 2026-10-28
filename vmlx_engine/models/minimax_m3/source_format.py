@@ -47,15 +47,22 @@ def is_source_checkpoint(weights: dict) -> bool:
     return any(k.endswith((".weight_scale_inv", ".weight_packed")) for k in weights)
 
 
-def convert_mxfp8_linears(model: nn.Module, weights: dict) -> None:
+def mxfp8_pairs_to_mlx(weights: dict) -> set:
     """In place: every ``X.weight`` + ``X.weight_scale_inv`` pair becomes ``X.weight`` (the e4m3 bytes viewed as
-    uint32) + ``X.scales``, and those modules of ``model`` become mxfp8 QuantizedLinear."""
+    uint32) + ``X.scales`` (MLX mxfp8 layout, same bytes). Returns the module paths X."""
     mxfp8 = set()
     for k in [k for k in weights if k.endswith(".weight_scale_inv")]:
         base = k[: -len(".weight_scale_inv")]
         weights[base + ".scales"] = weights.pop(k)
         weights[base + ".weight"] = mx.view(weights[base + ".weight"], mx.uint32)
         mxfp8.add(base)
+    return mxfp8
+
+
+def convert_mxfp8_linears(model: nn.Module, weights: dict) -> None:
+    """In place: every ``X.weight`` + ``X.weight_scale_inv`` pair becomes ``X.weight`` (the e4m3 bytes viewed as
+    uint32) + ``X.scales``, and those modules of ``model`` become mxfp8 QuantizedLinear."""
+    mxfp8 = mxfp8_pairs_to_mlx(weights)
     nn.quantize(model, class_predicate=lambda path, m: MXFP8 if path in mxfp8 else False)
 
 

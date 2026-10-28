@@ -26,6 +26,10 @@ and the final norm), partial RoPE over ``rotary_dim`` of ``head_dim``, a dense
 SwiGLU-OAI FFN, and sliding-window attention: a block row at position p reads
 context keys at positions > p - ``sliding_window`` plus the whole block. The
 checkpoint's linears are MXFP8 (kept as stored); ``fc`` and both heads are BF16.
+A pre-quantized copy (``write_quantized_minimax_drafter``) declares its formats
+in ``config.json["quantization"]``, mlx-lm's per-module form keyed by the live
+module paths (``layers.N.self_attn.q_proj``, ``fc``, ``markov_head.markov_w2``):
+affine and MXFP8 modules may be mixed.
 """
 
 from __future__ import annotations
@@ -299,7 +303,7 @@ class DSparkDrafter(nn.Module):
         w1 = self.markov_head.markov_w1
         w2 = self.markov_head.markov_w2
         proj = self.confidence_head.proj
-        conf_w = proj.weight.astype(mx.float32)
+        conf_w = _float_weight(proj).astype(mx.float32)
         conf_b = proj.bias.astype(mx.float32)
         prev = anchor.reshape(1)
         tokens, confs = [], []
@@ -322,16 +326,16 @@ class DSparkDrafter(nn.Module):
         logits = lm_head(block_hidden[:, :count, :])[0].astype(mx.float32)          # (count, V)
         cand = mx.argpartition(-logits, kth=k - 1, axis=-1)[:, :k]                   # (count, K)
         base = mx.take_along_axis(logits, cand, axis=-1)                              # (count, K)
-        w1 = self.markov_head.markov_w1.weight                                        # (V, r)
-        w2 = self.markov_head.markov_w2.weight                                        # (draft V, r)
+        w1 = self.markov_head.markov_w1                                               # (V, r)
+        w2 = self.markov_head.markov_w2                                               # (draft V, r)
         proj = self.confidence_head.proj
-        conf_w = proj.weight.astype(mx.float32)
+        conf_w = _float_weight(proj).astype(mx.float32)
         conf_b = proj.bias.astype(mx.float32)
         prev = anchor.reshape(())
         tokens, confs = [], []
         for i in range(count):
-            lat = w1[prev].astype(mx.float32)                                         # (r,)
-            row = base[i] + w2[cand[i]].astype(mx.float32) @ lat                      # (K,)
+            lat = _rows(w1, prev).astype(mx.float32)                                  # (r,)
+            row = base[i] + _rows(w2, cand[i]).astype(mx.float32) @ lat               # (K,)
             feat = mx.concatenate([block_hidden[0, i].astype(mx.float32), lat])
             confs.append(mx.sigmoid(feat @ conf_w[0] + conf_b[0]))
             if sampler is None:
@@ -419,11 +423,10 @@ def load_drafter(path: str | Path, bits: Optional[int] = None) -> DSparkDrafter:
     return model
 
 
-def _load_minimax_drafter(path: Path, raw_cfg: dict) -> DSparkDrafter:
-    """The MiniMax-M3.1 ``dspark/`` checkpoint as stored (MXFP8 linears; fc, Markov and confidence heads BF16)."""
-    from ..models.minimax_m3.source_format import convert_mxfp8_linears
-
-    model = DSparkDrafter(minimax_config(raw_cfg))
+def _minimax_weights(path: Path) -> dict:
+    """Every tensor of a MiniMax drafter directory under the drafter's module names (the release's
+    ``language_model.model.dspark.layers.N.decoder_layer.*`` / ``final_norm.*`` names are mapped; names that already
+    are module paths pass unchanged)."""
     weights = {}
     for f in sorted(path.glob("*.safetensors")):
         weights.update(mx.load(str(f)))
@@ -431,10 +434,175 @@ def _load_minimax_drafter(path: Path, raw_cfg: dict) -> DSparkDrafter:
     for k, v in weights.items():
         k = k.removeprefix("language_model.model.dspark.").replace(".decoder_layer.", ".")
         renamed["norm." + k[len("final_norm."):] if k.startswith("final_norm.") else k] = v
-    convert_mxfp8_linears(model, renamed)
+    return renamed
+
+
+def _load_minimax_drafter(path: Path, raw_cfg: dict) -> DSparkDrafter:
+    """A MiniMax-M3.1 ``dspark/`` directory, either
+    - as released (no ``quantization`` block): MXFP8 linears (``weight_scale_inv``) kept as stored; fc, Markov and
+      confidence heads BF16; or
+    - pre-quantized (``config.json["quantization"]``, mlx-lm's per-module form): every module with an entry keyed by
+      its live path gets exactly that entry (affine ``{"group_size", "bits"}`` or ``{"mode": "mxfp8", ...}``); a
+      module with ``.scales`` but no entry gets the block's top-level ``group_size`` / ``bits`` / ``mode``; MXFP8
+      pairs still stored in the release form (``weight_scale_inv``) are MXFP8. Then a strict load."""
+    from ..models.minimax_m3.source_format import MXFP8, convert_mxfp8_linears, mxfp8_pairs_to_mlx
+
+    model = DSparkDrafter(minimax_config(raw_cfg))
+    renamed = _minimax_weights(path)
+    quant = raw_cfg.get("quantization")
+    if not isinstance(quant, dict):
+        convert_mxfp8_linears(model, renamed)
+    else:
+        stored_mx8 = mxfp8_pairs_to_mlx(renamed)
+
+        def predicate(p, m):
+            if p in stored_mx8:
+                return dict(MXFP8)
+            if p in quant:
+                return quant[p]
+            if not hasattr(m, "to_quantized") or f"{p}.scales" not in renamed:
+                return False
+            return {"group_size": int(quant["group_size"]), "bits": int(quant["bits"]),
+                    "mode": quant.get("mode", "affine")}
+
+        nn.quantize(model, class_predicate=predicate)
     model.load_weights(list(renamed.items()), strict=True)
     mx.eval(model.parameters())
     return model
+
+
+# Default per-module plan of write_quantized_minimax_drafter (fnmatch patterns over live module paths, first match
+# wins): decoder-layer linears affine 4-bit, fc affine 8-bit, Markov and confidence heads as stored (BF16).
+MINIMAX_DRAFTER_PLAN = {
+    "layers.*": {"group_size": 64, "bits": 4},
+    "fc": {"group_size": 64, "bits": 8},
+    "markov_head.*": None,
+    "confidence_head.*": None,
+}
+
+
+def _entry(module) -> Optional[dict]:
+    """The quantization entry a module carries (None = float)."""
+    if not isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)):
+        return None
+    if module.mode == "affine":
+        return {"group_size": int(module.group_size), "bits": int(module.bits)}
+    return {"mode": module.mode, "group_size": int(module.group_size), "bits": int(module.bits)}
+
+
+def _float_weight(module) -> mx.array:
+    """The weight of a Linear / Embedding, dequantized (BF16) when the module is quantized."""
+    return _rows(module, None)
+
+
+def _rows(module, idx) -> mx.array:
+    """Rows ``idx`` (None = all) of a Linear / Embedding weight; a quantized module dequantizes only those rows (BF16).
+    The Markov / confidence heads are read this way, so pre-quantized heads (MiniMax drafters) draft correctly."""
+    if isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)):
+        flat = None if idx is None else mx.array(idx).reshape(-1)
+        take = (lambda a: a) if flat is None else (lambda a: a[flat])
+        biases = module.get("biases")
+        out = mx.dequantize(take(module.weight), take(module.scales), None if biases is None else take(biases),
+                            group_size=module.group_size, bits=module.bits, mode=module.mode, dtype=mx.bfloat16)
+        return out if idx is None else out.reshape(*mx.array(idx).shape, -1)
+    return module.weight if idx is None else module.weight[idx]
+
+
+def _write_aligned(flat: dict, out: Path) -> None:
+    """One dtype-aligned safetensors shard (jang_tools rewrite_aligned_safetensors), checked."""
+    import tempfile
+
+    from jang_tools.format.aligned_safetensors import (
+        rewrite_aligned_safetensors,
+        verify_safetensors_alignment,
+    )
+
+    mx.eval(flat)
+    with tempfile.TemporaryDirectory(dir=out.parent.parent) as tmp:
+        raw = Path(tmp) / "model.safetensors"
+        mx.save_safetensors(str(raw), flat, metadata={"format": "mlx"})
+        rewrite_aligned_safetensors(raw, out)
+    tensors, unaligned = verify_safetensors_alignment(out)
+    if unaligned or tensors != len(flat):
+        raise RuntimeError(f"drafter shard alignment check failed: {unaligned} unaligned of {tensors}")
+
+
+def write_quantized_minimax_drafter(src: str | Path, dst: str | Path, plan: Optional[dict] = None) -> Path:
+    """Write a pre-quantized copy of a MiniMax-M3.1 ``dspark/`` directory (never in place).
+
+    ``plan``: fnmatch pattern over live module paths -> target, first match wins (default MINIMAX_DRAFTER_PLAN):
+      ``{"group_size": g, "bits": b}``          affine, round to nearest from the stored values (MXFP8 dequantized
+                                                 exactly to BF16 first);
+      ``{"mode": "mxfp8", "group_size": 32, "bits": 8}``   MXFP8: the stored bytes when the module is stored MXFP8;
+      ``None`` / no match                        as stored (MXFP8 bytes or BF16).
+    Writes ``model.safetensors`` (module names, dtype-aligned), ``config.json`` = the source config plus
+    ``quantization``: top-level ``group_size`` / ``bits`` and one entry per quantized module keyed by its live path,
+    and copies every other non-weight file. Drafter quality only moves acceptance (the target verifies every token).
+    """
+    import fnmatch
+    import shutil
+
+    from mlx.utils import tree_flatten
+
+    src, dst = Path(src), Path(dst)
+    if dst.exists() and any(dst.iterdir()):
+        raise FileExistsError(f"{dst} exists and is not empty")
+    raw_cfg = json.loads((src / "config.json").read_text())
+    if not is_minimax_config(raw_cfg):
+        raise ValueError(f"{src} is not a MiniMax DSpark drafter")
+    plan = MINIMAX_DRAFTER_PLAN if plan is None else plan
+    model = _load_minimax_drafter(src, raw_cfg)
+
+    def target(path: str, module) -> Optional[dict]:
+        for pattern, spec in plan.items():
+            if fnmatch.fnmatchcase(path, pattern):
+                return _entry(module) if spec is None else dict(spec)
+        return _entry(module)
+
+    for path, module in list(model.named_modules()):
+        if not isinstance(module, (nn.Linear, nn.Embedding, nn.QuantizedLinear, nn.QuantizedEmbedding)):
+            continue
+        want, have = target(path, module), _entry(module)
+        if want is not None and want.get("mode", "affine") == "affine":
+            want = {"group_size": int(want["group_size"]), "bits": int(want["bits"])}
+        if want == have:
+            continue                                         # as stored: same bytes
+        w = _float_weight(module)
+        if isinstance(module, (nn.Embedding, nn.QuantizedEmbedding)):
+            fresh = nn.Embedding(w.shape[0], w.shape[1])
+        else:
+            fresh = nn.Linear(w.shape[1], w.shape[0], bias="bias" in module)
+            if "bias" in module:
+                fresh.bias = module.bias
+        fresh.weight = w
+        new = fresh if want is None else fresh.to_quantized(**want)
+        parent, _, leaf = path.rpartition(".")
+        setattr(_module_at(model, parent) if parent else model, leaf, new)
+
+    quant = {}
+    for path, module in model.named_modules():
+        e = _entry(module)
+        if e is not None:
+            quant[path] = e
+    affine = [e for e in quant.values() if "mode" not in e]
+    top = max(affine, key=lambda e: sum(e == o for o in affine)) if affine else {"group_size": 64, "bits": 8}
+    dst.mkdir(parents=True, exist_ok=True)
+    _write_aligned(dict(tree_flatten(model.parameters())), dst / "model.safetensors")
+    cfg = dict(raw_cfg)
+    cfg["quantization"] = {"group_size": top["group_size"], "bits": top["bits"], **dict(sorted(quant.items()))}
+    (dst / "config.json").write_text(json.dumps(cfg, indent=1))
+    for f in src.iterdir():
+        if (f.is_file() and f.name != "config.json" and not f.name.startswith(".")
+                and not f.name.endswith((".safetensors", ".safetensors.index.json"))):
+            shutil.copy2(f, dst / f.name)
+    return dst
+
+
+def _module_at(root: nn.Module, path: str) -> nn.Module:
+    m = root
+    for part in path.split("."):
+        m = m[int(part)] if part.isdigit() else getattr(m, part)
+    return m
 
 
 def write_quantized_drafter(src: str | Path, dst: str | Path, *, bits: int = 8, group_size: int = 64,
@@ -447,12 +615,7 @@ def write_quantized_drafter(src: str | Path, dst: str | Path, *, bits: int = 8, 
     ``config.json["quantization"]``.
     """
     import shutil
-    import tempfile
 
-    from jang_tools.format.aligned_safetensors import (
-        rewrite_aligned_safetensors,
-        verify_safetensors_alignment,
-    )
     from mlx.utils import tree_flatten
 
     src, dst = Path(src), Path(dst)
@@ -465,15 +628,7 @@ def write_quantized_drafter(src: str | Path, dst: str | Path, *, bits: int = 8, 
         class_predicate=lambda p, m: isinstance(m, nn.Linear) and not p.startswith(QUANT_SKIP)
         and m.weight.shape[-1] % group_size == 0,
     )
-    flat = dict(tree_flatten(model.parameters()))
-    mx.eval(flat)
-    with tempfile.TemporaryDirectory(dir=dst.parent) as tmp:
-        raw = Path(tmp) / "model.safetensors"
-        mx.save_safetensors(str(raw), flat, metadata={"format": "mlx"})
-        rewrite_aligned_safetensors(raw, dst / "model.safetensors")
-    tensors, unaligned = verify_safetensors_alignment(dst / "model.safetensors")
-    if unaligned or tensors != len(flat):
-        raise RuntimeError(f"drafter shard alignment check failed: {unaligned} unaligned of {tensors}")
+    _write_aligned(dict(tree_flatten(model.parameters())), dst / "model.safetensors")
     cfg = json.loads((src / "config.json").read_text())
     cfg["quantization"] = {"mode": mode, "bits": bits, "group_size": group_size, "skip": list(QUANT_SKIP)}
     (dst / "config.json").write_text(json.dumps(cfg, indent=1))
