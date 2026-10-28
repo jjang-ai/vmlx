@@ -3,10 +3,11 @@
 
 Implements the real MiniMax Sparse Attention (MSA): a Lightning Indexer selects
 top-k 128-token key blocks per query (per GQA group), and the main branch attends
-only the selected blocks via an additive block mask (the exact eager/sdpa path
-from transformers PR #46600). At context < topk*block (=2048) every block is
-selected, so it reduces to full causal attention (matches the validated probe,
-top1 0.654). The indexer keys live in MiniMaxM3SparseCache alongside K/V.
+only the selected blocks (msa.py: the additive block-mask path of transformers
+PR #46600, plus a gather over the selected blocks). At context <= topk*block
+(=2048) every block is selected, so it reduces to full causal attention
+(matches the validated probe, top1 0.654). The indexer keys live in
+MiniMaxM3SparseCache alongside K/V.
 
 Other blocks reuse proven mlx-lm code (validated against the torch oracle):
   swigluoai = gpt_oss.swiglu ; router = deepseek_v3.group_expert_select ;
@@ -63,12 +64,13 @@ class SwiGLU(nn.Module):
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-    from . import source_format
+    from . import msa, source_format
 except Exception:  # pragma: no cover - standalone / mlx_lm-namespace import
     import os as _os, sys as _sys
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
     from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
+    import msa  # type: ignore
     import source_format  # type: ignore
 
 
@@ -164,9 +166,10 @@ class GemmaRMSNorm(nn.Module):
 class Indexer(nn.Module):
     """Lightning Indexer: scores idx_q vs cached idx_k, picks top-k key blocks.
 
-    Returns an additive mask [B, 1, Sq, Sk] (0 on allowed keys, -inf elsewhere)
-    that composes with the causal mask. Block = key_pos // block_size; the
-    query's own (local) block is always kept.
+    Returns an ``msa.MSASelection`` (top-k block ids per query row and KV group;
+    ``dense_bias()`` gives the equivalent causal additive key mask) or None when
+    every block is visible. Block = key_pos // block_size; the query's own
+    (local) block is always kept.
     """
 
     def __init__(self, args: ModelArgs):
@@ -198,8 +201,8 @@ class Indexer(nn.Module):
         return self.select(idx_q, idx_k, offset)
 
     def select(self, idx_q, idx_k, offset):
-        """Key mask [B, G, Sq, Sk] (or None = every block visible) for queries at offset.. over keys idx_k[:, :, :Sk].
-        One query row over its own key prefix is exactly a decode step's selection."""
+        """Block selection (``msa.MSASelection``, or None = every block visible) for queries at offset.. over keys
+        idx_k[:, :, :Sk]. One query row over its own key prefix is exactly a decode step's selection."""
         B, _, Sq, _ = idx_q.shape
         Sk = idx_k.shape[2]
         # scores [B, nh, Sq, Sk] in fp32
@@ -230,16 +233,9 @@ class Indexer(nn.Module):
         if keep >= n_blocks:
             # all blocks visible -> only causal matters; return None (full attn)
             return None
-        # top-k blocks per query and group
+        # top-k blocks per query and group; the attention applies causality inside them
         top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,G,Sq,keep]
-        # build [B,G,Sq,n_blocks] keep-bias then expand to keys
-        block_keep = mx.full((B, self.nh, Sq, n_blocks), -mx.inf, dtype=mx.float32)
-        block_keep = mx.put_along_axis(block_keep, top_idx, mx.array(0.0, dtype=mx.float32), axis=-1)
-        # expand block -> key, drop pad
-        key_bias = mx.repeat(block_keep, self.block, axis=-1)[..., :Sk]   # [B,G,Sq,Sk]
-        # also enforce causal here (selected future blocks shouldn't leak)
-        key_bias = mx.where(k_pos > q_pos, -mx.inf, key_bias)
-        return key_bias
+        return msa.MSASelection(top_idx, offset, Sk, self.block)
 
 
 class Attention(nn.Module):
@@ -285,9 +281,15 @@ class Attention(nn.Module):
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
 
     def attend(self, q, k, v, block_bias, mask, cache):
-        """Attention output [B, H, L, D] (before o_proj) of q over k / v, with the MSA key mask when one exists."""
+        """Attention output [B, H, L, D] (before o_proj) of q over k / v, restricted to the MSA selection when one
+        exists (``block_bias``: an ``msa.MSASelection``, or an explicit additive key mask [B, G, L, Sk])."""
         if block_bias is None:
             return scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
+        if isinstance(block_bias, msa.MSASelection):
+            path = msa.choose_path(block_bias, q, k, mask, self.n_kv)
+            if path == "gather":
+                return msa.gathered_attention(q, k, v, block_bias, self.scale)
+            block_bias = block_bias.dense_bias()
         # block_bias is built as float32 (0.0 / -inf). SDPA requires the
         # mask dtype to promote to the bf16 compute/output dtype, else it
         # raises "[scaled_dot_product_attention] Mask type must promote to
