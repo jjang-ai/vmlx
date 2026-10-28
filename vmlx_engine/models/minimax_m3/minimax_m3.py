@@ -46,6 +46,10 @@ def swiglu(x_linear, x_glu, alpha: float = 1.702, limit: float = 7.0):
     return out_glu * (x_linear + 1)
 
 
+def _apply(module, x):
+    return module(x)
+
+
 class SwiGLU(nn.Module):
     """SwitchGLU activation: called as (x = up projection, gate)."""
 
@@ -178,14 +182,25 @@ class Indexer(nn.Module):
         self.index_k_norm = GemmaRMSNorm(self.d, args.rms_norm_eps)
         self.rope = nn.RoPE(args.rotary_dim, traditional=False, base=args.rope_theta)
 
-    def __call__(self, x, cache, offset):
+    def project(self, x, offset, linear=None):
+        """Index queries [B, nh, Sq, d] and keys [B, 1, Sq, d] of ``x`` at positions offset.. (norm + RoPE).
+        ``linear(module, x)`` replaces the projection call (DSpark verify: decode arithmetic per row)."""
         B, Sq, _ = x.shape
-        idx_q = self.index_q_norm(self.index_q_proj(x).reshape(B, Sq, self.nh, self.d)).transpose(0, 2, 1, 3)
-        idx_k = self.index_k_norm(self.index_k_proj(x).reshape(B, Sq, 1, self.d)).transpose(0, 2, 1, 3)
-        idx_q = self.rope(idx_q, offset=offset)
-        idx_k = self.rope(idx_k, offset=offset)
+        lin = _apply if linear is None else linear
+        idx_q = self.index_q_norm(lin(self.index_q_proj, x).reshape(B, Sq, self.nh, self.d)).transpose(0, 2, 1, 3)
+        idx_k = self.index_k_norm(lin(self.index_k_proj, x).reshape(B, Sq, 1, self.d)).transpose(0, 2, 1, 3)
+        return self.rope(idx_q, offset=offset), self.rope(idx_k, offset=offset)
+
+    def __call__(self, x, cache, offset):
+        idx_q, idx_k = self.project(x, offset)
         if cache is not None and isinstance(cache, MiniMaxM3SparseCache):
             idx_k = cache.update_index(idx_k)            # [B,1,Sk,d]
+        return self.select(idx_q, idx_k, offset)
+
+    def select(self, idx_q, idx_k, offset):
+        """Key mask [B, G, Sq, Sk] (or None = every block visible) for queries at offset.. over keys idx_k[:, :, :Sk].
+        One query row over its own key prefix is exactly a decode step's selection."""
+        B, _, Sq, _ = idx_q.shape
         Sk = idx_k.shape[2]
         # scores [B, nh, Sq, Sk] in fp32
         scores = (idx_q.astype(mx.float32) @ idx_k.astype(mx.float32).transpose(0, 1, 3, 2))
@@ -242,13 +257,19 @@ class Attention(nn.Module):
         self.rope = nn.RoPE(args.rotary_dim, traditional=False, base=args.rope_theta)
         self.indexer = Indexer(args) if args.is_sparse(li) else None
 
+    def project(self, x, offset, linear=None):
+        """q [B, H, L, D], k / v [B, KV, L, D] of ``x`` at positions offset.. (q/k norm + partial RoPE)."""
+        B, L, _ = x.shape
+        lin = _apply if linear is None else linear
+        q = self.q_norm(lin(self.q_proj, x).reshape(B, L, self.n_heads, self.hd)).transpose(0, 2, 1, 3)
+        k = self.k_norm(lin(self.k_proj, x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
+        v = lin(self.v_proj, x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
+        return self.rope(q, offset=offset), self.rope(k, offset=offset), v
+
     def __call__(self, x, mask=None, cache=None):
         B, L, _ = x.shape
         off = cache.offset if cache is not None else 0
-        q = self.q_norm(self.q_proj(x).reshape(B, L, self.n_heads, self.hd)).transpose(0, 2, 1, 3)
-        k = self.k_norm(self.k_proj(x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
-        v = self.v_proj(x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
-        q, k = self.rope(q, offset=off), self.rope(k, offset=off)
+        q, k, v = self.project(x, off)
         # Append K/V to the cache FIRST (matches upstream MiniMax-M3 ordering) so
         # the Lightning Indexer sees the COMPLETED post-append sequence length. If
         # the indexer ran first (on the pre-append offset) its block_bias Sk would
@@ -260,22 +281,25 @@ class Attention(nn.Module):
             k, v = cache.update_and_fetch(k, v)
         # MSA selection (additive block mask), computed from the SAME hidden x
         block_bias = self.indexer(x, cache, off) if self.indexer is not None else None
-        if block_bias is None:
-            o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
-        else:
-            # block_bias is built as float32 (0.0 / -inf). SDPA requires the
-            # mask dtype to promote to the bf16 compute/output dtype, else it
-            # raises "[scaled_dot_product_attention] Mask type must promote to
-            # output type bfloat16" once the indexer fires past the
-            # index_topk_blocks*index_block_size (=2048) token threshold.
-            # 0.0 and -inf are exactly representable in bf16, so the cast is
-            # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
-            # gated by context length, NOT cache mode.)
-            bias = block_bias.astype(q.dtype)  # [B, G, L, Sk], already causal
-            if isinstance(mask, mx.array):  # batch padding etc.
-                bias = bias + mask.astype(q.dtype)
-            o = self._grouped_attention(q, k, v, bias)
+        o = self.attend(q, k, v, block_bias, mask, cache)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
+
+    def attend(self, q, k, v, block_bias, mask, cache):
+        """Attention output [B, H, L, D] (before o_proj) of q over k / v, with the MSA key mask when one exists."""
+        if block_bias is None:
+            return scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
+        # block_bias is built as float32 (0.0 / -inf). SDPA requires the
+        # mask dtype to promote to the bf16 compute/output dtype, else it
+        # raises "[scaled_dot_product_attention] Mask type must promote to
+        # output type bfloat16" once the indexer fires past the
+        # index_topk_blocks*index_block_size (=2048) token threshold.
+        # 0.0 and -inf are exactly representable in bf16, so the cast is
+        # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
+        # gated by context length, NOT cache mode.)
+        bias = block_bias.astype(q.dtype)  # [B, G, L, Sk], already causal
+        if isinstance(mask, mx.array):  # batch padding etc.
+            bias = bias + mask.astype(q.dtype)
+        return self._grouped_attention(q, k, v, bias)
 
     def _grouped_attention(self, q, k, v, bias):
         """Attention where each KV group has its own key mask.
@@ -307,8 +331,10 @@ class SwiGLUOAIMLP(nn.Module):
         self.down_proj = nn.Linear(hidden, dim, bias=False)
         self.alpha, self.limit = alpha, limit
 
-    def __call__(self, x):
-        return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x), self.alpha, self.limit))
+    def __call__(self, x, linear=None):
+        if linear is None:
+            return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x), self.alpha, self.limit))
+        return linear(self.down_proj, swiglu(linear(self.up_proj, x), linear(self.gate_proj, x), self.alpha, self.limit))
 
 
 class SparseMoeBlock(nn.Module):
@@ -329,20 +355,25 @@ class SparseMoeBlock(nn.Module):
         self.shared_experts = SwiGLUOAIMLP(args.hidden_size, args.shared_intermediate_size,
                                            args.swiglu_alpha, args.swiglu_limit)
 
-    def __call__(self, x):
-        inds, scores = group_expert_select(
-            self.gate(x), self.e_score_correction_bias, self.top_k, 1, 1,
-            self.routed_scaling_factor, self.norm_topk_prob)
+    def routed(self, x, inds, scores):
+        """Router-weighted sum of the routed experts' outputs for ``x`` (the shared expert excluded)."""
         if getattr(self.switch_mlp, "is_jangt", False):
             # JANGHT: trellis / Hadamard routed experts, gather + SwiGLU-OAI + router-weighted sum in one call
-            y = self.switch_mlp.routed(x, inds, scores)
-        else:
-            y = (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
+            return self.switch_mlp.routed(x, inds, scores)
+        return (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
+
+    def __call__(self, x, linear=None, routed=None):
+        """``linear(module, x)`` / ``routed(x, inds, scores)`` replace the projection / routed calls (DSpark verify)."""
+        lin = _apply if linear is None else linear
+        inds, scores = group_expert_select(
+            lin(self.gate, x), self.e_score_correction_bias, self.top_k, 1, 1,
+            self.routed_scaling_factor, self.norm_topk_prob)
+        y = (self.routed if routed is None else routed)(x, inds, scores)
         # group_expert_select returns float32 scores, which promote the MoE output
         # (and thus the whole residual stream from layer 3 on) to float32 — forcing
         # every downstream attention/MLP matmul into float32 (~2x slower than bf16).
         # Cast back to the model compute dtype so the matmuls stay bf16.
-        return (y + self.shared_experts(x)).astype(x.dtype)
+        return (y + self.shared_experts(x, linear)).astype(x.dtype)
 
 
 class DecoderLayer(nn.Module):
