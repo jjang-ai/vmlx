@@ -49,6 +49,7 @@ from .prefix_cache import (
     _write_behind_ready,
     PAGED_CACHE_SCHEMA_VERSION,
     PrefixCacheManager,
+    _model_is_minimax_m3,
     build_block_cache_namespace,
     expected_cache_layer_count,
     compute_model_cache_key,
@@ -922,6 +923,19 @@ class Scheduler:
         )
         self._is_hybrid = self._is_hybrid_model(model)
         self._uses_m3_msa_cache = self._model_uses_m3_msa_cache(model)
+        # MiniMax-M3 aligned-chunk prefix cache (models/minimax_m3/prefill_geometry.py): every M3 prompt prefill is
+        # cut at absolute multiples of the prefill step and at the store boundary, and every cache tier reuses only
+        # a prefix such a cold prefill also ends a chunk at, so a hit is bit-identical to a cold prefill.
+        # VMLX_M3_ALIGNED_PREFIX=0 keeps the previous relative chunking + total-length block key.
+        from .models.minimax_m3.prefill_geometry import (
+            aligned_prefix_enabled as _m3_aligned_prefix_enabled,
+        )
+
+        self._m3_aligned_prefix = bool(
+            self._uses_m3_msa_cache
+            and _model_is_minimax_m3(model)
+            and _m3_aligned_prefix_enabled()
+        )
         # Do not silently widen repetition-penalty history for families whose
         # chat templates contain EOS/turn-boundary sentinels in the prompt.
         # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
@@ -1756,6 +1770,10 @@ class Scheduler:
                             self._mixed_attention_cache_model
                         ),
                     )
+                    if getattr(self, "_m3_aligned_prefix", False):
+                        self.block_aware_cache.set_minimax_m3_prefill_step(
+                            self.config.prefill_step_size
+                        )
                 except Exception:
                     self._cleanup_failed_block_cache_initialization(
                         block_disk_store=block_disk_store,
@@ -1877,6 +1895,15 @@ class Scheduler:
                     scope_key,
                     self.model,
                 )
+                if getattr(self, "_m3_aligned_prefix", False):
+                    # Whole-prompt M3 entries are only interchangeable with a cold prefill of the same chunk step
+                    # (and entries written before aligned prefill are not): scope the directory by both.
+                    from .models.minimax_m3.prefill_geometry import SCHEMA as _M3_PREFILL_SCHEMA
+
+                    scope_key += (
+                        f":m3_prefill={_M3_PREFILL_SCHEMA}"
+                        f":step={int(self.config.prefill_step_size or 0)}"
+                    )
                 model_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
                 cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
@@ -6602,6 +6629,98 @@ class Scheduler:
             or _GEN_PROMPT_STRIP_DISABLED
         )
 
+    def _m3_prefill_boundary(self, request: Request) -> Optional[int]:
+        """The MiniMax-M3 store boundary of this request: the prefix-cache lookup key (the prompt with the
+        generation-prompt suffix stripped exactly as ``add_request`` strips it) minus its final token, which a hit
+        re-feeds. The cold prefill is cut here, so an exact-geometry hit continues from it bit for bit."""
+        tokens = list(getattr(request, "prompt_token_ids", None) or [])
+        gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
+        if self._generation_prompt_strip_active() and 0 < gpl < len(tokens):
+            tokens = tokens[:-gpl]
+        boundary = len(tokens) - 1
+        return boundary if boundary > 0 else None
+
+    def _m3_prefill_plan(self, request: Request) -> Dict[str, Any]:
+        from .models.minimax_m3.prefill_geometry import is_media_request
+
+        return {
+            "boundary": self._m3_prefill_boundary(request),
+            "atomic": is_media_request(getattr(request, "_cache_extra_keys", None)),
+        }
+
+    def _insert_accepts_m3_prefill_plans(self) -> bool:
+        gen = self.batch_generator
+        cached = getattr(self, "_m3_prefill_plans_supported_for", None)
+        if cached is not None and cached[0] is gen:
+            return cached[1]
+        import inspect
+
+        try:
+            supported = "m3_prefill_plans" in inspect.signature(gen.insert).parameters
+        except (TypeError, ValueError):
+            supported = False
+        self._m3_prefill_plans_supported_for = (gen, supported)
+        return supported
+
+    def _m3_align_restored_prefix(
+        self, request: Request, cache: Any
+    ) -> Tuple[Optional[Any], Optional[str]]:
+        """Cut a restored MiniMax-M3 prefix to what a cold prefill of this request also computes (aligned mode).
+
+        Every cache tier lands here (paged/block-disk, memory, legacy prefix, prompt disk). The restored rows are
+        reusable up to this request's own store boundary only when they were produced with that same boundary (block
+        tiers: the geometry key guarantees it; whole-entry memory / prompt-disk tiers: an untruncated entry of
+        exactly that many rows; the legacy tier also stores role-segment prefixes, so never), and otherwise up to the
+        last chunk boundary. Returns (cache to use or None for a full prefill, fallback reason or None)."""
+        from .models.minimax_m3 import prefill_geometry
+
+        cached = max(0, int(getattr(request, "cached_tokens", 0) or 0))
+        offset = prefill_geometry.cache_offset(cache)
+        boundary = self._m3_prefill_boundary(request) or 0
+        step = max(1, int(self.config.prefill_step_size or 1))
+        detail = str(getattr(request, "_cache_detail", "") or "")
+        paged = getattr(request, "block_table", None) is not None
+        whole_entry_exact = detail.split("+")[0] in {"memory", "disk"}
+        # Lanes that disagree (layers at different offsets, an index lane out of step) prove nothing: full prefill.
+        reuse = 0 if offset is None else prefill_geometry.reuse_limit(
+            min(cached, offset),
+            boundary,
+            step,
+            exact_geometry=(paged or whole_entry_exact) and offset == cached,
+            atomic=prefill_geometry.is_media_request(
+                getattr(request, "_cache_extra_keys", None)
+            ),
+        )
+        if offset is not None and reuse == cached == offset:
+            return cache, None
+        trimmed = (
+            prefill_geometry.truncated_cache(cache, reuse) if reuse > 0 else None
+        )
+        logger.info(
+            "Request %s: MiniMax-M3 aligned prefix: restored %s rows (cache offset %s, %s), reuse %d "
+            "(chunk %d, boundary %d)%s",
+            request.request_id,
+            cached,
+            offset,
+            detail or "cache",
+            reuse if trimmed is not None else 0,
+            step,
+            boundary,
+            "" if trimmed is not None else "; full prefill",
+        )
+        if trimmed is None:
+            self._release_unusable_paged_hit(request)
+            request.prompt_cache = None
+            request.cached_tokens = 0
+            request.remaining_tokens = request.prompt_token_ids
+            return None, "minimax_m3_no_aligned_prefix"
+        if paged:
+            self._accept_paged_hit_credit(request, reuse)
+        request.prompt_cache = trimmed
+        request.cached_tokens = reuse
+        request.remaining_tokens = list(request.prompt_token_ids[reuse:])
+        return trimmed, None
+
     def add_request(self, request: Request) -> None:
         """
         Add a new request to the scheduler.
@@ -9190,6 +9309,25 @@ class Scheduler:
                     except Exception as e:
                         logger.debug(f"Memory check failed, skipping: {e}")
 
+            # MiniMax-M3 aligned prefix: whatever tier restored this prefix, keep only the part a cold prefill of
+            # this request also ends a chunk at (models/minimax_m3/prefill_geometry.py).
+            if cache_to_use is not None and getattr(self, "_m3_aligned_prefix", False):
+                _m3_aligned_cache, _m3_reason = self._m3_align_restored_prefix(
+                    request, cache_to_use
+                )
+                if _m3_aligned_cache is not cache_to_use:
+                    cache_to_use = _m3_aligned_cache
+                    tokens_to_process = list(request.remaining_tokens)
+                    if cache_execution is not None:
+                        cache_execution["cached_tokens"] = int(request.cached_tokens or 0)
+                        cache_execution["prefill_tokens"] = len(tokens_to_process)
+                        cache_execution["uncached_prompt_tokens"] = max(
+                            _prompt_tokens - int(request.cached_tokens or 0), 0
+                        )
+                        cache_execution["cache_reuse_applied"] = cache_to_use is not None
+                if _m3_reason is not None:
+                    _cache_fallback_reason = _m3_reason
+
             # Insert into BatchGenerator with optional cache.
             # Wrapped in try/except to prevent lost requests — if insert fails
             # completely, put the request back in the waiting queue.
@@ -9391,6 +9529,14 @@ class Scheduler:
                         insert_kwargs["gen_prompt_lens"] = [
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
                         ]
+                    # MiniMax-M3: cut the prefill at absolute chunk boundaries and at the store boundary, for cold
+                    # and cache-hit requests alike (bypass requests too: their output is the reference).
+                    if getattr(
+                        self, "_m3_aligned_prefix", False
+                    ) and self._insert_accepts_m3_prefill_plans():
+                        insert_kwargs["m3_prefill_plans"] = [
+                            self._m3_prefill_plan(request)
+                        ]
                     # DeepSeek-V4.1-Flash VL (additive): attach the ImageInput
                     # list + per-token token_types (full-prompt positions); the
                     # generator splices each image into the chunk holding its
@@ -9509,6 +9655,12 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        if getattr(
+                            self, "_m3_aligned_prefix", False
+                        ) and self._insert_accepts_m3_prefill_plans():
+                            insert_kwargs["m3_prefill_plans"] = [
+                                self._m3_prefill_plan(request)
+                            ]
                         # DSV4.1 VL: the cache-free retry prefills the whole prompt, so it must
                         # carry every image (the cached attempt may have omitted covered ones).
                         if getattr(request, "dsv41_vl_images", None) is not None and isinstance(
@@ -10203,6 +10355,11 @@ class Scheduler:
                                             getattr(
                                                 self, "_uses_m3_msa_cache", False
                                             )
+                                            # Aligned M3 hits continue in the cold prefill's chunks: their
+                                            # prompt snapshot IS the clean prefill state (no re-prefill).
+                                            and not getattr(
+                                                self, "_m3_aligned_prefix", False
+                                            )
                                             and int(
                                                 getattr(
                                                     request, "cached_tokens", 0
@@ -10503,6 +10660,9 @@ class Scheduler:
                                             )
                                             > 0
                                             and m3_key_tokens
+                                            and not getattr(
+                                                self, "_m3_aligned_prefix", False
+                                            )
                                         ):
                                             logger.info(
                                                 "MiniMax-M3 paged prefix store using "
@@ -10821,6 +10981,9 @@ class Scheduler:
                                         )
                                         > 0
                                         and m3_key_tokens
+                                        and not getattr(
+                                            self, "_m3_aligned_prefix", False
+                                        )
                                     ):
                                         logger.info(
                                             "MiniMax-M3 prefix cache store using "
@@ -11969,6 +12132,11 @@ class Scheduler:
                                 if getattr(request, "_cache_extra_keys", None):
                                     _paged_store_kwargs["cache_extra_keys"] = dict(
                                         request._cache_extra_keys
+                                    )
+                                if getattr(self, "_m3_aligned_prefix", False):
+                                    # The geometry the stored rows were computed in is the producing prefill's.
+                                    _paged_store_kwargs["minimax_m3_boundary"] = (
+                                        self._m3_prefill_boundary(request) or 0
                                     )
                                 if (
                                     self._is_hybrid
