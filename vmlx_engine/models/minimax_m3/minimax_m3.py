@@ -202,37 +202,19 @@ class Indexer(nn.Module):
 
     def select(self, idx_q, idx_k, offset):
         """Block selection (``msa.MSASelection``, or None = every block visible) for queries at offset.. over keys
-        idx_k[:, :, :Sk]. One query row over its own key prefix is exactly a decode step's selection."""
-        B, _, Sq, _ = idx_q.shape
+        idx_k[:, :, :Sk]. One query row over its own key prefix is exactly a decode step's selection.
+
+        Block score = max over the block's causal keys of idx_q . idx_k (float32), the local block(s) +inf; each
+        indexer head is one KV group with its own top-k. ``msa.block_scores`` computes them with the score-sheet
+        ops (``msa.reference_block_scores``) or a kernel that reproduces those bit for bit; the top-k below is the
+        same op either way."""
         Sk = idx_k.shape[2]
-        # scores [B, nh, Sq, Sk] in fp32
-        scores = (idx_q.astype(mx.float32) @ idx_k.astype(mx.float32).transpose(0, 1, 3, 2))
-        q_pos = mx.arange(offset, offset + Sq).reshape(1, 1, Sq, 1)
-        k_pos = mx.arange(Sk).reshape(1, 1, 1, Sk)
-        scores = mx.where(k_pos > q_pos, -mx.inf, scores)
-        # pad Sk to a block multiple, max-pool per block. Each indexer head is
-        # one KV group and keeps its own selection (upstream MiniMaxM3VLIndexer):
-        # pooling over heads here gave all groups one shared top-k, which differs
-        # from the reference once context passes topk * block (2048) tokens.
         n_blocks = (Sk + self.block - 1) // self.block
-        pad = n_blocks * self.block - Sk
-        if pad:
-            scores = mx.concatenate(
-                [scores, mx.full((B, self.nh, Sq, pad), -mx.inf, dtype=scores.dtype)], axis=-1)
-        scores = scores.reshape(B, self.nh, Sq, n_blocks, self.block)
-        block_scores = scores.max(axis=-1)                         # [B, G, Sq, n_blocks]
-        # force the local block(s) of each query to always win
-        q_block = ((q_pos.reshape(1, Sq) ) // self.block)         # [1, Sq]
-        if self.local > 0:
-            loc = mx.arange(self.local).reshape(1, 1, 1, self.local)
-            local_idx = mx.maximum(q_block.reshape(1, 1, Sq, 1) - loc, 0)  # [1,1,Sq,local]
-            local_idx = mx.broadcast_to(local_idx, (B, self.nh, Sq, self.local))
-            block_scores = mx.put_along_axis(
-                block_scores, local_idx, mx.array(mx.inf, dtype=block_scores.dtype), axis=-1)
         keep = min(self.topk, n_blocks)
         if keep >= n_blocks:
             # all blocks visible -> only causal matters; return None (full attn)
             return None
+        block_scores = msa.block_scores(idx_q, idx_k, offset, self.block, self.local)   # [B, G, Sq, n_blocks]
         # top-k blocks per query and group; the attention applies causality inside them
         top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,G,Sq,keep]
         return msa.MSASelection(top_idx, offset, Sk, self.block)
