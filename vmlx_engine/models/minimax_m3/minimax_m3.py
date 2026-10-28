@@ -55,11 +55,13 @@ class SwiGLU(nn.Module):
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
+    from . import source_format
 except Exception:  # pragma: no cover - standalone / mlx_lm-namespace import
     import os as _os, sys as _sys
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
     from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
+    import source_format  # type: ignore
 
 
 @dataclass
@@ -516,4 +518,7 @@ class Model(nn.Module):
             # model nests them under the `indexer` submodule.
             k = k.replace(".self_attn.index_", ".self_attn.indexer.index_")
             out[k] = v
+        if source_format.is_source_checkpoint(out):
+            # official checkpoint (MXFP8 linears, NVFP4 experts): keep it as stored
+            out = source_format.convert(self, out)
         return out
