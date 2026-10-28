@@ -246,21 +246,24 @@ def test_control_stock_multi_row_forward_is_not_row_exact(target):
     assert sum(not _eq(stock[r], ref_logits[r]) for r in range(8)) >= 4
 
 
-def test_verify_with_jangt_experts_equals_decode_steps():
+@pytest.fixture(scope="module")
+def jangt_model(tmp_path_factory):
+    """The JANGHT bundle test's in-memory model: JANGT (trellis) routed experts with outlier columns, MXFP8 / affine
+    4-6-8 trunk, float32 routers, 3 layers, index blocks of 8 with top-2."""
+    import tests.test_minimax_m3_janght as TJ
+
+    _, _, mem, _, _ = TJ.bundle.__wrapped__(tmp_path_factory)
+    return mem
+
+
+def test_verify_with_jangt_experts_equals_decode_steps(jangt_model):
     """JANGT (trellis) routed experts with outlier columns, mixed MXFP8 / affine trunk (the JANGHT bundle test's
     model): rows on the JANGT decode kernels below its sort threshold (17 x 4 = 68 < 72) and one row at a time
     above it on a NAX GPU (19 x 4 = 76)."""
     import tests.test_minimax_m3_janght as TJ
     from vmlx_engine.jangt.switch import nax_prefill
 
-    class _Tmp:
-        def mktemp(self, name):
-            import pathlib
-            import tempfile
-            return pathlib.Path(tempfile.mkdtemp(prefix=name))
-
-    _, _, mem, _, _ = TJ.bundle.__wrapped__(_Tmp())
-    tgt = MiniMaxM3DSparkTarget(mem)
+    tgt = MiniMaxM3DSparkTarget(jangt_model)
     assert any(getattr(layer.mlp.switch_mlp, "is_jangt", False) for layer in tgt.nm.layers if hasattr(layer.mlp, "switch_mlp"))
     prompt = mx.array([np.random.default_rng(5).integers(0, TJ.VOCAB, 61).tolist()])
     for width in (3, 8, 17, 19):
@@ -275,6 +278,27 @@ def test_verify_with_jangt_experts_equals_decode_steps():
         assert all(_eq(logits[r], ref_logits[r]) for r in range(width)), width
         per_row = width * TJ.TOPK >= 72 and nax_prefill()
         assert (tgt.verify_paths["routed_rows"] > 0) == per_row, (width, tgt.verify_paths)
+
+
+def test_dspark_greedy_equals_ar_with_jangt_experts(jangt_model, tmp_path):
+    """Greedy DSpark == greedy AR on the JANGT model (a matching tiny MiniMax drafter, scripted partial accepts,
+    Adaptive widths past the drafter block)."""
+    import tests.test_minimax_m3_janght as TJ
+
+    tgt = MiniMaxM3DSparkTarget(jangt_model)
+    cfg = _drafter_config()
+    cfg["text_config"].update(hidden_size=TJ.D, vocab_size=TJ.VOCAB, dspark_noise_token_id=TJ.VOCAB - 1,
+                              dspark_target_layer_ids=[0, 2], sliding_window=16)
+    prompt = np.random.default_rng(91).integers(0, TJ.VOCAB - 1, 61).tolist()
+    reference = generate_ar(tgt, prompt, 40, set(), prefill_step=16)
+    assert len(set(reference)) > 5
+    drafter = _Scripted(load_drafter(_save_release_drafter(tmp_path / "dspark", cfg)), prompt + reference,
+                        _every_fifth)
+    stats = DSparkStats()
+    out = generate_dspark(tgt, drafter, prompt, 40, set(), prefill_step=16, stats=stats, max_draft=2 * DRAFT_BLOCK,
+                          ar_fallback=_WidthOnly())
+    assert out == reference
+    assert stats.rounds > 3 and 0 < stats.accepted < stats.drafted and max(stats.widths) - 1 > DRAFT_BLOCK
 
 
 # ----------------------------------------------------------------------------------------------- rollback
