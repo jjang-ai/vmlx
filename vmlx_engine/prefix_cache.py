@@ -3432,7 +3432,8 @@ class BlockAwarePrefixCache:
         if not self._uses_minimax_m3_cache:
             return cache_extra_keys
 
-        if self._m3_aligned_step:
+        aligned_step = getattr(self, "_m3_aligned_step", None)
+        if aligned_step:
             from .models.minimax_m3 import prefill_geometry
 
             boundary = (
@@ -3443,7 +3444,7 @@ class BlockAwarePrefixCache:
                 )
             )
             return prefill_geometry.cache_extra_keys(
-                cache_extra_keys, boundary=boundary, step=self._m3_aligned_step
+                cache_extra_keys, boundary=boundary, step=aligned_step
             )
 
         # M3 stores the prompt-boundary cache under N-1 token IDs because the
@@ -4461,7 +4462,8 @@ class BlockAwarePrefixCache:
         scheduler cuts the restored rows to the boundary when it falls inside
         a block) and the rest are released. Nothing usable is a miss.
         """
-        if not (self._uses_minimax_m3_cache and self._m3_aligned_step):
+        step = getattr(self, "_m3_aligned_step", None)
+        if not (getattr(self, "_uses_minimax_m3_cache", False) and step):
             return block_table, remaining
         from .models.minimax_m3 import prefill_geometry
 
@@ -4470,7 +4472,7 @@ class BlockAwarePrefixCache:
         reuse = prefill_geometry.reuse_limit(
             matched,
             boundary,
-            self._m3_aligned_step,
+            step,
             exact_geometry=True,
             atomic=prefill_geometry.is_media_request(cache_extra_keys),
         )
@@ -4487,7 +4489,7 @@ class BlockAwarePrefixCache:
                     request_id,
                     matched,
                     reuse,
-                    self._m3_aligned_step,
+                    step,
                 )
             return block_table, remaining
         kept_ids: List[int] = []
@@ -4516,7 +4518,7 @@ class BlockAwarePrefixCache:
             request_id,
             matched,
             reuse,
-            self._m3_aligned_step,
+            step,
             boundary,
             len(dropped),
         )
