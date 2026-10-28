@@ -5,6 +5,8 @@ vmlx_engine.jangt.moe_kernels) or JANGH (jangtq2, vmlx_engine.jangh). Bundle con
   quantization["model.layers.N.mlp.switch_mlp.<proj>"] = {"mode": "jangt", "kbits": K}            (JANGT)
                                                      = {"mode": "jangtq2", "bits": b, "rotation": "hadamard32"} (JANGH)
   gate_proj and up_proj share one format and width (fused kernel); down may differ.
+The activation is the model's SwiGLU variant (moe_kernels.act_value_metal), given by the model, never by the bundle:
+  "silu" (default; clamped at swiglu_limit when > 0: GLM-5.3 / DSV4.1) or "oai" (MiniMax-M3: alpha 1.702, limit 7).
 JANGT tensors per projection (all are module parameters, names = bundle names):
   jt_packed uint32 (E, N, W)   trellis rows, W = words_per_row(K_in, 12, K)
   jt_scale  float32 (E, N)     row scales (unit-gain refit included)
@@ -92,11 +94,14 @@ class JTSwitchLinear(nn.Module):
 class JTMixedSwitchGLU(nn.Module):
     is_jangt = True
 
-    def __init__(self, D: int, I: int, E: int, gu: dict, dn: dict, n_out_gu: int, n_out_dn: int, limit: float = 0.0):
+    def __init__(self, D: int, I: int, E: int, gu: dict, dn: dict, n_out_gu: int, n_out_dn: int, limit: float = 0.0,
+                 act: str = "silu", alpha: float = 0.0):
         super().__init__()
         from vmlx_engine.jangh.switch import TQSwitchLinear
         self.D, self.I, self.E = D, I, E
         self.limit = float(limit)          # clamped SwiGLU (GLM-5.3: 10); 0 = plain SwiGLU (N0.5)
+        self.act = MK.check_act(act)       # "silu" | "oai" (SwiGLU-OAI, MiniMax-M3: alpha 1.702, limit 7)
+        self.alpha = float(alpha) if self.act == "oai" else 0.0
         self.gu_fmt, self.dn_fmt = gu["mode"], dn["mode"]
         if gu["mode"] == "jangt":
             self.gate_proj = JTSwitchLinear(D, I, E, gu["kbits"], n_out_gu, False)
@@ -136,10 +141,19 @@ class JTMixedSwitchGLU(nn.Module):
         if self.gu_fmt == "jangt":
             U = self._unit()
             return MK.gather_gate_up_swiglu_v3(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32, limit=self.limit,
-                                               rot_out=rot_out, slot_fastest=x2.shape[0] > 1)
+                                               rot_out=rot_out, slot_fastest=x2.shape[0] > 1, act=self.act, alpha=self.alpha)
         from vmlx_engine.jangh import kernels as K
         g, u = self.gate_proj, self.up_proj
-        return K.gather_qmv(K.h32_rows(x2, mx.float32), g.tq2_packed, g.tq2_scales, g._cb, idx2.reshape(-1).astype(mx.uint32),
+        xh, ids = K.h32_rows(x2, mx.float32), idx2.reshape(-1).astype(mx.uint32)
+        if self.act != "silu":
+            # the JANGH kernels' fused epilogue is SiLU only: gate and up as two single-weight passes (fp32 out), then
+            # the variant in fp32
+            hg = K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids, g.bits, x_per_dispatch=False,
+                              slot_fastest=x2.shape[0] > 1)
+            hu = K.gather_qmv(xh, u.tq2_packed, u.tq2_scales, u._cb, ids, u.bits, x_per_dispatch=False,
+                              slot_fastest=x2.shape[0] > 1)
+            return MK.act_mlx(hg, hu, self.act, self.limit, self.alpha)
+        return K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids,
                             g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit,
                             slot_fastest=x2.shape[0] > 1)
 
@@ -191,26 +205,31 @@ class JTMixedSwitchGLU(nn.Module):
                 from vmlx_engine.jangt.prefill import gather_gate_up_sorted_jt
                 xo = x2[:, U["gu_cols"]].astype(mx.float32)[tok]
                 h_s = gather_gate_up_sorted_jt(xr.astype(mx.bfloat16)[tok], xo, U["gate"], U["up"], idx_s, limit=self.limit,
-                                               plan=plan, rotate_output=ro)
+                                               plan=plan, rotate_output=ro, act=self.act, alpha=self.alpha)
                 h_rot = ro
             elif FUSED_GU_PREFILL and U["gate"]["n_out"] == 0:
                 from vmlx_engine.jangt.prefill import gather_qmm_sorted_jt      # no outliers: plain fused SwiGLU pass
                 h_s = gather_qmm_sorted_jt(xr.astype(mx.bfloat16)[tok], U["gate"], idx_s, U["up"], limit=self.limit,
-                                           plan=plan, rotate_output=ro)
+                                           plan=plan, rotate_output=ro, act=self.act, alpha=self.alpha)
                 h_rot = ro
             else:
                 xs_r, xs_x = xr[tok], x2[tok]
                 g = self._jt_mm(xs_r, xs_x, idx_s, U["gate"], plan); u = self._jt_mm(xs_r, xs_x, idx_s, U["up"], plan)
-                if self.limit > 0:
-                    g = mx.minimum(g, self.limit); u = mx.clip(u, -self.limit, self.limit)
-                h_s = g * mx.sigmoid(g) * u
+                h_s = MK.act_mlx(g, u, self.act, self.limit, self.alpha)
                 if ROUND_H_CONTROL:                                             # A/B control only: the fused kernels store bf16 h
                     h_s = h_s.astype(mx.bfloat16).astype(mx.float32)
         else:
             from vmlx_engine.jangh import kernels as K
             gp, upr = self.gate_proj, self.up_proj
-            h_s = K.gather_qmm_sorted(K.h32_rows(x2, x2.dtype)[tok], gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
-                                      packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit).astype(mx.float32)
+            xh = K.h32_rows(x2, x2.dtype)[tok]
+            if self.act != "silu":
+                # SiLU-only fused JANGH epilogue: two single-weight passes, the variant in fp32
+                g = K.gather_qmm_sorted(xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits).astype(mx.float32)
+                u = K.gather_qmm_sorted(xh, upr.tq2_packed, upr.tq2_scales, upr._cb, idx_s, upr.bits).astype(mx.float32)
+                h_s = MK.act_mlx(g, u, self.act, self.limit, self.alpha)
+            else:
+                h_s = K.gather_qmm_sorted(xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
+                                          packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit).astype(mx.float32)
         if self.dn_fmt == "jangt":
             U = self._unit()
             y_s = self._jt_mm(MK.rotate_rows(h_s, U["sv_dn"], idx_s), h_s, idx_s, U["down"], plan)
@@ -284,7 +303,9 @@ def enable_fused_combine(model: nn.Module) -> int:
 
 def install_jangt(model: nn.Module, config: dict) -> int:
     """Replace every routed SwitchGLU with a JTMixedSwitchGLU per the per-module contract (fail closed). config:
-    {"jangt", "quantization", optional "swiglu_limit" (clamped SwiGLU, GLM-5.3 = 10; absent/0 = plain SwiGLU)}.
+    {"jangt", "quantization", optional "swiglu_limit" (clamped SwiGLU, GLM-5.3 = 10; absent/0 = plain SwiGLU),
+    optional "swiglu_kind" ("silu" default | "oai": SwiGLU-OAI, MiniMax-M3) + "swiglu_alpha" (oai)}. The activation keys
+    come from the model's own config, not from the bundle's jangt block.
     Paths containing "mtp" are skipped (MTP heads are not part of the JANGT contract)."""
     from mlx_lm.models.switch_layers import SwitchGLU
     jt = config.get("jangt") or {}
@@ -293,6 +314,8 @@ def install_jangt(model: nn.Module, config: dict) -> int:
     quant = config.get("quantization") or {}
     n_out = jt.get("outlier_columns", {})
     limit = float(config.get("swiglu_limit", 0.0) or 0.0)
+    act = MK.check_act(config.get("swiglu_kind") or "silu")
+    alpha = float(config.get("swiglu_alpha", 0.0) or 0.0)
     count = 0
     for path, mod in list(model.named_modules()):
         sw = getattr(mod, "switch_mlp", None)
@@ -309,6 +332,7 @@ def install_jangt(model: nn.Module, config: dict) -> int:
                 raise ValueError(f"jangt: unsupported mode {v} for {key}")
         E, I, D = sw.gate_proj.weight.shape
         mod.switch_mlp = JTMixedSwitchGLU(D, I, E, ents["gate_proj"], ents["down_proj"],
-                                          int(n_out.get(f"{key}.gate_proj", 0)), int(n_out.get(f"{key}.down_proj", 0)), limit)
+                                          int(n_out.get(f"{key}.gate_proj", 0)), int(n_out.get(f"{key}.down_proj", 0)), limit,
+                                          act, alpha)
         count += 1
     return count
