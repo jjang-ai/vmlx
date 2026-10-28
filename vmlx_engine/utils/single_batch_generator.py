@@ -169,6 +169,9 @@ class _Request:
     # tokens (the end of the system turn) and keeps an exact typed snapshot there, so a new conversation with the
     # same system prompt and tools restores it instead of re-prefilling them. 0 = no split.
     stable_root_split: int = 0
+    # MiniMax-M3 aligned prefill plan ({"boundary": absolute store boundary or None, "atomic": media request}),
+    # set by the scheduler (models/minimax_m3/prefill_geometry.py). None = the previous relative chunking.
+    m3_plan: Optional[dict] = None
     stable_root_snapshot: Optional[list[Any]] = None
     # Periodic exact checkpoints (Naive): (boundary, window capture) taken during the cold prefill, then assembled
     # into (boundary, cache) from the N-1 snapshot for the scheduler to store before the N-1 checkpoint.
@@ -719,10 +722,12 @@ class SingleBatchGenerator:
         dsv41_vl_token_types: Optional[list[Any]] = None,
         gen_prompt_lens: Optional[list[int]] = None,
         stable_root_splits: Optional[list[int]] = None,
+        m3_prefill_plans: Optional[list[Optional[dict]]] = None,
     ):
         max_tokens = max_tokens or [self.max_tokens] * len(prompts)
         gen_prompt_lens = gen_prompt_lens or [0] * len(prompts)
         stable_root_splits = stable_root_splits or [0] * len(prompts)
+        m3_prefill_plans = m3_prefill_plans or [None] * len(prompts)
         caches = caches or [None] * len(prompts)
         # M3 VL (additive): per-prompt vision tensors, default None == text path.
         pixel_values = pixel_values or [None] * len(prompts)
@@ -760,6 +765,7 @@ class SingleBatchGenerator:
             dsv41_ttypes,
             gen_prompt_len,
             stable_root_split,
+            m3_plan,
         ) in zip(
             prompts,
             max_tokens,
@@ -776,6 +782,7 @@ class SingleBatchGenerator:
             dsv41_vl_token_types,
             gen_prompt_lens,
             stable_root_splits,
+            m3_prefill_plans,
         ):
             prompt_tokens = list(prompt)
             if not prompt_tokens:
@@ -803,6 +810,7 @@ class SingleBatchGenerator:
                 dsv41_vl_token_types=dsv41_ttypes,
                 gen_prompt_len=int(gen_prompt_len or 0),
                 stable_root_split=int(stable_root_split or 0),
+                m3_plan=dict(m3_plan) if m3_plan is not None else None,
             )
             self._unprocessed.append(req)
             uids.append(uid)
@@ -1316,6 +1324,8 @@ class SingleBatchGenerator:
         before the first generated token. M3 VL also requires this path because
         image-token positions must co-occur for the vision splice.
         """
+        if getattr(req, "m3_plan", None) is not None:
+            return self._prefill_m3_aligned_and_sample(req, req.m3_plan)
         tokens = list(req.prompt_tokens)
         has_media = req.pixel_values is not None or req.pixel_values_videos is not None
         # The processor emits one vision tensor containing features for every
@@ -1389,6 +1399,91 @@ class SingleBatchGenerator:
             req.context_tokens.extend(final_chunk)
             if req.logits_processors:
                 req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
+        self._sync()
+
+    def _m3_media_token_ids(self) -> set:
+        args = getattr(self.model, "args", None)
+        return {int(t) for t in (getattr(args, "image_token_index", None), getattr(args, "video_token_index", None))
+                if t is not None}
+
+    def m3_prefill_pieces(self, req: _Request, plan: dict) -> list:
+        """Absolute [a, b) prefill pieces of this M3 request (models/minimax_m3/prefill_geometry.py)."""
+        from ..models.minimax_m3.prefill_geometry import prefill_pieces
+
+        start = len(req.context_tokens)
+        end = start + len(req.prompt_tokens)
+        boundary = plan.get("boundary")
+        atomic = bool(plan.get("atomic"))
+        has_media = req.pixel_values is not None or req.pixel_values_videos is not None
+        if has_media and boundary is not None and start < int(boundary) < end:
+            # Every placeholder must meet its vision tensor in the first forward. A placeholder at or past the store
+            # boundary (never seen: the boundary is the last user token) keeps the whole media prefill atomic.
+            media = self._m3_media_token_ids()
+            tail = req.prompt_tokens[int(boundary) - start:]
+            if media and any(int(t) in media for t in tail):
+                logger.warning("MiniMax-M3 media placeholder past the cache boundary %s; atomic media prefill "
+                               "without the boundary cut (request %s)", boundary, req.uid)
+                boundary = None
+        return prefill_pieces(start, end, max(1, int(self.prefill_step_size or 1)), boundary,
+                              atomic=atomic or has_media)
+
+    def _prefill_m3_aligned_and_sample(self, req: _Request, plan: dict) -> None:
+        """Prefill an M3 prompt in chunks at ABSOLUTE positions (every multiple of the prefill step, and the prefix
+        cache's store boundary), then sample from the last row's logits.
+
+        A cold prefill and a continuation after a cache hit at a chunk boundary (or at the store boundary of an
+        exact-geometry request) then run the same matrices for every remaining row, so the hit's state and logits
+        equal the cold prefill's bit for bit. Media requests run [start, boundary) as one forward (every placeholder
+        with its vision tensor), then [boundary, N)."""
+        tokens = list(req.prompt_tokens)
+        start = len(req.context_tokens)
+        if req.cache:
+            from ..models.minimax_m3.prefill_geometry import cache_offset
+
+            offset = cache_offset(req.cache)
+            if offset is not None and offset != start:
+                # "cache mismatch": the scheduler's cache-corruption recovery clears the caches and re-runs the
+                # request from a cold prefill instead of continuing from rows that are not this context.
+                raise ValueError(
+                    f"MiniMax-M3 aligned prefill cache mismatch: cache holds {offset} rows but the request context "
+                    f"has {start}"
+                )
+        pieces = self.m3_prefill_pieces(req, plan)
+        _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        with self._stream_context():
+            for i, (a, b) in enumerate(pieces):
+                chunk = tokens[a - start: b - start]
+                last = i == len(pieces) - 1
+                lookahead = None if last else tokens[b - start: pieces[i + 1][1] - start]
+                logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+                if not last:
+                    # Only the cache rows are kept from a non-final piece: evaluate them, not the logits (the
+                    # lm_head over every row of a chunk is never read).
+                    mx.eval([layer.state for layer in req.cache])
+                    del logits
+                    req.context_tokens.extend(chunk)
+                    if req.logits_processors:
+                        req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
+                    self._sync()
+                    if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                        mx.clear_cache()
+                    continue
+                (logits,) = self._eval_on_stream(logits)
+                if getattr(req, "prefill_started", None) is not None:
+                    req.prefill_usage = {
+                        "tokens": len(tokens),
+                        "seconds": time.perf_counter() - req.prefill_started,
+                        "scope": "model_prefill_and_prompt_state",
+                    }
+                    req.prefill_started = None
+                logits = logits[:, -1, :]
+                input_tokens = mx.array([chunk[-1]], dtype=mx.int32)
+                req.next_token, req.next_logprobs = self._sample_from_logits(logits, req, input_tokens)
+                req.next_token_materialized = True
+                req.next_logprobs_materialized = req.next_logprobs is not None
+                req.context_tokens.extend(chunk)
+                if req.logits_processors:
+                    req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
         self._sync()
 
     def _start_request(self, req: _Request) -> Response:

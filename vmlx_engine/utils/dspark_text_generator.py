@@ -133,6 +133,7 @@ class DSparkTextGenerator(SingleBatchGenerator):
             prefill_step=self.prefill_step_size, sampler=draft_sampler, max_draft=rt["max_draft"],
             cost_per_row=rt["cost_per_row"], fixed_width=rt.get("fixed_width"), stats=stats,
             ar_fallback=policy, resume=resume, session=session, pick=pick,
+            prefill_plan=getattr(req, "m3_plan", None),
         )
         req._dspark_on = True
         req.next_token = self._pull(req)          # the prefill and the first token

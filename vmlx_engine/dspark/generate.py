@@ -262,6 +262,7 @@ def iter_dspark(
     on_snapshot: Optional[Callable] = None,
     session: Optional[dict] = None,
     pick: Optional[Callable] = None,
+    prefill_plan: Optional[dict] = None,
 ) -> Iterator[List[int]]:
     """Yield the token ids committed by each round (prefill yields the first). ``ar_fallback`` (a policy instance,
     or None for draft rounds only) interleaves AR steps when drafting measures slower than plain decoding.
@@ -283,7 +284,10 @@ def iter_dspark(
 
     Draft width: the ladder's top is ``max_draft`` within the target's verify coverage (``target.max_verify_rows``;
     None = any width). The drafter's trained block is not a ceiling: a round drafting more tokens than the block runs
-    a longer block of mask rows. Exactness never depends on the width."""
+    a longer block of mask rows. Exactness never depends on the width.
+
+    ``prefill_plan``: a target's aligned-prefill plan (MiniMax-M3: absolute chunk cuts and the prefix cache's store
+    boundary, models/minimax_m3/prefill_geometry.py), handed to ``target.prefill`` when it takes one."""
     cover = getattr(target, "max_verify_rows", MAX_VERIFY_ROWS)
     max_draft = max(1, int(max_draft) if cover is None else min(int(max_draft), int(cover) - 1))
     choose = (lambda lg: _pick(lg, sampler)) if pick is None else pick
@@ -322,7 +326,10 @@ def iter_dspark(
     # A sliding-window drafter never reads context rows more than ``sliding_window`` positions back: a target that
     # can (``keep_last``) returns only those prompt rows, and the drafter context starts at the first one.
     window = int(getattr(drafter, "sliding_window", 0) or 0)
-    extra = {"keep_last": window} if window and "keep_last" in inspect.signature(target.prefill).parameters else {}
+    _prefill_params = inspect.signature(target.prefill).parameters
+    extra = {"keep_last": window} if window and "keep_last" in _prefill_params else {}
+    if prefill_plan is not None and "plan" in _prefill_params:
+        extra["plan"] = prefill_plan
     logits, feats = target.prefill(mx.array([ids[start:]]), cache, taps, prefill_step, **extra)
     anchor = choose(logits[None]).reshape(1)
     if feats is not None:

@@ -170,9 +170,11 @@ class MiniMaxM3DSparkTarget:
 
     # ------------------------------------------------------------------ prefill / AR
     def prefill(self, ids: mx.array, cache, taps: Sequence[int], prefill_step: Optional[int],
-                keep_last: Optional[int] = None):
+                keep_last: Optional[int] = None, plan: Optional[dict] = None):
         """Returns (last-row logits (V,), tap features (1, P, n_taps * H) or None). Chunking = the served M3 prompt
-        path: chunks of ``prefill_step`` while more than one chunk remains, never leaving a lone final token.
+        path: with an aligned ``plan`` (``SingleBatchGenerator._prefill_m3_aligned_and_sample``), pieces cut at every
+        absolute multiple of ``prefill_step`` and at the plan's store boundary; without one, chunks of
+        ``prefill_step`` while more than one chunk remains, never leaving a lone final token.
         ``keep_last``: return only the features of the last ``keep_last`` rows (a sliding-window drafter never reads
         older ones; M3.1's taps are 61 KB per row, so a long prompt's full set would be gigabytes)."""
         from ..utils.generation_cancellation import raise_if_generation_cancelled
@@ -194,16 +196,27 @@ class MiniMaxM3DSparkTarget:
                 n -= 1
             return n
 
-        pos = 0
-        while length - pos > step:
+        if plan is not None:
+            from ..models.minimax_m3.prefill_geometry import prefill_pieces
+
+            start = self._offset(cache)
+            pieces = [(a - start, b - start) for a, b in
+                      prefill_pieces(start, start + length, step, plan.get("boundary"), atomic=bool(plan.get("atomic")))]
+        else:
+            pieces, pos = [], 0
+            while length - pos > step:
+                n = chunk_len(pos)
+                pieces.append((pos, pos + n))
+                pos += n
+            pieces.append((pos, length))
+        for a, b in pieces[:-1]:
             raise_if_generation_cancelled()
-            n = chunk_len(pos)
-            _, f = self._stock(ids[:, pos:pos + n], cache, taps, logits=False)
+            _, f = self._stock(ids[:, a:b], cache, taps, logits=False)
             mx.eval([c.state for c in cache])
             if f is not None:
                 mx.eval(f)
                 keep(f)
-            pos += n
+        pos = pieces[-1][0]
         raise_if_generation_cancelled()
         logits, f = self._stock(ids[:, pos:], cache, taps, logits=True)
         if f is not None:
