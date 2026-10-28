@@ -2981,7 +2981,7 @@ def serve_command(args):
         if ignored:
             print(f"  NOTE: These settings require --continuous-batching and will be ignored: {', '.join(ignored)}")
 
-    # --dspark on/off overrides the bundle's speculative.default stamp (read by models/mllm._load_dspark_runtime).
+    # --dspark on/off overrides the bundle's speculative.default stamp (read by dspark/runtime.load_dspark_runtime).
     _dspark_mode = getattr(args, "dspark", "auto")
     if _dspark_mode in ("on", "off"):
         os.environ["VMLX_DSPARK"] = "1" if _dspark_mode == "on" else "0"
@@ -4592,9 +4592,10 @@ Examples:
         "--dspark",
         choices=("auto", "on", "off"),
         default="auto",
-        help="DSpark drafter shipped inside the bundle (<bundle>/dspark, MiniCPM-V-4.7 / Naive N0.5): auto / on = use "
-             "it whenever the bundle ships one (a bundle without it serves AR), off = AR only. Runs on the "
-             "single-request lane (--no-continuous-batching); text, image and video requests.",
+        help="DSpark drafter shipped inside the bundle (<bundle>/dspark, MiniCPM-V-4.7 / Naive N0.5 / MiniMax-M3.1): "
+             "auto / on = use it whenever the bundle ships one (a bundle without it serves AR), off = AR only. "
+             "MiniCPM runs on the single-request lane (--no-continuous-batching; text, image and video requests); "
+             "MiniMax-M3.1 runs on the engine's single-sequence lane (text requests). Adaptive picks the draft width.",
     )
     serve_parser.add_argument(
         "--num-draft-tokens",

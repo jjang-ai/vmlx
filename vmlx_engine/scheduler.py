@@ -3952,6 +3952,34 @@ class Scheduler:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
 
         if (
+            getattr(self.model, "_vmlx_dspark_runtime", None) is not None
+            and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
+        ):
+            # A text-lane DSpark target (MiniMax-M3 / M3.1) whose bundle ships its drafter (dspark/runtime.py,
+            # attached at load; VMLX_DSPARK=0 keeps plain decoding): DSpark rounds on the engine cache for eligible
+            # requests, the inherited SingleBatchGenerator path for every other request.
+            try:
+                from .utils.dspark_text_generator import DSparkTextGenerator
+                logger.info("DSpark drafter attached — using DSparkTextGenerator (speculative decode, Adaptive width)")
+                return DSparkTextGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=None,
+                    prefill_batch_size=1,
+                    completion_batch_size=1,
+                    prefill_step_size=self.config.prefill_step_size,
+                    prompt_snapshot_max_bytes=_prompt_snapshot_max_bytes,
+                    mixed_swa_boundary_capture=self._mixed_swa_inline_capture_wanted(),
+                    mixed_swa_capture_block_size=int(
+                        getattr(self.block_aware_cache, "block_size", 64) or 64
+                    ),
+                )
+            except Exception as _dspark_text_err:
+                logger.warning("DSpark text generator init failed (%s); AR SingleBatchGenerator", _dspark_text_err)
+
+        if (
             getattr(self.model, "_dspark", None) is not None
             and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
         ):
@@ -9164,7 +9192,8 @@ class Scheduler:
             _m3vl_video_grid = getattr(request, "video_grid_thw", None)
             _m3vl_active = (
                 (_m3vl_pv is not None or _m3vl_pv_video is not None)
-                and self.batch_generator.__class__.__name__ == "SingleBatchGenerator"
+                and self.batch_generator.__class__.__name__
+                in ("SingleBatchGenerator", "DSparkTextGenerator")
             )
             _m3vl_cache_replay = bool(
                 _m3vl_active
@@ -9292,6 +9321,7 @@ class Scheduler:
                             # restored prefix as its context too (all_tokens / prefix store), so list it.
                             "SingleBatchGenerator",
                             "DSV41DSparkGenerator",
+                            "DSparkTextGenerator",
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)
@@ -13414,6 +13444,8 @@ class Scheduler:
             generator_path = "single_active"
         elif generator_cls == "DSV41DSparkGenerator":
             generator_path = "dsv41_dspark"
+        elif generator_cls == "DSparkTextGenerator":
+            generator_path = "dspark_text"
         elif generator_cls == "DSV4BatchGenerator":
             generator_path = "dsv4"
         elif generator_cls == "BatchGenerator":
@@ -13520,7 +13552,7 @@ class Scheduler:
                     stats["batch_generator"].update(native_mtp_stats)
             except Exception as exc:
                 logger.debug("Native MTP telemetry snapshot unavailable: %s", exc)
-        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
+        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSparkTextGenerator", "DSV4BatchGenerator"}:
             stats["batch_generator"].update(
                 {
                     "prompt_snapshot_max_bytes": getattr(
@@ -13609,6 +13641,8 @@ class Scheduler:
                 engine_path = "single_active"
             elif generator_cls == "DSV41DSparkGenerator":
                 engine_path = "dsv41_dspark"
+            elif generator_cls == "DSparkTextGenerator":
+                engine_path = "dspark_text"
             elif generator_cls == "DSV4BatchGenerator":
                 engine_path = "dsv4"
             elif generator_cls == "BatchGenerator":
@@ -13623,7 +13657,7 @@ class Scheduler:
                 "single_active_decode": engine_path in {"single_active", "dsv41_dspark"},
                 "max_num_seqs": self.config.max_num_seqs,
             }
-            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
+            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSparkTextGenerator", "DSV4BatchGenerator"}:
                 base["batch_generator"].update(
                     {
                         "prompt_snapshot_max_bytes": getattr(
