@@ -3159,6 +3159,10 @@ class BlockAwarePrefixCache:
         # discriminator.  The store serializer still detects the payload class
         # independently through _cache_data_has_minimax_m3().
         self._uses_minimax_m3_cache = _model_is_minimax_m3(model)
+        # MiniMax-M3 aligned-chunk geometry (models/minimax_m3/prefill_geometry.py): the prefill step the serving
+        # generator cuts every M3 prompt at. None keeps the previous total-length shape key (set by the scheduler
+        # only when it also runs the aligned prefill).
+        self._m3_aligned_step: Optional[int] = None
         if model is not None and hasattr(model, "make_cache"):
             try:
                 _cache = model.make_cache() or []
@@ -3385,12 +3389,23 @@ class BlockAwarePrefixCache:
 
         return bool(disk_only or minimax_m3 or native_tq)
 
+    def set_minimax_m3_prefill_step(self, step: Optional[int]) -> None:
+        """Key MiniMax-M3 blocks by the aligned-chunk geometry of a prefill cut every ``step`` tokens (the serving
+        generator's prefill step). None restores the total-length shape key."""
+        self._m3_aligned_step = max(1, int(step)) if step else None
+
+    def _minimax_m3_boundary(self, tokens: List[int], *, stored_prompt_boundary: bool) -> int:
+        """The store boundary of the prefill these tokens describe: a lookup gets the stripped prompt (its store
+        boundary is one token shorter), a store gets exactly the stored N-1 key."""
+        return len(tokens) if stored_prompt_boundary else max(0, len(tokens) - 1)
+
     def _shape_scoped_cache_extra_keys(
         self,
         tokens: List[int],
         cache_extra_keys: Optional[Any],
         *,
         stored_prompt_boundary: bool = False,
+        minimax_m3_boundary: Optional[int] = None,
     ) -> Optional[Any]:
         """Bind native M3 blocks to the prefill matrix shape that produced them.
 
@@ -3398,11 +3413,38 @@ class BlockAwarePrefixCache:
         tensors when MLX evaluates them inside different prompt-length matrix
         shapes. Ordinary attention tolerates that numerical drift, but
         MiniMax-M3's Lightning Indexer can select a different sparse block and
-        change greedy decoding. Exact requests and same-length partial-prefix
-        requests still share blocks; cross-length M3 aliases do not.
+        change greedy decoding.
+
+        Aligned mode (``set_minimax_m3_prefill_step``): every M3 prefill is cut
+        at absolute multiples of the step and at its store boundary, so a
+        block's numerics are fixed by the chunk that produced it. Blocks of
+        full chunks carry only the step and are shared by any longer prompt;
+        blocks of the partial chunk that ends at the store boundary carry that
+        boundary, so only an exact-geometry request reuses them
+        (``models/minimax_m3/prefill_geometry.py``). ``minimax_m3_boundary``
+        names the producing prefill's boundary when a store's token count is
+        not it.
+
+        Previous mode: the total prompt length keys every block, so exact
+        requests and same-length partial-prefix requests share blocks and
+        cross-length M3 aliases do not.
         """
         if not self._uses_minimax_m3_cache:
             return cache_extra_keys
+
+        if self._m3_aligned_step:
+            from .models.minimax_m3 import prefill_geometry
+
+            boundary = (
+                int(minimax_m3_boundary)
+                if minimax_m3_boundary is not None
+                else self._minimax_m3_boundary(
+                    tokens, stored_prompt_boundary=stored_prompt_boundary
+                )
+            )
+            return prefill_geometry.cache_extra_keys(
+                cache_extra_keys, boundary=boundary, step=self._m3_aligned_step
+            )
 
         # M3 stores the prompt-boundary cache under N-1 token IDs because the
         # final prompt token is re-fed to obtain first-token logits. Lookup
@@ -3698,6 +3740,9 @@ class BlockAwarePrefixCache:
             under the paged-cache lock.
             Every returned table is registered in _request_tables so the
             scheduler's normal completion cleanup can release those refs.
+
+        MiniMax-M3 aligned mode caps every hit to a prefix a cold prefill of
+        the request also ends a chunk at (``_cap_minimax_m3_hit``).
         """
         if not tokens:
             self._record_fetch_telemetry(
@@ -4107,7 +4152,9 @@ class BlockAwarePrefixCache:
                 dsv4_delta_applied=dsv4_matched_tokens is not None,
                 rotating_swa_normalized=_rotating_normalized,
             )
-            return block_table, remaining
+            return self._cap_minimax_m3_hit(
+                request_id, tokens, cache_extra_keys, block_table, remaining
+            )
 
         # Try prefix index for longer matches
         if best_match:
@@ -4381,7 +4428,9 @@ class BlockAwarePrefixCache:
                 dsv4_delta_applied=dsv4_matched_tokens is not None,
                 rotating_swa_normalized=_rotating_normalized,
             )
-            return block_table, remaining
+            return self._cap_minimax_m3_hit(
+                request_id, tokens, cache_extra_keys, block_table, remaining
+            )
 
         # No cache hit
         self._misses += 1
@@ -4394,6 +4443,106 @@ class BlockAwarePrefixCache:
             miss_reason="no_candidate",
         )
         return None, tokens
+
+    def _cap_minimax_m3_hit(
+        self,
+        request_id: str,
+        tokens: List[int],
+        cache_extra_keys: Optional[Any],
+        block_table: BlockTable,
+        remaining: List[int],
+    ) -> Tuple[Optional[BlockTable], List[int]]:
+        """Keep only the blocks a MiniMax-M3 continuation may reuse bit-exactly.
+
+        A hit of ``m`` tokens is usable as is when it ends at this request's
+        own store boundary (the trailing blocks matched only because they carry
+        that boundary). Otherwise reuse stops at the last chunk boundary
+        ``floor(m / step) * step``: the blocks covering it are kept (the
+        scheduler cuts the restored rows to the boundary when it falls inside
+        a block) and the rest are released. Nothing usable is a miss.
+        """
+        if not (self._uses_minimax_m3_cache and self._m3_aligned_step):
+            return block_table, remaining
+        from .models.minimax_m3 import prefill_geometry
+
+        matched = int(block_table.num_tokens)
+        boundary = max(0, len(tokens) - 1)
+        reuse = prefill_geometry.reuse_limit(
+            matched,
+            boundary,
+            self._m3_aligned_step,
+            exact_geometry=True,
+            atomic=prefill_geometry.is_media_request(cache_extra_keys),
+        )
+        keep_tokens = (
+            matched
+            if reuse == matched
+            else min(matched, prefill_geometry.block_cover(reuse, self.block_size))
+        )
+        if keep_tokens >= matched:
+            if reuse < matched:
+                logger.info(
+                    "MiniMax-M3 aligned prefix for %s: matched %d, reusable %d "
+                    "(chunk %d); the restored rows are cut inside the last block",
+                    request_id,
+                    matched,
+                    reuse,
+                    self._m3_aligned_step,
+                )
+            return block_table, remaining
+        kept_ids: List[int] = []
+        kept_tokens = 0
+        for block_id in block_table.block_ids:
+            block = self.paged_cache.allocated_blocks.get(block_id)
+            count = int(getattr(block, "token_count", 0) or 0)
+            if kept_tokens + count > keep_tokens:
+                break
+            kept_ids.append(block_id)
+            kept_tokens += count
+        dropped = block_table.block_ids[len(kept_ids):]
+        if dropped:
+            self.paged_cache.release_request_refs(
+                BlockTable(
+                    request_id=request_id,
+                    block_ids=list(dropped),
+                    num_tokens=matched - kept_tokens,
+                )
+            )
+        block_table.block_ids = kept_ids
+        block_table.num_tokens = kept_tokens
+        logger.info(
+            "MiniMax-M3 aligned prefix for %s: matched %d, reuse %d (chunk %d, "
+            "boundary %d); released %d trailing block(s)",
+            request_id,
+            matched,
+            reuse,
+            self._m3_aligned_step,
+            boundary,
+            len(dropped),
+        )
+        try:
+            record = self._fetch_telemetry.get(request_id)
+            if record is not None:
+                record["minimax_m3_matched_tokens"] = matched
+                record["minimax_m3_reuse_tokens"] = reuse
+                record["logical_restored_tokens"] = kept_tokens
+        except Exception:
+            logger.debug("M3 fetch telemetry failed for %s", request_id, exc_info=True)
+        credited = int(self._hit_credits.get(request_id, matched) or 0)
+        self._tokens_saved = max(0, self._tokens_saved - max(0, credited - kept_tokens))
+        if not kept_ids:
+            self._hits = max(0, self._hits - 1)
+            self._misses += 1
+            self._hit_credits.pop(request_id, None)
+            entry = self._request_tables.pop(request_id, None)
+            if entry is not None:
+                for _d in self._entries_by_type.values():
+                    _d.pop(request_id, None)
+            with self.paged_cache._lock:
+                self.paged_cache.request_tables.pop(request_id, None)
+            return None, tokens
+        self._hit_credits[request_id] = kept_tokens
+        return block_table, tokens[kept_tokens:]
 
     def _release_pinned_prefix_match(
         self,
@@ -5401,6 +5550,7 @@ class BlockAwarePrefixCache:
         store_cumulative_state: bool = True,
         *,
         defer_post_fence_gc: bool = False,
+        minimax_m3_boundary: Optional[int] = None,
     ) -> Optional[BlockTable]:
         """Store cache data and deterministically terminate any begun L2 fence."""
         # VMLX_STORE_PHASE_TRACE (see _STORE_PHASE_TRACE): read here so this lifecycle wrapper stays self-contained
@@ -5410,10 +5560,13 @@ class BlockAwarePrefixCache:
             self.settle_write_behind()
         if marks is not None:
             marks.append(("settle_prev", time.perf_counter()))
+        _shape_kwargs: Dict[str, Any] = {"stored_prompt_boundary": True}
+        if minimax_m3_boundary is not None:
+            _shape_kwargs["minimax_m3_boundary"] = minimax_m3_boundary
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
             tokens,
             cache_extra_keys,
-            stored_prompt_boundary=True,
+            **_shape_kwargs,
         )
         write_fence: Dict[str, Any] = {}
         producer_aborted = False
