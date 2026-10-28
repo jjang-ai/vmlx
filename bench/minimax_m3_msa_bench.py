@@ -13,8 +13,13 @@ output as consecutive layers do, after --warmup discarded probes): "eval" = eval
 command encoding; what decode pays once graph building overlaps the previous step), "wall" = building + evaluating.
 Paths alternate inside every probe, so other GPU load hits each path alike. "attn" times the attention given the selection; "layer" adds the selection.
 
+``--select`` compares the SELECTION paths instead (VMLX_MINIMAX_MSA_SELECT=reference: the score-sheet ops;
+=kernel: the selection kernel), attention routed as served (auto): "sel" times Indexer.select alone (block scores +
+top-k), "layer" selection + attention. Peak memory is per part, over the probe.
+
     python bench/minimax_m3_msa_bench.py --mode decode --sk 8192 32768 131072
     python bench/minimax_m3_msa_bench.py --mode prefill --rows 2048 --sk 8192 32768
+    python bench/minimax_m3_msa_bench.py --select --mode decode --sk 8192 32768 131072
 """
 
 from __future__ import annotations
@@ -73,8 +78,13 @@ def _summary(times):
     return statistics.median(times), min(times), max(times)
 
 
-def run(mode: str, sks, rows: int, groups: int, iters: int, probes: int, warmup: int, paths):
-    """Paths are interleaved inside every probe (order alternating), so drift and other GPU load hit each alike."""
+def run(mode: str, sks, rows: int, groups: int, iters: int, probes: int, warmup: int, paths, select: bool = False):
+    """Paths are interleaved inside every probe (order alternating), so drift and other GPU load hit each alike.
+    ``select``: the paths are selection paths (VMLX_MINIMAX_MSA_SELECT), parts "sel" and "layer"."""
+    from vmlx_engine.models.minimax_m3 import msa
+
+    env = msa.SELECT_ENV if select else "VMLX_MINIMAX_MSA"
+    parts = ("sel", "layer") if select else ("attn", "layer")
     attn = _attention(groups)
     ix = attn.indexer
     results = []
@@ -98,13 +108,19 @@ def run(mode: str, sks, rows: int, groups: int, iters: int, probes: int, warmup:
             sel = ix.select(iqi, ik, offset)
             return attn.attend(_q(prev), k, v, sel, mask, None)
 
-        times = {(p, part, kind): [] for p in paths for part in ("attn", "layer") for kind in ("wall", "eval")}
+        def sel_only(i, prev):
+            iqi = iq if prev is None else iq + eps * prev[..., :1].astype(iq.dtype)
+            return ix.select(iqi, ik, offset).top_idx
+
+        fns = {"attn": attn_only, "layer": layer, "sel": sel_only}
+        times = {(p, part, kind): [] for p in paths for part in parts for kind in ("wall", "eval")}
         peaks = {}
         for n in range(warmup + probes):
             order = paths if n % 2 == 0 else list(reversed(paths))
             for path in order:
-                os.environ["VMLX_MINIMAX_MSA"] = path
-                for part, fn in (("attn", attn_only), ("layer", layer)):
+                os.environ[env] = path
+                for part in parts:
+                    fn = fns[part]
                     mx.reset_peak_memory()
                     wall, ev = _probe(fn, iters)
                     peaks[(path, part)] = mx.get_peak_memory() / 2**20
@@ -112,10 +128,10 @@ def run(mode: str, sks, rows: int, groups: int, iters: int, probes: int, warmup:
                         times[(path, part, "wall")].append(wall)
                         times[(path, part, "eval")].append(ev)
         for path in paths:
-            row = {"mode": mode, "sk": sk, "rows": L, "groups": groups, "path": path,
-                   "peak_mib_attn": round(peaks[(path, "attn")]), "peak_mib_layer": round(peaks[(path, "layer")])}
-            line = f"{mode:7s} Sk={sk:6d} L={L:4d} G={groups} {path:6s}"
-            for part in ("attn", "layer"):
+            row = {"mode": mode, "sk": sk, "rows": L, "groups": groups, "path": path, "select": select}
+            row.update({f"peak_mib_{part}": round(peaks[(path, part)]) for part in parts})
+            line = f"{mode:7s} Sk={sk:6d} L={L:4d} G={groups} {path:9s}"
+            for part in parts:
                 for kind in ("eval", "wall"):
                     t = times[(path, part, kind)]
                     med, lo, hi = _summary(t)
@@ -123,10 +139,10 @@ def run(mode: str, sks, rows: int, groups: int, iters: int, probes: int, warmup:
                     row[f"{part}_{kind}_probes"] = t
                     line += f"  {part}-{kind} {med:7.3f} [{lo:.3f}-{hi:.3f}]"
             results.append(row)
-            print(line + f"  peak {peaks[(path, 'attn')]:.0f}/{peaks[(path, 'layer')]:.0f} MiB", flush=True)
+            print(line + "  peak " + "/".join(f"{peaks[(path, part)]:.0f}" for part in parts) + " MiB", flush=True)
         del q, k, v, iq, ik, sel0
         mx.clear_cache()
-    os.environ.pop("VMLX_MINIMAX_MSA", None)
+    os.environ.pop(env, None)
     return results
 
 
@@ -139,11 +155,14 @@ def main():
     ap.add_argument("--iters", type=int, default=0, help="calls per probe (default: 32 decode, 1 prefill)")
     ap.add_argument("--probes", type=int, default=7)
     ap.add_argument("--warmup", type=int, default=1)
-    ap.add_argument("--paths", nargs="+", default=["dense", "sparse"])
+    ap.add_argument("--paths", nargs="+", default=None,
+                    help="default: dense sparse (attention), reference kernel (--select)")
+    ap.add_argument("--select", action="store_true", help="compare selection paths (VMLX_MINIMAX_MSA_SELECT)")
     ap.add_argument("--json", default="")
     a = ap.parse_args()
     iters = a.iters or (32 if a.mode == "decode" else 1)
-    res = run(a.mode, a.sk, a.rows, a.groups, iters, a.probes, a.warmup, a.paths)
+    paths = a.paths or (["reference", "kernel"] if a.select else ["dense", "sparse"])
+    res = run(a.mode, a.sk, a.rows, a.groups, iters, a.probes, a.warmup, paths, a.select)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(res, f, indent=1)
