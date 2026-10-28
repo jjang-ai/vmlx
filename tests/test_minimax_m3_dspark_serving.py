@@ -241,3 +241,31 @@ def test_scheduler_picks_the_dspark_text_generator_only_when_a_runtime_is_attach
     gen = scheduler._create_batch_generator(SamplingParams(max_tokens=8, temperature=0.0))
     assert type(gen).__name__ == ("DSparkTextGenerator" if attached else "SingleBatchGenerator")
     assert getattr(gen.sampler, "_vmlx_greedy", False)
+
+
+def test_text_generator_sampled_requests(tmp_path, monkeypatch):
+    """Sampled requests: DSpark draws every token with the request's own sampler (sample-then-match);
+    VMLX_DSPARK_SAMPLED=0 sends them to the plain path, which then equals SingleBatchGenerator draw for draw."""
+    from vmlx_engine.dspark.runtime import load_dspark_runtime
+    from vmlx_engine.sampling import make_minimax_m3_sampler
+    from vmlx_engine.utils.dspark_text_generator import DSparkTextGenerator
+    from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+    model = _model(seed=13)
+    rt = load_dspark_runtime(model, _bundle(tmp_path))
+    object.__setattr__(model, "_vmlx_dspark_runtime", rt)
+    prompt = _ids(300, 91)
+
+    def seeded():
+        return make_minimax_m3_sampler(temp=0.8, top_p=0.95, seed=7)
+
+    ref = _drive(SingleBatchGenerator(model, sampler=seeded(), max_tokens=20, prefill_step_size=128, stop_tokens=[]),
+                 [prompt], max_tokens=20)[1]
+    monkeypatch.setenv("VMLX_DSPARK_SAMPLED", "0")
+    gen = DSparkTextGenerator(model, sampler=seeded(), max_tokens=20, prefill_step_size=128, stop_tokens=[])
+    assert _drive(gen, [prompt], max_tokens=20)[1] == ref and gen.last_dspark_stats is None
+    monkeypatch.delenv("VMLX_DSPARK_SAMPLED")
+    gen = DSparkTextGenerator(model, sampler=seeded(), max_tokens=20, prefill_step_size=128, stop_tokens=[])
+    tokens = _drive(gen, [prompt], max_tokens=20)[1]
+    assert len(tokens) == 20 and all(0 <= t < 1024 for t in tokens)
+    assert gen.last_dspark_stats is not None and gen.last_dspark_stats["tokens"] == 20
