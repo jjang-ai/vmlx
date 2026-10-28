@@ -77,7 +77,7 @@ class DSparkTextGenerator(SingleBatchGenerator):
     def _drafter_resume(self, prefix: list) -> dict:
         """Drafter context for a restored target prefix: the previous request's context when it covers ``prefix``."""
         memory, self._draft_memory = self._draft_memory, None
-        if memory is not None:
+        if memory is not None and prefix:
             tokens, caches, base = memory
             n = len(prefix)
             if base <= n <= len(tokens) and tokens[:n] == prefix:
@@ -113,7 +113,8 @@ class DSparkTextGenerator(SingleBatchGenerator):
         req.prompt_processed = True
         prompt_ids = list(req.context_tokens) + list(req.prompt_tokens)
         resume = {"target_cache": req.cache, "cache_len": cached}
-        resume.update(self._drafter_resume(prompt_ids[:cached]) if cached else {"draft_cache": None})
+        # The previous request's drafter context is consumed (or released) by every DSpark request.
+        resume.update(self._drafter_resume(prompt_ids[:cached] if cached else []))
         stats = DSparkStats()
         session: dict = {}
         policy = None if _off("VMLX_DSPARK_AR_FALLBACK") else ARFallback()
