@@ -207,21 +207,26 @@ class DSparkDrafter(nn.Module):
         self.reset()
 
     # ------------------------------------------------------------ context
-    def reset(self) -> None:
+    def reset(self, base: int = 0) -> None:
+        """Empty context positioned at ``base``: the next context row is position ``base``. A base > 0 drafts after
+        a target prefix whose tap features the drafter never saw (a restored engine prefix cache): positions stay
+        absolute, the attention just has no rows before ``base``. Drafts only (the target verifies every token)."""
         from mlx_lm.models.cache import KVCache
 
         # Context K/V per drafter layer, grown in steps (KVCache) instead of concatenated per round: the old
         # concatenation copied the whole context twice per layer per round, a cost that grew with the conversation.
         # Also the form the session store / SSD tier persist and restore (the mlx-lm cache state protocol).
         self._ctx = [KVCache() for _ in self.layers]
-        self.ctx_len = 0
+        self.ctx_base = int(base)
+        self.ctx_len = self.ctx_base
 
     def context_caches(self) -> list:
-        """The context K/V caches (one per drafter layer) covering ``ctx_len`` positions."""
+        """The context K/V caches (one per drafter layer) covering positions [ctx_base, ctx_len)."""
         return self._ctx
 
-    def set_context(self, caches: list) -> None:
-        """Adopt restored context caches (session store / SSD); they must all cover the same positions."""
+    def set_context(self, caches: list, base: int = 0) -> None:
+        """Adopt restored context caches (session store / SSD); they must all cover the same positions, starting at
+        ``base``."""
         caches = list(caches)
         if len(caches) != len(self.layers):
             raise ValueError("DSpark drafter context: one cache per drafter layer expected")
@@ -229,7 +234,8 @@ class DSparkDrafter(nn.Module):
         if len(offsets) != 1:
             raise ValueError(f"DSpark drafter context caches disagree on length: {sorted(offsets)}")
         self._ctx = caches
-        self.ctx_len = offsets.pop()
+        self.ctx_base = int(base)
+        self.ctx_len = self.ctx_base + offsets.pop()
 
     def context_arrays(self) -> list:
         return [a for c in self._ctx for a in (c.keys, c.values) if a is not None]
@@ -272,7 +278,7 @@ class DSparkDrafter(nn.Module):
             self._ctx[li].trim(length)
             mask = None
             if self.sliding_window:
-                k, v, mask = _sliding(k, v, start, length, self.sliding_window, q.dtype)
+                k, v, mask = _sliding(k, v, start, length, self.sliding_window, q.dtype, self.ctx_base)
             elif window and int(k.shape[2]) > window + length:
                 # Opt-in recent-context window (TensorFold's DSV4 drafter attends the last 128 rows): the draft
                 # block's attention reads O(window) instead of the whole conversation. Draft-side only.
@@ -348,14 +354,14 @@ class DSparkDrafter(nn.Module):
         return mx.concatenate(tokens), mx.stack(confs)
 
 
-def _sliding(k: mx.array, v: mx.array, start: int, length: int, window: int, dtype):
+def _sliding(k: mx.array, v: mx.array, start: int, length: int, window: int, dtype, base: int = 0):
     """Keys for a block at positions [start, start + length) under a model sliding window: context key positions
     > p - window for the row at position p, and the whole block (block attention is non-causal). ``k`` / ``v`` hold
-    the context rows [0, start) followed by the block rows."""
-    if start + length - 1 - window < 0:  # even the last block row reads every context row
+    the context rows of positions [base, start) followed by the block rows."""
+    if start + length - 1 - window < base:  # even the last block row reads every context row held
         return k, v, None
-    first = max(0, start + 1 - window)  # the earliest context row any block row can read (the anchor row's)
-    k, v = k[:, :, first:], v[:, :, first:]
+    first = max(base, start + 1 - window)  # the earliest context row any block row can read (the anchor row's)
+    k, v = k[:, :, first - base:], v[:, :, first - base:]
     kpos = mx.concatenate([mx.arange(first, start), mx.full((length,), start + length, dtype=mx.int32)])
     qpos = mx.arange(start, start + length)[:, None]
     keep = kpos[None, :] > qpos - window  # block keys carry start + length, i.e. always inside the window
@@ -423,18 +429,22 @@ def load_drafter(path: str | Path, bits: Optional[int] = None) -> DSparkDrafter:
     return model
 
 
-def _minimax_weights(path: Path) -> dict:
-    """Every tensor of a MiniMax drafter directory under the drafter's module names (the release's
+def minimax_tensor_name(name: str) -> str:
+    """A MiniMax drafter tensor name under the drafter's module names: the release's
     ``language_model.model.dspark.layers.N.decoder_layer.*`` / ``final_norm.*`` names are mapped; names that already
-    are module paths pass unchanged)."""
+    are module paths pass unchanged."""
+    name = name.removeprefix("language_model.model.dspark.").replace(".decoder_layer.", ".")
+    return "norm." + name[len("final_norm."):] if name.startswith("final_norm.") else name
+
+
+def _minimax_weights(path: Path) -> dict:
+    """Every tensor of a MiniMax drafter directory under the drafter's module names (``minimax_tensor_name``)."""
     weights = {}
     for f in sorted(path.glob("*.safetensors")):
+        if f.name.startswith("._"):
+            continue
         weights.update(mx.load(str(f)))
-    renamed = {}
-    for k, v in weights.items():
-        k = k.removeprefix("language_model.model.dspark.").replace(".decoder_layer.", ".")
-        renamed["norm." + k[len("final_norm."):] if k.startswith("final_norm.") else k] = v
-    return renamed
+    return {minimax_tensor_name(k): v for k, v in weights.items()}
 
 
 def _load_minimax_drafter(path: Path, raw_cfg: dict) -> DSparkDrafter:

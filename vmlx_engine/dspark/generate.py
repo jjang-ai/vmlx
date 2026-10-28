@@ -260,6 +260,7 @@ def iter_dspark(
     snapshot_cuts: Sequence[int] = (),
     on_snapshot: Optional[Callable] = None,
     session: Optional[dict] = None,
+    pick: Optional[Callable] = None,
 ) -> Iterator[List[int]]:
     """Yield the token ids committed by each round (prefill yields the first). ``ar_fallback`` (a policy instance,
     or None for draft rounds only) interleaves AR steps when drafting measures slower than plain decoding.
@@ -269,15 +270,32 @@ def iter_dspark(
     ``snapshot_cuts`` (absolute prompt positions) end prefill segments; ``on_snapshot(cut, target_cache,
     draft_caches)`` is called at each with the live caches (the callee clones them). ``session`` (a dict) is kept
     current with ``forwarded`` (exactly the token ids the target cache and drafter context hold), ``target_cache``
-    and ``drafter``, so the caller can store the end-of-turn state whenever it stops consuming."""
-    max_draft = max(1, min(int(max_draft), MAX_VERIFY_ROWS - 1, drafter.block))
+    and ``drafter``, so the caller can store the end-of-turn state whenever it stops consuming.
+
+    ``resume["draft_cache"]`` may be None: the drafter then starts with an empty context positioned at ``cache_len``
+    (a prefix whose taps it never saw; drafts only). ``resume["draft_base"]``: the position of the stored drafter
+    context's first row (default 0).
+
+    ``pick(logits (rows, V)) -> token ids``: how the target's token is chosen from its logits (default: argmax, or
+    ``sampler`` on log-probabilities); a serving lane passes its own decode pick so every committed token is chosen
+    exactly as its plain decode would choose it.
+
+    Draft width: the ladder's top is ``max_draft`` within the target's verify coverage (``target.max_verify_rows``;
+    None = any width). The drafter's trained block is not a ceiling: a round drafting more tokens than the block runs
+    a longer block of mask rows. Exactness never depends on the width."""
+    cover = getattr(target, "max_verify_rows", MAX_VERIFY_ROWS)
+    max_draft = max(1, int(max_draft) if cover is None else min(int(max_draft), int(cover) - 1))
+    choose = (lambda lg: _pick(lg, sampler)) if pick is None else pick
     stats = stats if stats is not None else DSparkStats()
     taps = drafter.target_layer_ids
     ids = [int(t) for t in prompt_ids]
     if resume is not None:
         cache = resume["target_cache"]
         cached = int(resume["cache_len"])
-        drafter.set_context(resume["draft_cache"])
+        if resume.get("draft_cache") is None:
+            drafter.reset(base=cached)
+        else:
+            drafter.set_context(resume["draft_cache"], base=int(resume.get("draft_base", 0) or 0))
         if drafter.ctx_len != cached:
             raise ValueError(f"DSpark resume: drafter context {drafter.ctx_len} != target cache {cached}")
     else:
@@ -301,7 +319,7 @@ def iter_dspark(
         if on_snapshot is not None:
             on_snapshot(cut, cache, drafter.context_caches())
     logits, feats = target.prefill(mx.array([ids[start:]]), cache, taps, prefill_step)
-    anchor = _pick(logits[None], sampler).reshape(1)
+    anchor = choose(logits[None]).reshape(1)
     if feats is not None:
         drafter.add_context(feats)
     mx.eval(anchor, *drafter.context_arrays())
@@ -331,17 +349,17 @@ def iter_dspark(
             t_step = time.perf_counter()
             launched = [int(anchor.item())]
             logits, feats = target.ar_step(anchor, cache, taps)
-            pick = _pick(logits[None], sampler).reshape(1)
-            mx.async_eval(pick, feats)
+            pick_ = choose(logits[None]).reshape(1)
+            mx.async_eval(pick_, feats)
             burst_feats, new, stop = [], [], False
             for i in range(n_steps):
                 nxt = None
                 if i + 1 < n_steps:
                     launched.append(None)            # filled with this step's input token below, once read
-                    logits2, feats2 = target.ar_step(pick.astype(anchor.dtype), cache, taps)
-                    nxt = (_pick(logits2[None], sampler).reshape(1), feats2)
+                    logits2, feats2 = target.ar_step(pick_.astype(anchor.dtype), cache, taps)
+                    nxt = (choose(logits2[None]).reshape(1), feats2)
                     mx.async_eval(*nxt)
-                tok = int(pick.item())
+                tok = int(pick_.item())
                 if i + 1 < n_steps:
                     launched[i + 1] = tok                # the pipelined step forwarded this token
                 burst_feats.append(feats)
@@ -350,7 +368,7 @@ def iter_dspark(
                     stop = True
                     break
                 if nxt is not None:
-                    pick, feats = nxt
+                    pick_, feats = nxt
             if launched and launched[-1] is None:
                 launched.pop()                       # stopped before reading the last launched step's input
             # A pipelined step past the EOS token already ran: its input (the EOS) is in the cache, and its tap row
@@ -370,16 +388,20 @@ def iter_dspark(
                 return
             continue
         t_round = time.perf_counter()
+        n = min(max_draft, room - 1) if room > 1 else 0
+        k = 0
+        if n >= 1 and pipelined:
+            k = fixed_width if fixed_width is not None else ar_fallback.planned_width(max_draft, cost_per_row)
+            k = max(1, min(int(k), n))
+        # The trained block, or a longer one when this round drafts past it.
+        span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
         block = mx.concatenate(
             [target.embed_tokens(anchor.reshape(1, 1)),
-             mx.broadcast_to(mask_embed, (1, drafter.block - 1, mask_embed.shape[-1]))], axis=1)
+             mx.broadcast_to(mask_embed, (1, span - 1, mask_embed.shape[-1]))], axis=1)
         hidden = drafter(block)
-        n = min(max_draft, room - 1) if room > 1 else 0
         if n >= 1 and pipelined:
             # One sync per round: the width comes from the acceptance history, the drafter is queued (async_eval) and
             # the verify graph is built on the CPU while the GPU drafts. Same values; only the schedule differs.
-            k = fixed_width if fixed_width is not None else ar_fallback.planned_width(max_draft, cost_per_row)
-            k = max(1, min(int(k), n))
             proposal, conf = drafter.draft(hidden, anchor, target.lm_head, k, sampler=sampler)
             mx.async_eval(proposal)
         elif n >= 1:
@@ -398,7 +420,7 @@ def iter_dspark(
             k, proposal = 0, mx.array([], dtype=anchor.dtype)
         rows = mx.concatenate([anchor, proposal]).reshape(1, k + 1)
         logits, feats, sink = target.verify(rows, cache, taps)
-        picks = _pick(logits, sampler)
+        picks = choose(logits)
         mx.eval(picks, feats)
         if pipelined and k:
             mx.eval(proposal)

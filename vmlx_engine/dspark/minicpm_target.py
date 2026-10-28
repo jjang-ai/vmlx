@@ -79,6 +79,9 @@ def _cache_offset(cache, idx: int) -> int:
 
 
 class MiniCPMDSparkTarget:
+    # Verify rows run on the row-exact kernels, which cover up to MAX_VERIFY_ROWS rows per call.
+    max_verify_rows = MAX_VERIFY_ROWS
+
     def __init__(self, model):
         self.model = model
         self.lm = model.language_model
