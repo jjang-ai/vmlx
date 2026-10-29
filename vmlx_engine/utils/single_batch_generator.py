@@ -1378,6 +1378,7 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        self._m3_reserve_prefill(req.cache, len(tokens))
 
         def _chunk_len(at: int) -> int:
             n = min(step, len(tokens) - at)
@@ -1399,7 +1400,12 @@ class SingleBatchGenerator:
                     else tokens[nxt:]
                 )
                 logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
-                (logits,) = self._eval_on_stream(logits)
+                # Only the cache rows are kept from a non-final chunk: evaluate them, not the logits. The lm_head over
+                # every row of the chunk (2048 x 200,064 on M3.1: ~0.1 s per chunk on an M5 Max) was computed and
+                # thrown away; the rows the cache keeps run the same kernels either way (the aligned-plan path below
+                # already did this).
+                mx.eval(self._m3_cache_rows(req.cache))
+                del logits
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
                     req.token_context.update_and_fetch(
@@ -1436,6 +1442,30 @@ class SingleBatchGenerator:
             if req.logits_processors:
                 req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
         self._sync()
+
+    @staticmethod
+    def _m3_cache_rows(cache) -> list:
+        """The cache state a non-final prefill chunk leaves (what it evaluates instead of its logits); empty layers
+        (nothing written) are skipped."""
+        out = []
+        for layer in cache or ():
+            empty = getattr(layer, "empty", None)
+            if callable(empty) and empty():
+                continue
+            out.append(layer.state)
+        return out
+
+    @staticmethod
+    def _m3_reserve_prefill(cache, rows: int) -> None:
+        """Size every M3 lane for the whole prefill at its first growth (MiniMaxM3SparseCache.reserve) instead of
+        re-allocating and copying every lane at each chunk. Capacity only: the rows and every reader are the same.
+        VMLX_M3_PREFILL_RESERVE=0 keeps the chunk-by-chunk growth (A/B)."""
+        if os.environ.get("VMLX_M3_PREFILL_RESERVE", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return
+        for layer in cache or ():
+            fn = getattr(layer, "reserve", None)
+            if callable(fn):
+                fn(int(rows))
 
     def _m3_media_token_ids(self) -> set:
         args = getattr(self.model, "args", None)
@@ -1486,6 +1516,7 @@ class SingleBatchGenerator:
                 )
         pieces = self.m3_prefill_pieces(req, plan)
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        self._m3_reserve_prefill(req.cache, len(tokens))
         with self._stream_context():
             for i, (a, b) in enumerate(pieces):
                 chunk = tokens[a - start: b - start]

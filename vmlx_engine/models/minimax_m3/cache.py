@@ -123,6 +123,53 @@ class MiniMaxM3SparseCache(KVCache):
     # ``offset``; the record validator accepts a longer physical backing.
     idx_step = 256
 
+    # ── prefill capacity reservation (SingleBatchGenerator M3 prefill, VMLX_M3_PREFILL_RESERVE) ──
+    # The stock growth re-allocates every lane at each prefill chunk (new buffer = old rows + the chunk, rounded to the
+    # step) and copies the old rows into it: an N-token prefill in chunks of C allocates and copies ~N^2 / (2C) rows
+    # per lane (32k: ~38 GB of fresh, zero-filled Metal buffers across the model; 100k: ~350 GB). A prefill that knows
+    # its length reserves the rows once; the next growth makes room for all of them (rounded up to the step, so the
+    # final capacity is the one the chunked growth reaches). Only capacity changes: rows below the offset, and every
+    # reader (``state``, ``update_and_fetch``, ``update_index``: all sliced to the logical extent), are the same.
+    def reserve(self, rows: int) -> None:
+        """Make the next capacity growth of the K / V and index lanes room for ``rows`` rows past the current
+        offset (a prefill of known length). A hint only: nothing is allocated here."""
+        until = int(self.offset or 0) + max(0, int(rows))
+        self.__dict__["_reserve_until"] = until
+        self.__dict__["_idx_reserve_until"] = until
+
+    def _grow_rows(self, key: str, prev: int, n: int, step: int) -> int:
+        """Rows a growth at ``prev`` for ``n`` new rows allocates: the stock ceil(n / step) * step, or enough for
+        the reservation (consumed once the offset reaches it)."""
+        until = int(self.__dict__.get(key) or 0)
+        need = max(n, until - prev)
+        if until and prev + n >= until:
+            self.__dict__.pop(key, None)
+        return ((need + step - 1) // step) * step
+
+    def update_and_fetch(self, keys, values):  # noqa: D102 - KVCache.update_and_fetch with the reservation
+        prev = int(self.offset)
+        n = int(keys.shape[2])
+        d = self.__dict__
+        if d.get("_keys") is None or prev + n > int(d["_keys"].shape[2]):
+            rows = self._grow_rows("_reserve_until", prev, n, self.step)
+            B, H, _, Dk = keys.shape
+            new_k = mx.zeros((B, H, rows, Dk), keys.dtype)
+            new_v = mx.zeros((B, int(values.shape[1]), rows, int(values.shape[3])), values.dtype)
+            if d.get("_keys") is not None:
+                k_old, v_old = self.keys, self.values
+                if prev % self.step != 0:
+                    k_old, v_old = k_old[..., :prev, :], v_old[..., :prev, :]
+                self.keys = mx.concatenate([k_old, new_k], axis=2)
+                self.values = mx.concatenate([v_old, new_v], axis=2)
+            else:
+                self.keys, self.values = new_k, new_v
+        elif d.get("_reserve_until") and prev + n >= int(d["_reserve_until"]):
+            d.pop("_reserve_until", None)
+        self.offset = prev + n
+        self.keys[..., prev:self.offset, :] = keys
+        self.values[..., prev:self.offset, :] = values
+        return self.keys[..., :self.offset, :], self.values[..., :self.offset, :]
+
     def update_index(self, idx_k: mx.array) -> mx.array:
         """Append this step's idx_k [B, H, T, D] and return the index history.
 
@@ -138,14 +185,16 @@ class MiniMaxM3SparseCache(KVCache):
         n = int(idx_k.shape[2])
         if self.idx_keys is None or prev + n > int(self.idx_keys.shape[2]):
             B, H, _, D = idx_k.shape
-            n_steps = (self.idx_step + n - 1) // self.idx_step
-            grown = mx.zeros((B, H, n_steps * self.idx_step, D), dtype=idx_k.dtype)
+            grown = mx.zeros((B, H, self._grow_rows("_idx_reserve_until", prev, n, self.idx_step), D),
+                             dtype=idx_k.dtype)
             if self.idx_keys is None:
                 self.idx_keys = grown
             else:
                 if prev % self.idx_step != 0:
                     self.idx_keys = self.idx_keys[..., :prev, :]
                 self.idx_keys = mx.concatenate([self.idx_keys, grown], axis=2)
+        elif self.__dict__.get("_idx_reserve_until") and prev + n >= int(self.__dict__["_idx_reserve_until"]):
+            self.__dict__.pop("_idx_reserve_until", None)
         self.idx_keys[..., prev : prev + n, :] = idx_k
         self._idx_offset = prev + n
         if self.offset and self._idx_offset != int(self.offset):
