@@ -548,8 +548,10 @@ def test_released_geometry_blocks_of_128_top_16_past_2048_tokens(release_drafter
     reference = generate_ar(tgt, prompt, 24, set(), prefill_step=1024)
     drafter = _Scripted(load_drafter(release_drafter_dir), prompt + reference, _every_fifth)
     stats = DSparkStats()
+    # Exercise partial acceptance deterministically. The timing governor can take
+    # AR after the first fully accepted block, before the scripted rejection.
     assert generate_dspark(tgt, drafter, prompt, 24, set(), prefill_step=1024, stats=stats,
-                           max_draft=2 * DRAFT_BLOCK, ar_fallback=ARFallback()) == reference
+                           max_draft=2 * DRAFT_BLOCK, ar_fallback=_WidthOnly()) == reference
     assert 0 < stats.accepted < stats.drafted
 
 
