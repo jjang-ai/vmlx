@@ -64,7 +64,7 @@ class SwiGLU(nn.Module):
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-    from . import msa, source_format
+    from . import fused_attn, msa, source_format
 except Exception:
     try:
         # Served path: minimax_m3_register loads this file as mlx_lm.models.minimax_m3_vl, where `.cache` is
@@ -75,7 +75,7 @@ except Exception:
         # desynchronised from K/V" (live M3.1 tool loop, 2026-10-28).
         from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache, make_minimax_m3_cache
         from vmlx_engine.models.minimax_m3.m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-        from vmlx_engine.models.minimax_m3 import msa, source_format
+        from vmlx_engine.models.minimax_m3 import fused_attn, msa, source_format
     except Exception:  # pragma: no cover - standalone import without vmlx_engine
         import os as _os, sys as _sys
         _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -83,6 +83,7 @@ except Exception:
         from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
         import msa  # type: ignore
         import source_format  # type: ignore
+        fused_attn = None  # the fused attention kernels ship with vmlx_engine
 
 
 @dataclass
@@ -386,7 +387,11 @@ class DecoderLayer(nn.Module):
                                       args.swiglu_alpha, args.swiglu_limit))
 
     def __call__(self, x, mask=None, cache=None):
-        h = x + self.self_attn(self.input_layernorm(x), mask, cache)
+        if fused_attn is not None and fused_attn.use_fused(self, x, mask, cache):
+            # VMLX_M3_FUSED_ATTN: input norm + attention + residual in five Metal launches (decode / verify rows)
+            h = fused_attn.attention_block(self, x, cache)
+        else:
+            h = x + self.self_attn(self.input_layernorm(x), mask, cache)
         return h + self.mlp(self.post_attention_layernorm(h))
 
 
