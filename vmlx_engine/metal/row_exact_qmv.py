@@ -1147,3 +1147,314 @@ def row_exact_verify_scope(*, rows: int = MAX_ROWS, required: bool = False):
         _SCOPE_ENV.reset(env_token)
         _SCOPE_ROWS.reset(rows_token)
         _SCOPE.reset(token)
+
+
+# --------------------------------------------------------------------------- #
+# Wide verify windows (up to 16 rows per weight walk).
+# --------------------------------------------------------------------------- #
+# A DSpark verify of the MiniMax-M3.1 trunk runs 2..16 rows through every
+# projection. The register transcriptions above hold every row's x_thread in
+# registers and cap at 4 rows (2-5-bit) / 6 rows (8-bit) before spilling, so a
+# 16-row window walked the weight 4 times (measured, M5 Max, 57 M3.1 layers of
+# q/k/v/o/index/shared projections: 12.5 ms at 1 row, 17.7 at 4, 82 at 16).
+# The wide walk keeps the qmv_fast arithmetic of every (row, output row) pair
+# -- load_vector per row, the shared-unpack qdot_rows terms in qdot's order,
+# the same k-block order and the same simd_sum -- but stages each block's
+# x_thread / sum of the window's rows in threadgroup memory, computed once per
+# threadgroup and read by every simdgroup, and keeps only the per-row results
+# in registers (RPS output rows per simdgroup, NSG simdgroups per threadgroup).
+# Rows are staged RC at a time (threadgroup memory), each chunk in the same
+# block iteration, so every pair still accumulates block by block in order.
+# Admission is the same per-shape bit-equality check against stock M=1 calls.
+WIDE_MAX_ROWS = 16
+_WIDE_ADMITTED: dict = {}
+
+
+def _wide_qdot_rows() -> str:
+    """qdot_rows with x_thread / sum read from threadgroup memory at a row stride (same terms, same order)."""
+    src = _QDOT_ROWS.split("template <typename U, int values_per_thread, int bits, int ROWS>", 1)[1]
+    src = ("template <typename U, int values_per_thread, int bits, int ROWS, int XSTRIDE, int SSTRIDE>" +
+           src.replace("inline void qdot_rows(", "inline void qdot_rows_tg(")
+           .replace("const thread U* x,          // [ROWS][values_per_thread], row-major",
+                    "const threadgroup U* x,     // row r at x + r * XSTRIDE")
+           .replace("const thread U* sum,        // [ROWS]", "const threadgroup U* sum,   // row r at sum[r * SSTRIDE]")
+           .replace("x + r * values_per_thread", "x + r * XSTRIDE")
+           .replace("const thread U* xt", "const threadgroup U* xt")
+           .replace("x[r * values_per_thread + i]", "x[r * XSTRIDE + i]")
+           .replace("sum[r] * bias", "sum[r * SSTRIDE] * bias"))
+    return src
+
+
+_SOURCE_WIDE = r"""
+  // qmv_fast_impl per (row, output row); the window's rows staged per block in threadgroup memory.
+  constexpr int bits = BITS;
+  constexpr int group_size = GS;
+  constexpr int in_vec_size = K;
+  constexpr int out_vec_size = N;
+  constexpr int packs_per_thread = bits == 2 ? 1 : 2;
+  constexpr int pack_factor = get_pack_factor<bits, 32>();
+  constexpr int bytes_per_pack = get_bytes_per_pack<bits, 32>();
+  constexpr int values_per_thread = pack_factor * packs_per_thread;
+  constexpr int block_size = values_per_thread * SIMD_SIZE;
+  constexpr int scale_step_per_thread = group_size / values_per_thread;
+  constexpr int w_words = (packs_per_thread * bytes_per_pack + 3) / 4;
+  typedef float U;
+
+  threadgroup U xs[RC * SIMD_SIZE * values_per_thread];
+  threadgroup U ss[RC * SIMD_SIZE];
+
+  uint3 tid = threadgroup_position_in_grid;
+  uint simd_gid = simdgroup_index_in_threadgroup;
+  uint simd_lid = thread_index_in_simdgroup;
+  uint lid = thread_index_in_threadgroup;
+
+  const int in_vec_size_w = in_vec_size * bytes_per_pack / pack_factor;
+  const int in_vec_size_g = in_vec_size / group_size;
+  const int out_row = tid.y * (NSG * RPS) + simd_gid * RPS;
+
+  const device uint8_t* ws = (const device uint8_t*)w + out_row * in_vec_size_w + simd_lid * packs_per_thread * bytes_per_pack;
+  const device T* sc = scales + out_row * in_vec_size_g + simd_lid / scale_step_per_thread;
+  const device T* bi = biases + out_row * in_vec_size_g + simd_lid / scale_step_per_thread;
+
+  thread U result[ROWS][RPS];
+  for (int r = 0; r < ROWS; r++)
+    for (int o = 0; o < RPS; o++) result[r][o] = 0;
+
+  for (int k = 0; k < in_vec_size; k += block_size) {
+    thread uint32_t wrow[RPS][w_words];
+    U srow[RPS], brow[RPS];
+    for (int o = 0; o < RPS; o++) {
+      const device uint8_t* wl = ws + o * in_vec_size_w;
+      thread uint8_t* wb = (thread uint8_t*)wrow[o];
+      for (int j = 0; j < packs_per_thread * bytes_per_pack; j++) wb[j] = wl[j];
+      srow[o] = sc[o * in_vec_size_g];
+      brow[o] = bi[o * in_vec_size_g];
+    }
+    for (int c0 = 0; c0 < ROWS; c0 += RC) {
+      for (int p = int(lid); p < RC * SIMD_SIZE; p += NSG * SIMD_SIZE) {
+        const int r = p / SIMD_SIZE, l = p % SIMD_SIZE;
+        if (c0 + r < ROWS) {
+          U xt[values_per_thread];
+          U s = load_vector<T, U, values_per_thread, bits>(x + (c0 + r) * in_vec_size + k + l * values_per_thread, xt);
+          for (int i = 0; i < values_per_thread; i++) xs[(r * SIMD_SIZE + l) * values_per_thread + i] = xt[i];
+          ss[r * SIMD_SIZE + l] = s;
+        }
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      for (int o = 0; o < RPS; o++) {
+        U part[RC];
+        qdot_rows_tg<U, values_per_thread, bits, RC, SIMD_SIZE * values_per_thread, SIMD_SIZE>(
+            (const thread uint8_t*)wrow[o], xs + simd_lid * values_per_thread, srow[o], brow[o], ss + simd_lid, part);
+        for (int r = 0; r < RC; r++) {
+          if (c0 + r < ROWS) result[c0 + r][o] += part[r];
+        }
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    ws += block_size * bytes_per_pack / pack_factor;
+    sc += block_size / group_size;
+    bi += block_size / group_size;
+  }
+
+  for (int r = 0; r < ROWS; r++) {
+    for (int o = 0; o < RPS; o++) {
+      U v = simd_sum(result[r][o]);
+      if (simd_lid == 0 && out_row + o < out_vec_size) {
+        y[r * out_vec_size + out_row + o] = static_cast<T>(v);
+      }
+    }
+  }
+"""
+
+
+@lru_cache(maxsize=8)
+def _wide_kernel():
+    header = _mlx_qmv_header()
+    if header is None:
+        return None
+    return mx.fast.metal_kernel(
+        name="vmlx_row_exact_verify_qmv_wide",
+        input_names=["w", "scales", "biases", "x"],
+        output_names=["y"],
+        header=header + "\n\n" + _wide_qdot_rows(),
+        source=_SOURCE_WIDE,
+    )
+
+
+def _wide_shape(rows: int, bits: int) -> tuple:
+    """(RPS output rows per simdgroup, NSG simdgroups, RC rows staged at a time); env-pinnable for A/B."""
+    vpt = _values_per_thread(bits)
+    rc_cap = max(1, (24 * 1024) // (4 * 32 * (vpt + 1)))       # staged x_thread + sums within 24 KB
+    try:
+        rps = int(os.environ.get("VMLX_ROW_EXACT_WIDE_RPS", "") or 1)
+        nsg = int(os.environ.get("VMLX_ROW_EXACT_WIDE_NSG", "") or 8)
+    except ValueError:
+        rps, nsg = 1, 8
+    return rps, nsg, min(rows, rc_cap)
+
+
+def _launch_wide(x2d, weight, scales, biases, bits, group_size, shape):
+    rows, in_dim = x2d.shape
+    out_dim = weight.shape[0]
+    rps, nsg, rc = shape
+    weight, scales, biases = (_device_sized(a) for a in (weight, scales, biases))
+    per_tg = nsg * rps
+    (y,) = _wide_kernel()(
+        inputs=[weight, scales, biases, x2d],
+        template=[("T", x2d.dtype), ("BITS", bits), ("GS", group_size), ("K", in_dim), ("N", out_dim),
+                  ("ROWS", rows), ("RPS", rps), ("NSG", nsg), ("RC", rc)],
+        grid=(32 * nsg, (out_dim + per_tg - 1) // per_tg, 1),
+        threadgroup=(32 * nsg, 1, 1),
+        output_shapes=[(rows, out_dim)],
+        output_dtypes=[x2d.dtype],
+    )
+    return y
+
+
+def wide_enabled() -> bool:
+    """VMLX_ROW_EXACT_WIDE=1 (default OFF; read per call): the one-walk wide kernel for 2..16-row windows.
+
+    Measured 2026-10-28 (M5 Max, 57 M3.1 layers of q/k/v/o/index/shared projections, interleaved A/B, min of 9):
+    4 rows 21.3 ms (4-row launches) vs 17.3-27.8 (wide, by shape), 8 rows 56.4 vs 52.5-60.5, 12 / 16 rows 84.5 /
+    103.2 vs 205-450 (the staged x_thread reads from threadgroup memory and the per-row results in registers cost
+    more than the weight re-walks they save). Exact (admitted per shape) but slower: kept for A/B, off by default."""
+    return os.environ.get("VMLX_ROW_EXACT_WIDE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def row_exact_qmv_wide(x, weight, scales, biases, *, group_size: int, bits: int):
+    """``x @ dequant(weight).T`` for 2..16 rows in ONE weight walk, every row bit-equal to its M=1 call, or None.
+
+    Only MLX's qmv_fast traversal (K a multiple of the block, N a multiple of 8, group a multiple of the lane's
+    values), affine 2/3/4/5/6/8-bit, activation dtype == scale dtype. Admitted per (rows, K, N, bits, group, dtype,
+    shape) by bit equality against stock one-row calls; None keeps the caller's path.
+    """
+    if x.ndim < 2 or biases is None or _mlx_qmv_header() is None or weight.dtype != mx.uint32:
+        return None
+    in_dim = int(x.shape[-1])
+    rows = 1
+    for dim in x.shape[:-1]:
+        rows *= int(dim)
+    out_dim = int(weight.shape[0])
+    if not 2 <= rows <= WIDE_MAX_ROWS or bits not in (2, 3, 4, 5, 6, 8) or group_size not in (32, 64, 128):
+        return None
+    vpt = _values_per_thread(bits)
+    if in_dim % (vpt * 32) or out_dim % 8 or group_size % vpt or in_dim % group_size:
+        return None
+    if x.dtype not in (mx.float16, mx.bfloat16, mx.float32) or scales.dtype != x.dtype or biases.dtype != x.dtype:
+        return None
+    shape = _wide_shape(rows, bits)
+    key = (rows, in_dim, out_dim, bits, group_size, str(x.dtype), shape)
+    ok = _WIDE_ADMITTED.get(key)
+    if ok is None:
+        probes = _admission_probes(rows, in_dim, x.dtype)
+        ok = True
+        for probe in probes:
+            want = mx.concatenate([
+                mx.quantized_matmul(probe[r:r + 1], weight, scales, biases, transpose=True, group_size=group_size,
+                                    bits=bits, mode="affine") for r in range(rows)], axis=0)
+            got = _launch_wide(probe, weight, scales, biases, bits, group_size, shape)
+            ok = ok and bool(mx.array_equal(got, want).item())
+        _WIDE_ADMITTED[key] = ok
+        STATS["wide_admitted" if ok else "wide_rejected"] = STATS.get("wide_admitted" if ok else "wide_rejected", 0) + 1
+        (logger.info if ok else logger.warning)(
+            "row-exact verify QMV wide %s rows=%d K=%d N=%d bits=%d gs=%d dtype=%s shape=%s",
+            "admitted" if ok else "REJECTED", rows, in_dim, out_dim, bits, group_size, x.dtype, shape)
+    if not ok:
+        return None
+    STATS["wide_calls"] = STATS.get("wide_calls", 0) + 1
+    y = _launch_wide(mx.contiguous(x.reshape(rows, in_dim)), weight, scales, biases, bits, group_size, shape)
+    return y.reshape(*x.shape[:-1], out_dim)
+
+
+# --------------------------------------------------------------------------- #
+# Row-split walk: RB blocks of up to 4 rows in ONE threadgroup.
+# --------------------------------------------------------------------------- #
+# The 4-row "multi" transcription of qmv_fast (registers hold 4 rows), with the threadgroup's simdgroups split by
+# (output-row group, row block): simdgroup s computes output rows (s % 2) * 4 .. + 3 for rows (s / 2) * 4 .. + 3.
+# The row blocks of one threadgroup read the same weight bytes at the same time, so the window costs one weight walk
+# from DRAM while each simdgroup keeps exactly the 4-row kernel's registers and per-row arithmetic.
+# Measured 2026-10-28 (M5 Max, 57 M3.1 layers of q/k/v/o/index/shared projections, interleaved, min of 9): 5 / 8 /
+# 12 / 16 rows 30.5 / 46.8 / 71.9 / 117.4 ms as 4-row launches vs 28.8 / 38.2 / 56.7 / 94.6 row-split (-6 / -18 /
+# -21 / -19 %). The rest is the per-row arithmetic itself (MLX's one-row qmv per row), which exactness keeps.
+def _rowsplit_source() -> str:
+    src = _SOURCE.replace(
+        "  const int out_row = tid.y * (num_simdgroups * results_per_simdgroup) +\n      simd_gid * results_per_simdgroup;",
+        "  const int rb = int(simd_gid) / num_simdgroups;\n"
+        "  const int out_row = tid.y * (num_simdgroups * results_per_simdgroup) +\n"
+        "      (int(simd_gid) % num_simdgroups) * results_per_simdgroup;")
+    src = src.replace("const device T* xs = x + (BATCH ? tid.x * in_vec_size : 0) + simd_lid * values_per_thread;",
+                      "const device T* xs = x + rb * ROWS * in_vec_size + simd_lid * values_per_thread;")
+    src = src.replace("y[(BATCH ? tid.x : r) * out_vec_size + out_row + row] = static_cast<T>(v);",
+                      "y[(rb * ROWS + r) * out_vec_size + out_row + row] = static_cast<T>(v);")
+    assert "rb * ROWS * in_vec_size" in src and "(rb * ROWS + r)" in src
+    return src
+
+
+@lru_cache(maxsize=4)
+def _rowsplit_kernel(reg: bool):
+    header = _mlx_qmv_header()
+    if header is None:
+        return None
+    return mx.fast.metal_kernel(
+        name=f"vmlx_row_exact_verify_qmv_rowsplit{'_reg' if reg else ''}",
+        input_names=["w", "scales", "biases", "x"], output_names=["y"], header=header,
+        source=f"#define REG {1 if reg else 0}\n#define MULTI 1\n#define BATCH 0\n#define ROWOUTER 0\n" + _rowsplit_source())
+
+
+_ROWSPLIT_ADMITTED: dict = {}
+
+
+def rowsplit_enabled() -> bool:
+    """VMLX_ROW_EXACT_ROWSPLIT (default on; read per call): 5..16-row verify windows in one weight walk."""
+    return os.environ.get("VMLX_ROW_EXACT_ROWSPLIT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def row_exact_qmv_rowsplit(x, weight, scales, biases, *, group_size: int, bits: int):
+    """5..16 rows in one weight walk as ceil(rows / 4) 4-row blocks per threadgroup (rows padded with zeros to a
+    multiple of the block, padded outputs dropped), every row bit-equal to its one-row call, or None."""
+    if x.ndim < 2 or biases is None or _mlx_qmv_header() is None or weight.dtype != mx.uint32:
+        return None
+    in_dim, out_dim = int(x.shape[-1]), int(weight.shape[0])
+    rows = 1
+    for dim in x.shape[:-1]:
+        rows *= int(dim)
+    if not 2 <= rows <= WIDE_MAX_ROWS or bits not in (2, 3, 4, 5, 6, 8) or group_size not in (32, 64, 128):
+        return None
+    vpt = _values_per_thread(bits)
+    if in_dim % (vpt * 32) or out_dim % 8 or group_size % vpt or in_dim % group_size:
+        return None
+    if x.dtype not in (mx.float16, mx.bfloat16, mx.float32) or scales.dtype != x.dtype or biases.dtype != x.dtype:
+        return None
+    rb = -(-rows // 4)
+    per = -(-rows // rb)                                   # balanced block (<= 4 rows)
+    reg = _register_weights(per)
+
+    def launch(x2d):
+        n = int(x2d.shape[0])
+        if n < rb * per:
+            x2d = mx.concatenate([x2d, mx.zeros((rb * per - n, in_dim), dtype=x2d.dtype)], axis=0)
+        w_, s_, b_ = (_device_sized(a) for a in (weight, scales, biases))
+        (y,) = _rowsplit_kernel(reg)(
+            inputs=[w_, s_, b_, x2d],
+            template=[("T", x2d.dtype), ("BITS", bits), ("GS", group_size), ("K", in_dim), ("N", out_dim),
+                      ("ROWS", per)],
+            grid=(64 * rb, (out_dim + 7) // 8, 1), threadgroup=(64 * rb, 1, 1),
+            output_shapes=[(rb * per, out_dim)], output_dtypes=[x2d.dtype])
+        return y[:n]
+
+    key = (rows, in_dim, out_dim, bits, group_size, str(x.dtype))
+    ok = _ROWSPLIT_ADMITTED.get(key)
+    if ok is None:
+        ok = True
+        for probe in _admission_probes(rows, in_dim, x.dtype):
+            want = mx.concatenate([
+                mx.quantized_matmul(probe[r:r + 1], weight, scales, biases, transpose=True, group_size=group_size,
+                                    bits=bits, mode="affine") for r in range(rows)], axis=0)
+            ok = ok and bool(mx.array_equal(launch(probe), want).item())
+        _ROWSPLIT_ADMITTED[key] = ok
+        (logger.info if ok else logger.warning)("row-exact verify QMV rowsplit %s rows=%d K=%d N=%d bits=%d",
+                                                "admitted" if ok else "REJECTED", rows, in_dim, out_dim, bits)
+    if not ok:
+        return None
+    STATS["rowsplit_calls"] = STATS.get("rowsplit_calls", 0) + 1
+    return launch(mx.contiguous(x.reshape(rows, in_dim))).reshape(*x.shape[:-1], out_dim)

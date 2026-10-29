@@ -376,6 +376,28 @@ class SparseMoeBlock(nn.Module):
         return (y + self.shared_experts(x, linear)).astype(x.dtype)
 
 
+def _fused_moe_module():
+    try:
+        from . import fused_moe  # type: ignore
+    except Exception:
+        from vmlx_engine.models.minimax_m3 import fused_moe  # served path: loaded as mlx_lm.models.minimax_m3_vl
+    return fused_moe
+
+
+def moe_residual(mlp, x_normed, h):
+    """``h + mlp(x_normed)`` -- through the fused MoE kernels (models/minimax_m3/fused_moe.py) when
+    VMLX_M3_FUSED_MOE=1 and the layer / call fit them (1..16 rows), else None. The fused block computes every row
+    with one-row (decode) arithmetic, bit-identical to the unfused block on one row (tests/test_minimax_m3_fused_moe.py).
+    Callers: the decoder layer for one-token steps, the DSpark verify for its rows; multi-token prefill chunks keep
+    the stock multi-row kernels (their arithmetic, and so the prompt cache, stays what it was)."""
+    if not isinstance(mlp, SparseMoeBlock):
+        return None
+    fm = _fused_moe_module()
+    if not fm.enabled() or not fm.supported(mlp, x_normed):
+        return None
+    return fm.fused_moe_residual(mlp, x_normed, h)
+
+
 class DecoderLayer(nn.Module):
     def __init__(self, args: ModelArgs, li: int):
         super().__init__()
@@ -392,7 +414,10 @@ class DecoderLayer(nn.Module):
             h = fused_attn.attention_block(self, x, cache)
         else:
             h = x + self.self_attn(self.input_layernorm(x), mask, cache)
-        return h + self.mlp(self.post_attention_layernorm(h))
+        xn = self.post_attention_layernorm(h)
+        # VMLX_M3_FUSED_MOE: router + routed / shared experts + residual in four launches (one decode row)
+        fused = moe_residual(self.mlp, xn, h) if xn.shape[-2] == 1 else None
+        return fused if fused is not None else h + self.mlp(xn)
 
 
 class MiniMaxM3Model(nn.Module):

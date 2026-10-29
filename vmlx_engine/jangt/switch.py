@@ -261,6 +261,17 @@ class JTMixedSwitchGLU(nn.Module):
         lead, kk = x.shape[:-1], indices.shape[-1]
         x2 = x.reshape(-1, self.D); idx2 = indices.reshape(-1, kk).astype(mx.int32); w2 = scores.reshape(-1, kk).astype(mx.float32)
         if idx2.size < SORT_THRESHOLD or not nax_prefill():
+            if x2.shape[0] > 1 and self.gu_fmt == "jangt" and self.dn_fmt == "jangt":
+                from vmlx_engine.jangt import grouped_decode as GD
+
+                if GD.grouped_enabled():
+                    # few rows (a speculative verify): each expert decoded once for every row that picked it,
+                    # bit-identical to the per-(row, slot) v3 kernels below (tests/test_jangt_grouped_decode.py)
+                    U = self._unit()
+                    h = GD.gate_up_swiglu_grouped(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32,
+                                                  limit=self.limit, act=self.act, alpha=self.alpha)
+                    y = GD.down_weighted_grouped(MK.rotate_rows(h, U["sv_dn"], idx2.reshape(-1)), h, idx2, w2, U)
+                    return y.astype(x.dtype).reshape(*lead, self.D)
             # JANGT gate/up feeding a JANGH down: rotate the activations in the gate/up epilogue (one dispatch less)
             ro = (self.gu_fmt == "jangt" and self.dn_fmt != "jangt" and self.I % 32 == 0
                   and os.environ.get("JANGT_ROT_OUT_DECODE", "0") == "1")   # measured neutral (-0.6%), off

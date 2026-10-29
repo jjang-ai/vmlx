@@ -60,7 +60,8 @@ import mlx.nn as nn
 logger = logging.getLogger(__name__)
 
 # Rows per multi-row affine kernel launch: the one-row qmv transcription keeps every row in registers up to four rows
-# at every bit width (row_exact_qmv._max_rows); wider verifies run as several launches, every row still exact.
+# at every bit width (row_exact_qmv._max_rows); wider verifies run as one row-split launch (row_exact_qmv_rowsplit:
+# 4-row blocks sharing one weight walk) or, without it, several launches -- every row still exact.
 _ROWS_PER_LAUNCH = 4
 # MLX SwitchGLU sorts (row, expert) pairs onto its multi-row gather kernels from this many routed pairs.
 _SWITCH_SORT_PAIRS = 64
@@ -258,6 +259,20 @@ class MiniMaxM3DSparkTarget:
         rows = int(x.shape[1])
         if rows == 1:
             return module(x)
+        wide = self._wide_kernel(module)
+        if wide is not None:
+            y = wide(x)
+            if y is not None:
+                self.verify_paths["linear_batched"] += 1
+                return y + module["bias"] if "bias" in module else y
+        if type(module) is nn.Linear and "bias" not in module:
+            # fp32 router: one launch for every row, each row on the one-row gemv's arithmetic (metal/row_exact_gemv)
+            from ..metal.row_exact_gemv import row_exact_gemv
+
+            y = row_exact_gemv(x, module["weight"])
+            if y is not None:
+                self.verify_paths["linear_batched"] += 1
+                return y
         kernel = self._multi_row_kernel(module)
         if kernel is not None:
             outs, batched = [], 0
@@ -275,6 +290,26 @@ class MiniMaxM3DSparkTarget:
             return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=1)
         self.verify_paths["linear_rows"] += 1
         return mx.concatenate([module(_row(x, r)) for r in range(rows)], axis=1)
+
+    @staticmethod
+    def _wide_kernel(module):
+        """One weight walk for a window of 5..16 rows, every row equal to the one-row call (admitted per shape by
+        bit-equality): the row-split walk (4-row blocks of one threadgroup; ``VMLX_ROW_EXACT_ROWSPLIT=0`` keeps
+        separate 4-row launches), or the experimental staged walk (``VMLX_ROW_EXACT_WIDE=1``, measured slower)."""
+        if not isinstance(module, nn.QuantizedLinear) or not _row_exact_kernel_enabled():
+            return None
+        if str(getattr(module, "mode", "affine") or "affine") != "affine" or "biases" not in module:
+            return None
+        from ..metal.row_exact_qmv import row_exact_qmv_rowsplit, row_exact_qmv_wide, rowsplit_enabled, wide_enabled
+
+        gs, bits = int(module.group_size), int(module.bits)
+        if rowsplit_enabled():
+            return lambda xb: (row_exact_qmv_rowsplit(xb, module["weight"], module["scales"], module["biases"],
+                                                      group_size=gs, bits=bits) if xb.shape[-2] > 4 else None)
+        if not wide_enabled():
+            return None
+        return lambda xb: row_exact_qmv_wide(xb, module["weight"], module["scales"], module["biases"],
+                                             group_size=gs, bits=bits)
 
     @staticmethod
     def _multi_row_kernel(module):
@@ -374,6 +409,7 @@ class MiniMaxM3DSparkTarget:
         offset = self._offset(cache)
         h = nm.embed_tokens(tokens)
         feats = {}
+        moe_residual = getattr(sys.modules.get(type(nm).__module__), "moe_residual", None)
         for li, (layer, c) in enumerate(zip(nm.layers, cache)):
             if fused_attn.use_fused(layer, h[:, :fused_attn.MAX_ROWS], None, c):
                 self.verify_paths["attention_fused"] = self.verify_paths.get("attention_fused", 0) + 1
@@ -385,7 +421,15 @@ class MiniMaxM3DSparkTarget:
                                         for a in range(0, rows, step)], axis=1)
             else:
                 h = h + self._attention(layer.self_attn, layer.input_layernorm(h), c, offset)
-            h = h + self._mlp(layer.mlp, layer.post_attention_layernorm(h))
+            xn = layer.post_attention_layernorm(h)
+            # VMLX_M3_FUSED_MOE=1: the fused MoE kernels take every verify row at once; they are row-invariant (and
+            # bit-identical to the unfused block), so each row equals its decode step, which runs the same kernels.
+            fused = moe_residual(layer.mlp, xn, h) if moe_residual is not None else None
+            if fused is not None:
+                self.verify_paths["moe_fused"] = self.verify_paths.get("moe_fused", 0) + 1
+                h = fused
+            else:
+                h = h + self._mlp(layer.mlp, xn)
             if li in tapset:
                 feats[li] = h
         logits = self._logits(nm.norm(h))[0]
