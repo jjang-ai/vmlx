@@ -148,6 +148,8 @@ class _Request:
     next_logprobs: Any = None
     next_token_materialized: bool = False
     next_logprobs_materialized: bool = False
+    # (items, submit kwargs) of a built, not yet submitted decode step (VMLX_M3_DECODE_OVERLAP_DEFER)
+    deferred_submit: Any = None
     # MiniMax-M3 VL (additive, only ever set when VMLX_M3_VL routes an image
     # request here). Carried so the FIRST prefill forward can splice vision
     # embeddings; cleared after that forward so decode never re-passes them.
@@ -420,6 +422,34 @@ class SingleBatchGenerator:
                 if type(layer) is mlx_cache.KVCache else ())
             out.extend(a for a in lanes if isinstance(a, mx.array))
         return out
+
+    @staticmethod
+    def _m3_defer_submit() -> bool:
+        """VMLX_M3_DECODE_OVERLAP_DEFER=1: the overlapped M3 decode builds step k+1 while step k runs but submits it
+        only after step k is complete and released (``_submit_deferred``).
+
+        MLX's slice update writes in place only into a donatable buffer, and a command buffer retains every input's
+        data until its completion handler runs (``array::is_donatable``, ``backend/metal/eval.cpp``). Submitted while
+        step k is in flight, step k+1's stock lane appends (``keys[..., prev:off, :] = k``) meet lanes step k's
+        attention still reads and copy them whole. Deferring the submit trades that for the gap between step k's end
+        and step k+1's first command buffer; the graph building (the host's share) still overlaps step k. The fused
+        attention's appends are in place and need no deferral."""
+        return os.environ.get("VMLX_M3_DECODE_OVERLAP_DEFER", "0").strip().lower() in {"1", "true", "on", "yes"}
+
+    def _submit_deferred(self, req) -> None:
+        """Submit a step built by ``_sample_from_logits(defer=True)`` from a synchronized stream: every command buffer
+        before it complete and released (``mx.eval`` returns on the completion event, before the handler releases
+        the inputs)."""
+        pending = getattr(req, "deferred_submit", None)
+        if pending is None:
+            return
+        req.deferred_submit = None
+        items, kw = pending
+        self._sync()
+        evaluated = self._submit_on_stream(*items, **kw)
+        req.next_token = evaluated[0]
+        if req.next_logprobs is not None:
+            req.next_logprobs = evaluated[1]
 
     def _submit_on_stream(self, *values, extra=()):
         with self._stream_context():
@@ -1129,6 +1159,7 @@ class SingleBatchGenerator:
         *,
         overlap: bool = False,
         extra=(),
+        defer: bool = False,
     ) -> tuple[mx.array, Any]:
         token_context = None
         if req.logits_processors:
@@ -1166,6 +1197,10 @@ class SingleBatchGenerator:
         # materializing the current token must not wait for the following one.
         # ``extra`` (M3 lane buffers) only when present: other families call these helpers exactly as before.
         kw = {"extra": extra} if extra else {}
+        if defer:
+            # Built, not submitted: _submit_deferred submits it once the previous step is released.
+            req.deferred_submit = (tuple(async_items), kw)
+            return sampled, logprobs
         evaluated = (
             self._submit_on_stream(*async_items, **kw)
             if overlap
@@ -1237,12 +1272,14 @@ class SingleBatchGenerator:
                     )
                 req.prefill_started = None
             overlap = self._can_overlap_decode(req)
+            m3 = self._cache_uses_m3_msa(req.cache)
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
                 input_tokens,
                 overlap=overlap,
-                extra=self._m3_lane_arrays(req.cache) if self._cache_uses_m3_msa(req.cache) else (),
+                extra=self._m3_lane_arrays(req.cache) if m3 else (),
+                defer=overlap and m3 and self._m3_defer_submit(),   # submitted by _yield_current_and_schedule_next
             )
             req.next_token_materialized = not overlap
             req.next_logprobs_materialized = not overlap and req.next_logprobs is not None
@@ -1327,6 +1364,8 @@ class SingleBatchGenerator:
                 current_logprobs = self._materialize_submitted_on_stream(current_logprobs)[0]
         except Exception:
             self._sync()
+        finally:
+            self._submit_deferred(req)
 
         token_id = self._token_to_int(current_token)
         req.output_tokens.append(token_id)
