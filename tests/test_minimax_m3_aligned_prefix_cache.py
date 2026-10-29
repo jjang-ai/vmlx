@@ -19,6 +19,10 @@ request's own store boundary.
 Controls that must FAIL (fail closed: each asserts it actually reused a non-aligned prefix first): the previous
 token-only key without aligned chunking, aligned chunking with a misaligned continuation start, and the aligned
 cache without the cold prefill's cut at the store boundary (exact repeats).
+
+The prompts here are unstructured token streams and the test tokenizer does not encode the M3 message markers, so
+the scheduler runs the chunk-only rule (no turn cuts: what VMLX_M3_STRUCTURAL_CUTS=0 or a tokenizer without the
+markers gets). Turn cuts on M3-structured prompts: tests/test_minimax_m3_structural_prefix_cache.py.
 """
 
 from __future__ import annotations
@@ -169,10 +173,10 @@ class _Trace:
         monkeypatch.setattr(SingleBatchGenerator, "insert", insert)
 
 
-def _scheduler(model, tmp_path, step: int):
+def _scheduler(model, tmp_path, step: int, tok=None):
     from vmlx_engine.scheduler import Scheduler, SchedulerConfig
 
-    return Scheduler(model, _Tok(), SchedulerConfig(
+    return Scheduler(model, tok if tok is not None else _Tok(), SchedulerConfig(
         max_num_seqs=1, prefill_step_size=step, enable_prefix_cache=True, use_paged_cache=False,
         enable_block_disk_cache=True, block_disk_cache_dir=str(tmp_path), paged_cache_block_size=64,
         max_cache_blocks=4096,
@@ -182,7 +186,7 @@ def _scheduler(model, tmp_path, step: int):
 _COUNTER = [0]
 
 
-def _run(sched, trace, prompt, *, bypass=False, max_tokens=MAX_TOKENS) -> dict:
+def _run(sched, trace, prompt, *, bypass=False, max_tokens=MAX_TOKENS, gpl=None) -> dict:
     """One request through add_request / step; returns tokens, sampler logits, cached tokens, insert record."""
     from vmlx_engine.request import Request, SamplingParams
 
@@ -192,7 +196,7 @@ def _run(sched, trace, prompt, *, bypass=False, max_tokens=MAX_TOKENS) -> dict:
                                                                                         temperature=0.0))
     req.prompt_token_ids = list(prompt)
     req.num_prompt_tokens = len(prompt)
-    req._gen_prompt_len = len(GEN)
+    req._gen_prompt_len = len(GEN) if gpl is None else int(gpl)
     if bypass:
         req._bypass_prefix_cache = True
     trace.logits = []

@@ -6684,7 +6684,7 @@ class Scheduler:
             or prefill_geometry.is_media_request(getattr(request, "_cache_extra_keys", None))
         ):
             return []
-        key = (id(markers), len(tokens), int(boundary))
+        key = (id(markers), id(tokens), len(tokens), int(boundary))
         cached = getattr(request, "_m3_turn_cuts_memo", None)
         if cached is not None and cached[0] == key:
             return list(cached[1])
