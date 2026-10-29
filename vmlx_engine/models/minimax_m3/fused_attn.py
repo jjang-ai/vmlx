@@ -50,7 +50,7 @@ def _proj_shape(rows: int) -> tuple:
     return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
 
 
-# E1 multi-row K1 / K5 (``VMLX_M3_EXACT_FLAT=1``, default off until measured on the real bundle): for 2 .. 16 rows a
+# E1 multi-row K1 / K5 (``VMLX_M3_EXACT_FLAT=1``, default off until measured on the real bundle): for 3 .. 16 rows a
 # prep launch computes each row's input chunks once (attn_xprep: the one-row build's own m3a_load_chunk), then the
 # projection walks each weight ONCE per tile of up to E1_TR rows, decoding every four-value code group once into half
 # registers and applying it to each row with the one-row build's per-element sequence (attn_common.metal m3e_rows).
@@ -59,6 +59,8 @@ def _proj_shape(rows: int) -> tuple:
 # 1.44 / 1.6x faster, 4 x 4 1.3x; wider tiles (4 x 8, 8 x 4) spill registers and run 2x slower.
 EXACT_FLAT_ENV = "VMLX_M3_EXACT_FLAT"
 E1_NSG, E1_TR = 8, 4
+# From 3 rows: at 2 rows E1 ties the 2-row build (K1 5.14 vs 5.04 ms, K5 4.10 vs 4.15 per 60 layers) and adds a launch.
+E1_MIN_ROWS = 3
 E1_STATS = {"qkv": 0, "oproj": 0}
 
 
@@ -263,7 +265,7 @@ def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
     """K1: [R, hidden] residual rows -> [R, (H + 2 KVH + GI + 1) * D] float32 (q | k | v | index q | index k)."""
     attn, ix = layer.self_attn, layer.self_attn.indexer
     R = int(x2.shape[0])
-    if R > 1 and exact_flat() and _e1_ok(p):
+    if R >= E1_MIN_ROWS and exact_flat() and _e1_ok(p):
         return qkv_e1(layer, p, x2)
     q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
     nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
@@ -421,7 +423,7 @@ def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
     """K5: x2 + o_proj(o) [R, hidden] in x2's dtype (and the sum-of-squares partials [R, hidden / 8] when ssp)."""
     m = layer.self_attn.o_proj
     R = int(o.shape[0])
-    if R > 1 and not ssp and exact_flat() and _e1_ok(p):
+    if R >= E1_MIN_ROWS and not ssp and exact_flat() and _e1_ok(p):
         return oproj_e1(layer, p, o, x2)
     nsg, rps, rt = _proj_shape(R)
     kern = K.kernel(
