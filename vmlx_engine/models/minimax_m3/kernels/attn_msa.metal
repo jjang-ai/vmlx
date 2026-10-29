@@ -23,6 +23,14 @@
 // in threadgroup memory. Block partials go to po / pm / pl; the last threadgroup of (r, g) to finish (device-scope
 // fence + atomic counter) merges the KEEP partials in ascending j (log-sum-exp) and writes out. Nothing a row computes
 // depends on the other rows of the launch.
+//
+// Cross-threadgroup handoff (the partials): device memory is only threadgroup-coherent by default (MSL 4.8), so a
+// threadgroup's plain stores need not be visible to the merging threadgroup however the fences and the counter are
+// ordered. Every access to po / pm / pl therefore goes through coherent(device) pointers, and the handoff is a release
+// (each writer's device fence, a device barrier, thread 0's fence before its counter add) / acquire (thread 0's fence
+// after the add, a device barrier, each reader's fence). Plain partials passed on the M5 Max and read stale partials
+// on the M5 Ultra: runs on the same inputs differed and decode turned to garbage
+// (tests/test_minimax_m3_fused_attn.py test_repeat_runs_are_bit_identical).
 
   constexpr int CPB = BLOCK / 32;                          // 32-key chunks per block (a power of two)
   constexpr int NSGT = NSG * CPB;                          // simdgroups per threadgroup
@@ -39,6 +47,9 @@
   const int H = G * HG;
   const int q_pos = meta[0] + r;
   const int nbk = q_pos / BLOCK + 1;
+  coherent(device) device float* cpo = (coherent(device) device float*)po;   // block partials: device-coherent
+  coherent(device) device float* cpm = (coherent(device) device float*)pm;
+  coherent(device) device float* cpl = (coherent(device) device float*)pl;
 
   threadgroup float qs[HG * D];
   threadgroup uint hist[256];
@@ -253,22 +264,25 @@
   if (c == 0) {
     for (int h = 0; h < HS; ++h) {
       const size_t pidx = ((size_t)rg * KEEP + j) * HG + hs * HS + h;
-      for (int e = 0; e < DPL; ++e) po[pidx * D + lane * DPL + e] = o[h][e];
+      for (int e = 0; e < DPL; ++e) cpo[pidx * D + lane * DPL + e] = o[h][e];
       if (lane == 0) {
-        pm[pidx] = m_run[h];
-        pl[pidx] = l_run[h];
+        cpm[pidx] = m_run[h];
+        cpl[pidx] = l_run[h];
       }
     }
   }
 
   // ---------------------------------------------------------------- merge: the last threadgroup of (r, g)
+  // release: every writer's partial stores, then thread 0's counter add; acquire: thread 0's add, then every reader
   atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
   threadgroup_barrier(mem_flags::mem_device);
   if (tid == 0) {
+    atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
     const uint prev = atomic_fetch_add_explicit((device atomic_uint*)cnt + rg, 1u, memory_order_relaxed);
+    atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
     last_tg = prev == uint(KEEP - 1);
   }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
+  threadgroup_barrier(mem_flags::mem_device);
   if (!last_tg) return;
   atomic_thread_fence(mem_flags::mem_device, memory_order_seq_cst, thread_scope_device);
   // weights w[jj][h] = 2^(pm - max) and 1 / l per head, in threadgroup memory (reuses qs)
@@ -276,13 +290,13 @@
   for (int h = tid; h < HG; h += NT) {
     const size_t b0 = (size_t)rg * KEEP * HG + h;
     float mx = NEG;
-    for (int jj = 0; jj < KEEP; ++jj) mx = max(mx, pm[b0 + (size_t)jj * HG]);
+    for (int jj = 0; jj < KEEP; ++jj) mx = max(mx, cpm[b0 + (size_t)jj * HG]);
     float ls = 0.0f;
     for (int jj = 0; jj < KEEP; ++jj) {
       const size_t pidx = b0 + (size_t)jj * HG;
-      const float w = fast::exp2(pm[pidx] - mx);
+      const float w = fast::exp2(cpm[pidx] - mx);
       wts[jj * HG + h] = w;
-      ls += w * pl[pidx];
+      ls += w * cpl[pidx];
     }
     wts[KEEP * HG + h] = 1.0f / ls;
   }
@@ -299,7 +313,7 @@
       #pragma unroll
       for (int jj = 0; jj < KEEP; ++jj) {
         const size_t pidx = ((size_t)rg * KEEP + jj) * HG + h;
-        acc += wts[jj * HG + h] * *((device const float4*)(po + pidx * D + d));
+        acc += wts[jj * HG + h] * *((coherent(device) device const float4*)(cpo + pidx * D + d));
       }
       *((device float4*)(out + ((size_t)r * H + (size_t)g * HG + h) * D + d)) = acc * wts[KEEP * HG + h];
     }

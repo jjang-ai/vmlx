@@ -296,8 +296,9 @@ def scores(p: Plan, iq: mx.array, idx_lane: mx.array, meta: mx.array, nb: int) -
 
 
 def msa(p: Plan, q: mx.array, k_lane: mx.array, v_lane: mx.array, sc: mx.array, cnt: mx.array,
-        meta: mx.array) -> mx.array:
-    """K4: attention output [R, H, D] float32 over each row's selected blocks."""
+        meta: mx.array, partials: bool = False):
+    """K4: attention output [R, H, D] float32 over each row's selected blocks (``partials``: also its block partials
+    (po, pm, pl), for tests)."""
     R = int(q.shape[0])
     nsg = p.HG // p.HS
     threads = 32 * nsg * (p.block // 32)
@@ -306,11 +307,12 @@ def msa(p: Plan, q: mx.array, k_lane: mx.array, v_lane: mx.array, sc: mx.array, 
         (("G", p.KVH), ("HG", p.HG), ("D", p.D), ("BLOCK", p.block), ("KEEP", p.keep), ("HS", p.HS),
          ("NSG", nsg)))
     rg = R * p.KVH
-    return kern(
+    out = kern(
         inputs=[q, k_lane, v_lane, sc, cnt, meta, mx.array([p.scale], dtype=mx.float32)],
         grid=(threads * p.keep, rg, 1), threadgroup=(threads, 1, 1),
         output_shapes=[(R, p.H, p.D), (rg * p.keep * p.HG * p.D,), (rg * p.keep * p.HG,), (rg * p.keep * p.HG,)],
-        output_dtypes=[mx.float32] * 4)[0]
+        output_dtypes=[mx.float32] * 4)
+    return (out[0], tuple(out[1:])) if partials else out[0]
 
 
 def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
