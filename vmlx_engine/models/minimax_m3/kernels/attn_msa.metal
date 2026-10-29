@@ -6,6 +6,8 @@
 //   constexpr int G = KV groups (= index heads), HG = query heads per group, D = head dim (multiple of 32),
 //   BLOCK = keys per block (multiple of 32), KEEP = selected blocks per row and group (top-k),
 //   HS = query heads per simdgroup (HG % HS == 0), NSG = HG / HS head slices; NT = 32 * NSG * BLOCK / 32 threads
+//   KQF = K / V lane format (kv_quant.metal; 0 = plain lanes of kt / vt, else packed uint8 lanes decoded in registers
+//   to kt / vt values, m3q_load: only the rows of the selected blocks are read)
 // Inputs (names): q [R, G * HG, D] float32 (K2 output), kc / vc = the K / V lanes [1, G, capacity, D] (strided),
 //   sc [R, G, NB] float32 block scores (K3 output; any >= 8-element array when no row is sparse),
 //   cnt [>= R * G] uint32 zeros (K2 output), meta int32 [>= 8] = {offset, ...}, scale float32 [1] (softmax scale).
@@ -170,6 +172,8 @@
     if (start <= q_pos) {                                  // a chunk past the row's position stays empty
       device const kt* kb = (device const kt*)kc + (size_t)g * kc_strides[1];
       device const vt* vb = (device const vt*)vc + (size_t)g * vc_strides[1];
+      device const uint8_t* kbq = (device const uint8_t*)kc + (size_t)g * kc_strides[1];   // packed lanes (KQF != 0)
+      device const uint8_t* vbq = (device const uint8_t*)vc + (size_t)g * vc_strides[1];
       const size_t kss = kc_strides[2], kds = kc_strides[3], vss = vc_strides[2], vds = vc_strides[3];
       const bool kvec = kds == 1 && (kss % 8) == 0 && ((ulong)kb % (8 * sizeof(kt))) == 0;
       const bool vvec = vds == 1 && (vss % 4) == 0 && ((ulong)vb % (4 * sizeof(vt))) == 0 && DPL % 4 == 0;
@@ -180,7 +184,16 @@
       for (int h = 0; h < HS; ++h) s[h] = 0.0f;
       if (valid) {
         device const kt* krow = kb + (size_t)kp * kss;
-        if (kvec) {
+        if constexpr (KQF != 0) {
+          device const uint8_t* kr = kbq + (size_t)kp * kss;
+          for (int d = 0; d < D; d += 8) {
+            float k8[8];
+            m3q_load<KQF, D, kt, 8>(kr, d, k8);
+            for (int e = 0; e < 8; ++e) {
+              for (int h = 0; h < HS; ++h) s[h] = fma(qh[h * D + d + e], k8[e], s[h]);
+            }
+          }
+        } else if (kvec) {
           for (int d = 0; d < D; d += 8) {
             const vec<kt, 8> k8 = *((device const vec<kt, 8>*)(krow + d));
             for (int e = 0; e < 8; ++e) {
@@ -208,7 +221,9 @@
       for (int jj = 0; jj < 32; ++jj) {
         device const vt* vrow = vb + (size_t)min(start + jj, q_pos) * vss + (size_t)(lane * DPL) * vds;
         float vv[DPL];
-        if (vvec) {
+        if constexpr (KQF != 0) {
+          m3q_load<KQF, D, vt, DPL>(vbq + (size_t)min(start + jj, q_pos) * vss, int(lane) * DPL, vv);
+        } else if (vvec) {
           for (int e = 0; e < DPL; e += 4) {
             const vec<vt, 4> v4 = *((device const vec<vt, 4>*)(vrow + e));
             vv[e] = float(v4[0]); vv[e + 1] = float(v4[1]); vv[e + 2] = float(v4[2]); vv[e + 3] = float(v4[3]);

@@ -61,6 +61,7 @@ class Array:
 
 class MX:
     array = Array
+    uint8, bfloat16 = "uint8", "bfloat16"
 
     def __init__(self):
         self.concatenations = 0
@@ -102,9 +103,31 @@ class KV:
         return True
 
 
+class KQ:
+    """Only the lane-format surface (models/minimax_m3/kv_quant.py) the cache uses for plain (bf16) lanes."""
+    class Fmt:
+        name, code, quantized = "bf16", 0, False
+
+    BF16 = Fmt()
+
+    @staticmethod
+    def get(name):
+        assert name in (None, "", "bf16") or name is KQ.BF16
+        return KQ.BF16
+
+    @staticmethod
+    def configured():
+        return KQ.BF16, KQ.BF16
+
+    @staticmethod
+    def lane_format(lane, fmt, head_dim=None):
+        assert lane.dtype != "uint8"
+        return KQ.BF16
+
+
 def load_owners():
     mx = MX()
-    ns = {"mx": mx, "KVCache": KV, "CACHE_TUPLE_TAG": "minimax_m3"}
+    ns = {"mx": mx, "KVCache": KV, "CACHE_TUPLE_TAG": "minimax_m3", "KQ": KQ}
     files = {
         "vmlx_engine/models/minimax_m3/cache.py": (
             "MiniMaxM3SparseCache", "restore_minimax_m3_sparse", "clone_minimax_m3_sparse"

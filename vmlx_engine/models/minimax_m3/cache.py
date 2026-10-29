@@ -24,6 +24,11 @@ custom cache object plus a `cache_data` tuple type the prefix/paged/disk tiers
 serialize. M3 is the simplest of the three (one extra tensor, no compressor pool,
 no conv/SSM state, no per-layer heterogeneity beyond dense-vs-sparse).
 
+KV formats (kv_quant.py; levers VMLX_M3_KV_DTYPE / VMLX_M3_INDEX_KV_DTYPE, default bf16): a lane may instead hold
+packed rows (uint8 [B, heads, capacity, RB], one row of codes + scales per token and head). Appends quantize the new
+rows, readers decode what they read; every token-axis operation (trim, slice, concatenate, the tiers' block store /
+restore) is the same on packed lanes. ``kv_format()`` / ``index_format()`` name a lane's format.
+
 cache_data tuple types contributed by this module (see block_disk_store.py):
   ("minimax_m3", keys_slice, values_slice, idx_keys_slice)   — sparse layer
   dense layers (0-2) reuse the standard ("kv", keys, values) KVCache tuple.
@@ -38,7 +43,28 @@ from typing import Any
 import mlx.core as mx
 from mlx_lm.models.cache import BatchKVCache, KVCache, dynamic_roll
 
+from . import kv_quant as KQ
+
 CACHE_TUPLE_TAG = "minimax_m3"
+
+
+def _grow_append(lane, rows: mx.array, prev: int, step: int) -> mx.array:
+    """``lane`` with ``rows`` [B, H, n, W] written at [prev, prev + n): grown first in ``step``-row steps when it lacks
+    the capacity (KVCache's policy; a lane past ``prev`` is cut there before growing). The slice update copies a
+    buffer another array aliases, so the returned lane is never a view someone else holds."""
+    n = int(rows.shape[2])
+    if lane is None or prev + n > int(lane.shape[2]):
+        B, H, _, W = (int(x) for x in rows.shape)
+        n_steps = (step + n - 1) // step
+        grown = mx.zeros((B, H, n_steps * step, W), dtype=rows.dtype)
+        if lane is None:
+            lane = grown
+        else:
+            if prev % step != 0:
+                lane = lane[..., :prev, :]
+            lane = mx.concatenate([lane, grown], axis=2)
+    lane[..., prev:prev + n, :] = rows
+    return lane
 
 
 class MiniMaxM3SparseCache(KVCache):
@@ -79,11 +105,18 @@ class MiniMaxM3SparseCache(KVCache):
     idx_keys = _lane_property(2, "_idx_keys")
     del _lane_property
 
-    def __init__(self):
+    def __init__(self, kv_format=None, index_format=None):
         self._lane_excl = [False, False, False]
         super().__init__()
         self.idx_keys: mx.array | None = None
         self._idx_offset = 0
+        # Formats of NEW lanes (kv_quant.Fmt; bf16 = today's lanes). An existing lane's own dtype decides whether it
+        # is packed (kv_format() / index_format()); a packed lane handed to a cache built without a format (a tier's
+        # restore) is read with the configured format, checked against its row width.
+        self._kv_fmt = KQ.get(kv_format) if kv_format else KQ.BF16
+        self._idx_fmt = KQ.get(index_format) if index_format else KQ.BF16
+        # dtypes packed lanes decode to: the dtype of the rows being appended (set on every append)
+        self._nominal = [mx.bfloat16, mx.bfloat16, mx.bfloat16]
         # Ephemeral DERIVED state owned by the consumer (e.g. Qwen4's QSA
         # indexer keeps its pooled/normed/roped completed-block keys here so
         # they are not recomputed from the whole raw history every call).
@@ -113,6 +146,60 @@ class MiniMaxM3SparseCache(KVCache):
                     self.derived.clear()
                     return
 
+    # ── lane formats (kv_quant.py) ──
+    def _lane_fmt(self, name: str, attr: str, which: int) -> "KQ.Fmt":
+        lane = self.__dict__.get(name)
+        fmt = self.__dict__.get(attr, KQ.BF16)
+        if lane is None:
+            return fmt
+        if lane.dtype != mx.uint8:
+            return KQ.BF16
+        if not fmt.quantized:
+            fmt = KQ.configured()[which]
+        fmt = KQ.lane_format(lane, fmt)
+        self.__dict__[attr] = fmt
+        return fmt
+
+    def kv_format(self) -> "KQ.Fmt":
+        """Format of the K / V lanes (of new lanes while there are none)."""
+        return self._lane_fmt("_keys", "_kv_fmt", 0)
+
+    def index_format(self) -> "KQ.Fmt":
+        """Format of the index-key lane (of a new lane while there is none)."""
+        return self._lane_fmt("_idx_keys", "_idx_fmt", 1)
+
+    def update_and_fetch(self, keys, values):  # type: ignore[override]
+        """Append K / V rows [B, KV, L, D]; return the lanes' visible extent. Packed lanes: the new rows are encoded
+        and the returned history is decoded from the lanes (the rows themselves included), in the appended dtype, so
+        every reader sees exactly what the lanes hold."""
+        fmt = self.kv_format()
+        if not fmt.quantized:
+            return super().update_and_fetch(keys, values)
+        prev = int(self.offset)
+        d = self.__dict__
+        self._nominal[0], self._nominal[1] = keys.dtype, values.dtype
+        d["_keys"] = _grow_append(d.get("_keys"), KQ.quantize(keys, fmt), prev, self.step)
+        d["_values"] = _grow_append(d.get("_values"), KQ.quantize(values, fmt), prev, self.step)
+        excl = d.setdefault("_lane_excl", [False, False, False])
+        excl[0] = excl[1] = True
+        self.offset = prev + int(keys.shape[2])
+        return (KQ.dequantize(d["_keys"], self.offset, fmt, keys.dtype),
+                KQ.dequantize(d["_values"], self.offset, fmt, values.dtype))
+
+    def read_kv(self, dtype=None):
+        """The K / V lanes' visible extent in the nominal dtype: decoded copies for packed lanes (no lane exposed),
+        views of plain lanes (which marks them shared, like any public read)."""
+        d = self.__dict__
+        keys, values = d.get("_keys"), d.get("_values")
+        if keys is None:
+            return None, None
+        fmt = self.kv_format()
+        n = int(self.offset)
+        if not fmt.quantized:
+            return self.keys[..., :n, :], self.values[..., :n, :]
+        return (KQ.dequantize(keys, n, fmt, dtype or self._nominal[0]),
+                KQ.dequantize(values, n, fmt, dtype or self._nominal[1]))
+
     # ── indexer-key side (called by the attention layer each step) ──
     # Physical growth step for the raw index lane (same policy as the K/V
     # side): the lane used to be re-concatenated at its exact length on every
@@ -134,6 +221,9 @@ class MiniMaxM3SparseCache(KVCache):
         consistent on self.offset (the 'return full' variant desynced
         serialization and broke coherence).
         """
+        ifmt = self.index_format()
+        if ifmt.quantized:
+            return self._update_index_packed(idx_k, ifmt)
         prev = int(self._idx_offset)
         n = int(idx_k.shape[2])
         if self.idx_keys is None or prev + n > int(self.idx_keys.shape[2]):
@@ -160,6 +250,32 @@ class MiniMaxM3SparseCache(KVCache):
         logical = int(self.offset) if self.offset else self._idx_offset
         return self.idx_keys[..., :logical, :]
 
+    def _update_index_packed(self, idx_k: mx.array, ifmt) -> mx.array:
+        prev = int(self._idx_offset)
+        d = self.__dict__
+        self._nominal[2] = idx_k.dtype
+        d["_idx_keys"] = _grow_append(d.get("_idx_keys"), KQ.quantize(idx_k, ifmt), prev, self.idx_step)
+        d.setdefault("_lane_excl", [False, False, False])[2] = True
+        self._idx_offset = prev + int(idx_k.shape[2])
+        if self.offset and self._idx_offset != int(self.offset):
+            raise ValueError(
+                "sparse index lane desynchronised from K/V: "
+                f"idx_offset={self._idx_offset} kv_offset={int(self.offset)}"
+            )
+        logical = int(self.offset) if self.offset else self._idx_offset
+        return KQ.dequantize(d["_idx_keys"], logical, ifmt, idx_k.dtype)
+
+    def read_index(self, dtype=None):
+        """The index-key lane's visible extent in the nominal dtype (decoded when packed). Does not expose it."""
+        idx = self.__dict__.get("_idx_keys")
+        if idx is None:
+            return None
+        ifmt = self.index_format()
+        n = int(self.offset)
+        if not ifmt.quantized:
+            return self.idx_keys[..., :n, :]
+        return KQ.dequantize(idx, n, ifmt, dtype or self._nominal[2])
+
     # ── serialization: expose the 3-tensor slice the disk tiers pack ──
     @property
     def state(self):  # type: ignore[override]
@@ -177,6 +293,10 @@ class MiniMaxM3SparseCache(KVCache):
             self._idx_offset = 0 if idx is None else idx.shape[2]
         else:
             KVCache.state.fset(self, v)
+        # packed lanes: resolve and check their format now (a row width no format produces raises here, before any
+        # reader decodes it)
+        self.kv_format()
+        self.index_format()
 
     def to_cache_data(self) -> tuple:
         """The tuple the L1/L2 tiers persist (see block_disk_store contract)."""
@@ -241,15 +361,22 @@ class MiniMaxM3SparseCache(KVCache):
 
     def fused_reserve(self, n: int, kv_heads: int, head_dim: int, k_dtype, v_dtype, idx_dim: int, idx_dtype) -> bool:
         """Capacity for ``n`` more rows on every lane (the stock growth: K / V in steps of ``step``, the index lane in
-        steps of ``idx_step``; existing lanes keep their dtypes) and whether those rows may be written in place: True
-        only while all three lane buffers are this cache's alone. A buffer this call allocates is; a lane read or
-        assigned from outside is not until ``fused_append`` re-owns it."""
+        steps of ``idx_step``; existing lanes keep their dtypes; packed lanes grow in packed rows) and whether those
+        rows may be written in place: True only while all three lane buffers are this cache's alone. A buffer this
+        call allocates is; a lane read or assigned from outside is not until ``fused_append`` re-owns it. The dtypes
+        are the rows' nominal ones (what packed lanes decode to)."""
         prev = int(self.offset)
         if int(self._idx_offset) != prev and self.__dict__.get("_idx_keys") is not None:
             raise ValueError(
                 f"sparse index lane desynchronised from K/V: idx_offset={self._idx_offset} kv_offset={prev}")
         d = self.__dict__
         excl = d.setdefault("_lane_excl", [False, False, False])
+        kfmt, ifmt = self.kv_format(), self.index_format()
+        self._nominal = [k_dtype, v_dtype, idx_dtype]
+        if kfmt.quantized:                                  # packed lanes: uint8 rows of RB bytes
+            head_dim, k_dtype, v_dtype = kfmt.row_bytes(head_dim), mx.uint8, mx.uint8
+        if ifmt.quantized:
+            idx_dim, idx_dtype = ifmt.row_bytes(idx_dim), mx.uint8
         keys, values = d.get("_keys"), d.get("_values")
         if keys is None or prev + n > int(keys.shape[2]):
             n_steps = (self.step + n - 1) // self.step
@@ -317,14 +444,48 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
     change sequence or batch alignment and applies it to the third tensor too.
     """
 
-    def __init__(self, left_padding: list[int]):
+    def __init__(self, left_padding: list[int], kv_format=None, index_format=None):
         super().__init__(left_padding)
         self.idx_keys: mx.array | None = None
         self._idx_offset = 0
         self.derived: dict = {}  # never populated on the batched cache
+        # packed lanes (kv_quant.py): same rules as the single-sequence cache; padding rows are zero bytes (decode 0)
+        self._kv_fmt = KQ.get(kv_format) if kv_format else KQ.BF16
+        self._idx_fmt = KQ.get(index_format) if index_format else KQ.BF16
+
+    def _fmt(self, lane, attr: str, which: int):
+        fmt = getattr(self, attr, KQ.BF16)
+        if lane is None:
+            return fmt
+        if lane.dtype != mx.uint8:
+            return KQ.BF16
+        fmt = KQ.lane_format(lane, fmt if fmt.quantized else KQ.configured()[which])
+        setattr(self, attr, fmt)
+        return fmt
+
+    def kv_format(self):
+        return self._fmt(self.keys, "_kv_fmt", 0)
+
+    def index_format(self):
+        return self._fmt(self.idx_keys, "_idx_fmt", 1)
+
+    def update_and_fetch(self, keys, values):  # type: ignore[override]
+        fmt = self.kv_format()
+        if not fmt.quantized:
+            return super().update_and_fetch(keys, values)
+        pk, pv = super().update_and_fetch(KQ.quantize(keys, fmt), KQ.quantize(values, fmt))
+        n = int(pk.shape[2])
+        return KQ.dequantize(pk, n, fmt, keys.dtype), KQ.dequantize(pv, n, fmt, values.dtype)
 
     def update_index(self, idx_k: mx.array) -> mx.array:
         """Append batched indexer keys after the matching K/V append."""
+        ifmt = self.index_format()
+        if ifmt.quantized and idx_k.ndim == 4:
+            hist = self._update_index_rows(KQ.quantize(idx_k, ifmt))
+            return KQ.dequantize(hist, int(hist.shape[2]), ifmt, idx_k.dtype)
+        return self._update_index_rows(idx_k)
+
+    def _update_index_rows(self, idx_k: mx.array) -> mx.array:
         if idx_k.ndim != 4:
             raise ValueError(f"idx_k must have shape [B, H, T, D], got {idx_k.shape}")
         if int(idx_k.shape[0]) != int(self.offset.shape[0]):
@@ -369,8 +530,12 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
         lengths = [int(c.size()) for c in caches]
         max_length = max(lengths)
         padding = [max_length - length for length in lengths]
+        formats = {(c.kv_format().name, c.index_format().name) for c in caches}
+        if len(formats) != 1:
+            # one batch lane holds one layout: decode packed members to plain lanes and batch those
+            caches = [_decoded_copy(c) for c in caches]
         if max_length == 0:
-            return cls([0] * len(caches))
+            return cls([0] * len(caches), caches[0].kv_format(), caches[0].index_format())
 
         for cache in caches:
             if cache.keys is not None and cache.idx_keys is None:
@@ -390,7 +555,7 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
                 ..., :length, :
             ]
 
-        merged = cls(padding)
+        merged = cls(padding, caches[0].kv_format(), caches[0].index_format())
         merged.keys = base.keys
         merged.values = base.values
         merged.offset = base.offset
@@ -402,7 +567,7 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
 
     def extract(self, idx: int) -> MiniMaxM3SparseCache:
         """Extract one row without losing the sparse indexer history."""
-        cache = MiniMaxM3SparseCache()
+        cache = MiniMaxM3SparseCache(self.kv_format(), self.index_format())
         if self.keys is None:
             return cache
         padding = int(self.left_padding[idx].item())
@@ -468,6 +633,20 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
             raise TypeError(
                 "BatchMiniMaxM3SparseCache can only extend the same cache type"
             )
+        # The stock extend pads an empty side with float32 rows; packed lanes need zero-row uint8 lanes instead (a
+        # dtype promotion would turn the codes into numbers).
+        donor = next((c for c in (self, other) if c.keys is not None), None)
+        if donor is not None and donor.keys.dtype == mx.uint8:
+            for c in (self, other):
+                if c.keys is None:
+                    shape = (int(c.offset.shape[0]), int(donor.keys.shape[1]), 0, int(donor.keys.shape[3]))
+                    c.keys = mx.zeros(shape, dtype=mx.uint8)
+                    c.values = mx.zeros(shape, dtype=mx.uint8)
+                    c._kv_fmt = donor._kv_fmt
+                    if donor.idx_keys is not None and c.idx_keys is None:
+                        c.idx_keys = mx.zeros((shape[0], int(donor.idx_keys.shape[1]), 0,
+                                               int(donor.idx_keys.shape[3])), dtype=donor.idx_keys.dtype)
+                        c._idx_fmt = donor._idx_fmt
         if self.keys is None and other.keys is None:
             super().extend(other)
             self._idx_offset = self._idx
@@ -521,6 +700,16 @@ class BatchMiniMaxM3SparseCache(BatchKVCache):
         return super().nbytes + (0 if self.idx_keys is None else self.idx_keys.nbytes)
 
 
+def _decoded_copy(cache: MiniMaxM3SparseCache) -> MiniMaxM3SparseCache:
+    """A plain-lane (nominal dtype) copy of a sparse cache whose lanes may be packed."""
+    if not (cache.kv_format().quantized or cache.index_format().quantized) or cache.empty():
+        return cache
+    keys, values = cache.read_kv()
+    out = MiniMaxM3SparseCache()
+    out.state = (keys, values, cache.read_index())
+    return out
+
+
 def restore_minimax_m3_sparse(keys, values, idx) -> MiniMaxM3SparseCache:
     """Rebuild a sparse-layer cache from a persisted ("minimax_m3", ...) tuple."""
     c = MiniMaxM3SparseCache()
@@ -542,7 +731,8 @@ def clone_minimax_m3_sparse(
     block selection is recomputed from ``idx_keys`` every step. This helper is
     the single safe way for prefix/disk/snapshot paths to rebuild the cache.
     """
-    new_cache = MiniMaxM3SparseCache()
+    formats = (cache.kv_format(), cache.index_format()) if hasattr(cache, "kv_format") else (None, None)
+    new_cache = MiniMaxM3SparseCache(*formats)
     keys = getattr(cache, "keys", None)
     values = getattr(cache, "values", None)
     if keys is None or values is None:
@@ -617,4 +807,29 @@ def make_minimax_m3_cache(config) -> list:
     if freq is None:
         moe = tc.get("moe_layer_freq") if isinstance(tc, dict) else getattr(tc, "moe_layer_freq", None)
         freq = moe if moe is not None else [0, 0, 0] + [1] * (n_layers - 3)
-    return [MiniMaxM3SparseCache() if freq[i] else KVCache() for i in range(n_layers)]
+    kv_fmt, idx_fmt = configured_formats(tc)
+    return [MiniMaxM3SparseCache(kv_fmt, idx_fmt) if freq[i] else KVCache() for i in range(n_layers)]
+
+
+def configured_formats(tc=None):
+    """(K / V, index-key) lane formats for new sparse caches: the levers (kv_quant.configured), each kept at bf16 with
+    a warning when it cannot pack this model's head dims."""
+    kv_fmt, idx_fmt = KQ.configured()
+
+    def _get(name, default):
+        if tc is None:
+            return default
+        v = tc.get(name) if isinstance(tc, dict) else getattr(tc, name, None)
+        if v is None and isinstance(tc, dict):
+            v = (tc.get("sparse_attention_config") or {}).get(name)
+        return default if v is None else int(v)
+
+    head_dim = _get("head_dim", 128)
+    index_dim = _get("index_head_dim", None) or _get("sparse_index_dim", head_dim)
+    if kv_fmt.quantized and not kv_fmt.supports(head_dim):
+        KQ.logger.warning("%s cannot pack head dim %d; K / V lanes stay bf16", kv_fmt.name, head_dim)
+        kv_fmt = KQ.BF16
+    if idx_fmt.quantized and not idx_fmt.supports(index_dim):
+        KQ.logger.warning("%s cannot pack index head dim %d; the index lane stays bf16", idx_fmt.name, index_dim)
+        idx_fmt = KQ.BF16
+    return kv_fmt, idx_fmt

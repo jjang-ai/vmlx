@@ -4,6 +4,8 @@
 // Host-prepended constants:
 //   using it = <index-key lane dtype>;  constexpr int GI = index heads (= KV groups), D = index head dim,
 //   BLOCK = keys per block (multiple of 32, <= 1024), LOCAL = forced local blocks, PT = pairs per pass (4 / 8 / 16: the host's choice)
+//   IQF = index-key lane format (kv_quant.metal; 0 = plain lane of `it`, else a packed uint8 lane whose rows decode to
+//   `it` values in registers, m3q_load: the key's row is the only memory a thread reads)
 // Inputs (names): iq [R, GI, D] float32 (K2 output), ic = index-key lane [1, 1, capacity, D] (strided),
 //   meta int32 [>= 8] = {offset, R, NB, ...}.
 // Output: sc [R, GI, NB] float32, NB = ceil((offset + R) / BLOCK) (meta[2]).
@@ -28,6 +30,7 @@
   const int last = offset + R - 1;                       // last position any pair sees
   const bool live = kp <= last;
   device const it* krow = (device const it*)ic + (size_t)kp * ic_strides[2];
+  device const uint8_t* kq = (device const uint8_t*)ic + (size_t)kp * ic_strides[2];   // packed row (IQF != 0)
   const size_t kds = ic_strides[3];
   const bool vec_ok = kds == 1 && ((ulong)krow % (8 * sizeof(it))) == 0;
 
@@ -43,7 +46,9 @@
     if (live) {
       for (int c = 0; c < DV; ++c) {
         float kv[8];
-        if (vec_ok) {
+        if constexpr (IQF != 0) {
+          m3q_load<IQF, D, it, 8>(kq, c * 8, kv);
+        } else if (vec_ok) {
           const vec<it, 8> k8 = *((device const vec<it, 8>*)(krow + c * 8));
           for (int e = 0; e < 8; ++e) kv[e] = float(k8[e]);
         } else {

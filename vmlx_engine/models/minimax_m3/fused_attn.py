@@ -31,6 +31,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from . import kernels as K
+from . import kv_quant as KQ
 
 ENV = "VMLX_M3_FUSED_ATTN"
 MAX_ROWS = 16
@@ -215,6 +216,8 @@ def use_fused(layer, x: mx.array, mask: Any, cache: Any, *, force: bool = False)
         return False
     if isinstance(getattr(cache, "offset", None), mx.array) or x.dtype not in K.METAL_TYPE:
         return False
+    if any(_fmts(cache)) and int(layer.self_attn.hd) // 32 not in (2, 4, 8):
+        return False                                       # packed V rows decode 2 / 4 / 8 dims per lane (D 64 .. 256)
     if not _metal():
         return False
     return plan(layer) is not None
@@ -253,11 +256,20 @@ def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
         output_shapes=[(R, ntot)], output_dtypes=[mx.float32])[0]
 
 
-def heads(layer, p: Plan, y: mx.array, meta: mx.array, lanes, lane_dtypes, inplace: bool):
-    """K2: (q [R, H, D] f32, index q [R, GI, D] f32, counters, new K / V / index rows or None)."""
+def _fmts(cache) -> tuple:
+    """(K / V, index-key) lane format codes of ``cache`` (kv_quant.py; 0 = plain lanes)."""
+    if not hasattr(cache, "kv_format"):
+        return 0, 0
+    return cache.kv_format().code, cache.index_format().code
+
+
+def heads(layer, p: Plan, y: mx.array, meta: mx.array, lanes, lane_dtypes, inplace: bool, fmts=(0, 0)):
+    """K2: (q [R, H, D] f32, index q [R, GI, D] f32, counters, new K / V / index rows or None). ``lane_dtypes`` are
+    the rows' nominal dtypes; ``fmts`` the lane formats (packed formats: the new rows come back packed, uint8)."""
     attn, ix = layer.self_attn, layer.self_attn.indexer
     R = int(y.shape[0])
     kdt, vdt, idt = lane_dtypes
+    kqf, iqf = fmts
     cnt = max(8, R * p.KVH)
     kern = K.kernel(
         "heads",
@@ -265,46 +277,50 @@ def heads(layer, p: Plan, y: mx.array, meta: mx.array, lanes, lane_dtypes, inpla
          ("qnt", _t(attn.q_norm.weight)), ("knt", _t(attn.k_norm.weight)), ("iqnt", _t(ix.index_q_norm.weight)),
          ("iknt", _t(ix.index_k_norm.weight))),
         (("H", p.H), ("KVH", p.KVH), ("GI", p.GI), ("D", p.D), ("ROT", p.ROT), ("INPLACE", int(inplace)),
-         ("CNT", cnt)),
+         ("CNT", cnt), ("KQF", kqf), ("IQF", iqf)),
         (("EPS", p.eps_head), ("LOG2BASE", p.log2base)))
     ht = p.H + 2 * p.KVH + p.GI + 1
     threads = 32 * R * ht
+    kw = KQ.get_code(kqf).row_bytes(p.D) if kqf else p.D
+    iw = KQ.get_code(iqf).row_bytes(p.D) if iqf else p.D
     if inplace:
         kc, vc, ic = lanes
         shapes = [(R, p.H, p.D), (R, p.GI, p.D), (cnt,), (1,), (1,), (1,)]
     else:
         kc = vc = ic = _dummy()
-        shapes = [(R, p.H, p.D), (R, p.GI, p.D), (cnt,), (R, p.KVH, p.D), (R, p.KVH, p.D), (R, 1, p.D)]
+        shapes = [(R, p.H, p.D), (R, p.GI, p.D), (cnt,), (R, p.KVH, kw), (R, p.KVH, kw), (R, 1, iw)]
     out = kern(
         inputs=[y, attn.q_norm.weight, attn.k_norm.weight, ix.index_q_norm.weight, ix.index_k_norm.weight, meta,
                 kc, vc, ic],
         grid=(-(-threads // 128) * 128, 1, 1), threadgroup=(128, 1, 1), output_shapes=shapes,
-        output_dtypes=[mx.float32, mx.float32, mx.uint32, kdt, vdt, idt])
+        output_dtypes=[mx.float32, mx.float32, mx.uint32, mx.uint8 if kqf else kdt, mx.uint8 if kqf else vdt,
+                       mx.uint8 if iqf else idt])
     return out[0], out[1], out[2], (None if inplace else (out[3], out[4], out[5]))
 
 
-def scores(p: Plan, iq: mx.array, idx_lane: mx.array, meta: mx.array, nb: int) -> mx.array:
-    """K3: block scores [R, GI, nb] float32."""
+def scores(p: Plan, iq: mx.array, idx_lane: mx.array, meta: mx.array, nb: int, iqf: int = 0, idt=None) -> mx.array:
+    """K3: block scores [R, GI, nb] float32 (``iqf``: the index lane's format; packed rows decode to ``idt``)."""
     R = int(iq.shape[0])
     pairs = R * p.GI
     pt = 4 if pairs <= 4 else (8 if pairs <= 8 else 16)    # pairs per pass: a pair's arithmetic does not depend on it
     kern = K.kernel(
-        "scores", (("it", K.METAL_TYPE[idx_lane.dtype]),),
-        (("GI", p.GI), ("D", p.D), ("BLOCK", p.block), ("LOCAL", p.local), ("PT", pt)))
+        "scores", (("it", K.METAL_TYPE[idt if iqf else idx_lane.dtype]),),
+        (("GI", p.GI), ("D", p.D), ("BLOCK", p.block), ("LOCAL", p.local), ("PT", pt), ("IQF", iqf)))
     return kern(inputs=[iq, idx_lane, meta], grid=(p.block * nb, 1, 1), threadgroup=(p.block, 1, 1),
                 output_shapes=[(R, p.GI, nb)], output_dtypes=[mx.float32])[0]
 
 
 def msa(p: Plan, q: mx.array, k_lane: mx.array, v_lane: mx.array, sc: mx.array, cnt: mx.array,
-        meta: mx.array) -> mx.array:
-    """K4: attention output [R, H, D] float32 over each row's selected blocks."""
+        meta: mx.array, kqf: int = 0, kdt=None, vdt=None) -> mx.array:
+    """K4: attention output [R, H, D] float32 over each row's selected blocks (``kqf``: the K / V lanes' format;
+    packed rows decode to ``kdt`` / ``vdt``)."""
     R = int(q.shape[0])
     nsg = p.HG // p.HS
     threads = 32 * nsg * (p.block // 32)
     kern = K.kernel(
-        "msa", (("kt", K.METAL_TYPE[k_lane.dtype]), ("vt", K.METAL_TYPE[v_lane.dtype])),
+        "msa", (("kt", K.METAL_TYPE[kdt if kqf else k_lane.dtype]), ("vt", K.METAL_TYPE[vdt if kqf else v_lane.dtype])),
         (("G", p.KVH), ("HG", p.HG), ("D", p.D), ("BLOCK", p.block), ("KEEP", p.keep), ("HS", p.HS),
-         ("NSG", nsg)))
+         ("NSG", nsg), ("KQF", kqf)))
     rg = R * p.KVH
     return kern(
         inputs=[q, k_lane, v_lane, sc, cnt, meta, mx.array([p.scale], dtype=mx.float32)],
@@ -330,12 +346,17 @@ def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
 
 
 def lane_dtypes(layer, cache, x_dtype):
-    """(K, V, index-key) lane dtypes: the lanes' own when they exist, else what today's ops would append."""
+    """(K, V, index-key) row dtypes: a plain lane's own when it exists, else what today's ops would append (for a
+    packed lane: the dtype its rows are rounded to before encoding and decode to)."""
     keys, values, idx = cache.fused_lanes()
     attn, ix = layer.self_attn, layer.self_attn.indexer
-    kdt = keys.dtype if keys is not None else _promote(x_dtype, attn.k_norm.weight.dtype)
-    vdt = values.dtype if values is not None else x_dtype
-    idt = idx.dtype if idx is not None else _promote(x_dtype, ix.index_k_norm.weight.dtype)
+
+    def own(lane):
+        return lane is not None and lane.dtype != mx.uint8
+
+    kdt = keys.dtype if own(keys) else _promote(x_dtype, attn.k_norm.weight.dtype)
+    vdt = values.dtype if own(values) else x_dtype
+    idt = idx.dtype if own(idx) else _promote(x_dtype, ix.index_k_norm.weight.dtype)
     return kdt, vdt, idt
 
 
@@ -352,7 +373,8 @@ def attention_block(layer, x: mx.array, cache) -> mx.array:
     inplace = cache.fused_reserve(R, p.KVH, p.D, dts[0], dts[1], p.D, dts[2])
     nb = -(-(offset + R) // p.block)                     # key blocks of the last row (the widest extent)
     meta = mx.array([offset, R, nb, 0, 0, 0, 0, 0], dtype=mx.int32)
-    q, iq, cnt, rows = heads(layer, p, y, meta, cache.fused_lanes(), dts, inplace)
+    fmts = _fmts(cache)
+    q, iq, cnt, rows = heads(layer, p, y, meta, cache.fused_lanes(), dts, inplace, fmts)
     if rows is not None:
         k_new, v_new, i_new = rows
         cache.fused_append(k_new.transpose(1, 0, 2)[None], v_new.transpose(1, 0, 2)[None],
@@ -362,11 +384,11 @@ def attention_block(layer, x: mx.array, cache) -> mx.array:
         STATS["inplace"] += 1
     k_lane, v_lane, i_lane = cache.fused_lanes()
     if nb > p.keep:
-        sc = scores(p, iq, i_lane, meta, nb)
+        sc = scores(p, iq, i_lane, meta, nb, fmts[1], dts[2])
         STATS["sparse_calls"] += 1
     else:
         sc = _dummy()
-    o = msa(p, q, k_lane, v_lane, sc, cnt, meta)
+    o = msa(p, q, k_lane, v_lane, sc, cnt, meta, fmts[0], dts[0], dts[1])
     # K4 ran behind the barrier MLX puts after K2 (it reads K2's outputs): later readers of the lanes are ordered
     # after it, so they see the rows K2 wrote in place.
     cache.fused_commit(R, after=o)

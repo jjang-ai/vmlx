@@ -281,6 +281,13 @@ def _resolve_runtime_cache_fingerprint() -> str:
         parts.append("dsa_fused_index_scores_v1")
     if os.environ.get("VMLX_QWEN4_PREFILL_REDUCE", "0") == "1":
         parts.append("qwen4_prefill_reduce_f16_top10_v1")
+    # MiniMax-M3 KV lane formats (VMLX_M3_KV_DTYPE / VMLX_M3_INDEX_KV_DTYPE): packed rows from one format are never
+    # read under another, nor mixed with bf16 rows. Empty for the default bf16 lanes (namespaces unchanged).
+    from .models.minimax_m3.kv_quant import cache_identity as _m3_kv_identity
+
+    m3_kv = _m3_kv_identity()
+    if m3_kv:
+        parts.append(m3_kv)
     source_id = _resolve_source_checkout_id()
     if source_id:
         parts.append(f"src={source_id}")

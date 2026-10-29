@@ -7,6 +7,9 @@
 //   constexpr int H, KVH, GI = q heads, KV heads, index q heads (GI = 0: no indexer);  D = head dim (multiple of 32)
 //   constexpr int ROT = rotary dims (ROT / 2 a multiple of 32, or ROT <= 32);  INPLACE = 1: write the cache lanes
 //   constexpr int CNT = length of the zeroed counter output (>= 8);  constexpr float EPS, LOG2BASE (= log2(theta))
+//   constexpr int KQF / IQF = K / V and index-key lane formats (kv_quant.metal; 0 = plain lanes). A packed format
+//   rounds each K / V / index-key row to its nominal type (kt / vt / it) and writes its packed row (m3q_store_row):
+//   into the lane at row offset + r (INPLACE), else into kn_out / vn_out [R, KVH, RB] / ikn_out [R, 1, RB] uint8.
 // Inputs (names): y [R, (H + 2 KVH + GI + (GI ? 1 : 0)) * D] float32 (K1 output), qn, kn, iqn, ikn [D] norm
 //   weights, meta int32 [>= 8] = {offset, ...}, kc / vc / ic = the cache lanes [1, KVH | 1, capacity, D] (strided;
 //   INPLACE only, else any >= 8-element arrays).
@@ -99,6 +102,33 @@
     for (int e = 0; e < DPL; ++e) v[e] = rv[e];
   }
 
+  // packed K / V / index-key rows (kv_quant.metal): one simdgroup encodes its row; the kind is uniform per simdgroup
+  if (KQF != 0 && (kind == 1 || kind == 2)) {
+    if constexpr (KQF != 0) {
+      constexpr int RBK = m3q_row_bytes(KQF, D);
+      for (int e = 0; e < DPL; ++e) v[e] = kind == 1 ? float(kt(v[e])) : float(vt(v[e]));
+      device uint8_t* row;
+      if (INPLACE) {
+        row = kind == 1 ? (device uint8_t*)kc + (size_t)hh * kc_strides[1] + (size_t)pos * kc_strides[2]
+                        : (device uint8_t*)vc + (size_t)hh * vc_strides[1] + (size_t)pos * vc_strides[2];
+      } else {
+        row = (kind == 1 ? (device uint8_t*)kn_out : (device uint8_t*)vn_out) + ((size_t)r * KVH + hh) * RBK;
+      }
+      m3q_store_row<KQF, D>(v, lane, row);
+    }
+    return;
+  }
+  if (IQF != 0 && kind == 4) {
+    if constexpr (IQF != 0) {
+      constexpr int RBI = m3q_row_bytes(IQF, D);
+      for (int e = 0; e < DPL; ++e) v[e] = float(it(v[e]));
+      device uint8_t* row = INPLACE ? (device uint8_t*)ic + (size_t)pos * ic_strides[2]
+                                    : (device uint8_t*)ikn_out + (size_t)r * RBI;
+      m3q_store_row<IQF, D>(v, lane, row);
+    }
+    return;
+  }
+
   for (int e = 0; e < DPL; ++e) {
     const int d = int(lane) + 32 * e;
     if (kind == 0) {
@@ -106,25 +136,31 @@
     } else if (kind == 3) {
       iq[((size_t)r * GI + hh) * D + d] = v[e];
     } else if (kind == 1) {
-      if (INPLACE) {
-        device kt* dst = (device kt*)kc;
-        dst[(size_t)hh * kc_strides[1] + (size_t)pos * kc_strides[2] + (size_t)d * kc_strides[3]] = kt(v[e]);
-      } else {
-        kn_out[((size_t)r * KVH + hh) * D + d] = kt(v[e]);
+      if constexpr (KQF == 0) {
+        if (INPLACE) {
+          device kt* dst = (device kt*)kc;
+          dst[(size_t)hh * kc_strides[1] + (size_t)pos * kc_strides[2] + (size_t)d * kc_strides[3]] = kt(v[e]);
+        } else {
+          kn_out[((size_t)r * KVH + hh) * D + d] = kt(v[e]);
+        }
       }
     } else if (kind == 2) {
-      if (INPLACE) {
-        device vt* dst = (device vt*)vc;
-        dst[(size_t)hh * vc_strides[1] + (size_t)pos * vc_strides[2] + (size_t)d * vc_strides[3]] = vt(v[e]);
-      } else {
-        vn_out[((size_t)r * KVH + hh) * D + d] = vt(v[e]);
+      if constexpr (KQF == 0) {
+        if (INPLACE) {
+          device vt* dst = (device vt*)vc;
+          dst[(size_t)hh * vc_strides[1] + (size_t)pos * vc_strides[2] + (size_t)d * vc_strides[3]] = vt(v[e]);
+        } else {
+          vn_out[((size_t)r * KVH + hh) * D + d] = vt(v[e]);
+        }
       }
     } else {
-      if (INPLACE) {
-        device it* dst = (device it*)ic;
-        dst[(size_t)pos * ic_strides[2] + (size_t)d * ic_strides[3]] = it(v[e]);
-      } else {
-        ikn_out[(size_t)r * D + d] = it(v[e]);
+      if constexpr (IQF == 0) {
+        if (INPLACE) {
+          device it* dst = (device it*)ic;
+          dst[(size_t)pos * ic_strides[2] + (size_t)d * ic_strides[3]] = it(v[e]);
+        } else {
+          ikn_out[(size_t)r * D + d] = it(v[e]);
+        }
       }
     }
   }

@@ -3,7 +3,8 @@
 
 The ``.metal`` files are the single source for vMLX (Python, ``mx.fast.metal_kernel``) and vmlx-swift
 (``MLXFast.metalKernel``). Each ``attn_<name>.metal`` file is a kernel BODY; ``attn_common.metal`` is the ``header``
-of every kernel. A kernel's source is::
+of every kernel, followed by ``kv_quant.metal`` (the KV cache formats: packed-row encode / decode helpers). The
+``kvq_*.metal`` files are the unfused cache encoder / decoder bodies. A kernel's source is::
 
     "".join(f"  using {n} = {t};\\n" for n, t in types) + "".join(f"  constexpr int {n} = {v};\\n" ...) + body
 
@@ -34,6 +35,8 @@ SPECS: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...], bool]] = {
     "scores": (("iq", "ic", "meta"), ("sc",), False),
     "msa": (("q", "kc", "vc", "sc", "cnt", "meta", "scale"), ("out", "po", "pm", "pl"), False),
     "oproj": (("o", "xr", "w", "s", "b"), ("h", "ssp"), True),
+    "kvq_quant": (("x",), ("y",), False),
+    "kvq_dequant": (("lane",), ("out",), False),
 }
 
 METAL_TYPE = {mx.bfloat16: "bfloat16_t", mx.float16: "float16_t", mx.float32: "float", mx.uint8: "uint8_t",
@@ -42,12 +45,13 @@ METAL_TYPE = {mx.bfloat16: "bfloat16_t", mx.float16: "float16_t", mx.float32: "f
 
 @lru_cache(maxsize=None)
 def header() -> str:
-    return (DIR / "attn_common.metal").read_text()
+    return (DIR / "attn_common.metal").read_text() + "\n" + (DIR / "kv_quant.metal").read_text()
 
 
 @lru_cache(maxsize=None)
 def body(name: str) -> str:
-    return (DIR / f"attn_{name}.metal").read_text()
+    path = DIR / f"attn_{name}.metal"
+    return (path if path.exists() else DIR / f"{name}.metal").read_text()
 
 
 def prefix(types: Tuple[Tuple[str, str], ...], ints: Tuple[Tuple[str, int], ...],
