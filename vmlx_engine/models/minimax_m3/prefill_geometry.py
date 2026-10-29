@@ -314,7 +314,9 @@ def cache_offset(cache) -> Optional[int]:
             offsets.add(int(offset))
         except (TypeError, ValueError):
             return None
-        if type(layer).__name__ == "MiniMaxM3SparseCache" and getattr(layer, "idx_keys", None) is not None:
+        has_lane = layer.has_index_lane() if hasattr(layer, "has_index_lane") else (
+            getattr(layer, "idx_keys", None) is not None)       # has_index_lane: does not un-own the lane buffers
+        if type(layer).__name__ == "MiniMaxM3SparseCache" and has_lane:
             if int(getattr(layer, "_idx_offset", -1)) != int(offset):
                 return None
     return offsets.pop() if len(offsets) == 1 else None

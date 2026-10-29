@@ -321,15 +321,17 @@ class SingleBatchGenerator:
         except Exception:
             return value
 
-    def _eval_on_stream(self, *values):
+    def _eval_on_stream(self, *values, extra=()):
+        """Evaluate ``values`` rebound on this generator's stream (returned) and ``extra`` as they are (not rebound:
+        cache buffers, where a rebind would copy them)."""
         if not values:
             return ()
         with self._stream_context():
             rebound = tuple(self._rehome_on_stream(value) for value in values)
             try:
-                mx.eval(*rebound)
+                mx.eval(*rebound, *extra)
             except TypeError:
-                for value in rebound:
+                for value in rebound + tuple(extra):
                     mx.eval(value)
         return rebound
 
@@ -383,12 +385,46 @@ class SingleBatchGenerator:
             native_glm = all(type(layer) in (Glm5KDACache, Glm5MLACache) for layer in req.cache) and not any(
                 getattr(layer, "_speculative_states", None) for layer in req.cache
             )
-        return (plain_kv or native_naive or native_glm) and not self._needs_affine2_sync(req.cache)
+        # MiniMax-M3 / M3.1: MiniMaxM3SparseCache sparse layers (+ stock KVCache dense layers on M3). K / V / index
+        # lanes are step-grown buffers written by graph-ordered slice updates, or by the fused attention's in-place
+        # appends, which re-issue the lanes behind their MSA launch (cache.py fused_commit); no host read per step.
+        # Qualified by tests/test_minimax_m3_decode_overlap.py (sparse selection active, length / stop / cancel ==
+        # synchronous, logprobs and final lanes bit-identical, thousands of tokens past the sparse switch, with and
+        # without VMLX_M3_FUSED_ATTN). VMLX_M3_DECODE_OVERLAP=0 keeps the synchronous loop.
+        native_m3 = (
+            not plain_kv and not native_naive and not native_glm
+            and os.environ.get("VMLX_M3_DECODE_OVERLAP", "1").strip().lower() not in {"0", "false", "off", "no"}
+            and self._m3_overlap_layout(req.cache)
+        )
+        return (plain_kv or native_naive or native_glm or native_m3) and not self._needs_affine2_sync(req.cache)
 
-    def _submit_on_stream(self, *values):
+    @staticmethod
+    def _m3_overlap_layout(cache) -> bool:
+        """The native M3 layout: at least one MiniMaxM3SparseCache, every layer that class or a stock KVCache."""
+        try:
+            from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache
+        except Exception:
+            return False
+        kinds = [type(layer) for layer in cache]
+        return MiniMaxM3SparseCache in kinds and all(k in (MiniMaxM3SparseCache, mlx_cache.KVCache) for k in kinds)
+
+    @staticmethod
+    def _m3_lane_arrays(cache) -> list:
+        """The lane buffers of an M3 cache list, read without exposing them (MiniMaxM3SparseCache.fused_lanes): they
+        ride the step's evaluation so the index lane's appends (unread by the dense-regime forward) never pile up as
+        a lazy graph. Never rehomed: a rehome is a full copy of every lane."""
+        out = []
+        for layer in cache or ():
+            lanes = layer.fused_lanes() if hasattr(layer, "fused_lanes") else (
+                (getattr(layer, "keys", None), getattr(layer, "values", None))
+                if type(layer) is mlx_cache.KVCache else ())
+            out.extend(a for a in lanes if isinstance(a, mx.array))
+        return out
+
+    def _submit_on_stream(self, *values, extra=()):
         with self._stream_context():
             rebound = tuple(self._rehome_on_stream(value) for value in values)
-            mx.async_eval(*rebound)
+            mx.async_eval(*rebound, *extra)
         return rebound
 
     def _materialize_submitted_on_stream(self, *values):
@@ -1092,6 +1128,7 @@ class SingleBatchGenerator:
         input_tokens: mx.array,
         *,
         overlap: bool = False,
+        extra=(),
     ) -> tuple[mx.array, Any]:
         token_context = None
         if req.logits_processors:
@@ -1127,10 +1164,12 @@ class SingleBatchGenerator:
         # stream so the next step never resolves a stale Stream(gpu,0).
         # Qualified steady decode may then submit on that same owned stream;
         # materializing the current token must not wait for the following one.
+        # ``extra`` (M3 lane buffers) only when present: other families call these helpers exactly as before.
+        kw = {"extra": extra} if extra else {}
         evaluated = (
-            self._submit_on_stream(*async_items)
+            self._submit_on_stream(*async_items, **kw)
             if overlap
-            else self._eval_on_stream(*async_items)
+            else self._eval_on_stream(*async_items, **kw)
         )
         sampled = evaluated[0]
         if logprobs is not None:
@@ -1138,34 +1177,15 @@ class SingleBatchGenerator:
         return sampled, logprobs
 
     def _needs_affine2_sync(self, cache=None) -> bool:
-        """MiniMax-M3 + affine-2 fast path requires FULL sync each decode step.
+        """The MiniMax-M3 affine-2 SwitchGLU fast path (opt-in) keeps a FULL synchronous step: its custom Metal kernel
+        was seen to corrupt long generations under the one-token lookahead and has not been requalified.
 
-        The default one-token lookahead leaves the forward (incl. the custom
-        affine-2 SwitchGLU Metal kernel) lazy across the iteration boundary; that
-        async overlap rarely corrupts long/thinking generations. Forcing mx.eval
-        of the forward each step removes the overlap — matching the proven
-        synchronous runtime path. Detect via the M3 MSA cache type (robust to
-        model wrappers). Gated to M3+affine-2 only.
-        """
-        # M3 MSA cache needs a FULL materialize-sync each decode step: the
-        # append-only idx_keys concatenation desyncs from K/V under the default
-        # one-token-lookahead async overlap on long generations (>~2048 tok),
-        # corrupting the Lightning-Indexer block selection -> incoherent loops.
-        # This is a property of the MSA cache ITSELF, independent of the affine-2
-        # fast path. (Previously gated on `not _disabled()` i.e. affine-2 ON; when
-        # affine-2 went default-OFF the MSA sync silently turned off too -> the
-        # server long-gen loop. Pure runtime is synchronous and never hit this.)
-        try:
-            _caches = cache if isinstance(cache, (list, tuple)) else (
-                [cache] if cache is not None else [])
-            for _c in _caches:
-                if _c is None:
-                    continue
-                if type(_c).__name__ == "MiniMaxM3SparseCache" or hasattr(_c, "idx_keys"):
-                    return True
-        except Exception:
-            pass
-        # Fallback: the affine-2 fast path (M3-only) also requires the sync.
+        The MSA cache itself no longer needs it. That sync (and the per-step evaluation of every layer's
+        ``cache.state`` it came with) dates from the index lane being re-concatenated every step; the lanes are now
+        step-grown buffers written by graph-ordered slice updates or the fused attention's ordered in-place appends,
+        and the state evaluation rebound (= copied) every K / V / index lane each token while marking the lanes
+        shared (every fused append then went copy-on-write). The lanes now ride the step's own evaluation
+        (``_m3_lane_arrays``)."""
         try:
             from vmlx_engine.models.minimax_m3.m3_affine2_switch import _disabled
             return not _disabled()
@@ -1222,30 +1242,10 @@ class SingleBatchGenerator:
                 req,
                 input_tokens,
                 overlap=overlap,
+                extra=self._m3_lane_arrays(req.cache) if self._cache_uses_m3_msa(req.cache) else (),
             )
             req.next_token_materialized = not overlap
             req.next_logprobs_materialized = not overlap and req.next_logprobs is not None
-            # M3+affine-2: materialize the forward + cache state NOW (no lookahead
-            # overlap) to avoid the async-overlap corruption of the custom Metal
-            # kernel. Eval the cache too (not just the token) since paged/block-disk
-            # snapshots read it.
-            if self._needs_affine2_sync(req.cache):
-                _arrs = [req.next_token]
-                if req.next_logprobs is not None:
-                    _arrs.append(req.next_logprobs)
-                try:
-                    for _c in (req.cache or []):
-                        _st = getattr(_c, "state", None)
-                        if isinstance(_st, (list, tuple)):
-                            _arrs.extend(x for x in _st if x is not None)
-                        elif _st is not None:
-                            _arrs.append(_st)
-                except Exception:
-                    pass
-                _ev = self._eval_on_stream(*_arrs)
-                req.next_token = _ev[0]
-                if req.next_logprobs is not None:
-                    req.next_logprobs = _ev[1]
             if trace:
                 self._sync()
                 sample_s = time.perf_counter() - sample_t0

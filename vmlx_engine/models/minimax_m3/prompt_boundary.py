@@ -83,8 +83,10 @@ class M3PromptBoundary:
         rows = self.rows if rows is None else int(rows)
         total = 0
         for layer in self.layers:
-            for name in ("keys", "values", "idx_keys"):
-                value = getattr(layer, name, None)
+            # fused_lanes: the sparse cache's lane buffers read without un-owning them (its fused appends stay in place)
+            lanes = layer.fused_lanes() if hasattr(layer, "fused_lanes") else tuple(
+                getattr(layer, name, None) for name in ("keys", "values", "idx_keys"))
+            for value in lanes:
                 if value is None:
                     continue
                 shape = tuple(int(s) for s in value.shape)
