@@ -261,6 +261,15 @@ class JTMixedSwitchGLU(nn.Module):
         lead, kk = x.shape[:-1], indices.shape[-1]
         x2 = x.reshape(-1, self.D); idx2 = indices.reshape(-1, kk).astype(mx.int32); w2 = scores.reshape(-1, kk).astype(mx.float32)
         if idx2.size < SORT_THRESHOLD or not nax_prefill():
+            if self.gu_fmt == "jangt" and self.dn_fmt == "jangt":
+                from vmlx_engine.jangt import fast_decode as FD
+
+                U = self._unit()
+                if FD.enabled() and FD.supported(U, self.D, self.I):
+                    # VMLX_JANGT_FAST=1: the v4 decode kernels (packed rows, folded code statistics) for decode steps
+                    # AND verify rows alike -- row-invariant, not bit-identical to v3 (jangt/fast_decode.py)
+                    y = FD.routed_fast(x2, idx2, w2, U, self.limit, self.act, self.alpha)
+                    return y.astype(x.dtype).reshape(*lead, self.D)
             if x2.shape[0] > 1 and self.gu_fmt == "jangt" and self.dn_fmt == "jangt":
                 from vmlx_engine.jangt import grouped_decode as GD
 
