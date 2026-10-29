@@ -65,13 +65,24 @@ try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
     from . import msa, source_format
-except Exception:  # pragma: no cover - standalone / mlx_lm-namespace import
-    import os as _os, sys as _sys
-    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
-    from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
-    import msa  # type: ignore
-    import source_format  # type: ignore
+except Exception:
+    try:
+        # Served path: minimax_m3_register loads this file as mlx_lm.models.minimax_m3_vl, where `.cache` is
+        # mlx-lm's own cache module. Import the siblings from the vmlx_engine package so the served model and the
+        # prefix-cache restore (vmlx_engine.models.minimax_m3.cache) share ONE MiniMaxM3SparseCache class: with a
+        # second copy loaded as a top-level `cache` module, Indexer's isinstance check failed on every restored
+        # cache, the forward skipped the index lane, and the next DSpark verify raised "sparse index lane
+        # desynchronised from K/V" (live M3.1 tool loop, 2026-10-28).
+        from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache, make_minimax_m3_cache
+        from vmlx_engine.models.minimax_m3.m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
+        from vmlx_engine.models.minimax_m3 import msa, source_format
+    except Exception:  # pragma: no cover - standalone import without vmlx_engine
+        import os as _os, sys as _sys
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
+        from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
+        import msa  # type: ignore
+        import source_format  # type: ignore
 
 
 @dataclass
