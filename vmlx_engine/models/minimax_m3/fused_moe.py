@@ -51,7 +51,7 @@ _INPUTS = {
     "m3_moe_gate_up": ["fc", "xr", "x", "sig", "bias", "wg", "sg", "wu", "su_", "ocol", "woutg", "woutu",
                        "sgw", "sgs", "sgb", "suw", "sus", "sub"],
     "m3_moe_down": ["fc", "hr", "h", "inds", "scores", "wd", "sd", "ocol", "wout", "hs", "sdw", "sds", "sdb", "resid",
-                    "sdo"],
+                    "sdo", "ry"],
 }
 _OUTPUTS = {
     "m3_router": ["sig", "xr"],
@@ -140,17 +140,17 @@ def supported(block, x: mx.array) -> bool:
             and sh.gate_proj.scales.dtype == x.dtype)
 
 
-def router(x2, gw, su, rows: int):
-    """K6: (sig [rows, E] f32, xr [rows, D] f32)."""
+def router(x2, gw, su, rows: int, rot: bool = True):
+    """K6: (sig [rows, E] f32, xr [rows, D] f32 -- not written with rot=False)."""
     E, D = int(gw.shape[0]), int(gw.shape[1])
-    n_tg = E + rows * ((D + 1023) // 1024)
+    n_tg = E + (rows * ((D + 1023) // 1024) if rot else 0)
     return _kernel("m3_router")(
-        inputs=[x2, gw, su], template=[("T", x2.dtype), ("D", D), ("E", E), ("ROWS", rows)],
+        inputs=[x2, gw, su], template=[("T", x2.dtype), ("D", D), ("E", E), ("ROWS", rows), ("ROT", int(rot))],
         grid=(256 * n_tg, 1, 1), threadgroup=(256, 1, 1),
         output_shapes=[(rows, E), (rows, D)], output_dtypes=[mx.float32, mx.float32])
 
 
-def template_args(block, rows: int, x_dtype, shared: bool = True) -> dict:
+def template_args(block, rows: int, x_dtype, shared: bool = True, routed: bool = True) -> dict:
     """Every template parameter K7 / K8 take for this layer, and their float constant buffers ``fc`` (also what
     vmlx-swift passes)."""
     sw = block.switch_mlp
@@ -159,10 +159,10 @@ def template_args(block, rows: int, x_dtype, shared: bool = True) -> dict:
     common = [("T", x_dtype), ("D", D), ("I", I), ("E", E), ("ROWS", rows), ("KS", int(block.top_k)),
               ("L", int(U["L"]))]
     gu = common + [("KB2", _kb2(U["K"])), ("W", int(U["gate"]["packed"].shape[-1])), ("NOUT", int(U["gate"]["n_out"])),
-                   ("SHARED", int(shared)), ("ALPHA", fbits(sw.alpha)), ("LIMIT", fbits(sw.limit)),
-                   ("RSF", fbits(block.routed_scaling_factor))]
+                   ("ROUTED", int(routed)), ("SHARED", int(shared)), ("ALPHA", fbits(sw.alpha)),
+                   ("LIMIT", fbits(sw.limit)), ("RSF", fbits(block.routed_scaling_factor))]
     dn = common + [("KB2", _kb2(U["K_dn"])), ("W", int(U["down"]["packed"].shape[-1])), ("NOUT", int(U["down"]["n_out"])),
-                   ("SHARED", int(shared))]
+                   ("SHARED", int(shared)), ("ROUTED", int(routed))]
     fc_gu = _stats(U["L"], U["K"])
     fc_dn = _stats(U["L"], U["K_dn"])
     return {"gate_up": gu, "down": dn, "fc_gate_up": fc_gu, "fc_down": fc_dn}
@@ -176,16 +176,16 @@ def _fc(values: tuple) -> mx.array:
     return mx.array(np.pad(np.array(values, np.float32), (0, 16 - len(values))))
 
 
-def gate_up(block, x2, sig, xr, shared: bool = True):
+def gate_up(block, x2, sig, xr, shared: bool = True, routed: bool = True):
     """K7: (h [rows * KS, I] f32, hs [rows, I] (written only with ``shared``), inds [rows, KS] u32, scores [rows, KS]
     f32)."""
     sw, sh = block.switch_mlp, block.shared_experts
     U = sw._unit()
     rows, I, KS = int(x2.shape[0]), sw.I, int(block.top_k)
-    targs = template_args(block, rows, x2.dtype, shared)
+    targs = template_args(block, rows, x2.dtype, shared, routed)
     g, u = U["gate"], U["up"]
     return _kernel("m3_moe_gate_up")(
-        inputs=[_fc(tuple(targs["fc_gate_up"])), xr, x2, sig, block.e_score_correction_bias, g["packed"], g["scale"],
+        inputs=[_fc(tuple(targs["fc_gate_up"])), sig if xr is None else xr, x2, sig, block.e_score_correction_bias, g["packed"], g["scale"],
                 u["packed"], u["scale"], g["ocol"], g["wout"], u["wout"], sh.gate_proj.weight, sh.gate_proj.scales,
                 sh.gate_proj.biases, sh.up_proj.weight, sh.up_proj.scales, sh.up_proj.biases],
         template=targs["gate_up"], grid=(64, rows * KS + (rows if shared else 0), I // 8), threadgroup=(64, 1, 1),
@@ -200,19 +200,19 @@ def down_input(block, h, inds):
     return MK.rotate_rows(h, block.switch_mlp._unit()["sv_dn"], inds.reshape(-1))
 
 
-def down(block, hr, h, inds, scores, hs, r2, sdo=None):
+def down(block, hr, h, inds, scores, hs, r2, sdo=None, ry=None):
     """K8: the new residual rows [rows, D]. ``sdo``: the shared expert's output computed by the caller (else K8
     computes it from ``hs``)."""
     sw, sh = block.switch_mlp, block.shared_experts
     U = sw._unit()
     rows, D = int(r2.shape[0]), sw.D
     shared = sdo is None
-    targs = template_args(block, rows, r2.dtype, shared)
+    targs = template_args(block, rows, r2.dtype, shared, ry is None)
     d = U["down"]
     return _kernel("m3_moe_down")(
-        inputs=[_fc(tuple(targs["fc_down"])), hr, h, inds, scores, d["packed"], d["scale"], d["ocol"], d["wout"],
+        inputs=[_fc(tuple(targs["fc_down"])), h if hr is None else hr, h, inds, scores, d["packed"], d["scale"], d["ocol"], d["wout"],
                 r2 if hs is None else hs, sh.down_proj.weight, sh.down_proj.scales, sh.down_proj.biases, r2,
-                r2 if sdo is None else sdo],
+                r2 if sdo is None else sdo, ry if ry is not None else _fc((0.0,))],
         template=targs["down"], grid=(64, rows, D // 8), threadgroup=(64, 1, 1),
         output_shapes=[(rows, D)], output_dtypes=[r2.dtype])[0]
 
@@ -226,10 +226,20 @@ def fused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:
     x2 = mx.contiguous(x_normed.reshape(-1, D))
     r2 = mx.contiguous(resid.reshape(-1, D).astype(x2.dtype))
     rows = int(x2.shape[0])
-    sig, xr = router(x2, block.gate.weight, U["su_gu"], rows)
     shared = rows <= _shared_rows()
-    h, hs, inds, scores = gate_up(block, x2, sig, xr, shared)
     sdo = None if shared else _shared_rows_exact(block.shared_experts, x2)
+    from vmlx_engine.jangt import fast_decode as FD
+
+    if FD.enabled() and FD.supported(U, D, sw.I):
+        # VMLX_JANGT_FAST=1: routing + shared expert in K6 / K7, the routed experts on the fast JANGT kernels (the
+        # same ones JTMixedSwitchGLU.routed runs with the lever), K8 adds shared + residual
+        sig, _ = router(x2, block.gate.weight, U["su_gu"], rows, rot=False)
+        h, hs, inds, scores = gate_up(block, x2, sig, None, shared, routed=False)
+        ry = FD.routed_fast(x2, inds, scores, U, sw.limit, sw.act, sw.alpha)
+        out = down(block, None, h, inds, scores, hs if shared else None, r2, sdo, ry=ry)
+        return out.reshape(*lead, D)
+    sig, xr = router(x2, block.gate.weight, U["su_gu"], rows)
+    h, hs, inds, scores = gate_up(block, x2, sig, xr, shared)
     out = down(block, down_input(block, h, inds), h, inds, scores, hs if shared else None, r2, sdo)
     return out.reshape(*lead, D)
 

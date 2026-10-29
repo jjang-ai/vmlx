@@ -2,7 +2,8 @@
 // K6 m3_router: the MoE router of ROWS rows in one launch -- fp32 gate logits + sigmoid -- and the Hadamard-128
 // rotation of the routed experts' input (x * su_gu), which the JANGT gate/up kernel (K7) reads.
 //
-// Template: T (activation dtype of x), D (hidden, multiple of 128), E (experts), ROWS (1..16).
+// Template: T (activation dtype of x), D (hidden, multiple of 128), E (experts), ROWS (1..16), ROT (1: also rotate the
+//   routed input -- the rotation threadgroups follow the router ones; 0: router threadgroups only, xr not written).
 // Inputs:  x [ROWS, D] T (post-attention-norm hidden), gw [E, D] float32 (router), su [D] float32 (gate/up signs,
 //          0 on the layer's outlier columns).
 // Outputs: sig [ROWS, E] float32 = sigmoid(x @ gw.T) (group_expert_select's orig_scores; K7 adds the correction bias

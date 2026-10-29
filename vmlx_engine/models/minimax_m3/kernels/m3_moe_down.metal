@@ -4,7 +4,8 @@
 //
 // Template: T (activation dtype), D (hidden = down output), I (expert intermediate = down input), E, ROWS (1..16),
 //   KS, KB2 (2 x JANGT bits per weight of down), L (12), W (uint32 words per down row), NOUT (down outlier columns,
-//   0 = none), SHARED (1: compute the shared expert's down here from hs; 0: read the caller's shared down output sdo).
+//   0 = none), SHARED (1: compute the shared expert's down here from hs; 0: read the caller's shared down output sdo),
+//   ROUTED (1: the routed down + combine here; 0: read the caller's routed, router-weighted sum ry [ROWS, D] f32).
 // Inputs:  fc [4] f32 = (mu0, mu1, isd0, isd1: moe_kernels code_stats of KB2), hr [ROWS * KS, I] f32 (K7's h rotated with each slot's expert column scales: moe_kernels.rotate_rows(h,
 //   sv_dn, inds)), h [ROWS * KS, I] f32 (K7), inds / scores [ROWS, KS] (K7), wd [E, D, W] u32, sd [E, D] f32,
 //   ocol [E, max(NOUT,1)] i32, wout [E, D, max(NOUT,1)] f16, hs [ROWS, I] T (K7), sdw [D, I / 8] u32,
@@ -25,8 +26,12 @@
   const uint lb = lane * uint(PL); const uint sh = lb & 31u;
   const float mu0 = fc[0], mu1 = fc[1], isd0 = fc[2], isd1 = fc[3];
   float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  if (ROUTED == 0) {
+#pragma clang loop unroll(full)
+    for (uint r = 0; r < 4u; r++) acc[r] = ry[(size_t)t * D + row0 + r];
+  }
   constexpr int FULL = I / 512, TAIL = I % 512;
-  for (uint sl = 0; sl < uint(KS); sl++) {
+  for (uint sl = 0; sl < (ROUTED != 0 ? uint(KS) : 0u); sl++) {
     const uint ts = t * uint(KS) + sl;
     const uint e = inds[ts];
     const float wgt = float(scores[ts]);

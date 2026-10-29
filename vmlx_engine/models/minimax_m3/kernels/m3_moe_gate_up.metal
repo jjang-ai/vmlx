@@ -5,7 +5,8 @@
 //
 // Template: T (activation dtype), D (hidden = gate/up input), I (expert intermediate), E (experts), ROWS (1..16),
 //   KS (experts per token), KB2 (2 x JANGT bits per weight of gate/up: 2 / 3 / 4 / 5 / 6), L (trellis state bits,
-//   12), W (uint32 words per gate/up row), NOUT (gate/up outlier columns, 0 = none), SHARED (1: this launch also
+//   12), W (uint32 words per gate/up row), NOUT (gate/up outlier columns, 0 = none), ROUTED (1: the routed experts'
+//   gate / up here; 0: only the routing -- inds / scores -- and the shared expert, h not written), SHARED (1: this launch also
 //   computes the shared expert's gate / up; 0: the caller runs it, hs is not written), ALPHA / LIMIT / RSF (the
 //   SwiGLU-OAI alpha 1.702, limit 7.0 and the routed scaling factor 2.0 as float32 bit patterns, read with
 //   as_type<float>: compile-time constants, as the v3 kernels' literals -- the compiler folds alpha into fast::exp, so
@@ -57,6 +58,7 @@
       float sc = o_slot / den;
       scores[(size_t)t * KS + slot] = sc * as_type<float>(RSF);
     }
+    if (ROUTED == 0) return;                   // the routed experts run elsewhere (jangt fast_decode); routing only
     // ---- moe_kernels._gu_v3 for slot z (rot_out off, out float)
     constexpr int PL = jt_lane_bits<KB2>();
     const uint lb = lane * uint(PL); const uint sh = lb & 31u;

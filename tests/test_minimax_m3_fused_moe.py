@@ -28,6 +28,13 @@ from vmlx_engine.models.minimax_m3 import minimax_m3 as M  # noqa: E402
 E = 16
 
 
+@pytest.fixture(autouse=True)
+def _in_kernel_routed_experts(monkeypatch):
+    """These tests cover the fused kernels' own routed experts; the fast JANGT kernels inside the fused block are
+    covered by tests/test_jangt_fast_decode.py."""
+    monkeypatch.delenv("VMLX_JANGT_FAST", raising=False)
+
+
 def _jangt(D, I, Kgu, Kdn, nog, nod, rng):
     sw = SW.JTMixedSwitchGLU(D, I, E, {"mode": "jangt", "kbits": Kgu}, {"mode": "jangt", "kbits": Kdn}, nog, nod,
                              7.0, "oai", 1.702)
