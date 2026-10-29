@@ -50,6 +50,40 @@ def _proj_shape(rows: int) -> tuple:
     return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
 
 
+# E1 multi-row K1 / K5 (``VMLX_M3_EXACT_FLAT=1``, default off until measured on the real bundle): for 2 .. 16 rows a
+# prep launch computes each row's input chunks once (attn_xprep: the one-row build's own m3a_load_chunk), then the
+# projection walks each weight ONCE per tile of up to E1_TR rows, decoding every four-value code group once into half
+# registers and applying it to each row with the one-row build's per-element sequence (attn_common.metal m3e_rows).
+# Verify rows stay bit-identical to decode steps; the one-row builds (decode) are not touched. Shapes measured on the
+# M5 Max at M3.1 shapes (o_proj 8192 -> 6144, rows 4 / 8 / 16 vs the 2-row build): 6 outputs x 4 rows per lane 1.4 /
+# 1.44 / 1.6x faster, 4 x 4 1.3x; wider tiles (4 x 8, 8 x 4) spill registers and run 2x slower.
+EXACT_FLAT_ENV = "VMLX_M3_EXACT_FLAT"
+E1_NSG, E1_TR = 8, 4
+E1_STATS = {"qkv": 0, "oproj": 0}
+
+
+def exact_flat() -> bool:
+    return os.environ.get(EXACT_FLAT_ENV, "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _e1_ok(p) -> bool:
+    """E1 builds cover 4-bit affine q / k / v / o and an MXFP8 or 4-bit affine index (16-value lane chunks)."""
+    return p.bits_a == 4 and (p.fmt_b == 1 or p.bits_b == 4) and p.bits_o == 4
+
+
+def _e1_shape(rows: int, widths) -> tuple:
+    """(NSG, O, TR) of an E1 build: balanced row tiles of <= E1_TR rows; 6 outputs per simdgroup where every segment
+    divides into whole tiles of NSG * 6, else 4. ``VMLX_M3_E1_SHAPE=nsg,o,tr`` pins it (A/B)."""
+    pin = os.environ.get("VMLX_M3_E1_SHAPE", "").strip()
+    if pin:
+        nsg, o, tr = (int(v) for v in pin.split(","))
+        return nsg, o, tr
+    n_tiles = -(-rows // E1_TR)
+    tr = -(-rows // n_tiles)
+    o = 6 if all(w % (E1_NSG * 6) == 0 for w in widths) else 4
+    return E1_NSG, o, tr
+
+
 # Diagnostics: launches, rows, appends written in place vs through MLX slice updates, launches that ran K3.
 STATS = {"calls": 0, "rows": 0, "inplace": 0, "copy_appends": 0, "sparse_calls": 0}
 
@@ -229,6 +263,8 @@ def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
     """K1: [R, hidden] residual rows -> [R, (H + 2 KVH + GI + 1) * D] float32 (q | k | v | index q | index k)."""
     attn, ix = layer.self_attn, layer.self_attn.indexer
     R = int(x2.shape[0])
+    if R > 1 and exact_flat() and _e1_ok(p):
+        return qkv_e1(layer, p, x2)
     q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
     nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
     nsg, rps, rt = _proj_shape(R)
@@ -251,6 +287,72 @@ def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
                 ik["scales"], ikb],
         grid=(32 * nsg * (ntot // (nsg * rps)) * -(-R // rt), 1, 1), threadgroup=(32 * nsg, 1, 1),
         output_shapes=[(R, ntot)], output_dtypes=[mx.float32])[0]
+
+
+def xprep(x2: mx.array, nw: Optional[mx.array], eps: float, two: bool, rp: int):
+    """(xa, xb or None, xs, inv): each row's input chunks for the E1 builds (kernels/attn_xprep.metal), zero-padded to
+    ``rp`` rows (whole row tiles)."""
+    kin = int(x2.shape[1])
+    norm = nw is not None
+    kern = K.kernel("xprep", (("xt", _t(x2)), ("nwt", _t(nw) if norm else "float")),
+                    (("KIN", kin), ("NORM", int(norm)), ("TWO", int(two))), (("EPS", float(eps)),))
+    xa, xb, xs, inv = kern(inputs=[x2, nw if norm else _dummy()], grid=(32, rp, 1), threadgroup=(32, 1, 1),
+                           output_shapes=[(rp, kin), (rp, kin) if two else (1,), (rp, kin // 16), (max(8, rp),)],
+                           output_dtypes=[mx.float32] * 4)
+    return xa, (xb if two else None), xs, inv
+
+
+_RV: dict = {}
+
+
+def _rv(rows: int) -> mx.array:
+    """A cached [rows] array: the E1 K1 build reads only its length (the valid row count)."""
+    a = _RV.get(rows)
+    if a is None:
+        a = _RV[rows] = mx.zeros((rows,), dtype=mx.int32)
+        mx.eval(a)
+    return a
+
+
+def qkv_e1(layer, p: Plan, x2: mx.array) -> mx.array:
+    """K1 for 2 .. 16 rows, E1 build: bit-identical per row to ``qkv``'s one-row build."""
+    attn, ix = layer.self_attn, layer.self_attn.indexer
+    R = int(x2.shape[0])
+    q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
+    nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
+    nsg, o, tr = _e1_shape(R, (nq, nk, nv, niq, nik))
+    nrt = -(-R // tr)
+    xa, xb, xs, inv = xprep(x2, layer.input_layernorm.weight, p.eps_in, two=p.fmt_b == 1, rp=nrt * tr)
+    sbt = _t(iq["scales"]) if p.fmt_b == 2 else "float"
+    kern = K.kernel(
+        "qkv_e1", (("sat", _t(q["scales"])), ("sbt", sbt)),
+        (("KIN", p.hidden), ("NQ", nq), ("NK", nk), ("NV", nv), ("NIQ", niq), ("NIK", nik), ("GS_A", p.gs_a),
+         ("FMT_B", p.fmt_b), ("GS_B", p.gs_b), ("NSG", nsg), ("O", o), ("TR", tr)))
+    iqb, ikb = (_dummy(), _dummy()) if p.fmt_b == 1 else (iq["biases"], ik["biases"])
+    ntot = nq + nk + nv + niq + nik
+    E1_STATS["qkv"] += 1
+    return kern(
+        inputs=[xa, xb if xb is not None else xa, xs, inv, _rv(R), q["weight"], q["scales"], q["biases"], k["weight"],
+                k["scales"], k["biases"], v["weight"], v["scales"], v["biases"], iq["weight"], iq["scales"], iqb,
+                ik["weight"], ik["scales"], ikb],
+        grid=(32 * nsg * (ntot // (nsg * o)) * nrt, 1, 1), threadgroup=(32 * nsg, 1, 1),
+        output_shapes=[(R, ntot)], output_dtypes=[mx.float32])[0]
+
+
+def oproj_e1(layer, p: Plan, o: mx.array, x2: mx.array) -> mx.array:
+    """K5 for 2 .. 16 rows, E1 build: bit-identical per row to ``oproj``'s one-row build."""
+    m = layer.self_attn.o_proj
+    R = int(o.shape[0])
+    nsg, oo, tr = _e1_shape(R, (p.hidden,))
+    nrt = -(-R // tr)
+    xa, _, xs, _ = xprep(o, None, 0.0, two=False, rp=nrt * tr)
+    kern = K.kernel(
+        "oproj_e1", (("xt", _t(x2)), ("st", _t(m["scales"]))),
+        (("KIN", p.H * p.D), ("NOUT", p.hidden), ("GS", p.gs_o), ("NSG", nsg), ("O", oo), ("TR", tr)))
+    E1_STATS["oproj"] += 1
+    return kern(inputs=[xa, xs, x2, m["weight"], m["scales"], m["biases"]],
+                grid=(32 * nsg * (p.hidden // (nsg * oo)) * nrt, 1, 1), threadgroup=(32 * nsg, 1, 1),
+                output_shapes=[(R, p.hidden)], output_dtypes=[x2.dtype])[0]
 
 
 def heads(layer, p: Plan, y: mx.array, meta: mx.array, lanes, lane_dtypes, inplace: bool):
@@ -319,6 +421,8 @@ def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
     """K5: x2 + o_proj(o) [R, hidden] in x2's dtype (and the sum-of-squares partials [R, hidden / 8] when ssp)."""
     m = layer.self_attn.o_proj
     R = int(o.shape[0])
+    if R > 1 and not ssp and exact_flat() and _e1_ok(p):
+        return oproj_e1(layer, p, o, x2)
     nsg, rps, rt = _proj_shape(R)
     kern = K.kernel(
         "oproj", (("xt", _t(x2)), ("st", _t(m["scales"]))),

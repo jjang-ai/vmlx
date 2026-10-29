@@ -174,3 +174,99 @@ METAL_FUNC void m3a_rowsN(const device XT* x, const device NWT* nw, const device
     }
   }
 }
+
+// ------------------------------------------------------------------ E1: multi-row builds, codes decoded once per tile
+// DSpark verify windows of 2 .. 16 rows (VMLX_M3_EXACT_FLAT, fused_attn.py). The one-row builds above are untouched;
+// these compute every output element with exactly their per-element sequence, so a verify row equals its decode step
+// bit for bit, while each weight word is read and decoded ONCE per tile of TR rows instead of once per 2-row tile:
+//   * attn_xprep runs m3a_load_chunk once per (row, block, lane) and stores x' (xp), the chunk sums (xs) and the
+//     inverse RMS (K1) in the projections' own block / lane order;
+//   * m3e_rows walks the weights: per block and output row, its 16 codes are decoded one four-value group at a time
+//     into half registers (4-bit codes times their place value and fp8 e4m3 values are exact in half; float(half) is
+//     the float m3a_codes / m3a_fp8_codes give) and applied to every row of the tile with m3a_dot's statement
+//     d += x0 * c0 + x1 * c1 + x2 * c2 + x3 * c3, d starting at 0 per block; then res += s * d + b * xs (affine) or
+//     res += s * d (MXFP8) per block, simd_sum per output -- the m3a_rowsN sequence, element by element.
+// Registers bound the tile: TR rows x O outputs of d and res per lane (4 x 6 / 4 x 4 measured best on the M5 Max;
+// 4 x 8 / 8 x 4 spill and run 2x slower).
+
+// Four codes (group gi4 of a lane's 16) of one output row: affine 4-bit from its uint2 (wv[0]), MXFP8 from its 16
+// bytes (wv[0], wv[1]).
+template <int FMT>
+METAL_FUNC void m3e_codes4(const thread uint2* wv, int gi4, thread half* c) {
+  if (FMT == 1) {
+    const uint2 w2 = wv[gi4 >> 1];
+    const uint wd = (gi4 & 1) ? w2.y : w2.x;
+    for (int j = 0; j < 4; ++j) {
+      const uint bb = (wd >> (8 * j)) & 0xffu;
+      half h = as_type<half>(ushort((bb & 127u) << 7));
+      h *= half(256.0h);
+      c[j] = (bb & 128u) ? -h : h;
+    }
+  } else {
+    const uint h16 = (gi4 < 2 ? (wv[0].x >> (16 * gi4)) : (wv[0].y >> (16 * (gi4 - 2)))) & 0xffffu;
+    c[0] = half(h16 & 0x000fu);
+    c[1] = half(h16 & 0x00f0u);
+    c[2] = half(h16 & 0x0f00u);
+    c[3] = half(h16 & 0xf000u);
+  }
+}
+
+// Partials res[TR][O] (this lane's, before simd_sum) of output rows lrow .. lrow + O - 1 for rows r0 .. r0 + TR - 1 of
+// the prepared input (xp [*, KIN] f32, xs [*, KIN / 16] f32, padded by attn_xprep to whole tiles: every tile row is
+// computed, the caller stores the valid ones; a per-row guard here cost 10-15 %). FMT 0: affine 4-bit, group GS,
+// scales + biases ST; FMT 1: MXFP8 (e8m0 scale bytes per 32, no bias).
+template <typename ST, int FMT, int GS, int KIN, int O, int TR>
+METAL_FUNC void m3e_rows(const device float* xp, const device float* xsb, const device uint8_t* w,
+                         const device ST* sc, const device ST* bi, int lrow, int r0, uint lane,
+                         thread float (&res)[TR][O]) {
+  constexpr int VPT = 16;
+  constexpr int BLK = 512;
+  constexpr int ROWB = FMT == 1 ? KIN : KIN / 2;
+  constexpr int NG = KIN / (FMT == 1 ? 32 : GS);
+  static_assert(KIN % BLK == 0, "shape");
+  for (int t = 0; t < TR; ++t)
+    for (int o = 0; o < O; ++o) res[t][o] = 0.0f;
+  const device uint8_t* wl = w + (size_t)lrow * ROWB + lane * (FMT == 1 ? 16 : 8);
+  const int gl = (int(lane) * VPT) / (FMT == 1 ? 32 : GS);
+  const device float* xr0 = xp + (size_t)r0 * KIN + int(lane) * VPT;
+  for (int k = 0; k < KIN; k += BLK) {
+    const int gi = k / (FMT == 1 ? 32 : GS) + gl;
+    constexpr int WN = FMT == 1 ? 2 : 1;
+    uint2 wv[O][WN];
+    float s[O], b[O];
+    for (int o = 0; o < O; ++o) {
+      if (FMT == 1) {
+        const uint4 v4 = *((const device uint4*)(wl + (size_t)o * ROWB + k));
+        wv[o][0] = v4.xy;
+        wv[o][WN - 1] = v4.zw;
+        s[o] = m3a_e8m0(uint(((const device uint8_t*)sc)[(size_t)(lrow + o) * NG + gi]));
+        b[o] = 0.0f;
+      } else {
+        wv[o][0] = *((const device uint2*)(wl + (size_t)o * ROWB + k / 2));
+        s[o] = float(sc[(size_t)(lrow + o) * NG + gi]);
+        b[o] = float(bi[(size_t)(lrow + o) * NG + gi]);
+      }
+    }
+    float d[TR][O];
+    for (int t = 0; t < TR; ++t)
+      for (int o = 0; o < O; ++o) d[t][o] = 0.0f;
+    for (int i = 0; i < 4; ++i) {
+      half c[O][4];
+      for (int o = 0; o < O; ++o) m3e_codes4<FMT>(wv[o], i, c[o]);
+      for (int t = 0; t < TR; ++t) {
+        const float4 x4 = ((const device float4*)(xr0 + (size_t)t * KIN + k))[i];
+        for (int o = 0; o < O; ++o) {
+          d[t][o] += x4.x * float(c[o][0]) + x4.y * float(c[o][1]) + x4.z * float(c[o][2]) + x4.w * float(c[o][3]);
+        }
+      }
+    }
+    for (int t = 0; t < TR; ++t) {
+      if (FMT == 1) {
+        for (int o = 0; o < O; ++o) res[t][o] += s[o] * d[t][o];
+      } else {
+        const float xs = xsb[(size_t)(r0 + t) * (KIN / VPT) + k / VPT + int(lane)];
+        for (int o = 0; o < O; ++o) res[t][o] += s[o] * d[t][o] + b[o] * xs;
+      }
+    }
+  }
+}

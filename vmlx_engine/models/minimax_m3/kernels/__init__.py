@@ -34,6 +34,11 @@ SPECS: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...], bool]] = {
     "scores": (("iq", "ic", "meta"), ("sc",), False),
     "msa": (("q", "kc", "vc", "sc", "cnt", "meta", "scale"), ("out", "po", "pm", "pl"), False),
     "oproj": (("o", "xr", "w", "s", "b"), ("h", "ssp"), True),
+    # E1 multi-row builds (DSpark verify; VMLX_M3_EXACT_FLAT): prep once per row, then each weight decoded once per tile
+    "xprep": (("x", "nw"), ("xa", "xb", "xs", "inv"), True),
+    "qkv_e1": (("xa", "xb", "xs", "inv", "rv", "q_w", "q_s", "q_b", "k_w", "k_s", "k_b", "v_w", "v_s", "v_b",
+                "iq_w", "iq_s", "iq_b", "ik_w", "ik_s", "ik_b"), ("y",), True),
+    "oproj_e1": (("xa", "xs", "xr", "w", "s", "b"), ("h",), True),
 }
 
 METAL_TYPE = {mx.bfloat16: "bfloat16_t", mx.float16: "float16_t", mx.float32: "float", mx.uint8: "uint8_t",

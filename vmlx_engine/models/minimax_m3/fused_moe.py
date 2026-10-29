@@ -248,7 +248,22 @@ def _shared_rows_exact(sh, x2):
     """The shared expert of several rows, every row on MLX's one-row qmv arithmetic (one row-split walk for 5..16
     rows, 4-row launches otherwise, one-row calls where a shape is not admitted) and the model's own SwiGLU-OAI:
     [rows, D]."""
+    from vmlx_engine.metal import row_exact_e1 as E1
     from vmlx_engine.metal.row_exact_qmv import row_exact_qmv, row_exact_qmv_rowsplit, rowsplit_enabled
+    from vmlx_engine.models.minimax_m3.minimax_m3 import swiglu
+
+    if E1.enabled() and int(x2.shape[0]) >= E1.DISPATCH_MIN_ROWS:
+        # VMLX_M3_EXACT_FLAT: gate | up in one E1 walk, then down; each weight decoded once per tile of rows, every row
+        # on MLX's one-row arithmetic (metal/row_exact_e1, admitted per shape by bit-equality)
+        gu = E1.row_exact_e1(x2, [(sh.up_proj["weight"], sh.up_proj["scales"], sh.up_proj["biases"]),
+                                  (sh.gate_proj["weight"], sh.gate_proj["scales"], sh.gate_proj["biases"])],
+                             bits=int(sh.up_proj.bits), group_size=int(sh.up_proj.group_size))
+        if gu is not None:
+            h = swiglu(gu[0], gu[1], sh.alpha, sh.limit)
+            dn = E1.row_exact_e1(h, [(sh.down_proj["weight"], sh.down_proj["scales"], sh.down_proj["biases"])],
+                                 bits=int(sh.down_proj.bits), group_size=int(sh.down_proj.group_size))
+            if dn is not None:
+                return dn[0]
 
     def lin(q, x):
         rows = int(x.shape[0])
@@ -265,8 +280,6 @@ def _shared_rows_exact(sh, x2):
             outs.append(y if y is not None else
                         mx.concatenate([q(xb[r:r + 1]) for r in range(int(xb.shape[0]))], axis=0))
         return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=0)
-
-    from vmlx_engine.models.minimax_m3.minimax_m3 import swiglu
 
     return lin(sh.down_proj, swiglu(lin(sh.up_proj, x2), lin(sh.gate_proj, x2), sh.alpha, sh.limit))
 
