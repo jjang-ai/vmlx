@@ -340,6 +340,14 @@ def lane_dtypes(layer, cache, x_dtype):
 
 
 # ------------------------------------------------------------------------------------------------ forward
+def _flat(layer):
+    """models/minimax_m3/flat_dense when VMLX_M3_FLAT_DENSE=1 covers this layer's projections (K1 / K5 then run on
+    the row-invariant matrix-unit kernels), else None."""
+    from . import flat_dense as FL
+
+    return FL if FL.active() and FL.attn_supported(layer) else None
+
+
 def attention_block(layer, x: mx.array, cache) -> mx.array:
     """``x + self_attn(input_layernorm(x))`` for one sequence of 1 .. 16 rows at ``cache.offset`` (appends the rows'
     K / V / index keys to ``cache``). Call only when ``use_fused`` said so."""
@@ -347,7 +355,8 @@ def attention_block(layer, x: mx.array, cache) -> mx.array:
     _, R, hidden = x.shape
     x2 = x.reshape(R, hidden)
     offset = int(cache.offset)
-    y = qkv(layer, p, x2)
+    fl = _flat(layer)
+    y = fl.attn_qkv(layer, x2) if fl is not None else qkv(layer, p, x2)
     dts = lane_dtypes(layer, cache, x.dtype)
     inplace = cache.fused_reserve(R, p.KVH, p.D, dts[0], dts[1], p.D, dts[2])
     nb = -(-(offset + R) // p.block)                     # key blocks of the last row (the widest extent)
@@ -370,7 +379,8 @@ def attention_block(layer, x: mx.array, cache) -> mx.array:
     # K4 ran behind the barrier MLX puts after K2 (it reads K2's outputs): later readers of the lanes are ordered
     # after it, so they see the rows K2 wrote in place.
     cache.fused_commit(R, after=o)
-    h = oproj(layer, p, o.reshape(R, p.H * p.D), x2)
+    o2 = o.reshape(R, p.H * p.D)
+    h = fl.attn_oproj(layer, o2, x2) if fl is not None else oproj(layer, p, o2, x2)
     STATS["calls"] += 1
     STATS["rows"] += R
     return h.reshape(1, R, hidden)

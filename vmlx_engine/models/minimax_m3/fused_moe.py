@@ -226,8 +226,15 @@ def fused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:
     x2 = mx.contiguous(x_normed.reshape(-1, D))
     r2 = mx.contiguous(resid.reshape(-1, D).astype(x2.dtype))
     rows = int(x2.shape[0])
-    shared = rows <= _shared_rows()
-    sdo = None if shared else _shared_rows_exact(block.shared_experts, x2)
+    from vmlx_engine.models.minimax_m3 import flat_dense as FL
+
+    if FL.active() and FL.mlp_supported(block.shared_experts):
+        # VMLX_M3_FLAT_DENSE: the shared expert on the row-invariant matrix-unit kernels for every row count (decode
+        # steps take the same kernels); K7 / K8 then skip it and K8 adds its output
+        shared, sdo = False, FL.mlp(block.shared_experts, x2)
+    else:
+        shared = rows <= _shared_rows()
+        sdo = None if shared else _shared_rows_exact(block.shared_experts, x2)
     from vmlx_engine.jangt import fast_decode as FD
 
     if FD.enabled() and FD.supported(U, D, sw.I):

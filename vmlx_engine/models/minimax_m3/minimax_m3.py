@@ -64,7 +64,7 @@ class SwiGLU(nn.Module):
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-    from . import fused_attn, msa, source_format
+    from . import flat_dense, fused_attn, msa, source_format
 except Exception:
     try:
         # Served path: minimax_m3_register loads this file as mlx_lm.models.minimax_m3_vl, where `.cache` is
@@ -75,7 +75,7 @@ except Exception:
         # desynchronised from K/V" (live M3.1 tool loop, 2026-10-28).
         from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache, make_minimax_m3_cache
         from vmlx_engine.models.minimax_m3.m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-        from vmlx_engine.models.minimax_m3 import fused_attn, msa, source_format
+        from vmlx_engine.models.minimax_m3 import flat_dense, fused_attn, msa, source_format
     except Exception:  # pragma: no cover - standalone import without vmlx_engine
         import os as _os, sys as _sys
         _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -84,6 +84,7 @@ except Exception:
         import msa  # type: ignore
         import source_format  # type: ignore
         fused_attn = None  # the fused attention kernels ship with vmlx_engine
+        flat_dense = None
 
 
 @dataclass
@@ -323,6 +324,28 @@ class Attention(nn.Module):
         return o.reshape(B, H, L, D)
 
 
+def _flat_rows(x, verify: bool = False) -> bool:
+    """True when this call takes the flat dense kernels (VMLX_M3_FLAT_DENSE=1): bf16 / fp16 rows, and either at most
+    16 of them (decode steps, short prefill chunks) or a DSpark verify (any width, run in chunks of 16 rows)."""
+    if flat_dense is None or not flat_dense.active() or x.dtype not in (mx.bfloat16, mx.float16):
+        return False
+    rows = 1
+    for d in x.shape[:-1]:
+        rows *= int(d)
+    return verify or rows <= flat_dense.MAX_ROWS
+
+
+def lm_head_logits(model, out, verify: bool = False):
+    """The model's logits of ``out`` (tied embedding or lm_head; the flat kernels for decode / verify rows with
+    VMLX_M3_FLAT_DENSE=1). Model.__call__ and the DSpark target both call this, so verify rows == decode steps."""
+    if model.args.tie_word_embeddings:
+        return model.model.embed_tokens.as_linear(out)
+    head = model.lm_head
+    if _flat_rows(out, verify) and flat_dense.linear_supported(head):
+        return flat_dense.linear(head, out)
+    return head(out)
+
+
 class SwiGLUOAIMLP(nn.Module):
     def __init__(self, dim, hidden, alpha, limit):
         super().__init__()
@@ -332,6 +355,10 @@ class SwiGLUOAIMLP(nn.Module):
         self.alpha, self.limit = alpha, limit
 
     def __call__(self, x, linear=None):
+        if _flat_rows(x, verify=linear is not None) and flat_dense.mlp_supported(self):
+            # VMLX_M3_FLAT_DENSE: gate / up + SwiGLU-OAI and down on the row-invariant matrix-unit kernels -- decode
+            # steps, prefill chunks of <= 16 rows and the DSpark verify's rows (any width, in chunks of 16) alike
+            return flat_dense.mlp(self, x)
         if linear is None:
             return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x), self.alpha, self.limit))
         return linear(self.down_proj, swiglu(linear(self.up_proj, x), linear(self.gate_proj, x), self.alpha, self.limit))
@@ -564,11 +591,7 @@ class Model(nn.Module):
         aux = None
         if return_aux:
             out, aux = out
-        logits = (
-            self.model.embed_tokens.as_linear(out)
-            if self.args.tie_word_embeddings
-            else self.lm_head(out)
-        )
+        logits = lm_head_logits(self, out)
         return (logits, aux) if return_aux else logits
 
     def make_cache(self):

@@ -137,7 +137,14 @@ class MiniMaxM3DSparkTarget:
                 raise ValueError(f"DSpark MiniMax-M3 target: sparse layer {li} has no index-key cache lane")
         self.embed_tokens = self.nm.embed_tokens
         self.tied = bool(getattr(self.args, "tie_word_embeddings", False))
-        self.lm_head = (lambda h: self.nm.embed_tokens.as_linear(h)) if self.tied else lm.lm_head
+        # The model module's own logits helper (flat dense kernels for decode rows with VMLX_M3_FLAT_DENSE=1), so
+        # the target's AR steps and verify rows take the head the served decode step takes.
+        head_fn = getattr(sys.modules.get(type(lm).__module__), "lm_head_logits", None)
+        self._head_fn = head_fn
+        if head_fn is not None:
+            self.lm_head = lambda h: head_fn(lm, h)
+        else:
+            self.lm_head = (lambda h: self.nm.embed_tokens.as_linear(h)) if self.tied else lm.lm_head
         self.rope_delta = 0
         # Per verify: how many projection calls ran batched on the exact multi-row kernel vs as one-row calls, and
         # how many routed-expert layers ran batched vs per row (cost diagnostics for real-weight runs).
@@ -336,6 +343,14 @@ class MiniMaxM3DSparkTarget:
     def _logits(self, out: mx.array) -> mx.array:
         if self.tied:
             return mx.concatenate([self.lm_head(_row(out, r)) for r in range(int(out.shape[1]))], axis=1)
+        if self._head_fn is not None:
+            mod = sys.modules.get(type(self.model).__module__)
+            flat_rows = getattr(mod, "_flat_rows", None)
+            fl = getattr(mod, "flat_dense", None)
+            if flat_rows is not None and flat_rows(out, verify=True) and fl.linear_supported(self.model.lm_head):
+                self.verify_paths["head_flat"] = self.verify_paths.get("head_flat", 0) + 1
+                return fl.linear(self.model.lm_head, out)
+            return self._linear(self.model.lm_head, out)
         return self._linear(self.lm_head, out)
 
     def _attention(self, attn, x: mx.array, cache, offset: int) -> mx.array:

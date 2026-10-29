@@ -1119,5 +1119,12 @@ def routed_down(h, idx2, w2, U):
 
 
 def routed_fast(x2, idx2, w2, U, limit, act, alpha):
-    """The routed block of JTMixedSwitchGLU.routed for decode / verify rows: (T, D) f32."""
+    """The routed block of JTMixedSwitchGLU.routed for decode / verify rows: (T, D) f32. With
+    VMLX_JANGT_GROUPED_FAST=1, 2+ rows run the expert-grouped kernels (jangt/grouped_fast.py: each expert's windows
+    decoded once per group of slots that picked it), bit-identical to the per-slot kernels below."""
+    if idx2.shape[0] > 1:
+        from vmlx_engine.jangt import grouped_fast as GF
+
+        if GF.enabled() and idx2.size <= 1024:
+            return GF.routed_grouped(x2, idx2, w2, U, limit, act, alpha)
     return routed_down(routed_gate_up(x2, idx2, U, limit, act, alpha), idx2, w2, U)
