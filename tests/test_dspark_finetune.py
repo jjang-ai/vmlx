@@ -122,6 +122,19 @@ def test_records_roundtrip_resume_and_layout_guard(tmp_path):
     assert w2.done_ids() == set(want) and w2._next == len(list((tmp_path / "shards").glob("shard-*.json")))
     with pytest.raises(ValueError, match="another layout"):
         R.ShardWriter(tmp_path, {**meta, "hidden": 16})
+    # several directories (e.g. generated on two machines) read as one dataset; a duplicated id is refused
+    other = tmp_path.parent / (tmp_path.name + "_b")
+    w3 = R.ShardWriter(other, meta)
+    _, arr = want["x0"]
+    w3.add(R.Record(id="y0", n=len(arr["tokens"]), tap_start=want["x0"][0], set="ref"), **arr)
+    w3.close()
+    both = R.Dataset(f"{tmp_path},{other}")
+    assert {r.id for r in both.records} == set(want) | {"y0"}
+    y0 = next(r for r in both.records if r.id == "y0")
+    assert np.array_equal(both.taps(y0, y0.tap_start, y0.n), arr["taps"])
+    assert [r.id for r in R.Dataset([tmp_path, other], sets=["ref"]).records] == ["y0"]
+    with pytest.raises(ValueError, match="twice"):
+        R.Dataset([tmp_path, tmp_path])
 
 
 def test_assistant_mask_and_anchor_positions():

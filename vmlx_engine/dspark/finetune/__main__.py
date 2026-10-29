@@ -127,7 +127,7 @@ def cmd_eval(a) -> None:
     ds = Dataset(a.data, sets=_csv(a.sets) or None, domains=_csv(a.domains) or None, modes=_csv(a.modes) or None)
     if a.limit:
         ds.records = ds.records[:a.limit]
-    head = TargetHead(a.head or a.data)
+    head = TargetHead(a.head or a.data.split(",")[0])
     widths = [w if w == "adaptive" else int(w) for w in _csv(a.width)]
     report = {"data": a.data, "sets": a.sets, "records": len(ds.records), "drafters": {}}
     for path in a.drafter:
@@ -212,7 +212,7 @@ def main(argv=None) -> None:
     g.set_defaults(fn=cmd_gen)
 
     t = sub.add_parser("train", help="fine-tune a drafter")
-    t.add_argument("--data", required=True)
+    t.add_argument("--data", required=True, help="data directory, or several comma-separated")
     t.add_argument("--drafter", required=True, help="the shipped dspark/ directory (initial weights)")
     t.add_argument("--out", required=True)
     t.add_argument("--head", default=None, help="directory with target_head.* (default: --data)")
@@ -246,7 +246,7 @@ def main(argv=None) -> None:
     t.set_defaults(fn=cmd_train)
 
     e = sub.add_parser("eval", help="offline acceptance of drafter directories")
-    e.add_argument("--data", required=True)
+    e.add_argument("--data", required=True, help="data directory, or several comma-separated")
     e.add_argument("--drafter", action="append", required=True)
     e.add_argument("--head", default=None)
     e.add_argument("--sets", default="ref")

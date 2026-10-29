@@ -195,13 +195,26 @@ class ShardWriter:
 
 
 class Dataset:
-    """Every record of a data directory (optionally only some ``sets`` / ``domains``), memory-mapped."""
+    """Every record of one or more data directories (``data_dir``: a path, a comma-separated string or a list; e.g.
+    generated on two machines), optionally only some ``sets`` / ``domains`` / ``ids`` / ``modes``, memory-mapped.
+    All directories must share the record layout (taps, hidden size, dtype, top-K)."""
 
-    def __init__(self, data_dir: str | Path, *, sets: Optional[Iterable[str]] = None,
+    def __init__(self, data_dir, *, sets: Optional[Iterable[str]] = None,
                  domains: Optional[Iterable[str]] = None, ids: Optional[Iterable[str]] = None,
                  modes: Optional[Iterable[str]] = None):
-        self.dir = Path(data_dir)
+        if isinstance(data_dir, (list, tuple)):
+            dirs = [Path(d) for d in data_dir]
+        else:
+            dirs = [Path(d) for d in str(data_dir).split(",") if d]
+        self.dirs = dirs
+        self.dir = dirs[0]
         self.meta = json.loads((self.dir / "meta.json").read_text())
+        for d in dirs[1:]:
+            other = json.loads((d / "meta.json").read_text())
+            clash = {k: (self.meta.get(k), other.get(k)) for k in ("taps", "hidden", "tap_dtype", "topk", "vocab_size")
+                     if self.meta.get(k) != other.get(k)}
+            if clash:
+                raise ValueError(f"{d} holds records of another layout than {self.dir}: {clash}")
         self.width = int(self.meta["hidden"]) * len(self.meta["taps"])
         self.topk = int(self.meta.get("topk") or 0)
         sets = set(sets) if sets else None
@@ -210,19 +223,26 @@ class Dataset:
         modes = set(modes) if modes else None
         self.records: list[Record] = []
         self._maps: dict[str, SafetensorsMap] = {}
-        for idx in sorted((self.dir / "shards").glob("shard-*.json")):
-            for e in json.loads(idx.read_text())["records"]:
-                if sets and e["set"] not in sets or domains and e["domain"] not in domains or ids and e["id"] not in ids \
-                        or modes and e["mode"] not in modes:
-                    continue
-                self.records.append(Record(id=e["id"], n=e["n"], tap_start=e["tap_start"], shard=idx.stem + ".safetensors",
-                                           tok_off=e["tok_off"], tap_off=e["tap_off"], domain=e["domain"],
-                                           set=e["set"], mode=e["mode"], n_gen=e["n_gen"], extra=e.get("extra") or {}))
+        seen = set()
+        for d in dirs:
+            for idx in sorted((d / "shards").glob("shard-*.json")):
+                for e in json.loads(idx.read_text())["records"]:
+                    if sets and e["set"] not in sets or domains and e["domain"] not in domains \
+                            or ids and e["id"] not in ids or modes and e["mode"] not in modes:
+                        continue
+                    if e["id"] in seen:
+                        raise ValueError(f"record {e['id']} appears twice across {dirs}")
+                    seen.add(e["id"])
+                    self.records.append(Record(id=e["id"], n=e["n"], tap_start=e["tap_start"],
+                                               shard=str(d / "shards" / (idx.stem + ".safetensors")),
+                                               tok_off=e["tok_off"], tap_off=e["tap_off"], domain=e["domain"],
+                                               set=e["set"], mode=e["mode"], n_gen=e["n_gen"],
+                                               extra=e.get("extra") or {}))
 
     def _map(self, rec: Record) -> SafetensorsMap:
         m = self._maps.get(rec.shard)
         if m is None:
-            m = self._maps[rec.shard] = SafetensorsMap(self.dir / "shards" / rec.shard)
+            m = self._maps[rec.shard] = SafetensorsMap(rec.shard)
         return m
 
     def per_position(self, rec: Record, name: str) -> np.ndarray:

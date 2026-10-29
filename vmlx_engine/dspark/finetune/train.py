@@ -122,7 +122,7 @@ def setup(cfg: TrainConfig):
     train = {k: params[k].astype(mx.float32) for k in sorted(names)}
     frozen = {k: v for k, v in params.items() if k not in names}
     fq = frozenset(m for m in mxfp8 if f"{m}.weight" in names) if cfg.qat else frozenset()
-    head = TargetHead(cfg.head or cfg.data)
+    head = TargetHead(cfg.head or str(cfg.data).split(",")[0])
     return spec, train, frozen, fq, head, mxfp8
 
 
