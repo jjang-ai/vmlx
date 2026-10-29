@@ -5573,8 +5573,14 @@ class BlockAwarePrefixCache:
         *,
         defer_post_fence_gc: bool = False,
         minimax_m3_boundary: Optional[int] = None,
+        minimax_m3_stream_inflight_bytes: Optional[int] = None,
     ) -> Optional[BlockTable]:
-        """Store cache data and deterministically terminate any begun L2 fence."""
+        """Store cache data and deterministically terminate any begun L2 fence.
+
+        ``minimax_m3_stream_inflight_bytes``: the MiniMax-M3 zero-copy store (``cache_data`` are views of the live
+        cache, models/minimax_m3/prompt_boundary.py). Each SSD block is copied to the writer only while the bytes it
+        has not yet written stay under this cap, and no block keeps a RAM copy (no write-behind hold): peak extra
+        memory is the cap plus one block, whatever the prompt length."""
         # VMLX_STORE_PHASE_TRACE (see _STORE_PHASE_TRACE): read here so this lifecycle wrapper stays self-contained
         marks = [("start", time.perf_counter())] if os.environ.get("VMLX_STORE_PHASE_TRACE", "") == "1" else None
         self._store_phase_marks = marks
@@ -5602,6 +5608,7 @@ class BlockAwarePrefixCache:
                 store_cumulative_state=store_cumulative_state,
                 _write_fence=write_fence,
                 _defer_gc=defer_post_fence_gc,
+                _m3_stream_inflight=minimax_m3_stream_inflight_bytes,
             )
             if marks is not None:
                 marks.append(("impl_tail", time.perf_counter()))
@@ -5723,6 +5730,7 @@ class BlockAwarePrefixCache:
         *,
         _write_fence: Dict[str, Any],
         _defer_gc: bool = False,
+        _m3_stream_inflight: Optional[int] = None,
     ) -> Optional[BlockTable]:
         """
         Store computed cache for future reuse.
@@ -6031,6 +6039,43 @@ class BlockAwarePrefixCache:
             )
             if callable(record_unadmitted):
                 record_unadmitted(disk_write_fence_id, int(count))
+
+        # MiniMax-M3 zero-copy store: the payloads are views of the live cache. Hand the writer one block copy at a
+        # time while its unwritten bytes stay under the cap, and keep no RAM copy (no write-behind hold).
+        m3_streamed = bool(
+            _m3_stream_inflight
+            and has_minimax_m3_cache_data
+            and disk_store is not None
+            and callable(getattr(disk_store, "wait_for_pending_write_bytes", None))
+        )
+        m3_stream_stats = {"blocks": 0, "waits": 0, "timeouts": 0, "max_pending": 0, "cap": int(_m3_stream_inflight or 0)}
+        if m3_streamed:
+            self._last_m3_stream_store = m3_stream_stats
+
+        def _m3_stream_wait(block_payload) -> None:
+            need = 0
+            for entry in block_payload or ():
+                if isinstance(entry, (tuple, list)):
+                    for value in entry[1:]:
+                        need += int(getattr(value, "nbytes", 0) or 0)
+            limit = max(0, int(_m3_stream_inflight) - need)
+            pending = int(disk_store.pending_write_bytes())
+            m3_stream_stats["blocks"] += 1
+            m3_stream_stats["max_pending"] = max(m3_stream_stats["max_pending"], pending)
+            if pending <= limit:
+                return
+            m3_stream_stats["waits"] += 1
+            if not disk_store.wait_for_pending_write_bytes(
+                limit, timeout=float(self._native_block_disk_admission_timeout)
+            ):
+                m3_stream_stats["timeouts"] += 1
+                logger.warning(
+                    "MiniMax-M3 streamed store %s: the SSD writer still holds %d bytes after %.0f s; admitting the "
+                    "next block under the store-wide budget",
+                    request_id,
+                    int(disk_store.pending_write_bytes()),
+                    float(self._native_block_disk_admission_timeout),
+                )
 
         def _write_block_to_disk(
             block_hash: bytes,
@@ -6797,6 +6842,10 @@ class BlockAwarePrefixCache:
                                     f"{block.block_id} ({_layer_summary}, "
                                     f"{len(block_tokens)} tokens)"
                                 )
+                                if m3_streamed:
+                                    # Bounded in-flight bytes: wait for the writer before
+                                    # handing it the next block's copy.
+                                    _m3_stream_wait(block_kv_data)
                                 _admitted_write = _write_block_to_disk(
                                     block_chain_hash,
                                     np_block,
@@ -6805,6 +6854,7 @@ class BlockAwarePrefixCache:
                                 )
                                 if (
                                     _admitted_write
+                                    and not m3_streamed
                                     and _disk_only
                                     and getattr(self, "_ssd_write_behind", False)
                                     and block_chain_hash in disk_only_fallbacks

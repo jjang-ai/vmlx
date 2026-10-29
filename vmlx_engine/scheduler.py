@@ -6659,6 +6659,85 @@ class Scheduler:
             or _GEN_PROMPT_STRIP_DISABLED
         )
 
+    def _m3_snapshot_from_marker(self, request: Request, snapshot: Any) -> Any:
+        """Resolve a MiniMax-M3 boundary marker into prompt-boundary cache views (no copy) and flag the request for
+        the bounded streamed store; any other snapshot is returned unchanged."""
+        from .models.minimax_m3.prompt_boundary import M3PromptBoundary
+
+        if not isinstance(snapshot, M3PromptBoundary):
+            return snapshot
+        views = snapshot.views()
+        if views is None:
+            logger.warning(
+                "Request %s: MiniMax-M3 prompt boundary (%d rows) no longer held by the live cache; not storing it",
+                request.request_id,
+                snapshot.rows,
+            )
+            return None
+        request._m3_zero_copy_store = True
+        logger.info(
+            "Request %s: MiniMax-M3 prompt boundary taken from the live cache (%d rows, %.1f MB, no copy)",
+            request.request_id,
+            snapshot.rows,
+            snapshot.nbytes() / 1e6,
+        )
+        return views
+
+    def _m3_live_prompt_views(self, request: Request, raw_cache: Any, rows: int) -> Optional[List[Any]]:
+        """Views of the first ``rows`` rows of a live MiniMax-M3 cache (append-only lanes: the prompt's rows), or None
+        (zero-copy off, not an M3 cache list, lanes out of step)."""
+        from .models.minimax_m3 import prompt_boundary
+
+        if not prompt_boundary.zero_copy_enabled() or rows <= 0:
+            return None
+        marker = prompt_boundary.capture(list(raw_cache or []))
+        views = marker.views(rows) if marker is not None and marker.rows >= rows else None
+        if views is not None:
+            request._m3_zero_copy_store = True
+        return views
+
+    @staticmethod
+    def _m3_rows(cache: Any) -> int:
+        from .models.minimax_m3.prefill_geometry import cache_offset
+
+        try:
+            return int(cache_offset(cache) or 0)
+        except Exception:
+            return 0
+
+    def _m3_copy_fits(self, request: Request, cache: Any, rows: int, tier: str) -> bool:
+        """Whether a whole-entry copy of ``rows`` rows of a zero-copy MiniMax-M3 store fits in the free Metal working
+        set (the RAM / prompt-SSD tiers copy the prompt; the block SSD tier streams it and needs no room)."""
+        if not getattr(request, "_m3_zero_copy_store", False):
+            return True
+        from .models.minimax_m3.prompt_boundary import M3PromptBoundary
+        from .utils.memory_limits import (
+            get_effective_metal_working_set_bytes,
+            get_metal_ws_guard_threshold,
+        )
+
+        try:
+            import mlx.core as _mx
+
+            need = M3PromptBoundary(list(cache or []), rows).nbytes(rows)
+            active, maximum = get_effective_metal_working_set_bytes(_mx)
+        except Exception:
+            return True
+        if maximum <= 0:
+            return True
+        headroom = max(0, int(maximum * get_metal_ws_guard_threshold() / 100) - int(active))
+        if need <= headroom:
+            return True
+        logger.warning(
+            "Request %s: MiniMax-M3 %s store skipped: its copy (%.1f MB) exceeds the free Metal working set "
+            "(%.1f MB); the SSD block tier streams the prompt without a copy",
+            request.request_id,
+            tier,
+            need / 1e6,
+            headroom / 1e6,
+        )
+        return False
+
     def _m3_prefill_boundary(self, request: Request) -> Optional[int]:
         """The MiniMax-M3 store boundary of this request: the prefix-cache lookup key (the prompt with the
         generation-prompt suffix stripped exactly as ``add_request`` strips it) minus its final token, which a hit
@@ -10237,6 +10316,13 @@ class Scheduler:
                         snapshot_cache = getattr(
                             response, "prompt_cache_snapshot", None
                         )
+                        # MiniMax-M3: the generator hands over a boundary marker (the live cache objects + the
+                        # prompt row count), not a copy. The request has stopped writing, so take the
+                        # prompt-boundary views now: they alias the live buffers and the store copies them block
+                        # by block (models/minimax_m3/prompt_boundary.py).
+                        snapshot_cache = self._m3_snapshot_from_marker(
+                            request, snapshot_cache
+                        )
                         # DSV4 EXTENDED STORE: zero-copy delta transport that
                         # continues the prompt chain through decode, ending at
                         # a 256-token boundary. When valid it preempts both
@@ -10750,11 +10836,18 @@ class Scheduler:
                                             cache_for_extract = None
                                         else:
                                             # Cold M3 requests may safely use the
-                                            # generator's clean prompt snapshot.
+                                            # generator's clean prompt snapshot. Without
+                                            # one, the live cache's first N-1 rows are
+                                            # the prompt rows (append-only lanes): take
+                                            # them as views instead of the full
+                                            # host-round-trip copy.
                                             cache_for_extract = (
                                                 snapshot_cache
                                                 if snapshot_cache is not None
-                                                else self._truncate_cache_to_prompt_length(
+                                                else self._m3_live_prompt_views(
+                                                    request, raw_cache, prompt_len - 1
+                                                )
+                                                or self._truncate_cache_to_prompt_length(
                                                     raw_cache, prompt_len
                                                 )
                                             )
@@ -10806,6 +10899,12 @@ class Scheduler:
                                             # disk key is prompt-stripped and
                                             # would mismatch the chain state.
                                             and not extended_store_armed
+                                            and self._m3_copy_fits(
+                                                request,
+                                                cache_for_extract,
+                                                self._m3_rows(cache_for_extract),
+                                                "prompt-SSD",
+                                            )
                                         ):
                                             try:
                                                 from .mllm_batch_generator import (
@@ -12208,6 +12307,16 @@ class Scheduler:
                                     _paged_store_kwargs["minimax_m3_boundary"] = (
                                         self._m3_prefill_boundary(request) or 0
                                     )
+                                if getattr(request, "_m3_zero_copy_store", False):
+                                    # Views of the live cache: copy them to the SSD writer block by block,
+                                    # never more than this many bytes in flight, and hold no RAM copy.
+                                    from .models.minimax_m3.prompt_boundary import (
+                                        store_inflight_bytes as _m3_inflight_bytes,
+                                    )
+
+                                    _paged_store_kwargs["minimax_m3_stream_inflight_bytes"] = (
+                                        _m3_inflight_bytes()
+                                    )
                                 if (
                                     self._is_hybrid
                                     and not self._uses_dsv4_cache
@@ -12377,6 +12486,13 @@ class Scheduler:
                             if cache_key_override is not None:
                                 cache_to_store = request._extracted_cache
                                 cache_key_tokens = list(cache_key_override)
+                            elif not self._m3_copy_fits(
+                                request,
+                                request._extracted_cache,
+                                max(prompt_len - 1, 0),
+                                "whole-prompt",
+                            ):
+                                cache_to_store = None
                             else:
                                 cache_to_store = self._truncate_cache_to_prompt_length(
                                     request._extracted_cache, prompt_len
@@ -12597,6 +12713,13 @@ class Scheduler:
                             if cache_key_override is not None:
                                 cache_to_store = request._extracted_cache
                                 cache_key_tokens = list(cache_key_override)
+                            elif not self._m3_copy_fits(
+                                request,
+                                request._extracted_cache,
+                                max(prompt_len - 1, 0),
+                                "whole-prompt",
+                            ):
+                                cache_to_store = None
                             else:
                                 cache_to_store = self._truncate_cache_to_prompt_length(
                                     request._extracted_cache, prompt_len

@@ -152,6 +152,13 @@ def test_text_generator_equals_single_batch_generator(tmp_path, release_drafter_
     gen = DSparkTextGenerator(model, sampler=_greedy(), max_tokens=24, prefill_step_size=256, stop_tokens=[])
     _, tokens, finish, snap = _drive(gen, [prompt])
     assert tokens == ref_tokens and finish == ref_finish == "length"
+    # The prompt snapshot is a zero-copy boundary marker on both lanes (models/minimax_m3/prompt_boundary.py); its
+    # prompt-boundary views, taken after decode and DSpark rollbacks, are identical.
+    from vmlx_engine.models.minimax_m3.prompt_boundary import M3PromptBoundary
+
+    assert isinstance(ref_snap, M3PromptBoundary) and isinstance(snap, M3PromptBoundary)
+    assert ref_snap.rows == snap.rows == len(prompt)
+    ref_snap, snap = ref_snap.views(), snap.views()
     assert ref_snap is not None and snap is not None and not _cache_problems(snap, ref_snap)
     stats = gen.last_dspark_stats
     assert stats["rounds"] > 0 and 0 < stats["accepted"] < stats["drafted"]

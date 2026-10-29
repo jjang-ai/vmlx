@@ -566,6 +566,20 @@ class SingleBatchGenerator:
 
         if not cache or not any(self._cache_needs_prompt_snapshot(c) for c in cache):
             return None
+        # MiniMax-M3: every lane is append-only, so the rows the prefill wrote are still the live cache's first rows
+        # when the request ends. Hand the scheduler a marker (the live cache objects + the row count), not a copy:
+        # the copy was 8.2 GiB for a 65k prompt on M3.1 and either OOMed or, under the headroom guard below, left
+        # long prompts uncached. The terminal store streams the rows to the SSD block store
+        # (models/minimax_m3/prompt_boundary.py).
+        if self._cache_uses_m3_msa(cache):
+            from ..models.minimax_m3 import prompt_boundary
+
+            if prompt_boundary.zero_copy_enabled():
+                marker = prompt_boundary.capture(list(cache))
+                if marker is not None:
+                    self.prompt_snapshot_last_estimated_bytes = marker.nbytes()
+                    self.prompt_snapshot_last_reason = "boundary_marker"
+                    return marker
         try:
             from ..memory_cache import estimate_kv_cache_memory
 
