@@ -216,9 +216,18 @@ class MiniMaxM3DSparkTarget:
                 pieces.append((pos, pos + n))
                 pos += n
             pieces.append((pos, length))
+        # A piece that ends before the drafter's window (the last ``keep_last`` rows) contributes no kept tap row, so it
+        # runs without taps: the forward then needs only the cache rows, as the plain lane's chunks do (the last tap,
+        # layer 59 on M3.1, is the only reader of that layer's MoE output on such a piece). Cache rows and the kept
+        # features are the same; VMLX_DSPARK_PREFILL_ALL_TAPS=1 taps every piece (A/B).
+        import os
+
+        tail_from = (length - int(keep_last)) if keep_last and os.environ.get(
+            "VMLX_DSPARK_PREFILL_ALL_TAPS", "0").strip().lower() not in {"1", "true", "yes", "on"} else None
         for a, b in pieces[:-1]:
             raise_if_generation_cancelled()
-            _, f = self._stock(ids[:, a:b], cache, taps, logits=False)
+            piece_taps = taps if tail_from is None or b > tail_from else ()
+            _, f = self._stock(ids[:, a:b], cache, piece_taps, logits=False)
             mx.eval([c.state for c in cache])
             if f is not None:
                 mx.eval(f)

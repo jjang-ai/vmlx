@@ -237,3 +237,41 @@ def test_dspark_lane_prefill_reserved_is_bit_identical(model, monkeypatch):
         assert mx.array_equal(a[0], b[0]).item() and mx.array_equal(a[1], b[1]).item()
         assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(a[2], b[2]))
         assert all(cap >= n for cap in b[3])
+
+
+@pytest.mark.parametrize("keep_last", [700, 2500, 5000])
+def test_dspark_lane_skips_taps_before_the_drafter_window(model, monkeypatch, keep_last):
+    """Pieces that end before the drafter's window run without taps; the kept features, the last-row logits and every
+    lane equal tapping every piece (VMLX_DSPARK_PREFILL_ALL_TAPS=1), and the tapped forwards are only the window's."""
+    from vmlx_engine.dspark.minimax_target import MiniMaxM3DSparkTarget
+
+    target = MiniMaxM3DSparkTarget(model)
+    n = 2701
+    ids = mx.array([_ids(n, 515)])
+    plan = {"boundary": n - 3, "atomic": False}
+    outs = {}
+    for all_taps in ("1", "0"):
+        monkeypatch.setenv("VMLX_DSPARK_PREFILL_ALL_TAPS", all_taps)
+        tapped = []
+        real = target._stock
+
+        def spy(tokens, cache, taps, logits):
+            tapped.append((int(tokens.shape[1]), bool(taps)))
+            return real(tokens, cache, taps, logits)
+
+        monkeypatch.setattr(target, "_stock", spy)
+        cache = model.make_cache()
+        logits, feats = target.prefill(ids, cache, (1, 3), 320, keep_last=keep_last, plan=plan)
+        mx.eval(logits, feats)
+        monkeypatch.setattr(target, "_stock", real)
+        outs[all_taps] = (logits, feats, _lanes(cache), tapped)
+    a, b = outs["1"], outs["0"]
+    assert mx.array_equal(a[0], b[0]).item()
+    assert a[1].shape == b[1].shape == (1, min(n, keep_last), 2 * model.args.hidden_size)
+    assert mx.array_equal(a[1], b[1]).item()
+    assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(a[2], b[2]))
+    assert all(t for _, t in a[3])
+    rows_tapped = sum(r for r, t in b[3] if t)
+    assert keep_last <= rows_tapped < keep_last + 320 + 3 or (keep_last >= n and rows_tapped == n)
+    if keep_last < n - 320:
+        assert any(not t for _, t in b[3])
