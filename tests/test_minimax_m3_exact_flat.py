@@ -172,6 +172,7 @@ def test_control_a_perturbed_e1_walk_is_rejected_by_admission(monkeypatch):
     assert E1._WALK.count(old) == 1
     monkeypatch.setattr(E1, "_WALK", E1._WALK.replace(old, "res[t][o] = (res[t][o] + s[o] * d[t][o]) + sm * b[o];"))
     monkeypatch.setattr(E1, "_ADMITTED", {})
+    monkeypatch.setattr(E1, "_DECISIONS", {})
     E1._walk_kernel.cache_clear()
     try:
         segs = [_qlin(3072, 6144, 4, 1)]

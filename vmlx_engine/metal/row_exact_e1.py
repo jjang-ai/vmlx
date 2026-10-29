@@ -28,6 +28,7 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from functools import lru_cache
@@ -42,6 +43,7 @@ MIN_ROWS, MAX_ROWS = 2, 16
 DISPATCH_MIN_ROWS = 3
 TILE_ROWS = 4
 _ADMITTED: dict = {}
+_DECISIONS: dict = {}
 STATS = {"calls": 0, "admitted": 0, "rejected": 0}
 
 _HEADER_EXTRA = r"""
@@ -214,11 +216,13 @@ _WALK = r"""
       for (int o = 0; o < O; ++o) res[t][o] += s[o] * d[t][o] + sm * b[o];
     }
   }
+  device T* y = seg1 ? y1 : y0;
+  const int NSEG = seg1 ? N1 : N0;
   for (int t = 0; t < TR; ++t) {
     if (r0 + t >= R) break;
     for (int o = 0; o < O; ++o) {
       const float v = simd_sum(res[t][o]);
-      if (int(lane) == o) y[(size_t)(r0 + t) * NTOT + orow + o] = static_cast<T>(v);
+      if (int(lane) == o) y[(size_t)(r0 + t) * NSEG + lrow + o] = static_cast<T>(v);
     }
   }
 """
@@ -237,23 +241,36 @@ def _header() -> Optional[str]:
     return None if base is None else base + "\n" + _HEADER_EXTRA
 
 
-@lru_cache(maxsize=4)
-def _prep_kernel():
+_MTYPE = {mx.bfloat16: "bfloat16_t", mx.float16: "float16_t"}
+
+
+def _consts(pairs) -> str:
+    """Constants baked into the source (a templated call costs ~2.5 us more per launch in MLX 0.32.3)."""
+    return "".join(f"  using {n} = {_MTYPE[v]};\n" if n == "T" else f"  constexpr int {n} = {int(v)};\n"
+                   for n, v in pairs)
+
+
+@lru_cache(maxsize=64)
+def _prep_kernel(consts: tuple):
     header = _header()
     if header is None:
         return None
-    return mx.fast.metal_kernel(name="vmlx_row_exact_e1_prep", input_names=["x"], output_names=["xp", "xs"],
-                                header=header, source=_PREP)
+    src = _consts(consts) + _PREP
+    tag = hashlib.sha256((header + src).encode()).hexdigest()[:16]
+    return mx.fast.metal_kernel(name=f"vmlx_row_exact_e1_prep_{tag}", input_names=["x"], output_names=["xp", "xs"],
+                                header=header, source=src)
 
 
-@lru_cache(maxsize=4)
-def _walk_kernel():
+@lru_cache(maxsize=256)
+def _walk_kernel(consts: tuple):
     header = _header()
     if header is None:
         return None
-    return mx.fast.metal_kernel(name="vmlx_row_exact_e1_walk",
+    src = _consts(consts) + _WALK
+    tag = hashlib.sha256((header + src).encode()).hexdigest()[:16]
+    return mx.fast.metal_kernel(name=f"vmlx_row_exact_e1_walk_{tag}",
                                 input_names=["xp", "xs", "rv", "w0", "s0", "b0", "w1", "s1", "b1"],
-                                output_names=["y"], header=header, source=_WALK)
+                                output_names=["y0", "y1"], header=header, source=src)
 
 
 def _vpt(bits: int) -> int:
@@ -317,30 +334,40 @@ def _supported(x2d, segs, bits: int, group_size: int) -> bool:
     return 1 <= len(segs) <= 2
 
 
+def _plan(rows: int, k: int, widths: tuple, bits: int, group_size: int, dtype, nsg: int, o: int, tr: int) -> tuple:
+    """Everything a launch needs except the arrays (cached per shape: a verify makes ~120 of these calls)."""
+    key = (rows, k, widths, bits, group_size, dtype, nsg, o, tr)
+    p = _PLANS.get(key)
+    if p is None:
+        nrt = -(-rows // tr)
+        rp = nrt * tr
+        nch = k // _vpt(bits)
+        n0 = widths[0]
+        n1 = widths[1] if len(widths) > 1 else 0
+        p = _PLANS[key] = (
+            (("T", dtype), ("BITS", bits), ("K", k)),
+            dict(grid=(32, rp, 1), threadgroup=(32, 1, 1),
+                 output_shapes=[(rp * nch * _xw(bits),), (rp, nch)], output_dtypes=[mx.float32, mx.float32]),
+            (("T", dtype), ("BITS", bits), ("GS", group_size), ("K", k), ("N0", n0), ("N1", n1), ("O", o), ("TR", tr),
+             ("NSG", nsg)),
+            dict(grid=(32 * nsg * ((n0 + n1) // (nsg * o)) * nrt, 1, 1), threadgroup=(32 * nsg, 1, 1),
+                 output_shapes=[(rows, n0), (rows, n1) if n1 else (1,)], output_dtypes=[dtype, dtype]),
+            _rv(rows))
+    return p
+
+
+_PLANS: dict = {}
+
+
 def _launch(x2d, segs, bits: int, group_size: int, nsg: int, o: int, tr: int):
     rows, k = int(x2d.shape[0]), int(x2d.shape[1])
-    widths = [int(w.shape[0]) for w, _, _ in segs]
-    nrt = -(-rows // tr)
-    rp = nrt * tr
-    xp, xs = _prep_kernel()(
-        inputs=[x2d], template=[("T", x2d.dtype), ("BITS", bits), ("K", k)],
-        grid=(32, rp, 1), threadgroup=(32, 1, 1),
-        output_shapes=[(rp * (k // _vpt(bits)) * _xw(bits),), (rp, k // _vpt(bits))],
-        output_dtypes=[mx.float32, mx.float32])
+    widths = tuple(int(w.shape[0]) for w, _, _ in segs)
+    pc, prep, wc, walk, rv = _plan(rows, k, widths, bits, group_size, x2d.dtype, nsg, o, tr)
+    xp, xs = _prep_kernel(pc)(inputs=[x2d], **prep)
     (w0, s0, b0) = segs[0]
     (w1, s1, b1) = segs[1] if len(segs) > 1 else (_dummy(mx.uint32), _dummy(x2d.dtype), _dummy(x2d.dtype))
-    n0 = widths[0]
-    n1 = widths[1] if len(segs) > 1 else 0
-    ntot = n0 + n1
-    (y,) = _walk_kernel()(
-        inputs=[xp, xs, _rv(rows), w0, s0, b0, w1, s1, b1],
-        template=[("T", x2d.dtype), ("BITS", bits), ("GS", group_size), ("K", k), ("N0", n0), ("N1", n1),
-                  ("O", o), ("TR", tr), ("NSG", nsg)],
-        grid=(32 * nsg * (ntot // (nsg * o)) * nrt, 1, 1), threadgroup=(32 * nsg, 1, 1),
-        output_shapes=[(rows, ntot)], output_dtypes=[x2d.dtype])
-    if len(segs) == 1:
-        return [y]
-    return [y[:, :n0], y[:, n0:]]
+    y0, y1 = _walk_kernel(wc)(inputs=[xp, xs, rv, w0, s0, b0, w1, s1, b1], **walk)
+    return [y0] if len(segs) == 1 else [y0, y1]
 
 
 def _probes(rows: int, k: int, dtype) -> list:
@@ -351,57 +378,73 @@ def _probes(rows: int, k: int, dtype) -> list:
     return [zero_mean.astype(dtype), ((zero_mean + shift + spikes) * scale).astype(dtype)]
 
 
+def _admit(x2d, segs, bits: int, group_size: int):
+    """(nsg, o, tr) when this shape's E1 call reproduces stock one-row calls on these weights, else False."""
+    rows, k = int(x2d.shape[0]), int(x2d.shape[1])
+    if _header() is None or not _supported(x2d, segs, bits, group_size):
+        return False
+    widths = tuple(int(w.shape[0]) for w, _, _ in segs)
+    nsg, o, tr = shape(rows, widths, bits)
+    if any(wd % (nsg * o) for wd in widths):
+        return False
+    ok = True
+    for probe in _probes(rows, k, x2d.dtype):
+        got = _launch(probe, segs, bits, group_size, nsg, o, tr)
+        for (w, s, b), g in zip(segs, got):
+            want = mx.concatenate([
+                mx.quantized_matmul(probe[r:r + 1], w, s, b, transpose=True, group_size=group_size, bits=bits,
+                                    mode="affine") for r in range(rows)], axis=0)
+            ok = ok and bool(mx.array_equal(g, want).item())
+    STATS["admitted" if ok else "rejected"] += 1
+    (logger.info if ok else logger.warning)(
+        "row-exact E1 QMV %s rows=%d K=%d N=%s bits=%d gs=%d dtype=%s shape=%s",
+        "admitted" if ok else "REJECTED (stock one-row arithmetic not reproduced; caller keeps its path)",
+        rows, k, widths, bits, group_size, x2d.dtype, (nsg, o, tr))
+    return (nsg, o, tr) if ok else False
+
+
 def row_exact_e1(x, segments, *, bits: int, group_size: int) -> Optional[list]:
     """``[x @ dequant(W_i).T for each segment]`` (segments: (weight, scales, biases) sharing x, bits and group),
-    every row bit-equal to MLX's one-row call, or None (unsupported / not admitted: keep the caller's exact path)."""
-    if x.ndim < 2 or _header() is None:
+    every row bit-equal to MLX's one-row call, or None (unsupported / not admitted: keep the caller's exact path).
+    The decision (supported + admitted, tile shape) is cached per (rows, K, widths, bits, group, x / scale dtype, tile
+    pin): a verify makes ~120 of these calls, so the repeat path is one lookup and two launches."""
+    shp = x.shape
+    if len(shp) < 2:
         return None
-    k = int(x.shape[-1])
+    k = int(shp[-1])
     rows = 1
-    for dim in x.shape[:-1]:
+    for dim in shp[:-1]:
         rows *= int(dim)
-    x2d = x.reshape(rows, k)
-    segs = [tuple(s) for s in segments]
     if rows > MAX_ROWS:
         # wider windows: balanced chunks of <= MAX_ROWS rows, each its own walk (every row still exact)
+        x2d = x.reshape(rows, k)
         n = -(-rows // MAX_ROWS)
         base, extra = divmod(rows, n)
         parts, start = [], 0
         for c in range(n):
             size = base + (1 if c < extra else 0)
-            got = row_exact_e1(x2d[start:start + size], segs, bits=bits, group_size=group_size)
+            got = row_exact_e1(x2d[start:start + size], segments, bits=bits, group_size=group_size)
             if got is None:
                 return None
             parts.append(got)
             start += size
-        lead = tuple(x.shape[:-1])
-        return [mx.concatenate([p[i] for p in parts], axis=0).reshape(*lead, -1) for i in range(len(segs))]
-    if not _supported(x2d, segs, bits, group_size):
+        lead = tuple(shp[:-1])
+        return [mx.concatenate([p[i] for p in parts], axis=0).reshape(*lead, -1) for i in range(len(segments))]
+    if rows < MIN_ROWS:
         return None
-    widths = tuple(int(w.shape[0]) for w, _, _ in segs)
-    nsg, o, tr = shape(rows, widths, bits)
-    if any(wd % (nsg * o) for wd in widths):
-        return None
-    key = (rows, k, widths, bits, group_size, str(x2d.dtype), nsg, o, tr)
-    ok = _ADMITTED.get(key)
-    if ok is None:
-        ok = True
-        for probe in _probes(rows, k, x2d.dtype):
-            got = _launch(probe, segs, bits, group_size, nsg, o, tr)
-            for (w, s, b), g in zip(segs, got):
-                want = mx.concatenate([
-                    mx.quantized_matmul(probe[r:r + 1], w, s, b, transpose=True, group_size=group_size, bits=bits,
-                                        mode="affine") for r in range(rows)], axis=0)
-                ok = ok and bool(mx.array_equal(g, want).item())
-        _ADMITTED[key] = ok
-        STATS["admitted" if ok else "rejected"] += 1
-        (logger.info if ok else logger.warning)(
-            "row-exact E1 QMV %s rows=%d K=%d N=%s bits=%d gs=%d dtype=%s shape=%s",
-            "admitted" if ok else "REJECTED (stock one-row arithmetic not reproduced; caller keeps its path)",
-            rows, k, widths, bits, group_size, x2d.dtype, (nsg, o, tr))
-    if not ok:
+    segs = segments if isinstance(segments[0], tuple) else [tuple(t) for t in segments]
+    key = (rows, k, tuple(int(w.shape[0]) for w, _, _ in segs), bits, group_size, x.dtype, segs[0][1].dtype,
+           os.environ.get("VMLX_E1_QMV_SHAPE", ""))
+    dec = _DECISIONS.get(key)
+    x2d = x if len(shp) == 2 else x.reshape(rows, k)
+    if dec is None:
+        dec = _DECISIONS[key] = _admit(x2d, segs, bits, group_size)
+        _ADMITTED[key] = bool(dec)
+    if not dec:
         return None
     STATS["calls"] += 1
-    outs = _launch(mx.contiguous(x2d), segs, bits, group_size, nsg, o, tr)
-    lead = tuple(x.shape[:-1])
+    outs = _launch(x2d, segs, bits, group_size, *dec)
+    if len(shp) == 2:
+        return outs
+    lead = tuple(shp[:-1])
     return [y.reshape(*lead, int(y.shape[-1])) for y in outs]
