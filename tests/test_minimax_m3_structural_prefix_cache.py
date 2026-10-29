@@ -340,6 +340,82 @@ def test_restart_onto_the_same_block_store(model, tmp_path, monkeypatch):
         sched.shutdown()
 
 
+def test_chunk_only_store_is_not_reused_by_the_turn_cut_rule(model, tmp_path, monkeypatch):
+    """An SSD block store written under the chunk-only rule (v1 keys) and read under the turn-cut rule: its rows were
+    computed without the turn cuts, so none is reused (schema v2 keys), and the request equals its cold prefill."""
+    step = 320
+    trace = _Trace(monkeypatch)
+    prompt = _first_prompt("adaptive")
+    monkeypatch.setenv(prefill_geometry.STRUCTURAL_ENV, "0")
+    sched = _scheduler(model, tmp_path, step, tok=_TurnTok())
+    try:
+        assert sched._m3_turn_markers is None
+        _run(sched, trace, prompt)
+        assert _run(sched, trace, prompt)["cached"] == _boundary(prompt)          # the v1 entry is there
+    finally:
+        sched.shutdown()
+    monkeypatch.delenv(prefill_geometry.STRUCTURAL_ENV)
+    sched = _scheduler(model, tmp_path, step, tok=_TurnTok())
+    try:
+        assert sched._m3_turn_markers == MARKERS
+        warm = _run(sched, trace, prompt)
+        assert warm["cached"] == 0, warm["cached"]
+        assert _same(warm, _run(sched, trace, prompt, bypass=True))
+        assert _run(sched, trace, prompt)["cached"] == _boundary(prompt)          # its own v2 entry
+    finally:
+        sched.shutdown()
+
+
+def test_paged_ram_tier(model, tmp_path, monkeypatch):
+    """The paged RAM block tier (no SSD store): same keys, same reuse, bit-identical."""
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    step = 320
+    trace = _Trace(monkeypatch)
+    sched = Scheduler(model, _TurnTok(), SchedulerConfig(
+        max_num_seqs=1, prefill_step_size=step, enable_prefix_cache=True, use_paged_cache=True,
+        enable_block_disk_cache=False, paged_cache_block_size=64, max_cache_blocks=4096,
+    ))
+    try:
+        assert sched.block_aware_cache is not None and sched.block_aware_cache._m3_turn_markers == MARKERS
+        rows, last, last_cold = _loop(sched, trace, model, step, n_turns=4, check_direct=False)
+        rep = _run(sched, trace, last)
+        assert rep["cached"] == _boundary(last) and _same(rep, last_cold)
+        assert "disk" not in rep["detail"], rep["detail"]
+    finally:
+        sched.shutdown()
+    _report({"test": "paged_ram", "step": step, "turns": rows})
+
+
+@pytest.mark.parametrize("aligned,structural", [("0", "1"), ("1", "0"), ("1", "1")])
+def test_levers(model, tmp_path, monkeypatch, aligned, structural):
+    """VMLX_M3_ALIGNED_PREFIX=0: neither aligned prefill nor turn cuts (previous behaviour); VMLX_M3_STRUCTURAL_CUTS=0:
+    aligned chunks without turn cuts (v1 keys and plan); default: turn cuts in the plan, the block keys and the
+    prompt-SSD scope."""
+    monkeypatch.setenv(prefill_geometry.ENV, aligned)
+    monkeypatch.setenv(prefill_geometry.STRUCTURAL_ENV, structural)
+    sched = _scheduler(model, tmp_path, 320, tok=_TurnTok())
+    try:
+        assert sched._m3_aligned_prefix == (aligned == "1")
+        want = MARKERS if aligned == structural == "1" else None
+        assert sched._m3_turn_markers == want and sched.block_aware_cache._m3_turn_markers == want
+        assert sched.block_aware_cache._m3_aligned_step == (320 if aligned == "1" else None)
+        if aligned == "1":
+            from vmlx_engine.request import Request, SamplingParams
+
+            prompt = _first_prompt("adaptive")
+            req = Request(request_id="lever", prompt=prompt, sampling_params=SamplingParams(max_tokens=1))
+            req.prompt_token_ids = prompt
+            req._gen_prompt_len = len(GEN)
+            plan = sched._m3_prefill_plan(req)
+            assert plan.get("cuts") == (_turn_cuts(prompt) if want else None), plan
+            req._cache_extra_keys = {"mllm_media": "x"}
+            media_plan = sched._m3_prefill_plan(req)
+            assert media_plan["atomic"] and media_plan.get("cuts") == ([] if want else None), media_plan
+    finally:
+        sched.shutdown()
+
+
 @pytest.mark.parametrize("tier", ["memory", "prompt_disk"])
 def test_whole_entry_tiers_reuse_the_previous_boundary(model, tmp_path, monkeypatch, tier):
     """The whole-prompt tiers (memory-aware RAM; the prompt-level SSD cache, restarted every turn so a hit can only
