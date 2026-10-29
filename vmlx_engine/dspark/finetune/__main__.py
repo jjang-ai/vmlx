@@ -59,7 +59,7 @@ def cmd_gen(a) -> None:
         print(f"[gen] dry run: {tot} prompt / sequence tokens")
         return
     mx.set_cache_limit(int(a.cache_gb * (1 << 30)))
-    from ..utils import jang_loader
+    from ...utils import jang_loader
 
     t0 = time.perf_counter()
     model, _ = jang_loader.load_jang_model(str(bundle))
