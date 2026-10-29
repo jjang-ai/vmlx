@@ -1468,15 +1468,12 @@ class SingleBatchGenerator:
 
     @staticmethod
     def _m3_reserve_prefill(cache, rows: int) -> None:
-        """Size every M3 lane for the whole prefill at its first growth (MiniMaxM3SparseCache.reserve) instead of
-        re-allocating and copying every lane at each chunk. Capacity only: the rows and every reader are the same.
-        VMLX_M3_PREFILL_RESERVE=0 keeps the chunk-by-chunk growth (A/B)."""
-        if os.environ.get("VMLX_M3_PREFILL_RESERVE", "1").strip().lower() in {"0", "false", "off", "no"}:
-            return
-        for layer in cache or ():
-            fn = getattr(layer, "reserve", None)
-            if callable(fn):
-                fn(int(rows))
+        """Size every M3 lane for the whole prefill at its first growth (models/minimax_m3/cache.reserve_prefill)
+        instead of re-allocating and copying every lane at each chunk. VMLX_M3_PREFILL_RESERVE=0 keeps the
+        chunk-by-chunk growth (A/B)."""
+        from ..models.minimax_m3.cache import reserve_prefill
+
+        reserve_prefill(cache, rows)
 
     def _m3_media_token_ids(self) -> set:
         args = getattr(self.model, "args", None)

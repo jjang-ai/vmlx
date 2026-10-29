@@ -200,6 +200,10 @@ class MiniMaxM3DSparkTarget:
                 n -= 1
             return n
 
+        # one growth of every cache lane for the whole prompt instead of one per piece (bit-identical rows)
+        from ..models.minimax_m3.cache import reserve_prefill
+
+        reserve_prefill(cache, length)
         if plan is not None:
             from ..models.minimax_m3.prefill_geometry import plan_pieces
 

@@ -33,6 +33,7 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import mlx.core as mx
@@ -642,6 +643,22 @@ def truncate_minimax_m3_cache(cache: list, length: int) -> None:
             continue
         if length < offset:
             trim(offset - length)
+
+
+RESERVE_ENV = "VMLX_M3_PREFILL_RESERVE"
+
+
+def reserve_prefill(cache, rows: int) -> None:
+    """Before an M3 prompt prefill of ``rows`` rows: every ``MiniMaxM3SparseCache`` lane grows once for the whole
+    prefill (``MiniMaxM3SparseCache.reserve``) instead of at every chunk. Callers: SingleBatchGenerator's M3 prefill
+    paths and the DSpark text lane (MiniMaxM3DSparkTarget.prefill). ``VMLX_M3_PREFILL_RESERVE=0`` keeps the
+    chunk-by-chunk growth (A/B). Capacity only: rows and readers are unchanged."""
+    if os.environ.get(RESERVE_ENV, "1").strip().lower() in {"0", "false", "off", "no"}:
+        return
+    for layer in cache or ():
+        fn = getattr(layer, "reserve", None)
+        if callable(fn):
+            fn(int(rows))
 
 
 def make_minimax_m3_cache(config) -> list:

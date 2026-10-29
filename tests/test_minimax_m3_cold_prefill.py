@@ -215,3 +215,25 @@ def test_buffer_cache_released_once_after_the_prefill(model, monkeypatch, planne
     for mode in ("each", "never"):
         assert mx.array_equal(outs[mode][0], outs["end"][0]).item()
         assert all(mx.array_equal(x, y).item() for x, y in zip(outs[mode][1], outs["end"][1]))
+
+
+def test_dspark_lane_prefill_reserved_is_bit_identical(model, monkeypatch):
+    """The DSpark text lane (MiniMaxM3DSparkTarget.prefill: the live app's M3.1 prefill) reserves the lanes too: last-row
+    logits, tap features and every lane equal the chunk-by-chunk growth, with and without an aligned plan."""
+    from vmlx_engine.dspark.minimax_target import MiniMaxM3DSparkTarget
+
+    target = MiniMaxM3DSparkTarget(model)
+    n = 2701
+    ids = mx.array([_ids(n, 4242)])
+    for plan in (None, {"boundary": n - 3, "atomic": False}):
+        outs = {}
+        for reserve in ("0", "1"):
+            monkeypatch.setenv("VMLX_M3_PREFILL_RESERVE", reserve)
+            cache = model.make_cache()
+            logits, feats = target.prefill(ids, cache, (1, 3), 320, keep_last=700, plan=plan)
+            mx.eval(logits, feats)
+            outs[reserve] = (logits, feats, _lanes(cache), [int(c.keys.shape[2]) for c in cache if hasattr(c, "reserve")])
+        a, b = outs["0"], outs["1"]
+        assert mx.array_equal(a[0], b[0]).item() and mx.array_equal(a[1], b[1]).item()
+        assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(a[2], b[2]))
+        assert all(cap >= n for cap in b[3])
