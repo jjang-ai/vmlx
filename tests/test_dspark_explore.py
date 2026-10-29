@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """DSpark planner exploration (``VMLX_DSPARK_EXPLORE``): positions past the drafted width are never observed, so a
 position whose estimate fell stays low and the planned width never grows again; with the lever a round drafts one
-deeper when the next position has not been observed for ``explore_every`` planned rounds. Widths only: greedy DSpark
-still equals AR (the planner never touches tokens)."""
+deeper when the next position has not been observed for ``explore_every`` planned rounds and the chain likely reaches
+it. Widths only: greedy DSpark still equals AR (the planner never touches tokens)."""
 
 from __future__ import annotations
 
@@ -51,6 +51,21 @@ def test_with_the_lever_a_really_bad_position_is_pulled_back_down(monkeypatch):
         p.record_acceptance(k, min(k, 1))                # position 1 always rejected
     assert max(widths) >= 2                              # it is retried ...
     assert sum(w > 1 for w in widths[-320:]) <= 320 // ARFallback.explore_every + 1   # ... once per explore_every
+
+
+def test_no_probe_where_the_chain_does_not_reach(monkeypatch):
+    """All drafts wrong: position 1 can never be observed (position 0 always rejects first), so it is never probed;
+    the plan stays at one draft (no probe every round once the position is stale)."""
+    monkeypatch.setenv("VMLX_DSPARK_EXPLORE", "1")
+    p = ARFallback()
+    for _ in range(5):
+        p.record_acceptance(3, 0)
+    widths = []
+    for _ in range(320):
+        k = p.planned_width(8, 0.12)
+        widths.append(k)
+        p.record_acceptance(k, 0)
+    assert widths == [1] * 320
 
 
 def test_the_lever_does_not_widen_while_positions_are_fresh(monkeypatch):

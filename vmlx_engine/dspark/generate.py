@@ -181,10 +181,12 @@ class ARFallback:
     # drafts past it again (MiniMax-M3.1 real bundle 2026-10-29, Studio: easy_list 76 rounds at 4 rows with acceptance
     # 0.88-0.90; easy_code 104 rounds at 2 rows with acceptance 0.72 while the same prompt ran 5-12 rows at 5.2 tokens
     # per round in the other arm). With the lever, when the position just past the planned width has not been
-    # observed for explore_every planned rounds, the round drafts one deeper so that position is re-measured (at most
-    # one extra verify row per explore_every rounds; a really low position stays low). It changes which width Adaptive
-    # picks, never caps it, and never changes tokens.
+    # observed for explore_every planned rounds and the chain likely reaches it (the planned positions' acceptance
+    # product >= explore_reach), the round drafts one deeper so that position is re-measured; once observed it waits
+    # explore_every rounds again (a really low position costs one probe per explore_every rounds and stays low). It
+    # changes which width Adaptive picks, never caps it, and never changes tokens.
     explore_every = 32
+    explore_reach = 0.5
 
     def _explore(self) -> bool:
         return os.environ.get("VMLX_DSPARK_EXPLORE", "").strip().lower() in {"1", "true", "on", "yes"}
@@ -213,7 +215,11 @@ class ARFallback:
             self.planned_rounds = n + 1
             seen = self.__dict__.get("position_seen", [])
             if k < max_draft and k < len(seen) and n - seen[k] >= self.explore_every:
-                k += 1
+                reach = 1.0                      # chance the chain reaches position k: probe only where it likely
+                for j in range(k):               # does (an all-rejecting stream never observes it)
+                    reach *= conf[j]
+                if reach >= self.explore_reach:
+                    k += 1
         return k
 
     def record_draft(self, tokens: int, seconds: float, rows: Optional[int] = None) -> None:
