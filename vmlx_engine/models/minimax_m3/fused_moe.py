@@ -235,12 +235,18 @@ def fused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:
 
 
 def _shared_rows_exact(sh, x2):
-    """The shared expert of several rows, every row on MLX's one-row qmv arithmetic (row-exact 4-row launches; one-row
-    calls where a shape is not admitted) and the model's own SwiGLU-OAI: [rows, D]."""
-    from vmlx_engine.metal.row_exact_qmv import row_exact_qmv
+    """The shared expert of several rows, every row on MLX's one-row qmv arithmetic (one row-split walk for 5..16
+    rows, 4-row launches otherwise, one-row calls where a shape is not admitted) and the model's own SwiGLU-OAI:
+    [rows, D]."""
+    from vmlx_engine.metal.row_exact_qmv import row_exact_qmv, row_exact_qmv_rowsplit, rowsplit_enabled
 
     def lin(q, x):
         rows = int(x.shape[0])
+        if rows > 4 and rowsplit_enabled():
+            y = row_exact_qmv_rowsplit(x, q["weight"], q["scales"], q["biases"], group_size=int(q.group_size),
+                                       bits=int(q.bits))
+            if y is not None:
+                return y
         outs = []
         for a in range(0, rows, 4):
             xb = x[a:a + 4]
