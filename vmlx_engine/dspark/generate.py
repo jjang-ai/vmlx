@@ -286,8 +286,8 @@ def iter_dspark(
     None = any width). The drafter's trained block is not a ceiling: a round drafting more tokens than the block runs
     a longer block of mask rows. Exactness never depends on the width.
 
-    ``prefill_plan``: a target's aligned-prefill plan (MiniMax-M3: absolute chunk cuts and the prefix cache's store
-    boundary, models/minimax_m3/prefill_geometry.py), handed to ``target.prefill`` when it takes one."""
+    ``prefill_plan``: a target's aligned-prefill plan (MiniMax-M3: absolute chunk cuts, turn cuts and the prefix
+    cache's store boundary, models/minimax_m3/prefill_geometry.py), handed to ``target.prefill`` when it takes one."""
     cover = getattr(target, "max_verify_rows", MAX_VERIFY_ROWS)
     max_draft = max(1, int(max_draft) if cover is None else min(int(max_draft), int(cover) - 1))
     choose = (lambda lg: _pick(lg, sampler)) if pick is None else pick

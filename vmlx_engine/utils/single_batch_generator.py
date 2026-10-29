@@ -169,8 +169,9 @@ class _Request:
     # tokens (the end of the system turn) and keeps an exact typed snapshot there, so a new conversation with the
     # same system prompt and tools restores it instead of re-prefilling them. 0 = no split.
     stable_root_split: int = 0
-    # MiniMax-M3 aligned prefill plan ({"boundary": absolute store boundary or None, "atomic": media request}),
-    # set by the scheduler (models/minimax_m3/prefill_geometry.py). None = the previous relative chunking.
+    # MiniMax-M3 aligned prefill plan ({"boundary": absolute store boundary or None, "atomic": media request,
+    # "cuts": absolute turn cuts}), set by the scheduler (models/minimax_m3/prefill_geometry.py). None = the previous
+    # relative chunking.
     m3_plan: Optional[dict] = None
     stable_root_snapshot: Optional[list[Any]] = None
     # Periodic exact checkpoints (Naive): (boundary, window capture) taken during the cold prefill, then assembled
@@ -1446,11 +1447,11 @@ class SingleBatchGenerator:
                                "without the boundary cut (request %s)", boundary, req.uid)
                 boundary = None
         return prefill_pieces(start, end, max(1, int(self.prefill_step_size or 1)), boundary,
-                              atomic=atomic or has_media)
+                              atomic=atomic or has_media, cuts=plan.get("cuts"))
 
     def _prefill_m3_aligned_and_sample(self, req: _Request, plan: dict) -> None:
-        """Prefill an M3 prompt in chunks at ABSOLUTE positions (every multiple of the prefill step, and the prefix
-        cache's store boundary), then sample from the last row's logits.
+        """Prefill an M3 prompt in chunks at ABSOLUTE positions (every multiple of the prefill step, every turn cut of
+        the plan, and the prefix cache's store boundary), then sample from the last row's logits.
 
         A cold prefill and a continuation after a cache hit at a chunk boundary (or at the store boundary of an
         exact-geometry request) then run the same matrices for every remaining row, so the hit's state and logits

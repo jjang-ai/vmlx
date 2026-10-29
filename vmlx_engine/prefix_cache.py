@@ -3161,8 +3161,10 @@ class BlockAwarePrefixCache:
         self._uses_minimax_m3_cache = _model_is_minimax_m3(model)
         # MiniMax-M3 aligned-chunk geometry (models/minimax_m3/prefill_geometry.py): the prefill step the serving
         # generator cuts every M3 prompt at. None keeps the previous total-length shape key (set by the scheduler
-        # only when it also runs the aligned prefill).
+        # only when it also runs the aligned prefill). ``_m3_turn_markers``: the turn-cut markers of that prefill
+        # (None = chunk-only cuts).
         self._m3_aligned_step: Optional[int] = None
+        self._m3_turn_markers: Optional[Any] = None
         if model is not None and hasattr(model, "make_cache"):
             try:
                 _cache = model.make_cache() or []
@@ -3389,10 +3391,20 @@ class BlockAwarePrefixCache:
 
         return bool(disk_only or minimax_m3 or native_tq)
 
-    def set_minimax_m3_prefill_step(self, step: Optional[int]) -> None:
+    def set_minimax_m3_prefill_step(self, step: Optional[int], turn_markers: Optional[Any] = None) -> None:
         """Key MiniMax-M3 blocks by the aligned-chunk geometry of a prefill cut every ``step`` tokens (the serving
-        generator's prefill step). None restores the total-length shape key."""
+        generator's prefill step) and, with ``turn_markers`` (prefill_geometry.TurnMarkers), at every turn cut. None
+        restores the total-length shape key."""
         self._m3_aligned_step = max(1, int(step)) if step else None
+        self._m3_turn_markers = turn_markers if step else None
+
+    def _minimax_m3_turn_cuts(self, tokens: List[int], boundary: int) -> List[int]:
+        markers = getattr(self, "_m3_turn_markers", None)
+        if markers is None:
+            return []
+        from .models.minimax_m3 import prefill_geometry
+
+        return prefill_geometry.turn_cuts(tokens, markers, boundary)
 
     def _minimax_m3_boundary(self, tokens: List[int], *, stored_prompt_boundary: bool) -> int:
         """The store boundary of the prefill these tokens describe: a lookup gets the stripped prompt (its store
@@ -3416,11 +3428,13 @@ class BlockAwarePrefixCache:
         change greedy decoding.
 
         Aligned mode (``set_minimax_m3_prefill_step``): every M3 prefill is cut
-        at absolute multiples of the step and at its store boundary, so a
-        block's numerics are fixed by the chunk that produced it. Blocks of
-        full chunks carry only the step and are shared by any longer prompt;
-        blocks of the partial chunk that ends at the store boundary carry that
-        boundary, so only an exact-geometry request reuses them
+        at absolute multiples of the step, at its turn cuts (a function of the
+        tokens before each cut) and at its store boundary, so a block's
+        numerics are fixed by the chunk that produced it. Blocks of finished
+        chunks carry only the step (and turn markers) and are shared by any
+        prompt with the same tokens; blocks of the partial chunk that ends at
+        a store boundary that is neither a step multiple nor a turn cut carry
+        that boundary, so only an exact-geometry request reuses them
         (``models/minimax_m3/prefill_geometry.py``). ``minimax_m3_boundary``
         names the producing prefill's boundary when a store's token count is
         not it.
@@ -3444,7 +3458,11 @@ class BlockAwarePrefixCache:
                 )
             )
             return prefill_geometry.cache_extra_keys(
-                cache_extra_keys, boundary=boundary, step=aligned_step
+                cache_extra_keys,
+                boundary=boundary,
+                step=aligned_step,
+                markers=getattr(self, "_m3_turn_markers", None),
+                tokens=tokens,
             )
 
         # M3 stores the prompt-boundary cache under N-1 token IDs because the
@@ -4457,10 +4475,11 @@ class BlockAwarePrefixCache:
 
         A hit of ``m`` tokens is usable as is when it ends at this request's
         own store boundary (the trailing blocks matched only because they carry
-        that boundary). Otherwise reuse stops at the last chunk boundary
-        ``floor(m / step) * step``: the blocks covering it are kept (the
-        scheduler cuts the restored rows to the boundary when it falls inside
-        a block) and the rest are released. Nothing usable is a miss.
+        that boundary, or the boundary is a turn cut). Otherwise reuse stops at
+        the last chunk boundary or turn cut of this request at or below ``m``:
+        the blocks covering it are kept (the scheduler cuts the restored rows
+        there when it falls inside a block) and the rest are released. Nothing
+        usable is a miss.
         """
         step = getattr(self, "_m3_aligned_step", None)
         if not (getattr(self, "_uses_minimax_m3_cache", False) and step):
@@ -4475,6 +4494,7 @@ class BlockAwarePrefixCache:
             step,
             exact_geometry=True,
             atomic=prefill_geometry.is_media_request(cache_extra_keys),
+            cuts=self._minimax_m3_turn_cuts(tokens, boundary),
         )
         keep_tokens = (
             matched

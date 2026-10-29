@@ -550,7 +550,8 @@ def test_control_misaligned_continuation_start_drifts(model, tmp_path, monkeypat
                         lambda matched, boundary, step, **kw: min(int(matched), int(boundary)))
     real_keys = prefill_geometry.cache_extra_keys
     monkeypatch.setattr(prefill_geometry, "cache_extra_keys",
-                        lambda keys, *, boundary, step: real_keys(keys, boundary=step * 10 ** 6, step=step))
+                        lambda keys, *, boundary, step, **kw: real_keys(keys, boundary=step * 10 ** 6, step=step,
+                                                                         **kw))
     trace = _Trace(monkeypatch)
     sched = _scheduler(model, tmp_path, 320)
     try:

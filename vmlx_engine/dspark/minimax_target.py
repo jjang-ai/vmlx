@@ -173,7 +173,7 @@ class MiniMaxM3DSparkTarget:
                 keep_last: Optional[int] = None, plan: Optional[dict] = None):
         """Returns (last-row logits (V,), tap features (1, P, n_taps * H) or None). Chunking = the served M3 prompt
         path: with an aligned ``plan`` (``SingleBatchGenerator._prefill_m3_aligned_and_sample``), pieces cut at every
-        absolute multiple of ``prefill_step`` and at the plan's store boundary; without one, chunks of
+        absolute multiple of ``prefill_step``, at the plan's turn cuts and at its store boundary; without one, chunks of
         ``prefill_step`` while more than one chunk remains, never leaving a lone final token.
         ``keep_last``: return only the features of the last ``keep_last`` rows (a sliding-window drafter never reads
         older ones; M3.1's taps are 61 KB per row, so a long prompt's full set would be gigabytes)."""
@@ -197,11 +197,10 @@ class MiniMaxM3DSparkTarget:
             return n
 
         if plan is not None:
-            from ..models.minimax_m3.prefill_geometry import prefill_pieces
+            from ..models.minimax_m3.prefill_geometry import plan_pieces
 
             start = self._offset(cache)
-            pieces = [(a - start, b - start) for a, b in
-                      prefill_pieces(start, start + length, step, plan.get("boundary"), atomic=bool(plan.get("atomic")))]
+            pieces = [(a - start, b - start) for a, b in plan_pieces(start, start + length, step, plan)]
         else:
             pieces, pos = [], 0
             while length - pos > step:

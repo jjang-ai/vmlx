@@ -924,18 +924,37 @@ class Scheduler:
         self._is_hybrid = self._is_hybrid_model(model)
         self._uses_m3_msa_cache = self._model_uses_m3_msa_cache(model)
         # MiniMax-M3 aligned-chunk prefix cache (models/minimax_m3/prefill_geometry.py): every M3 prompt prefill is
-        # cut at absolute multiples of the prefill step and at the store boundary, and every cache tier reuses only
-        # a prefix such a cold prefill also ends a chunk at, so a hit is bit-identical to a cold prefill.
-        # VMLX_M3_ALIGNED_PREFIX=0 keeps the previous relative chunking + total-length block key.
-        from .models.minimax_m3.prefill_geometry import (
-            aligned_prefix_enabled as _m3_aligned_prefix_enabled,
-        )
+        # cut at absolute multiples of the prefill step, at every turn cut (after the end of each non-assistant
+        # message: the previous request's store boundary is one) and at the store boundary, and every cache tier
+        # reuses only a prefix such a cold prefill also ends a chunk at, so a hit is bit-identical to a cold prefill
+        # and a tool loop reuses the whole previous prompt.
+        # VMLX_M3_ALIGNED_PREFIX=0 keeps the previous relative chunking + total-length block key;
+        # VMLX_M3_STRUCTURAL_CUTS=0 keeps the aligned chunks without turn cuts.
+        from .models.minimax_m3 import prefill_geometry as _m3_geometry
 
         self._m3_aligned_prefix = bool(
             self._uses_m3_msa_cache
             and _model_is_minimax_m3(model)
-            and _m3_aligned_prefix_enabled()
+            and _m3_geometry.aligned_prefix_enabled()
         )
+        self._m3_turn_markers = None
+        if self._m3_aligned_prefix and _m3_geometry.structural_cuts_enabled():
+            self._m3_turn_markers = _m3_geometry.turn_markers_from_tokenizer(
+                tokenizer
+            )
+            if self._m3_turn_markers is None:
+                logger.warning(
+                    "MiniMax-M3 turn cuts off: the tokenizer does not encode the M3 message markers "
+                    "(%r, %r, %r); prefix reuse stops at prefill-step boundaries",
+                    _m3_geometry.M3_EOS_TEXT,
+                    _m3_geometry.M3_BOS_TEXT,
+                    _m3_geometry.M3_ASSISTANT_ROLE_TEXT,
+                )
+            else:
+                logger.info(
+                    "MiniMax-M3 prefix cache: turn cuts on (%s)",
+                    self._m3_turn_markers.signature(),
+                )
         # Do not silently widen repetition-penalty history for families whose
         # chat templates contain EOS/turn-boundary sentinels in the prompt.
         # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
@@ -1772,7 +1791,8 @@ class Scheduler:
                     )
                     if getattr(self, "_m3_aligned_prefix", False):
                         self.block_aware_cache.set_minimax_m3_prefill_step(
-                            self.config.prefill_step_size
+                            self.config.prefill_step_size,
+                            turn_markers=getattr(self, "_m3_turn_markers", None),
                         )
                 except Exception:
                     self._cleanup_failed_block_cache_initialization(
@@ -1896,14 +1916,24 @@ class Scheduler:
                     self.model,
                 )
                 if getattr(self, "_m3_aligned_prefix", False):
-                    # Whole-prompt M3 entries are only interchangeable with a cold prefill of the same chunk step
-                    # (and entries written before aligned prefill are not): scope the directory by both.
-                    from .models.minimax_m3.prefill_geometry import SCHEMA as _M3_PREFILL_SCHEMA
+                    # Whole-prompt M3 entries are only interchangeable with a cold prefill of the same chunk step and
+                    # turn-cut rule (and entries written before aligned prefill are not): scope the directory by them.
+                    from .models.minimax_m3 import prefill_geometry as _m3_geometry
 
-                    scope_key += (
-                        f":m3_prefill={_M3_PREFILL_SCHEMA}"
-                        f":step={int(self.config.prefill_step_size or 0)}"
-                    )
+                    _m3_markers = getattr(self, "_m3_turn_markers", None)
+                    if _m3_markers is None:
+                        scope_key += (
+                            f":m3_prefill={_m3_geometry.SCHEMA}"
+                            f":step={int(self.config.prefill_step_size or 0)}"
+                        )
+                    else:
+                        _m3_turns = _m3_markers.signature()
+                        scope_key += (
+                            f":m3_prefill={_m3_geometry.SCHEMA_TURNS}"
+                            f":step={int(self.config.prefill_step_size or 0)}"
+                            f":turns={_m3_turns['bos']}-{_m3_turns['eos']}-"
+                            + "_".join(str(t) for t in _m3_turns["assistant"])
+                        )
                 model_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
                 cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
@@ -6640,13 +6670,41 @@ class Scheduler:
         boundary = len(tokens) - 1
         return boundary if boundary > 0 else None
 
+    def _m3_turn_cuts(self, request: Request) -> List[int]:
+        """The turn cuts of this request's prompt at or below its store boundary (prefill_geometry.turn_cuts); none
+        for a media request (atomic prefill) or without turn markers. Computed once per prompt."""
+        from .models.minimax_m3 import prefill_geometry
+
+        markers = getattr(self, "_m3_turn_markers", None)
+        boundary = self._m3_prefill_boundary(request)
+        tokens = getattr(request, "prompt_token_ids", None) or []
+        if (
+            markers is None
+            or not boundary
+            or prefill_geometry.is_media_request(getattr(request, "_cache_extra_keys", None))
+        ):
+            return []
+        key = (id(markers), len(tokens), int(boundary))
+        cached = getattr(request, "_m3_turn_cuts_memo", None)
+        if cached is not None and cached[0] == key:
+            return list(cached[1])
+        cuts = prefill_geometry.turn_cuts(tokens, markers, boundary)
+        try:
+            request._m3_turn_cuts_memo = (key, tuple(cuts))
+        except Exception:
+            pass
+        return cuts
+
     def _m3_prefill_plan(self, request: Request) -> Dict[str, Any]:
         from .models.minimax_m3.prefill_geometry import is_media_request
 
-        return {
+        plan = {
             "boundary": self._m3_prefill_boundary(request),
             "atomic": is_media_request(getattr(request, "_cache_extra_keys", None)),
         }
+        if getattr(self, "_m3_turn_markers", None) is not None:
+            plan["cuts"] = self._m3_turn_cuts(request)
+        return plan
 
     def _insert_accepts_m3_prefill_plans(self) -> bool:
         gen = self.batch_generator
@@ -6668,10 +6726,12 @@ class Scheduler:
         """Cut a restored MiniMax-M3 prefix to what a cold prefill of this request also computes (aligned mode).
 
         Every cache tier lands here (paged/block-disk, memory, legacy prefix, prompt disk). The restored rows are
-        reusable up to this request's own store boundary only when they were produced with that same boundary (block
-        tiers: the geometry key guarantees it; whole-entry memory / prompt-disk tiers: an untruncated entry of
-        exactly that many rows; the legacy tier also stores role-segment prefixes, so never), and otherwise up to the
-        last chunk boundary. Returns (cache to use or None for a full prefill, fallback reason or None)."""
+        reusable up to the last chunk boundary or turn cut of this request at or below them (turn cuts are a function
+        of the tokens before them, so any producer with the same tokens cut there too), and up to this request's own
+        store boundary when they were produced with that same boundary (block tiers: the geometry key guarantees it;
+        whole-entry memory / prompt-disk tiers: an untruncated entry of exactly that many rows; the legacy tier also
+        stores role-segment prefixes, so never). Returns (cache to use or None for a full prefill, fallback reason or
+        None)."""
         from .models.minimax_m3 import prefill_geometry
 
         cached = max(0, int(getattr(request, "cached_tokens", 0) or 0))
@@ -6690,15 +6750,24 @@ class Scheduler:
             atomic=prefill_geometry.is_media_request(
                 getattr(request, "_cache_extra_keys", None)
             ),
+            cuts=self._m3_turn_cuts(request),
         )
         if offset is not None and reuse == cached == offset:
             return cache, None
         trimmed = (
             prefill_geometry.truncated_cache(cache, reuse) if reuse > 0 else None
         )
+        if getattr(self, "_m3_turn_markers", None) is None:
+            rule = "chunk-only cuts"
+        elif reuse == boundary:
+            rule = "own boundary"
+        elif reuse and reuse % step == 0:
+            rule = "chunk boundary"
+        else:
+            rule = "turn cut" if reuse else "no cut"
         logger.info(
             "Request %s: MiniMax-M3 aligned prefix: restored %s rows (cache offset %s, %s), reuse %d "
-            "(chunk %d, boundary %d)%s",
+            "(chunk %d, boundary %d, %s)%s",
             request.request_id,
             cached,
             offset,
@@ -6706,6 +6775,7 @@ class Scheduler:
             reuse if trimmed is not None else 0,
             step,
             boundary,
+            rule,
             "" if trimmed is not None else "; full prefill",
         )
         if trimmed is None:
