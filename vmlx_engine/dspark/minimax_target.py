@@ -259,6 +259,12 @@ class MiniMaxM3DSparkTarget:
         rows = int(x.shape[1])
         if rows == 1:
             return module(x)
+        wide = self._wide_kernel(module)
+        if wide is not None:
+            y = wide(x)
+            if y is not None:
+                self.verify_paths["linear_batched"] += 1
+                return y + module["bias"] if "bias" in module else y
         kernel = self._multi_row_kernel(module)
         if kernel is not None:
             outs, batched = [], 0
@@ -276,6 +282,22 @@ class MiniMaxM3DSparkTarget:
             return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=1)
         self.verify_paths["linear_rows"] += 1
         return mx.concatenate([module(_row(x, r)) for r in range(rows)], axis=1)
+
+    @staticmethod
+    def _wide_kernel(module):
+        """One weight walk for the whole window (up to 16 rows), every row equal to the one-row call (admitted per
+        shape by bit-equality; ``VMLX_ROW_EXACT_WIDE=0`` keeps the 4-row launches)."""
+        if not isinstance(module, nn.QuantizedLinear) or not _row_exact_kernel_enabled():
+            return None
+        if str(getattr(module, "mode", "affine") or "affine") != "affine" or "biases" not in module:
+            return None
+        from ..metal.row_exact_qmv import row_exact_qmv_wide, wide_enabled
+
+        if not wide_enabled():
+            return None
+        gs, bits = int(module.group_size), int(module.bits)
+        return lambda xb: row_exact_qmv_wide(xb, module["weight"], module["scales"], module["biases"],
+                                             group_size=gs, bits=bits)
 
     @staticmethod
     def _multi_row_kernel(module):
