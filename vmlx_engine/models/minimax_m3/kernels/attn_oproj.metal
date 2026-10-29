@@ -5,8 +5,8 @@
 // Host-prepended constants:
 //   using xt = <residual dtype>;  using st = <o_proj scales+biases dtype>;
 //   constexpr int KIN = q heads * head dim (o_proj input), NOUT = hidden size, BITS, GS (affine)
-//   constexpr int NSG, RPS       // simdgroups per threadgroup, output columns per simdgroup (2, 4)
-//   constexpr int RT             // rows per threadgroup (1 for one row; the host's choice for several)
+//   constexpr int NSG, RPS, RT   // simdgroups / threadgroup, output columns / simdgroup, rows / threadgroup:
+//                                // one row 2, 4, 1; several rows 4, 8, 2 (fused_attn.py)
 //   constexpr int SSP            // 1: write the sum-of-squares partials
 // Inputs (names): o [R, KIN] float32 (K4 output), xr [R, NOUT] xt (the residual stream before attention),
 //   w / s / b (o_proj weight / scales / biases).

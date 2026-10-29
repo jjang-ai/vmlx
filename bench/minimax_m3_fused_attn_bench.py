@@ -9,8 +9,8 @@ at a fixed context (each probe trims what it appended). Medians of PROBES probes
 
 Paths: ``stock`` = today's ops (rows = 1: the model's decode attention; rows > 1: the DSpark verify's per-row
 attention with row-exact projections), ``fused`` = the five fused launches. ``--kernels`` adds per-kernel GPU times
-(NL independent launches of one kernel over the NL layers' weights, evaluated together: throughput per launch) for
-the fused kernels and their unfused op groups.
+(4 x NL independent launches of one kernel cycling over the NL layers' weights, evaluated together: GPU time per
+launch with launches allowed to overlap) for the fused kernels and their unfused op groups.
 
 No real model is loaded. Usage: python bench/minimax_m3_fused_attn_bench.py [--rows 1,4,8,16] [--ctx 1000,4000,16000]
 """
@@ -152,15 +152,19 @@ def run_blocks(layers, ctxs, rows_list, probes, passes=1):
     return out
 
 
+KERNEL_REPS = 4
+
+
 def _time_independent(fn_per_layer, n_layers, probes):
-    """Eval ms per layer of n_layers independent launches (graph built before the clock starts)."""
+    """Eval ms per launch of KERNEL_REPS x n_layers independent launches cycling over the layers' weights, evaluated
+    together (graph built before the clock starts): GPU time per launch, overlapping launches allowed."""
     ts = []
     for _ in range(probes + 1):
-        outs = [fn_per_layer(i) for i in range(n_layers)]
+        outs = [fn_per_layer(i % n_layers) for i in range(KERNEL_REPS * n_layers)]
         mx.synchronize()
         t0 = time.perf_counter()
         mx.eval(outs)
-        ts.append((time.perf_counter() - t0) * 1e3 / n_layers)
+        ts.append((time.perf_counter() - t0) * 1e3 / (KERNEL_REPS * n_layers))
     return statistics.median(ts[1:])
 
 
@@ -184,6 +188,8 @@ def run_kernels(layers, ctx, rows, probes):
     mx.eval(ys)
     meta = mx.array([ctx, rows, -(-(ctx + rows) // 128), 0, 0, 0, 0, 0], dtype=mx.int32)
     dts = [F.lane_dtypes(l, c, mx.bfloat16) for l, c in zip(layers, caches)]
+    scratch = [[mx.zeros((1, h, ctx + 256, HD), dtype=mx.bfloat16) for h in (KVH, KVH, 1)] for _ in range(n)]
+    mx.eval(scratch)
 
     def stock_heads(i):
         a, ix = layers[i].self_attn, layers[i].self_attn.indexer
@@ -192,13 +198,20 @@ def run_kernels(layers, ctx, rows, probes):
         k = a.k_norm(y[:, H * HD:(H + KVH) * HD].reshape(1, rows, KVH, HD)).transpose(0, 2, 1, 3)
         iq = ix.index_q_norm(y[:, (H + 2 * KVH) * HD:(H + 2 * KVH + 4) * HD].reshape(1, rows, 4, HD)).transpose(0, 2, 1, 3)
         ik = ix.index_k_norm(y[:, (H + 2 * KVH + 4) * HD:].reshape(1, rows, 1, HD)).transpose(0, 2, 1, 3)
-        return [a.rope(q, offset=ctx), a.rope(k, offset=ctx), ix.rope(iq, offset=ctx), ix.rope(ik, offset=ctx)]
+        v = y[:, (H + KVH) * HD:(H + 2 * KVH) * HD].reshape(1, rows, KVH, HD).transpose(0, 2, 1, 3)
+        q, k, iq, ik = a.rope(q, offset=ctx), a.rope(k, offset=ctx), ix.rope(iq, offset=ctx), ix.rope(ik, offset=ctx)
+        # today's three lane appends (slice updates at the logical end of each lane)
+        sk, sv, si = scratch[i]
+        sk[..., ctx:ctx + rows, :] = k
+        sv[..., ctx:ctx + rows, :] = v
+        si[..., ctx:ctx + rows, :] = ik
+        return [q, iq, sk, sv, si]
 
     def fused_heads(i):
         caches[i].fused_reserve(rows, KVH, HD, *dts[i][:2], HD, dts[i][2])
         return F.heads(layers[i], plans[i], ys[i], meta, caches[i].fused_lanes(), dts[i], True)[:3]
 
-    res["K2 head norms+rope(+appends)"] = (_time_independent(stock_heads, n, probes),
+    res["K2 head norms+rope+appends"] = (_time_independent(stock_heads, n, probes),
                                             _time_independent(fused_heads, n, probes))
     outs = [fused_heads(i) for i in range(n)]
     mx.eval(outs)

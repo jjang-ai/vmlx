@@ -278,14 +278,17 @@ def kernel_errors(layer: Layer, ctx: int, rows: int, seed: int = 0) -> dict:
     return out
 
 
-@pytest.mark.parametrize("ctx, rows", [(700, 3), (3001, 5), (2040, 16)])
+@pytest.mark.parametrize("ctx, rows", [(700, 3), (3001, 5), (2040, 16), (66001, 2)])
 def test_kernel_errors_against_float64_reference(layer, ctx, rows):
     """Each launch reproduces its math in fp32: errors against a float64 reference on the same inputs are at fp32
     accumulation level (K2's q / index q also carry MLX's fp32 RoPE angle, ~1e-5 x position), the bf16 lane and
     residual outputs one correct rounding (K5 <= 0.5 bf16 ulp); today's ops on the same step are coarser (bf16
-    intermediates) and pick a different block set for some (row, group) pairs."""
+    intermediates) and pick a different block set for some (row, group) pairs. 66,001 keys: more blocks than K4's
+    threads, so K4 selects by radix select instead of a rank count (K4's reference uses the reference selection
+    rule, so a different pick would show as a large K4 error)."""
     errs = kernel_errors(layer, ctx, rows)
-    bounds = {"K1": 2e-6, "K2 q": 1e-3, "K2 index q": 1e-3, "K2 k (lane dtype)": 4.5e-3, "K2 v (lane dtype)": 4.5e-3,
+    rope = max(1e-3, 3e-8 * (ctx + rows))                  # MLX's fp32 RoPE angle: error grows with the position
+    bounds = {"K1": 2e-6, "K2 q": rope, "K2 index q": rope, "K2 k (lane dtype)": 4.5e-3, "K2 v (lane dtype)": 4.5e-3,
               "K2 index k (lane dtype)": 4.5e-3, "K3 block scores": 1e-5, "K4 attention (fused selection)": 1e-5,
               "K5 o_proj + residual": 4.5e-3, "K5 o_proj + residual (bf16 ulps)": 0.51}
     for name, bound in bounds.items():
@@ -320,6 +323,14 @@ def _run(layer, x, ctx, seed, *, per_row: bool, spare: int = 0, eager: bool = Fa
 
 def _same(a, b) -> bool:
     return _eq(a[0], b[0]) and all(_eq(x, y) for x, y in zip(a[1], b[1]))
+
+
+def test_rows_are_bit_identical_past_the_rank_count_selection(layer):
+    """Past 512 blocks K4 switches from the rank count to the radix select: rows still equal one-row blocks."""
+    x = rows_input(5, layer.hidden, 66001)
+    for rows in (1, 2, 5):
+        assert _same(_run(layer, x[:, :rows], 66001, 4, per_row=False),
+                     _run(layer, x[:, :rows], 66001, 4, per_row=True, eager=True)), rows
 
 
 @pytest.mark.parametrize("ctx", [300, 2040, 3001])

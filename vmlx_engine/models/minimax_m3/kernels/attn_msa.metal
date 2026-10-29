@@ -16,7 +16,8 @@
 // Row r sits at q = offset + r and sees keys 0 .. q (n = q / BLOCK + 1 blocks). When n <= KEEP every block is
 // visible: threadgroup j takes block j (none when j >= n). Otherwise the row's selection is the KEEP highest scores of
 // sc[r, g, 0 .. n) (the local block is +inf), ties to the lower block id, listed in ascending block id; threadgroup j
-// takes the j-th. Every threadgroup of (r, g) computes that same selection (radix select on order-preserving keys).
+// takes the j-th. Every threadgroup of (r, g) computes that same selection: a rank count when the row has at most NT
+// blocks, else a radix select on order-preserving keys (the same set either way).
 // Attention per threadgroup: one simdgroup per (32-key chunk of the block, slice of HS heads); lane = key for Q K
 // (softmax in base 2, keys > q masked and never read), lane = D / 32 dims for P V; the chunks merge in a fixed tree
 // in threadgroup memory. Block partials go to po / pm / pl; the last threadgroup of (r, g) to finish (device-scope
@@ -52,6 +53,27 @@
   int blk;
   if (nbk <= KEEP) {
     blk = j < nbk ? j : -1;
+  } else if (nbk <= NT) {
+    // one block per thread: rank = blocks ahead of it (higher score, or equal score and lower id); the KEEP lowest
+    // ranks are the selection (the radix path's set), listed in ascending block id by one prefix scan
+    device const float* srow = sc + (size_t)rg * sc_shape[2];
+    threadgroup uint* keys = (threadgroup uint*)qs;        // qs is staged after the selection
+    const uint mine = tid < nbk ? m3a_fkey(srow[tid]) : 0u;
+    if (tid < nbk) keys[tid] = mine;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    int rank = 0;
+    if (tid < nbk) {
+      for (int i = 0; i < nbk; ++i) {
+        const uint k = keys[i];
+        rank += (k > mine || (k == mine && i < tid)) ? 1 : 0;
+      }
+    }
+    const uint flag = (tid < nbk && rank < KEEP) ? 1u : 0u;
+    uint total;
+    const uint at = m3a_tg_exclusive_scan<NSGT>(flag, lane, sg, scan, total);
+    if (flag) sel[at] = tid;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    blk = sel[j];
   } else {
     device const float* srow = sc + (size_t)rg * sc_shape[2];
     uint prefix = 0u, pmask = 0u;

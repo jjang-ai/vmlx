@@ -10,8 +10,8 @@
 //   constexpr int KIN = hidden size;  NQ / NK / NV = q / k / v output rows;  NIQ / NIK = index q / k rows
 //   constexpr int BITS_A, GS_A        // q / k / v: affine bits (4 / 8) and group size (32 / 64 / 128)
 //   constexpr int FMT_B, BITS_B, GS_B // index: 1 = MXFP8 (pass 8 / 32), 2 = affine BITS_B / GS_B
-//   constexpr int NSG, RPS            // simdgroups per threadgroup, output rows per simdgroup (2, 4: MLX qmv's shape)
-//   constexpr int RT                  // rows per threadgroup (1 for one row; the host's choice for several)
+//   constexpr int NSG, RPS, RT        // simdgroups / threadgroup, output rows / simdgroup, rows / threadgroup:
+//                                     // one row 2, 4, 1 (MLX qmv's shape); several rows 4, 8, 2 (fused_attn.py)
 //   constexpr float EPS               // rms_norm_eps
 // Inputs (names): x, nw, q_w, q_s, q_b, k_w, k_s, k_b, v_w, v_s, v_b, iq_w, iq_s, iq_b, ik_w, ik_s, ik_b
 //   (MXFP8 has no biases: pass any array of >= 8 elements). Output: y [R, NQ + NK + NV + NIQ + NIK] float32.

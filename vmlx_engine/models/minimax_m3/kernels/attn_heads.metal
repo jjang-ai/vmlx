@@ -17,8 +17,10 @@
 //
 // Row r sits at position offset + r: RoPE angle float(offset + r) * 2^(-(i / (ROT / 2)) * LOG2BASE) with fast::cos /
 // fast::sin (MLX's rope kernel); K / V / index key rows land at lane position offset + r. In-place writes are only
-// requested by the host while it owns the lane buffers exclusively (cache.py: MiniMaxM3SparseCache.fused_reserve);
-// every later reader of the lanes also reads an output of this launch, so MLX orders it after this one.
+// requested by the host while it owns the lane buffers exclusively (cache.py: MiniMaxM3SparseCache.fused_reserve).
+// MLX does not see those writes: K3 / K4 read this launch's outputs (q, iq, cnt), which puts them behind a barrier
+// after it, and the host re-issues the lanes as mx.depends(lanes, K4's output) so every later reader of a lane is
+// encoded after K4 (MiniMaxM3SparseCache.fused_commit).
 
   constexpr int DPL = D / 32;
   constexpr int HALF = ROT / 2;

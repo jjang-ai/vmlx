@@ -34,19 +34,23 @@ from . import kernels as K
 
 ENV = "VMLX_M3_FUSED_ATTN"
 MAX_ROWS = 16
-# K1 / K5 threadgroup shape: NSG simdgroups x RPS output rows (MLX qmv's 2 x 4). Rows ride the grid: threadgroup
-# tile * R + row runs the one-row code, so a row's output is the same compiled arithmetic at any row count.
+# K1 / K5 threadgroup shapes. Row tiles ride the grid (threadgroup = weight tile x row tile) and every output element
+# runs the same per-chunk arithmetic whatever the shape (kernels/attn_common.metal m3a_rowsN), so a row's output does
+# not depend on the shape or the row count. One row: NSG 2 simdgroups x RPS 4 output rows (MLX qmv's shape). Several
+# rows: RT 2 rows per threadgroup (each output chunk's codes decoded once for both; 4 runs out of registers), 4 x 8
+# (each row's input loaded by fewer threadgroups, its per-chunk load amortized over more outputs). Measured on the
+# M5 Max at M3.1 shapes, 2 .. 16 rows: (4, 8) ~ (8, 8) < (8, 4) < (2, 4).
 PROJ_NSG, PROJ_RPS = 2, 4
-# Several rows: RT rows per threadgroup (each output chunk's codes decoded once for the tile; 4 runs out of registers),
-# MULTI_NSG simdgroups x MULTI_RPS output rows (each row's input loaded by fewer threadgroups and its per-chunk load
-# amortized over more outputs). Measured on the M5 Max at M3.1 shapes, 2 .. 16 rows: (4, 8) ~ (8, 8) < (8, 4) < (2, 4).
 PROJ_RT = 2
 MULTI_NSG, MULTI_RPS = 4, 8
 
 
 def _proj_shape(rows: int) -> tuple:
-    """(NSG, RPS, RT) of the K1 / K5 build for ``rows``; the shape never changes an output element's arithmetic."""
+    """(NSG, RPS, RT) of the K1 / K5 build for ``rows``."""
     return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
+
+
+# Diagnostics: launches, rows, appends written in place vs through MLX slice updates, launches that ran K3.
 STATS = {"calls": 0, "rows": 0, "inplace": 0, "copy_appends": 0, "sparse_calls": 0}
 
 
@@ -282,9 +286,11 @@ def heads(layer, p: Plan, y: mx.array, meta: mx.array, lanes, lane_dtypes, inpla
 def scores(p: Plan, iq: mx.array, idx_lane: mx.array, meta: mx.array, nb: int) -> mx.array:
     """K3: block scores [R, GI, nb] float32."""
     R = int(iq.shape[0])
+    pairs = R * p.GI
+    pt = 4 if pairs <= 4 else (8 if pairs <= 8 else 16)    # pairs per pass: a pair's arithmetic does not depend on it
     kern = K.kernel(
         "scores", (("it", K.METAL_TYPE[idx_lane.dtype]),),
-        (("GI", p.GI), ("D", p.D), ("BLOCK", p.block), ("LOCAL", p.local), ("PT", 16)))
+        (("GI", p.GI), ("D", p.D), ("BLOCK", p.block), ("LOCAL", p.local), ("PT", pt)))
     return kern(inputs=[iq, idx_lane, meta], grid=(p.block * nb, 1, 1), threadgroup=(p.block, 1, 1),
                 output_shapes=[(R, p.GI, nb)], output_dtypes=[mx.float32])[0]
 

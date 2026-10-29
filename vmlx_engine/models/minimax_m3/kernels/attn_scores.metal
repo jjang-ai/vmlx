@@ -3,7 +3,7 @@
 //
 // Host-prepended constants:
 //   using it = <index-key lane dtype>;  constexpr int GI = index heads (= KV groups), D = index head dim,
-//   BLOCK = keys per block (multiple of 32, <= 1024), LOCAL = forced local blocks, PT = pairs staged per pass (16)
+//   BLOCK = keys per block (multiple of 32, <= 1024), LOCAL = forced local blocks, PT = pairs per pass (4 / 8 / 16: the host's choice)
 // Inputs (names): iq [R, GI, D] float32 (K2 output), ic = index-key lane [1, 1, capacity, D] (strided),
 //   meta int32 [>= 8] = {offset, R, NB, ...}.
 // Output: sc [R, GI, NB] float32, NB = ceil((offset + R) / BLOCK) (meta[2]).
