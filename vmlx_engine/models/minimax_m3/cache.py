@@ -124,12 +124,12 @@ class MiniMaxM3SparseCache(KVCache):
     # ``offset``; the record validator accepts a longer physical backing.
     idx_step = 256
 
-    # ── prefill capacity reservation (SingleBatchGenerator M3 prefill, VMLX_M3_PREFILL_RESERVE) ──
+    # ── prefill capacity reservation (``reserve_prefill`` below decides; VMLX_M3_PREFILL_RESERVE) ──
     # The stock growth re-allocates every lane at each prefill chunk (new buffer = old rows + the chunk, rounded to the
     # step) and copies the old rows into it: an N-token prefill in chunks of C allocates and copies ~N^2 / (2C) rows
     # per lane (32k: ~38 GB of fresh, zero-filled Metal buffers across the model; 100k: ~350 GB). A prefill that knows
-    # its length reserves the rows once; the next growth makes room for all of them (rounded up to the step, so the
-    # final capacity is the one the chunked growth reaches). Only capacity changes: rows below the offset, and every
+    # its remaining length reserves those rows; the next growth makes room for all of them (rounded up to the step, so
+    # the final capacity is the one the chunked growth reaches). Only capacity changes: rows below the offset, and every
     # reader (``state``, ``update_and_fetch``, ``update_index``: all sliced to the logical extent), are the same.
     def reserve(self, rows: int) -> None:
         """Make the next capacity growth of the K / V and index lanes room for ``rows`` rows past the current
