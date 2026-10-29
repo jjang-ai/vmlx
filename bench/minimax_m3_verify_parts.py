@@ -241,6 +241,96 @@ def bench_routed(blocks, rows_list, reps, same=False):
     return res
 
 
+# ------------------------------------------------------------------------------------------------ whole MoE block
+def build_moe(nl):
+    """Real-shape SparseMoeBlocks: fp32 router + bias, JANGT routed experts (build_routed), affine-4 shared expert."""
+    from vmlx_engine.models.minimax_m3 import minimax_m3 as M
+
+    args = M.ModelArgs(hidden_size=D, intermediate_size=I, shared_intermediate_size=I, num_local_experts=E,
+                       num_experts_per_tok=TOPE)
+    routed = build_routed(nl)
+    blocks = []
+    for li in range(nl):
+        b = M.SparseMoeBlock(args)
+        b.switch_mlp = routed[li].switch_mlp
+        b.gate.weight = mx.random.normal((E, D), key=mx.random.key(500 + li)) * 0.02
+        b.e_score_correction_bias = mx.random.normal((E,), key=mx.random.key(600 + li)) * 0.05
+        b.shared_experts.gate_proj = _affine(D, I, 4, seed=700 + li)
+        b.shared_experts.up_proj = _affine(D, I, 4, seed=800 + li)
+        b.shared_experts.down_proj = _affine(I, D, 4, seed=900 + li)
+        mx.eval(b.parameters())
+        blocks.append(b)
+    return blocks
+
+
+def bench_moe(blocks, rows_list, reps):
+    """Per MoE layer x 57: today's decode (1 row) / verify (target._mlp, k rows) vs the fused block, and the fused
+    kernels one by one. Interleaved rounds; min / median."""
+    from vmlx_engine.models.minimax_m3 import fused_moe as F
+
+    t = _target()
+    scale = MOE_LAYERS / len(blocks)
+    res = {}
+    for rows in rows_list:
+        x = _x(rows, D, rows)
+        h = _x(rows, D, rows + 100)
+
+        def today():
+            return [h + (b(x) if rows == 1 else t._mlp(b, x)) for b in blocks]
+
+        def fused():
+            return [F.fused_moe_residual(b, x, h) for b in blocks]
+
+        # kernel inputs for the per-kernel timings
+        pre = []
+        for b in blocks:
+            U = b.switch_mlp._unit()
+            x2 = x[0]
+            sig, xr = F.router(x2, b.gate.weight, U["su_gu"], rows)
+            hh, hs, inds, scores = F.gate_up(b, x2, sig, xr)
+            hr = F.down_input(b, hh, inds)
+            mx.eval(sig, xr, hh, hs, inds, scores, hr)
+            pre.append((b, U, x2, sig, xr, hh, hs, inds, scores, hr))
+
+        def k6():
+            return [F.router(p[2], p[0].gate.weight, p[1]["su_gu"], rows) for p in pre]
+
+        def k7():
+            return [F.gate_up(p[0], p[2], p[3], p[4]) for p in pre]
+
+        def rot():
+            return [F.down_input(p[0], p[5], p[7]) for p in pre]
+
+        def k8():
+            return [F.down(p[0], p[9], p[5], p[7], p[8], p[6], h[0]) for p in pre]
+
+        fns = {"today": today, "fused": fused, "K6": k6, "K7": k7, "R": rot, "K8": k8}
+        for f in fns.values():
+            for _ in range(2):
+                mx.eval(f())
+        ts = {k: [] for k in fns}
+        for _ in range(reps):
+            for k, f in fns.items():
+                out = f()
+                mx.synchronize()
+                t0 = time.perf_counter()
+                mx.eval(out)
+                ts[k].append((time.perf_counter() - t0) * 1e3 * scale)
+        # build + run (the Python graph build is part of a verify)
+        tb = {k: [] for k in ("today", "fused")}
+        for _ in range(reps):
+            for k in tb:
+                mx.synchronize()
+                t0 = time.perf_counter()
+                mx.eval(fns[k]())
+                tb[k].append((time.perf_counter() - t0) * 1e3 * scale)
+        res[rows] = {k: [round(min(v), 2), round(statistics.median(v), 2)] for k, v in ts.items()}
+        res[rows].update({k + "+build": [round(min(v), 2), round(statistics.median(v), 2)] for k, v in tb.items()})
+        print(f"moe rows={rows:2d}: " + " ".join(f"{k} {v[0]:.2f}/{v[1]:.2f}" for k, v in res[rows].items())
+              + "  (ms per 57 layers, min/median)", flush=True)
+    return res
+
+
 # ------------------------------------------------------------------------------------------------ attention
 def build_attn(nl, ctx):
     from vmlx_engine.models.minimax_m3 import minimax_m3 as M
@@ -313,7 +403,7 @@ def main():
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     rows_list = [int(r) for r in a.rows.split(",")]
-    parts = a.part.split(",") if a.part != "all" else ["proj", "head", "router", "routed", "attn"]
+    parts = a.part.split(",") if a.part != "all" else ["proj", "head", "router", "routed", "moe", "attn"]
     res = {}
     if "proj" in parts:
         res["proj"] = bench_proj(build_proj(a.layers), rows_list, a.reps)
@@ -325,6 +415,8 @@ def main():
         blocks = build_routed(a.jt_layers)
         res["routed"] = bench_routed(blocks, rows_list, a.reps, same=a.same)
         del blocks
+    if "moe" in parts:
+        res["moe"] = bench_moe(build_moe(a.jt_layers), rows_list, a.reps)
     if "attn" in parts:
         for ctx in (int(c) for c in a.ctx.split(",")):
             res[f"attn@{ctx}"] = bench_attn(build_attn(a.layers, ctx), rows_list, a.reps, ctx)

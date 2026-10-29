@@ -265,6 +265,14 @@ class MiniMaxM3DSparkTarget:
             if y is not None:
                 self.verify_paths["linear_batched"] += 1
                 return y + module["bias"] if "bias" in module else y
+        if type(module) is nn.Linear and "bias" not in module:
+            # fp32 router: one launch for every row, each row on the one-row gemv's arithmetic (metal/row_exact_gemv)
+            from ..metal.row_exact_gemv import row_exact_gemv
+
+            y = row_exact_gemv(x, module["weight"])
+            if y is not None:
+                self.verify_paths["linear_batched"] += 1
+                return y
         kernel = self._multi_row_kernel(module)
         if kernel is not None:
             outs, batched = [], 0
@@ -390,9 +398,18 @@ class MiniMaxM3DSparkTarget:
         offset = self._offset(cache)
         h = nm.embed_tokens(tokens)
         feats = {}
+        moe_residual = getattr(sys.modules.get(type(nm).__module__), "moe_residual", None)
         for li, (layer, c) in enumerate(zip(nm.layers, cache)):
             h = h + self._attention(layer.self_attn, layer.input_layernorm(h), c, offset)
-            h = h + self._mlp(layer.mlp, layer.post_attention_layernorm(h))
+            xn = layer.post_attention_layernorm(h)
+            # VMLX_M3_FUSED_MOE=1: the fused MoE kernels take every verify row at once; they are row-invariant (and
+            # bit-identical to the unfused block), so each row equals its decode step, which runs the same kernels.
+            fused = moe_residual(layer.mlp, xn, h) if moe_residual is not None else None
+            if fused is not None:
+                self.verify_paths["moe_fused"] = self.verify_paths.get("moe_fused", 0) + 1
+                h = fused
+            else:
+                h = h + self._mlp(layer.mlp, xn)
             if li in tapset:
                 feats[li] = h
         logits = self._logits(nm.norm(h))[0]
