@@ -46,6 +46,7 @@ def _v4(spec: str):
 VARIANTS = {
     # name: (kind, options)
     "v3": ("v3", {}),
+    "prod": ("prod", {}),       # fast_decode.routed_gate_up / routed_down (input packing included)
     "fast2": ("fast", {"fold": "two"}),
     "fast_ld": ("fast", {"fold": "one", "wload": "scalar"}),
     "fast_pf": ("fast", {"fold": "one", "wload": "prefetch"}),
@@ -192,6 +193,8 @@ def main():
                                 xin = MK.rotate_rows(x, U["su_gu"]) if a.prep else xr[li]
                                 outs.append(MK.gather_gate_up_swiglu_v3(xin, x, idx, U, out_dtype=mx.float32, limit=7.0,
                                                                         slot_fastest=rows > 1, act="oai", alpha=1.702))
+                            elif kind == "prod":
+                                outs.append(FD.routed_gate_up(x, idx, U, 7.0, "oai", 1.702))
                             elif kind == "v4g":
                                 p = FD.pack_rows1(x, U["su_gu"]) if a.prep else pk[li]
                                 outs.append(FD.gate_up4g(p, x, idx, U, limit=7.0, act="oai", alpha=1.702, **opts))
@@ -208,6 +211,8 @@ def main():
                             elif kind == "v4":
                                 p = FD.pack_rows1(hh, U["sv_dn"], idx.reshape(-1)) if a.prep else pk[li]
                                 outs.append(FD.down4(p, hh, idx, w, U, **opts))
+                            elif kind == "prod":
+                                outs.append(FD.routed_down(hh, idx, w, U))
                             elif kind == "v4g":
                                 p = FD.pack_rows1(hh, U["sv_dn"], idx.reshape(-1)) if a.prep else pk[li]
                                 outs.append(FD.down4g(p, hh, idx, w, U, **opts))

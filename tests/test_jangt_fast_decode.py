@@ -172,3 +172,20 @@ def test_control_perturbed_row_fold_is_caught(monkeypatch):
         assert not _eq(alone, full[:4])
     finally:
         FD.gen_gu4.cache_clear()
+
+
+@pytest.mark.parametrize("T", [1, 3, 16])
+def test_fused_moe_with_fast_jangt_equals_unfused_with_fast_jangt(monkeypatch, T):
+    """VMLX_M3_FUSED_MOE=1 + VMLX_JANGT_FAST=1: routing and the shared expert in the fused kernels, the routed experts
+    on the fast kernels -- bit-identical to the unfused block with the fast kernels, rows alone == rows in a window."""
+    import tests.test_minimax_m3_fused_moe as TF
+    from vmlx_engine.models.minimax_m3 import fused_moe as F
+
+    monkeypatch.setenv("VMLX_JANGT_FAST", "1")
+    b = TF._block(Kgu=1.5, Kdn=2.5, nog=1, nod=3, seed=7)
+    x, res = TF._rows(T, 1024, seed=T)
+    ref = F.unfused_moe_residual(b, x, res)
+    got = F.fused_moe_residual(b, x, res)
+    assert _eq(got, ref)
+    alone = F.fused_moe_residual(b, x[:, :1], res[:, :1])
+    assert _eq(alone, got[:, :1])
