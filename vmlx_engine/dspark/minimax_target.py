@@ -360,7 +360,14 @@ class MiniMaxM3DSparkTarget:
 
     def verify(self, tokens: mx.array, cache, taps: Sequence[int]):
         """Forward (1, T) rows; returns (logits (T, V), tap features (1, T, n_taps * H) or None, None). Row r's
-        logits equal those of the r-th of T sequential decode steps; all T rows are appended to the cache."""
+        logits equal those of the r-th of T sequential decode steps; all T rows are appended to the cache.
+
+        With ``VMLX_M3_FUSED_ATTN=1`` a layer the fused attention covers runs it for the rows, at most 16 per launch
+        (wider verifies in consecutive chunks, each appending before the next attends): its kernels compute every row
+        exactly as a one-row decode step does (``models/minimax_m3/fused_attn``), and decode steps take the same
+        kernels, so the equality holds at any width."""
+        from ..models.minimax_m3 import fused_attn
+
         taps = tuple(int(t) for t in taps)
         tapset = set(taps)
         nm = self.nm
@@ -368,7 +375,16 @@ class MiniMaxM3DSparkTarget:
         h = nm.embed_tokens(tokens)
         feats = {}
         for li, (layer, c) in enumerate(zip(nm.layers, cache)):
-            h = h + self._attention(layer.self_attn, layer.input_layernorm(h), c, offset)
+            if fused_attn.use_fused(layer, h[:, :fused_attn.MAX_ROWS], None, c):
+                self.verify_paths["attention_fused"] = self.verify_paths.get("attention_fused", 0) + 1
+                rows, step = int(h.shape[1]), fused_attn.MAX_ROWS
+                if rows <= step:
+                    h = fused_attn.attention_block(layer, h, c)
+                else:
+                    h = mx.concatenate([fused_attn.attention_block(layer, h[:, a:a + step], c)
+                                        for a in range(0, rows, step)], axis=1)
+            else:
+                h = h + self._attention(layer.self_attn, layer.input_layernorm(h), c, offset)
             h = h + self._mlp(layer.mlp, layer.post_attention_layernorm(h))
             if li in tapset:
                 feats[li] = h
@@ -385,5 +401,7 @@ class MiniMaxM3DSparkTarget:
             if c.trim(trim) != trim:
                 raise RuntimeError(f"DSpark rollback: layer {li} cache holds fewer than {trim} verify rows")
             idx_offset = getattr(c, "_idx_offset", None)
-            if idx_offset is not None and getattr(c, "idx_keys", None) is not None and int(idx_offset) != int(c.offset):
+            # has_index_lane: the sparse cache's check that does not expose (and so un-own) the lane buffers
+            has_lane = c.has_index_lane() if hasattr(c, "has_index_lane") else getattr(c, "idx_keys", None) is not None
+            if idx_offset is not None and has_lane and int(idx_offset) != int(c.offset):
                 raise RuntimeError(f"DSpark rollback: layer {li} index-key lane {idx_offset} != K/V lane {c.offset}")

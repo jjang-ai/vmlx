@@ -234,6 +234,7 @@ vmlx_engine = [
     "chat_templates/*.jinja",
     "config/*.yaml",
     "metal/*.metal",
+    "models/minimax_m3/kernels/*.metal",
     "metal/third_party/*/LICENSE",
     "metal/third_party/*/NOTICE",
     "native_mtp_examples/*.md",

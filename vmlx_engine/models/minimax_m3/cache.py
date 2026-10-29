@@ -41,22 +41,6 @@ from mlx_lm.models.cache import BatchKVCache, KVCache, dynamic_roll
 CACHE_TUPLE_TAG = "minimax_m3"
 
 
-def _lane_property(i: int, name: str) -> property:
-    """A lane attribute of MiniMaxM3SparseCache: reading or assigning it marks the lane shared (see the class)."""
-
-    def get(self):
-        excl = self.__dict__.get("_lane_excl")
-        if excl is not None:
-            excl[i] = False
-        return self.__dict__.get(name)
-
-    def put(self, value):
-        self.__dict__[name] = value
-        self.__dict__.setdefault("_lane_excl", [False, False, False])[i] = False
-
-    return property(get, put)
-
-
 class MiniMaxM3SparseCache(KVCache):
     """KVCache + an append-only indexer-key cache (idx_keys).
 
@@ -75,9 +59,25 @@ class MiniMaxM3SparseCache(KVCache):
     # assignment of one marks that lane shared; the fused path appends to a shared lane with MLX slice updates (copy
     # on write, ``fused_append``), after which the lane is the cache's own again, and writes in place only while all
     # three lanes are its own (``fused_reserve``). Trim / offset / nbytes never expose a lane.
+    def _lane_property(i: int, name: str) -> property:  # noqa: N805 - class-body helper, deleted below
+        """A lane attribute: reading or assigning it marks the lane shared."""
+
+        def get(self):
+            excl = self.__dict__.get("_lane_excl")
+            if excl is not None:
+                excl[i] = False
+            return self.__dict__.get(name)
+
+        def put(self, value):
+            self.__dict__[name] = value
+            self.__dict__.setdefault("_lane_excl", [False, False, False])[i] = False
+
+        return property(get, put)
+
     keys = _lane_property(0, "_keys")
     values = _lane_property(1, "_values")
     idx_keys = _lane_property(2, "_idx_keys")
+    del _lane_property
 
     def __init__(self):
         self._lane_excl = [False, False, False]
