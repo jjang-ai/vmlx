@@ -443,8 +443,11 @@ class Model(nn.Module):
         if getattr(args, "vision_config", None):
             try:
                 from .minimax_m3_vl import MiniMaxM3VLVisionStack
-            except Exception:  # pragma: no cover - standalone import
-                from minimax_m3_vl import MiniMaxM3VLVisionStack  # type: ignore
+            except Exception:
+                try:  # served path (mlx_lm.models.minimax_m3_vl): the sibling lives in the vmlx_engine package
+                    from vmlx_engine.models.minimax_m3.minimax_m3_vl import MiniMaxM3VLVisionStack
+                except Exception:  # pragma: no cover - standalone import
+                    from minimax_m3_vl import MiniMaxM3VLVisionStack  # type: ignore
             self.vision = MiniMaxM3VLVisionStack({
                 "vision_config": args.vision_config,
                 "projector_hidden_size": args.projector_hidden_size,

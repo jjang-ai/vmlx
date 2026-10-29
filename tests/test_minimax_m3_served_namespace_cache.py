@@ -78,3 +78,22 @@ def test_restored_cache_continues_in_lockstep_on_the_served_model(monkeypatch, c
             assert (x is None) == (y is None)
             if x is not None:
                 assert T._eq(x, y)
+
+
+def test_served_model_builds_and_runs_its_vision_stack():
+    """A bundle with vision_config (every M3 / M3.1 VL bundle) builds through the served module: Model.__init__ imports
+    the vision stack lazily, and on the served path that import must also come from the vmlx_engine package (it failed
+    with ModuleNotFoundError: minimax_m3_vl once the top-level sys.path fallback was gone)."""
+    served = _served_module()
+    cfg = T._config()
+    cfg["vision_config"] = {"hidden_size": 32, "num_attention_heads": 2, "num_hidden_layers": 1,
+                            "intermediate_size": 64, "patch_size": 14, "num_channels": 3, "layer_norm_eps": 1e-5,
+                            "img_token_compression_config": {"spatial_merge_size": 2, "temporal_patch_size": 2}}
+    cfg["projector_hidden_size"] = T.D
+    model = served.Model(served.ModelArgs.from_dict(cfg))
+    assert hasattr(model, "vision")
+    grid = mx.array([[1, 2, 4]], dtype=mx.int32)                     # 8 patches -> 2 merged image tokens
+    pixels = mx.random.normal((8, 3 * 2 * 14 * 14)).astype(mx.bfloat16)
+    feats = model.vision(pixels, grid)
+    mx.eval(feats)
+    assert feats.shape == (2, T.D)
