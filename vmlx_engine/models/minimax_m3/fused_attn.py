@@ -45,6 +45,29 @@ PROJ_RT = 2
 MULTI_NSG, MULTI_RPS = 4, 8
 
 
+# VMLX_M3_ROWS_PRE (default off until measured): the multi-row K1 / K5 builds read each row's input chunks (norm
+# multiply, place-value division, chunk sums, inverse RMS) from ONE attn_xprep pass instead of recomputing them in
+# every output tile; same per-element arithmetic, so rows stay bit-identical to the one-row decode build, which is
+# not touched. PRE_RT: rows per threadgroup of those builds (VMLX_M3_ROWS_PRE_RT).
+PRE_ENV = "VMLX_M3_ROWS_PRE"
+
+
+def rows_pre() -> bool:
+    return os.environ.get(PRE_ENV, "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _pre_rt() -> int:
+    try:
+        return max(1, int(os.environ.get("VMLX_M3_ROWS_PRE_RT", "") or PROJ_RT))
+    except ValueError:
+        return PROJ_RT
+
+
+def _pre_ok(p) -> bool:
+    """Input chunks of 16 values for every projection format of the layer (affine 4-bit, MXFP8)."""
+    return p.bits_a == 4 and (p.fmt_b == 1 or p.bits_b == 4) and p.bits_o == 4
+
+
 def _proj_shape(rows: int) -> tuple:
     """(NSG, RPS, RT) of the K1 / K5 build for ``rows``."""
     return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
@@ -225,10 +248,67 @@ def _t(a: mx.array) -> str:
     return K.METAL_TYPE[a.dtype]
 
 
+def xprep(p: Plan, x2: mx.array, nw: Optional[mx.array], eps: float, two: bool):
+    """(xa, xb or None, xs, inv): each row's input chunks for the multi-row builds (kernels/attn_xprep.metal)."""
+    R, kin = int(x2.shape[0]), int(x2.shape[1])
+    norm = nw is not None
+    kern = K.kernel("xprep", (("xt", _t(x2)), ("nwt", _t(nw) if norm else "float")),
+                    (("KIN", kin), ("NORM", int(norm)), ("BITS_A", 4), ("TWO", int(two))), (("EPS", float(eps)),))
+    xa, xb, xs, inv = kern(inputs=[x2, nw if norm else _dummy()], grid=(32, R, 1), threadgroup=(32, 1, 1),
+                           output_shapes=[(R, kin), (R, kin) if two else (1,), (R, kin // 16), (max(8, R),)],
+                           output_dtypes=[mx.float32] * 4)
+    return xa, (xb if two else None), xs, inv
+
+
+def qkv_pre(layer, p: Plan, x2: mx.array) -> mx.array:
+    """K1 for 2+ rows on precomputed input chunks: bit-identical per row to ``qkv`` (one-row build)."""
+    attn, ix = layer.self_attn, layer.self_attn.indexer
+    R = int(x2.shape[0])
+    q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
+    nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
+    rt = _pre_rt()
+    nsg, rps = MULTI_NSG, MULTI_RPS
+    xa, xb, xs, inv = xprep(p, x2, layer.input_layernorm.weight, p.eps_in, two=p.fmt_b == 1)
+    sbt = _t(iq["scales"]) if p.fmt_b == 2 else "float"
+    kern = K.kernel(
+        "qkv_pre",
+        (("xt", _t(x2)), ("nwt", _t(layer.input_layernorm.weight)), ("sat", _t(q["scales"])), ("sbt", sbt)),
+        (("KIN", p.hidden), ("NQ", nq), ("NK", nk), ("NV", nv), ("NIQ", niq), ("NIK", nik), ("BITS_A", p.bits_a),
+         ("GS_A", p.gs_a), ("FMT_B", p.fmt_b), ("BITS_B", p.bits_b), ("GS_B", p.gs_b), ("NSG", nsg), ("RPS", rps),
+         ("RT", rt)),
+        (("EPS", p.eps_in),))
+    iqb, ikb = (_dummy(), _dummy()) if p.fmt_b == 1 else (iq["biases"], ik["biases"])
+    ntot = nq + nk + nv + niq + nik
+    return kern(
+        inputs=[xa, xb if xb is not None else xa, xs, inv, q["weight"], q["scales"], q["biases"], k["weight"],
+                k["scales"], k["biases"], v["weight"], v["scales"], v["biases"], iq["weight"], iq["scales"], iqb,
+                ik["weight"], ik["scales"], ikb],
+        grid=(32 * nsg * (ntot // (nsg * rps)) * -(-R // rt), 1, 1), threadgroup=(32 * nsg, 1, 1),
+        output_shapes=[(R, ntot)], output_dtypes=[mx.float32])[0]
+
+
+def oproj_pre(layer, p: Plan, o: mx.array, x2: mx.array) -> mx.array:
+    """K5 for 2+ rows on precomputed input chunks: bit-identical per row to ``oproj`` (one-row build)."""
+    m = layer.self_attn.o_proj
+    R = int(o.shape[0])
+    rt = _pre_rt()
+    nsg, rps = MULTI_NSG, MULTI_RPS
+    xa, _, xs, _ = xprep(p, o, None, 0.0, two=False)
+    kern = K.kernel(
+        "oproj_pre", (("xt", _t(x2)), ("st", _t(m["scales"]))),
+        (("KIN", p.H * p.D), ("NOUT", p.hidden), ("BITS", p.bits_o), ("GS", p.gs_o), ("NSG", nsg), ("RPS", rps),
+         ("RT", rt), ("SSP", 0)))
+    return kern(inputs=[xa, xs, x2, m["weight"], m["scales"], m["biases"]],
+                grid=(32 * nsg * (p.hidden // (nsg * rps)) * -(-R // rt), 1, 1), threadgroup=(32 * nsg, 1, 1),
+                output_shapes=[(R, p.hidden)], output_dtypes=[x2.dtype])[0]
+
+
 def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
     """K1: [R, hidden] residual rows -> [R, (H + 2 KVH + GI + 1) * D] float32 (q | k | v | index q | index k)."""
     attn, ix = layer.self_attn, layer.self_attn.indexer
     R = int(x2.shape[0])
+    if R > 1 and rows_pre() and _pre_ok(p):
+        return qkv_pre(layer, p, x2)
     q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
     nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
     nsg, rps, rt = _proj_shape(R)
@@ -317,6 +397,8 @@ def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
     """K5: x2 + o_proj(o) [R, hidden] in x2's dtype (and the sum-of-squares partials [R, hidden / 8] when ssp)."""
     m = layer.self_attn.o_proj
     R = int(o.shape[0])
+    if R > 1 and not ssp and rows_pre() and _pre_ok(p):
+        return oproj_pre(layer, p, o, x2)
     nsg, rps, rt = _proj_shape(R)
     kern = K.kernel(
         "oproj", (("xt", _t(x2)), ("st", _t(m["scales"]))),

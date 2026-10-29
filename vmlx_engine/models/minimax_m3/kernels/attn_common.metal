@@ -174,3 +174,60 @@ METAL_FUNC void m3a_rowsN(const device XT* x, const device NWT* nw, const device
     }
   }
 }
+
+// ------------------------------------------------------------------------- RT rows, precomputed input chunks
+// m3a_rowsN with each row's per-block lane chunk read from a precomputed buffer instead of recomputed per output
+// tile: xp [R, KIN] float = m3a_load_chunk's x' (pre-divided by the 4-bit place values when BITS == 4), xs [R, KIN /
+// VPT] float = its chunk sums (attn_xprep computes both with m3a_load_chunk itself, in the same block order). Every
+// output element runs the same per-block sequence as m3a_rowsN (m3a_codes / m3a_fp8_codes, m3a_dot, res += s * dot
+// + b * xs), so a row's result equals the one-row build's bit for bit; only the input preparation moved out.
+template <typename ST, int FMT, int BITS, int GS, int KIN, int RPS, int RT>
+METAL_FUNC void m3a_rowsP(const device float* xp, const device float* xsb, const device uint8_t* w,
+                          const device ST* sc, const device ST* bi, int lrow, int r0, int R, uint lane,
+                          thread float (&res)[RT][RPS]) {
+  constexpr int VPT = (FMT == 1 || BITS == 4) ? 16 : 8;
+  constexpr int BLK = VPT * 32;
+  constexpr int ROWB = FMT == 1 ? KIN : KIN * BITS / 8;
+  constexpr int NG = KIN / (FMT == 1 ? 32 : GS);
+  static_assert(KIN % BLK == 0, "shape");
+  for (int t = 0; t < RT; ++t)
+    for (int o = 0; o < RPS; ++o) res[t][o] = 0.0f;
+  const device uint8_t* wl = w + (size_t)lrow * ROWB + lane * (VPT * (FMT == 1 ? 8 : BITS) / 8);
+  const int gl = (int(lane) * VPT) / (FMT == 1 ? 32 : GS);
+  for (int k = 0; k < KIN; k += BLK) {
+    float xq[RT][VPT];
+    float xs[RT];
+    for (int t = 0; t < RT; ++t) {
+      if (r0 + t < R) {
+        const device float4* p4 = (const device float4*)(xp + (size_t)(r0 + t) * KIN + k + int(lane) * VPT);
+        for (int i = 0; i < VPT / 4; ++i) {
+          const float4 v = p4[i];
+          xq[t][4 * i] = v.x; xq[t][4 * i + 1] = v.y; xq[t][4 * i + 2] = v.z; xq[t][4 * i + 3] = v.w;
+        }
+        xs[t] = xsb[(size_t)(r0 + t) * (KIN / VPT) + k / VPT + int(lane)];
+      }
+    }
+    const int gi = k / (FMT == 1 ? 32 : GS) + gl;
+    for (int o = 0; o < RPS; ++o) {
+      float wf[VPT];
+      float s, b = 0.0f;
+      if (FMT == 1) {
+        m3a_fp8_codes(wl + (size_t)o * ROWB + k, wf);
+        s = m3a_e8m0(uint(((const device uint8_t*)sc)[(size_t)(lrow + o) * NG + gi]));
+      } else {
+        m3a_codes<BITS, VPT>(wl + (size_t)o * ROWB + k * BITS / 8, wf);
+        s = float(sc[(size_t)(lrow + o) * NG + gi]);
+        b = float(bi[(size_t)(lrow + o) * NG + gi]);
+      }
+      for (int t = 0; t < RT; ++t) {
+        if (r0 + t < R) {
+          if (FMT == 1) {
+            res[t][o] += s * m3a_dot<VPT>(xq[t], wf);
+          } else {
+            res[t][o] += s * m3a_dot<VPT>(xq[t], wf) + b * xs[t];
+          }
+        }
+      }
+    }
+  }
+}
