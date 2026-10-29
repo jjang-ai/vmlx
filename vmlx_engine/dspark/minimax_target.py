@@ -60,7 +60,8 @@ import mlx.nn as nn
 logger = logging.getLogger(__name__)
 
 # Rows per multi-row affine kernel launch: the one-row qmv transcription keeps every row in registers up to four rows
-# at every bit width (row_exact_qmv._max_rows); wider verifies run as several launches, every row still exact.
+# at every bit width (row_exact_qmv._max_rows); wider verifies run as one row-split launch (row_exact_qmv_rowsplit:
+# 4-row blocks sharing one weight walk) or, without it, several launches -- every row still exact.
 _ROWS_PER_LAUNCH = 4
 # MLX SwitchGLU sorts (row, expert) pairs onto its multi-row gather kernels from this many routed pairs.
 _SWITCH_SORT_PAIRS = 64
@@ -293,17 +294,21 @@ class MiniMaxM3DSparkTarget:
 
     @staticmethod
     def _wide_kernel(module):
-        """One weight walk for the whole window (up to 16 rows), every row equal to the one-row call (admitted per
-        shape by bit-equality; ``VMLX_ROW_EXACT_WIDE=0`` keeps the 4-row launches)."""
+        """One weight walk for a window of 5..16 rows, every row equal to the one-row call (admitted per shape by
+        bit-equality): the row-split walk (4-row blocks of one threadgroup; ``VMLX_ROW_EXACT_ROWSPLIT=0`` keeps
+        separate 4-row launches), or the experimental staged walk (``VMLX_ROW_EXACT_WIDE=1``, measured slower)."""
         if not isinstance(module, nn.QuantizedLinear) or not _row_exact_kernel_enabled():
             return None
         if str(getattr(module, "mode", "affine") or "affine") != "affine" or "biases" not in module:
             return None
-        from ..metal.row_exact_qmv import row_exact_qmv_wide, wide_enabled
+        from ..metal.row_exact_qmv import row_exact_qmv_rowsplit, row_exact_qmv_wide, rowsplit_enabled, wide_enabled
 
+        gs, bits = int(module.group_size), int(module.bits)
+        if rowsplit_enabled():
+            return lambda xb: (row_exact_qmv_rowsplit(xb, module["weight"], module["scales"], module["biases"],
+                                                      group_size=gs, bits=bits) if xb.shape[-2] > 4 else None)
         if not wide_enabled():
             return None
-        gs, bits = int(module.group_size), int(module.bits)
         return lambda xb: row_exact_qmv_wide(xb, module["weight"], module["scales"], module["biases"],
                                              group_size=gs, bits=bits)
 

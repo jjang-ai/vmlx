@@ -1364,3 +1364,97 @@ def row_exact_qmv_wide(x, weight, scales, biases, *, group_size: int, bits: int)
     STATS["wide_calls"] = STATS.get("wide_calls", 0) + 1
     y = _launch_wide(mx.contiguous(x.reshape(rows, in_dim)), weight, scales, biases, bits, group_size, shape)
     return y.reshape(*x.shape[:-1], out_dim)
+
+
+# --------------------------------------------------------------------------- #
+# Row-split walk: RB blocks of up to 4 rows in ONE threadgroup.
+# --------------------------------------------------------------------------- #
+# The 4-row "multi" transcription of qmv_fast (registers hold 4 rows), with the threadgroup's simdgroups split by
+# (output-row group, row block): simdgroup s computes output rows (s % 2) * 4 .. + 3 for rows (s / 2) * 4 .. + 3.
+# The row blocks of one threadgroup read the same weight bytes at the same time, so the window costs one weight walk
+# from DRAM while each simdgroup keeps exactly the 4-row kernel's registers and per-row arithmetic.
+# Measured 2026-10-28 (M5 Max, 57 M3.1 layers of q/k/v/o/index/shared projections, interleaved, min of 9): 5 / 8 /
+# 12 / 16 rows 30.5 / 46.8 / 71.9 / 117.4 ms as 4-row launches vs 28.8 / 38.2 / 56.7 / 94.6 row-split (-6 / -18 /
+# -21 / -19 %). The rest is the per-row arithmetic itself (MLX's one-row qmv per row), which exactness keeps.
+def _rowsplit_source() -> str:
+    src = _SOURCE.replace(
+        "  const int out_row = tid.y * (num_simdgroups * results_per_simdgroup) +\n      simd_gid * results_per_simdgroup;",
+        "  const int rb = int(simd_gid) / num_simdgroups;\n"
+        "  const int out_row = tid.y * (num_simdgroups * results_per_simdgroup) +\n"
+        "      (int(simd_gid) % num_simdgroups) * results_per_simdgroup;")
+    src = src.replace("const device T* xs = x + (BATCH ? tid.x * in_vec_size : 0) + simd_lid * values_per_thread;",
+                      "const device T* xs = x + rb * ROWS * in_vec_size + simd_lid * values_per_thread;")
+    src = src.replace("y[(BATCH ? tid.x : r) * out_vec_size + out_row + row] = static_cast<T>(v);",
+                      "y[(rb * ROWS + r) * out_vec_size + out_row + row] = static_cast<T>(v);")
+    assert "rb * ROWS * in_vec_size" in src and "(rb * ROWS + r)" in src
+    return src
+
+
+@lru_cache(maxsize=4)
+def _rowsplit_kernel(reg: bool):
+    header = _mlx_qmv_header()
+    if header is None:
+        return None
+    return mx.fast.metal_kernel(
+        name=f"vmlx_row_exact_verify_qmv_rowsplit{'_reg' if reg else ''}",
+        input_names=["w", "scales", "biases", "x"], output_names=["y"], header=header,
+        source=f"#define REG {1 if reg else 0}\n#define MULTI 1\n#define BATCH 0\n#define ROWOUTER 0\n" + _rowsplit_source())
+
+
+_ROWSPLIT_ADMITTED: dict = {}
+
+
+def rowsplit_enabled() -> bool:
+    """VMLX_ROW_EXACT_ROWSPLIT (default on; read per call): 5..16-row verify windows in one weight walk."""
+    return os.environ.get("VMLX_ROW_EXACT_ROWSPLIT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def row_exact_qmv_rowsplit(x, weight, scales, biases, *, group_size: int, bits: int):
+    """5..16 rows in one weight walk as ceil(rows / 4) 4-row blocks per threadgroup (rows padded with zeros to a
+    multiple of the block, padded outputs dropped), every row bit-equal to its one-row call, or None."""
+    if x.ndim < 2 or biases is None or _mlx_qmv_header() is None or weight.dtype != mx.uint32:
+        return None
+    in_dim, out_dim = int(x.shape[-1]), int(weight.shape[0])
+    rows = 1
+    for dim in x.shape[:-1]:
+        rows *= int(dim)
+    if not 2 <= rows <= WIDE_MAX_ROWS or bits not in (2, 3, 4, 5, 6, 8) or group_size not in (32, 64, 128):
+        return None
+    vpt = _values_per_thread(bits)
+    if in_dim % (vpt * 32) or out_dim % 8 or group_size % vpt or in_dim % group_size:
+        return None
+    if x.dtype not in (mx.float16, mx.bfloat16, mx.float32) or scales.dtype != x.dtype or biases.dtype != x.dtype:
+        return None
+    rb = -(-rows // 4)
+    per = -(-rows // rb)                                   # balanced block (<= 4 rows)
+    reg = _register_weights(per)
+
+    def launch(x2d):
+        n = int(x2d.shape[0])
+        if n < rb * per:
+            x2d = mx.concatenate([x2d, mx.zeros((rb * per - n, in_dim), dtype=x2d.dtype)], axis=0)
+        w_, s_, b_ = (_device_sized(a) for a in (weight, scales, biases))
+        (y,) = _rowsplit_kernel(reg)(
+            inputs=[w_, s_, b_, x2d],
+            template=[("T", x2d.dtype), ("BITS", bits), ("GS", group_size), ("K", in_dim), ("N", out_dim),
+                      ("ROWS", per)],
+            grid=(64 * rb, (out_dim + 7) // 8, 1), threadgroup=(64 * rb, 1, 1),
+            output_shapes=[(rb * per, out_dim)], output_dtypes=[x2d.dtype])
+        return y[:n]
+
+    key = (rows, in_dim, out_dim, bits, group_size, str(x.dtype))
+    ok = _ROWSPLIT_ADMITTED.get(key)
+    if ok is None:
+        ok = True
+        for probe in _admission_probes(rows, in_dim, x.dtype):
+            want = mx.concatenate([
+                mx.quantized_matmul(probe[r:r + 1], weight, scales, biases, transpose=True, group_size=group_size,
+                                    bits=bits, mode="affine") for r in range(rows)], axis=0)
+            ok = ok and bool(mx.array_equal(launch(probe), want).item())
+        _ROWSPLIT_ADMITTED[key] = ok
+        (logger.info if ok else logger.warning)("row-exact verify QMV rowsplit %s rows=%d K=%d N=%d bits=%d",
+                                                "admitted" if ok else "REJECTED", rows, in_dim, out_dim, bits)
+    if not ok:
+        return None
+    STATS["rowsplit_calls"] = STATS.get("rowsplit_calls", 0) + 1
+    return launch(mx.contiguous(x.reshape(rows, in_dim))).reshape(*x.shape[:-1], out_dim)
