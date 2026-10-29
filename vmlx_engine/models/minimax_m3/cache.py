@@ -138,6 +138,16 @@ class MiniMaxM3SparseCache(KVCache):
         self.__dict__["_reserve_until"] = until
         self.__dict__["_idx_reserve_until"] = until
 
+    def row_bytes(self) -> int:
+        """Bytes one more row costs on the K / V / index lanes (0 while a lane does not exist yet)."""
+        total = 0
+        for name in ("_keys", "_values", "_idx_keys"):
+            a = self.__dict__.get(name)
+            if a is None or a.ndim != 4 or not int(a.shape[2]):
+                return 0
+            total += a.nbytes // int(a.shape[2])
+        return int(total)
+
     def _grow_rows(self, key: str, prev: int, n: int, step: int) -> int:
         """Rows a growth at ``prev`` for ``n`` new rows allocates: the stock ceil(n / step) * step, or enough for
         the reservation (consumed once the offset reaches it)."""
@@ -646,19 +656,54 @@ def truncate_minimax_m3_cache(cache: list, length: int) -> None:
 
 
 RESERVE_ENV = "VMLX_M3_PREFILL_RESERVE"
+RESERVE_MARGIN_ENV = "VMLX_M3_PREFILL_RESERVE_MARGIN_GB"
 
 
-def reserve_prefill(cache, rows: int) -> None:
-    """Before an M3 prompt prefill of ``rows`` rows: every ``MiniMaxM3SparseCache`` lane grows once for the whole
-    prefill (``MiniMaxM3SparseCache.reserve``) instead of at every chunk. Callers: SingleBatchGenerator's M3 prefill
-    paths and the DSpark text lane (MiniMaxM3DSparkTarget.prefill). ``VMLX_M3_PREFILL_RESERVE=0`` keeps the
-    chunk-by-chunk growth (A/B). Capacity only: rows and readers are unchanged."""
+def allocator_headroom_bytes() -> int | None:
+    """Bytes MLX's Metal allocator can still hand out before it starts releasing its buffer cache on every allocation
+    that misses it (its GC threshold, 0.95 x the device's recommended working set in MLX 0.32's MetalAllocator), minus
+    what is active now. None when MLX does not report it."""
+    try:
+        rec = int(mx.device_info().get("max_recommended_working_set_size") or 0)
+        if rec <= 0:
+            return None
+        return int(0.95 * rec) - int(mx.get_active_memory())
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def reserve_prefill(cache, rows: int):
+    """Reserve every ``MiniMaxM3SparseCache`` lane for the next ``rows`` prompt rows (``MiniMaxM3SparseCache.reserve``)
+    so the lanes grow once instead of at every chunk. Callers (SingleBatchGenerator's M3 prefill paths, the DSpark text
+    lane) ask before each piece until this returns True or False:
+
+    * None: the lanes do not exist yet (a cold cache before its first piece); ask again before the next piece;
+    * False: not reserved, the lanes keep the stock chunk-by-chunk growth: ``VMLX_M3_PREFILL_RESERVE=0``, or the
+      reserved rows would leave MLX's allocator less than ``VMLX_M3_PREFILL_RESERVE_MARGIN_GB`` (default 4) below its
+      GC threshold. Measured on a 128 GB M5 Max (95.5 GiB M3.1 bundle) at 100k tokens: the whole KV reserved at the
+      start kept the allocator over that threshold for the entire prefill, so every chunk's transients came back as
+      fresh, zero-filled buffers (3.9 TB zero-filled vs 1.1 TB with the chunked growth) and the prefill ran 2 % slower.
+      The growth strategy is the only thing decided here; the prefill runs either way;
+    * True: reserved. Capacity only: rows and readers are unchanged."""
     if os.environ.get(RESERVE_ENV, "1").strip().lower() in {"0", "false", "off", "no"}:
-        return
-    for layer in cache or ():
-        fn = getattr(layer, "reserve", None)
-        if callable(fn):
-            fn(int(rows))
+        return False
+    layers = [layer for layer in cache or () if callable(getattr(layer, "reserve", None))]
+    if not layers:
+        return False
+    per_row = [layer.row_bytes() for layer in layers]
+    if not all(per_row):
+        return None
+    headroom = allocator_headroom_bytes()
+    if headroom is not None:
+        try:
+            margin = float(os.environ.get(RESERVE_MARGIN_ENV, "4"))
+        except (TypeError, ValueError):
+            margin = 4.0
+        if sum(per_row) * int(rows) + int(margin * 2 ** 30) > headroom:
+            return False
+    for layer in layers:
+        layer.reserve(int(rows))
+    return True
 
 
 def make_minimax_m3_cache(config) -> list:

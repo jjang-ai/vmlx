@@ -200,10 +200,11 @@ class MiniMaxM3DSparkTarget:
                 n -= 1
             return n
 
-        # one growth of every cache lane for the whole prompt instead of one per piece (bit-identical rows)
+        # one growth of every cache lane for the rest of the prompt instead of one per piece, once the lanes exist and
+        # the allocator has room (models/minimax_m3/cache.reserve_prefill; bit-identical rows)
         from ..models.minimax_m3.cache import reserve_prefill
 
-        reserve_prefill(cache, length)
+        reserved = None
         if plan is not None:
             from ..models.minimax_m3.prefill_geometry import plan_pieces
 
@@ -226,6 +227,8 @@ class MiniMaxM3DSparkTarget:
             "VMLX_DSPARK_PREFILL_ALL_TAPS", "0").strip().lower() not in {"1", "true", "yes", "on"} else None
         for a, b in pieces[:-1]:
             raise_if_generation_cancelled()
+            if reserved is None:
+                reserved = reserve_prefill(cache, length - a)
             piece_taps = taps if tail_from is None or b > tail_from else ()
             _, f = self._stock(ids[:, a:b], cache, piece_taps, logits=False)
             mx.eval([c.state for c in cache])
@@ -234,6 +237,8 @@ class MiniMaxM3DSparkTarget:
                 keep(f)
         pos = pieces[-1][0]
         raise_if_generation_cancelled()
+        if reserved is None:
+            reserve_prefill(cache, length - pos)
         logits, f = self._stock(ids[:, pos:], cache, taps, logits=True)
         if f is not None:
             keep(f)

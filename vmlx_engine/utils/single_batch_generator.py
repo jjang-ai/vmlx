@@ -1379,7 +1379,7 @@ class SingleBatchGenerator:
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
         _clear_each = self._m3_clear_each_chunk()
-        self._m3_reserve_prefill(req.cache, len(tokens))
+        _reserved = None
 
         def _chunk_len(at: int) -> int:
             n = min(step, len(tokens) - at)
@@ -1392,6 +1392,8 @@ class SingleBatchGenerator:
 
         with self._stream_context():
             while len(tokens) - pos > step:
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, len(tokens) - pos)
                 n = _chunk_len(pos)
                 chunk = tokens[pos : pos + n]
                 nxt = pos + n
@@ -1418,6 +1420,8 @@ class SingleBatchGenerator:
                 pos += n
 
             final_chunk = tokens[pos:]
+            if _reserved is None:
+                _reserved = self._m3_reserve_prefill(req.cache, len(final_chunk))
             logits = self._model_call(final_chunk, req)  # forwards+clears pixel_values
             # Materialize the full vision+text forward on THIS stream before the
             # sample step touches it (prevents stale-stream resolution on the
@@ -1467,13 +1471,12 @@ class SingleBatchGenerator:
         return out
 
     @staticmethod
-    def _m3_reserve_prefill(cache, rows: int) -> None:
-        """Size every M3 lane for the whole prefill at its first growth (models/minimax_m3/cache.reserve_prefill)
-        instead of re-allocating and copying every lane at each chunk. VMLX_M3_PREFILL_RESERVE=0 keeps the
-        chunk-by-chunk growth (A/B)."""
+    def _m3_reserve_prefill(cache, rows: int):
+        """Reserve every M3 lane for the remaining ``rows`` prompt rows (models/minimax_m3/cache.reserve_prefill):
+        None until the lanes exist (ask again before the next piece), then True / False (reserved / stock growth)."""
         from ..models.minimax_m3.cache import reserve_prefill
 
-        reserve_prefill(cache, rows)
+        return reserve_prefill(cache, rows)
 
     def _m3_media_token_ids(self) -> set:
         args = getattr(self.model, "args", None)
@@ -1525,9 +1528,11 @@ class SingleBatchGenerator:
         pieces = self.m3_prefill_pieces(req, plan)
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
         _clear_each = self._m3_clear_each_chunk()
-        self._m3_reserve_prefill(req.cache, len(tokens))
+        _reserved = None
         with self._stream_context():
             for i, (a, b) in enumerate(pieces):
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, start + len(tokens) - a)
                 chunk = tokens[a - start: b - start]
                 last = i == len(pieces) - 1
                 lookahead = None if last else tokens[b - start: pieces[i + 1][1] - start]

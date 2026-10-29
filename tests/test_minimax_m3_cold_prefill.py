@@ -154,16 +154,18 @@ def test_reserved_prefill_is_bit_identical_and_grows_once(model, monkeypatch, n,
     la, lb = _lanes(a_cache), _lanes(b_cache)
     assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(la, lb))
     sparse = sum(1 for c in b_cache if hasattr(c, "reserve"))
-    pieces = -(-n // step) + 1
-    # with the reservation every lane grows once during the prefill (K / V and the index lane), without it per chunk
+    # with the reservation every lane grows at most twice during the prefill (K / V and the index lane): the first
+    # piece's stock growth creates the lanes, the reservation sizes them for the rest; without it, once per piece
     pre_b = [g for g in b_grows if g[1] < n]
-    assert len(pre_b) == 2 * sparse
-    assert all(g[3] >= n for g in pre_b)
-    if n > step:
+    assert sparse and len(pre_b) <= 4 * sparse
+    for key in ("_reserve_until", "_idx_reserve_until"):
+        per_lane = [g for g in pre_b if g[0] == key]
+        assert len(per_lane) <= 2 * sparse
+        assert max(g[1] + g[3] for g in per_lane) >= n          # the last growth covers the whole prompt
+    if n > 2 * step:
         assert len([g for g in a_grows if g[1] < n]) > len(pre_b)
     # the reservation is consumed: decode growth is the stock 256-row step again
     assert all(int(c.__dict__.get("_reserve_until") or 0) == 0 for c in b_cache if hasattr(c, "reserve"))
-    del pieces
 
 
 def test_reserved_continuation_after_an_unaligned_restore(model, monkeypatch):
@@ -275,3 +277,37 @@ def test_dspark_lane_skips_taps_before_the_drafter_window(model, monkeypatch, ke
     assert keep_last <= rows_tapped < keep_last + 320 + 3 or (keep_last >= n and rows_tapped == n)
     if keep_last < n - 320:
         assert any(not t for _, t in b[3])
+
+
+
+def test_reservation_waits_for_the_lanes_and_declines_without_allocator_room(model, monkeypatch):
+    """reserve_prefill: None on a cold cache (no lane shapes yet), True once the lanes exist and the allocator has room,
+    False when disabled or when the reserved rows would leave MLX's allocator less than the margin below its GC
+    threshold (measured on a 128 GB M5 Max at 100k: reserving pushed every chunk into the allocator's release-on-allocate
+    regime). Declined, the prefill grows chunk by chunk exactly like VMLX_M3_PREFILL_RESERVE=0, same outputs."""
+    from vmlx_engine.models.minimax_m3 import cache as C
+
+    monkeypatch.delenv("VMLX_M3_PREFILL_RESERVE", raising=False)
+    cold = model.make_cache()
+    assert C.reserve_prefill(cold, 1000) is None
+    mx.eval(model(mx.array([_ids(300, 1)]), cache=cold))
+    assert all(c.row_bytes() > 0 for c in cold if hasattr(c, "reserve"))
+    assert C.reserve_prefill(cold, 1000) is True
+    monkeypatch.setattr(C, "allocator_headroom_bytes", lambda: 0)
+    warm = model.make_cache()
+    mx.eval(model(mx.array([_ids(300, 1)]), cache=warm))
+    assert C.reserve_prefill(warm, 1000) is False
+    monkeypatch.setenv("VMLX_M3_PREFILL_RESERVE", "0")
+    assert C.reserve_prefill(warm, 1000) is False
+
+    # a declined reservation is the stock growth: same growth events and outputs as the reservation turned off
+    monkeypatch.delenv("VMLX_M3_PREFILL_RESERVE", raising=False)
+    prompt = _ids(2701, 31)
+    plan = {"boundary": 2698, "atomic": False}
+    declined = _generate(model, prompt, 320, plan, 3, monkeypatch, "1")
+    monkeypatch.undo()
+    off = _generate(model, prompt, 320, plan, 3, monkeypatch, "0")
+    monkeypatch.undo()
+    assert declined[0] == off[0]
+    assert all(mx.array_equal(x, y).item() for x, y in zip(declined[1], off[1]))
+    assert [g[1:] for g in declined[3]] == [g[1:] for g in off[3]]
