@@ -1,18 +1,30 @@
 """Faster JANGT trellis decode kernels for few-row MoE decode / verify (MiniMax-M3.1 widths), behind a lever.
 
-Same math as moe_kernels' v3 decode kernels (_gu_v3 / _down_v3): 16-weight lane chunks of 12-bit trellis states,
-half2 codes ((s * MU) & MASK) | ORB, half2 fma chain per lane chunk, fp32 fold, code statistics and row scales in the
-epilogue, outlier columns. NOT bit-identical to v3 (decode and verify switch together); every row's arithmetic is
-independent of the other rows in the launch (row invariance 1..16).
+Production path (``routed_fast`` / ``routed_gate_up`` / ``routed_down``; JTMixedSwitchGLU.routed and the fused M3
+MoE block call it with VMLX_JANGT_FAST=1, default off): same math as moe_kernels' v3 decode kernels -- 16-weight lane
+chunks of 12-bit trellis states, half2 codes ((s * MU) & MASK) | ORB, half2 fma chain per lane chunk, fp32 fold, code
+statistics and row scales in the epilogue, outlier columns -- with
+  * the activation side packed once per row in ONE launch (``pack_rows1``: Hadamard-128 rotation, fp16 range guard,
+    half2 conversion, even / odd sums); v3 redid the guard and conversion in every threadgroup;
+  * the code statistics folded into the per-chunk fold (one fp32 accumulator per output row and projection instead
+    of two: half the simd_sum reductions); outlier columns added to the row accumulator before its one simd_sum;
+  * every output row's window words loaded up front per block, states extracted with extract_bits;
+  * down: the slot combine inside the kernel for one row (one launch less), per-slot + combine kernel for 2+ rows.
+NOT bit-identical to v3 (decode and verify switch together). Every row's arithmetic is independent of the other rows
+in the launch: decode steps == verify rows (tests/test_jangt_fast_decode.py), and the float64-reference error equals
+v3's (bench/jangt_decode_error.py).
 
-What changes (see ``gen_gate_up`` flags; ablations measured in bench/jangt_decode_profile.py):
-  * the activation side is packed once per row (``pack_rows``): the Hadamard-128 rotation, the fp16 range guard and
-    the half2 conversion run once per row (v3: in every threadgroup, ~1,500 per layer at one row), the kernels load
-    8 half2 + one inverse scale per lane chunk;
-  * the code statistics are folded into the per-chunk fold (one fp32 accumulator per output row and projection
-    instead of two, half the simd_sum reductions) and the even / odd input sums come with the packed rows;
-  * outlier columns join the row accumulator before the single simd_sum;
-  * state extraction with extract_bits; more output rows per simdgroup (O) to share the activation registers.
+Measured (M5 Max, 57 M3.1 layers, input packing included; 06-PY-VERIFY-KERNELS.md 2026-10-29): one row gate / up
+K 1 / 1.5 / 2: 5.23 / 5.40 / 4.94 -> 3.89 / 4.06 / 4.91 ms; down K 1 / 1.5 / 2 / 2.5: 4.40 / 3.54 / 3.25 / 3.65 ->
+3.46 / 2.82 / 3.19 / 3.58 ms; 16 rows -25 to -34 %. At one row the kernels sit between two floors: the per-state ALU
+work (~1.6 T states / s, K-independent) and DRAM (~540 GB/s): K <= 1.5 is ALU-bound (K 1 cannot pass ~400 GB/s with
+this code), K >= 2 byte-bound (82 % of peak at K 2).
+
+Experiments kept for the record (bench/jangt_decode_profile.py; measured slower or neutral): ``gen_gate_up`` /
+``gen_down`` (the first generator, with ablation switches), window words from one coalesced load + simd_shuffle,
+a threadgroup-memory code table (2x slower: bank conflicts), prefetching the next block's words, splitting K across
+simdgroups, 8 output rows per simdgroup (spills), and decode-once-per-expert grouping (``gate_up4g`` / ``down4g``:
+bit-identical to the ungrouped kernels, -15 % only when all rows share experts, slower on real routing).
 """
 
 from __future__ import annotations
