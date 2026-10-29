@@ -213,6 +213,17 @@ class ARFallback:
             "round_seconds_by_rows": dict(self.width_seconds),
         }
 
+    def continues_after(self, steps: int) -> bool:
+        """Whether the action after an AR burst of ``steps`` steps is AR again, judged before the burst's own timing is
+        recorded (``next_is_ar`` after ``record_ar_burst``, with the current cost estimates): a pipelined burst launches
+        its successor's first step early on this guess, and a wrong guess rolls that one step back."""
+        if self.since_probe + steps >= self.probe_every:
+            return False                             # a draft probe is due
+        if self.ar_left - steps > 0:
+            return True
+        return (self.draft_rate is not None and self.ar_seconds is not None
+                and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin))
+
     def burst_size(self) -> int:
         """AR steps to run now: the rest of the current burst, cut at the next draft probe."""
         return max(1, min(self.ar_left, self.probe_every - self.since_probe))
@@ -355,118 +366,155 @@ def iter_dspark(
                  and os.environ.get("VMLX_DSPARK_PIPELINE", "1").strip().lower() not in {"0", "false", "off", "no"})
     t1 = time.perf_counter()
     produced = 1
-    while produced < max_new:
-        room = max_new - produced
-        if ar_fallback is not None and fixed_width is None and ar_fallback.next_is_ar():
-            # Pipelined AR burst: step i+1 is queued (async_eval) before step i's token is read, as in the AR lane,
-            # and the burst's tap rows reach the drafter in one call. Same values as one-at-a-time steps.
-            n_steps = max(1, min(int(ar_fallback.burst_size()), room))
-            t_step = time.perf_counter()
-            launched = [int(anchor.item())]
-            logits, feats = target.ar_step(anchor, cache, taps)
-            pick_ = choose(logits[None]).reshape(1)
-            mx.async_eval(pick_, feats)
-            burst_feats, new, stop = [], [], False
-            for i in range(n_steps):
-                nxt = None
-                if i + 1 < n_steps:
-                    launched.append(None)            # filled with this step's input token below, once read
-                    logits2, feats2 = target.ar_step(pick_.astype(anchor.dtype), cache, taps)
-                    nxt = (choose(logits2[None]).reshape(1), feats2)
-                    mx.async_eval(*nxt)
-                tok = int(pick_.item())
-                if i + 1 < n_steps:
-                    launched[i + 1] = tok                # the pipelined step forwarded this token
-                burst_feats.append(feats)
-                new.append(tok)
-                if tok in eos:
-                    stop = True
-                    break
-                if nxt is not None:
-                    pick_, feats = nxt
-            if launched and launched[-1] is None:
-                launched.pop()                       # stopped before reading the last launched step's input
-            # A pipelined step past the EOS token already ran: its input (the EOS) is in the cache, and its tap row
-            # must reach the drafter so the context stays aligned with the cache.
-            if len(launched) > len(burst_feats) and nxt is not None:
-                burst_feats.append(nxt[1])
-            drafter.add_context(mx.concatenate(burst_feats, axis=1) if len(burst_feats) > 1 else burst_feats[0])
-            forwarded.extend(launched)
+    # Carry: an AR step launched at the end of a burst for the burst that most likely follows (a target that can roll
+    # one AR step back: ``target.ar_step_rollback``; VMLX_DSPARK_AR_CARRY=0 disables). It is exactly the step that
+    # burst would launch first (same input, same cache), so the tokens never change; a draft round that follows instead
+    # rolls its row back first. (pick, tap row, input token) or None.
+    carry_ok = (ar_fallback is not None and hasattr(ar_fallback, "continues_after")
+                and bool(getattr(target, "ar_step_rollback", False))
+                and os.environ.get("VMLX_DSPARK_AR_CARRY", "1").strip().lower() not in {"0", "false", "off", "no"})
+    carry = None
+    if session is not None:
+        session["ar_carried"] = session["ar_carry_rolled_back"] = 0
+
+    def drop_carry():
+        nonlocal carry
+        if carry is not None:
+            target.rollback(cache, None, kept=0, total=1)
+            carry = None
+            if session is not None:
+                session["ar_carry_rolled_back"] += 1
+
+    try:
+        while produced < max_new:
+            room = max_new - produced
+            if ar_fallback is not None and fixed_width is None and ar_fallback.next_is_ar():
+                # Pipelined AR burst: step i+1 is queued (async_eval) before step i's token is read, as in the AR
+                # lane, and the burst's tap rows reach the drafter in one call. Same values as one-at-a-time steps.
+                n_steps = max(1, min(int(ar_fallback.burst_size()), room))
+                t_step = time.perf_counter()
+                if carry is not None:
+                    pick_, feats, first_in = carry       # launched during the previous burst
+                    carry = None
+                    launched = [first_in]
+                    if session is not None:
+                        session["ar_carried"] += 1
+                else:
+                    launched = [int(anchor.item())]
+                    logits, feats = target.ar_step(anchor, cache, taps)
+                    pick_ = choose(logits[None]).reshape(1)
+                    mx.async_eval(pick_, feats)
+                # launch past the burst's last step only for a successor burst that is likely and has room
+                tail = carry_ok and n_steps < room and ar_fallback.continues_after(n_steps)
+                burst_feats, new, stop = [], [], False
+                for i in range(n_steps):
+                    nxt = None
+                    if i + 1 < n_steps or tail:
+                        launched.append(None)            # filled with this step's input token below, once read
+                        logits2, feats2 = target.ar_step(pick_.astype(anchor.dtype), cache, taps)
+                        nxt = (choose(logits2[None]).reshape(1), feats2)
+                        mx.async_eval(*nxt)
+                    tok = int(pick_.item())
+                    if nxt is not None:
+                        launched[i + 1] = tok            # the pipelined step forwarded this token
+                    burst_feats.append(feats)
+                    new.append(tok)
+                    if tok in eos:
+                        stop = True
+                        break
+                    if nxt is not None:
+                        pick_, feats = nxt
+                if launched and launched[-1] is None:
+                    launched.pop()                       # stopped before reading the last launched step's input
+                if not stop and len(launched) > len(burst_feats):
+                    # The step launched past the burst: carried to the next burst (or rolled back), not part of this
+                    # burst's forwarded tokens or drafter context.
+                    carry = (pick_, feats, launched.pop())
+                # A pipelined step past the EOS token already ran: its input (the EOS) is in the cache, and its tap
+                # row must reach the drafter so the context stays aligned with the cache.
+                if len(launched) > len(burst_feats) and nxt is not None:
+                    burst_feats.append(nxt[1])
+                drafter.add_context(mx.concatenate(burst_feats, axis=1) if len(burst_feats) > 1 else burst_feats[0])
+                forwarded.extend(launched)
+                anchor = mx.array([new[-1]], dtype=anchor.dtype)
+                ar_fallback.record_ar_burst(len(new), time.perf_counter() - t_step)
+                stats.ar_tokens += len(new)
+                produced += len(new)
+                stats.tokens = produced
+                stats.decode_s = time.perf_counter() - t1
+                yield new
+                if stop:
+                    return
+                continue
+            drop_carry()                                 # a draft round follows: its verify starts at the anchor
+            t_round = time.perf_counter()
+            n = min(max_draft, room - 1) if room > 1 else 0
+            k = 0
+            if n >= 1 and pipelined:
+                k = fixed_width if fixed_width is not None else ar_fallback.planned_width(max_draft, cost_per_row)
+                k = max(1, min(int(k), n))
+            # The trained block, or a longer one when this round drafts past it.
+            span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
+            block = mx.concatenate(
+                [target.embed_tokens(anchor.reshape(1, 1)),
+                 mx.broadcast_to(mask_embed, (1, span - 1, mask_embed.shape[-1]))], axis=1)
+            hidden = drafter(block)
+            if n >= 1 and pipelined:
+                # One sync per round: the width comes from the acceptance history, the drafter is queued (async_eval) and
+                # the verify graph is built on the CPU while the GPU drafts. Same values; only the schedule differs.
+                proposal, conf = drafter.draft(hidden, anchor, target.lm_head, k, sampler=sampler)
+                mx.async_eval(proposal)
+            elif n >= 1:
+                drafts, conf = drafter.draft(hidden, anchor, target.lm_head, max_draft,
+                                             sampler=sampler)
+                mx.eval(drafts, conf)
+                if fixed_width is not None:
+                    k = fixed_width
+                elif ar_fallback is not None and hasattr(ar_fallback, "choose_width"):
+                    k = ar_fallback.choose_width(conf.tolist(), max_draft, cost_per_row)
+                else:
+                    k = choose_width(conf.tolist(), max_draft, cost_per_row)
+                k = max(1, min(int(k), n))
+                proposal = drafts[:k]
+            else:
+                k, proposal = 0, mx.array([], dtype=anchor.dtype)
+            rows = mx.concatenate([anchor, proposal]).reshape(1, k + 1)
+            logits, feats, sink = target.verify(rows, cache, taps)
+            picks = choose(logits)
+            mx.eval(picks, feats)
+            if pipelined and k:
+                mx.eval(proposal)
+            drafted = proposal.tolist() if k else []
+            target_picks = picks.tolist()
+            accepted = 0
+            while accepted < k and drafted[accepted] == target_picks[accepted]:
+                accepted += 1
+            new = drafted[:accepted] + [target_picks[accepted]]
+            target.rollback(cache, sink, kept=accepted + 1, total=k + 1)
+            drafter.add_context(feats[:, :accepted + 1])
+            forwarded.extend(rows[0, :accepted + 1].tolist())
             anchor = mx.array([new[-1]], dtype=anchor.dtype)
-            ar_fallback.record_ar_burst(len(new), time.perf_counter() - t_step)
-            stats.ar_tokens += len(new)
+            stats.rounds += 1
+            stats.drafted += k
+            stats.accepted += accepted
+            if ar_fallback is not None:
+                ar_fallback.record_draft(len(new), time.perf_counter() - t_round, rows=k + 1)
+                if hasattr(ar_fallback, "record_acceptance"):
+                    ar_fallback.record_acceptance(k, accepted)
+            stats.widths[k + 1] = stats.widths.get(k + 1, 0) + 1
+            cut = next((i for i, t in enumerate(new) if t in eos), None)
+            if cut is not None:
+                new = new[:cut + 1]
+            new = new[:max_new - produced]
             produced += len(new)
             stats.tokens = produced
             stats.decode_s = time.perf_counter() - t1
             yield new
-            if stop:
+            if cut is not None:
                 return
-            continue
-        t_round = time.perf_counter()
-        n = min(max_draft, room - 1) if room > 1 else 0
-        k = 0
-        if n >= 1 and pipelined:
-            k = fixed_width if fixed_width is not None else ar_fallback.planned_width(max_draft, cost_per_row)
-            k = max(1, min(int(k), n))
-        # The trained block, or a longer one when this round drafts past it.
-        span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
-        block = mx.concatenate(
-            [target.embed_tokens(anchor.reshape(1, 1)),
-             mx.broadcast_to(mask_embed, (1, span - 1, mask_embed.shape[-1]))], axis=1)
-        hidden = drafter(block)
-        if n >= 1 and pipelined:
-            # One sync per round: the width comes from the acceptance history, the drafter is queued (async_eval) and
-            # the verify graph is built on the CPU while the GPU drafts. Same values; only the schedule differs.
-            proposal, conf = drafter.draft(hidden, anchor, target.lm_head, k, sampler=sampler)
-            mx.async_eval(proposal)
-        elif n >= 1:
-            drafts, conf = drafter.draft(hidden, anchor, target.lm_head, max_draft,
-                                         sampler=sampler)
-            mx.eval(drafts, conf)
-            if fixed_width is not None:
-                k = fixed_width
-            elif ar_fallback is not None and hasattr(ar_fallback, "choose_width"):
-                k = ar_fallback.choose_width(conf.tolist(), max_draft, cost_per_row)
-            else:
-                k = choose_width(conf.tolist(), max_draft, cost_per_row)
-            k = max(1, min(int(k), n))
-            proposal = drafts[:k]
-        else:
-            k, proposal = 0, mx.array([], dtype=anchor.dtype)
-        rows = mx.concatenate([anchor, proposal]).reshape(1, k + 1)
-        logits, feats, sink = target.verify(rows, cache, taps)
-        picks = choose(logits)
-        mx.eval(picks, feats)
-        if pipelined and k:
-            mx.eval(proposal)
-        drafted = proposal.tolist() if k else []
-        target_picks = picks.tolist()
-        accepted = 0
-        while accepted < k and drafted[accepted] == target_picks[accepted]:
-            accepted += 1
-        new = drafted[:accepted] + [target_picks[accepted]]
-        target.rollback(cache, sink, kept=accepted + 1, total=k + 1)
-        drafter.add_context(feats[:, :accepted + 1])
-        forwarded.extend(rows[0, :accepted + 1].tolist())
-        anchor = mx.array([new[-1]], dtype=anchor.dtype)
-        stats.rounds += 1
-        stats.drafted += k
-        stats.accepted += accepted
-        if ar_fallback is not None:
-            ar_fallback.record_draft(len(new), time.perf_counter() - t_round, rows=k + 1)
-            if hasattr(ar_fallback, "record_acceptance"):
-                ar_fallback.record_acceptance(k, accepted)
-        stats.widths[k + 1] = stats.widths.get(k + 1, 0) + 1
-        cut = next((i for i, t in enumerate(new) if t in eos), None)
-        if cut is not None:
-            new = new[:cut + 1]
-        new = new[:max_new - produced]
-        produced += len(new)
-        stats.tokens = produced
-        stats.decode_s = time.perf_counter() - t1
-        yield new
-        if cut is not None:
-            return
+    finally:
+        # Loop end (length) or the consumer closing the stream: the cache must hold exactly the forwarded tokens.
+        drop_carry()
 
 
 def generate_dspark(target, drafter, prompt_ids, max_new, eos, **kwargs) -> List[int]:

@@ -107,6 +107,9 @@ class MiniMaxM3DSparkTarget:
 
     # Every verify row runs on decode arithmetic at any width: this target puts no ceiling on the draft ladder.
     max_verify_rows: Optional[int] = None
+    # rollback() can drop a single AR step (every lane is a trimmable append-only buffer): iter_dspark may launch the
+    # next AR burst's first step early and roll it back when a draft round follows instead.
+    ar_step_rollback = True
 
     def __init__(self, model):
         lm = model
