@@ -198,7 +198,8 @@ class Dataset:
     """Every record of a data directory (optionally only some ``sets`` / ``domains``), memory-mapped."""
 
     def __init__(self, data_dir: str | Path, *, sets: Optional[Iterable[str]] = None,
-                 domains: Optional[Iterable[str]] = None, ids: Optional[Iterable[str]] = None):
+                 domains: Optional[Iterable[str]] = None, ids: Optional[Iterable[str]] = None,
+                 modes: Optional[Iterable[str]] = None):
         self.dir = Path(data_dir)
         self.meta = json.loads((self.dir / "meta.json").read_text())
         self.width = int(self.meta["hidden"]) * len(self.meta["taps"])
@@ -206,11 +207,13 @@ class Dataset:
         sets = set(sets) if sets else None
         domains = set(domains) if domains else None
         ids = set(ids) if ids else None
+        modes = set(modes) if modes else None
         self.records: list[Record] = []
         self._maps: dict[str, SafetensorsMap] = {}
         for idx in sorted((self.dir / "shards").glob("shard-*.json")):
             for e in json.loads(idx.read_text())["records"]:
-                if sets and e["set"] not in sets or domains and e["domain"] not in domains or ids and e["id"] not in ids:
+                if sets and e["set"] not in sets or domains and e["domain"] not in domains or ids and e["id"] not in ids \
+                        or modes and e["mode"] not in modes:
                     continue
                 self.records.append(Record(id=e["id"], n=e["n"], tap_start=e["tap_start"], shard=idx.stem + ".safetensors",
                                            tok_off=e["tok_off"], tap_off=e["tap_off"], domain=e["domain"],

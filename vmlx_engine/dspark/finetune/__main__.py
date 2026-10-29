@@ -47,8 +47,11 @@ def cmd_gen(a) -> None:
     prompt_ctx = int(a.prompt_ctx) if a.prompt_ctx is not None else window
     items = DG.load_items(a.prompts, a.mode, sets=_csv(a.sets), domains=_csv(a.domains), limit=a.limit,
                           max_len=a.max_len, cut_turns=a.cut_turns)
-    if a.set_name:
-        for it in items:
+    prefix = a.id_prefix if a.id_prefix is not None else ("tf:" if a.mode == "teacher" else
+                                                          "gs:" if a.sample else "gg:")
+    for it in items:
+        it["id"] = prefix + it["id"]          # generate / teacher / sampled records of one row never collide
+        if a.set_name:
             it["set"] = a.set_name
     print(f"[gen] {len(items)} items from {a.prompts} ({a.mode}); taps {taps}, window {window}, prompt_ctx {prompt_ctx}")
     if a.dry_run:
@@ -93,7 +96,8 @@ def cmd_train(a) -> None:
                       conf_weight=a.conf_weight, soft_weight=a.soft_weight, base_weight=a.base_weight,
                       candidates=a.candidates, on_path=not a.all_rows, trainable=_csv(a.trainable) or ("*",),
                       qat=not a.no_qat, train_sets=_csv(a.train_sets), eval_sets=_csv(a.eval_sets),
-                      domains=_csv(a.domains), eval_every=a.eval_every,
+                      domains=_csv(a.domains), modes=_csv(a.modes), eval_modes=_csv(a.eval_modes),
+                      eval_every=a.eval_every,
                       eval_anchors_per_record=a.eval_anchors_per_record, ckpt_every=a.ckpt_every, seed=a.seed,
                       log_every=a.log_every)
     train(cfg)
@@ -120,7 +124,7 @@ def cmd_eval(a) -> None:
     from .records import Dataset
     from .target_head import TargetHead
 
-    ds = Dataset(a.data, sets=_csv(a.sets) or None, domains=_csv(a.domains) or None)
+    ds = Dataset(a.data, sets=_csv(a.sets) or None, domains=_csv(a.domains) or None, modes=_csv(a.modes) or None)
     if a.limit:
         ds.records = ds.records[:a.limit]
     head = TargetHead(a.head or a.data)
@@ -189,6 +193,8 @@ def main(argv=None) -> None:
     g.add_argument("--mode", choices=("generate", "teacher"), default="generate")
     g.add_argument("--sets", default="", help="keep rows whose 'set' is one of these (csv)")
     g.add_argument("--set-name", default="", help="store every record under this set name instead of its own")
+    g.add_argument("--id-prefix", default=None,
+                   help="record id prefix (default tf: teacher, gg: greedy, gs: sampled), so modes share a directory")
     g.add_argument("--domains", default="")
     g.add_argument("--limit", type=int, default=None)
     g.add_argument("--max-new", type=int, default=1024)
@@ -230,6 +236,8 @@ def main(argv=None) -> None:
     t.add_argument("--train-sets", default="calib")
     t.add_argument("--eval-sets", default="ref")
     t.add_argument("--domains", default="")
+    t.add_argument("--modes", default="", help="record modes to train on: generate,generate-sampled,teacher")
+    t.add_argument("--eval-modes", default="", help="record modes of the in-training held-out eval")
     t.add_argument("--eval-every", type=int, default=200)
     t.add_argument("--eval-anchors-per-record", type=int, default=512)
     t.add_argument("--ckpt-every", type=int, default=200)
@@ -243,6 +251,7 @@ def main(argv=None) -> None:
     e.add_argument("--head", default=None)
     e.add_argument("--sets", default="ref")
     e.add_argument("--domains", default="")
+    e.add_argument("--modes", default="", help="generate (exact serving data) / generate-sampled / teacher")
     e.add_argument("--limit", type=int, default=None)
     e.add_argument("--width", default="adaptive", help="csv of 'adaptive' and fixed widths")
     e.add_argument("--candidates", type=int, default=None)

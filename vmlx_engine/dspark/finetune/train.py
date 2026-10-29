@@ -60,6 +60,8 @@ class TrainConfig:
     train_sets: tuple = ("calib",)
     eval_sets: tuple = ("ref",)
     domains: tuple = ()
+    modes: tuple = ()                       # record modes to train on (generate / generate-sampled / teacher)
+    eval_modes: tuple = ()
     eval_every: int = 200
     eval_anchors_per_record: int = 512
     ckpt_every: int = 200
@@ -174,8 +176,9 @@ def train(cfg: TrainConfig, log=print) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     (out / "train_config.json").write_text(json.dumps(asdict(cfg), indent=1, default=list))
     spec, train_p, frozen, fq, head, _ = setup(cfg)
-    ds = Dataset(cfg.data, sets=cfg.train_sets or None, domains=cfg.domains or None)
-    ev = Dataset(cfg.data, sets=cfg.eval_sets or None, domains=cfg.domains or None) if cfg.eval_sets else None
+    ds = Dataset(cfg.data, sets=cfg.train_sets or None, domains=cfg.domains or None, modes=cfg.modes or None)
+    ev = Dataset(cfg.data, sets=cfg.eval_sets or None, domains=cfg.domains or None,
+                 modes=cfg.eval_modes or None) if cfg.eval_sets else None
     sampler = WindowSampler(ds, cfg.anchors, cfg.seed)
     spans = tuple(int(s) for s in (cfg.spans or (spec.block,)))
     cands = default_candidates() if cfg.candidates < 0 else int(cfg.candidates)
