@@ -5,7 +5,8 @@
 //
 // Template: T (activation dtype), D (hidden = gate/up input), I (expert intermediate), E (experts), ROWS (1..16),
 //   KS (experts per token), KB2 (2 x JANGT bits per weight of gate/up: 2 / 3 / 4 / 5 / 6), L (trellis state bits,
-//   12), W (uint32 words per gate/up row), NOUT (gate/up outlier columns, 0 = none), ALPHA / LIMIT / RSF (the
+//   12), W (uint32 words per gate/up row), NOUT (gate/up outlier columns, 0 = none), SHARED (1: this launch also
+//   computes the shared expert's gate / up; 0: the caller runs it, hs is not written), ALPHA / LIMIT / RSF (the
 //   SwiGLU-OAI alpha 1.702, limit 7.0 and the routed scaling factor 2.0 as float32 bit patterns, read with
 //   as_type<float>: compile-time constants, as the v3 kernels' literals -- the compiler folds alpha into fast::exp, so
 //   a runtime alpha rounds differently).
@@ -14,13 +15,15 @@
 //   woutg / woutu [E, I, max(NOUT,1)] f16, sgw / suw [I, D / 8] u32, sgs / sgb / sus / sub [I, D / 64] T (shared).
 // Outputs: h [ROWS * KS, I] f32 (routed SwiGLU-OAI, slot t * KS + j), hs [ROWS, I] T (shared SwiGLU-OAI),
 //   inds [ROWS, KS] u32, scores [ROWS, KS] f32 (written by the row tile 0 threadgroups).
-// Grid: (64, I / 8, ROWS * KS + ROWS), threadgroup (64, 1, 1): 2 simdgroups x 4 output rows; z < ROWS * KS is the
-//   (row, slot) z of the routed part (moe_kernels._gu_v3 per slot, bit for bit); z = ROWS * KS + t the shared expert
-//   of row t (MLX one-row qmv_fast per output row, then MLX's bf16 rounding and the compiled SwiGLU op by op).
+// Grid: (64, ROWS * KS + SHARED * ROWS, I / 8), threadgroup (64, 1, 1): 2 simdgroups x 4 output rows of tile
+//   grid.z; grid.y = z < ROWS * KS is the (row, slot) z of the routed part (moe_kernels._gu_v3 per slot, bit for bit),
+//   z = ROWS * KS + t the shared expert of row t (MLX one-row qmv_fast per output row, then MLX's bf16 rounding and
+//   the compiled SwiGLU op by op). The slot is the faster grid axis (as v3's slot_fastest): consecutive threadgroups
+//   read the same weight tile for different slots, so experts picked by several rows come from cache.
 
   const uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
-  const uint row0 = threadgroup_position_in_grid.y * 8u + sgi * 4u;
-  const uint z = threadgroup_position_in_grid.z;
+  const uint row0 = threadgroup_position_in_grid.z * 8u + sgi * 4u;
+  const uint z = threadgroup_position_in_grid.y;
   const float alpha = as_type<float>(ALPHA), limit = as_type<float>(LIMIT);
   if (z < uint(ROWS * KS)) {
     // ---- routing of row t (stable descending order of sigmoid + bias: argpartition's order)
@@ -49,7 +52,7 @@
       if (uint(j) == slot) { e = bi; o_slot = oj; }
       for (int i = 0; i < PER; i++) if (lane + 32u * uint(i) == bi) cv[i] = -INFINITY;
     }
-    if (threadgroup_position_in_grid.y == 0u && sgi == 0u && lane == 0u) {
+    if (threadgroup_position_in_grid.z == 0u && sgi == 0u && lane == 0u) {
       inds[(size_t)t * KS + slot] = e;
       float sc = o_slot / den;
       scores[(size_t)t * KS + slot] = sc * as_type<float>(RSF);
@@ -108,6 +111,7 @@
     }
     return;
   }
+  if (SHARED == 0) return;
   // ---- shared expert of row t = z - ROWS * KS: MLX qmv_fast (4-bit, group 64) for gate and up, 4 output rows per
   // simdgroup. One row per threadgroup (rows run in parallel; the tile's weights are shared through the cache).
   // (Several rows per threadgroup with [rows][4] accumulator arrays miscompiled here: rows other than one per pass

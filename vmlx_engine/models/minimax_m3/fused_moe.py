@@ -34,12 +34,24 @@ import numpy as np
 KDIR = Path(__file__).parent / "kernels"
 MAX_ROWS = 16
 ENV = "VMLX_M3_FUSED_MOE"
+# Rows up to which the shared expert runs inside K7 / K8 (one threadgroup per row and output tile, MLX's one-row qmv).
+# Wider calls run it as row-exact 4-row qmv launches (metal/row_exact_qmv; the same per-row arithmetic), which walk
+# the weights a quarter as often: measured 16 rows, 57 layers, fused shared ~30 ms vs ~10 ms. VMLX_M3_FUSED_SHARED_ROWS.
+SHARED_IN_KERNEL_ROWS = 2
+
+
+def _shared_rows() -> int:
+    try:
+        return int(os.environ.get("VMLX_M3_FUSED_SHARED_ROWS", "") or SHARED_IN_KERNEL_ROWS)
+    except ValueError:
+        return SHARED_IN_KERNEL_ROWS
 
 _INPUTS = {
     "m3_router": ["x", "gw", "su"],
     "m3_moe_gate_up": ["fc", "xr", "x", "sig", "bias", "wg", "sg", "wu", "su_", "ocol", "woutg", "woutu",
                        "sgw", "sgs", "sgb", "suw", "sus", "sub"],
-    "m3_moe_down": ["fc", "hr", "h", "inds", "scores", "wd", "sd", "ocol", "wout", "hs", "sdw", "sds", "sdb", "resid"],
+    "m3_moe_down": ["fc", "hr", "h", "inds", "scores", "wd", "sd", "ocol", "wout", "hs", "sdw", "sds", "sdb", "resid",
+                    "sdo"],
 }
 _OUTPUTS = {
     "m3_router": ["sig", "xr"],
@@ -112,6 +124,8 @@ def supported(block, x: mx.array) -> bool:
         return False                       # the shared expert shares K7's intermediate tiles
     if sw.I % 512 or sw.D % 512:
         return False                       # MLX's one-row qmv_fast traversal (the shared expert's arithmetic)
+    if sw.D % 1024 or sw.D < 16 * sw.E:
+        return False                       # MLX's one-row gemv configuration K6 transcribes (BN 8, K >= 16 N)
     gate = getattr(block, "gate", None)
     if not isinstance(gate, nn.Linear) or isinstance(gate, nn.QuantizedLinear) or "bias" in gate:
         return False
@@ -136,7 +150,7 @@ def router(x2, gw, su, rows: int):
         output_shapes=[(rows, E), (rows, D)], output_dtypes=[mx.float32, mx.float32])
 
 
-def template_args(block, rows: int, x_dtype) -> dict:
+def template_args(block, rows: int, x_dtype, shared: bool = True) -> dict:
     """Every template parameter K7 / K8 take for this layer, and their float constant buffers ``fc`` (also what
     vmlx-swift passes)."""
     sw = block.switch_mlp
@@ -145,8 +159,10 @@ def template_args(block, rows: int, x_dtype) -> dict:
     common = [("T", x_dtype), ("D", D), ("I", I), ("E", E), ("ROWS", rows), ("KS", int(block.top_k)),
               ("L", int(U["L"]))]
     gu = common + [("KB2", _kb2(U["K"])), ("W", int(U["gate"]["packed"].shape[-1])), ("NOUT", int(U["gate"]["n_out"])),
-                   ("ALPHA", fbits(sw.alpha)), ("LIMIT", fbits(sw.limit)), ("RSF", fbits(block.routed_scaling_factor))]
-    dn = common + [("KB2", _kb2(U["K_dn"])), ("W", int(U["down"]["packed"].shape[-1])), ("NOUT", int(U["down"]["n_out"]))]
+                   ("SHARED", int(shared)), ("ALPHA", fbits(sw.alpha)), ("LIMIT", fbits(sw.limit)),
+                   ("RSF", fbits(block.routed_scaling_factor))]
+    dn = common + [("KB2", _kb2(U["K_dn"])), ("W", int(U["down"]["packed"].shape[-1])), ("NOUT", int(U["down"]["n_out"])),
+                   ("SHARED", int(shared))]
     fc_gu = _stats(U["L"], U["K"])
     fc_dn = _stats(U["L"], U["K_dn"])
     return {"gate_up": gu, "down": dn, "fc_gate_up": fc_gu, "fc_down": fc_dn}
@@ -160,18 +176,19 @@ def _fc(values: tuple) -> mx.array:
     return mx.array(np.pad(np.array(values, np.float32), (0, 16 - len(values))))
 
 
-def gate_up(block, x2, sig, xr):
-    """K7: (h [rows * KS, I] f32, hs [rows, I], inds [rows, KS] u32, scores [rows, KS] f32)."""
+def gate_up(block, x2, sig, xr, shared: bool = True):
+    """K7: (h [rows * KS, I] f32, hs [rows, I] (written only with ``shared``), inds [rows, KS] u32, scores [rows, KS]
+    f32)."""
     sw, sh = block.switch_mlp, block.shared_experts
     U = sw._unit()
     rows, I, KS = int(x2.shape[0]), sw.I, int(block.top_k)
-    targs = template_args(block, rows, x2.dtype)
+    targs = template_args(block, rows, x2.dtype, shared)
     g, u = U["gate"], U["up"]
     return _kernel("m3_moe_gate_up")(
         inputs=[_fc(tuple(targs["fc_gate_up"])), xr, x2, sig, block.e_score_correction_bias, g["packed"], g["scale"],
                 u["packed"], u["scale"], g["ocol"], g["wout"], u["wout"], sh.gate_proj.weight, sh.gate_proj.scales,
                 sh.gate_proj.biases, sh.up_proj.weight, sh.up_proj.scales, sh.up_proj.biases],
-        template=targs["gate_up"], grid=(64, I // 8, rows * KS + rows), threadgroup=(64, 1, 1),
+        template=targs["gate_up"], grid=(64, rows * KS + (rows if shared else 0), I // 8), threadgroup=(64, 1, 1),
         output_shapes=[(rows * KS, I), (rows, I), (rows, KS), (rows, KS)],
         output_dtypes=[mx.float32, x2.dtype, mx.uint32, mx.float32])
 
@@ -183,17 +200,20 @@ def down_input(block, h, inds):
     return MK.rotate_rows(h, block.switch_mlp._unit()["sv_dn"], inds.reshape(-1))
 
 
-def down(block, hr, h, inds, scores, hs, r2):
-    """K8: the new residual rows [rows, D]."""
+def down(block, hr, h, inds, scores, hs, r2, sdo=None):
+    """K8: the new residual rows [rows, D]. ``sdo``: the shared expert's output computed by the caller (else K8
+    computes it from ``hs``)."""
     sw, sh = block.switch_mlp, block.shared_experts
     U = sw._unit()
     rows, D = int(r2.shape[0]), sw.D
-    targs = template_args(block, rows, r2.dtype)
+    shared = sdo is None
+    targs = template_args(block, rows, r2.dtype, shared)
     d = U["down"]
     return _kernel("m3_moe_down")(
-        inputs=[_fc(tuple(targs["fc_down"])), hr, h, inds, scores, d["packed"], d["scale"], d["ocol"], d["wout"], hs,
-                sh.down_proj.weight, sh.down_proj.scales, sh.down_proj.biases, r2],
-        template=targs["down"], grid=(64, D // 8, rows), threadgroup=(64, 1, 1),
+        inputs=[_fc(tuple(targs["fc_down"])), hr, h, inds, scores, d["packed"], d["scale"], d["ocol"], d["wout"],
+                r2 if hs is None else hs, sh.down_proj.weight, sh.down_proj.scales, sh.down_proj.biases, r2,
+                r2 if sdo is None else sdo],
+        template=targs["down"], grid=(64, rows, D // 8), threadgroup=(64, 1, 1),
         output_shapes=[(rows, D)], output_dtypes=[r2.dtype])[0]
 
 
@@ -205,10 +225,34 @@ def fused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:
     D = sw.D
     x2 = mx.contiguous(x_normed.reshape(-1, D))
     r2 = mx.contiguous(resid.reshape(-1, D).astype(x2.dtype))
-    sig, xr = router(x2, block.gate.weight, U["su_gu"], int(x2.shape[0]))
-    h, hs, inds, scores = gate_up(block, x2, sig, xr)
-    out = down(block, down_input(block, h, inds), h, inds, scores, hs, r2)
+    rows = int(x2.shape[0])
+    sig, xr = router(x2, block.gate.weight, U["su_gu"], rows)
+    shared = rows <= _shared_rows()
+    h, hs, inds, scores = gate_up(block, x2, sig, xr, shared)
+    sdo = None if shared else _shared_rows_exact(block.shared_experts, x2)
+    out = down(block, down_input(block, h, inds), h, inds, scores, hs if shared else None, r2, sdo)
     return out.reshape(*lead, D)
+
+
+def _shared_rows_exact(sh, x2):
+    """The shared expert of several rows, every row on MLX's one-row qmv arithmetic (row-exact 4-row launches; one-row
+    calls where a shape is not admitted) and the model's own SwiGLU-OAI: [rows, D]."""
+    from vmlx_engine.metal.row_exact_qmv import row_exact_qmv
+
+    def lin(q, x):
+        rows = int(x.shape[0])
+        outs = []
+        for a in range(0, rows, 4):
+            xb = x[a:a + 4]
+            y = row_exact_qmv(xb, q["weight"], q["scales"], q["biases"], group_size=int(q.group_size),
+                              bits=int(q.bits)) if int(xb.shape[0]) > 1 else None
+            outs.append(y if y is not None else
+                        mx.concatenate([q(xb[r:r + 1]) for r in range(int(xb.shape[0]))], axis=0))
+        return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=0)
+
+    from vmlx_engine.models.minimax_m3.minimax_m3 import swiglu
+
+    return lin(sh.down_proj, swiglu(lin(sh.up_proj, x2), lin(sh.gate_proj, x2), sh.alpha, sh.limit))
 
 
 def unfused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:

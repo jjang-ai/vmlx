@@ -302,3 +302,116 @@ def down_weighted_grouped(hr, h, idx, rw, U, rows_per_pass: int = 0, out_rows: i
     """As MK.gather_down_weighted_v3: (T, D) fp32, bit-identical."""
     T, k = idx.shape
     return slot_combine(down_slots_grouped(hr, h, idx, U, rows_per_pass, out_rows), rw, T, k)
+
+
+# ------------------------------------------------------------------------------------------- tile-shared variant
+# Measured 2026-10-28 (M5 Max, M3.1 gate/up, 57 layers, interleaved, min of 15), bit-identical to v3 but slower:
+#   real routing 1 / 4 / 8 / 16 rows: v3 7.5 / 18.5 / 34.1 / 60.5 ms vs 4 simdgroups 11.8 / 25.0 / 47.1 / 94.8
+#   (2 simdgroups worse); all rows on the same 4 experts: v3 17.1 / 31.0 / 60.6 (4 / 8 / 16 rows) vs 14.4 / 26.0 /
+#   59.3. The threadgroup-memory round trip of the decoded tiles and the two barriers per block cost more than the
+#   decode they share. Not routed anywhere; kept as the measured alternative (tests/test_jangt_grouped_decode.py).
+# The register-resident grouping above loses to v3 because every extra row's activations and accumulators occupy
+# registers. Here a threadgroup of NS simdgroups serves one group of up to NS rows (slots of one expert) and 8 output
+# rows: per 512-value block the simdgroups first DECODE the tile's 16 lane chunks (8 output rows x gate / up) once,
+# into threadgroup memory (half2 x 8 per lane chunk: exactly the values _tdot3 multiplies), then simdgroup j APPLIES
+# them to row j (its own activation load, fp16 guard, fma chain in step order, fp32 fold) -- each row's arithmetic is
+# v3's, the decode is shared. Registers per lane: one row's accumulators (8 output rows x 4) + one row's activations.
+def _decode_store(K, L: int, dst: str) -> str:
+    so = VL.step_offsets(K, 9)
+    mk = (1 << L) - 1
+    MU = VL.MULTS[K]
+    M2 = MASK | (MASK << 16)
+    O2 = ORB | (ORB << 16)
+    st = []
+    for j in range(8):
+        ex = MK._step_extract(int(so[j]), L)
+        st.append(f"{{ uint s_ = ({ex}) & {mk}u; {dst}[{j}] = as_type<half2>(((s_ * {MU}u) & {M2}u) | {O2}u); }}")
+    return " ".join(st)
+
+
+@functools.lru_cache(maxsize=None)
+def _gu_tiles(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float, guard: bool,
+              act: str, alpha: float, NS: int):
+    mu, isd = VL.code_stats(L, K)
+    PL, adv, _ = MK._lane_geom(K, L)
+    ld = MK._window_load(K, L, lambda i: f"wr[{i}]")
+    per_sg = 16 // NS                                   # lane chunks each simdgroup decodes per block
+    full, tail = kin // 512 * 512, kin % 512
+    clamp = MK.act_clamp_metal(limit)
+    hval = MK.act_value_metal(act, alpha)
+    outl_pre = "" if n_out == 0 else f"""
+      float og[8], ou[8];
+      {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{ og[r] = 0.0f; ou[r] = 0.0f; }}
+      if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
+        if (c >= 0) {{ float xo = float(x[(size_t)(myts / KS) * {kin}u + uint(c)]);
+          {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{ og[r] = xo * float(woutg[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]);
+                                                      ou[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
+      {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{ og[r] = simd_sum(og[r]); ou[r] = simd_sum(ou[r]); }}"""
+    outl = "" if n_out == 0 else " g += og[r]; u += ou[r];"
+    picks = " ".join(f"if (sgi == {j}u) myts = ts{j};" for j in range(NS))
+    src = f"""
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * 8u;{_group_head(NS)}
+    threadgroup half2 dec[16 * 32 * 8];
+    uint myts = ts0; {picks}
+    const bool active = sgi < nr;
+    const uint lb = lane * {PL}u; const uint sh = lb & 31u; (void)sh;
+    const device float* xp = xr + (size_t)(myts / KS) * {kin}u + lane * 16u;
+    float g0[8], g1[8], u0[8], u1[8];
+    {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{ g0[r] = 0.0f; g1[r] = 0.0f; u0[r] = 0.0f; u1[r] = 0.0f; }}
+    float se = 0.0f, so = 0.0f;
+    for (uint k0 = 0; k0 < {full + (512 if tail else 0)}u; k0 += 512u) {{
+      const bool lane_on = k0 < {full}u || lane < {tail // 16}u;
+      // decode: chunk c = (output row c / 2, gate if c even else up), simdgroup sgi decodes chunks sgi * {per_sg} ..
+      {MK._UNROLL} for (uint q = 0; q < {per_sg}u; q++) {{
+        const uint c = sgi * {per_sg}u + q;
+        const device uint32_t* base = (c & 1u) ? wu : wg;
+        const device uint32_t* wr = base + ((size_t)e * {N}u + row0 + c / 2u) * {W}u + (k0 / 512u) * {adv}u + (lb >> 5);
+        if (lane_on) {{ {ld} half2 pv[8]; {_decode_store(K, L, "pv")}
+          {MK._UNROLL} for (uint j = 0; j < 8u; j++) dec[(c * 32u + lane) * 8u + j] = pv[j]; }}
+      }}
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (active && lane_on) {{
+        {MK._xload3(guard).replace("xp[i]", "xp[i]")}
+        {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{
+          half2 ag = half2(0.0h), au = half2(0.0h);
+          {MK._UNROLL} for (uint j = 0; j < 8u; j++) ag = fma(xh[j], dec[((2u * r) * 32u + lane) * 8u + j], ag);
+          {MK._UNROLL} for (uint j = 0; j < 8u; j++) au = fma(xh[j], dec[((2u * r + 1u) * 32u + lane) * 8u + j], au);
+          g0[r] += float(ag.x) * xi; g1[r] += float(ag.y) * xi; u0[r] += float(au.x) * xi; u1[r] += float(au.y) * xi;
+        }}
+      }}
+      xp += 512u;
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+    }}
+    if (!active) return;{outl_pre}
+    float SE = simd_sum(se), SO = simd_sum(so);
+    {MK._UNROLL} for (uint r = 0; r < 8u; r++) {{
+      float G0 = simd_sum(g0[r]), G1 = simd_sum(g1[r]), U0 = simd_sum(u0[r]), U1 = simd_sum(u1[r]);
+      if (lane == 0u) {{
+        float g = ((G0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (G1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sg[(size_t)e * {N}u + row0 + r];
+        float u = ((U0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (U1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * su_[(size_t)e * {N}u + row0 + r];{outl}{clamp}
+        out[(size_t)myts * {N}u + row0 + r] = {odt}({hval});
+      }}
+    }}
+    """
+    ins = ["xr", "x", "idx", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
+    lim = MK.act_tag(act, limit, alpha)
+    return mx.fast.metal_kernel(
+        name=f"jtgt_gu_k{kin}_n{N}_K{MK._kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}_ns{NS}",
+        input_names=ins, output_names=["out"], source=src)
+
+
+def gate_up_swiglu_tiles(xr, x, idx, U, out_dtype=mx.float32, limit: float = 0.0, act: str = "silu",
+                         alpha: float = 0.0, ns: int = 4):
+    """As MK.gather_gate_up_swiglu_v3 (rot_out off): (T * k, N), bit-identical, decoded tiles shared per group."""
+    T, kin = x.shape
+    k = idx.shape[1]
+    N = U["gate"]["scale"].shape[1]
+    n_out = U["gate"]["n_out"]
+    W = int(U["gate"]["packed"].shape[-1])
+    ins = [xr, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"], U["up"]["packed"],
+           U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
+    kern = _gu_tiles(kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit), MK._fp16_guard(),
+                     MK.check_act(act), float(alpha) if act == "oai" else 0.0, int(ns))
+    return kern(inputs=ins, template=[("NS", T * k), ("KS", k)], grid=(32 * ns, N // 8, T * k),
+                threadgroup=(32 * ns, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]

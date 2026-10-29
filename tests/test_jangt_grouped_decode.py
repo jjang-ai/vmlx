@@ -136,3 +136,22 @@ def test_control_perturbed_row_arithmetic_is_caught(monkeypatch):
         assert not h_ok
     finally:
         G._gu_grouped.cache_clear()
+
+
+@pytest.mark.parametrize("ns", [2, 4])
+@pytest.mark.parametrize("mode", ["same", "distinct", "pool"])
+def test_tile_shared_gate_up_equals_v3(mode, ns):
+    """The tile-shared variant (decoded tiles in threadgroup memory) is bit-identical to v3 too, tails included."""
+    for D, I, Kgu, n_out, lim, act in ((1024, 512, 1.5, 2, 7.0, "oai"), (1280, 640, 1, 0, 7.0, "oai"),
+                                       (1024, 512, 2.5, 3, 10.0, "silu")):
+        m = _module(D, I, Kgu, 2, n_out, lim, act, seed=int(Kgu * 10) + ns)
+        U = m._unit()
+        for T in (1, 5, 16):
+            idx, _, _ = _routing(T, 4, seed=T + 3, mode=mode)
+            x = _x(T, D, T)
+            xr = MK.rotate_rows(x, U["su_gu"])
+            ref = MK.gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.float32, limit=m.limit, act=m.act,
+                                              alpha=m.alpha)
+            got = G.gate_up_swiglu_tiles(xr, x, idx, U, out_dtype=mx.float32, limit=m.limit, act=m.act, alpha=m.alpha,
+                                         ns=ns)
+            assert bool(mx.array_equal(got, ref).item()), (D, Kgu, T)
