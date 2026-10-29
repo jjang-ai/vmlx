@@ -565,25 +565,46 @@ class SingleBatchGenerator:
 
         if not cache or not any(self._cache_needs_prompt_snapshot(c) for c in cache):
             return None
-        limit = self.prompt_snapshot_max_bytes
-        if limit is not None:
-            try:
-                from ..memory_cache import estimate_kv_cache_memory
+        try:
+            from ..memory_cache import estimate_kv_cache_memory
 
-                estimated = int(estimate_kv_cache_memory(list(cache), resident=False))
-            except Exception as exc:
-                logger.debug("typed prompt snapshot size estimate failed: %s", exc)
-            else:
-                self.prompt_snapshot_last_estimated_bytes = estimated
-                if estimated > limit:
-                    self.prompt_snapshot_oversize_skips += 1
-                    logger.warning(
-                        "Skipping typed prompt snapshot before copy: estimated %.1fMB "
-                        "exceeds every enabled cache backend limit (%.1fMB)",
-                        estimated / (1024 * 1024),
-                        limit / (1024 * 1024),
-                    )
-                    return None
+            estimated = int(estimate_kv_cache_memory(list(cache), resident=False))
+        except Exception as exc:
+            logger.debug("typed prompt snapshot size estimate failed: %s", exc)
+            return self._clone_prompt_cache_snapshot(cache)
+        self.prompt_snapshot_last_estimated_bytes = estimated
+        limit = self.prompt_snapshot_max_bytes
+        if limit is not None and estimated > limit:
+            self.prompt_snapshot_last_reason = "backend_budget"
+            self.prompt_snapshot_oversize_skips += 1
+            logger.warning(
+                "Skipping typed prompt snapshot before copy: estimated %.1fMB "
+                "exceeds every enabled cache backend limit (%.1fMB)",
+                estimated / (1024 * 1024),
+                limit / (1024 * 1024),
+            )
+            return None
+        # The copy is new GPU memory on top of the live cache. A long prompt on a model that nearly fills the
+        # working set raised [METAL] Insufficient Memory right here and failed the request (MiniMax-M3.1 JANGHT,
+        # 95.5 GiB, 65k-token prompt -> an 8.2 GiB copy on a 107.5 GiB working set, 2026-10-28). Without room for
+        # the copy, skip the prefix-cache store of this prompt; the request itself continues.
+        active, maximum = get_effective_metal_working_set_bytes(mx)
+        if maximum > 0:
+            from .memory_limits import get_metal_ws_guard_threshold
+
+            headroom = max(0, int(maximum * get_metal_ws_guard_threshold() / 100) - active)
+            self.prompt_snapshot_last_headroom_bytes = headroom
+            if estimated > headroom:
+                self.prompt_snapshot_last_reason = "metal_headroom"
+                self.prompt_snapshot_headroom_skips += 1
+                logger.warning(
+                    "Skipping typed prompt snapshot: its copy (%.1fMB) exceeds the free Metal working set "
+                    "(%.1fMB); this prompt is not stored in the prefix cache, the request continues",
+                    estimated / (1024 * 1024),
+                    headroom / (1024 * 1024),
+                )
+                return None
+        self.prompt_snapshot_last_reason = "captured"
         return self._clone_prompt_cache_snapshot(cache)
 
     def _capture_mixed_swa_boundary(self, req):
