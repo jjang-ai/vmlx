@@ -1529,14 +1529,25 @@ class SingleBatchGenerator:
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
         _clear_each = self._m3_clear_each_chunk()
         _reserved = None
+        groups = self._m3_piece_groups(req, pieces)
         with self._stream_context():
-            for i, (a, b) in enumerate(pieces):
+            for gi, group in enumerate(groups):
+                a = group[0][0]
                 if _reserved is None:
                     _reserved = self._m3_reserve_prefill(req.cache, start + len(tokens) - a)
-                chunk = tokens[a - start: b - start]
-                last = i == len(pieces) - 1
-                lookahead = None if last else tokens[b - start: pieces[i + 1][1] - start]
-                logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+                last = gi == len(groups) - 1
+                if len(group) == 1:
+                    b = group[0][1]
+                    chunk = tokens[a - start: b - start]
+                    lookahead = None if last else tokens[b - start: groups[gi + 1][0][1] - start]
+                    logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+                else:
+                    # Several pieces of one chunk (turn cuts / the store boundary inside it): one layer-major forward,
+                    # every piece's rows exactly its own forward's (MiniMaxM3Model.forward_pieces).
+                    parts = [tokens[x - start: y - start] for x, y in group]
+                    chunk = [t for part in parts for t in part]
+                    _, _, logits = self.model.prefill_group([mx.array([part], dtype=mx.int32) for part in parts],
+                                                            req.cache, logits_last=last)
                 if not last:
                     # Only the cache rows are kept from a non-final piece: evaluate them, not the logits (the
                     # lm_head over every row of a chunk is never read).
@@ -1568,6 +1579,23 @@ class SingleBatchGenerator:
         self._sync()
         if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
             mx.clear_cache()
+
+    def _m3_piece_groups(self, req: _Request, pieces: list) -> list:
+        """The aligned plan's pieces grouped by prefill chunk (``a // step``) for one layer-major forward each
+        (``Model.prefill_group``), or one group per piece: a model without ``prefill_group``, a media request (its
+        first forward carries the vision tensors), or ``VMLX_M3_PREFILL_GROUP=0``."""
+        step = max(1, int(self.prefill_step_size or 1))
+        if (not callable(getattr(self.model, "prefill_group", None))
+                or req.pixel_values is not None or req.pixel_values_videos is not None
+                or os.environ.get("VMLX_M3_PREFILL_GROUP", "1").strip().lower() in {"0", "false", "off", "no"}):
+            return [[p] for p in pieces]
+        groups: list = []
+        for p in pieces:
+            if groups and groups[-1][0][0] // step == p[0] // step:
+                groups[-1].append(p)
+            else:
+                groups.append([p])
+        return groups
 
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()

@@ -223,23 +223,54 @@ class MiniMaxM3DSparkTarget:
         # features are the same; VMLX_DSPARK_PREFILL_ALL_TAPS=1 taps every piece (A/B).
         tail_from = (length - int(keep_last)) if keep_last and os.environ.get(
             "VMLX_DSPARK_PREFILL_ALL_TAPS", "0").strip().lower() not in {"1", "true", "yes", "on"} else None
-        for a, b in pieces[:-1]:
+        # Pieces of one prefill chunk (turn cuts / the store boundary inside it) run as one layer-major group
+        # (MiniMaxM3Model.forward_pieces: every piece's rows exactly its own forward's, the routed experts once per
+        # group); VMLX_M3_PREFILL_GROUP=0 runs piece by piece.
+        base = self._offset(cache) if plan is not None else 0
+        groups = []
+        grouping = plan is not None and callable(getattr(self.nm, "forward_pieces", None)) and os.environ.get(
+            "VMLX_M3_PREFILL_GROUP", "1").strip().lower() not in {"0", "false", "off", "no"}
+        for p in pieces:
+            if grouping and groups and (base + groups[-1][0][0]) // step == (base + p[0]) // step:
+                groups[-1].append(p)
+            else:
+                groups.append([p])
+        layers_sorted = tuple(sorted(set(int(t) for t in taps)))
+        logits = None
+        for gi, group in enumerate(groups):
             raise_if_generation_cancelled()
+            last = gi == len(groups) - 1
             if reserved is None:
-                reserved = reserve_prefill(cache, length - a)
-            piece_taps = taps if tail_from is None or b > tail_from else ()
-            _, f = self._stock(ids[:, a:b], cache, piece_taps, logits=False)
+                reserved = reserve_prefill(cache, length - group[0][0])
+            piece_taps = [taps if (last and j == len(group) - 1) or tail_from is None or b > tail_from else ()
+                          for j, (a, b) in enumerate(group)]
+            if len(group) == 1:
+                a, b = group[0]
+                lg, f = self._stock(ids[:, a:b], cache, piece_taps[0], logits=last)
+                fs = [f]
+            else:
+                aux_pieces = [j for j, t in enumerate(piece_taps) if t]
+                outs, aux = self.nm.forward_pieces([ids[:, a:b] for a, b in group], cache, aux_pieces=aux_pieces,
+                                                   aux_layers=layers_sorted)
+                fs = []
+                for j in range(len(group)):
+                    if j in aux_pieces and taps:
+                        by_layer = dict(zip(layers_sorted, aux[j]))
+                        fs.append(mx.concatenate([by_layer[int(t)] for t in taps], axis=-1))
+                    else:
+                        fs.append(None)
+                lg = self.lm_head(outs[-1]) if last else None
+            if last:
+                logits = lg
+                for f in fs:
+                    if f is not None:
+                        keep(f)
+                break
             mx.eval([c.state for c in cache])
-            if f is not None:
-                mx.eval(f)
-                keep(f)
-        pos = pieces[-1][0]
-        raise_if_generation_cancelled()
-        if reserved is None:
-            reserve_prefill(cache, length - pos)
-        logits, f = self._stock(ids[:, pos:], cache, taps, logits=True)
-        if f is not None:
-            keep(f)
+            for f in fs:
+                if f is not None:
+                    mx.eval(f)
+                    keep(f)
         if not feats:
             return logits[0, -1], None
         out = mx.concatenate(feats, axis=1)

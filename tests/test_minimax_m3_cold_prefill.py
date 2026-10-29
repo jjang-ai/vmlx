@@ -251,6 +251,7 @@ def test_dspark_lane_skips_taps_before_the_drafter_window(model, monkeypatch, ke
     n = 2701
     ids = mx.array([_ids(n, 515)])
     plan = {"boundary": n - 3, "atomic": False}
+    monkeypatch.setenv("VMLX_M3_PREFILL_GROUP", "0")    # piece by piece (the spy counts _stock calls); grouped: below
     outs = {}
     for all_taps in ("1", "0"):
         monkeypatch.setenv("VMLX_DSPARK_PREFILL_ALL_TAPS", all_taps)
@@ -311,3 +312,80 @@ def test_reservation_waits_for_the_lanes_and_declines_without_allocator_room(mod
     assert declined[0] == off[0]
     assert all(mx.array_equal(x, y).item() for x, y in zip(declined[1], off[1]))
     assert [g[1:] for g in declined[3]] == [g[1:] for g in off[3]]
+
+
+# ------------------------------------------------------------------------------------- layer-major piece groups
+from tests.test_minimax_m3_janght import bundle as janght_bundle  # noqa: E402,F401  (module fixture: tiny JANGHT M3)
+
+CUT_SETS = ([5, 17, 18, 40, 100, 333, 700, 961, 1000, 1290, 1937, 2400], [64, 1100, 1700], [])
+
+
+def _plan_run(model, prompt, step, plan, n_tokens, monkeypatch, group: str, routed_calls=None):
+    monkeypatch.setenv("VMLX_M3_PREFILL_GROUP", group)
+    toks, seen, cache, _ = _generate(model, prompt, step, plan, n_tokens, monkeypatch, "1")
+    return toks, seen, cache
+
+
+@pytest.mark.parametrize("cuts", CUT_SETS)
+def test_grouped_pieces_equal_piece_by_piece_plain_lane(model, monkeypatch, cuts):
+    """The aligned plan's pieces of one chunk as one layer-major forward == piece by piece: first-token and decode
+    logits, every lane, bit for bit (affine-switch tiny M3: no routed batching, only the layer-major order)."""
+    n = 2701
+    prompt = _ids(n, 404)
+    plan = {"boundary": n - 3, "atomic": False, "cuts": cuts}
+    a = _plan_run(model, prompt, 320, plan, 6, monkeypatch, "0")
+    b = _plan_run(model, prompt, 320, plan, 6, monkeypatch, "1")
+    assert a[0] == b[0]
+    assert all(mx.array_equal(x, y).item() for x, y in zip(a[1], b[1]))
+    assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(_lanes(a[2]), _lanes(b[2])))
+
+
+def test_grouped_pieces_batch_the_jangt_routed_experts_bit_identically(janght_bundle, monkeypatch):
+    """Tiny JANGHT M3 (JANGT routed experts, the sorted NAX prefill on M5): pieces of >= 18 rows of one chunk run their
+    routed experts in ONE call, pieces below that (the decode kernels) alone; logits and lanes equal piece by piece,
+    and the routed calls drop. Control: the same pieces without grouping make one routed call per piece."""
+    from vmlx_engine.jangt import switch as SW
+
+    if not SW.nax_prefill():
+        pytest.skip("sorted JANGT prefill kernel needs NAX (M5-class GPU)")
+    _, _, mem, _, _ = janght_bundle
+    n = 1301
+    prompt = np.random.default_rng(9).integers(0, 511, n).tolist()
+    plan = {"boundary": n - 3, "atomic": False, "cuts": [7, 30, 47, 200, 333, 512 + 40, 700, 1100, 1290]}
+    counts = {}
+    real = SW.JTMixedSwitchGLU.routed
+
+    def spy(self, x, indices, scores):
+        counts[key] = counts.get(key, 0) + 1
+        return real(self, x, indices, scores)
+
+    monkeypatch.setattr(SW.JTMixedSwitchGLU, "routed", spy)
+    out = {}
+    for key in ("0", "1"):
+        out[key] = _plan_run(mem, prompt, 512, plan, 5, monkeypatch, key)
+    assert out["0"][0] == out["1"][0]
+    assert all(mx.array_equal(x, y).item() for x, y in zip(out["0"][1], out["1"][1]))
+    assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(_lanes(out["0"][2]), _lanes(out["1"][2])))
+    assert counts["1"] < counts["0"]
+
+
+@pytest.mark.parametrize("keep_last", [300, 5000])
+def test_grouped_pieces_dspark_lane(model, monkeypatch, keep_last):
+    """DSpark text lane: grouped pieces (taps on the window's pieces) == piece by piece: logits, kept features, lanes."""
+    from vmlx_engine.dspark.minimax_target import MiniMaxM3DSparkTarget
+
+    target = MiniMaxM3DSparkTarget(model)
+    n = 2701
+    ids = mx.array([_ids(n, 77)])
+    plan = {"boundary": n - 3, "atomic": False, "cuts": CUT_SETS[0]}
+    res = {}
+    for group in ("0", "1"):
+        monkeypatch.setenv("VMLX_M3_PREFILL_GROUP", group)
+        cache = model.make_cache()
+        logits, feats = target.prefill(ids, cache, (1, 3), 320, keep_last=keep_last, plan=plan)
+        mx.eval(logits, feats)
+        res[group] = (logits, feats, _lanes(cache))
+    a, b = res["0"], res["1"]
+    assert mx.array_equal(a[0], b[0]).item()
+    assert a[1].shape == b[1].shape and mx.array_equal(a[1], b[1]).item()
+    assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(a[2], b[2]))
