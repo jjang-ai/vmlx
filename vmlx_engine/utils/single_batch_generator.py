@@ -1378,6 +1378,7 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
         self._m3_reserve_prefill(req.cache, len(tokens))
 
         def _chunk_len(at: int) -> int:
@@ -1412,7 +1413,7 @@ class SingleBatchGenerator:
                         mx.array(chunk, dtype=mx.int32)
                     )
                 self._sync()
-                if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
                     mx.clear_cache()
                 pos += n
 
@@ -1442,6 +1443,16 @@ class SingleBatchGenerator:
             if req.logits_processors:
                 req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
         self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    @staticmethod
+    def _m3_clear_each_chunk() -> bool:
+        """VMLX_M3_PREFILL_CLEAR_EACH_CHUNK=1: release MLX's buffer cache after every M3 prefill chunk (the previous
+        behaviour). Default: keep it through the prefill (every chunk re-allocates the same transient sizes; releasing
+        them sends each chunk back to fresh, zero-filled Metal buffers) and release it once when the prefill ends, so
+        the footprint after the prefill is what it was. VMLX_PREFILL_KEEP_ALLOC=1 still skips every release."""
+        return os.environ.get("VMLX_M3_PREFILL_CLEAR_EACH_CHUNK", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _m3_cache_rows(cache) -> list:
@@ -1516,6 +1527,7 @@ class SingleBatchGenerator:
                 )
         pieces = self.m3_prefill_pieces(req, plan)
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
         self._m3_reserve_prefill(req.cache, len(tokens))
         with self._stream_context():
             for i, (a, b) in enumerate(pieces):
@@ -1532,7 +1544,7 @@ class SingleBatchGenerator:
                     if req.logits_processors:
                         req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
                     self._sync()
-                    if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                    if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
                         mx.clear_cache()
                     continue
                 (logits,) = self._eval_on_stream(logits)
@@ -1552,6 +1564,8 @@ class SingleBatchGenerator:
                 if req.logits_processors:
                     req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
         self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
 
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()

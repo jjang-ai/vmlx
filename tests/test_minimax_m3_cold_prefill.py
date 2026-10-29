@@ -182,3 +182,36 @@ def test_reserved_continuation_after_an_unaligned_restore(model, monkeypatch):
     assert a[0] == b[0]
     assert all(mx.array_equal(x, y).item() for x, y in zip(a[1], b[1]))
     assert all(x.shape == y.shape and mx.array_equal(x, y).item() for x, y in zip(_lanes(a[2]), _lanes(b[2])))
+
+
+# ------------------------------------------------------------------------------------------- allocator cache release
+@pytest.mark.parametrize("planned", [True, False])
+def test_buffer_cache_released_once_after_the_prefill(model, monkeypatch, planned):
+    """Default: MLX's buffer cache is kept through the M3 prefill (every chunk re-allocates the same transient sizes)
+    and released once at its end; VMLX_M3_PREFILL_CLEAR_EACH_CHUNK=1 releases it after every non-final chunk (the
+    previous behaviour); VMLX_PREFILL_KEEP_ALLOC=1 never. Outputs are bit-identical across the three."""
+    import vmlx_engine.utils.single_batch_generator as SBG
+
+    n, step = 2701, 320
+    prompt = _ids(n, 99)
+    plan = {"boundary": n - 3, "atomic": False} if planned else None
+    calls, outs = {}, {}
+    real = SBG.mx.clear_cache
+    for mode, env in (("end", {}), ("each", {"VMLX_M3_PREFILL_CLEAR_EACH_CHUNK": "1"}),
+                      ("never", {"VMLX_PREFILL_KEEP_ALLOC": "1"})):
+        for k in ("VMLX_M3_PREFILL_CLEAR_EACH_CHUNK", "VMLX_PREFILL_KEEP_ALLOC", "VMLINUX_PREFILL_KEEP_ALLOC"):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        count = []
+        monkeypatch.setattr(SBG.mx, "clear_cache", lambda: (count.append(1), real())[1])
+        logits, cache, _ = _served(model, prompt, step, plan)
+        monkeypatch.setattr(SBG.mx, "clear_cache", real)
+        calls[mode], outs[mode] = len(count), (logits, _lanes(cache))
+    chunks = -(-n // step)
+    assert calls["end"] == 1
+    assert calls["never"] == 0
+    assert calls["each"] >= chunks - 1
+    for mode in ("each", "never"):
+        assert mx.array_equal(outs[mode][0], outs["end"][0]).item()
+        assert all(mx.array_equal(x, y).item() for x, y in zip(outs[mode][1], outs["end"][1]))
