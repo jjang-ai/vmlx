@@ -337,6 +337,7 @@ def _decode_probe(model, prompt, holder, steps=40):
 
     def take(cache):
         out = holder(cache)
+        gen._sync()                      # the generator's own stream (mx.synchronize() is the default stream's)
         mx.synchronize()
         at_snapshot["active"] = mx.get_active_memory()
         mx.reset_peak_memory()           # the decode window starts here: after prefill, before the first decode
@@ -351,6 +352,7 @@ def _decode_probe(model, prompt, holder, steps=40):
     snapshot = first.prompt_cache_snapshot
     times = []
     for _ in range(steps):
+        gen._sync()                      # every command buffer of the generator's stream complete AND released
         t = time.perf_counter()
         resp, = gen.next()[1]
         times.append(time.perf_counter() - t)
@@ -362,11 +364,20 @@ def _decode_probe(model, prompt, holder, steps=40):
     return peak, held, times
 
 
-def test_decode_is_unaffected_by_the_marker(wide_model):
+def test_decode_is_unaffected_by_the_marker(wide_model, monkeypatch):
     """The marker holds cache objects, not arrays: decode memory and step time equal a run with no snapshot at all.
     Holding array views of the live cache instead (the hazard) blocks MLX buffer donation in the cache's slice
     update: the first decode step copies every lane and the copy stays while the views are held. The old clone holds
-    a full copy for the whole decode."""
+    a full copy for the whole decode.
+
+    The holder is the only variable, so the decode runs synchronously from a synchronized device every step. MLX's
+    slice update copies a lane whenever a command buffer still retains the lane's data (``is_donatable``: a commit's
+    completion handler holds every input until it runs). Under the one-token decode overlap (VMLX_M3_DECODE_OVERLAP,
+    default on) the previous step is in flight by design, and this tiny model copied a random number of lanes in every
+    arm, the marker's included (0 .. 240 MB against 134 MB of lanes). ``mx.eval`` returns on the step's completion
+    event, before the handler releases the inputs, so even a synchronous loop copied a lane set now and then;
+    synchronizing the generator's stream waits for the release."""
+    monkeypatch.setenv("VMLX_M3_DECODE_OVERLAP", "0")
     prompt = _ids(4000, 7)                              # capacity 4096 rows: 40 decode steps append without growth
 
     def none(cache):
@@ -386,7 +397,7 @@ def test_decode_is_unaffected_by_the_marker(wide_model):
         return SingleBatchGenerator._clone_prompt_cache_snapshot(cache)
 
     results = {name: [] for name in ("none", "marker", "views", "clone")}
-    for _ in range(3):                                   # interleaved probes, median reported
+    for _ in range(3):                                   # interleaved probes: memory median, step time fastest
         for name, fn in (("none", none), ("marker", marker), ("views", views), ("clone", clone)):
             results[name].append(_decode_probe(wide_model, prompt, fn))
     summary = {}
@@ -394,7 +405,7 @@ def test_decode_is_unaffected_by_the_marker(wide_model):
         summary[name] = {
             "decode_peak_mb": statistics.median(r[0] for r in runs) / MB,
             "held_mb": statistics.median(r[1] for r in runs) / MB,
-            "median_step_ms": statistics.median(statistics.median(r[2][1:]) for r in runs) * 1e3,
+            "median_step_ms": min(statistics.median(r[2][1:]) for r in runs) * 1e3,   # load only adds time
             "first_step_ms": statistics.median(r[2][0] for r in runs) * 1e3,
         }
     _report({"test": "decode", "summary": summary})

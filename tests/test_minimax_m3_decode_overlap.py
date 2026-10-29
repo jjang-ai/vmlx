@@ -38,7 +38,7 @@ from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator  # noq
 
 @pytest.fixture(autouse=True)
 def _defaults(monkeypatch):
-    for name in ("VMLX_M3_DECODE_OVERLAP", "VMLX_M3_AFFINE2_SWITCH", "VMLX_ROW_EXACT_VERIFY_QMV", "VMLX_DSPARK",
+    for name in ("VMLX_M3_DECODE_OVERLAP", "VMLX_M3_DECODE_OVERLAP_DEFER", "VMLX_M3_AFFINE2_SWITCH", "VMLX_ROW_EXACT_VERIFY_QMV", "VMLX_DSPARK",
                  "VMLX_DSPARK_MAX_DRAFT", "VMLX_DSPARK_WIDTH", "VMLX_DSPARK_SAMPLED", "VMLX_DSPARK_PIPELINE",
                  "VMLX_DSPARK_AR_FALLBACK", "VMLX_DSPARK_AR_CARRY", "VMLX_MINIMAX_MSA", "VMLX_MINIMAX_MSA_SELECT",
                  "VMLX_M3_ALIGNED_PREFIX", "VMLX_DISABLE_GEN_PROMPT_STRIP", F.ENV):
@@ -169,13 +169,17 @@ def _run(model, primed, monkeypatch, *, overlap: bool, stop=None, mode="length",
     return rows, lanes, submits
 
 
+@pytest.mark.parametrize("defer", [False, True])
 @pytest.mark.parametrize("fused", [False, True])
 @pytest.mark.parametrize("mode", ["length", "stop", "cancel"])
-def test_m3_overlap_matches_sync(model, monkeypatch, mode, fused):
+def test_m3_overlap_matches_sync(model, monkeypatch, mode, fused, defer):
     """From 700 primed keys (sparse selection on every step): tokens, finish reasons, logprobs and the final K / V /
-    index lanes of the overlapped run equal the synchronous run's; the overlapped run really submits asynchronously."""
+    index lanes of the overlapped run equal the synchronous run's; the overlapped run really submits asynchronously.
+    ``defer``: VMLX_M3_DECODE_OVERLAP_DEFER (the next step submitted once the previous one is released)."""
     if fused:
         monkeypatch.setenv(F.ENV, "1")
+    if defer:
+        monkeypatch.setenv("VMLX_M3_DECODE_OVERLAP_DEFER", "1")
     primed = _prime(model, 700)
     stop = _run(model, primed, monkeypatch, overlap=False)[0][2].token if mode == "stop" else None
     F.STATS.update(calls=0)
@@ -193,12 +197,14 @@ def test_m3_overlap_matches_sync(model, monkeypatch, mode, fused):
         assert submits, "the overlapped path must submit asynchronously"
 
 
-@pytest.mark.parametrize("fused", [False, True])
-def test_m3_long_generation_overlap_equals_sync_past_the_sparse_switch(model, monkeypatch, fused):
+@pytest.mark.parametrize("fused,defer", [(False, False), (True, False), (False, True)])
+def test_m3_long_generation_overlap_equals_sync_past_the_sparse_switch(model, monkeypatch, fused, defer):
     """2,000 generated tokens from a 150-token prompt (dense up to 192 keys, sparse after): overlapped == synchronous
     token for token, with the lanes crossing several 256-row growths."""
     if fused:
         monkeypatch.setenv(F.ENV, "1")
+    if defer:
+        monkeypatch.setenv("VMLX_M3_DECODE_OVERLAP_DEFER", "1")
     prompt = _ids(150, 77)
     sync, sync_lanes, _ = _run(model, None, monkeypatch, overlap=False, max_tokens=2000, prompt=prompt,
                                logprobs=False)
@@ -226,6 +232,106 @@ def test_m3_overlap_equals_sync_across_2048_keys_at_the_released_geometry(releas
     over, _, submits = _run(released_model, None, monkeypatch, overlap=True, max_tokens=300, prompt=prompt,
                             logprobs=False)
     assert [r.token for r in over] == [r.token for r in sync] and len(sync) == 300 and submits
+
+
+# ----------------------------------------------------------------------------------------------- overlap lane copies
+class OverlapLaneCopies(Warning):
+    """Reported, not failed: lanes the one-token decode overlap copied in ``test_overlap_lane_copies_are_tracked``."""
+
+
+@pytest.fixture(scope="module")
+def wide_model():
+    """16 heads over 8 KV groups of 256 (as tests/test_minimax_m3_streamed_store.py): a 4,000-token cache is 134 MB of
+    lanes, one K or V lane 16 MB, far above a decode step's few MB of transients."""
+    saved = (TD.HEADS, TD.KVH, TD.HD)
+    TD.HEADS, TD.KVH, TD.HD = 16, 8, 256
+    try:
+        yield TD._model(seed=5, block=128, topk=16)
+    finally:
+        TD.HEADS, TD.KVH, TD.HD = saved
+
+
+def _decode_peaks(model, prompt, steps=40):
+    """One request, nothing else holding the lanes: (tokens, per-step peak above the memory at the first decode token,
+    memory held after the decode, the largest K lane's bytes, every lane's bytes). A step's peak covers its call: the next step built and submitted
+    (a lane copy is allocated then, while the old lane is still retained) and the current one read back."""
+    gen = SingleBatchGenerator(model, sampler=_greedy(), max_tokens=steps + 1, prefill_step_size=2048, stop_tokens=[])
+    gen._clone_admissible_prompt_cache_snapshot = lambda cache: None
+    gen.insert([prompt], max_tokens=[steps + 1])
+    first, = gen.next()[0]
+    cache = gen._request.cache
+    lane = max(int(c.nbytes) for c in cache) // 2
+    total = sum(int(c.nbytes) + int(getattr(c.__dict__.get("_idx_keys"), "nbytes", 0) or 0) for c in cache)
+    del cache
+    gen._sync()
+    mx.synchronize()
+    a0 = mx.get_active_memory()
+    tokens, peaks = [first.token], []
+    for _ in range(steps):
+        start = mx.get_active_memory()
+        mx.reset_peak_memory()                      # (MLX's peak restarts from 0, not from the active memory)
+        resp, = gen.next()[1]
+        peaks.append(max(mx.get_peak_memory(), start) - a0)
+        tokens.append(resp.token)
+        if resp.finish_reason is not None:
+            break
+    gen._sync()
+    mx.synchronize()
+    held = mx.get_active_memory() - a0
+    del gen, first, resp
+    return tokens, peaks, held, lane, total
+
+
+def test_overlap_lane_copies_are_tracked(wide_model, monkeypatch):
+    """The one-token decode overlap submits step k+1 while step k is in flight; a command buffer retains its inputs
+    until its completion handler runs, so step k+1's stock slice-update appends can find a lane step k still reads
+    and copy it whole (MLX ``is_donatable``). On this model (one step = a couple of command buffers) that happens at
+    random, 0 .. ~2 lane sets per step; on the real M3.1 bundle the host's ~60 layers of graph building keep step
+    k+1's appends behind step k's buffers (measured in the M3.1 campaign). This test keeps it visible: the overlap's
+    copies are measured and reported (warning ``OverlapLaneCopies`` + VMLX_M3_OVERLAP_COPY_REPORT), asserted bounded
+    and transient; the deferred submit (VMLX_M3_DECODE_OVERLAP_DEFER) copies nothing, and every arm decodes the same
+    tokens."""
+    import json
+    import os
+    import warnings
+
+    prompt = _ids(4000, 7)                          # capacity 4,096 rows: 40 decode steps append without growth
+    arms = {"overlap": {}, "deferred": {"VMLX_M3_DECODE_OVERLAP_DEFER": "1"}, "sync": {"VMLX_M3_DECODE_OVERLAP": "0"}}
+    runs = {name: [] for name in arms}
+    for _ in range(3):
+        for name, env in arms.items():
+            for k in ("VMLX_M3_DECODE_OVERLAP", "VMLX_M3_DECODE_OVERLAP_DEFER"):
+                monkeypatch.delenv(k, raising=False)
+            for k, v in env.items():
+                monkeypatch.setenv(k, v)
+            runs[name].append(_decode_peaks(wide_model, prompt))
+    lane, lanes_total = runs["sync"][0][3], runs["sync"][0][4]
+    assert lane > 8 * 1024 * 1024                   # big enough to show
+    floor = min(min(r[1]) for r in runs["deferred"])
+
+    def copies(peaks):                              # lane-equivalents above the step's own transients
+        return sum(max(0, round((p - floor) / lane)) for p in peaks)
+
+    summary = {name: {"lane_copies": [copies(r[1]) for r in rs], "max_step_peak_mb": round(max(max(r[1]) for r in rs)
+               / 2 ** 20, 1), "held_mb": [round(r[2] / 2 ** 20, 1) for r in rs]} for name, rs in runs.items()}
+    out = os.environ.get("VMLX_M3_OVERLAP_COPY_REPORT")
+    if out:
+        with open(out, "a") as f:
+            f.write(json.dumps({"test": "overlap_lane_copies", "lane_mb": round(lane / 2 ** 20, 1),
+                                "lanes_mb": round(lanes_total / 2 ** 20, 1), "summary": summary}) + "\n")
+    if any(summary["overlap"]["lane_copies"]):
+        warnings.warn(OverlapLaneCopies(f"decode overlap copied lanes: {summary}"))
+    # every arm decodes the same tokens
+    reference = runs["sync"][0][0]
+    assert all(r[0] == reference for rs in runs.values() for r in rs)
+    # the deferred submit never copies: every step's peak within a quarter lane of the arm's lowest step
+    assert summary["deferred"]["lane_copies"] == [0, 0, 0], summary
+    assert max(max(r[1]) for r in runs["deferred"]) < floor + lane // 4, summary
+    # the overlap's copies are transient and bounded: nothing held after the decode; at most three versions of a lane
+    # at once (step k+1's copy, the one step k reads, the one step k-1 read until its handler runs)
+    held = [r[2] for rs in runs.values() for r in rs]
+    assert max(held) - min(held) < 1024 * 1024, summary
+    assert max(max(r[1]) for r in runs["overlap"]) <= floor + 3 * lanes_total, summary
 
 
 # ----------------------------------------------------------------------------------------------- serving: lane ownership
