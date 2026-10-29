@@ -21,6 +21,7 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Optional
@@ -452,6 +453,84 @@ class MiniMaxM3Model(nn.Module):
         out = self.norm(h)
         return (out, aux) if return_aux else out
 
+    def forward_pieces(self, pieces, cache, *, aux_pieces=None, aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS):
+        """Prefill consecutive prompt pieces (token arrays [1, L_i], in order, appended to ``cache``) LAYER BY LAYER:
+        every piece runs exactly the ops it runs as its own ``__call__`` (same rows, same matrix shapes, same cache
+        rows visible to its attention), except that the routed experts of a MoE layer run once over the rows of all
+        the pieces that take the sorted prefill kernel alone (``_group_routed``): that kernel's output rows do not
+        depend on the other rows or on their count (tests/test_minimax_m3_cold_prefill.py), so each expert's weights
+        are decoded once per group instead of once per piece. Returns the final-norm outputs per piece and, for the
+        pieces in ``aux_pieces``, their outputs after ``aux_layers`` (``__call__``'s return_aux order).
+
+        Why: the aligned prefill cuts a prompt at every turn cut (prefill_geometry), so a many-message chat runs many
+        small pieces; the routed experts cost per piece ~ every expert the piece routes to, decoded once, whatever its
+        row count. Pieces must stay pieces (the K / V / index projections' rows are not invariant to the row count),
+        the routed experts need not."""
+        hs = [self.embed_tokens(p) for p in pieces]
+        masks = [None] * len(hs)
+        aux_pieces = set(aux_pieces or ())
+        aux_set = set(aux_layers) if aux_pieces else set()
+        aux = {i: [] for i in aux_pieces}
+        for li, (layer, c) in enumerate(zip(self.layers, cache)):
+            xns = []
+            for i, h in enumerate(hs):
+                if li == 0:
+                    masks[i] = create_attention_mask(h, cache[0])
+                if fused_attn is not None and fused_attn.use_fused(layer, h, masks[i], c):
+                    h = fused_attn.attention_block(layer, h, c)
+                else:
+                    h = h + layer.self_attn(layer.input_layernorm(h), masks[i], c)
+                hs[i] = h
+                xns.append(layer.post_attention_layernorm(h))
+            outs = _group_mlp(layer.mlp, xns, hs)
+            for i in range(len(hs)):
+                hs[i] = outs[i]
+                if li in aux_set and i in aux_pieces:
+                    aux[i].append(hs[i])
+        return [self.norm(h) for h in hs], aux
+
+
+# Rows per piece below which the JANGT routed experts leave the sorted prefill kernel (switch.SORT_THRESHOLD slots)
+def _takes_sorted_prefill(mlp, rows: int) -> bool:
+    sw = getattr(mlp, "switch_mlp", None)
+    if not getattr(sw, "is_jangt", False):
+        return False
+    try:
+        from vmlx_engine.jangt import switch as SW
+    except Exception:  # pragma: no cover - standalone import
+        return False
+    return rows * int(mlp.top_k) >= SW.SORT_THRESHOLD and SW.nax_prefill()
+
+
+def _group_mlp(mlp, xns, hs):
+    """``h + mlp(xn)`` for every piece of a layer-major group (DecoderLayer.__call__'s MLP half), with the routed
+    experts of the pieces that take the sorted JANGT prefill kernel computed in ONE call over their rows
+    (``VMLX_M3_PREFILL_GROUP_ROUTED=0``: one call per piece, for A/B)."""
+    out = [None] * len(xns)
+    grouped = []
+    if isinstance(mlp, SparseMoeBlock) and os.environ.get("VMLX_M3_PREFILL_GROUP_ROUTED", "1").strip().lower() not in {
+            "0", "false", "off", "no"}:
+        grouped = [i for i, xn in enumerate(xns) if _takes_sorted_prefill(mlp, int(xn.shape[-2]))]
+    if len(grouped) < 2:
+        grouped = []
+    for i, (xn, h) in enumerate(zip(xns, hs)):
+        if i in grouped:
+            continue
+        fused = moe_residual(mlp, xn, h) if xn.shape[-2] == 1 else None
+        out[i] = fused if fused is not None else h + mlp(xn)
+    if grouped:
+        routes = [group_expert_select(mlp.gate(xns[i]), mlp.e_score_correction_bias, mlp.top_k, 1, 1,
+                                      mlp.routed_scaling_factor, mlp.norm_topk_prob) for i in grouped]
+        rows = [int(xns[i].shape[-2]) for i in grouped]
+        y = mlp.routed(mx.concatenate([xns[i] for i in grouped], axis=-2),
+                       mx.concatenate([r[0] for r in routes], axis=-2), mx.concatenate([r[1] for r in routes], axis=-2))
+        at = 0
+        for i, n in zip(grouped, rows):
+            xn = xns[i]
+            out[i] = hs[i] + (y[..., at:at + n, :] + mlp.shared_experts(xn)).astype(xn.dtype)
+            at += n
+    return out
+
 
 class Model(nn.Module):
     def __init__(self, args: ModelArgs):
@@ -573,6 +652,18 @@ class Model(nn.Module):
 
     def make_cache(self):
         return make_minimax_m3_cache(self.args)
+
+    def prefill_group(self, pieces, cache, *, logits_last: bool = False, aux_pieces=None,
+                      aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS):
+        """Text prefill of consecutive pieces as one layer-major group (``MiniMaxM3Model.forward_pieces``): every piece
+        gets the rows its own ``__call__`` would give it. Returns (final-norm outputs per piece, aux per piece in
+        ``aux_pieces``, the last piece's logits [1, L, V] when ``logits_last``)."""
+        outs, aux = self.model.forward_pieces(pieces, cache, aux_pieces=aux_pieces, aux_layers=aux_layers)
+        logits = None
+        if logits_last:
+            logits = (self.model.embed_tokens.as_linear(outs[-1]) if self.args.tie_word_embeddings
+                      else self.lm_head(outs[-1]))
+        return outs, aux, logits
 
     @property
     def layers(self):

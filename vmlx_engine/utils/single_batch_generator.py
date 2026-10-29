@@ -1378,6 +1378,8 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
+        _reserved = None
 
         def _chunk_len(at: int) -> int:
             n = min(step, len(tokens) - at)
@@ -1390,6 +1392,8 @@ class SingleBatchGenerator:
 
         with self._stream_context():
             while len(tokens) - pos > step:
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, len(tokens) - pos)
                 n = _chunk_len(pos)
                 chunk = tokens[pos : pos + n]
                 nxt = pos + n
@@ -1399,18 +1403,25 @@ class SingleBatchGenerator:
                     else tokens[nxt:]
                 )
                 logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
-                (logits,) = self._eval_on_stream(logits)
+                # Only the cache rows are kept from a non-final chunk: evaluate them, not the logits. The lm_head over
+                # every row of the chunk (2048 x 200,064 on M3.1: ~0.1 s per chunk on an M5 Max) was computed and
+                # thrown away; the rows the cache keeps run the same kernels either way (the aligned-plan path below
+                # already did this).
+                mx.eval(self._m3_cache_rows(req.cache))
+                del logits
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
                     req.token_context.update_and_fetch(
                         mx.array(chunk, dtype=mx.int32)
                     )
                 self._sync()
-                if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
                     mx.clear_cache()
                 pos += n
 
             final_chunk = tokens[pos:]
+            if _reserved is None:
+                _reserved = self._m3_reserve_prefill(req.cache, len(final_chunk))
             logits = self._model_call(final_chunk, req)  # forwards+clears pixel_values
             # Materialize the full vision+text forward on THIS stream before the
             # sample step touches it (prevents stale-stream resolution on the
@@ -1436,6 +1447,36 @@ class SingleBatchGenerator:
             if req.logits_processors:
                 req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
         self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    @staticmethod
+    def _m3_clear_each_chunk() -> bool:
+        """VMLX_M3_PREFILL_CLEAR_EACH_CHUNK=1: release MLX's buffer cache after every M3 prefill chunk (the previous
+        behaviour). Default: keep it through the prefill (every chunk re-allocates the same transient sizes; releasing
+        them sends each chunk back to fresh, zero-filled Metal buffers) and release it once when the prefill ends, so
+        the footprint after the prefill is what it was. VMLX_PREFILL_KEEP_ALLOC=1 still skips every release."""
+        return os.environ.get("VMLX_M3_PREFILL_CLEAR_EACH_CHUNK", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _m3_cache_rows(cache) -> list:
+        """The cache state a non-final prefill chunk leaves (what it evaluates instead of its logits); empty layers
+        (nothing written) are skipped."""
+        out = []
+        for layer in cache or ():
+            empty = getattr(layer, "empty", None)
+            if callable(empty) and empty():
+                continue
+            out.append(layer.state)
+        return out
+
+    @staticmethod
+    def _m3_reserve_prefill(cache, rows: int):
+        """Reserve every M3 lane for the remaining ``rows`` prompt rows (models/minimax_m3/cache.reserve_prefill):
+        None until the lanes exist (ask again before the next piece), then True / False (reserved / stock growth)."""
+        from ..models.minimax_m3.cache import reserve_prefill
+
+        return reserve_prefill(cache, rows)
 
     def _m3_media_token_ids(self) -> set:
         args = getattr(self.model, "args", None)
@@ -1486,12 +1527,27 @@ class SingleBatchGenerator:
                 )
         pieces = self.m3_prefill_pieces(req, plan)
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
+        _reserved = None
+        groups = self._m3_piece_groups(req, pieces)
         with self._stream_context():
-            for i, (a, b) in enumerate(pieces):
-                chunk = tokens[a - start: b - start]
-                last = i == len(pieces) - 1
-                lookahead = None if last else tokens[b - start: pieces[i + 1][1] - start]
-                logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+            for gi, group in enumerate(groups):
+                a = group[0][0]
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, start + len(tokens) - a)
+                last = gi == len(groups) - 1
+                if len(group) == 1:
+                    b = group[0][1]
+                    chunk = tokens[a - start: b - start]
+                    lookahead = None if last else tokens[b - start: groups[gi + 1][0][1] - start]
+                    logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+                else:
+                    # Several pieces of one chunk (turn cuts / the store boundary inside it): one layer-major forward,
+                    # every piece's rows exactly its own forward's (MiniMaxM3Model.forward_pieces).
+                    parts = [tokens[x - start: y - start] for x, y in group]
+                    chunk = [t for part in parts for t in part]
+                    _, _, logits = self.model.prefill_group([mx.array([part], dtype=mx.int32) for part in parts],
+                                                            req.cache, logits_last=last)
                 if not last:
                     # Only the cache rows are kept from a non-final piece: evaluate them, not the logits (the
                     # lm_head over every row of a chunk is never read).
@@ -1501,7 +1557,7 @@ class SingleBatchGenerator:
                     if req.logits_processors:
                         req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
                     self._sync()
-                    if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                    if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
                         mx.clear_cache()
                     continue
                 (logits,) = self._eval_on_stream(logits)
@@ -1521,6 +1577,25 @@ class SingleBatchGenerator:
                 if req.logits_processors:
                     req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
         self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    def _m3_piece_groups(self, req: _Request, pieces: list) -> list:
+        """The aligned plan's pieces grouped by prefill chunk (``a // step``) for one layer-major forward each
+        (``Model.prefill_group``), or one group per piece: a model without ``prefill_group``, a media request (its
+        first forward carries the vision tensors), or ``VMLX_M3_PREFILL_GROUP=0``."""
+        step = max(1, int(self.prefill_step_size or 1))
+        if (not callable(getattr(self.model, "prefill_group", None))
+                or req.pixel_values is not None or req.pixel_values_videos is not None
+                or os.environ.get("VMLX_M3_PREFILL_GROUP", "1").strip().lower() in {"0", "false", "off", "no"}):
+            return [[p] for p in pieces]
+        groups: list = []
+        for p in pieces:
+            if groups and groups[-1][0][0] // step == p[0] // step:
+                groups[-1].append(p)
+            else:
+                groups.append([p])
+        return groups
 
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()

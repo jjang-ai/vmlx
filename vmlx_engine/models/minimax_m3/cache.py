@@ -33,6 +33,7 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import mlx.core as mx
@@ -123,6 +124,63 @@ class MiniMaxM3SparseCache(KVCache):
     # ``offset``; the record validator accepts a longer physical backing.
     idx_step = 256
 
+    # ── prefill capacity reservation (``reserve_prefill`` below decides; VMLX_M3_PREFILL_RESERVE) ──
+    # The stock growth re-allocates every lane at each prefill chunk (new buffer = old rows + the chunk, rounded to the
+    # step) and copies the old rows into it: an N-token prefill in chunks of C allocates and copies ~N^2 / (2C) rows
+    # per lane (32k: ~38 GB of fresh, zero-filled Metal buffers across the model; 100k: ~350 GB). A prefill that knows
+    # its remaining length reserves those rows; the next growth makes room for all of them (rounded up to the step, so
+    # the final capacity is the one the chunked growth reaches). Only capacity changes: rows below the offset, and every
+    # reader (``state``, ``update_and_fetch``, ``update_index``: all sliced to the logical extent), are the same.
+    def reserve(self, rows: int) -> None:
+        """Make the next capacity growth of the K / V and index lanes room for ``rows`` rows past the current
+        offset (a prefill of known length). A hint only: nothing is allocated here."""
+        until = int(self.offset or 0) + max(0, int(rows))
+        self.__dict__["_reserve_until"] = until
+        self.__dict__["_idx_reserve_until"] = until
+
+    def row_bytes(self) -> int:
+        """Bytes one more row costs on the K / V / index lanes (0 while a lane does not exist yet)."""
+        total = 0
+        for name in ("_keys", "_values", "_idx_keys"):
+            a = self.__dict__.get(name)
+            if a is None or a.ndim != 4 or not int(a.shape[2]):
+                return 0
+            total += a.nbytes // int(a.shape[2])
+        return int(total)
+
+    def _grow_rows(self, key: str, prev: int, n: int, step: int) -> int:
+        """Rows a growth at ``prev`` for ``n`` new rows allocates: the stock ceil(n / step) * step, or enough for
+        the reservation (consumed once the offset reaches it)."""
+        until = int(self.__dict__.get(key) or 0)
+        need = max(n, until - prev)
+        if until and prev + n >= until:
+            self.__dict__.pop(key, None)
+        return ((need + step - 1) // step) * step
+
+    def update_and_fetch(self, keys, values):  # noqa: D102 - KVCache.update_and_fetch with the reservation
+        prev = int(self.offset)
+        n = int(keys.shape[2])
+        d = self.__dict__
+        if d.get("_keys") is None or prev + n > int(d["_keys"].shape[2]):
+            rows = self._grow_rows("_reserve_until", prev, n, self.step)
+            B, H, _, Dk = keys.shape
+            new_k = mx.zeros((B, H, rows, Dk), keys.dtype)
+            new_v = mx.zeros((B, int(values.shape[1]), rows, int(values.shape[3])), values.dtype)
+            if d.get("_keys") is not None:
+                k_old, v_old = self.keys, self.values
+                if prev % self.step != 0:
+                    k_old, v_old = k_old[..., :prev, :], v_old[..., :prev, :]
+                self.keys = mx.concatenate([k_old, new_k], axis=2)
+                self.values = mx.concatenate([v_old, new_v], axis=2)
+            else:
+                self.keys, self.values = new_k, new_v
+        elif d.get("_reserve_until") and prev + n >= int(d["_reserve_until"]):
+            d.pop("_reserve_until", None)
+        self.offset = prev + n
+        self.keys[..., prev:self.offset, :] = keys
+        self.values[..., prev:self.offset, :] = values
+        return self.keys[..., :self.offset, :], self.values[..., :self.offset, :]
+
     def update_index(self, idx_k: mx.array) -> mx.array:
         """Append this step's idx_k [B, H, T, D] and return the index history.
 
@@ -138,14 +196,16 @@ class MiniMaxM3SparseCache(KVCache):
         n = int(idx_k.shape[2])
         if self.idx_keys is None or prev + n > int(self.idx_keys.shape[2]):
             B, H, _, D = idx_k.shape
-            n_steps = (self.idx_step + n - 1) // self.idx_step
-            grown = mx.zeros((B, H, n_steps * self.idx_step, D), dtype=idx_k.dtype)
+            grown = mx.zeros((B, H, self._grow_rows("_idx_reserve_until", prev, n, self.idx_step), D),
+                             dtype=idx_k.dtype)
             if self.idx_keys is None:
                 self.idx_keys = grown
             else:
                 if prev % self.idx_step != 0:
                     self.idx_keys = self.idx_keys[..., :prev, :]
                 self.idx_keys = mx.concatenate([self.idx_keys, grown], axis=2)
+        elif self.__dict__.get("_idx_reserve_until") and prev + n >= int(self.__dict__["_idx_reserve_until"]):
+            self.__dict__.pop("_idx_reserve_until", None)
         self.idx_keys[..., prev : prev + n, :] = idx_k
         self._idx_offset = prev + n
         if self.offset and self._idx_offset != int(self.offset):
@@ -593,6 +653,57 @@ def truncate_minimax_m3_cache(cache: list, length: int) -> None:
             continue
         if length < offset:
             trim(offset - length)
+
+
+RESERVE_ENV = "VMLX_M3_PREFILL_RESERVE"
+RESERVE_MARGIN_ENV = "VMLX_M3_PREFILL_RESERVE_MARGIN_GB"
+
+
+def allocator_headroom_bytes() -> int | None:
+    """Bytes MLX's Metal allocator can still hand out before it starts releasing its buffer cache on every allocation
+    that misses it (its GC threshold, 0.95 x the device's recommended working set in MLX 0.32's MetalAllocator), minus
+    what is active now. None when MLX does not report it."""
+    try:
+        rec = int(mx.device_info().get("max_recommended_working_set_size") or 0)
+        if rec <= 0:
+            return None
+        return int(0.95 * rec) - int(mx.get_active_memory())
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def reserve_prefill(cache, rows: int):
+    """Reserve every ``MiniMaxM3SparseCache`` lane for the next ``rows`` prompt rows (``MiniMaxM3SparseCache.reserve``)
+    so the lanes grow once instead of at every chunk. Callers (SingleBatchGenerator's M3 prefill paths, the DSpark text
+    lane) ask before each piece until this returns True or False:
+
+    * None: the lanes do not exist yet (a cold cache before its first piece); ask again before the next piece;
+    * False: not reserved, the lanes keep the stock chunk-by-chunk growth: ``VMLX_M3_PREFILL_RESERVE=0``, or the
+      reserved rows would leave MLX's allocator less than ``VMLX_M3_PREFILL_RESERVE_MARGIN_GB`` (default 4) below its
+      GC threshold. Measured on a 128 GB M5 Max (95.5 GiB M3.1 bundle) at 100k tokens: the whole KV reserved at the
+      start kept the allocator over that threshold for the entire prefill, so every chunk's transients came back as
+      fresh, zero-filled buffers (3.9 TB zero-filled vs 1.1 TB with the chunked growth) and the prefill ran 2 % slower.
+      The growth strategy is the only thing decided here; the prefill runs either way;
+    * True: reserved. Capacity only: rows and readers are unchanged."""
+    if os.environ.get(RESERVE_ENV, "1").strip().lower() in {"0", "false", "off", "no"}:
+        return False
+    layers = [layer for layer in cache or () if callable(getattr(layer, "reserve", None))]
+    if not layers:
+        return False
+    per_row = [layer.row_bytes() for layer in layers]
+    if not all(per_row):
+        return None
+    headroom = allocator_headroom_bytes()
+    if headroom is not None:
+        try:
+            margin = float(os.environ.get(RESERVE_MARGIN_ENV, "4"))
+        except (TypeError, ValueError):
+            margin = 4.0
+        if sum(per_row) * int(rows) + int(margin * 2 ** 30) > headroom:
+            return False
+    for layer in layers:
+        layer.reserve(int(rows))
+    return True
 
 
 def make_minimax_m3_cache(config) -> list:
