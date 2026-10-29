@@ -309,6 +309,9 @@ class MiniMaxM3DSparkTarget:
         rows = int(x.shape[1])
         if rows == 1:
             return module(x)
+        e1 = self._e1(module, x)
+        if e1 is not None:
+            return e1[0]
         wide = self._wide_kernel(module)
         if wide is not None:
             y = wide(x)
@@ -340,6 +343,27 @@ class MiniMaxM3DSparkTarget:
             return outs[0] if len(outs) == 1 else mx.concatenate(outs, axis=1)
         self.verify_paths["linear_rows"] += 1
         return mx.concatenate([module(_row(x, r)) for r in range(rows)], axis=1)
+
+    def _e1(self, module, x: mx.array, pair=None):
+        """``VMLX_M3_EXACT_FLAT=1``: [module(x)] (or [module(x), pair(x)] in one walk) on the E1 kernels -- every weight
+        read and decoded once per tile of rows, each row on MLX's one-row arithmetic (metal/row_exact_e1, admitted per
+        shape by bit-equality) -- or None (lever off, < 3 rows, other formats, not admitted)."""
+        from ..metal import row_exact_e1 as E1
+
+        if not E1.enabled() or int(x.shape[-2]) < E1.DISPATCH_MIN_ROWS or not _row_exact_kernel_enabled():
+            return None
+        mods = (module,) if pair is None else (module, pair)
+        for m in mods:
+            if (not isinstance(m, nn.QuantizedLinear) or str(getattr(m, "mode", "affine") or "affine") != "affine"
+                    or "biases" not in m or "bias" in m):
+                return None
+        bits, gs = int(module.bits), int(module.group_size)
+        if bits not in E1.dispatch_bits() or any((int(m.bits), int(m.group_size)) != (bits, gs) for m in mods):
+            return None
+        out = E1.row_exact_e1(x, [(m["weight"], m["scales"], m["biases"]) for m in mods], bits=bits, group_size=gs)
+        if out is not None:
+            self.verify_paths["linear_e1"] = self.verify_paths.get("linear_e1", 0) + len(mods)
+        return out
 
     @staticmethod
     def _wide_kernel(module):
@@ -439,6 +463,13 @@ class MiniMaxM3DSparkTarget:
     def _mlp(self, mlp, x: mx.array) -> mx.array:
         if hasattr(mlp, "switch_mlp") and hasattr(mlp, "routed") and _accepts(mlp, "routed"):
             return mlp(x, linear=self._linear, routed=self._routed(mlp))
+        if all(hasattr(mlp, n) for n in ("gate_proj", "up_proj", "down_proj", "alpha", "limit")):
+            # dense SwiGLU-OAI layer: gate and up share one E1 walk (VMLX_M3_EXACT_FLAT), each row on one-row arithmetic
+            gu = self._e1(mlp.up_proj, x, pair=mlp.gate_proj)
+            if gu is not None:
+                swiglu = getattr(sys.modules.get(type(mlp).__module__), "swiglu", None)
+                if swiglu is not None:
+                    return self._linear(mlp.down_proj, swiglu(gu[0], gu[1], mlp.alpha, mlp.limit))
         if _accepts(mlp, "linear"):
             return mlp(x, linear=self._linear)
         return mx.concatenate([mlp(_row(x, r)) for r in range(int(x.shape[1]))], axis=1)
