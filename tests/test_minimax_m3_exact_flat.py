@@ -27,7 +27,7 @@ from vmlx_engine.metal import row_exact_e1 as E1  # noqa: E402
 from vmlx_engine.models.minimax_m3 import fused_attn as F  # noqa: E402
 from vmlx_engine.models.minimax_m3 import kernels as K  # noqa: E402
 
-LEVERS = ("VMLX_ROW_EXACT_VERIFY_QMV", "VMLX_DSPARK", "VMLX_DSPARK_MAX_DRAFT", "VMLX_DSPARK_WIDTH",
+LEVERS = ("VMLX_M3_E1_BITS", "VMLX_ROW_EXACT_VERIFY_QMV", "VMLX_DSPARK", "VMLX_DSPARK_MAX_DRAFT", "VMLX_DSPARK_WIDTH",
           "VMLX_DSPARK_SAMPLED", "VMLX_DSPARK_PIPELINE", "VMLX_DSPARK_AR_FALLBACK", "VMLX_MINIMAX_MSA",
           "VMLX_MINIMAX_MSA_SELECT", "VMLX_M3_E1_SHAPE", "VMLX_E1_QMV_SHAPE")
 
@@ -38,6 +38,7 @@ def _levers(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(F.ENV, "1")
     monkeypatch.setenv(F.EXACT_FLAT_ENV, "1")
+    monkeypatch.setenv("VMLX_M3_E1_BITS", "4,6,8")            # every width the kernels cover (6-bit is opt-in)
 
 
 def _eq(a, b) -> bool:
@@ -298,6 +299,23 @@ def test_dspark_greedy_equals_ar_with_e1(target, drafter_dir, mode):
     assert out == reference
     assert stats.rounds > 3 and 0 < stats.accepted < stats.drafted
     assert F.E1_STATS["qkv"] > before
+
+
+def test_six_bit_projections_keep_the_row_split_walk_by_default(target, monkeypatch):
+    """Default dispatch: 6-bit projections (the M3.1 lm_head) stay on today's exact walk (measured no faster with E1
+    on the real bundle); 4-bit ones take E1. The verify stays exact either way."""
+    monkeypatch.delenv("VMLX_M3_E1_BITS")
+    assert E1.dispatch_bits() == (4, 8)
+    head = target.lm_head
+    assert int(head.bits) == 6                                   # affine 6, as the M3.1 lm_head (TF._plan)
+    x = _rows(5, TD.D, 9).astype(mx.bfloat16)[None]
+    assert target._e1(head, x) is None                           # default: today's row-split walk
+    up = target.nm.layers[0].mlp.up_proj                         # dense MLP, affine 4
+    assert target._e1(up, x) is not None
+    bad, _, _, _ = _verify_vs_decode(target, 765, 6)
+    assert not bad
+    monkeypatch.setenv("VMLX_M3_E1_BITS", "4,6,8")
+    assert target._e1(head, x) is not None
 
 
 def test_decode_logits_identical_with_the_lever_on_and_off(target, monkeypatch):

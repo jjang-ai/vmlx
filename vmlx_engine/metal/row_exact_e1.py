@@ -41,6 +41,21 @@ logger = logging.getLogger(__name__)
 MIN_ROWS, MAX_ROWS = 2, 16
 # Callers take E1 from this many rows: at 2 rows it ties today's builds (no gain for the extra prep launch).
 DISPATCH_MIN_ROWS = 3
+# Widths callers dispatch to E1 by default. 6-bit (the M3.1 lm_head) is exact but measured no faster than the
+# row-split walk on the real bundle (m5-max 2026-10-29: 6.2 -> 6.5 ms at 8 rows, 11.6 -> 12.6 at 16; synthetic
+# 4.56 -> 4.27): its one-row qdot is 1.5 FMAs per weight per row and the row-split walk already decodes once per 4
+# rows. ``VMLX_M3_E1_BITS=4,6,8`` overrides (A/B).
+DISPATCH_BITS = (4, 8)
+
+
+def dispatch_bits() -> tuple:
+    raw = os.environ.get("VMLX_M3_E1_BITS", "").strip()
+    if not raw:
+        return DISPATCH_BITS
+    try:
+        return tuple(int(b) for b in raw.split(",") if b.strip())
+    except ValueError:
+        return DISPATCH_BITS
 TILE_ROWS = 4
 _ADMITTED: dict = {}
 _DECISIONS: dict = {}

@@ -311,7 +311,7 @@ class MiniMaxM3DSparkTarget:
                     or "biases" not in m or "bias" in m):
                 return None
         bits, gs = int(module.bits), int(module.group_size)
-        if any((int(m.bits), int(m.group_size)) != (bits, gs) for m in mods):
+        if bits not in E1.dispatch_bits() or any((int(m.bits), int(m.group_size)) != (bits, gs) for m in mods):
             return None
         out = E1.row_exact_e1(x, [(m["weight"], m["scales"], m["biases"]) for m in mods], bits=bits, group_size=gs)
         if out is not None:
