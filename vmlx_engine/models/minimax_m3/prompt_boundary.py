@@ -31,8 +31,16 @@ INFLIGHT_ENV = "VMLX_M3_STORE_MAX_INFLIGHT_MB"
 DEFAULT_INFLIGHT_MB = 256
 
 
+RESTORE_ENV = "VMLX_M3_STREAMED_RESTORE"
+
+
 def zero_copy_enabled() -> bool:
     return os.environ.get(ENV, "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def streamed_restore_enabled() -> bool:
+    """SSD-only M3 restore into preallocated lanes, one payload at a time (prefix_cache, default on)."""
+    return os.environ.get(RESTORE_ENV, "1").strip().lower() not in {"0", "false", "off", "no"}
 
 
 def store_inflight_bytes() -> int:
