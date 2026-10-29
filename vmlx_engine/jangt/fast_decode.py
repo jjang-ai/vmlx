@@ -1,7 +1,7 @@
 """Faster JANGT trellis decode kernels for few-row MoE decode / verify (MiniMax-M3.1 widths), behind a lever.
 
 Production path (``routed_fast`` / ``routed_gate_up`` / ``routed_down``; JTMixedSwitchGLU.routed and the fused M3
-MoE block call it with VMLX_JANGT_FAST=1, default off): same math as moe_kernels' v3 decode kernels -- 16-weight lane
+MoE block call it when ``enabled(unit)``): same math as moe_kernels' v3 decode kernels -- 16-weight lane
 chunks of 12-bit trellis states, half2 codes ((s * MU) & MASK) | ORB, half2 fma chain per lane chunk, fp32 fold, code
 statistics and row scales in the epilogue, outlier columns -- with
   * the activation side packed once per row in ONE launch (``pack_rows1``: Hadamard-128 rotation, fp16 range guard,
@@ -19,6 +19,14 @@ K 1 / 1.5 / 2: 5.23 / 5.40 / 4.94 -> 3.89 / 4.06 / 4.91 ms; down K 1 / 1.5 / 2 /
 3.46 / 2.82 / 3.19 / 3.58 ms; 16 rows -25 to -34 %. At one row the kernels sit between two floors: the per-state ALU
 work (~1.6 T states / s, K-independent) and DRAM (~540 GB/s): K <= 1.5 is ALU-bound (K 1 cannot pass ~400 GB/s with
 this code), K >= 2 byte-bound (82 % of peak at K 2).
+
+Scope (2026-10-29): default ON for MiniMax-M3 / M3.1 only, OFF for every other JANGT family (never qualified on their
+real bundles). The M3 model marks its routed stacks at load (``switch.enable_fast_decode_default``, called by
+``models/minimax_m3/minimax_m3.Model``); ``enabled(unit)`` resolves, read per call:
+  * ``VMLX_JANGT_FAST=0`` / ``false`` / ``off`` / ``no``: off for every model (v3 kernels);
+  * ``VMLX_JANGT_FAST=1`` / ``true`` / ``on`` / ``yes``: on for every JANGT model whose shapes ``supported`` admits (as
+    before 2026-10-29);
+  * unset (or any other value): the unit's load-time default -- on for M3 / M3.1 stacks, off for all others.
 
 Experiments kept for the record (bench/jangt_decode_profile.py; measured slower or neutral): ``gen_gate_up`` /
 ``gen_down`` (the first generator, with ablation switches), window words from one coalesced load + simd_shuffle,
@@ -43,9 +51,23 @@ _UNROLL = '_Pragma("clang loop unroll(full)")'
 _ODT = {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}
 
 
-def enabled() -> bool:
-    """VMLX_JANGT_FAST=1 (default off until the real-bundle KL check; read per call)."""
-    return os.environ.get("VMLX_JANGT_FAST", "0").strip().lower() in {"1", "true", "on", "yes"}
+ENV = "VMLX_JANGT_FAST"
+# Attribute a model sets on its JTMixedSwitchGLU units at load to make the fast kernels its default (MiniMax-M3 only).
+DEFAULT_ATTR = "_jangt_fast_default"
+# Diagnostics: routed_fast calls (decode steps + verify launches) and the rows they carried.
+STATS = {"calls": 0, "rows": 0}
+
+
+def enabled(unit=None) -> bool:
+    """``VMLX_JANGT_FAST`` for ``unit`` (a JTMixedSwitchGLU): an explicit on / off value applies to every model;
+    unset (or any other value) gives the unit's load-time default (on for MiniMax-M3 / M3.1, off otherwise).
+    Read per call."""
+    raw = os.environ.get(ENV, "").strip().lower()
+    if raw in {"1", "true", "on", "yes"}:
+        return True
+    if raw in {"0", "false", "off", "no"}:
+        return False
+    return bool(getattr(unit, DEFAULT_ATTR, False))
 
 
 def _lit(v: float) -> str:
@@ -1120,4 +1142,6 @@ def routed_down(h, idx2, w2, U):
 
 def routed_fast(x2, idx2, w2, U, limit, act, alpha):
     """The routed block of JTMixedSwitchGLU.routed for decode / verify rows: (T, D) f32."""
+    STATS["calls"] += 1
+    STATS["rows"] += int(x2.shape[0])
     return routed_down(routed_gate_up(x2, idx2, U, limit, act, alpha), idx2, w2, U)

@@ -31,8 +31,8 @@ E = 16
 @pytest.fixture(autouse=True)
 def _in_kernel_routed_experts(monkeypatch):
     """These tests cover the fused kernels' own routed experts; the fast JANGT kernels inside the fused block are
-    covered by tests/test_jangt_fast_decode.py."""
-    monkeypatch.delenv("VMLX_JANGT_FAST", raising=False)
+    covered by tests/test_jangt_fast_decode.py. Explicitly off: fast JANGT is M3's default since 2026-10-29."""
+    monkeypatch.setenv("VMLX_JANGT_FAST", "0")
 
 
 def _jangt(D, I, Kgu, Kdn, nog, nod, rng):

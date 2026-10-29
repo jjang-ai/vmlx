@@ -41,8 +41,11 @@ def _defaults(monkeypatch):
     for name in ("VMLX_M3_DECODE_OVERLAP", "VMLX_M3_DECODE_OVERLAP_DEFER", "VMLX_M3_AFFINE2_SWITCH", "VMLX_ROW_EXACT_VERIFY_QMV", "VMLX_DSPARK",
                  "VMLX_DSPARK_MAX_DRAFT", "VMLX_DSPARK_WIDTH", "VMLX_DSPARK_SAMPLED", "VMLX_DSPARK_PIPELINE",
                  "VMLX_DSPARK_AR_FALLBACK", "VMLX_DSPARK_AR_CARRY", "VMLX_MINIMAX_MSA", "VMLX_MINIMAX_MSA_SELECT",
-                 "VMLX_M3_ALIGNED_PREFIX", "VMLX_DISABLE_GEN_PROMPT_STRIP", F.ENV):
+                 "VMLX_M3_ALIGNED_PREFIX", "VMLX_DISABLE_GEN_PROMPT_STRIP"):
         monkeypatch.delenv(name, raising=False)
+    # fused attention is M3's default since 2026-10-29: these tests' baseline arm is the unfused ops, set explicitly;
+    # the fused arms set VMLX_M3_FUSED_ATTN=1 themselves
+    monkeypatch.setenv(F.ENV, "0")
 
 
 @pytest.fixture(scope="module")

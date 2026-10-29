@@ -265,9 +265,10 @@ class JTMixedSwitchGLU(nn.Module):
                 from vmlx_engine.jangt import fast_decode as FD
 
                 U = self._unit()
-                if FD.enabled() and FD.supported(U, self.D, self.I):
-                    # VMLX_JANGT_FAST=1: the v4 decode kernels (packed rows, folded code statistics) for decode steps
-                    # AND verify rows alike -- row-invariant, not bit-identical to v3 (jangt/fast_decode.py)
+                if FD.enabled(self) and FD.supported(U, self.D, self.I):
+                    # VMLX_JANGT_FAST (default on only for units a MiniMax-M3 load marked; =0 / =1 force it for every
+                    # model): the v4 decode kernels (packed rows, folded code statistics) for decode steps AND verify
+                    # rows alike -- row-invariant, not bit-identical to v3 (jangt/fast_decode.py)
                     y = FD.routed_fast(x2, idx2, w2, U, self.limit, self.act, self.alpha)
                     return y.astype(x.dtype).reshape(*lead, self.D)
             if x2.shape[0] > 1 and self.gu_fmt == "jangt" and self.dn_fmt == "jangt":
@@ -315,6 +316,21 @@ def enable_fused_combine(model: nn.Module) -> int:
     for _, module in model.named_modules():
         if isinstance(module, JTMixedSwitchGLU):
             object.__setattr__(module, "_fused_combine", True)
+            n += 1
+    return n
+
+
+def enable_fast_decode_default(model: nn.Module) -> int:
+    """Make the fast JANGT decode kernels (jangt/fast_decode.py) the default of every JANGT routed stack of ``model``
+    (``VMLX_JANGT_FAST`` unset). Per model, never global: only MiniMax-M3 / M3.1 calls it (qualified on its real
+    bundle, 2026-10-29); ``VMLX_JANGT_FAST=0`` still turns it off, ``=1`` still turns it on for every model. Returns
+    the count."""
+    from vmlx_engine.jangt.fast_decode import DEFAULT_ATTR
+
+    n = 0
+    for _, module in model.named_modules():
+        if isinstance(module, JTMixedSwitchGLU):
+            object.__setattr__(module, DEFAULT_ATTR, True)
             n += 1
     return n
 

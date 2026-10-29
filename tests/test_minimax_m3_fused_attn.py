@@ -437,7 +437,7 @@ def test_repeat_runs_are_bit_identical(layer, ctx, rows):
 def test_control_todays_multi_row_attention_is_not_row_invariant(layer, monkeypatch):
     """Control: the same comparison on today's multi-row forward (one call for all rows: multi-row qmm, one causal
     attention) finds rows that differ from one-row steps, so the invariance check above can fail."""
-    monkeypatch.delenv(F.ENV)
+    monkeypatch.setenv(F.ENV, "0")
     ctx, rows = 3001, 8
     x = rows_input(rows, layer.hidden, 11)
 
@@ -516,7 +516,7 @@ def test_routing(layer, monkeypatch):
     from mlx_lm.models.cache import KVCache
 
     assert not F.use_fused(layer, rows_input(1, layer.hidden, 0), None, KVCache())
-    monkeypatch.delenv(F.ENV)
+    monkeypatch.setenv(F.ENV, "0")
     assert not F.use_fused(layer, rows_input(1, layer.hidden, 0), None, c)
     other = Layer(hidden=512, heads=8, kv=2, hd=64, rot=32, block=32, topk=6)
     other.self_attn.o_proj = nn.Linear(512, 512, bias=False)
@@ -587,7 +587,7 @@ def test_fused_model_logits_within_the_unfused_noise_floor(target, monkeypatch):
     through its expert routing; the argmax agrees wherever today's top-2 margin is not a near-tie."""
     for prompt_len, seed in ((773, 11), (300, 3)):
         prompt = TD._ids(prompt_len, seed)
-        monkeypatch.delenv(F.ENV)
+        monkeypatch.setenv(F.ENV, "0")
         reference = generate_ar(target, prompt, 30, set(), prefill_step=256)
         base = _decode_logits(target, prompt, reference)
         monkeypatch.setenv("VMLX_MINIMAX_MSA", "dense")
@@ -611,7 +611,7 @@ def test_fused_greedy_decoding_diverges_only_at_near_ties(target, monkeypatch):
     is a near-tie (this random model has many)."""
     for prompt_len, seed in ((773, 11), (517, 12)):
         prompt = TD._ids(prompt_len, seed)
-        monkeypatch.delenv(F.ENV)
+        monkeypatch.setenv(F.ENV, "0")
         reference = generate_ar(target, prompt, 40, set(), prefill_step=256)
         base = _decode_logits(target, prompt, reference)
         monkeypatch.setenv(F.ENV, "1")

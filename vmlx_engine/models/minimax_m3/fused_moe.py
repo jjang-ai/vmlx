@@ -230,9 +230,10 @@ def fused_moe_residual(block, x_normed: mx.array, resid: mx.array) -> mx.array:
     sdo = None if shared else _shared_rows_exact(block.shared_experts, x2)
     from vmlx_engine.jangt import fast_decode as FD
 
-    if FD.enabled() and FD.supported(U, D, sw.I):
-        # VMLX_JANGT_FAST=1: routing + shared expert in K6 / K7, the routed experts on the fast JANGT kernels (the
-        # same ones JTMixedSwitchGLU.routed runs with the lever), K8 adds shared + residual
+    if FD.enabled(sw) and FD.supported(U, D, sw.I):
+        # fast JANGT (VMLX_JANGT_FAST; default on for M3's units, marked at load): routing + shared expert in K6 / K7,
+        # the routed experts on the fast JANGT kernels (the same ones JTMixedSwitchGLU.routed runs), K8 adds shared +
+        # residual
         sig, _ = router(x2, block.gate.weight, U["su_gu"], rows, rot=False)
         h, hs, inds, scores = gate_up(block, x2, sig, None, shared, routed=False)
         ry = FD.routed_fast(x2, inds, scores, U, sw.limit, sw.act, sw.alpha)

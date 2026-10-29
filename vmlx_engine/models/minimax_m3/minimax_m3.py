@@ -543,11 +543,14 @@ class Model(nn.Module):
         if args.jangt:
             # JANGHT: every routed stack becomes a JTMixedSwitchGLU BEFORE quantization (the loader's nn.quantize then
             # hands each {"mode": "jangt", ...} entry to the installed unit). The activation is M3's own SwiGLU-OAI.
-            from vmlx_engine.jangt.switch import install_jangt
+            from vmlx_engine.jangt.switch import enable_fast_decode_default, install_jangt
 
             self.jangt_modules = install_jangt(self, {
                 "jangt": args.jangt, "quantization": args.quantization,
                 "swiglu_kind": "oai", "swiglu_alpha": args.swiglu_alpha, "swiglu_limit": args.swiglu_limit})
+            # Fast JANGT decode kernels are M3's default (2026-10-29, real-bundle KL 0.3150 vs 0.3157), scoped to THIS
+            # model's units: other JANGT families keep v3 unless VMLX_JANGT_FAST=1; VMLX_JANGT_FAST=0 turns M3's off.
+            enable_fast_decode_default(self)
         # VL vision stack (additive — only when the bundle declares vision_config).
         if getattr(args, "vision_config", None):
             try:

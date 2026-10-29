@@ -21,7 +21,11 @@ weights (zero-mean and shifted / spiky probes); a failed check returns None (the
 it. Several projections with the same input (a SwiGLU's gate and up) can share one prep and one walk (``segments``).
 
 Measured on the M5 Max (MLX 0.32.3, MiniMax-M3.1 shapes; see docs ``14-PY-EXACT-FLAT-VERIFY.md``). Lever:
-``VMLX_M3_EXACT_FLAT`` (the callers check it; default off).
+``VMLX_M3_EXACT_FLAT`` (the callers check it). Default ON since 2026-10-29: it is the MiniMax-M3 / M3.1 lever, and
+every caller is M3 code (``models/minimax_m3/fused_moe.py`` shared expert, ``dspark/minimax_target.py`` verify
+projections; the fused attention's K1 / K5 read the same env in ``fused_attn.exact_flat``). ``=0`` / ``false`` /
+``off`` / ``no`` turns it off; ``=1`` (or unset / any other value) keeps it on. A non-M3 caller must not inherit this
+default: give it its own lever.
 
 Created by Jinho Jang (eric@jangq.ai).
 """
@@ -244,8 +248,9 @@ _WALK = r"""
 
 
 def enabled() -> bool:
-    """``VMLX_M3_EXACT_FLAT`` (default off; read per call)."""
-    return os.environ.get("VMLX_M3_EXACT_FLAT", "").strip().lower() in {"1", "true", "on", "yes"}
+    """``VMLX_M3_EXACT_FLAT`` (M3 / M3.1 only; default on, ``0`` turns it off; read per call)."""
+    raw = os.environ.get("VMLX_M3_EXACT_FLAT", "").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 @lru_cache(maxsize=1)

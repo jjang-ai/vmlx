@@ -76,7 +76,7 @@ def test_e1_k1_k5_equal_the_one_row_builds(layer, rows, monkeypatch):
     before = dict(F.E1_STATS)
     got_q, got_o = F.qkv_e1(layer, p, x2), F.oproj_e1(layer, p, o, x2)
     assert F.E1_STATS["qkv"] == before["qkv"] + 1 and F.E1_STATS["oproj"] == before["oproj"] + 1
-    monkeypatch.delenv(F.EXACT_FLAT_ENV)
+    monkeypatch.setenv(F.EXACT_FLAT_ENV, "0")
     ref_q = _one_row(lambda a: F.qkv(layer, p, a), x2)
     ref_o = _one_row(lambda a, b: F.oproj(layer, p, a, b), o, x2)
     mx.eval(got_q, got_o, ref_q, ref_o)
@@ -136,7 +136,7 @@ def test_one_row_decode_build_untouched_by_the_lever(monkeypatch):
     before = dict(F.E1_STATS)
     on = (F.qkv(lay, p, x2), F.oproj(lay, p, o, x2))
     assert F.E1_STATS == before
-    monkeypatch.delenv(F.EXACT_FLAT_ENV)
+    monkeypatch.setenv(F.EXACT_FLAT_ENV, "0")
     off = (F.qkv(lay, p, x2), F.oproj(lay, p, o, x2))
     assert _eq(on[0], off[0]) and _eq(on[1], off[1])
 
@@ -323,7 +323,7 @@ def test_decode_logits_identical_with_the_lever_on_and_off(target, monkeypatch):
     prompt = TD._ids(509, 4)
     on = generate_ar(target, prompt, 12, set(), prefill_step=256)
     lg_on = TF._decode_logits(target, prompt, on)
-    monkeypatch.delenv(F.EXACT_FLAT_ENV)
+    monkeypatch.setenv(F.EXACT_FLAT_ENV, "0")
     off = generate_ar(target, prompt, 12, set(), prefill_step=256)
     lg_off = TF._decode_logits(target, prompt, off)
     assert on == off

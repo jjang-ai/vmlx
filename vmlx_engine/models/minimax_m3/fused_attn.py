@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """MiniMax-M3 fused attention half for decode and DSpark verify (1 .. 16 rows): five Metal launches per layer.
 
-``VMLX_M3_FUSED_ATTN=1`` (default off) routes a decoder layer's attention half -- ``x + o_proj(MSA(norm(x)))`` -- to
+Default ON for MiniMax-M3 / M3.1 (approved 2026-10-29; this module is only ever reached from M3 code:
+``minimax_m3.py`` and ``dspark/minimax_target.py``). ``VMLX_M3_FUSED_ATTN`` is an override both ways: ``0`` / ``false`` /
+``off`` / ``no`` runs today's unfused ops, ``1`` / ``true`` / ``on`` / ``yes`` (or unset / any other value) the fused
+path. The same rule holds for the E1 multi-row builds below (``VMLX_M3_EXACT_FLAT``, default on). Read per call.
+
+The lever routes a decoder layer's attention half -- ``x + o_proj(MSA(norm(x)))`` -- to
 
 * K1 ``attn_qkv``: input RMSNorm fused into ONE projection launch for q | k | v (affine) and index q | k (MXFP8 or
   affine): threadgroups partitioned by weight, the norm's sum of squares accumulated once per row on the fly;
@@ -50,7 +55,8 @@ def _proj_shape(rows: int) -> tuple:
     return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
 
 
-# E1 multi-row K1 / K5 (``VMLX_M3_EXACT_FLAT=1``, default off until measured on the real bundle): for 3 .. 16 rows a
+# E1 multi-row K1 / K5 (``VMLX_M3_EXACT_FLAT``, default on since 2026-10-29 after the real-bundle A/Bs of doc 14;
+# ``=0`` keeps the 2-row-tile builds): for 3 .. 16 rows a
 # prep launch computes each row's input chunks once (attn_xprep: the one-row build's own m3a_load_chunk), then the
 # projection walks each weight ONCE per tile of up to E1_TR rows, decoding every four-value code group once into half
 # registers and applying it to each row with the one-row build's per-element sequence (attn_common.metal m3e_rows).
@@ -64,8 +70,23 @@ E1_MIN_ROWS = 3
 E1_STATS = {"qkv": 0, "oproj": 0}
 
 
+_ON = frozenset({"1", "true", "on", "yes"})
+_OFF = frozenset({"0", "false", "off", "no"})
+
+
+def _lever(name: str, default: bool) -> bool:
+    """An explicit on / off value of ``name`` wins; unset, empty or anything else gives ``default``."""
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in _ON:
+        return True
+    if raw in _OFF:
+        return False
+    return default
+
+
 def exact_flat() -> bool:
-    return os.environ.get(EXACT_FLAT_ENV, "").strip().lower() in {"1", "true", "on", "yes"}
+    """``VMLX_M3_EXACT_FLAT``: default on (M3 / M3.1), ``0`` turns it off."""
+    return _lever(EXACT_FLAT_ENV, True)
 
 
 def _e1_ok(p) -> bool:
@@ -91,7 +112,8 @@ STATS = {"calls": 0, "rows": 0, "inplace": 0, "copy_appends": 0, "sparse_calls":
 
 
 def enabled() -> bool:
-    return os.environ.get(ENV, "").strip().lower() in {"1", "true", "on", "yes"}
+    """``VMLX_M3_FUSED_ATTN``: default on (M3 / M3.1), ``0`` turns it off."""
+    return _lever(ENV, True)
 
 
 def _metal() -> bool:
