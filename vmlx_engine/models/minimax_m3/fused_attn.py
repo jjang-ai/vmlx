@@ -37,13 +37,16 @@ MAX_ROWS = 16
 # K1 / K5 threadgroup shape: NSG simdgroups x RPS output rows (MLX qmv's 2 x 4). Rows ride the grid: threadgroup
 # tile * R + row runs the one-row code, so a row's output is the same compiled arithmetic at any row count.
 PROJ_NSG, PROJ_RPS = 2, 4
-# Rows per K1 / K5 threadgroup for several rows: each output chunk's codes are decoded once for the tile (2 measured
-# best on the M5 Max: 4 runs out of registers); one row: 1.
+# Several rows: RT rows per threadgroup (each output chunk's codes decoded once for the tile; 4 runs out of registers),
+# MULTI_NSG simdgroups x MULTI_RPS output rows (each row's input loaded by fewer threadgroups and its per-chunk load
+# amortized over more outputs). Measured on the M5 Max at M3.1 shapes, 2 .. 16 rows: (4, 8) ~ (8, 8) < (8, 4) < (2, 4).
 PROJ_RT = 2
+MULTI_NSG, MULTI_RPS = 4, 8
 
 
-def _proj_rt(rows: int) -> int:
-    return 1 if rows == 1 else PROJ_RT
+def _proj_shape(rows: int) -> tuple:
+    """(NSG, RPS, RT) of the K1 / K5 build for ``rows``; the shape never changes an output element's arithmetic."""
+    return (PROJ_NSG, PROJ_RPS, 1) if rows == 1 else (MULTI_NSG, MULTI_RPS, PROJ_RT)
 STATS = {"calls": 0, "rows": 0, "inplace": 0, "copy_appends": 0, "sparse_calls": 0}
 
 
@@ -149,7 +152,7 @@ def _build_plan(layer) -> tuple:
     blk_a = 512 if p.bits_a == 4 else 256
     blk_b = 512 if p.fmt_b == 1 or p.bits_b == 4 else 256
     blk_o = 512 if p.bits_o == 4 else 256
-    rows_tg = PROJ_NSG * PROJ_RPS
+    rows_tg = max(_proj_shape(1)[0] * _proj_shape(1)[1], _proj_shape(2)[0] * _proj_shape(2)[1])
     if (p.hidden % blk_a or p.hidden % blk_b or (p.H * p.D) % blk_o or p.hidden % rows_tg
             or any(n % rows_tg for n in (p.H * p.D, p.KVH * p.D, p.GI * p.D, p.D))):
         return None, "projection widths not multiples of the kernel blocks"
@@ -159,8 +162,10 @@ def _build_plan(layer) -> tuple:
     p.HS = 4 if p.HG % 4 == 0 else p.HG
     if p.HS > 8 or p.HG * p.D * 4 > 16384:
         return None, "query heads per KV group"
-    if p.block % 32 or p.block > 1024 or p.keep < 1 or p.local < 0:
-        return None, "index block geometry"
+    cpb = p.block // 32
+    if (p.block % 32 or cpb & (cpb - 1) or p.keep < 1 or p.local < 0 or (p.HG // p.HS) * cpb > 32
+            or 4 * (p.HG * p.D + max(1, cpb // 2) * p.HG * (p.D + 2)) + 1400 + 4 * p.keep > 32768):
+        return None, "index block geometry (32-key chunks per block: a power of two, threadgroup memory)"
     ropes = (attn.rope, ix.rope)
     for rope in ropes:
         if bool(getattr(rope, "traditional", True)) or float(getattr(rope, "scale", 1.0)) != 1.0:
@@ -222,7 +227,7 @@ def qkv(layer, p: Plan, x2: mx.array) -> mx.array:
     R = int(x2.shape[0])
     q, k, v, iq, ik = attn.q_proj, attn.k_proj, attn.v_proj, ix.index_q_proj, ix.index_k_proj
     nq, nk, nv, niq, nik = p.H * p.D, p.KVH * p.D, p.KVH * p.D, p.GI * p.D, p.D
-    nsg, rps, rt = PROJ_NSG, PROJ_RPS, _proj_rt(R)
+    nsg, rps, rt = _proj_shape(R)
     sbt = _t(iq["scales"]) if p.fmt_b == 2 else "float"
     kern = K.kernel(
         "qkv",
@@ -289,6 +294,7 @@ def msa(p: Plan, q: mx.array, k_lane: mx.array, v_lane: mx.array, sc: mx.array, 
     """K4: attention output [R, H, D] float32 over each row's selected blocks."""
     R = int(q.shape[0])
     nsg = p.HG // p.HS
+    threads = 32 * nsg * (p.block // 32)
     kern = K.kernel(
         "msa", (("kt", K.METAL_TYPE[k_lane.dtype]), ("vt", K.METAL_TYPE[v_lane.dtype])),
         (("G", p.KVH), ("HG", p.HG), ("D", p.D), ("BLOCK", p.block), ("KEEP", p.keep), ("HS", p.HS),
@@ -296,7 +302,7 @@ def msa(p: Plan, q: mx.array, k_lane: mx.array, v_lane: mx.array, sc: mx.array, 
     rg = R * p.KVH
     return kern(
         inputs=[q, k_lane, v_lane, sc, cnt, meta, mx.array([p.scale], dtype=mx.float32)],
-        grid=(32 * nsg * p.keep, rg, 1), threadgroup=(32 * nsg, 1, 1),
+        grid=(threads * p.keep, rg, 1), threadgroup=(threads, 1, 1),
         output_shapes=[(R, p.H, p.D), (rg * p.keep * p.HG * p.D,), (rg * p.keep * p.HG,), (rg * p.keep * p.HG,)],
         output_dtypes=[mx.float32] * 4)[0]
 
@@ -305,7 +311,7 @@ def oproj(layer, p: Plan, o: mx.array, x2: mx.array, ssp: bool = False):
     """K5: x2 + o_proj(o) [R, hidden] in x2's dtype (and the sum-of-squares partials [R, hidden / 8] when ssp)."""
     m = layer.self_attn.o_proj
     R = int(o.shape[0])
-    nsg, rps, rt = PROJ_NSG, PROJ_RPS, _proj_rt(R)
+    nsg, rps, rt = _proj_shape(R)
     kern = K.kernel(
         "oproj", (("xt", _t(x2)), ("st", _t(m["scales"]))),
         (("KIN", p.H * p.D), ("NOUT", p.hidden), ("BITS", p.bits_o), ("GS", p.gs_o), ("NSG", nsg), ("RPS", rps),

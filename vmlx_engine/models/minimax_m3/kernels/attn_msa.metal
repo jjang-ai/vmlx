@@ -5,26 +5,28 @@
 //   using kt / vt = <K / V lane dtypes>
 //   constexpr int G = KV groups (= index heads), HG = query heads per group, D = head dim (multiple of 32),
 //   BLOCK = keys per block (multiple of 32), KEEP = selected blocks per row and group (top-k),
-//   HS = query heads per simdgroup (HG % HS == 0), NSG = HG / HS simdgroups (NT = 32 * NSG threads)
+//   HS = query heads per simdgroup (HG % HS == 0), NSG = HG / HS head slices; NT = 32 * NSG * BLOCK / 32 threads
 // Inputs (names): q [R, G * HG, D] float32 (K2 output), kc / vc = the K / V lanes [1, G, capacity, D] (strided),
 //   sc [R, G, NB] float32 block scores (K3 output; any >= 8-element array when no row is sparse),
 //   cnt [>= R * G] uint32 zeros (K2 output), meta int32 [>= 8] = {offset, ...}, scale float32 [1] (softmax scale).
 // Outputs: out [R, G * HG, D] float32; po [R, G, KEEP, HG, D], pm / pl [R, G, KEEP, HG] float32 (scratch partials).
 // Grid: (NT * KEEP, R * G, 1), threadgroup (NT, 1, 1): threadgroup (j, r * G + g) handles the j-th block of row r's
-//   selection for group g.
+//   selection for group g. Threadgroup memory ~ 4 (HG D + (BLOCK / 64) HG D) + 1 KB (M3.1: 25 KB).
 //
 // Row r sits at q = offset + r and sees keys 0 .. q (n = q / BLOCK + 1 blocks). When n <= KEEP every block is
 // visible: threadgroup j takes block j (none when j >= n). Otherwise the row's selection is the KEEP highest scores of
 // sc[r, g, 0 .. n) (the local block is +inf), ties to the lower block id, listed in ascending block id; threadgroup j
 // takes the j-th. Every threadgroup of (r, g) computes that same selection (radix select on order-preserving keys).
-// Attention per threadgroup: simdgroup s owns heads s * HS .. + HS; lane = key of a 32-key chunk; online softmax in
-// base 2 over the block's chunks (keys > q masked, never read), P V with lane = D / 32 dims. Partials go to po / pm /
-// pl; the last threadgroup of (r, g) to finish (device-scope fence + atomic counter) merges the KEEP partials in
-// ascending j (log-sum-exp) and writes out. Nothing a row computes depends on the other rows of the launch.
+// Attention per threadgroup: one simdgroup per (32-key chunk of the block, slice of HS heads); lane = key for Q K
+// (softmax in base 2, keys > q masked and never read), lane = D / 32 dims for P V; the chunks merge in a fixed tree
+// in threadgroup memory. Block partials go to po / pm / pl; the last threadgroup of (r, g) to finish (device-scope
+// fence + atomic counter) merges the KEEP partials in ascending j (log-sum-exp) and writes out. Nothing a row computes
+// depends on the other rows of the launch.
 
-  constexpr int NT = 32 * NSG;
+  constexpr int CPB = BLOCK / 32;                          // 32-key chunks per block (a power of two)
+  constexpr int NSGT = NSG * CPB;                          // simdgroups per threadgroup
+  constexpr int NT = 32 * NSGT;
   constexpr int DPL = D / 32;
-  constexpr int CPB = BLOCK / 32;
   constexpr float NEG = -1.0e30f;
   const uint lane = thread_index_in_simdgroup;
   const int sg = int(simdgroup_index_in_threadgroup);
@@ -41,8 +43,10 @@
   threadgroup uint hist[256];
   threadgroup int sel[KEEP];
   threadgroup int shared_i[4];
-  threadgroup uint scan[NT];
+  threadgroup uint scan[NSGT];
   threadgroup bool last_tg;
+  threadgroup float cmo[(CPB > 1 ? CPB / 2 : 1) * NSG * HS * D];   // chunk-merge partial o, m / l
+  threadgroup float cml[(CPB > 1 ? CPB / 2 : 1) * NSG * HS * 2];
 
   // ---------------------------------------------------------------- selection
   int blk;
@@ -98,27 +102,14 @@
         ngt += key > prefix ? 1u : 0u;
         neq += key == prefix ? 1u : 0u;
       }
-      // exclusive scans over threads of eq counts, then of selected counts
-      scan[tid] = neq;
-      threadgroup_barrier(mem_flags::mem_threadgroup);
-      uint eq_before = 0u, eq_total = 0u;
-      for (int t = 0; t < NT; ++t) {
-        const uint vv = scan[t];
-        eq_before += t < tid ? vv : 0u;
-        eq_total += vv;
-      }
+      // exclusive scans over threads (in thread order) of the tie counts, then of the selected counts
+      uint eq_total;
+      const uint eq_before = m3a_tg_exclusive_scan<NSGT>(neq, lane, sg, scan, eq_total);
       const int tie_lo = base_tie + int(eq_before);    // global tie rank of this thread's first tie
       const int take_eq = max(0, min(int(neq), remaining - tie_lo));
       const uint nsel = ngt + uint(take_eq);
-      threadgroup_barrier(mem_flags::mem_threadgroup);
-      scan[tid] = nsel;
-      threadgroup_barrier(mem_flags::mem_threadgroup);
-      uint sel_before = 0u, sel_total = 0u;
-      for (int t = 0; t < NT; ++t) {
-        const uint vv = scan[t];
-        sel_before += t < tid ? vv : 0u;
-        sel_total += vv;
-      }
+      uint sel_total;
+      const uint sel_before = m3a_tg_exclusive_scan<NSGT>(nsel, lane, sg, scan, sel_total);
       int at = base_out + int(sel_before);
       int tie = tie_lo;
       for (int i = lo; i < hi; ++i) {
@@ -138,6 +129,9 @@
   }
 
   // ---------------------------------------------------------------- attention over block blk
+  // simdgroup sg = (chunk c, head slice hs): the 32 keys blk * BLOCK + 32 c + lane against heads hs * HS .. + HS
+  const int hs = sg % NSG;
+  const int c = sg / NSG;
   const float qscale = scale[0] * 1.4426950408889634f;
   device const float* qg = q + ((size_t)r * H + (size_t)g * HG) * D;
   for (int i = tid; i < HG * D; i += NT) qs[i] = qg[i] * qscale;
@@ -150,15 +144,14 @@
     for (int e = 0; e < DPL; ++e) o[h][e] = 0.0f;
   }
   if (blk >= 0) {
-    device const kt* kb = (device const kt*)kc + (size_t)g * kc_strides[1];
-    device const vt* vb = (device const vt*)vc + (size_t)g * vc_strides[1];
-    const size_t kss = kc_strides[2], kds = kc_strides[3], vss = vc_strides[2], vds = vc_strides[3];
-    const bool kvec = kds == 1 && (kss % 4) == 0 && ((ulong)kb % (4 * sizeof(kt))) == 0;
-    const bool vvec = vds == 1 && (vss % 4) == 0 && ((ulong)vb % (4 * sizeof(vt))) == 0 && DPL % 4 == 0;
-    threadgroup const float* qh = qs + sg * HS * D;
-    for (int c = 0; c < CPB; ++c) {
-      const int start = blk * BLOCK + c * 32;
-      if (start > q_pos) break;                            // uniform: later chunks are in the future too
+    const int start = blk * BLOCK + c * 32;
+    if (start <= q_pos) {                                  // a chunk past the row's position stays empty
+      device const kt* kb = (device const kt*)kc + (size_t)g * kc_strides[1];
+      device const vt* vb = (device const vt*)vc + (size_t)g * vc_strides[1];
+      const size_t kss = kc_strides[2], kds = kc_strides[3], vss = vc_strides[2], vds = vc_strides[3];
+      const bool kvec = kds == 1 && (kss % 8) == 0 && ((ulong)kb % (8 * sizeof(kt))) == 0;
+      const bool vvec = vds == 1 && (vss % 4) == 0 && ((ulong)vb % (4 * sizeof(vt))) == 0 && DPL % 4 == 0;
+      threadgroup const float* qh = qs + hs * HS * D;
       const int kp = start + int(lane);
       const bool valid = kp <= q_pos;
       float s[HS];
@@ -166,10 +159,10 @@
       if (valid) {
         device const kt* krow = kb + (size_t)kp * kss;
         if (kvec) {
-          for (int d = 0; d < D; d += 4) {
-            const vec<kt, 4> k4 = *((device const vec<kt, 4>*)(krow + d));
-            for (int e = 0; e < 4; ++e) {
-              const float kd = float(k4[e]);
+          for (int d = 0; d < D; d += 8) {
+            const vec<kt, 8> k8 = *((device const vec<kt, 8>*)(krow + d));
+            for (int e = 0; e < 8; ++e) {
+              const float kd = float(k8[e]);
               for (int h = 0; h < HS; ++h) s[h] = fma(qh[h * D + d + e], kd, s[h]);
             }
           }
@@ -183,16 +176,15 @@
       float p[HS];
       for (int h = 0; h < HS; ++h) {
         const float x = valid ? s[h] : NEG;
-        const float m_new = max(m_run[h], simd_max(x));
-        const float factor = fast::exp2(m_run[h] - m_new);
-        p[h] = valid ? fast::exp2(x - m_new) : 0.0f;
-        l_run[h] = l_run[h] * factor + simd_sum(p[h]);
-        m_run[h] = m_new;
-        for (int e = 0; e < DPL; ++e) o[h][e] *= factor;
+        m_run[h] = simd_max(x);
+        p[h] = valid ? fast::exp2(x - m_run[h]) : 0.0f;
+        l_run[h] = simd_sum(p[h]);
       }
-      const int nvalid = min(32, q_pos - start + 1);
-      for (int jj = 0; jj < nvalid; ++jj) {
-        device const vt* vrow = vb + (size_t)(start + jj) * vss + (size_t)(lane * DPL) * vds;
+      // all 32 keys, unrolled so the V loads overlap: a key past q_pos has p = 0 and reads the row at q_pos instead
+      // (finite, contributes nothing), so nothing past the row's extent is read
+      #pragma unroll(8)
+      for (int jj = 0; jj < 32; ++jj) {
+        device const vt* vrow = vb + (size_t)min(start + jj, q_pos) * vss + (size_t)(lane * DPL) * vds;
         float vv[DPL];
         if (vvec) {
           for (int e = 0; e < DPL; e += 4) {
@@ -208,14 +200,42 @@
         }
       }
     }
+    // the block's chunks, merged in a fixed tree: at step t, chunk c + t folds into chunk c (c < t)
+    for (int step = CPB / 2; step >= 1; step /= 2) {
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (c >= step && c < 2 * step) {
+        for (int h = 0; h < HS; ++h) {
+          const int slot = ((c - step) * NSG + hs) * HS + h;
+          for (int e = 0; e < DPL; ++e) cmo[slot * D + lane * DPL + e] = o[h][e];
+          if (lane == 0) {
+            cml[2 * slot] = m_run[h];
+            cml[2 * slot + 1] = l_run[h];
+          }
+        }
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (c < step) {
+        for (int h = 0; h < HS; ++h) {
+          const int slot = (c * NSG + hs) * HS + h;
+          const float mb = cml[2 * slot], lb = cml[2 * slot + 1];
+          const float m = max(m_run[h], mb);
+          const float fa = fast::exp2(m_run[h] - m), fb = fast::exp2(mb - m);
+          l_run[h] = l_run[h] * fa + lb * fb;
+          m_run[h] = m;
+          for (int e = 0; e < DPL; ++e) o[h][e] = o[h][e] * fa + cmo[slot * D + lane * DPL + e] * fb;
+        }
+      }
+    }
   }
-  // partial (unnormalized) for heads sg * HS .. + HS of this (r, g, j)
-  for (int h = 0; h < HS; ++h) {
-    const size_t pidx = ((size_t)rg * KEEP + j) * HG + sg * HS + h;
-    for (int e = 0; e < DPL; ++e) po[pidx * D + lane * DPL + e] = o[h][e];
-    if (lane == 0) {
-      pm[pidx] = m_run[h];
-      pl[pidx] = l_run[h];
+  // partial (unnormalized) of this (r, g, j): chunk 0's simdgroups hold the merged block
+  if (c == 0) {
+    for (int h = 0; h < HS; ++h) {
+      const size_t pidx = ((size_t)rg * KEEP + j) * HG + hs * HS + h;
+      for (int e = 0; e < DPL; ++e) po[pidx * D + lane * DPL + e] = o[h][e];
+      if (lane == 0) {
+        pm[pidx] = m_run[h];
+        pl[pidx] = l_run[h];
+      }
     }
   }
 
@@ -234,24 +254,31 @@
   for (int h = tid; h < HG; h += NT) {
     const size_t b0 = (size_t)rg * KEEP * HG + h;
     float mx = NEG;
-    for (int jj = 0; jj < KEEP; ++jj) mx = max(mx, ((volatile device const float*)pm)[b0 + (size_t)jj * HG]);
+    for (int jj = 0; jj < KEEP; ++jj) mx = max(mx, pm[b0 + (size_t)jj * HG]);
     float ls = 0.0f;
     for (int jj = 0; jj < KEEP; ++jj) {
       const size_t pidx = b0 + (size_t)jj * HG;
-      const float w = fast::exp2(((volatile device const float*)pm)[pidx] - mx);
+      const float w = fast::exp2(pm[pidx] - mx);
       wts[jj * HG + h] = w;
-      ls += w * ((volatile device const float*)pl)[pidx];
+      ls += w * pl[pidx];
     }
     wts[KEEP * HG + h] = 1.0f / ls;
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  for (int i = tid; i < HG * D; i += NT) {
-    const int h = i / D;
-    const int d = i - h * D;
-    float acc = 0.0f;
-    for (int jj = 0; jj < KEEP; ++jj) {
-      const size_t pidx = ((size_t)rg * KEEP + jj) * HG + h;
-      acc += wts[jj * HG + h] * ((volatile device const float*)po)[pidx * D + d];
+  // four consecutive dims per thread and step (float4), the KEEP partials of each in ascending j
+  constexpr int NV4 = HG * D / 4;
+  #pragma unroll
+  for (int i0 = 0; i0 < NV4; i0 += NT) {
+    const int i = i0 + tid;
+    if (i < NV4) {
+      const int h = (4 * i) / D;
+      const int d = 4 * i - h * D;
+      float4 acc = float4(0.0f);
+      #pragma unroll
+      for (int jj = 0; jj < KEEP; ++jj) {
+        const size_t pidx = ((size_t)rg * KEEP + jj) * HG + h;
+        acc += wts[jj * HG + h] * *((device const float4*)(po + pidx * D + d));
+      }
+      *((device float4*)(out + ((size_t)r * H + (size_t)g * HG + h) * D + d)) = acc * wts[KEEP * HG + h];
     }
-    out[((size_t)r * H + (size_t)g * HG + h) * D + d] = acc * wts[KEEP * HG + h];
   }

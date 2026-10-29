@@ -29,6 +29,25 @@ METAL_FUNC float m3a_e8m0(uint s) {
   return as_type<float>(s == 0u ? 0x400000u : (s << 23));
 }
 
+// Exclusive prefix sum of v over the threads of a threadgroup of NSG simdgroups, in thread order; total = the sum.
+// Contains threadgroup barriers (every thread calls it); scratch holds NSG values.
+template <int NSG>
+METAL_FUNC uint m3a_tg_exclusive_scan(uint v, uint lane, int sg, threadgroup uint* scratch, thread uint& total) {
+  const uint excl = simd_prefix_exclusive_sum(v);
+  const uint sgsum = simd_sum(v);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (lane == 0) scratch[sg] = sgsum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  uint before = 0u;
+  total = 0u;
+  for (int i = 0; i < NSG; ++i) {
+    const uint t = scratch[i];
+    before += i < sg ? t : 0u;
+    total += t;
+  }
+  return before + excl;
+}
+
 // Order-preserving uint key of a float (larger float -> larger key; NaN above +inf).
 METAL_FUNC uint m3a_fkey(float f) {
   const uint u = as_type<uint>(f);
