@@ -370,6 +370,70 @@ def test_another_rows_input_never_changes_a_row(layer):
         assert _eq(la[..., :ctx + 6, :], lb[..., :ctx + 6, :])
 
 
+def _poison(sizes) -> None:
+    """Hand MLX's buffer cache NaN-filled buffers of these byte sizes, freed at once, so the next allocations of those
+    sizes reuse them: a launch that reads memory nothing ordered before it wrote then reads NaN, not a lucky
+    leftover (MLX does not clear allocations)."""
+    junk = [mx.full((max(1, int(n) // 4),), float("nan"), dtype=mx.float32) + 0 for n in sizes for _ in range(2)]
+    mx.eval(junk)
+    del junk
+
+
+def _block_sizes(p, rows: int, ctx: int, hidden: int) -> list:
+    """Byte sizes of every array one fused block allocates (K1 .. K5 outputs and K4's block partials)."""
+    rg, nb = rows * p.KVH, -(-(ctx + rows) // p.block)
+    ntot = (p.H + 2 * p.KVH + p.GI + 1) * p.D
+    return [rows * ntot * 4, rows * p.H * p.D * 4, rows * p.GI * p.D * 4, rows * p.GI * nb * 4,
+            rg * p.keep * p.HG * p.D * 4, rg * p.keep * p.HG * 4, rows * hidden * 2]
+
+
+@pytest.mark.parametrize("ctx, rows", [(300, 1), (1031, 1), (1031, 16), (2040, 16), (3001, 5), (8269, 1),
+                                       (8269, 16)])
+def test_repeat_runs_are_bit_identical(layer, ctx, rows):
+    """The same inputs four times, fresh lanes each time and MLX's buffer cache refilled with NaN before every run:
+    the residual rows and every lane row are bit-identical and finite each time; K4 alone likewise, and its merged
+    output equals a float64 merge of the block partials it left behind. Catches a launch reading memory it is not
+    ordered after or not coherent with: K4's last threadgroup merges the other threadgroups' block partials, and
+    without coherent(device) partials (device memory is only threadgroup-coherent by default, MSL 4.8) it read stale
+    ones on the M5 Ultra -- rows changed from run to run or went NaN -- while the M5 Max happened to pass."""
+    p = F.plan(layer)
+    x = rows_input(rows, layer.hidden, ctx + 1)
+    runs = []
+    for _ in range(4):
+        _poison(_block_sizes(p, rows, ctx, layer.hidden))
+        runs.append(_run(layer, x, ctx, ctx, per_row=False, spare=64))
+    for h, lanes in runs:
+        assert bool(mx.all(mx.isfinite(h)).item()) and all(bool(mx.all(mx.isfinite(v)).item()) for v in lanes)
+    assert all(_same(runs[0], r) for r in runs[1:])
+
+    # K4 alone, four launches on one set of inputs (fresh zero counters each): bit-identical outputs, each equal to a
+    # float64 merge of the block partials the launch left behind (read after the launch, so ordered)
+    c = lane_cache(ctx, ctx, spare=64)
+    y = F.qkv(layer, p, x.reshape(rows, layer.hidden))
+    dts = F.lane_dtypes(layer, c, x.dtype)
+    nb = -(-(ctx + rows) // p.block)
+    meta = mx.array([ctx, rows, nb, 0, 0, 0, 0, 0], dtype=mx.int32)
+    q, iq, cnt, new = F.heads(layer, p, y, meta, c.fused_lanes(), dts, False)
+    c.fused_append(*(a.transpose(1, 0, 2)[None] for a in new))
+    kl, vl, il = c.fused_lanes()
+    sc = F.scores(p, iq, il, meta, nb) if nb > p.keep else F._dummy()
+    mx.eval(q, kl, vl, sc)
+    outs = []
+    for _ in range(4):
+        _poison(_block_sizes(p, rows, ctx, layer.hidden))
+        o, (po, pm, pl) = F.msa(p, q, kl, vl, sc, mx.zeros(cnt.shape, dtype=cnt.dtype), meta, partials=True)
+        mx.eval(o, po, pm, pl)
+        po_ = np.array(po, np.float64).reshape(rows, p.KVH, p.keep, p.HG, p.D)
+        pm_ = np.array(pm, np.float64).reshape(rows, p.KVH, p.keep, p.HG)
+        pl_ = np.array(pl, np.float64).reshape(rows, p.KVH, p.keep, p.HG)
+        w = np.exp2(pm_ - pm_.max(axis=2, keepdims=True))
+        ref = (w[..., None] * po_).sum(axis=2) / (w * pl_).sum(axis=2)[..., None]
+        got = _np(o).reshape(rows, p.KVH, p.HG, p.D)
+        assert np.isfinite(got).all() and _rel(got, ref) < 1e-5, _rel(got, ref)
+        outs.append(o)
+    assert all(_eq(outs[0], o) for o in outs[1:])
+
+
 def test_control_todays_multi_row_attention_is_not_row_invariant(layer, monkeypatch):
     """Control: the same comparison on today's multi-row forward (one call for all rows: multi-row qmm, one causal
     attention) finds rows that differ from one-row steps, so the invariance check above can fail."""
