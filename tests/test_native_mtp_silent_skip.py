@@ -48,9 +48,7 @@ def test_engine_produces_the_skip_key_the_panel_reads():
     engagement could ever display, and a model silently running without MTP had
     nowhere to say so. A DEBUG log line is not a user-visible surface.
     """
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-        native_mtp_stats_snapshot,
-    )
+    from vmlx_engine.text_mtp.lane_stats import native_mtp_stats_snapshot
 
     snapshot = native_mtp_stats_snapshot()
     assert "last_native_mtp_skip" in snapshot, (

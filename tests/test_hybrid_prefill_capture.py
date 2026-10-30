@@ -98,10 +98,10 @@ def test_real_qwen_native_snapshot_survives_suffix_and_restores(bits):
     import mlx.nn as nn
     from mlx_lm.models import qwen3_5
     from mlx_lm.models.cache import ArraysCache
-    from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+    from vmlx_engine.text_mtp import qwen_family as qwen35_model
     from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
 
-    qwen35_model.apply()
+    qwen35_model.install()
     mx.random.seed(617)
     layer = qwen3_5.GatedDeltaNet(qwen3_5.TextModelArgs(
         hidden_size=64, linear_num_value_heads=2, linear_num_key_heads=2,

@@ -652,8 +652,8 @@ class TestBatchedEngineVideoTemplate:
         import inspect
         import types
 
-        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_decoder_layer
-        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_gated_delta_net
+        from vmlx_engine.text_mtp.qwen_family import _hook_decoder_layer as _patch_decoder_layer
+        from vmlx_engine.text_mtp.qwen_family import _hook_linear_attention as _patch_gated_delta_net
 
         class GatedDeltaNet:
             pass
@@ -679,7 +679,7 @@ class TestBatchedEngineVideoTemplate:
     def test_qwen35_dense_mtp_decoder_call_forwards_gdn_sink_runtime(self):
         import types
 
-        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_decoder_layer
+        from vmlx_engine.text_mtp.qwen_family import _hook_decoder_layer as _patch_decoder_layer
 
         class DecoderLayer:
             pass
@@ -728,11 +728,11 @@ class TestBatchedEngineVideoTemplate:
     def test_qwen35_dense_mtp_patch_propagates_gdn_sink_past_decoder(self):
         import inspect
 
-        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+        from vmlx_engine.text_mtp import qwen_family as qwen35_model
 
-        patched_backbone = inspect.getsource(qwen35_model._patch_qwen3_5_text_model)
-        patched_text = inspect.getsource(qwen35_model._patch_text_model)
-        patched_outer = inspect.getsource(qwen35_model._patch_outer_model)
+        patched_backbone = inspect.getsource(qwen35_model._hook_backbone)
+        patched_text = inspect.getsource(qwen35_model._hook_text_model)
+        patched_outer = inspect.getsource(qwen35_model._hook_wrapper_model)
 
         assert "gdn_sink: Optional[list] = None" in patched_backbone
         assert "gdn_sink=gdn_sink" in patched_backbone

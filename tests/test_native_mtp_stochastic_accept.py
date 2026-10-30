@@ -263,7 +263,7 @@ class TestBothSchedulersShareOneRule:
 
     def test_text_path_delegates_to_the_shared_helper(self):
         from vmlx_engine import native_mtp_acceptance
-        from vmlx_engine.patches.mlx_lm_mtp import batch_generator as text_gen
+        from vmlx_engine.text_mtp import lane
 
         sentinel = object()
         captured = {}
@@ -275,7 +275,7 @@ class TestBothSchedulersShareOneRule:
         original = native_mtp_acceptance.accept_lp_for
         native_mtp_acceptance.accept_lp_for = _fake
         try:
-            assert text_gen._accept_lp_for(None, mx.array([0.0])) is sentinel
+            assert lane.acceptance_view(None, mx.array([0.0])) is sentinel
         finally:
             native_mtp_acceptance.accept_lp_for = original
         assert captured.get("called"), "text path must route through the shared rule"

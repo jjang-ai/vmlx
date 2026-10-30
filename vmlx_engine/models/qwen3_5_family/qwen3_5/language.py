@@ -450,7 +450,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                 # size, not the parent it holds alive.
                 #
                 # Every sibling capture site already does this — the MTP patch at
-                # patches/mlx_lm_mtp/qwen35_model.py:270, the boundary captures in
+                # text_mtp/qwen_family.py (recurrent_step), the boundary captures in
                 # mllm_batch_generator, and upstream mlx_lm. This vendored VLM copy
                 # was the straggler, and it is the live path for Qwen3.5/3.6-VL
                 # loads that go through mlx_vlm_compat without the MTP patch.

@@ -30,7 +30,7 @@ SOURCE_HASH_FILES = (
     "tests/cross_matrix/output_counts.py",
     "vmlx_engine/native_mtp.py",
     "vmlx_engine/mllm_batch_generator.py",
-    "vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py",
+    "vmlx_engine/text_mtp/qwen_family.py",
     "vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py",
     "vmlx_engine/server.py",
     "vmlx_engine/native_mtp_policy_suite.py",

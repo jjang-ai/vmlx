@@ -2398,9 +2398,9 @@ class Model(nn.Module):
                 from vmlx_engine.jangt.switch import enable_fused_combine
 
                 enable_fused_combine(self)
-        from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active
+        from vmlx_engine.text_mtp import draft_head_loading_enabled
 
-        if args.num_nextn_predict_layers > 0 and is_mtp_active():
+        if args.num_nextn_predict_layers > 0 and draft_head_loading_enabled():
             self.mtp = Glm5NextMTP(args)
 
     def __call__(
