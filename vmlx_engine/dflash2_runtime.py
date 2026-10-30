@@ -1640,7 +1640,7 @@ class _BlockChooser:
     one noisy probe at a time.  Served JANGH2 code ran 49.9 tok/s under it vs
     59.9 at fixed width 8.
 
-    Model used here (expected tokens per ms, as in TensorFold's depth picker):
+    Model used here (expected tokens per ms):
       * Drafts are accepted as a prefix, so cycle tokens = 1 + accepted, and
         E[tokens | w] = 1 + sum_{j=1}^{w-1} prod_{k<=j} p_k, where p_k is the
         probability that draft position k is accepted given 1..k-1 were.
@@ -1922,9 +1922,9 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False, codebook: boo
     tokens only when the drafter is right.  Default (``VMLX_DFLASH2_BLOCK``
     unset or ``auto``): (5, trained, 2*trained), e.g. (5, 8, 16) for the
     Qwen3.8-27B drafter, or (trained, 2*trained) when ``lane_flat``; _BlockChooser picks among them by expected tokens per
-    measured second.  2*trained follows mlx-serve, which drafts 16 positions
-    with this same block-8 drafter: the masked positions past the trained
-    block are still drafted, just with lower acceptance, and with the lane
+    measured second.  2*trained drafts 16 positions with a block-8 drafter:
+    the masked positions past the trained block are still drafted, just with
+    lower acceptance, and with the lane
     matmul a 16-row verify costs about what 8 rows do.  ``<n>`` pins one width
     (A/B tool), capped at 2*trained.
     """

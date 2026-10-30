@@ -1,7 +1,7 @@
 """Guarded FP16 HC residual combine followed by grouped native-order RMS.
 
-Boundary inspired by ddalcu/mlx-serve 3c6206d94 hcReadPending; no Zig/BF16
-arithmetic is reused. Reduction adapted from Apple MLX 0.32.2 (1f8e74e3),
+Fused boundary: the pending HC residual combine is read inside the norm
+kernel. Reduction adapted from Apple MLX 0.32.2 (1f8e74e3),
 mlx/backend/metal/kernels/rms_norm.metal and normalization.cpp: N_READS=4,
 640 threads for axis2560, two SIMD sums, precise rsqrt, FP16 norm output.
 The caller's affine norm weight multiply is AFTER that FP16 rounding.
