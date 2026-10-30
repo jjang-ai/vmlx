@@ -28,12 +28,6 @@ enum GeomSlot : int {
   kGeomSlots
 };
 
-struct RowMax {
-  template <typename U>
-  METAL_FUNC static constexpr U apply(U a, U b) {
-    return metal::max(a, b);
-  }
-};
 struct RowAdd {
   template <typename U>
   METAL_FUNC static constexpr U apply(U a, U b) {
@@ -265,7 +259,8 @@ METAL_FUNC void split_value_attention(
     const int col_pos0 = kb * BK + lane_col;
     const bool check_causal = CAUSAL && kb >= first_causal_block;
     const bool check_window = WINDOW > 0 && kb * BK <= tile_first_pos + group_row + F - 1 - WINDOW;
-    if (tail_block || check_causal || check_window) {
+    // Drop every score of this block for which pred(row position, key position, key index in block) holds.
+    auto drop_where = [&](auto pred) {
       STEEL_PRAGMA_UNROLL
       for (short kf = 0; kf < KF; kf++) {
         thread auto& frag = scores.frag_at(0, kf);
@@ -273,16 +268,21 @@ METAL_FUNC void split_value_attention(
         for (short i = 0; i < score_t::kFragThrRows; i++) {
           STEEL_PRAGMA_UNROLL
           for (short j = 0; j < score_t::kFragThrCols; j++) {
-            const int row = row_pos0 + i * score_t::kFragRowsJump;
-            const int col_in_block = kf * F + lane_col + j;
-            const int col = col_pos0 + kf * F + j;
-            const bool drop = (tail_block && col_in_block >= key_tail) || (check_causal && row < col) ||
-                (check_window && col <= row - WINDOW);
             const short e = i * score_t::kFragThrCols + j;
-            frag[e] = drop ? dropped : frag[e];
+            const int in_block = kf * F + lane_col + j;
+            frag[e] = pred(row_pos0 + i * score_t::kFragRowsJump, col_pos0 + kf * F + j, in_block) ? dropped : frag[e];
           }
         }
       }
+    };
+    if (tail_block) {
+      drop_where([&](int, int, int in_block) { return in_block >= key_tail; });
+    }
+    if (check_causal) {
+      drop_where([&](int row, int col, int) { return row < col; });
+    }
+    if (check_window) {
+      drop_where([&](int row, int col, int) { return col <= row - WINDOW; });
     }
     if (HAS_MASK) {
       using mtile_t = NAXTile<bool, 1, KF>;
@@ -306,8 +306,23 @@ METAL_FUNC void split_value_attention(
     }
 
     // Online softmax (base 2).
+    // Row max: every score of the row this lane holds (all fragments), then across the row's four lanes. Max is
+    // exact, so the grouping does not change the result; it halves the shuffles of a per-fragment reduction.
     metal::vec<float, kRows> new_max = run_max;
-    scores.template row_reduce<RowMax>(new_max);
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < score_t::kFragThrRows; i++) {
+      float m = scores.frag_at(0, 0)[i * score_t::kFragThrCols];
+      STEEL_PRAGMA_UNROLL
+      for (short kf = 0; kf < KF; kf++) {
+        STEEL_PRAGMA_UNROLL
+        for (short j = 0; j < score_t::kFragThrCols; j++) {
+          m = metal::max(m, scores.frag_at(0, kf)[i * score_t::kFragThrCols + j]);
+        }
+      }
+      m = metal::max(m, simd_shuffle_xor(m, ushort(1)));
+      m = metal::max(m, simd_shuffle_xor(m, ushort(8)));
+      new_max[i] = metal::max(new_max[i], m);
+    }
     scores.template row_bin_op<RowExp2Shift>(new_max);
     metal::vec<float, kRows> rescale;
     STEEL_PRAGMA_UNROLL

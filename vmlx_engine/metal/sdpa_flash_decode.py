@@ -119,7 +119,8 @@ _SPLIT_PASS = r"""
       keys_strides[1] % 8 == 0 && values_strides[1] % 8 == 0 && keys_strides[0] % 8 == 0 &&
       values_strides[0] % 8 == 0;
   int chunk_row[MY_CHUNKS];         // key row within the tile, TILE when this slot is unused
-  int64_t chunk_src[MY_CHUNKS];     // element offset of the chunk from the tile's first key
+  const device T* chunk_src[MY_CHUNKS];  // the chunk's source in the current tile (advanced one tile per step)
+  int64_t chunk_step[MY_CHUNKS];
   threadgroup T* chunk_dst[MY_CHUNKS];
   bool chunk_is_k[MY_CHUNKS];
   _Pragma("clang loop unroll(full)")
@@ -133,7 +134,8 @@ _SPLIT_PASS = r"""
     chunk_is_k[j] = is_k;
     chunk_row[j] = c < K_CHUNKS + V_CHUNKS ? r : TILE;
     chunk_dst[j] = is_k ? k_tile + r * K_PITCH + col : v_tile + r * V_PITCH + col;
-    chunk_src[j] = is_k ? r * k_row + col * k_el : r * v_row + col * v_el;
+    chunk_src[j] = is_k ? k_src + (key_begin + r) * k_row + col * k_el : v_src + (key_begin + r) * v_row + col * v_el;
+    chunk_step[j] = TILE * (is_k ? k_row : v_row);
   }
 
   const int last_visible = n_keys - ROWS + row;   // causal: last key this row may see
@@ -147,7 +149,8 @@ _SPLIT_PASS = r"""
         continue;
       }
       const bool live = whole_tile || t0 + chunk_row[j] < key_end;
-      const device T* src = (chunk_is_k[j] ? k_src + t0 * k_row : v_src + t0 * v_row) + chunk_src[j];
+      const device T* src = chunk_src[j];
+      chunk_src[j] += chunk_step[j];
       if (wide_loads) {
         *reinterpret_cast<threadgroup vec<T, 8>*>(chunk_dst[j]) =
             live ? *reinterpret_cast<const device vec<T, 8>*>(src) : vec<T, 8>(0);
