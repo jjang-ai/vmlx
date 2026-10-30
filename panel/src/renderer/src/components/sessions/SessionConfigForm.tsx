@@ -458,8 +458,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     return () => { alive = false }
   }, [bundlePath, qwen38Dense27b, isImage])
   const bundledDflash2 = dflash2Drafters.find(d => d.bundled) || null
-  // DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1); `default` is
-  // on whenever the bundle ships one, used until the user sets the checkbox; `textLane`: MiniMax-M3 / M3.1.
+  // DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1, DeepSeek-V4.1);
+  // `default` is on whenever the bundle ships one, used until the user sets the checkbox; `textLane`: MiniMax-M3 /
+  // M3.1 and DeepSeek-V4.1.
   const [bundledDspark, setBundledDspark] = useState<{ name: string; path: string; default: boolean; textLane?: boolean } | null>(null)
   useEffect(() => {
     setBundledDspark(null)
@@ -476,11 +477,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveDraftModel = config.speculativeModel || (bundledDflash2Active ? bundledDflash2!.path : '')
   const selectedDflash2 = useDflash2Selection(effectiveDraftModel)
   const dflash2Speculative = selectedDflash2 || (!config.speculativeModel && bundledDflash2Active)
-  // Mirrors sessions.ts: an explicit or DFlash2 draft model takes precedence over the bundled DSpark drafter.
-  const dsparkOverridden = !!config.speculativeModel || dflash2Speculative
+  // Mirrors sessions.ts: an explicit or DFlash2 draft model takes precedence over the bundled DSpark drafter (not on
+  // the DSV4 family, whose engine drops an external draft model and keeps DeepSeek-V4.1's own draft).
+  const dsparkOverridden = !dsv4Active && (!!config.speculativeModel || dflash2Speculative)
   const dsparkActive = !!bundledDspark && (config.useBundledDspark ?? bundledDspark.default) && !dsparkOverridden
   // MiniCPM-V-4.7 drafts on the single-request lane (batching off, native speculative cache policy). MiniMax-M3 /
-  // M3.1 draft on the text lane: the checkbox only selects --dspark, batching and the cache stack stay as configured.
+  // M3.1 and DeepSeek-V4.1 draft on the engine's single-sequence lane: the checkbox only selects --dspark, batching
+  // and the cache stack stay as configured.
   const dsparkSingleRequest = dsparkActive && !bundledDspark?.textLane
   const nativeSpeculativeCache = dflash2Speculative || dsparkSingleRequest
   const singleActiveControls = dsv4Active || glmSingleActive || nativeSpeculativeCache
@@ -1833,7 +1836,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
 
       {/* Native in-model MTP */}
-      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
+      {/* DSV4 family: only DeepSeek-V4.1's bundled DSpark checkbox (its engine drops external drafters). */}
+      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || (dsv4Active && !bundledDspark)}>
+        {dsv4Active && bundledDspark && (
+          <div data-vmlx-control="use-bundled-dspark">
+            <CheckField
+              label={t('sessions.config.useBundledDspark', { name: bundledDspark.name })}
+              tooltip={t('sessions.config.useBundledDsparkTextLaneTooltip')}
+              checked={dsparkActive}
+              onChange={v => onChange('useBundledDspark', v)}
+            />
+          </div>
+        )}
+        {!dsv4Active && <>
         {nativeMtpDetected && <div data-vmlx-section="nativeMtp">
         {!nativeMtpSupported && (
           <IncompatWarning text={detectedNativeMtp?.blockedReason || t('sessions.config.nativeMtpBlockedFallback')} />
@@ -1924,6 +1939,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           />
         )}
         {dflash2Speculative && <InfoNote text={t('sessions.config.dflash2AdaptiveBlockNote')} />}
+        </>}
       </Section>
 
       {/* Speculative Decoding */}

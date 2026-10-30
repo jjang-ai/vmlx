@@ -395,10 +395,11 @@ export function buildCommandPreview(
     ? (explicitDflash2 ?? /dflash2/i.test(config.speculativeModel))
     : !!detectedDflash2Path)
   // A bundled DSpark drafter (<bundle>/dspark) is on by default (sessions.ts). MiniCPM-V-4.7 drafts on the
-  // single-request lane; MiniMax-M3 / M3.1 (textLane) keep batching and the cache stack as configured.
+  // single-request lane; MiniMax-M3 / M3.1 and DeepSeek-V4.1 (textLane) keep batching and the cache stack as
+  // configured. The DSV4 family drops an external draft model, so it never overrides V4.1's draft.
   const dsparkChoice = config.useBundledDspark
-  const dsparkActive = !dsv4Active && !!bundledDspark && (dsparkChoice ?? bundledDspark.default) &&
-    !config.speculativeModel && !dflash2Speculative
+  const dsparkOverridden = !dsv4Active && (!!config.speculativeModel || dflash2Speculative)
+  const dsparkActive = !!bundledDspark && (dsparkChoice ?? bundledDspark.default) && !dsparkOverridden
   const dsparkSingleRequest = dsparkActive && !(bundledDspark && bundledDspark.textLane)
   const cacheStackActive = dsv4Active
     ? true
@@ -530,8 +531,7 @@ export function buildCommandPreview(
   if (!config.speculativeModel && config.useBundledDflash2 === false && hasBundledDrafter) {
     parts.push('--no-bundled-dflash2')
   }
-  if (bundledDspark && !dsv4Active) {
-    const dsparkOverridden = !!config.speculativeModel || dflash2Speculative
+  if (bundledDspark) {
     parts.push('--dspark', dsparkOverridden ? 'off' : dsparkChoice === undefined ? 'auto' : dsparkActive ? 'on' : 'off')
   }
   if (compatibleExternalSpeculative) {

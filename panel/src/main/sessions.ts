@@ -5263,17 +5263,20 @@ export class SessionManager extends EventEmitter {
       console.log(`[SESSION] Using the DFlash2 drafter bundled with the model: ${bundledDflash2Drafter}`)
     }
     const dflash2Speculative = isDflash2DrafterSelection(effectiveSpeculativeModel)
-    // A DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1) is on
-    // whenever the bundle ships one, unless the user set useBundledDspark; an explicit draft model or a DFlash2 drafter
-    // takes precedence. MiniCPM-V-4.7 drafts on the single-request lane, so batching stays off and the cache stack
-    // follows the native speculative policy while it is active. MiniMax-M3 / M3.1 draft on the text lane: the choice
-    // only selects --dspark, batching and the cache stack stay exactly as configured.
-    const bundledDsparkDrafter = dsv4Active ? null : findBundledDsparkDrafter(config.modelPath)
+    // A DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1,
+    // DeepSeek-V4.1) is on whenever the bundle ships one, unless the user set useBundledDspark; an explicit draft model
+    // or a DFlash2 drafter takes precedence, except on the DSV4 family, whose engine drops --speculative-model and
+    // keeps its own draft. MiniCPM-V-4.7 drafts on the single-request lane, so batching stays off and the cache stack
+    // follows the native speculative policy while it is active. MiniMax-M3 / M3.1 and DeepSeek-V4.1 draft on the
+    // engine's single-sequence lane: the choice only selects --dspark, batching and the cache stack stay exactly as
+    // configured (V4.1 already launches with --max-num-seqs 1, which its DSpark generator needs).
+    const bundledDsparkDrafter = findBundledDsparkDrafter(config.modelPath)
     const dsparkChoice: boolean | undefined = (config as any).useBundledDspark
+    const dsparkOverridden = !dsv4Active && (!!config.speculativeModel || dflash2Speculative)
     // DSpark bundles (MiniCPM-V-4.7) have only a multimodal runtime, so a text-only launch (Multimodal Force Off) still
     // loads it (api/utils.is_mllm_model) and drafts text requests; --text-only only restricts media at the API.
     const dsparkActive = !!bundledDsparkDrafter && (dsparkChoice ?? bundledDsparkDefault(config.modelPath)) &&
-      !config.speculativeModel && !dflash2Speculative
+      !dsparkOverridden
     const dsparkSingleRequest = dsparkActive && !dsparkUsesTextLane(config.modelPath)
     const cacheStackActive = dsv4Active
       ? true
@@ -5540,8 +5543,8 @@ export class SessionManager extends EventEmitter {
       args.push('--no-bundled-dflash2')
     }
     if (bundledDsparkDrafter) {
-      // The user's choice when set; otherwise the bundle's stamp (auto), which is what the lane above followed.
-      const dsparkOverridden = !!config.speculativeModel || dflash2Speculative
+      // The user's choice when set; otherwise auto (the engine uses a shipped drafter), which is what the lane above
+      // followed.
       args.push('--dspark', dsparkOverridden ? 'off' : dsparkChoice === undefined ? 'auto' : dsparkActive ? 'on' : 'off')
       if (dsparkActive) console.log(`[SESSION] Using the DSpark drafter bundled with the model: ${bundledDsparkDrafter}`)
     }

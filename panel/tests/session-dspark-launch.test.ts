@@ -19,7 +19,7 @@ vi.mock('../src/main/database', () => ({ db }))
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => '/tmp', isPackaged: false },
   powerSaveBlocker: { isStarted: () => false, start: () => 1, stop: () => undefined } }))
 import { SessionManager } from '../src/main/sessions'
-import { addDraftAdmissionWeights, writeMinimaxDsparkBundle } from './helpers/draftAdmissionFixture'
+import { addDraftAdmissionWeights, writeDsv41Bundle, writeMinimaxDsparkBundle, type Dsv41Layout } from './helpers/draftAdmissionFixture'
 const dirs: string[] = []
 function bundle(stampDefault: boolean | null, drafter = true): string {
   const dir = mkdtempSync(join(tmpdir(), 'vmlx-dspark-launch-'))
@@ -40,6 +40,12 @@ function m3Bundle(drafter = true): string {
   dirs.push(dir)
   writeMinimaxDsparkBundle(dir)
   if (!drafter) rmSync(join(dir, 'dspark'), { recursive: true, force: true })
+  return dir
+}
+function dsv41Bundle(layout: Dsv41Layout): string {
+  const dir = mkdtempSync(join(tmpdir(), 'vmlx-dspark-dsv41-launch-'))
+  dirs.push(dir)
+  writeDsv41Bundle(dir, layout)
   return dir
 }
 function args(manager: SessionManager, row: any): string[] {
@@ -171,5 +177,56 @@ describe('bundled DSpark launch wiring, MiniMax-M3 / M3.1 (text lane)', () => {
     expect(off).toContain('--continuous-batching')
     expect(on).toContain('--continuous-batching')
     expect(shape(off, row.modelPath)).toEqual(shape(on, row.modelPath))
+  })
+})
+
+describe('bundled DSpark launch wiring, DeepSeek-V4.1 (dspark/dspark.safetensors, DSV4 single-sequence lane)', () => {
+  const shape = (command: string[], bundleDir: string) => {
+    const out = [...command]
+    const i = out.indexOf('--dspark')
+    if (i >= 0) out.splice(i, 2)
+    return out.map(a => (a === bundleDir ? '<bundle>' : a))
+  }
+
+  it('JANGHT1.4 and JANG_2K layouts: auto / on / off pass --dspark; the DSV4 lane (--max-num-seqs 1) is unchanged', async () => {
+    for (const layout of ['janght', 'jang2k'] as const) {
+      for (const [extra, mode] of [[{}, 'auto'], [{ useBundledDspark: true }, 'on'], [{ useBundledDspark: false }, 'off']] as const) {
+        rows.length = 0
+        const manager = new SessionManager()
+        const withDraft = dsv41Bundle(layout)
+        const without = dsv41Bundle('none')
+        const row = await manager.createSession(withDraft, { port: 8150, ...extra })
+        const plain = await manager.createSession(without, { port: 8150, ...extra })
+        const command = args(manager, row)
+        expect(flag(command, '--dspark')).toBe(mode)
+        // The engine's DSV41DSparkGenerator engages only at max_num_seqs == 1; the DSV4 lane always passes it.
+        expect(flag(command, '--max-num-seqs')).toBe('1')
+        expect(command).toContain('--continuous-batching')
+        expect(command).not.toContain('--no-continuous-batching')
+        expect(args(manager, plain)).not.toContain('--dspark')
+        expect(shape(command, withDraft)).toEqual(shape(args(manager, plain), without))
+      }
+    }
+  })
+
+  it('toggling the saved choice relaunches with --dspark off / on and the same flags otherwise', async () => {
+    const manager = new SessionManager()
+    const row = await manager.createSession(dsv41Bundle('janght'), { port: 8151 })
+    expect(flag(args(manager, row), '--dspark')).toBe('auto')
+    await manager.updateSessionConfig(row.id, { useBundledDspark: false })
+    const off = args(manager, row)
+    await manager.updateSessionConfig(row.id, { useBundledDspark: true })
+    const on = args(manager, row)
+    expect(flag(off, '--dspark')).toBe('off')
+    expect(flag(on, '--dspark')).toBe('on')
+    expect(shape(off, row.modelPath)).toEqual(shape(on, row.modelPath))
+  })
+
+  it('a stale draft model does not switch V4.1 DSpark off (the DSV4 engine ignores --speculative-model)', async () => {
+    const manager = new SessionManager()
+    const row = await manager.createSession(dsv41Bundle('janght'), { port: 8152, speculativeModel: '/models/other-draft' })
+    const command = args(manager, row)
+    expect(flag(command, '--dspark')).toBe('auto')
+    expect(command).not.toContain('--speculative-model')
   })
 })

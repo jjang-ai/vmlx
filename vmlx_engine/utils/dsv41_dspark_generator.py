@@ -2,7 +2,8 @@
 """DeepSeek-V4.1-Flash DSpark speculative-decode generator for the vMLX engine.
 
 Selected (scheduler) only when a bundle's dSpark draft is attached as ``model._dspark`` (default-on
-for bundles that ship the draft; ``VMLX_DSV41_DSPARK=0`` disables it) and max_num_seqs == 1. It subclasses
+for bundles that ship the draft; ``--dspark off`` disables it, see load_jangtq_dsv41.dsv41_dspark_decision) and
+max_num_seqs == 1. It subclasses
 ``SingleBatchGenerator`` to reuse its request lifecycle (insert/remove/Response/stop machinery) and
 overrides only the decode path: it prefills the request's ENGINE cache with
 ``jang_tools.dsv41.dspark.DSparkRunner.prefill(session=<engine DeepseekV41Cache list>)`` (so the prompt
