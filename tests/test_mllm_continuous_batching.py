@@ -1278,7 +1278,7 @@ class TestMLLMBatchStats:
     def test_qwen_mtp_patches_support_prefix_without_lm_head(self):
         """Qwen native-MTP text/VL wrappers must let MLLM prefill skip prefix lm_head."""
         sources = [
-            Path("vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py").read_text(),
+            Path("vmlx_engine/text_mtp/qwen_family.py").read_text(),
             Path("vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py").read_text(),
         ]
 

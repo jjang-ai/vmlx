@@ -31,7 +31,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/model_config_registry.py",
     "vmlx_engine/model_configs.py",
     "vmlx_engine/native_mtp.py",
-    "vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py",
+    "vmlx_engine/text_mtp/qwen_family.py",
     "vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py",
     "vmlx_engine/server.py",
     "vmlx_engine/utils/jang_loader.py",

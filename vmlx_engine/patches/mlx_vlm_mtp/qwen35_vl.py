@@ -1131,9 +1131,9 @@ def _patch_language_model(qlang: Any) -> None:
         n_mtp = _mtp_layer_count(args, config)
         if n_mtp > 0:
             try:
-                from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active
+                from vmlx_engine.text_mtp import draft_head_loading_enabled
 
-                active = is_mtp_active()
+                active = draft_head_loading_enabled()
             except Exception:
                 active = False
             if active:
@@ -1401,9 +1401,9 @@ def _patch_moe_language_model(qmoe_lang: Any) -> None:
         n_mtp = _mtp_layer_count(args, config)
         if n_mtp > 0:
             try:
-                from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active
+                from vmlx_engine.text_mtp import draft_head_loading_enabled
 
-                active = is_mtp_active()
+                active = draft_head_loading_enabled()
             except Exception:
                 active = False
             if active:
@@ -1479,10 +1479,10 @@ def _patch_outer_model(qvl: Any) -> None:
         # this on the attribute alone would also fire while the module simply
         # has not been constructed yet, silently discarding a live head's
         # weights.
-        from ..mlx_lm_mtp import is_mtp_active
+        from ...text_mtp import draft_head_loading_enabled
 
         language_model = getattr(self, "language_model", None)
-        drop_mtp_weights = not is_mtp_active() and not hasattr(
+        drop_mtp_weights = not draft_head_loading_enabled() and not hasattr(
             language_model, "mtp"
         )
 
@@ -1668,10 +1668,10 @@ def _patch_moe_outer_model(qmoe_vl: Any) -> None:
         # this on the attribute alone would also fire while the module simply
         # has not been constructed yet, silently discarding a live head's
         # weights.
-        from ..mlx_lm_mtp import is_mtp_active
+        from ...text_mtp import draft_head_loading_enabled
 
         language_model = getattr(self, "language_model", None)
-        drop_mtp_weights = not is_mtp_active() and not hasattr(
+        drop_mtp_weights = not draft_head_loading_enabled() and not hasattr(
             language_model, "mtp"
         )
 

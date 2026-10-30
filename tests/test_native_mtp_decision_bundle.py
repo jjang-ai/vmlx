@@ -1,8 +1,8 @@
 """One device round-trip per verify cycle, with the accept decision on device.
 
-Recreates the shape of MTPLX's decode loop, which reads back a single small
-"decision bundle" holding sampled tokens, drafts and accept flags rather than
-pulling ids to the host and comparing in Python. vMLX paid two blocking syncs
+The verify cycle reads back a single small "decision bundle" holding sampled
+tokens, drafts and accept flags rather than pulling ids to the host and
+comparing in Python. vMLX paid two blocking syncs
 per cycle (sampled ids, then draft ids) and compared host-side with the GPU
 idle -- and raw-harness timing put the engine at ~66ms/cycle against the same
 model's ~55ms/cycle without engine machinery.

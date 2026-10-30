@@ -88,7 +88,7 @@ _NAX_ATTENTION = os.environ.get("VMLX_MIMO_NAX_ATTENTION", "1").strip().lower() 
 
 
 # 1-4 query rows over a long cache (decode, DFlash AR steps, verify widths <= 4): split-key "flash decoding" with
-# simdgroup matrix products (metal/sdpa_flash_decode.py, oMLX port). MLX has no fused 192/128 vector kernel, so its
+# simdgroup matrix products (metal/sdpa_flash_decode.py). MLX has no fused 192/128 vector kernel, so its
 # call materializes the scores: one row at 121k keys 1.84 ms per full layer vs 1.12 (x1.64; 9 layers = 6.5 ms per token),
 # two rows 3.47 vs 1.54, four rows 23.9 vs 3.11 (synthetic M5 Max, max |err| <= 1.2e-4 vs MLX). Crossovers measured:
 # one row from 32k keys, two rows from 4k, three-eight rows from 2k (they also beat _grouped_few_rows: 5-8 rows

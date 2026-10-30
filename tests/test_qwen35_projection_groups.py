@@ -259,9 +259,9 @@ def test_qwen35_vlm_mtp_wrappers_consume_prepared_projection_groups():
 def test_qwen35_text_mtp_wrapper_consumes_exact_decode_conv_candidate():
     import inspect
 
-    from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+    from vmlx_engine.text_mtp import qwen_family as qwen35_model
 
-    gdn_source = inspect.getsource(qwen35_model._patch_gated_delta_net)
+    gdn_source = inspect.getsource(qwen35_model._hook_linear_attention)
 
     assert "qwen35_gdn_conv_decode" in gdn_source
     assert "qwen35_gated_delta_decode" in gdn_source

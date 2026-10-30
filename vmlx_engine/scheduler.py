@@ -598,14 +598,14 @@ def _prompt_ssd_terminal_flush() -> bool:
 
 
 def _native_mtp_spec_stats_for(uid) -> Optional[dict]:
-    """The finished request's native-MTP record from the mlx_lm BatchGenerator patch (keyed by generator uid), as
+    """The finished request's native-MTP record from the text MTP lane (keyed by generator uid), as
     last_request.speculative. None when MTP did not run for this uid."""
     try:
-        from .patches.mlx_lm_mtp import batch_generator as _mtp_bg
         from .request_telemetry import mtp_spec_stats
+        from .text_mtp.lane_stats import last_record
     except Exception:
         return None
-    record = getattr(_mtp_bg, "_LAST_NATIVE_MTP", None)
+    record = last_record()
     if isinstance(record, dict) and str(record.get("request_id")) == str(uid):
         return mtp_spec_stats(record)
     return None
@@ -13504,7 +13504,7 @@ class Scheduler:
         }
         if generator_cls == "BatchGenerator":
             try:
-                from .patches.mlx_lm_mtp.batch_generator import (
+                from .text_mtp.lane_stats import (
                     native_mtp_stats_snapshot,
                 )
 

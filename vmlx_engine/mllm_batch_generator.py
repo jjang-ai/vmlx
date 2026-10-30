@@ -5176,9 +5176,9 @@ def _native_mtp_decision_bundle(
 ) -> Tuple[mx.array, int]:
     """Build one small device array carrying the whole verify decision.
 
-    Recreates the shape of MTPLX's decode loop, which submits the verify and
-    then reads back a single tiny "decision bundle" holding the sampled tokens,
-    the drafts, and the accept flags -- the comparison happens ON DEVICE.
+    The verify is submitted and then a single tiny "decision bundle" is read
+    back holding the sampled tokens, the drafts, and the accept flags -- the
+    comparison happens ON DEVICE.
 
     vMLX instead pulled the sampled ids to the host with ``.tolist()``, pulled
     the draft ids back in a SECOND blocking eval, and then compared them in
@@ -5470,7 +5470,7 @@ def _native_mtp_accepted_count(
     """Count leading accepted drafts for one MTP verify cycle.
 
     Delegates to the shared rule so this path and the text path
-    (``patches/mlx_lm_mtp/batch_generator.py``) can never disagree about how a
+    (``text_mtp/lane.py``) can never disagree about how a
     draft is accepted — that divergence is what forced ``--is-mllm`` bundles to
     pin temperature to 0 while text bundles ran fine at any temperature.
     """
@@ -19434,9 +19434,8 @@ class MLLMBatchGenerator:
             state.stats.mtp_cache_recreated_on_rejects += 1
         else:
             # Retain the head cache across a rejection, matching the text path
-            # (patches/mlx_lm_mtp/batch_generator.py): "The head cache is never
-            # rolled back (loose history by design -- verify guarantees
-            # correctness; the cache only shapes draft quality)."
+            # (text_mtp/lane.py): the head cache keeps loose history -- verify
+            # guarantees correctness; the head cache only shapes draft quality.
             #
             # Recreating it means the head drafts the next token with ZERO
             # history. On predictable text rejections are rare so it never

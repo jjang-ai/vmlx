@@ -151,8 +151,8 @@ def test_native_mtp_cache_snapshot_stays_off_the_draft_cycle_hot_path():
     """The bounded cache scan belongs only to terminal telemetry publication."""
 
     roots = {
-        Path("vmlx_engine/patches/mlx_lm_mtp/batch_generator.py"): {
-            "_log_mtp_stats"
+        Path("vmlx_engine/text_mtp/lane_stats.py"): {
+            "finish_record"
         },
         Path("vmlx_engine/mllm_batch_generator.py"): {
             "_native_mtp_log_stats",
@@ -385,14 +385,10 @@ def test_native_mtp_light_timing_records_without_sync_trace(monkeypatch):
     assert stats.draft_ms > 0
 
 
-def test_omlx_native_mtp_stats_publish_acceptance_depth_and_forwards():
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-        _MtpStats,
-        _publish_native_mtp_stats,
-        native_mtp_stats_snapshot,
-    )
+def test_text_lane_native_mtp_stats_publish_acceptance_depth_and_forwards():
+    from vmlx_engine.text_mtp.lane_stats import LaneStats; from vmlx_engine.text_mtp.lane_stats import publish; from vmlx_engine.text_mtp.lane_stats import native_mtp_stats_snapshot
 
-    stats = _MtpStats(
+    stats = LaneStats(
         cycles=5,
         accepts=3,
         rejects=2,
@@ -427,7 +423,7 @@ def test_omlx_native_mtp_stats_publish_acceptance_depth_and_forwards():
         },
     )
 
-    published = _publish_native_mtp_stats("hy3-test", stats, "stop")
+    published = publish("hy3-test", stats, "stop")
     snapshot = native_mtp_stats_snapshot()
 
     assert published["request_id"] == "hy3-test"

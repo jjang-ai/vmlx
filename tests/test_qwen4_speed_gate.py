@@ -28,7 +28,7 @@ def run(monkeypatch,lines):
         def __exit__(self,*args): pass
     monkeypatch.setattr(g.urllib.request,"urlopen",lambda *args,**kwargs: Response())
     return g.request_stream(url="http://unused/v1/chat/completions",model="fixture",text="fixture",
-        max_tokens=128,temperature=0,top_p=1,top_k=0,generation_mode=None,depth=None,timeout=1)
+        max_tokens=128,temperature=0,top_p=1,top_k=0,timeout=1)
 
 @pytest.mark.parametrize("defect",["error","malformed","missing_done","duplicate_done","missing_finish","missing_usage","changed_id","stats_only_usage","error_finish"])
 def test_invalid_stream_is_not_a_speed_success(monkeypatch,defect):

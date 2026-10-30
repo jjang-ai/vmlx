@@ -12,7 +12,7 @@ def test_wrapper_activation_replaces_previous_bundle_state(monkeypatch, tmp_path
 
     flags, heads = [], []
     monkeypatch.setattr(m, "_ACTIVE_NATIVE_MTP_MODEL_PATH", Path("/previous-bundle"))
-    monkeypatch.setattr(m, "_set_mtp_active", flags.append)
+    monkeypatch.setattr(m, "_set_draft_head_loading", flags.append)
     monkeypatch.setitem(sys.modules, "vmlx_engine.patches.mlx_vlm_mtp.qwen35_vl",
                         SimpleNamespace(set_active_bundle_mtp_layers=heads.append))
     monkeypatch.setattr(m, "inspect_native_mtp_bundle", lambda path: {

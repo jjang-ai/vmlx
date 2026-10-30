@@ -4,9 +4,9 @@
 The Hy3 JANG converter (jang_tools.convert_hy3_jang, profile JANG_2L with
 mtp_policy=preserve-affine8) re-namespaces the DSV3-style MTP layer
 (model.layers.80.*) to mtp.0.* with final param names. jang_tools.hy3.model
-supplies Hy3MTPLayer + the vmlx batch_generator hooks (mtp_forward /
-make_mtp_cache / return_hidden __call__); patches/mlx_lm_mtp/hy_v3_model.py
-gates head attachment on is_mtp_active().
+supplies Hy3MTPLayer + the hooks the vMLX text MTP lane calls (mtp_forward /
+make_mtp_cache / return_hidden __call__); vmlx_engine/text_mtp/hy3_family.py
+gates head attachment on draft_head_loading_enabled().
 """
 
 from __future__ import annotations
@@ -243,7 +243,7 @@ class TestHy3ModelMtpContract:
         import mlx.core as mx
 
         from jang_tools.hy3.model import Model
-        from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active, set_mtp_active
+        from vmlx_engine.text_mtp import draft_head_loading_enabled, set_draft_head_loading
 
         weights = {
             "model.norm.weight": mx.ones((64,)),
@@ -254,12 +254,12 @@ class TestHy3ModelMtpContract:
         # Another test module may have left the process-wide MTP gate on; once
         # the patch is applied, Model.__init__ auto-attaches the head when it
         # is. Pin the flag so `bare` really is head-free.
-        prev = is_mtp_active()
-        set_mtp_active(False)
+        prev = draft_head_loading_enabled()
+        set_draft_head_loading(False)
         try:
             bare = Model(_tiny_hy3_args())
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
         out = bare.sanitize(dict(weights))
         assert "mtp.0.enorm.weight" not in out
         assert "model.layers.2.eh_proj.weight" not in out
@@ -273,40 +273,40 @@ class TestHy3ModelMtpContract:
         assert "model.layers.2.eh_proj.weight" not in out
 
     def test_vmlx_patch_gates_head_attachment(self):
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            hy_v3_model,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import hy3_family
+        from vmlx_engine.text_mtp import (
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert hy_v3_model.apply() is True
+        assert hy3_family.install() is True
 
         import sys
 
         hy = sys.modules["mlx_lm.models.hy_v3"]
-        assert "_omlx_mtp_patched" in hy.Model.__dict__
+        assert "__vmlx_text_mtp__" in hy.Model.__dict__
 
-        prev = is_mtp_active()
+        prev = draft_head_loading_enabled()
         try:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
             assert not hasattr(hy.Model(_tiny_hy3_args()), "mtp")
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = hy.Model(_tiny_hy3_args())
             assert hasattr(model, "mtp") and len(model.mtp) == 1
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
 
     def test_model_has_native_mtp_runtime_walk_finds_hy3_head(self):
         from jang_tools.hy3.model import Model
         from vmlx_engine.native_mtp import model_has_native_mtp_runtime
-        from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active, set_mtp_active
+        from vmlx_engine.text_mtp import draft_head_loading_enabled, set_draft_head_loading
 
-        prev = is_mtp_active()
-        set_mtp_active(False)  # see note above: patched __init__ reads this
+        prev = draft_head_loading_enabled()
+        set_draft_head_loading(False)  # see note above: patched __init__ reads this
         try:
             model = Model(_tiny_hy3_args())
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
         assert model_has_native_mtp_runtime(model) is False
         model.attach_mtp()
         assert model_has_native_mtp_runtime(model) is True

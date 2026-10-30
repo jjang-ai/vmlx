@@ -288,7 +288,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             import dflash.model_mlx as dflash_runtime
             import mlx.core as mx
             import mlx.nn as nn
-            from .patches.mlx_lm_mtp import set_mtp_active
+            from .text_mtp import set_draft_head_loading
             from .patches.mlx_vlm_mtp import apply_mlx_vlm_mtp_patch
 
             target_type, draft_bits = _bundled_dflash2_target(resolved_draft)
@@ -297,7 +297,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
                 # the native-MTP adapter even though its own external draft wins.
                 # (glm5_next has its own adapter, vmlx_engine/glm_dflash2.py; activating MTP there would make the
                 # target build an MTP head its bundle does not ship.)
-                set_mtp_active(True)
+                set_draft_head_loading(True)
                 apply_mlx_vlm_mtp_patch()
 
             stored_config = json.loads((Path(resolved_draft) / "config.json").read_text())

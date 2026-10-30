@@ -13,17 +13,17 @@ import types
 
 import pytest
 
-from vmlx_engine.patches import mlx_lm_mtp
+from vmlx_engine import text_mtp
 from vmlx_engine.patches.mlx_vlm_mtp import qwen35_vl
 
 
 @pytest.fixture(autouse=True)
 def _mtp_inactive():
     """Default to MTP off; the drop only fires when it is positively off."""
-    previous = mlx_lm_mtp.is_mtp_active()
-    mlx_lm_mtp.set_mtp_active(False)
+    previous = text_mtp.draft_head_loading_enabled()
+    text_mtp.set_draft_head_loading(False)
     yield
-    mlx_lm_mtp.set_mtp_active(previous)
+    text_mtp.set_draft_head_loading(previous)
 
 
 class _Weight:
@@ -102,7 +102,7 @@ def test_outer_sanitize_keeps_mtp_weights_while_runtime_is_active(patcher):
     whenever sanitize happens to run against a not-yet-populated model.
     """
     cls, model = _patched_model(patcher)
-    mlx_lm_mtp.set_mtp_active(True)
+    text_mtp.set_draft_head_loading(True)
 
     kept = cls.sanitize(model, _weights())
 

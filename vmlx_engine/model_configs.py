@@ -1745,7 +1745,7 @@ def register_all(registry=None):
     #     route_norm=True, router_scaling_factor=2.826.
     #   - Cache: standard causal KV. NOT MLA, NOT SSM hybrid, NOT CCA, NOT VL.
     #   - MTP: `num_nextn_predict_layers=1`. The native runtime IS implemented
-    #     (jang_tools.hy3 Hy3MTPLayer + patches/mlx_lm_mtp/hy_v3_model.py) and
+    #     (jang_tools.hy3 Hy3MTPLayer + text_mtp/hy3_family.py) and
     #     correct, but OFF for Hy3-JANG_2L via `runtime.native_mtp_blocked`.
     #     Footprint-controlled A/B (head loaded in both arms): depth-1 MTP nets
     #     ~-3%. The verify forward is the floor — a 2-token verify costs 1.36x a

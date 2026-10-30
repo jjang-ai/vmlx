@@ -2,8 +2,8 @@
 """Experimental value-row blocking of the incumbent GLM KDA AR operation.
 
 Reuses q/k/g/beta across four values, retaining [B,H,K,V] FP32 state and the
-incumbent per-value arithmetic. This is not oMLX's transposed recurrent-prefill
-algorithm. No projection/quantization/normalization/cache-format change.
+incumbent per-value arithmetic (not a transposed recurrent-prefill algorithm).
+No projection/quantization/normalization/cache-format change.
 Default OFF until full-model and sustained serving qualification.
 """
 from functools import lru_cache

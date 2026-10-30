@@ -2,7 +2,7 @@
 """Policy-independent on-the-fly MTP -> AR safety governor (shared by lanes).
 
 Both native-MTP generators (the multimodal lane in ``mllm_batch_generator``
-and the text lane in ``patches/mlx_lm_mtp/batch_generator``) run this every
+and the text lane in ``text_mtp/lane.py``) run this every
 verify cycle, for FIXED and ADAPTIVE depth alike.  The depth-adapt gates are
 what a fixed policy disables; this valve is not a depth policy, it is the
 bounded loss detector; measurement and exploratory work are not an

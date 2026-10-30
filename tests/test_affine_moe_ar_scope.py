@@ -148,7 +148,7 @@ def test_mllm_ar_forward_owns_scope_and_releases_it_on_error(monkeypatch, fail):
 
 
 def test_text_generation_scopes_stock_ar_but_not_mtp_resume_or_verify(monkeypatch):
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+    from vmlx_engine.text_mtp import hooks, lane
 
     generate = importlib.import_module("mlx_lm.generate")
     seen = []
@@ -171,19 +171,19 @@ def test_text_generation_scopes_stock_ar_but_not_mtp_resume_or_verify(monkeypatc
     monkeypatch.setattr(generate, "PromptProcessingBatch", type("Prompt", (), {
         "prompt": lambda *a: None,
     }))
-    monkeypatch.setattr(lane, "_PATCHED", False)
-    monkeypatch.setattr(lane, "_is_mtp_eligible", lambda _: True)
-    monkeypatch.setattr(lane, "_text_recovery_for_batch", lambda _: SimpleNamespace(uid="a"))
-    monkeypatch.setattr(lane, "_text_mtp_maybe_resume",
+    monkeypatch.setattr(hooks, "_installed", False)
+    monkeypatch.setattr(lane, "lane_eligible", lambda _: True)
+    monkeypatch.setattr(lane, "parked_recovery", lambda _: SimpleNamespace(uid="a"))
+    monkeypatch.setattr(lane, "maybe_resume_from_ar",
                         lambda *a: seen.append(("resume", pair._AR_SCOPE.get())))
-    monkeypatch.setattr(lane, "_text_mtp_calibration_due", lambda *a: False)
-    monkeypatch.setattr(lane, "_mtp_next",
+    monkeypatch.setattr(lane, "calibration_due", lambda *a: False)
+    monkeypatch.setattr(lane, "lane_step",
                         lambda *a: seen.append(("verify", pair._AR_SCOPE.get())) or [])
-    assert lane.apply()
+    assert hooks.install_generation_hooks()
     batch = Batch.__new__(Batch)
     batch.uids = ["a"]
     batch.next()
-    batch._omlx_mtp_state = SimpleNamespace(ar_fallback_pending=False)
+    batch._vmlx_text_mtp_lane = SimpleNamespace(ar_fallback_pending=False)
     batch.next()
     assert seen == [("resume", False), ("ar", True), ("resume", False), ("verify", False)]
     assert not pair._AR_SCOPE.get()
@@ -191,12 +191,12 @@ def test_text_generation_scopes_stock_ar_but_not_mtp_resume_or_verify(monkeypatc
 
 @pytest.mark.parametrize("fail_step", [False, True])
 def test_text_handoff_scope_ends_at_forward_and_releases_on_error(monkeypatch, fail_step):
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+    from vmlx_engine.text_mtp import hooks, lane
 
     seen = []
     batch = SimpleNamespace(tokens=[[1, 2]])
     state = SimpleNamespace(next_main=mx.array([2]))
-    monkeypatch.setattr(lane, "_mtp_ar_handoff_ready", lambda *a: (True, "ready"))
+    monkeypatch.setattr(lane, "handoff_readiness", lambda *a: (True, "ready"))
 
     def step():
         seen.append(pair._AR_SCOPE.get())
@@ -210,9 +210,9 @@ def test_text_handoff_scope_ends_at_forward_and_releases_on_error(monkeypatch, f
         raise RuntimeError("after step")
 
     batch._step = step
-    monkeypatch.setattr(lane, "_text_recovery_for_batch", after_step)
+    monkeypatch.setattr(lane, "parked_recovery", after_step)
     with pytest.raises(RuntimeError, match="step"):
-        lane._prepare_mtp_ar_handoff(batch, state, None)
+        lane.hand_off_to_ar(batch, state, None)
     assert seen == [True]
     assert batch.tokens == [[1, 2]]
     assert not pair._AR_SCOPE.get()
