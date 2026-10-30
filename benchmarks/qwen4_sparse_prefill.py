@@ -1,4 +1,4 @@
-"""Exact native sparse QK and paired component timings across dispatch sizes."""
+"""Exact sparse QSA QK kernels and paired component timings across dispatch sizes."""
 
 import argparse
 import json
@@ -9,11 +9,11 @@ from pathlib import Path
 
 import mlx.core as mx
 
-from vmlx_engine.metal.qwen4_prefill_direct import (
-    qsa_prefill_direct,
-    qsa_prefill_direct_build_info,
-    qsa_prefill_direct_ready,
-    qsa_prefill_direct_topk_buffer,
+from vmlx_engine.metal import qwen4_qsa_sparse_kernels as kernels
+from vmlx_engine.metal.qwen4_qsa_direct_prefill import (
+    direct_attention,
+    direct_ready,
+    selected_block_buffer,
 )
 
 
@@ -57,16 +57,12 @@ def run(rows, context, dtype, trials, *, stock_path="legacy", candidate="materia
         return mx.fast.scaled_dot_product_attention(q, k, v, scale=0.0625, mask=mask)
 
     def direct():
-        if candidate in {"fused", "nax"}:
-            # Diagnostic only: the exported fused primitive is not routed by
-            # the product adapter's materialized-score numerical contract.
-            import mtplx_qsa_kernels as extension
-
-            selected = qsa_prefill_direct_topk_buffer(ids, valid, pos_start=offset)
-            function = (extension.qwen4_qsa_sparse_gqa_attention_nax if candidate == "nax"
-                        else extension.qwen4_qsa_sparse_gqa_attention)
-            return function(q, k, v, selected, 0.0625, offset)
-        return qsa_prefill_direct(
+        if candidate == "online":
+            # The fused online-softmax kernel; its contract is the current
+            # fused SDPA (use --stock-path runtime), not the unfused oracle.
+            selected = selected_block_buffer(ids, valid, pos_start=offset)
+            return kernels.sparse_online_attention(q, k, v, selected, offset, 0.0625)
+        return direct_attention(
             q, k, v, ids, valid, pos_start=offset, total_tokens=context, scale=0.0625
         )
 
@@ -121,11 +117,11 @@ if __name__ == "__main__":
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--stock-path", choices=("legacy", "runtime"), default="legacy")
     parser.add_argument("--dtypes", default="float16,bfloat16")
-    parser.add_argument("--candidate", choices=("materialized", "fused", "nax"), default="materialized")
+    parser.add_argument("--candidate", choices=("materialized", "online"), default="materialized")
     args = parser.parse_args()
     os.environ["VMLX_QWEN4_PREFILL_DIRECT"] = "1"
     mx.set_cache_limit(512 * 1024**2)
-    assert qsa_prefill_direct_ready(), "native pipeline unavailable"
+    assert direct_ready(), "sparse-score lane unavailable on this device/runtime"
     results = []
     dtype_map = {"float16": mx.float16, "bfloat16": mx.bfloat16}
     for dtype_name in args.dtypes.split(","):
@@ -140,7 +136,7 @@ if __name__ == "__main__":
                     json.dumps(
                         {
                             "scope": "component diagnostic only; numerical differences are not acceptance",
-                            "build": qsa_prefill_direct_build_info(),
+                            "kernel_math": kernels.MATH_ABI,
                             "results": results,
                         },
                         indent=2,

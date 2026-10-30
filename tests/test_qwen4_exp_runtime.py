@@ -7,16 +7,16 @@ from vmlx_engine.models.qwen4_exp.language import LanguageModel, Qwen4ExpTextArg
 
 
 def test_unified_gdn_fp16_softplus_matches_mlx_for_finite_inputs():
-    from vmlx_engine.metal.qwen4_unified_gdn_verify import _HEADER
+    from vmlx_engine.metal.qwen4_gdn_verify_window import HEADER
 
     values = np.arange(65536, dtype=np.uint16).view(np.float16)
     x = mx.array(values[np.isfinite(values)])
     got = mx.fast.metal_kernel(
         name="vmlx_gdn_fp16_softplus_admission",
-        input_names=["x"], output_names=["y"], header=_HEADER,
+        input_names=["x"], output_names=["y"], header=HEADER,
         source="""
           uint i = thread_position_in_grid.x;
-          if (i < N) y[i] = mlx_softplus_fast(x[i]);
+          if (i < N) y[i] = gdnw_softplus(x[i]);
         """,
     )(
         inputs=[x], template=[("N", x.size)],
@@ -48,8 +48,8 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(
     steps, a_dtype, dt_dtype,
 ):
     """Qualify the isolated kernel before any model dispatch can use it."""
-    from vmlx_engine.metal.qwen4_unified_gdn_verify import (
-        qwen4_unified_gdn_verify,
+    from vmlx_engine.metal.qwen4_gdn_verify_window import (
+        gdn_verify_window,
     )
     from vmlx_engine.models.qwen4_exp.language import GatedDeltaNet
 
@@ -81,24 +81,24 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(
     # Admission diagnostics only: localize dtype/operation-order changes
     # before weakening a recurrence or accepted-prefix assertion.
     from mlx_lm.models.gated_delta import compute_g
-    from vmlx_engine.metal.qwen4_unified_gdn_verify import _HEADER
+    from vmlx_engine.metal.qwen4_gdn_verify_window import HEADER
 
     gates = mx.fast.metal_kernel(
         name="vmlx_gdn_fp16_gate_diagnostic",
         input_names=["a", "b", "A_log", "dt_bias"],
         output_names=["av", "sp", "g", "beta"],
-        header=_HEADER,
+        header=HEADER,
         source="""
           uint i = thread_position_in_grid.x;
           if (i >= N) return;
           uint h = i % HV;
           GT v = static_cast<GT>(a[i]) + static_cast<GT>(dt_bias[h]);
-          GT s = mlx_softplus_fast(v);
+          GT s = gdnw_softplus(v);
           av[i] = v;
           sp[i] = s;
           g[i] = metal::precise::exp(
               -metal::precise::exp(float(A_log[h])) * float(s));
-          beta[i] = mlx_sigmoid_precise(b[i]);
+          beta[i] = gdnw_sigmoid_precise(b[i]);
         """,
     )(
         inputs=[a, b, layer.A_log, layer.dt_bias],
@@ -140,7 +140,7 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(
         prefixes.append((mx.concatenate([out_c, out_d], axis=1), conv_d, state_d))
     expected = layer.norm(prefixes[-1][0], z.reshape(1, steps, heads, dim))
     mx.eval(expected, *[v for p in prefixes for v in p])
-    output, next_conv, next_state, states, convs = qwen4_unified_gdn_verify(
+    output, next_conv, next_state, states, convs = gdn_verify_window(
         qkv, z, b, a, conv, layer.conv1d.weight, layer.A_log,
         layer.dt_bias, state, layer.norm.weight, layer.norm.eps,
         threadgroup_y=32,
@@ -193,7 +193,7 @@ def test_unified_gdn_fp16_verify_preserves_every_prefix_and_continuation(
             return y, cc, sc, cd, sd
 
         def fused_path():
-            return qwen4_unified_gdn_verify(
+            return gdn_verify_window(
                 qkv, z, b, a, conv, layer.conv1d.weight, layer.A_log,
                 layer.dt_bias, state, layer.norm.weight, layer.norm.eps,
                 threadgroup_y=32,
@@ -369,43 +369,43 @@ def test_unified_gdn_cache_setter_failure_does_not_retry(monkeypatch):
 
 
 def test_unified_gdn_explicit_opt_in_and_actual_dtype_guards(monkeypatch):
-    from vmlx_engine.metal.qwen4_unified_gdn_verify import (
-        unified_gdn_verify_eligible, unified_gdn_verify_requested,
+    from vmlx_engine.metal.qwen4_gdn_verify_window import (
+        gdn_verify_window_eligible, gdn_verify_window_requested,
     )
 
     monkeypatch.delenv("VMLX_QWEN4_UNIFIED_GDN_VERIFY", raising=False)
-    assert not unified_gdn_verify_requested()
+    assert not gdn_verify_window_requested()
     monkeypatch.setenv("VMLX_QWEN4_UNIFIED_GDN_VERIFY", "1")
-    assert unified_gdn_verify_requested()
+    assert gdn_verify_window_requested()
     layer, _, conv, state = _unified_gdn_layer_case()
     args = [layer.in_proj_qkv.value, layer.in_proj_z.value,
             layer.in_proj_b.value, layer.in_proj_a.value, conv,
             layer.conv1d.weight, layer.A_log, layer.dt_bias, state,
             layer.norm.weight, layer.norm.eps]
-    assert unified_gdn_verify_eligible(*args)
+    assert gdn_verify_window_eligible(*args)
     for index in range(10):
         if index in (6, 7):
             continue  # Preserved coefficients use independently checked dtypes.
         wrong = list(args)
         wrong[index] = args[index].astype(mx.bfloat16)
-        assert not unified_gdn_verify_eligible(*wrong)
+        assert not gdn_verify_window_eligible(*wrong)
     for a_dtype in (mx.float16, mx.bfloat16, mx.float32):
         for dt_dtype in (mx.float16, mx.bfloat16, mx.float32):
             preserved = list(args)
             preserved[6] = args[6].astype(a_dtype)
             preserved[7] = args[7].astype(dt_dtype)
-            assert unified_gdn_verify_eligible(*preserved)
+            assert gdn_verify_window_eligible(*preserved)
     for index in (6, 7):
         for value in (None, args[index][:-1], args[index].astype(mx.int32)):
             wrong = list(args)
             wrong[index] = value
-            assert not unified_gdn_verify_eligible(*wrong)
+            assert not gdn_verify_window_eligible(*wrong)
     wrong = list(args)
     wrong[8] = None
-    assert not unified_gdn_verify_eligible(*wrong)
+    assert not gdn_verify_window_eligible(*wrong)
     wrong = list(args)
     wrong[0] = wrong[0][:, :, :-1]
-    assert not unified_gdn_verify_eligible(*wrong)
+    assert not gdn_verify_window_eligible(*wrong)
 
 
 def _tiny_args() -> Qwen4ExpTextArgs:
