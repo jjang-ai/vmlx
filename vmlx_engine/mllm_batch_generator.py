@@ -5176,9 +5176,9 @@ def _native_mtp_decision_bundle(
 ) -> Tuple[mx.array, int]:
     """Build one small device array carrying the whole verify decision.
 
-    Recreates the shape of MTPLX's decode loop, which submits the verify and
-    then reads back a single tiny "decision bundle" holding the sampled tokens,
-    the drafts, and the accept flags -- the comparison happens ON DEVICE.
+    The verify is submitted and then a single tiny "decision bundle" is read
+    back holding the sampled tokens, the drafts, and the accept flags -- the
+    comparison happens ON DEVICE.
 
     vMLX instead pulled the sampled ids to the host with ``.tolist()``, pulled
     the draft ids back in a SECOND blocking eval, and then compared them in

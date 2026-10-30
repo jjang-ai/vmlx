@@ -1,6 +1,6 @@
 """Guarded GLM productive-AR mHC + following weighted RMS fusion.
 
-Projection and scalar Sinkhorn are incumbent arithmetic, not ds4 arithmetic.
+Projection and scalar Sinkhorn keep the incumbent vMLX arithmetic.
 Reduction adapted from MLX 0.32.2 rms_norm.metal (Apple MIT below).
 Opt-in, with exact shape/dtype/runtime admission. No cache mutation.
 MIT License
