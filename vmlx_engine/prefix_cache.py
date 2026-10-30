@@ -24,7 +24,6 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -467,45 +466,16 @@ def build_block_cache_namespace(
     return f"{scope}:{looped_scope}" if looped_scope else scope
 
 
-@lru_cache(maxsize=16)
-def _qwen4_native_artifact_digest(files: tuple) -> str:
-    digest = hashlib.sha256()
-    for name, _size, _mtime in files:
-        path = pathlib.Path(name)
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()[:16]
-
-
 _QWEN4_GDN_MATH_ABI = "stock-lanes32-v2"
 _QWEN4_CHECKPOINT_MATH_ABI = "stock-segments-v2"
 _QWEN4_VERIFY_MATH_ABI = "stock-order-sparse-qk-absolute16-pv-v5"
 
 
-def _qwen4_native_artifact_identity() -> str:
-    """Identify native cache math without loading an extension or GPU stream."""
-    source = (
-        pathlib.Path(__file__).resolve().parent.parent
-        / "native_extensions" / "qsa_kernels" / "mtplx_qsa_kernels"
-    )
-    try:
-        if not any(source.glob("_ext*.so")):
-            try:
-                distribution = importlib.metadata.distribution("mtplx_qsa_kernels")
-            except importlib.metadata.PackageNotFoundError:
-                return "unavailable"
-            source = pathlib.Path(distribution.locate_file("mtplx_qsa_kernels"))
-        paths = sorted(
-            p for p in source.iterdir()
-            if p.suffix in {".so", ".dylib", ".metallib"}
-        )
-        if not paths:
-            return "unavailable"
-        files = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in paths)
-        return _qwen4_native_artifact_digest(files)
-    except OSError:
-        # Do not share an unknown artifact with the explicitly absent lane.
-        return f"unreadable-process-{os.getpid()}"
+def _qwen4_qsa_kernel_identity() -> str:
+    """Identity of the in-tree sparse QSA kernel math (no Metal compile)."""
+    from vmlx_engine.metal.qwen4_qsa_sparse_kernels import MATH_ABI
+
+    return MATH_ABI
 
 
 def compute_model_cache_key(
@@ -740,10 +710,8 @@ def compute_model_cache_key(
             if enabled and flag == "VMLX_QWEN4_COALESCE_PREFILL_CHECKPOINTS":
                 parts.append("qwen4_checkpoint_math=" + _QWEN4_CHECKPOINT_MATH_ABI)
             if enabled and flag in {"VMLX_QWEN4_PREFILL_DIRECT", "VMLX_QWEN4_SPARSE_FUSED_PREFILL"}:
-                # A source build is optional: distinguish absent, rebuilt and
-                # installed artifacts before reusing persisted floating-point
-                # state. This is read-only and never imports a Metal module.
-                parts.append("qwen4_qsa_native=" + _qwen4_native_artifact_identity())
+                # Persisted floating-point state is keyed by the kernel math.
+                parts.append("qwen4_qsa_kernels=" + _qwen4_qsa_kernel_identity())
 
     # Experimental GLM arithmetic must not share persisted state with the
     # control arm before full-model equivalence is qualified.

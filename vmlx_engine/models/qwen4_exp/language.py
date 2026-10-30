@@ -47,8 +47,8 @@ from vmlx_engine.metal.row_exact_qmv import (
 from vmlx_engine.metal.qwen4_gdn_prework import (
     gdn_prework_requested, gdn_prework_update,
 )
-from vmlx_engine.metal.qwen4_gdn_blocked_prefill import (
-    qwen4_blocked_gated_delta_update as gated_delta_update,
+from vmlx_engine.metal.qwen4_gdn_tiled_prefill import (
+    qwen4_gated_delta_prefill as gated_delta_update,
 )
 from mlx_lm.models.qwen3_5 import GatedDeltaNet as _Qwen35GatedDeltaNet
 from mlx_lm.models.qwen3_5 import TextModelArgs as _Qwen35TextArgs
@@ -85,10 +85,10 @@ from vmlx_engine.metal.gdn_conv_decode import (
     fused_gdn_conv_requested,
     qwen4_gdn_conv_decode,
 )
-from vmlx_engine.metal.qwen4_unified_gdn_verify import (
-    qwen4_unified_gdn_verify,
-    unified_gdn_verify_eligible,
-    unified_gdn_verify_requested,
+from vmlx_engine.metal.qwen4_gdn_verify_window import (
+    gdn_verify_window,
+    gdn_verify_window_eligible,
+    gdn_verify_window_requested,
 )
 from vmlx_engine.metal.quantized_projection_group import (
     QuantizedProjectionGroup,
@@ -1190,7 +1190,7 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
         # else: keep the inherited silu-gated norm
         self._fused_conv_decode = fused_gdn_conv_requested()
         self._gdn_prework = gdn_prework_requested()
-        self._unified_gdn_verify = unified_gdn_verify_requested()
+        self._unified_gdn_verify = gdn_verify_window_requested()
         self._unified_gdn_verify_graph_calls = 0
         self._precise_gdn_epilogue = precise_gdn_epilogue_requested()
 
@@ -1352,13 +1352,13 @@ class GatedDeltaNet(_Qwen35GatedDeltaNet):
                  self.head_v_dim, self.conv_kernel_size) == (16, 48, 128, 128, 4)
             and not self.training
             and mx.default_device() == mx.gpu
-            and unified_gdn_verify_eligible(
+            and gdn_verify_window_eligible(
                 qkv, z.reshape(batch_size, seq_len, -1), b, a, conv_state,
                 self.conv1d.weight, self.A_log, self.dt_bias, ssm_state,
                 self.norm.weight, self.norm.eps,
             )
         ):
-            unified = qwen4_unified_gdn_verify(
+            unified = gdn_verify_window(
                 qkv, z.reshape(batch_size, seq_len, -1), b, a, conv_state,
                 self.conv1d.weight, self.A_log, self.dt_bias, ssm_state,
                 self.norm.weight, self.norm.eps, threadgroup_y=32,
@@ -1817,7 +1817,7 @@ class QSAIndexer(nn.Module):
                 ..., :k_sel
             ]  # [B,S,k]
         if return_blocks:
-            # The direct native consumer reads a valid chronological prefix.
+            # The sparse-score consumer reads a valid chronological prefix.
             # Sorting preserves selection and puts incomplete blocks last.
             selected = mx.sort(top_idx[0], axis=-1).astype(mx.int32)
             return selected, selected < ncb_mx[:, None]
@@ -2047,18 +2047,16 @@ class QSAAttention(nn.Module):
             # Shorter contexts retain stock attention to avoid a regression.
             and T >= 8192
         ):
-            from vmlx_engine.metal.qwen4_prefill_direct import (
-                qsa_prefill_direct,
-                qsa_prefill_direct_supported,
-                qsa_prefill_direct_ready,
+            from vmlx_engine.metal.qwen4_qsa_direct_prefill import (
+                direct_attention, direct_ready, direct_supported,
             )
             # Shape-only placeholders: no selector or cache mutation until
-            # every static consumer guard and the native pipeline is ready.
+            # every static consumer guard passes and the sparse-score lane is ready.
             block_shape = mx.zeros((S, 512), dtype=mx.int32)
-            direct_prefill = qsa_prefill_direct_supported(
+            direct_prefill = direct_supported(
                 queries, keys, values, block_shape, block_shape == 0,
                 pos_start=offset, total_tokens=T, scale=self.scale,
-            ) and qsa_prefill_direct_ready()
+            ) and direct_ready()
         index_mask = self.indexer(
             x,
             cache,
@@ -2068,15 +2066,15 @@ class QSAAttention(nn.Module):
         )
         if direct_prefill or sparse_fused_prefill:
             selected, valid = index_mask
-            consumer = qwen4_sparse_fused_prefill.attention if sparse_fused_prefill else qsa_prefill_direct
+            consumer = qwen4_sparse_fused_prefill.attention if sparse_fused_prefill else direct_attention
             out = consumer(
                 queries, keys, values, selected, valid,
                 pos_start=offset, total_tokens=T, scale=self.scale,
             )
             if direct_prefill and not getattr(self, "_direct_prefill_logged", False):
                 logger.info(
-                    "Powered by MTPLX/oMLX: direct sparse QSA prefill enabled "
-                    "https://github.com/youssofal/mtplx"
+                    "QSA prefill dispatch path=sparse_scores rows=%d context=%d dtype=%s",
+                    S, T, queries.dtype,
                 )
                 self._direct_prefill_logged = True
             out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)

@@ -195,15 +195,12 @@ def test_cache_identity_normalizes_supported_true_spellings(flag, monkeypatch):
         assert compute_model_cache_key(model) == key
 
 
-def test_native_artifact_digest_changes_with_payload(tmp_path):
-    from vmlx_engine.prefix_cache import _qwen4_native_artifact_digest
+def test_qsa_kernel_identity_tracks_kernel_math():
+    from vmlx_engine.metal.qwen4_qsa_sparse_kernels import MATH_ABI
+    from vmlx_engine.prefix_cache import _qwen4_qsa_kernel_identity
 
-    p = tmp_path / "_ext.so"
-    p.write_bytes(b"old")
-    old = _qwen4_native_artifact_digest(((str(p), 3, 1),))
-    p.write_bytes(b"new")
-    new = _qwen4_native_artifact_digest(((str(p), 3, 2),))
-    assert old != new
+    assert _qwen4_qsa_kernel_identity() == MATH_ABI
+    assert MATH_ABI.startswith("qsa-sparse-nax-")
 
 
 @pytest.mark.parametrize("enabled", [False, True])

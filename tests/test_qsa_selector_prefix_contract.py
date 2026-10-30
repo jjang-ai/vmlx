@@ -1,9 +1,9 @@
-"""The real Qwen4 selector must satisfy the native kernel's prefix ABI."""
+"""The real Qwen4 selector must satisfy the sparse kernels' valid-prefix contract."""
 
 import mlx.core as mx
 import pytest
 
-from vmlx_engine.metal.qwen4_prefill_direct import qsa_prefill_direct_topk_buffer
+from vmlx_engine.metal.qwen4_qsa_direct_prefill import selected_block_buffer
 from vmlx_engine.models.qwen4_exp.language import QSAIndexer, Qwen4ExpTextArgs
 
 
@@ -15,7 +15,7 @@ def test_real_selector_matches_dense_mask_and_valid_prefix(rows):
     x = mx.random.normal((1, rows, 64))
     dense = indexer(x, None, offset=0, return_blocks=False)
     ids, valid = indexer(x, None, offset=0, return_blocks=True)
-    native = qsa_prefill_direct_topk_buffer(ids, valid, pos_start=0, validate=True)
+    native = selected_block_buffer(ids, valid, pos_start=0, validate=True)
     assert native.shape == (1, 1, rows, 512)
     blocks = mx.put_along_axis(
         mx.zeros((rows, rows // 4), dtype=mx.bool_), ids, mx.array(True), axis=-1
