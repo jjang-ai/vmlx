@@ -1117,6 +1117,7 @@
       "bundledDflash2Available": "This bundle includes a DFlash2 drafter ({{name}}), currently not selected. Enable it under Speculative Decoding. Performance varies by workload.",
       "useBundledDspark": "Use the bundled DSpark drafter ({{name}})",
       "useBundledDsparkTooltip": "On by default when the model bundle ships a DSpark drafter; bundles without one decode normally. Text, image and video requests are drafted and verified exactly (same output as plain decoding); audio uses plain decoding. The model runs on the single-request lane while this is on. Off = plain decoding.",
+      "useBundledDsparkTextLaneTooltip": "On by default when the model bundle ships a DSpark drafter; bundles without one decode normally. The model verifies every drafted token. Continuous batching and the cache settings stay as configured. Off = plain decoding.",
       "useBundledDflash2": "Use the bundled DFlash2 drafter ({{name}})",
       "useBundledDflash2Tooltip": "On by default when the model bundle includes a DFlash2 drafter. A Draft model entered below takes precedence. Off = the bundle's native MTP (Adaptive/AR) is used instead.",
       "nativeMtpOffForDrafter": "Native MTP is off while a DFlash2 drafter is selected (the two cannot share a decode step). Clear the Draft model or turn the bundled drafter off to use Adaptive MTP again.",

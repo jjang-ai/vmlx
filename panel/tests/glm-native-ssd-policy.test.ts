@@ -137,7 +137,7 @@ describe('GLM native SSD defaults preserve runtime route and saved choices', () 
       expect(source).toContain('const nativeGlmSsd = usesGlmNativeSsdPool(detected, config)')
       expect(source).toContain('const diskControls = resolveGlmDiskCacheControls(detectedFamily, nativeGlmSsd, config)')
       // ffc5bcc6: the prompt L2 stays off only for a DFlash2 speculative session (native SSD tier).
-      expect(source).toContain('enableDiskCache: !dflash2Speculative && !dsparkActive && !!diskControls.enableDiskCache')
+      expect(source).toContain('enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache')
     }
   })
 })
