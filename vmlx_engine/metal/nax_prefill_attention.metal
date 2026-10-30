@@ -128,7 +128,7 @@ METAL_FUNC void split_value_attention(
     mask += int64_t(batch) * m_str[0] + int64_t(head) * m_str[1];
   }
 
-  const float scale_log2 = scale * 1.44269504089f; // scores in the exp2 domain
+  const metal::uniform<float> scale_log2 = make_uniform(scale) * make_uniform(1.44269504089f);  // exp2 domain
   const short2 coord = acc_t::NAXFrag_t::get_coord();
   const short lane_row = coord.y;
   const short lane_col = coord.x;
@@ -187,9 +187,11 @@ METAL_FUNC void split_value_attention(
   }
 
   for (int kb = kb_lo; kb < kb_hi; kb++) {
+    // 32-bit offsets within one (batch, kv head): rows * row stride stays far below 2^32 elements. (64-bit block
+    // offsets measured ~1 % slower on the long single-dispatch loop.)
+    const device T* kblk = k + uint(kb) * uint(BK * k_ld);
+    const device T* vblk = v + uint(kb) * uint(BK * v_ld);
     const bool tail_block = !ALIGN_K && kb == geom[kFullKeyBlocks];
-    const device T* kblk = k + int64_t(kb) * BK * k_str[2];
-    const device T* vblk = v + int64_t(kb) * BK * v_str[2];
 
     // Scores of this block: two 16-key fragments per product, head-dim fragments in order.
     score_t scores;
@@ -250,7 +252,7 @@ METAL_FUNC void split_value_attention(
 
     STEEL_PRAGMA_UNROLL
     for (short e = 0; e < score_t::kElemsPerTile; e++) {
-      scores.elems()[e] *= scale_log2;
+      scores.elems()[e] *= float(scale_log2);
     }
 
     // Masks: keys past the end, causal, window band, explicit bool mask. Each only ever drops a score.
@@ -259,30 +261,49 @@ METAL_FUNC void split_value_attention(
     const int col_pos0 = kb * BK + lane_col;
     const bool check_causal = CAUSAL && kb >= first_causal_block;
     const bool check_window = WINDOW > 0 && kb * BK <= tile_first_pos + group_row + F - 1 - WINDOW;
-    // Drop every score of this block for which pred(row position, key position, key index in block) holds.
-    auto drop_where = [&](auto pred) {
+    // Each mask only ever drops scores; they are applied one after another where they can bite.
+    if (tail_block) {
       STEEL_PRAGMA_UNROLL
       for (short kf = 0; kf < KF; kf++) {
-        thread auto& frag = scores.frag_at(0, kf);
         STEEL_PRAGMA_UNROLL
         for (short i = 0; i < score_t::kFragThrRows; i++) {
           STEEL_PRAGMA_UNROLL
           for (short j = 0; j < score_t::kFragThrCols; j++) {
             const short e = i * score_t::kFragThrCols + j;
-            const int in_block = kf * F + lane_col + j;
-            frag[e] = pred(row_pos0 + i * score_t::kFragRowsJump, col_pos0 + kf * F + j, in_block) ? dropped : frag[e];
+            scores.frag_at(0, kf)[e] = kf * F + lane_col + j < key_tail ? scores.frag_at(0, kf)[e] : dropped;
           }
         }
       }
-    };
-    if (tail_block) {
-      drop_where([&](int, int, int in_block) { return in_block >= key_tail; });
     }
     if (check_causal) {
-      drop_where([&](int row, int col, int) { return row < col; });
+      STEEL_PRAGMA_UNROLL
+      for (short kf = 0; kf < KF; kf++) {
+        STEEL_PRAGMA_UNROLL
+        for (short i = 0; i < score_t::kFragThrRows; i++) {
+          STEEL_PRAGMA_UNROLL
+          for (short j = 0; j < score_t::kFragThrCols; j++) {
+            const short e = i * score_t::kFragThrCols + j;
+            const int row = row_pos0 + i * score_t::kFragRowsJump;
+            const int col = col_pos0 + kf * F + j;
+            scores.frag_at(0, kf)[e] = row < col ? dropped : scores.frag_at(0, kf)[e];
+          }
+        }
+      }
     }
     if (check_window) {
-      drop_where([&](int row, int col, int) { return col <= row - WINDOW; });
+      STEEL_PRAGMA_UNROLL
+      for (short kf = 0; kf < KF; kf++) {
+        STEEL_PRAGMA_UNROLL
+        for (short i = 0; i < score_t::kFragThrRows; i++) {
+          STEEL_PRAGMA_UNROLL
+          for (short j = 0; j < score_t::kFragThrCols; j++) {
+            const short e = i * score_t::kFragThrCols + j;
+            const int row = row_pos0 + i * score_t::kFragRowsJump;
+            const int col = col_pos0 + kf * F + j;
+            scores.frag_at(0, kf)[e] = col <= row - WINDOW ? dropped : scores.frag_at(0, kf)[e];
+          }
+        }
+      }
     }
     if (HAS_MASK) {
       using mtile_t = NAXTile<bool, 1, KF>;
