@@ -9,7 +9,10 @@ fp32 router + bias, JANGT routed experts (128 experts, top-4, I 3072; the bench'
 lm_head and embedding, layer 0 dense MLP, layers 1.. MoE, every layer sparse attention. Random weights; no bundle.
 
   python bench/minimax_m3_whole_verify.py [--layers 4] [--ctx 1500] [--widths 1,2,4,6,8,12,16] [--reps 6]
-      [--ab VMLX_M3_EXACT_FLAT=1]   (an arm with this env lever set, interleaved per rep with the levers as given)
+      [--ab VMLX_M3_EXACT_FLAT=0]   (an arm with this env lever set, interleaved per rep with the levers as given)
+
+Since 2026-10-29 fused attention, fast JANGT and E1 are M3's defaults: with no env the base arm runs all three (the
+routed units are marked like an M3 load's), so an A/B against the old path sets the lever to 0.
 """
 
 from __future__ import annotations
@@ -67,6 +70,9 @@ def build(n_layers: int, seed: int = 0):
     routed = VP.build_routed(n_layers - 1)
     for li in range(1, n_layers):
         model.model.layers[li].mlp.switch_mlp = routed[li - 1].switch_mlp
+    from vmlx_engine.jangt.switch import enable_fast_decode_default
+
+    enable_fast_decode_default(model)        # as minimax_m3.Model does for a JANGHT load (fast JANGT = M3's default)
 
     def plan(path, module):
         if path.endswith("mlp.gate") or "switch_mlp" in path:

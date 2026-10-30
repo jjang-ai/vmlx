@@ -136,10 +136,7 @@ def main():
     for ctx in (int(c) for c in a.ctx.split(",")):
         primed = prime(model, ctx)
         for fused in (False, True):
-            if fused:
-                os.environ[F.ENV] = "1"
-            else:
-                os.environ.pop(F.ENV, None)
+            os.environ[F.ENV] = "1" if fused else "0"          # explicit both ways: fused attention is M3's default
             run(model, primed, 8, "overlap")                       # warm-up (kernel builds)
             times = {arm: [] for arm in ("old", "sync", "overlap")}
             stats = {}
