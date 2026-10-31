@@ -50,7 +50,13 @@ describe('tool status responsiveness contract', () => {
     expect(source).toContain('TOOL_CALL_MARKER_LINE_START')
     expect(shared).toContain('<zyphra_tool_call\\b')
     expect(shared).toContain('<function(?:=|\\b)')
-    expect(source).toContain('emitToolStatus(\n                  "generating"')
+    // Markup detected in emitDelta raises the generating status itself.
+    const emitDeltaSource = source.slice(
+      source.indexOf('const emitDelta = ('),
+      source.indexOf('// Strip any leaked chat template tokens from the delta'),
+    )
+    expect(emitDeltaSource).toContain('if (observed.startedGenerating) {')
+    expect(emitDeltaSource).toContain('emitToolStatus(\n                "generating"')
     expect(source).toContain('responsesEventType === "response.heartbeat"')
     expect(source).toContain('parsed.tool_call_generating')
     expect(source).toContain('if (!suppressVisibleToolDelta) {')

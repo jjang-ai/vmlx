@@ -23,6 +23,57 @@ export interface ResponsesToolBufferReconciliation {
 export const TOOL_CALL_MARKER_LINE_START =
   /(?:^|\n)\s*(?:<zyphra_tool_call\b|<function(?:=|\b)|<minimax:tool_call|<tool_call\b|\[Calling tool:|<invoke name=|<read_file\b|<write_file\b|<run_command\b|<search_files\b|<edit_file\b|<list_directory\b|<execute_command\b|<bash\b)/;
 
+export interface StreamToolBufferingState {
+  /**
+   * A tool call is being generated: signalled by the server (Responses
+   * `response.heartbeat` with `tool_call_generating`) or by leaked markup.
+   */
+  generating: boolean;
+  /** Leaked tool-call markup was seen in this client's raw visible text. */
+  markupDetected: boolean;
+}
+
+export interface VisibleToolMarkupObservation {
+  state: StreamToolBufferingState;
+  /** Suppress this visible delta (and every later one in the iteration). */
+  suppress: boolean;
+  /** This observation started tool generation (show the status once). */
+  startedGenerating: boolean;
+}
+
+/**
+ * Decide whether a visible text delta is leaked tool markup.
+ *
+ * Only markup this client sees in the RAW visible text suppresses deltas. A
+ * server tool-generation heartbeat does not: the server withholds native
+ * markup itself and, when the call closes, sends the prose that shared a delta
+ * with the first marker as ordinary output_text. Suppressing on the heartbeat
+ * dropped that prose from the bubble and from the history replayed on the next
+ * tool step.
+ *
+ * Detection uses a trailing 200-char window of the raw accumulated text so it
+ * stays O(1) per delta.
+ */
+export function observeVisibleToolMarkup(
+  state: StreamToolBufferingState,
+  rawAccumulated: string,
+  lineStartPattern: RegExp = TOOL_CALL_MARKER_LINE_START,
+): VisibleToolMarkupObservation {
+  if (state.markupDetected) {
+    return { state, suppress: true, startedGenerating: false };
+  }
+  const searchWindow =
+    rawAccumulated.length > 200 ? rawAccumulated.slice(-200) : rawAccumulated;
+  if (!lineStartPattern.test(searchWindow)) {
+    return { state, suppress: false, startedGenerating: false };
+  }
+  return {
+    state: { generating: true, markupDetected: true },
+    suppress: true,
+    startedGenerating: !state.generating,
+  };
+}
+
 /**
  * Reconcile a Responses stream that advertised speculative tool generation but
  * completed without a concrete function_call item.
