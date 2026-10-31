@@ -1466,6 +1466,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                 # taps + vision + dSpark heads. Routed through the validated
                 # jang_tools.dsv41 runtime wrapped in the engine Model contract.
                 if _mt == "deepseek_v41" or _tc_mt == "deepseek_v41":
+                    _is_dsv4_bundle = True  # no generic-loader fallback: it cannot run V4.1 (see the handlers below)
                     logger.info(
                         "DSV4.1-Flash bundle detected — routing through the "
                         "native DSV4.1 runtime wrapper (jang_tools.dsv41)."

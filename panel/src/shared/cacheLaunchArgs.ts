@@ -59,17 +59,17 @@ export interface CacheLaunchArgsResult {
  *  - the preview could omit `--disable-block-disk-cache` while the launcher
  *    emitted it to override the engine's default-on SSD tier.
  *
- * In-RAM paged cache is retired product-wide. A stale saved `usePagedCache`
- * value is accepted only so old configs can flow through one migration-safe
- * API; it can never produce `--use-paged-cache`.
+ * Cache tiers: RAM only (no Block Disk Cache: the engine's memory-aware prefix cache), SSD only (Block Disk
+ * Cache, `--no-paged-cache`) or RAM + SSD (Block Disk Cache + the user's "Keep a RAM copy": `--use-paged-cache`).
+ * `--use-paged-cache` only ever comes from that checkbox, and only together with the block store.
  */
 export function buildCacheLaunchArgs(input: CacheLaunchArgsInput): CacheLaunchArgsResult {
   const policy = resolveCacheLaunchPolicy(input)
-  // These three tokens are the product-wide retained-RAM contract. Keep them
-  // ahead of every early return so disabled prefix caching cannot accidentally
-  // fall back to an engine default that re-enables a hidden RAM tier.
+  // These tokens are the retained-RAM contract (no paged RAM blocks unless the user kept a RAM copy, no media or
+  // SSM RAM caches). Keep them ahead of every early return so disabled prefix caching cannot accidentally fall
+  // back to an engine default that re-enables a hidden RAM tier.
   const args: string[] = [
-    '--no-paged-cache',
+    policy.effectiveUsePagedCache ? '--use-paged-cache' : '--no-paged-cache',
     '--no-vision-memory-cache',
     '--ssm-state-cache-size', '0',
     '--ssm-state-cache-mb', '0',

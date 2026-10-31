@@ -4033,6 +4033,7 @@ class BlockAwarePrefixCache:
                     )
                     return None, tokens
 
+            _dsv4_terminal_rejected = False
             if (
                 self._validate_dsv4_terminal
                 and self._dsv4_l2_chain_missing_terminal_state(
@@ -4046,7 +4047,22 @@ class BlockAwarePrefixCache:
                     block_ids=[cb.block_id for cb in cached_blocks],
                     num_tokens=sum(getattr(cb, "token_count", 0) for cb in cached_blocks),
                 )
+                # (token count, chain hash) of the rejected chain, read while its refs are still held
+                _rejected_chain = [
+                    (int(getattr(cb, "token_count", 0) or 0), getattr(cb, "block_hash", None))
+                    for cb in cached_blocks
+                ]
                 self.paged_cache.release_request_refs(_reject_table)
+                _shorter = self._prefer_dsv4_terminal_prefix(
+                    request_id, tokens, cache_extra_keys, _rejected_chain,
+                    _disk_store, _validation_payload_cache,
+                )
+                if _shorter is not None:
+                    cached_blocks, num_cached = _shorter
+                    _fetch_origin = "dsv4_shorter_terminal"
+                else:
+                    _dsv4_terminal_rejected = True
+            if _dsv4_terminal_rejected:
                 logger.warning(
                     "Ignoring DSV4 paged prefix hit for %s: restored blocks "
                     "contain DeepseekV4Cache pending markers but no terminal "
@@ -4863,6 +4879,75 @@ class BlockAwarePrefixCache:
                 if len(entry) > 2 and entry[2] is not None:
                     saw_terminal = True
         return saw_zaya and not saw_terminal
+
+    def _prefer_dsv4_terminal_prefix(
+        self, request_id, tokens, cache_extra_keys, rejected_blocks, disk_store,
+        validation_payload_cache,
+    ):
+        """The longest stored prefix shorter than a rejected DSV4 candidate that ends on a terminal composite state.
+
+        A DSV4 / DSV4.1 entry carries its whole SWA + CSA/HCA state on its terminal block. The chain-hash lookup
+        follows full blocks as far as the request matches ANY stored entry, so a request that shares the full
+        blocks of a longer entry (same document, different question) lands on that entry's interior blocks, which
+        carry no state, and was rejected as a miss although a shorter entry (the system prompt and tools, an
+        earlier turn, a prefix cut) ends inside that prefix. Walk back over the rejected chain's full blocks and
+        probe, after each, the known terminal partial sizes (the same parent-chained hashes a stored entry's
+        terminal block has; RAM index first, then the SSD index), longest first; the first entry whose terminal
+        block holds the composite state wins. ``rejected_blocks``: (token count, chain hash) of the rejected
+        chain, whose refs the caller already released; the returned chain is pinned. None when no shorter
+        terminal exists."""
+        bs = int(self.block_size)
+        full = []
+        for count, block_hash in rejected_blocks:
+            if count != bs or block_hash is None:
+                break
+            full.append(block_hash)
+        rejected_len = sum(count for count, _ in rejected_blocks)
+        sizes = sorted({int(x) for x in getattr(self.paged_cache, "_partial_block_sizes", ()) if 0 < int(x) < bs},
+                       reverse=True)
+        candidates = []
+        for j in range(len(full), -1, -1):
+            parent = full[j - 1] if j > 0 else None
+            for size in sizes:
+                lo = j * bs
+                if lo + size > len(tokens) or lo + size >= rejected_len:
+                    continue
+                h = compute_block_hash(
+                    parent, tokens[lo:lo + size],
+                    extra_keys=cache_extra_keys_for_token_range(cache_extra_keys, lo, lo + size),
+                )
+                found = self.paged_cache.cached_block_hash_to_block.get_block(h) is not None
+                if not found and disk_store is not None:
+                    probe = getattr(disk_store, "has_block_record", None) or getattr(disk_store, "has_block", None)
+                    try:
+                        found = bool(probe(h)) if callable(probe) else False
+                    except Exception:  # noqa: BLE001 - a probe failure is a miss
+                        found = False
+                if found:
+                    candidates.append(lo + size)
+            if len(candidates) >= 4:
+                break
+        for length in candidates:
+            blocks, got = self.paged_cache.get_computed_blocks(tokens[:length], extra_keys=cache_extra_keys)
+            ok = bool(blocks) and got == length
+            if ok:
+                try:
+                    ok = not self._dsv4_l2_chain_missing_terminal_state(
+                        blocks, disk_store, validation_payload_cache=validation_payload_cache,
+                    )
+                except Exception:
+                    ok = False
+            if ok:
+                logger.info(
+                    "DSV4 prefix hit for %s backs off to the %d-token terminal entry (the longer match ended on "
+                    "interior blocks of another entry)", request_id, length,
+                )
+                return blocks, length
+            if blocks:
+                self.paged_cache.release_request_refs(BlockTable(
+                    request_id=request_id, block_ids=[b.block_id for b in blocks], num_tokens=got,
+                ))
+        return None
 
     def _prefer_rotating_terminal_partial(
         self, request_id, tokens, cache_extra_keys, blocks, num_tokens,
