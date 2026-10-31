@@ -42,29 +42,31 @@ def _adaptive_enabled() -> bool:
 # reuse until active + cached memory reaches its GC line, 0.95 x Metal's recommended working set; there it releases
 # cached buffers on every cache miss and allocates fresh Metal buffers. Measured (DSV4.1, draft resident, cold
 # prefill): a chunk runs at full speed while its PEAK active memory stays >= ~2.8 GiB under that line, and slows
-# 5-27 % once it comes closer (JANG_2K on a 256 GB M5 Ultra sits 6.2 GiB under the line at rest, JANGHT1.4 on a 128 GB
+# 5-27 % once it comes closer (the same on both machines and both bundles; moving only the GC line with
+# mx.set_memory_limit reproduces it) (JANG_2K on a 256 GB M5 Ultra sits 6.2 GiB under the line at rest, JANGHT1.4 on a 128 GB
 # M5 Max 7.2 GiB). A chunk's transient memory grows with its rows and with the context.
 #
 # So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to
 # _MAX_CHUNK (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
 # peak keeps _GC_RESERVE_BYTES under the line, never below the fixed rule's 1024 (narrower chunks were slower in every
-# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350); then the prompt is
-# split into equal chunks of at most that width (no small tail chunk, and a prompt that fits is one chunk). The transient is predicted from a
+# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350). A prompt that fits
+# runs as one chunk; a longer one in the fewest chunks of at most that width, near-equal and a multiple of 128 rows. The transient is predicted from a
 # measured DSV4.1 model scaled by what this process has observed: after each DSpark prefill the measured peak (at the
-# N-1 boundary, before the prompt snapshot) updates the scale. The chooser only picks a width: it never refuses or
+# N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio; the scale is the median of the last 8. The chooser only picks a width: it never refuses or
 # shortens a prompt. When the allocator numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024, one
 # chunk for a prompt of <= 2048 tokens on a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width
 # (diagnostics). Evidence: jang docs/runtime/dsv41-flash-1017-janght-2026-10-19/evidence/py-adaptive-prefill-step-20261031.
 _GiB = 1 << 30
 _MAX_CHUNK = 4096
+_ALIGN = 128               # a split prompt's chunk width is a multiple of this
 _DEFAULT_STEP = 2048       # vMLX's --prefill-step-size default; a smaller configured step caps the width
-_GC_RESERVE_BYTES = int(3.0 * _GiB)
+_GC_RESERVE_BYTES = int(2.8 * _GiB)
 # Transient of one chunk (peak active minus active before it), draft resident: _T_BASE + rows * _T_ROW + context * _T_CTX
 # (upper envelope of the measured chunks, both bundles).
 _T_BASE = int(1.0 * _GiB)
 _T_ROW = int(1.4 * _GiB) // 1024
 _T_CTX = int(0.9 * _GiB) // 100_000
-_SCALE_WINDOW = 8          # observations the learned scale keeps (largest ratio wins)
+_SCALE_WINDOW = 8          # observations the learned scale keeps (their median is the scale)
 _OBSERVE_MIN_ROWS = 256    # shorter prefills are dominated by the base term; not used for learning
 _SCALE_FLOOR = 0.5
 
@@ -115,11 +117,17 @@ def _active_bytes() -> int:
     return int(get())
 
 
-def _even_split(body: int, widest: int) -> int:
-    """Chunk width that splits body rows into the fewest chunks of at most widest rows, all of near-equal size."""
+def _split(body: int, widest: int) -> int:
+    """Width for body rows: one chunk if they fit in widest, else the fewest chunks of at most widest rows, the width
+    the near-equal share rounded up to a multiple of _ALIGN (an unaligned 950 + 949 split of 1,899 rows ran 2 % slower
+    than 1024 + 875 on JANG_2K and JANGHT alike)."""
     widest = max(1, int(widest))
-    k = -(-body // widest)
-    return -(-body // k)
+    if body <= widest:
+        return body
+    top = widest // _ALIGN * _ALIGN or widest
+    k = -(-body // top)
+    share = -(-body // k)
+    return min(top, -(-share // _ALIGN) * _ALIGN)
 
 
 class PrefillChunkChooser:
@@ -142,9 +150,15 @@ class PrefillChunkChooser:
     # --- model -----------------------------------------------------------------------------------------------------
     @classmethod
     def scale(cls) -> float:
-        """Largest measured / predicted ratio of the recent prefills (1.0 before any); never below _SCALE_FLOOR, so one
-        misread peak cannot make the chooser predict a fraction of the measured model."""
-        return max(_SCALE_FLOOR, max(cls._ratios)) if cls._ratios else 1.0
+        """Median measured / predicted ratio of the recent prefills (1.0 before any), never below _SCALE_FLOOR. The
+        median, not the largest: a request's peak is its worst chunk (the transient is a sawtooth over the context), so
+        one ratio over-states the typical chunk, and the largest would keep every later request narrower than needed."""
+        if not cls._ratios:
+            return 1.0
+        r = sorted(cls._ratios)
+        mid = len(r) // 2
+        med = r[mid] if len(r) % 2 else 0.5 * (r[mid - 1] + r[mid])
+        return max(_SCALE_FLOOR, med)
 
     @staticmethod
     def predicted_transient(rows: int, ctx: int, scale: float = 1.0) -> float:
@@ -178,7 +192,7 @@ class PrefillChunkChooser:
             return chunk
         ctx = start + n_tokens
         widest = self.widest(line - active, ctx)
-        chunk = _even_split(body, widest) if body > 0 else widest
+        chunk = _split(body, widest) if body > 0 else widest
         self.last = {"rule": "adaptive", "chunk": chunk, "widest": widest, "headroom_gib": round((line - active) / _GiB, 2),
                      "scale": round(self.scale(), 3), "n_tokens": n_tokens, "start": start}
         return chunk

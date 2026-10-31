@@ -54,7 +54,7 @@ def test_env_override_pins_the_width(monkeypatch):
 def test_bad_env_override_is_ignored(monkeypatch):
     monkeypatch.setenv("VMLX_DSV41_DSPARK_PREFILL_STEP", "junk")
     c = chooser(116.0)
-    assert c.choose(12_000, 0) == 4_000
+    assert c.choose(12_000, 0) == 4_096
     assert c.last["rule"] == "adaptive"
 
 
@@ -82,23 +82,23 @@ def test_failed_detection_keeps_the_old_rule(gc_line, active):
 # --- the rule ---------------------------------------------------------------------------------------------------------
 def test_plenty_of_room_runs_the_widest_width_in_equal_chunks():
     c = chooser(116.0)                         # JANGHT on the 256 GB Ultra
-    assert c.choose(12_000, 0) == 4_000       # 11,999 body rows -> 3 chunks of <= 4096, equal
+    assert c.choose(12_000, 0) == 4_096       # 11,999 body rows -> 3 chunks of <= 4096 (4096 + 4096 + 3807)
     assert c.last["widest"] == G._MAX_CHUNK == 4096
-    assert c.choose(32_845, 0) == 3_650       # 32,844 body rows -> 9 chunks of <= 4096, equal
+    assert c.choose(32_845, 0) == 3_712       # 32,844 body rows -> 9 chunks: share 3650 rounded up to 128
 
 
 def test_a_prompt_that_fits_runs_as_one_chunk():
     c = chooser(116.0)
     assert c.choose(1_382, 0) == 1_381        # the whole body in one chunk
     assert c.choose(4_097, 0) == 4_096
-    assert c.choose(4_098, 0) == 2_049        # 4,097 body rows: two equal chunks, no 1-row tail
+    assert c.choose(4_098, 0) == 2_176        # 4,097 body rows: two chunks (2176 + 1921), no 1-row tail
 
 
 def test_one_chunk_only_when_the_rule_would_pick_that_width():
     tight = chooser(6.2)                       # JANG_2K on the Ultra: ~6.2 GiB under the GC line at rest
     w = tight.widest(int(6.2 * GiB), 1_900)
     assert w < 1_899
-    assert tight.choose(1_900, 0) == 950      # two equal chunks, not one 1,899-row chunk
+    assert tight.choose(1_900, 0) == 1_024    # two chunks (1024 + 875), not one 1,899-row chunk
     assert tight.choose(1_382, 0) == 1_381    # fits under the widest: one chunk
 
 
@@ -121,35 +121,41 @@ def test_no_room_keeps_the_fixed_step_never_refuses():
         c = chooser(headroom)
         w = c.choose(100_000, 0)
         assert c.last["widest"] == G._MIN_CHUNK == 1024  # the fixed rule's step: never narrower
-        assert w == 1021                       # 99,999 body rows in 98 equal chunks of <= 1024
+        assert w == 1024                       # 99,999 body rows in 98 chunks of <= 1024
         assert c.last["rule"] == "adaptive"
     assert chooser(-10.0).choose(10_000_000, 0) <= G._MIN_CHUNK  # any length: a width, never an error
 
 
 def test_a_step_set_below_the_default_bounds_the_width():
     assert chooser(116.0, configured=1024).choose(32_845, 0) <= 1024
-    assert chooser(116.0, configured=1024).choose(1_382, 0) == 691  # 1,381 rows in two chunks of <= 1024
+    assert chooser(116.0, configured=1024).choose(1_382, 0) == 768  # 1,381 rows: 768 + 613
     assert chooser(116.0, configured=256).choose(32_845, 0) <= 256
     assert chooser(116.0, configured=2047).last is None
     assert chooser(116.0, configured=2047).choose(32_845, 0) <= 2047
     # the default (2048), unset, or larger: the chooser's own range
     for cfg in (2048, 0, None, 8192):
         c = chooser(116.0, configured=cfg)
-        assert c.choose(32_845, 0) == 3_650 and c.last["widest"] == G._MAX_CHUNK
+        assert c.choose(32_845, 0) == 3_712 and c.last["widest"] == G._MAX_CHUNK
     assert chooser(6.2, configured=8192).choose(32_845, 0) < 2048   # still bounded by the headroom
 
 
 @pytest.mark.parametrize("n", [2, 3, 513, 1_025, 1_900, 6_563, 12_000, 32_845, 100_190, 262_144])
 @pytest.mark.parametrize("headroom", [4.0, 6.2, 7.2, 116.0])
-def test_chunks_are_near_equal_never_a_tiny_tail(n, headroom):
+def test_chunks_fewest_aligned_never_wider_than_widest(n, headroom):
     c = chooser(headroom)
     w = c.choose(n, 0)
     body = n - 1
     parts = chunks_of(body, w)
+    widest = c.last["widest"]
     assert sum(parts) == body
-    assert w <= max(c.last["widest"], 1)
-    assert min(parts) >= max(parts) - len(parts)  # equal up to rounding
-    assert len(parts) == -(-body // c.last["widest"])  # the fewest chunks the widest width allows
+    assert w <= widest
+    if body <= widest:
+        assert parts == [body]                   # fits: one chunk
+    else:
+        top = widest // G._ALIGN * G._ALIGN
+        assert w % G._ALIGN == 0                 # aligned width
+        assert len(parts) == -(-body // top)     # the fewest aligned chunks
+        assert parts[-1] >= 1
 
 
 def test_single_token_prompt():
@@ -181,7 +187,16 @@ def test_learned_scale_is_process_wide_and_windowed():
         b.choose(32_000, 0)
         b.end(0, 2048, 32_000, 0, peak=int(0.9 * b.predicted_transient(2048, 32_000)))
     assert len(G.PrefillChunkChooser._ratios) == G._SCALE_WINDOW
-    assert b.scale() == pytest.approx(0.9, rel=1e-3)  # the 0.5 aged out; the largest recent ratio wins
+    assert b.scale() == pytest.approx(0.9, rel=1e-3)  # the 0.5 aged out
+
+
+def test_learned_scale_is_the_median_so_one_sawtooth_peak_does_not_stick():
+    c = chooser(6.2)
+    for r in (0.97, 0.98, 1.08, 0.99):         # one request whose worst chunk sat on a transient peak
+        c.choose(32_000, 0)
+        c.end(0, 1369, 32_000, 0, peak=int(r * c.predicted_transient(1369, 32_000)))
+    assert c.scale() == pytest.approx(0.985, abs=2e-3)
+    assert c.choose(32_845, 0) >= c.choose(32_845, 0) and c.last["scale"] < 1.0
 
 
 def test_no_learning_from_short_prefills_overrides_or_fallbacks(monkeypatch):
@@ -232,3 +247,12 @@ def test_never_narrower_than_the_fixed_step_unless_configured():
         for ctx in (1_000, 100_190, 524_288, 1_048_576):
             assert chooser(headroom).widest(int(headroom * GiB), ctx) >= 1024
     assert chooser(0.0, configured=512).widest(0, 1_048_576) == 512
+
+
+def test_split_examples():
+    assert G._split(1_899, 1_614) == 1_024      # 1024 + 875 (the unaligned 950 + 949 was 2 % slower)
+    assert G._split(1_381, 1_617) == 1_381      # fits: one chunk
+    assert G._split(11_999, 1_547) == 1_536     # 7 x 1536 + 1247
+    assert G._split(100_189, 1_024) == 1_024
+    assert G._split(5, 1_024) == 5
+    assert G._split(3_000, 100) == 100          # a width under _ALIGN is used as is
