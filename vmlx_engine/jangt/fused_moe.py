@@ -81,7 +81,11 @@ def _fp8_rows4(K: int, xexpr: str, w: str, s: str, res: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: float, guard: bool):
+def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: float, guard: bool,
+               act: str = "silu", alpha: float = 0.0, s_act: str = "silu", s_alpha: float = 0.0, s_limit: float | None = None):
+    """Routed slots use (act, alpha, limit) = the experts' SwiGLU variant, the shared slot (s_act, s_alpha, s_limit);
+    s_limit None = limit (the single-limit callers before the variants existed)."""
+    s_limit = limit if s_limit is None else s_limit
     mu, isd = VL.code_stats(L, K); PL, adv, _ = MK._lane_geom(K, L)
     gu_body = f"""{MK._xload3(guard)}
       {_U} for (uint r = 0; r < 4u; r++) {{
@@ -98,8 +102,14 @@ def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: 
                                                  ou[r] = xo * float(woutu[((size_t)e * {F}u + row0 + r) * {n_out}u + lane]); }} }} }}
       {_U} for (uint r = 0; r < 4u; r++) {{ og[r] = simd_sum(og[r]); ou[r] = simd_sum(ou[r]); }}"""
     outl = "" if n_out == 0 else " g += og[r]; u += ou[r];"
-    clamp = "" if not limit > 0 else f" g = metal::min(g, {float(limit)}f); u = metal::clamp(u, {-float(limit)}f, {float(limit)}f);"
-    shared_clamp = "" if not limit > 0 else f" su_v = metal::clamp(su_v, {-float(limit)}f, {float(limit)}f); sg_v = metal::min(sg_v, {float(limit)}f);"
+    clamp = MK.act_clamp_metal(limit)
+    hval = MK.act_value_metal(act, alpha)
+    shared_clamp = "" if not s_limit > 0 else f" su_v = metal::clamp(su_v, {-float(s_limit)}f, {float(s_limit)}f); sg_v = metal::min(sg_v, {float(s_limit)}f);"
+    # shared expert: MLX's op order and sigmoid, so the bf16 result is bit-identical to the stock ops (_stock_row)
+    if MK.check_act(s_act) == "oai":
+        shared_h = f"float glu = sg_v * jt_sigmoid({MK.f32_literal(s_alpha)} * sg_v); float hs_v = glu * (su_v + 1.0f);"
+    else:
+        shared_h = "float silu = sg_v * jt_sigmoid(sg_v); float hs_v = silu * su_v;"
     src = f"""
     uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
     uint row0 = threadgroup_position_in_grid.y * 8u + sgi * 4u; uint z = threadgroup_position_in_grid.z;
@@ -120,7 +130,7 @@ def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: 
         if (lane == 0u) {{
           float g = ((G0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (G1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sg[(size_t)e * {F}u + row0 + r];
           float u = ((U0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (U1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * su_[(size_t)e * {F}u + row0 + r];{outl}{clamp}
-          hr_out[(size_t)ts * {F}u + row0 + r] = (g / (1.0f + metal::fast::exp(-g))) * u;
+          hr_out[(size_t)ts * {F}u + row0 + r] = {hval};
         }}
       }}
     }} else {{
@@ -131,14 +141,16 @@ def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: 
         float G = simd_sum(rg[r]), U = simd_sum(ru[r]);
         if (lane == 0u) {{
           float sg_v = float(static_cast<bfloat16_t>(G)), su_v = float(static_cast<bfloat16_t>(U));{shared_clamp}
-          float silu = sg_v * jt_sigmoid(sg_v);
-          hs_out[(size_t)t * {F}u + row0 + r] = static_cast<bfloat16_t>(silu * su_v);
+          {shared_h}
+          hs_out[(size_t)t * {F}u + row0 + r] = static_cast<bfloat16_t>(hs_v);
         }}
       }}
     }}
     """
     ins = ["xr", "x", "idx", "wg", "sg", "wu", "su_", "w1", "s1", "w3", "s3"] + (["ocol", "woutg", "woutu"] if n_out else [])
-    lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
+    lim = MK.act_tag(act, limit, alpha)
+    if (s_act, s_limit) != (act, limit) or (s_act == "oai" and s_alpha != alpha):
+        lim += "_s" + (MK.act_tag(s_act, s_limit, s_alpha) or "_plain")
     return mx.fast.metal_kernel(name=f"jtf_gu_d{D}_f{F}_K{MK._kname(K)}_o{n_out}_w{W}_k{topk}{lim}{'' if guard else '_ng'}",
                                 input_names=ins, output_names=["hr_out", "hs_out"], source=src, header=_HEADER)
 
@@ -209,7 +221,14 @@ def _eligible(x, idx, experts, shared) -> bool:
             and tuple(shared.w1.weight.shape) == (F, D // 4) and tuple(shared.w2.weight.shape) == (D, F // 4))
 
 
-def _run(x, idx, w, experts, shared, limit: float):
+def _routed_act(experts) -> tuple:
+    """(act, alpha, limit) of the routed experts: the variant experts.routed applies (JTMixedSwitchGLU)."""
+    act = getattr(experts, "act", "silu")
+    return act, float(getattr(experts, "alpha", 0.0)) if act == "oai" else 0.0, float(getattr(experts, "limit", 0.0))
+
+
+def _run(x, idx, w, experts, shared, limit: float, act: str = "silu", alpha: float = 0.0):
+    """(act, alpha, limit): the shared expert's SwiGLU variant; the routed slots use the experts' own (_routed_act)."""
     U = experts._unit()
     R, D = x.shape
     k = idx.shape[1]
@@ -218,7 +237,9 @@ def _run(x, idx, w, experts, shared, limit: float):
     guard = MK._fp16_guard()
     g, u, d = U["gate"], U["up"], U["down"]
     xr = MK.rotate_rows(x, U["su_gu"])
-    gu = _gu_kernel(D, F, U["K"], U["L"], g["n_out"], int(g["packed"].shape[-1]), k, float(limit), guard)
+    r_act, r_alpha, r_limit = _routed_act(experts)
+    gu = _gu_kernel(D, F, U["K"], U["L"], g["n_out"], int(g["packed"].shape[-1]), k, r_limit, guard, r_act, r_alpha,
+                    MK.check_act(act), float(alpha) if act == "oai" else 0.0, float(limit))
     ins = [xr, x, idx_u, g["packed"], g["scale"], u["packed"], u["scale"],
            shared.w1.weight, shared.w1.scales, shared.w3.weight, shared.w3.scales]
     if g["n_out"]:
@@ -235,29 +256,37 @@ def _run(x, idx, w, experts, shared, limit: float):
               output_shapes=[(R, D)], output_dtypes=[mx.bfloat16])[0]
 
 
-def _stock_row(x1, idx1, w1, experts, shared, limit: float):
-    """The stock JANGT routed + mxfp8 shared path for ONE row (jang_tools.dsv41.model.Block.moe / _shared)."""
+def _stock_row(x1, idx1, w1, experts, shared, limit: float, act: str = "silu", alpha: float = 0.0):
+    """The stock JANGT routed + mxfp8 shared path for ONE row (jang_tools.dsv41.model.Block.moe / _shared); the shared
+    expert's activation is (act, alpha, limit) (moe_kernels.act_mlx: silu = nn.silu's ops)."""
     y = experts.routed(x1, idx1, w1).astype(mx.float32)
     sg = shared.w1(x1).astype(mx.float32)
     su = shared.w3(x1).astype(mx.float32)
     if limit > 0:
         su = mx.clip(su, -limit, limit)
         sg = mx.minimum(sg, limit)
-    import mlx.nn as nn
-    y = y + shared.w2((nn.silu(sg) * su).astype(mx.bfloat16)).astype(mx.float32)
+    if MK.check_act(act) == "oai":
+        h = sg * mx.sigmoid(alpha * sg) * (su + 1)
+    else:
+        import mlx.nn as nn
+        h = nn.silu(sg) * su
+    y = y + shared.w2(h.astype(mx.bfloat16)).astype(mx.float32)
     return y.astype(x1.dtype)
 
 
-def jt_moe_decode(x, idx, w, experts, shared, limit: float):
+def jt_moe_decode(x, idx, w, experts, shared, limit: float, act: str = "silu", alpha: float = 0.0):
     """y [R, D] bf16 for x [R, D] bf16 (R <= 8), idx [R, k], w [R, k] f32 (normalized, scaled), a JTMixedSwitchGLU and
-    a shared expert of mxfp8 Linears w1/w3/w2; None when not eligible / disabled / the self-check failed."""
+    a shared expert of mxfp8 Linears w1/w3/w2 whose SwiGLU variant is (act, alpha, limit) (the routed experts keep
+    their own); None when not eligible / disabled / the self-check failed."""
     if _STATE["disabled"] or not requested() or not _eligible(x, idx, experts, shared):
         return None
-    y = _run(x, idx, w, experts, shared, float(limit))
+    alpha = float(alpha) if MK.check_act(act) == "oai" else 0.0
+    y = _run(x, idx, w, experts, shared, float(limit), act, alpha)
     # Rows are part of the shape: each row count is checked against the stock path on its first use.
-    key = (x.shape[0], x.shape[1], experts.I, idx.shape[1], float(limit), experts._unit()["K"], experts._unit()["K_dn"])
+    key = (x.shape[0], x.shape[1], experts.I, idx.shape[1], float(limit), experts._unit()["K"], experts._unit()["K_dn"],
+           act, alpha, _routed_act(experts))
     if key not in _STATE["checked"]:
-        ref = mx.concatenate([_stock_row(x[i:i + 1], idx[i:i + 1], w[i:i + 1], experts, shared, float(limit))
+        ref = mx.concatenate([_stock_row(x[i:i + 1], idx[i:i + 1], w[i:i + 1], experts, shared, float(limit), act, alpha)
                               for i in range(x.shape[0])], axis=0)
         ok = bool(mx.array_equal(y, ref).item())
         if not ok:

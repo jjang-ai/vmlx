@@ -3,10 +3,11 @@
 
 Implements the real MiniMax Sparse Attention (MSA): a Lightning Indexer selects
 top-k 128-token key blocks per query (per GQA group), and the main branch attends
-only the selected blocks via an additive block mask (the exact eager/sdpa path
-from transformers PR #46600). At context < topk*block (=2048) every block is
-selected, so it reduces to full causal attention (matches the validated probe,
-top1 0.654). The indexer keys live in MiniMaxM3SparseCache alongside K/V.
+only the selected blocks (msa.py: block-sparse Metal kernels for decode and
+prefill; the additive block-mask path of transformers PR #46600 stays as the
+reference / fallback). At context <= topk*block (=2048) every block is selected,
+so it reduces to full causal attention (matches the validated probe, top1 0.654).
+The indexer keys live in MiniMaxM3SparseCache alongside K/V.
 
 Other blocks reuse proven mlx-lm code (validated against the torch oracle):
   swigluoai = gpt_oss.swiglu ; router = deepseek_v3.group_expert_select ;
@@ -20,26 +21,70 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
 
 from mlx_lm.models.base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
-from mlx_lm.models.gpt_oss import SwiGLU, swiglu
 from mlx_lm.models.deepseek_v3 import group_expert_select
 
 EAGLE3_AUX_LAYERS = (2, 30, 57)
 
+
+# SwiGLU-OAI as M3 applies it (upstream MiniMaxM3VLExperts._apply_gate): gate
+# clipped from above, linear part clipped to [-limit, limit], plus one. Defined
+# here instead of imported from mlx_lm.models.gpt_oss, which mlx-lm 0.32 removed
+# (its switch_layers.SwiGLU is the plain SiLU gate, not this). Same op order as
+# mlx-lm 0.31.3's version, so outputs are bit-identical.
+@partial(mx.compile, shapeless=True)
+def swiglu(x_linear, x_glu, alpha: float = 1.702, limit: float = 7.0):
+    x_glu = mx.clip(x_glu, a_min=None, a_max=limit)
+    x_linear = mx.clip(x_linear, a_min=-limit, a_max=limit)
+    out_glu = x_glu * mx.sigmoid(alpha * x_glu)
+    return out_glu * (x_linear + 1)
+
+
+def _apply(module, x):
+    return module(x)
+
+
+class SwiGLU(nn.Module):
+    """SwitchGLU activation: called as (x = up projection, gate)."""
+
+    def __init__(self, alpha: float = 1.702, limit: float = 7.0):
+        super().__init__()
+        self.alpha, self.limit = alpha, limit
+
+    def __call__(self, x, gate):
+        return swiglu(x, gate, self.alpha, self.limit)
+
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
-except Exception:  # pragma: no cover - standalone / mlx_lm-namespace import
-    import os as _os, sys as _sys
-    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
-    from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
+    from . import fused_attn, msa, source_format
+except Exception:
+    try:
+        # Served path: minimax_m3_register loads this file as mlx_lm.models.minimax_m3_vl, where `.cache` is
+        # mlx-lm's own cache module. Import the siblings from the vmlx_engine package so the served model and the
+        # prefix-cache restore (vmlx_engine.models.minimax_m3.cache) share ONE MiniMaxM3SparseCache class: with a
+        # second copy loaded as a top-level `cache` module, Indexer's isinstance check failed on every restored
+        # cache, the forward skipped the index lane, and the next DSpark verify raised "sparse index lane
+        # desynchronised from K/V" (live M3.1 tool loop, 2026-10-28).
+        from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache, make_minimax_m3_cache
+        from vmlx_engine.models.minimax_m3.m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
+        from vmlx_engine.models.minimax_m3 import fused_attn, msa, source_format
+    except Exception:  # pragma: no cover - standalone import without vmlx_engine
+        import os as _os, sys as _sys
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
+        from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
+        import msa  # type: ignore
+        import source_format  # type: ignore
+        fused_attn = None  # the fused attention kernels ship with vmlx_engine
 
 
 @dataclass
@@ -78,6 +123,10 @@ class ModelArgs(BaseModelArgs):
     image_token_index: int = 200025
     video_token_index: int = 200026
     projector_hidden_size: int = 6144
+    # JANGHT bundles: config.json's top-level "jangt" block and per-module "quantization" contract (routed experts are
+    # trellis JANGT / Hadamard JANGH units, vmlx_engine.jangt). None for every other bundle.
+    jangt: Optional[dict] = None
+    quantization: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, params):
@@ -101,6 +150,8 @@ class ModelArgs(BaseModelArgs):
         merged["video_token_index"] = params.get("video_token_index", 200026)
         merged["projector_hidden_size"] = params.get(
             "projector_hidden_size", merged.get("hidden_size", 6144))
+        merged["jangt"] = params.get("jangt") or None
+        merged["quantization"] = params.get("quantization") if params.get("jangt") else None
         allowed = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in merged.items() if k in allowed})
 
@@ -128,9 +179,10 @@ class GemmaRMSNorm(nn.Module):
 class Indexer(nn.Module):
     """Lightning Indexer: scores idx_q vs cached idx_k, picks top-k key blocks.
 
-    Returns an additive mask [B, 1, Sq, Sk] (0 on allowed keys, -inf elsewhere)
-    that composes with the causal mask. Block = key_pos // block_size; the
-    query's own (local) block is always kept.
+    Returns an ``msa.MSASelection`` (top-k block ids per query row and KV group;
+    ``dense_bias()`` gives the equivalent causal additive key mask) or None when
+    every block is visible. Block = key_pos // block_size; the query's own
+    (local) block is always kept.
     """
 
     def __init__(self, args: ModelArgs):
@@ -146,51 +198,39 @@ class Indexer(nn.Module):
         self.index_k_norm = GemmaRMSNorm(self.d, args.rms_norm_eps)
         self.rope = nn.RoPE(args.rotary_dim, traditional=False, base=args.rope_theta)
 
-    def __call__(self, x, cache, offset):
+    def project(self, x, offset, linear=None):
+        """Index queries [B, nh, Sq, d] and keys [B, 1, Sq, d] of ``x`` at positions offset.. (norm + RoPE).
+        ``linear(module, x)`` replaces the projection call (DSpark verify: decode arithmetic per row)."""
         B, Sq, _ = x.shape
-        idx_q = self.index_q_norm(self.index_q_proj(x).reshape(B, Sq, self.nh, self.d)).transpose(0, 2, 1, 3)
-        idx_k = self.index_k_norm(self.index_k_proj(x).reshape(B, Sq, 1, self.d)).transpose(0, 2, 1, 3)
-        idx_q = self.rope(idx_q, offset=offset)
-        idx_k = self.rope(idx_k, offset=offset)
+        lin = _apply if linear is None else linear
+        idx_q = self.index_q_norm(lin(self.index_q_proj, x).reshape(B, Sq, self.nh, self.d)).transpose(0, 2, 1, 3)
+        idx_k = self.index_k_norm(lin(self.index_k_proj, x).reshape(B, Sq, 1, self.d)).transpose(0, 2, 1, 3)
+        return self.rope(idx_q, offset=offset), self.rope(idx_k, offset=offset)
+
+    def __call__(self, x, cache, offset):
+        idx_q, idx_k = self.project(x, offset)
         if cache is not None and isinstance(cache, MiniMaxM3SparseCache):
             idx_k = cache.update_index(idx_k)            # [B,1,Sk,d]
+        return self.select(idx_q, idx_k, offset)
+
+    def select(self, idx_q, idx_k, offset):
+        """Block selection (``msa.MSASelection``, or None = every block visible) for queries at offset.. over keys
+        idx_k[:, :, :Sk]. One query row over its own key prefix is exactly a decode step's selection.
+
+        Block score = max over the block's causal keys of idx_q . idx_k (float32), the local block(s) +inf; each
+        indexer head is one KV group with its own top-k. ``msa.block_scores`` computes them with the score-sheet
+        ops (``msa.reference_block_scores``) or a kernel that reproduces those bit for bit; the top-k below is the
+        same op either way."""
         Sk = idx_k.shape[2]
-        # scores [B, nh, Sq, Sk] in fp32
-        scores = (idx_q.astype(mx.float32) @ idx_k.astype(mx.float32).transpose(0, 1, 3, 2))
-        q_pos = mx.arange(offset, offset + Sq).reshape(1, 1, Sq, 1)
-        k_pos = mx.arange(Sk).reshape(1, 1, 1, Sk)
-        scores = mx.where(k_pos > q_pos, -mx.inf, scores)
-        # pad Sk to a block multiple, max-pool per block, max over heads
         n_blocks = (Sk + self.block - 1) // self.block
-        pad = n_blocks * self.block - Sk
-        if pad:
-            scores = mx.concatenate(
-                [scores, mx.full((B, self.nh, Sq, pad), -mx.inf, dtype=scores.dtype)], axis=-1)
-        scores = scores.reshape(B, self.nh, Sq, n_blocks, self.block)
-        block_scores = scores.max(axis=-1).max(axis=1)            # [B, Sq, n_blocks]
-        # force the local block(s) of each query to always win
-        q_block = ((q_pos.reshape(1, Sq) ) // self.block)         # [1, Sq]
-        if self.local > 0:
-            loc = mx.arange(self.local).reshape(1, 1, self.local)
-            local_idx = mx.maximum(q_block.reshape(1, Sq, 1) - loc, 0)  # [1,Sq,local]
-            local_idx = mx.broadcast_to(local_idx, (B, Sq, self.local))
-            block_scores = mx.put_along_axis(
-                block_scores, local_idx, mx.array(mx.inf, dtype=block_scores.dtype), axis=-1)
         keep = min(self.topk, n_blocks)
         if keep >= n_blocks:
             # all blocks visible -> only causal matters; return None (full attn)
             return None
-        # top-k blocks per query
-        top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,Sq,keep]
-        # build [B,1,Sq,n_blocks] keep-bias then expand to keys
-        block_keep = mx.full((B, Sq, n_blocks), -mx.inf, dtype=mx.float32)
-        block_keep = mx.put_along_axis(block_keep, top_idx, mx.array(0.0, dtype=mx.float32), axis=-1)
-        # expand block -> key, drop pad, add head axis
-        key_bias = mx.repeat(block_keep, self.block, axis=-1)[:, :, :Sk]   # [B,Sq,Sk]
-        key_bias = key_bias.reshape(B, 1, Sq, Sk)
-        # also enforce causal here (selected future blocks shouldn't leak)
-        key_bias = mx.where(k_pos > q_pos, -mx.inf, key_bias)
-        return key_bias
+        block_scores = msa.block_scores(idx_q, idx_k, offset, self.block, self.local)   # [B, G, Sq, n_blocks]
+        # top-k blocks per query and group; the attention applies causality inside them
+        top_idx = mx.argpartition(-block_scores, kth=keep - 1, axis=-1)[..., :keep]  # [B,G,Sq,keep]
+        return msa.MSASelection(top_idx, offset, Sk, self.block)
 
 
 class Attention(nn.Module):
@@ -208,13 +248,19 @@ class Attention(nn.Module):
         self.rope = nn.RoPE(args.rotary_dim, traditional=False, base=args.rope_theta)
         self.indexer = Indexer(args) if args.is_sparse(li) else None
 
+    def project(self, x, offset, linear=None):
+        """q [B, H, L, D], k / v [B, KV, L, D] of ``x`` at positions offset.. (q/k norm + partial RoPE)."""
+        B, L, _ = x.shape
+        lin = _apply if linear is None else linear
+        q = self.q_norm(lin(self.q_proj, x).reshape(B, L, self.n_heads, self.hd)).transpose(0, 2, 1, 3)
+        k = self.k_norm(lin(self.k_proj, x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
+        v = lin(self.v_proj, x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
+        return self.rope(q, offset=offset), self.rope(k, offset=offset), v
+
     def __call__(self, x, mask=None, cache=None):
         B, L, _ = x.shape
         off = cache.offset if cache is not None else 0
-        q = self.q_norm(self.q_proj(x).reshape(B, L, self.n_heads, self.hd)).transpose(0, 2, 1, 3)
-        k = self.k_norm(self.k_proj(x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
-        v = self.v_proj(x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
-        q, k = self.rope(q, offset=off), self.rope(k, offset=off)
+        q, k, v = self.project(x, off)
         # Append K/V to the cache FIRST (matches upstream MiniMax-M3 ordering) so
         # the Lightning Indexer sees the COMPLETED post-append sequence length. If
         # the indexer ran first (on the pre-append offset) its block_bias Sk would
@@ -225,21 +271,57 @@ class Attention(nn.Module):
         if cache is not None:
             k, v = cache.update_and_fetch(k, v)
         # MSA selection (additive block mask), computed from the SAME hidden x
-        attn_mask = mask
-        if self.indexer is not None:
-            block_bias = self.indexer(x, cache, off)
-            if block_bias is not None:
-                # block_bias is built as float32 (0.0 / -inf). SDPA requires the
-                # mask dtype to promote to the bf16 compute/output dtype, else it
-                # raises "[scaled_dot_product_attention] Mask type must promote to
-                # output type bfloat16" once the indexer fires past the
-                # index_topk_blocks*index_block_size (=2048) token threshold.
-                # 0.0 and -inf are exactly representable in bf16, so the cast is
-                # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
-                # gated by context length, NOT cache mode.)
-                attn_mask = block_bias.astype(q.dtype)  # already causal + block-restricted
-        o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=attn_mask)
+        block_bias = self.indexer(x, cache, off) if self.indexer is not None else None
+        o = self.attend(q, k, v, block_bias, mask, cache)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
+
+    def attend(self, q, k, v, block_bias, mask, cache):
+        """Attention output [B, H, L, D] (before o_proj) of q over k / v, restricted to the MSA selection when one
+        exists (``block_bias``: an ``msa.MSASelection``, or an explicit additive key mask [B, G, L, Sk])."""
+        if block_bias is None:
+            return scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=mask)
+        if isinstance(block_bias, msa.MSASelection):
+            path = msa.choose_path(block_bias, q, k, mask, self.n_kv)
+            if path == "decode":
+                return msa.decode_kernel_attention(q, k, v, block_bias, self.scale)
+            if path == "gather":
+                return msa.gathered_attention(q, k, v, block_bias, self.scale)
+            if path == "kernel":
+                return msa.kernel_attention(q, k, v, block_bias, self.scale)
+            block_bias = block_bias.dense_bias()
+        # block_bias is built as float32 (0.0 / -inf). SDPA requires the
+        # mask dtype to promote to the bf16 compute/output dtype, else it
+        # raises "[scaled_dot_product_attention] Mask type must promote to
+        # output type bfloat16" once the indexer fires past the
+        # index_topk_blocks*index_block_size (=2048) token threshold.
+        # 0.0 and -inf are exactly representable in bf16, so the cast is
+        # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
+        # gated by context length, NOT cache mode.)
+        bias = block_bias.astype(q.dtype)  # [B, G, L, Sk], already causal
+        if isinstance(mask, mx.array):  # batch padding etc.
+            bias = bias + mask.astype(q.dtype)
+        return self._grouped_attention(q, k, v, bias)
+
+    def _grouped_attention(self, q, k, v, bias):
+        """Attention where each KV group has its own key mask.
+
+        Query heads are contiguous per KV head, so folding the groups into the
+        batch axis gives one SDPA call whose [B*G, 1, L, Sk] mask broadcasts over
+        the group's query heads; a dense per-head mask would be 16x larger.
+        """
+        B, H, L, D = q.shape
+        G, Sk = bias.shape[1], k.shape[2]
+        if G != self.n_kv:  # indexer heads that do not line up with KV heads
+            bias = mx.repeat(bias, H // G, axis=1)
+            return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=bias)
+        o = mx.fast.scaled_dot_product_attention(
+            q.reshape(B * G, H // G, L, D),
+            k.reshape(B * G, 1, Sk, D),
+            v.reshape(B * G, 1, Sk, D),
+            scale=self.scale,
+            mask=bias.reshape(B * G, 1, L, Sk),
+        )
+        return o.reshape(B, H, L, D)
 
 
 class SwiGLUOAIMLP(nn.Module):
@@ -250,8 +332,10 @@ class SwiGLUOAIMLP(nn.Module):
         self.down_proj = nn.Linear(hidden, dim, bias=False)
         self.alpha, self.limit = alpha, limit
 
-    def __call__(self, x):
-        return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x), self.alpha, self.limit))
+    def __call__(self, x, linear=None):
+        if linear is None:
+            return self.down_proj(swiglu(self.up_proj(x), self.gate_proj(x), self.alpha, self.limit))
+        return linear(self.down_proj, swiglu(linear(self.up_proj, x), linear(self.gate_proj, x), self.alpha, self.limit))
 
 
 class SparseMoeBlock(nn.Module):
@@ -266,22 +350,53 @@ class SparseMoeBlock(nn.Module):
             args.hidden_size,
             args.intermediate_size,
             args.num_local_experts,
-            activation=SwiGLU(),
+            activation=SwiGLU(args.swiglu_alpha, args.swiglu_limit),
             bias=False,
         )
         self.shared_experts = SwiGLUOAIMLP(args.hidden_size, args.shared_intermediate_size,
                                            args.swiglu_alpha, args.swiglu_limit)
 
-    def __call__(self, x):
+    def routed(self, x, inds, scores):
+        """Router-weighted sum of the routed experts' outputs for ``x`` (the shared expert excluded)."""
+        if getattr(self.switch_mlp, "is_jangt", False):
+            # JANGHT: trellis / Hadamard routed experts, gather + SwiGLU-OAI + router-weighted sum in one call
+            return self.switch_mlp.routed(x, inds, scores)
+        return (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
+
+    def __call__(self, x, linear=None, routed=None):
+        """``linear(module, x)`` / ``routed(x, inds, scores)`` replace the projection / routed calls (DSpark verify)."""
+        lin = _apply if linear is None else linear
         inds, scores = group_expert_select(
-            self.gate(x), self.e_score_correction_bias, self.top_k, 1, 1,
+            lin(self.gate, x), self.e_score_correction_bias, self.top_k, 1, 1,
             self.routed_scaling_factor, self.norm_topk_prob)
-        y = (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
+        y = (self.routed if routed is None else routed)(x, inds, scores)
         # group_expert_select returns float32 scores, which promote the MoE output
         # (and thus the whole residual stream from layer 3 on) to float32 — forcing
         # every downstream attention/MLP matmul into float32 (~2x slower than bf16).
         # Cast back to the model compute dtype so the matmuls stay bf16.
-        return (y + self.shared_experts(x)).astype(x.dtype)
+        return (y + self.shared_experts(x, linear)).astype(x.dtype)
+
+
+def _fused_moe_module():
+    try:
+        from . import fused_moe  # type: ignore
+    except Exception:
+        from vmlx_engine.models.minimax_m3 import fused_moe  # served path: loaded as mlx_lm.models.minimax_m3_vl
+    return fused_moe
+
+
+def moe_residual(mlp, x_normed, h):
+    """``h + mlp(x_normed)`` -- through the fused MoE kernels (models/minimax_m3/fused_moe.py) when
+    VMLX_M3_FUSED_MOE=1 and the layer / call fit them (1..16 rows), else None. The fused block computes every row
+    with one-row (decode) arithmetic, bit-identical to the unfused block on one row (tests/test_minimax_m3_fused_moe.py).
+    Callers: the decoder layer for one-token steps, the DSpark verify for its rows; multi-token prefill chunks keep
+    the stock multi-row kernels (their arithmetic, and so the prompt cache, stays what it was)."""
+    if not isinstance(mlp, SparseMoeBlock):
+        return None
+    fm = _fused_moe_module()
+    if not fm.enabled() or not fm.supported(mlp, x_normed):
+        return None
+    return fm.fused_moe_residual(mlp, x_normed, h)
 
 
 class DecoderLayer(nn.Module):
@@ -295,8 +410,15 @@ class DecoderLayer(nn.Module):
                                       args.swiglu_alpha, args.swiglu_limit))
 
     def __call__(self, x, mask=None, cache=None):
-        h = x + self.self_attn(self.input_layernorm(x), mask, cache)
-        return h + self.mlp(self.post_attention_layernorm(h))
+        if fused_attn is not None and fused_attn.use_fused(self, x, mask, cache):
+            # VMLX_M3_FUSED_ATTN: input norm + attention + residual in five Metal launches (decode / verify rows)
+            h = fused_attn.attention_block(self, x, cache)
+        else:
+            h = x + self.self_attn(self.input_layernorm(x), mask, cache)
+        xn = self.post_attention_layernorm(h)
+        # VMLX_M3_FUSED_MOE: router + routed / shared experts + residual in four launches (one decode row)
+        fused = moe_residual(self.mlp, xn, h) if xn.shape[-2] == 1 else None
+        return fused if fused is not None else h + self.mlp(xn)
 
 
 class MiniMaxM3Model(nn.Module):
@@ -331,6 +453,84 @@ class MiniMaxM3Model(nn.Module):
         out = self.norm(h)
         return (out, aux) if return_aux else out
 
+    def forward_pieces(self, pieces, cache, *, aux_pieces=None, aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS):
+        """Prefill consecutive prompt pieces (token arrays [1, L_i], in order, appended to ``cache``) LAYER BY LAYER:
+        every piece runs exactly the ops it runs as its own ``__call__`` (same rows, same matrix shapes, same cache
+        rows visible to its attention), except that the routed experts of a MoE layer run once over the rows of all
+        the pieces that take the sorted prefill kernel alone (``_group_routed``): that kernel's output rows do not
+        depend on the other rows or on their count (tests/test_minimax_m3_cold_prefill.py), so each expert's weights
+        are decoded once per group instead of once per piece. Returns the final-norm outputs per piece and, for the
+        pieces in ``aux_pieces``, their outputs after ``aux_layers`` (``__call__``'s return_aux order).
+
+        Why: the aligned prefill cuts a prompt at every turn cut (prefill_geometry), so a many-message chat runs many
+        small pieces; the routed experts cost per piece ~ every expert the piece routes to, decoded once, whatever its
+        row count. Pieces must stay pieces (the K / V / index projections' rows are not invariant to the row count),
+        the routed experts need not."""
+        hs = [self.embed_tokens(p) for p in pieces]
+        masks = [None] * len(hs)
+        aux_pieces = set(aux_pieces or ())
+        aux_set = set(aux_layers) if aux_pieces else set()
+        aux = {i: [] for i in aux_pieces}
+        for li, (layer, c) in enumerate(zip(self.layers, cache)):
+            xns = []
+            for i, h in enumerate(hs):
+                if li == 0:
+                    masks[i] = create_attention_mask(h, cache[0])
+                if fused_attn is not None and fused_attn.use_fused(layer, h, masks[i], c):
+                    h = fused_attn.attention_block(layer, h, c)
+                else:
+                    h = h + layer.self_attn(layer.input_layernorm(h), masks[i], c)
+                hs[i] = h
+                xns.append(layer.post_attention_layernorm(h))
+            outs = _group_mlp(layer.mlp, xns, hs)
+            for i in range(len(hs)):
+                hs[i] = outs[i]
+                if li in aux_set and i in aux_pieces:
+                    aux[i].append(hs[i])
+        return [self.norm(h) for h in hs], aux
+
+
+# Rows per piece below which the JANGT routed experts leave the sorted prefill kernel (switch.SORT_THRESHOLD slots)
+def _takes_sorted_prefill(mlp, rows: int) -> bool:
+    sw = getattr(mlp, "switch_mlp", None)
+    if not getattr(sw, "is_jangt", False):
+        return False
+    try:
+        from vmlx_engine.jangt import switch as SW
+    except Exception:  # pragma: no cover - standalone import
+        return False
+    return rows * int(mlp.top_k) >= SW.SORT_THRESHOLD and SW.nax_prefill()
+
+
+def _group_mlp(mlp, xns, hs):
+    """``h + mlp(xn)`` for every piece of a layer-major group (DecoderLayer.__call__'s MLP half), with the routed
+    experts of the pieces that take the sorted JANGT prefill kernel computed in ONE call over their rows
+    (``VMLX_M3_PREFILL_GROUP_ROUTED=0``: one call per piece, for A/B)."""
+    out = [None] * len(xns)
+    grouped = []
+    if isinstance(mlp, SparseMoeBlock) and os.environ.get("VMLX_M3_PREFILL_GROUP_ROUTED", "1").strip().lower() not in {
+            "0", "false", "off", "no"}:
+        grouped = [i for i, xn in enumerate(xns) if _takes_sorted_prefill(mlp, int(xn.shape[-2]))]
+    if len(grouped) < 2:
+        grouped = []
+    for i, (xn, h) in enumerate(zip(xns, hs)):
+        if i in grouped:
+            continue
+        fused = moe_residual(mlp, xn, h) if xn.shape[-2] == 1 else None
+        out[i] = fused if fused is not None else h + mlp(xn)
+    if grouped:
+        routes = [group_expert_select(mlp.gate(xns[i]), mlp.e_score_correction_bias, mlp.top_k, 1, 1,
+                                      mlp.routed_scaling_factor, mlp.norm_topk_prob) for i in grouped]
+        rows = [int(xns[i].shape[-2]) for i in grouped]
+        y = mlp.routed(mx.concatenate([xns[i] for i in grouped], axis=-2),
+                       mx.concatenate([r[0] for r in routes], axis=-2), mx.concatenate([r[1] for r in routes], axis=-2))
+        at = 0
+        for i, n in zip(grouped, rows):
+            xn = xns[i]
+            out[i] = hs[i] + (y[..., at:at + n, :] + mlp.shared_experts(xn)).astype(xn.dtype)
+            at += n
+    return out
+
 
 class Model(nn.Module):
     def __init__(self, args: ModelArgs):
@@ -340,12 +540,26 @@ class Model(nn.Module):
         self.model = MiniMaxM3Model(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        if args.jangt:
+            # JANGHT: every routed stack becomes a JTMixedSwitchGLU BEFORE quantization (the loader's nn.quantize then
+            # hands each {"mode": "jangt", ...} entry to the installed unit). The activation is M3's own SwiGLU-OAI.
+            from vmlx_engine.jangt.switch import enable_fast_decode_default, install_jangt
+
+            self.jangt_modules = install_jangt(self, {
+                "jangt": args.jangt, "quantization": args.quantization,
+                "swiglu_kind": "oai", "swiglu_alpha": args.swiglu_alpha, "swiglu_limit": args.swiglu_limit})
+            # Fast JANGT decode kernels are M3's default (2026-10-29, real-bundle KL 0.3150 vs 0.3157), scoped to THIS
+            # model's units: other JANGT families keep v3 unless VMLX_JANGT_FAST=1; VMLX_JANGT_FAST=0 turns M3's off.
+            enable_fast_decode_default(self)
         # VL vision stack (additive — only when the bundle declares vision_config).
         if getattr(args, "vision_config", None):
             try:
                 from .minimax_m3_vl import MiniMaxM3VLVisionStack
-            except Exception:  # pragma: no cover - standalone import
-                from minimax_m3_vl import MiniMaxM3VLVisionStack  # type: ignore
+            except Exception:
+                try:  # served path (mlx_lm.models.minimax_m3_vl): the sibling lives in the vmlx_engine package
+                    from vmlx_engine.models.minimax_m3.minimax_m3_vl import MiniMaxM3VLVisionStack
+                except Exception:  # pragma: no cover - standalone import
+                    from minimax_m3_vl import MiniMaxM3VLVisionStack  # type: ignore
             self.vision = MiniMaxM3VLVisionStack({
                 "vision_config": args.vision_config,
                 "projector_hidden_size": args.projector_hidden_size,
@@ -442,6 +656,18 @@ class Model(nn.Module):
     def make_cache(self):
         return make_minimax_m3_cache(self.args)
 
+    def prefill_group(self, pieces, cache, *, logits_last: bool = False, aux_pieces=None,
+                      aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS):
+        """Text prefill of consecutive pieces as one layer-major group (``MiniMaxM3Model.forward_pieces``): every piece
+        gets the rows its own ``__call__`` would give it. Returns (final-norm outputs per piece, aux per piece in
+        ``aux_pieces``, the last piece's logits [1, L, V] when ``logits_last``)."""
+        outs, aux = self.model.forward_pieces(pieces, cache, aux_pieces=aux_pieces, aux_layers=aux_layers)
+        logits = None
+        if logits_last:
+            logits = (self.model.embed_tokens.as_linear(outs[-1]) if self.args.tie_word_embeddings
+                      else self.lm_head(outs[-1]))
+        return outs, aux, logits
+
     @property
     def layers(self):
         return self.model.layers
@@ -471,4 +697,7 @@ class Model(nn.Module):
             # model nests them under the `indexer` submodule.
             k = k.replace(".self_attn.index_", ".self_attn.indexer.index_")
             out[k] = v
+        if source_format.is_source_checkpoint(out):
+            # official checkpoint (MXFP8 linears, NVFP4 experts): keep it as stored
+            out = source_format.convert(self, out)
         return out

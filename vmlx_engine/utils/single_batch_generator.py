@@ -148,6 +148,8 @@ class _Request:
     next_logprobs: Any = None
     next_token_materialized: bool = False
     next_logprobs_materialized: bool = False
+    # (items, submit kwargs) of a built, not yet submitted decode step (VMLX_M3_DECODE_OVERLAP_DEFER)
+    deferred_submit: Any = None
     # MiniMax-M3 VL (additive, only ever set when VMLX_M3_VL routes an image
     # request here). Carried so the FIRST prefill forward can splice vision
     # embeddings; cleared after that forward so decode never re-passes them.
@@ -169,6 +171,10 @@ class _Request:
     # tokens (the end of the system turn) and keeps an exact typed snapshot there, so a new conversation with the
     # same system prompt and tools restores it instead of re-prefilling them. 0 = no split.
     stable_root_split: int = 0
+    # MiniMax-M3 aligned prefill plan ({"boundary": absolute store boundary or None, "atomic": media request,
+    # "cuts": absolute turn cuts}), set by the scheduler (models/minimax_m3/prefill_geometry.py). None = the previous
+    # relative chunking.
+    m3_plan: Optional[dict] = None
     stable_root_snapshot: Optional[list[Any]] = None
     # Periodic exact checkpoints (Naive): (boundary, window capture) taken during the cold prefill, then assembled
     # into (boundary, cache) from the N-1 snapshot for the scheduler to store before the N-1 checkpoint.
@@ -317,15 +323,17 @@ class SingleBatchGenerator:
         except Exception:
             return value
 
-    def _eval_on_stream(self, *values):
+    def _eval_on_stream(self, *values, extra=()):
+        """Evaluate ``values`` rebound on this generator's stream (returned) and ``extra`` as they are (not rebound:
+        cache buffers, where a rebind would copy them)."""
         if not values:
             return ()
         with self._stream_context():
             rebound = tuple(self._rehome_on_stream(value) for value in values)
             try:
-                mx.eval(*rebound)
+                mx.eval(*rebound, *extra)
             except TypeError:
-                for value in rebound:
+                for value in rebound + tuple(extra):
                     mx.eval(value)
         return rebound
 
@@ -379,12 +387,74 @@ class SingleBatchGenerator:
             native_glm = all(type(layer) in (Glm5KDACache, Glm5MLACache) for layer in req.cache) and not any(
                 getattr(layer, "_speculative_states", None) for layer in req.cache
             )
-        return (plain_kv or native_naive or native_glm) and not self._needs_affine2_sync(req.cache)
+        # MiniMax-M3 / M3.1: MiniMaxM3SparseCache sparse layers (+ stock KVCache dense layers on M3). K / V / index
+        # lanes are step-grown buffers written by graph-ordered slice updates, or by the fused attention's in-place
+        # appends, which re-issue the lanes behind their MSA launch (cache.py fused_commit); no host read per step.
+        # Qualified by tests/test_minimax_m3_decode_overlap.py (sparse selection active, length / stop / cancel ==
+        # synchronous, logprobs and final lanes bit-identical, thousands of tokens past the sparse switch, with and
+        # without VMLX_M3_FUSED_ATTN). VMLX_M3_DECODE_OVERLAP=0 keeps the synchronous loop.
+        native_m3 = (
+            not plain_kv and not native_naive and not native_glm
+            and os.environ.get("VMLX_M3_DECODE_OVERLAP", "1").strip().lower() not in {"0", "false", "off", "no"}
+            and self._m3_overlap_layout(req.cache)
+        )
+        return (plain_kv or native_naive or native_glm or native_m3) and not self._needs_affine2_sync(req.cache)
 
-    def _submit_on_stream(self, *values):
+    @staticmethod
+    def _m3_overlap_layout(cache) -> bool:
+        """The native M3 layout: at least one MiniMaxM3SparseCache, every layer that class or a stock KVCache."""
+        try:
+            from vmlx_engine.models.minimax_m3.cache import MiniMaxM3SparseCache
+        except Exception:
+            return False
+        kinds = [type(layer) for layer in cache]
+        return MiniMaxM3SparseCache in kinds and all(k in (MiniMaxM3SparseCache, mlx_cache.KVCache) for k in kinds)
+
+    @staticmethod
+    def _m3_lane_arrays(cache) -> list:
+        """The lane buffers of an M3 cache list, read without exposing them (MiniMaxM3SparseCache.fused_lanes): they
+        ride the step's evaluation so the index lane's appends (unread by the dense-regime forward) never pile up as
+        a lazy graph. Never rehomed: a rehome is a full copy of every lane."""
+        out = []
+        for layer in cache or ():
+            lanes = layer.fused_lanes() if hasattr(layer, "fused_lanes") else (
+                (getattr(layer, "keys", None), getattr(layer, "values", None))
+                if type(layer) is mlx_cache.KVCache else ())
+            out.extend(a for a in lanes if isinstance(a, mx.array))
+        return out
+
+    @staticmethod
+    def _m3_defer_submit() -> bool:
+        """VMLX_M3_DECODE_OVERLAP_DEFER=1: the overlapped M3 decode builds step k+1 while step k runs but submits it
+        only after step k is complete and released (``_submit_deferred``).
+
+        MLX's slice update writes in place only into a donatable buffer, and a command buffer retains every input's
+        data until its completion handler runs (``array::is_donatable``, ``backend/metal/eval.cpp``). Submitted while
+        step k is in flight, step k+1's stock lane appends (``keys[..., prev:off, :] = k``) meet lanes step k's
+        attention still reads and copy them whole. Deferring the submit trades that for the gap between step k's end
+        and step k+1's first command buffer; the graph building (the host's share) still overlaps step k. The fused
+        attention's appends are in place and need no deferral."""
+        return os.environ.get("VMLX_M3_DECODE_OVERLAP_DEFER", "0").strip().lower() in {"1", "true", "on", "yes"}
+
+    def _submit_deferred(self, req) -> None:
+        """Submit a step built by ``_sample_from_logits(defer=True)`` from a synchronized stream: every command buffer
+        before it complete and released (``mx.eval`` returns on the completion event, before the handler releases
+        the inputs)."""
+        pending = getattr(req, "deferred_submit", None)
+        if pending is None:
+            return
+        req.deferred_submit = None
+        items, kw = pending
+        self._sync()
+        evaluated = self._submit_on_stream(*items, **kw)
+        req.next_token = evaluated[0]
+        if req.next_logprobs is not None:
+            req.next_logprobs = evaluated[1]
+
+    def _submit_on_stream(self, *values, extra=()):
         with self._stream_context():
             rebound = tuple(self._rehome_on_stream(value) for value in values)
-            mx.async_eval(*rebound)
+            mx.async_eval(*rebound, *extra)
         return rebound
 
     def _materialize_submitted_on_stream(self, *values):
@@ -562,25 +632,60 @@ class SingleBatchGenerator:
 
         if not cache or not any(self._cache_needs_prompt_snapshot(c) for c in cache):
             return None
-        limit = self.prompt_snapshot_max_bytes
-        if limit is not None:
-            try:
-                from ..memory_cache import estimate_kv_cache_memory
+        # MiniMax-M3: every lane is append-only, so the rows the prefill wrote are still the live cache's first rows
+        # when the request ends. Hand the scheduler a marker (the live cache objects + the row count), not a copy:
+        # the copy was 8.2 GiB for a 65k prompt on M3.1 and either OOMed or, under the headroom guard below, left
+        # long prompts uncached. The terminal store streams the rows to the SSD block store
+        # (models/minimax_m3/prompt_boundary.py).
+        if self._cache_uses_m3_msa(cache):
+            from ..models.minimax_m3 import prompt_boundary
 
-                estimated = int(estimate_kv_cache_memory(list(cache), resident=False))
-            except Exception as exc:
-                logger.debug("typed prompt snapshot size estimate failed: %s", exc)
-            else:
-                self.prompt_snapshot_last_estimated_bytes = estimated
-                if estimated > limit:
-                    self.prompt_snapshot_oversize_skips += 1
-                    logger.warning(
-                        "Skipping typed prompt snapshot before copy: estimated %.1fMB "
-                        "exceeds every enabled cache backend limit (%.1fMB)",
-                        estimated / (1024 * 1024),
-                        limit / (1024 * 1024),
-                    )
-                    return None
+            if prompt_boundary.zero_copy_enabled():
+                marker = prompt_boundary.capture(list(cache))
+                if marker is not None:
+                    self.prompt_snapshot_last_estimated_bytes = marker.nbytes()
+                    self.prompt_snapshot_last_reason = "boundary_marker"
+                    return marker
+        try:
+            from ..memory_cache import estimate_kv_cache_memory
+
+            estimated = int(estimate_kv_cache_memory(list(cache), resident=False))
+        except Exception as exc:
+            logger.debug("typed prompt snapshot size estimate failed: %s", exc)
+            return self._clone_prompt_cache_snapshot(cache)
+        self.prompt_snapshot_last_estimated_bytes = estimated
+        limit = self.prompt_snapshot_max_bytes
+        if limit is not None and estimated > limit:
+            self.prompt_snapshot_last_reason = "backend_budget"
+            self.prompt_snapshot_oversize_skips += 1
+            logger.warning(
+                "Skipping typed prompt snapshot before copy: estimated %.1fMB "
+                "exceeds every enabled cache backend limit (%.1fMB)",
+                estimated / (1024 * 1024),
+                limit / (1024 * 1024),
+            )
+            return None
+        # The copy is new GPU memory on top of the live cache. A long prompt on a model that nearly fills the
+        # working set raised [METAL] Insufficient Memory right here and failed the request (MiniMax-M3.1 JANGHT,
+        # 95.5 GiB, 65k-token prompt -> an 8.2 GiB copy on a 107.5 GiB working set, 2026-10-28). Without room for
+        # the copy, skip the prefix-cache store of this prompt; the request itself continues.
+        active, maximum = get_effective_metal_working_set_bytes(mx)
+        if maximum > 0:
+            from .memory_limits import get_metal_ws_guard_threshold
+
+            headroom = max(0, int(maximum * get_metal_ws_guard_threshold() / 100) - active)
+            self.prompt_snapshot_last_headroom_bytes = headroom
+            if estimated > headroom:
+                self.prompt_snapshot_last_reason = "metal_headroom"
+                self.prompt_snapshot_headroom_skips += 1
+                logger.warning(
+                    "Skipping typed prompt snapshot: its copy (%.1fMB) exceeds the free Metal working set "
+                    "(%.1fMB); this prompt is not stored in the prefix cache, the request continues",
+                    estimated / (1024 * 1024),
+                    headroom / (1024 * 1024),
+                )
+                return None
+        self.prompt_snapshot_last_reason = "captured"
         return self._clone_prompt_cache_snapshot(cache)
 
     def _capture_mixed_swa_boundary(self, req):
@@ -719,10 +824,12 @@ class SingleBatchGenerator:
         dsv41_vl_token_types: Optional[list[Any]] = None,
         gen_prompt_lens: Optional[list[int]] = None,
         stable_root_splits: Optional[list[int]] = None,
+        m3_prefill_plans: Optional[list[Optional[dict]]] = None,
     ):
         max_tokens = max_tokens or [self.max_tokens] * len(prompts)
         gen_prompt_lens = gen_prompt_lens or [0] * len(prompts)
         stable_root_splits = stable_root_splits or [0] * len(prompts)
+        m3_prefill_plans = m3_prefill_plans or [None] * len(prompts)
         caches = caches or [None] * len(prompts)
         # M3 VL (additive): per-prompt vision tensors, default None == text path.
         pixel_values = pixel_values or [None] * len(prompts)
@@ -760,6 +867,7 @@ class SingleBatchGenerator:
             dsv41_ttypes,
             gen_prompt_len,
             stable_root_split,
+            m3_plan,
         ) in zip(
             prompts,
             max_tokens,
@@ -776,6 +884,7 @@ class SingleBatchGenerator:
             dsv41_vl_token_types,
             gen_prompt_lens,
             stable_root_splits,
+            m3_prefill_plans,
         ):
             prompt_tokens = list(prompt)
             if not prompt_tokens:
@@ -803,6 +912,7 @@ class SingleBatchGenerator:
                 dsv41_vl_token_types=dsv41_ttypes,
                 gen_prompt_len=int(gen_prompt_len or 0),
                 stable_root_split=int(stable_root_split or 0),
+                m3_plan=dict(m3_plan) if m3_plan is not None else None,
             )
             self._unprocessed.append(req)
             uids.append(uid)
@@ -1048,6 +1158,8 @@ class SingleBatchGenerator:
         input_tokens: mx.array,
         *,
         overlap: bool = False,
+        extra=(),
+        defer: bool = False,
     ) -> tuple[mx.array, Any]:
         token_context = None
         if req.logits_processors:
@@ -1083,10 +1195,16 @@ class SingleBatchGenerator:
         # stream so the next step never resolves a stale Stream(gpu,0).
         # Qualified steady decode may then submit on that same owned stream;
         # materializing the current token must not wait for the following one.
+        # ``extra`` (M3 lane buffers) only when present: other families call these helpers exactly as before.
+        kw = {"extra": extra} if extra else {}
+        if defer:
+            # Built, not submitted: _submit_deferred submits it once the previous step is released.
+            req.deferred_submit = (tuple(async_items), kw)
+            return sampled, logprobs
         evaluated = (
-            self._submit_on_stream(*async_items)
+            self._submit_on_stream(*async_items, **kw)
             if overlap
-            else self._eval_on_stream(*async_items)
+            else self._eval_on_stream(*async_items, **kw)
         )
         sampled = evaluated[0]
         if logprobs is not None:
@@ -1094,34 +1212,15 @@ class SingleBatchGenerator:
         return sampled, logprobs
 
     def _needs_affine2_sync(self, cache=None) -> bool:
-        """MiniMax-M3 + affine-2 fast path requires FULL sync each decode step.
+        """The MiniMax-M3 affine-2 SwitchGLU fast path (opt-in) keeps a FULL synchronous step: its custom Metal kernel
+        was seen to corrupt long generations under the one-token lookahead and has not been requalified.
 
-        The default one-token lookahead leaves the forward (incl. the custom
-        affine-2 SwitchGLU Metal kernel) lazy across the iteration boundary; that
-        async overlap rarely corrupts long/thinking generations. Forcing mx.eval
-        of the forward each step removes the overlap — matching the proven
-        synchronous runtime path. Detect via the M3 MSA cache type (robust to
-        model wrappers). Gated to M3+affine-2 only.
-        """
-        # M3 MSA cache needs a FULL materialize-sync each decode step: the
-        # append-only idx_keys concatenation desyncs from K/V under the default
-        # one-token-lookahead async overlap on long generations (>~2048 tok),
-        # corrupting the Lightning-Indexer block selection -> incoherent loops.
-        # This is a property of the MSA cache ITSELF, independent of the affine-2
-        # fast path. (Previously gated on `not _disabled()` i.e. affine-2 ON; when
-        # affine-2 went default-OFF the MSA sync silently turned off too -> the
-        # server long-gen loop. Pure runtime is synchronous and never hit this.)
-        try:
-            _caches = cache if isinstance(cache, (list, tuple)) else (
-                [cache] if cache is not None else [])
-            for _c in _caches:
-                if _c is None:
-                    continue
-                if type(_c).__name__ == "MiniMaxM3SparseCache" or hasattr(_c, "idx_keys"):
-                    return True
-        except Exception:
-            pass
-        # Fallback: the affine-2 fast path (M3-only) also requires the sync.
+        The MSA cache itself no longer needs it. That sync (and the per-step evaluation of every layer's
+        ``cache.state`` it came with) dates from the index lane being re-concatenated every step; the lanes are now
+        step-grown buffers written by graph-ordered slice updates or the fused attention's ordered in-place appends,
+        and the state evaluation rebound (= copied) every K / V / index lane each token while marking the lanes
+        shared (every fused append then went copy-on-write). The lanes now ride the step's own evaluation
+        (``_m3_lane_arrays``)."""
         try:
             from vmlx_engine.models.minimax_m3.m3_affine2_switch import _disabled
             return not _disabled()
@@ -1173,35 +1272,17 @@ class SingleBatchGenerator:
                     )
                 req.prefill_started = None
             overlap = self._can_overlap_decode(req)
+            m3 = self._cache_uses_m3_msa(req.cache)
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
                 input_tokens,
                 overlap=overlap,
+                extra=self._m3_lane_arrays(req.cache) if m3 else (),
+                defer=overlap and m3 and self._m3_defer_submit(),   # submitted by _yield_current_and_schedule_next
             )
             req.next_token_materialized = not overlap
             req.next_logprobs_materialized = not overlap and req.next_logprobs is not None
-            # M3+affine-2: materialize the forward + cache state NOW (no lookahead
-            # overlap) to avoid the async-overlap corruption of the custom Metal
-            # kernel. Eval the cache too (not just the token) since paged/block-disk
-            # snapshots read it.
-            if self._needs_affine2_sync(req.cache):
-                _arrs = [req.next_token]
-                if req.next_logprobs is not None:
-                    _arrs.append(req.next_logprobs)
-                try:
-                    for _c in (req.cache or []):
-                        _st = getattr(_c, "state", None)
-                        if isinstance(_st, (list, tuple)):
-                            _arrs.extend(x for x in _st if x is not None)
-                        elif _st is not None:
-                            _arrs.append(_st)
-                except Exception:
-                    pass
-                _ev = self._eval_on_stream(*_arrs)
-                req.next_token = _ev[0]
-                if req.next_logprobs is not None:
-                    req.next_logprobs = _ev[1]
             if trace:
                 self._sync()
                 sample_s = time.perf_counter() - sample_t0
@@ -1283,6 +1364,8 @@ class SingleBatchGenerator:
                 current_logprobs = self._materialize_submitted_on_stream(current_logprobs)[0]
         except Exception:
             self._sync()
+        finally:
+            self._submit_deferred(req)
 
         token_id = self._token_to_int(current_token)
         req.output_tokens.append(token_id)
@@ -1316,6 +1399,8 @@ class SingleBatchGenerator:
         before the first generated token. M3 VL also requires this path because
         image-token positions must co-occur for the vision splice.
         """
+        if getattr(req, "m3_plan", None) is not None:
+            return self._prefill_m3_aligned_and_sample(req, req.m3_plan)
         tokens = list(req.prompt_tokens)
         has_media = req.pixel_values is not None or req.pixel_values_videos is not None
         # The processor emits one vision tensor containing features for every
@@ -1332,6 +1417,8 @@ class SingleBatchGenerator:
         )
         pos = 0
         _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
+        _reserved = None
 
         def _chunk_len(at: int) -> int:
             n = min(step, len(tokens) - at)
@@ -1344,6 +1431,8 @@ class SingleBatchGenerator:
 
         with self._stream_context():
             while len(tokens) - pos > step:
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, len(tokens) - pos)
                 n = _chunk_len(pos)
                 chunk = tokens[pos : pos + n]
                 nxt = pos + n
@@ -1353,18 +1442,25 @@ class SingleBatchGenerator:
                     else tokens[nxt:]
                 )
                 logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
-                (logits,) = self._eval_on_stream(logits)
+                # Only the cache rows are kept from a non-final chunk: evaluate them, not the logits. The lm_head over
+                # every row of the chunk (2048 x 200,064 on M3.1: ~0.1 s per chunk on an M5 Max) was computed and
+                # thrown away; the rows the cache keeps run the same kernels either way (the aligned-plan path below
+                # already did this).
+                mx.eval(self._m3_cache_rows(req.cache))
+                del logits
                 req.context_tokens.extend(chunk)
                 if req.logits_processors:
                     req.token_context.update_and_fetch(
                         mx.array(chunk, dtype=mx.int32)
                     )
                 self._sync()
-                if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
                     mx.clear_cache()
                 pos += n
 
             final_chunk = tokens[pos:]
+            if _reserved is None:
+                _reserved = self._m3_reserve_prefill(req.cache, len(final_chunk))
             logits = self._model_call(final_chunk, req)  # forwards+clears pixel_values
             # Materialize the full vision+text forward on THIS stream before the
             # sample step touches it (prevents stale-stream resolution on the
@@ -1390,6 +1486,155 @@ class SingleBatchGenerator:
             if req.logits_processors:
                 req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
         self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    @staticmethod
+    def _m3_clear_each_chunk() -> bool:
+        """VMLX_M3_PREFILL_CLEAR_EACH_CHUNK=1: release MLX's buffer cache after every M3 prefill chunk (the previous
+        behaviour). Default: keep it through the prefill (every chunk re-allocates the same transient sizes; releasing
+        them sends each chunk back to fresh, zero-filled Metal buffers) and release it once when the prefill ends, so
+        the footprint after the prefill is what it was. VMLX_PREFILL_KEEP_ALLOC=1 still skips every release."""
+        return os.environ.get("VMLX_M3_PREFILL_CLEAR_EACH_CHUNK", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _m3_cache_rows(cache) -> list:
+        """The cache state a non-final prefill chunk leaves (what it evaluates instead of its logits); empty layers
+        (nothing written) are skipped."""
+        out = []
+        for layer in cache or ():
+            empty = getattr(layer, "empty", None)
+            if callable(empty) and empty():
+                continue
+            out.append(layer.state)
+        return out
+
+    @staticmethod
+    def _m3_reserve_prefill(cache, rows: int):
+        """Reserve every M3 lane for the remaining ``rows`` prompt rows (models/minimax_m3/cache.reserve_prefill):
+        None until the lanes exist (ask again before the next piece), then True / False (reserved / stock growth)."""
+        from ..models.minimax_m3.cache import reserve_prefill
+
+        return reserve_prefill(cache, rows)
+
+    def _m3_media_token_ids(self) -> set:
+        args = getattr(self.model, "args", None)
+        return {int(t) for t in (getattr(args, "image_token_index", None), getattr(args, "video_token_index", None))
+                if t is not None}
+
+    def m3_prefill_pieces(self, req: _Request, plan: dict) -> list:
+        """Absolute [a, b) prefill pieces of this M3 request (models/minimax_m3/prefill_geometry.py)."""
+        from ..models.minimax_m3.prefill_geometry import prefill_pieces
+
+        start = len(req.context_tokens)
+        end = start + len(req.prompt_tokens)
+        boundary = plan.get("boundary")
+        atomic = bool(plan.get("atomic"))
+        has_media = req.pixel_values is not None or req.pixel_values_videos is not None
+        if has_media and boundary is not None and start < int(boundary) < end:
+            # Every placeholder must meet its vision tensor in the first forward. A placeholder at or past the store
+            # boundary (never seen: the boundary is the last user token) keeps the whole media prefill atomic.
+            media = self._m3_media_token_ids()
+            tail = req.prompt_tokens[int(boundary) - start:]
+            if media and any(int(t) in media for t in tail):
+                logger.warning("MiniMax-M3 media placeholder past the cache boundary %s; atomic media prefill "
+                               "without the boundary cut (request %s)", boundary, req.uid)
+                boundary = None
+        return prefill_pieces(start, end, max(1, int(self.prefill_step_size or 1)), boundary,
+                              atomic=atomic or has_media, cuts=plan.get("cuts"))
+
+    def _prefill_m3_aligned_and_sample(self, req: _Request, plan: dict) -> None:
+        """Prefill an M3 prompt in chunks at ABSOLUTE positions (every multiple of the prefill step, every turn cut of
+        the plan, and the prefix cache's store boundary), then sample from the last row's logits.
+
+        A cold prefill and a continuation after a cache hit at a chunk boundary (or at the store boundary of an
+        exact-geometry request) then run the same matrices for every remaining row, so the hit's state and logits
+        equal the cold prefill's bit for bit. Media requests run [start, boundary) as one forward (every placeholder
+        with its vision tensor), then [boundary, N)."""
+        tokens = list(req.prompt_tokens)
+        start = len(req.context_tokens)
+        if req.cache:
+            from ..models.minimax_m3.prefill_geometry import cache_offset
+
+            offset = cache_offset(req.cache)
+            if offset is not None and offset != start:
+                # "cache mismatch": the scheduler's cache-corruption recovery clears the caches and re-runs the
+                # request from a cold prefill instead of continuing from rows that are not this context.
+                raise ValueError(
+                    f"MiniMax-M3 aligned prefill cache mismatch: cache holds {offset} rows but the request context "
+                    f"has {start}"
+                )
+        pieces = self.m3_prefill_pieces(req, plan)
+        _prefill_keep_alloc = _prefill_keep_alloc_enabled()
+        _clear_each = self._m3_clear_each_chunk()
+        _reserved = None
+        groups = self._m3_piece_groups(req, pieces)
+        with self._stream_context():
+            for gi, group in enumerate(groups):
+                a = group[0][0]
+                if _reserved is None:
+                    _reserved = self._m3_reserve_prefill(req.cache, start + len(tokens) - a)
+                last = gi == len(groups) - 1
+                if len(group) == 1:
+                    b = group[0][1]
+                    chunk = tokens[a - start: b - start]
+                    lookahead = None if last else tokens[b - start: groups[gi + 1][0][1] - start]
+                    logits = self._model_call(chunk, req, lookahead=lookahead)  # forwards+clears pixel_values
+                else:
+                    # Several pieces of one chunk (turn cuts / the store boundary inside it): one layer-major forward,
+                    # every piece's rows exactly its own forward's (MiniMaxM3Model.forward_pieces).
+                    parts = [tokens[x - start: y - start] for x, y in group]
+                    chunk = [t for part in parts for t in part]
+                    _, _, logits = self.model.prefill_group([mx.array([part], dtype=mx.int32) for part in parts],
+                                                            req.cache, logits_last=last)
+                if not last:
+                    # Only the cache rows are kept from a non-final piece: evaluate them, not the logits (the
+                    # lm_head over every row of a chunk is never read).
+                    mx.eval([layer.state for layer in req.cache])
+                    del logits
+                    req.context_tokens.extend(chunk)
+                    if req.logits_processors:
+                        req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
+                    self._sync()
+                    if not _prefill_keep_alloc and _clear_each and hasattr(mx, "clear_cache"):
+                        mx.clear_cache()
+                    continue
+                (logits,) = self._eval_on_stream(logits)
+                if getattr(req, "prefill_started", None) is not None:
+                    req.prefill_usage = {
+                        "tokens": len(tokens),
+                        "seconds": time.perf_counter() - req.prefill_started,
+                        "scope": "model_prefill_and_prompt_state",
+                    }
+                    req.prefill_started = None
+                logits = logits[:, -1, :]
+                input_tokens = mx.array([chunk[-1]], dtype=mx.int32)
+                req.next_token, req.next_logprobs = self._sample_from_logits(logits, req, input_tokens)
+                req.next_token_materialized = True
+                req.next_logprobs_materialized = req.next_logprobs is not None
+                req.context_tokens.extend(chunk)
+                if req.logits_processors:
+                    req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
+        self._sync()
+        if not _prefill_keep_alloc and not _clear_each and hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    def _m3_piece_groups(self, req: _Request, pieces: list) -> list:
+        """The aligned plan's pieces grouped by prefill chunk (``a // step``) for one layer-major forward each
+        (``Model.prefill_group``), or one group per piece: a model without ``prefill_group``, a media request (its
+        first forward carries the vision tensors), or ``VMLX_M3_PREFILL_GROUP=0``."""
+        step = max(1, int(self.prefill_step_size or 1))
+        if (not callable(getattr(self.model, "prefill_group", None))
+                or req.pixel_values is not None or req.pixel_values_videos is not None
+                or os.environ.get("VMLX_M3_PREFILL_GROUP", "1").strip().lower() in {"0", "false", "off", "no"}):
+            return [[p] for p in pieces]
+        groups: list = []
+        for p in pieces:
+            if groups and groups[-1][0][0] // step == p[0] // step:
+                groups[-1].append(p)
+            else:
+                groups.append([p])
+        return groups
 
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()

@@ -2,10 +2,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
-import { bundledDsparkDefault, configDeclaresDspark, findBundledDsparkDrafter } from '../src/main/dsparkBundle'
+import { bundledDsparkDefault, configDeclaresDspark, dsparkUsesTextLane, findBundledDsparkDrafter } from '../src/main/dsparkBundle'
 import { buildCommandPreview } from '../src/renderer/src/components/sessions/SessionSettings'
 import { DEFAULT_CONFIG } from '../src/renderer/src/components/sessions/SessionConfigForm'
-import { addDraftAdmissionWeights } from './helpers/draftAdmissionFixture'
+import { addDraftAdmissionWeights, writeMinimaxDsparkBundle } from './helpers/draftAdmissionFixture'
 
 function bundle(drafter: Record<string, unknown> | null, dir = 'dspark', stamp?: Record<string, unknown>): string {
   const root = mkdtempSync(join(tmpdir(), 'dspark-bundle-'))
@@ -75,6 +75,61 @@ describe('bundled DSpark drafter detection', () => {
   })
 })
 
+function minimaxBundle(modelType = 'minimax_m3_vl'): string {
+  const root = mkdtempSync(join(tmpdir(), 'dspark-m31-'))
+  writeMinimaxDsparkBundle(root, 'dspark', modelType)
+  return root
+}
+
+describe('MiniMax-M3 / M3.1 bundled DSpark drafter (text lane)', () => {
+  it('finds the M3.1 drafter (DSparkMiniMaxDraftModel, release tensor names, MXFP8 linears) for both model types', () => {
+    for (const modelType of ['minimax_m3_vl', 'minimax_m3']) {
+      const root = minimaxBundle(modelType)
+      expect(configDeclaresDspark({ architectures: ['DSparkMiniMaxDraftModel'] })).toBe(true)
+      expect(findBundledDsparkDrafter(root)).toBe(join(root, 'dspark'))
+      expect(bundledDsparkDefault(root)).toBe(true)
+      expect(dsparkUsesTextLane(root)).toBe(true)
+    }
+  })
+
+  it('MiniCPM-V-4.7 stays on the single-request lane', () => {
+    expect(dsparkUsesTextLane(bundle({ architectures: ['Qwen3DSparkModel'] }))).toBe(false)
+    expect(dsparkUsesTextLane('')).toBe(false)
+  })
+
+  it('rejects an M3.1 drafter whose taps, geometry, weights or shard index do not fit the target', () => {
+    const edit = (root: string, file: string, fn: (cfg: any) => void) => {
+      const cfg = JSON.parse(readFileSync(join(root, file), 'utf8'))
+      fn(cfg)
+      writeFileSync(join(root, file), JSON.stringify(cfg))
+    }
+    let root = minimaxBundle()
+    edit(root, 'dspark/config.json', cfg => { cfg.text_config.dspark_target_layer_ids = [1, 4] })
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    root = minimaxBundle()
+    edit(root, 'dspark/config.json', cfg => { cfg.text_config.hidden_size = 64 })
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    root = minimaxBundle()
+    edit(root, 'dspark/config.json', cfg => { cfg.text_config.num_hidden_layers = 2 })   // layer 1 has no weights
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    root = minimaxBundle()
+    edit(root, 'dspark/model.safetensors.index.json', idx => { idx.weight_map['language_model.model.dspark.fc.weight'] = 'other.safetensors' })
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    root = minimaxBundle()
+    unlinkSync(join(root, 'dspark', 'model-dspark-00001.safetensors'))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+  })
+
+  it('a declared non-DSpark method or a missing drafter keeps M3 on plain decoding', () => {
+    const root = minimaxBundle()
+    writeFileSync(join(root, 'jang_config.json'), JSON.stringify({ speculative: { method: 'mtp' } }))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    const plain = mkdtempSync(join(tmpdir(), 'm3-plain-'))
+    writeFileSync(join(plain, 'config.json'), JSON.stringify({ model_type: 'minimax_m3_vl' }))
+    expect(findBundledDsparkDrafter(plain)).toBeNull()
+  })
+})
+
 const flat = (cmd: string) => cmd.replace(/\s*\\\n\s*/g, ' ')
 
 describe('command preview with a bundled DSpark drafter', () => {
@@ -109,5 +164,21 @@ describe('command preview with a bundled DSpark drafter', () => {
 
   it('bundles without a drafter get no --dspark flag', () => {
     expect(preview({}, false)).not.toContain('--dspark')
+  })
+
+  it('a text-lane (M3.1) drafter only selects --dspark: batching and every cache flag stay as without a drafter', () => {
+    const m3 = { family: 'minimax-m3', isMultimodal: false }
+    const run = (cfg: any, dspark: any) => flat(buildCommandPreview('/m', { ...base, ...cfg }, m3, '', false, undefined, dspark))
+    const strip = (cmd: string) => cmd.replace(/ --dspark (auto|on|off)/, '')
+    const lane = { default: true, textLane: true }
+    const none = run({}, false)
+    expect(none).toContain('--continuous-batching')
+    expect(none).not.toContain('--dspark')
+    for (const [cfg, mode] of [[{}, 'auto'], [{ useBundledDspark: true }, 'on'], [{ useBundledDspark: false }, 'off']] as const) {
+      const cmd = run(cfg, lane)
+      expect(cmd).toContain(`--dspark ${mode}`)
+      expect(cmd).not.toContain('--no-continuous-batching')
+      expect(strip(cmd)).toBe(strip(run(cfg, false)))
+    }
   })
 })

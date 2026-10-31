@@ -118,7 +118,7 @@ import {
 import { buildNativeMtpLaunchArgs, buildNativeMtpLaunchEnvironment, nativeMtpSessionChoice, resolveNativeMtpStartupMode } from '../shared/nativeMtpLaunchArgs'
 import { planSessionConfigSave } from '../shared/sessionConfigLifecycle'
 import { findBundledDflash2Drafter, isDflash2DrafterSelection } from './dflash2Bundle'
-import { bundledDsparkDefault, findBundledDsparkDrafter } from './dsparkBundle'
+import { bundledDsparkDefault, dsparkUsesTextLane, findBundledDsparkDrafter } from './dsparkBundle'
 
 
 
@@ -5263,19 +5263,21 @@ export class SessionManager extends EventEmitter {
       console.log(`[SESSION] Using the DFlash2 drafter bundled with the model: ${bundledDflash2Drafter}`)
     }
     const dflash2Speculative = isDflash2DrafterSelection(effectiveSpeculativeModel)
-    // A DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5) follows the bundle's
-    // measured stamp (jang_config speculative.default) unless the user set useBundledDspark. The engine runs it on
-    // the single-request lane, so batching stays off while it is active; an explicit draft model or a DFlash2 drafter
-    // takes precedence.
+    // A DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1) is on
+    // whenever the bundle ships one, unless the user set useBundledDspark; an explicit draft model or a DFlash2 drafter
+    // takes precedence. MiniCPM-V-4.7 drafts on the single-request lane, so batching stays off and the cache stack
+    // follows the native speculative policy while it is active. MiniMax-M3 / M3.1 draft on the text lane: the choice
+    // only selects --dspark, batching and the cache stack stay exactly as configured.
     const bundledDsparkDrafter = dsv4Active ? null : findBundledDsparkDrafter(config.modelPath)
     const dsparkChoice: boolean | undefined = (config as any).useBundledDspark
     // DSpark bundles (MiniCPM-V-4.7) have only a multimodal runtime, so a text-only launch (Multimodal Force Off) still
     // loads it (api/utils.is_mllm_model) and drafts text requests; --text-only only restricts media at the API.
     const dsparkActive = !!bundledDsparkDrafter && (dsparkChoice ?? bundledDsparkDefault(config.modelPath)) &&
       !config.speculativeModel && !dflash2Speculative
+    const dsparkSingleRequest = dsparkActive && !dsparkUsesTextLane(config.modelPath)
     const cacheStackActive = dsv4Active
       ? true
-      : dflash2Speculative || dsparkActive
+      : dflash2Speculative || dsparkSingleRequest
         ? false
         : config.continuousBatching !== false
     if (cacheStackActive) {
@@ -5366,14 +5368,14 @@ export class SessionManager extends EventEmitter {
     }
     const cacheLaunch = buildCacheLaunchArgs({
       // DSpark's multi-turn session tier is native speculative state like DFlash2's: it keeps the SSD settings.
-      nativeSpeculativeCache: dflash2Speculative || dsparkActive,
+      nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
       continuousBatching: cacheStackActive,
       enablePrefixCache: config.enablePrefixCache !== false,
       // Accepted for migration compatibility only. The shared builder always
       // emits --no-paged-cache and never its positive counterpart.
       usePagedCache: false,
-      enableDiskCache: !dflash2Speculative && !dsparkActive && !!diskControls.enableDiskCache,
-      enableBlockDiskCache: dflash2Speculative || dsparkActive ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
+      enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
+      enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
       noMemoryAwareCache: !!config.noMemoryAwareCache,
       forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active,
       prefixCacheSize: config.prefixCacheSize,

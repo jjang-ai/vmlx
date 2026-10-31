@@ -4492,16 +4492,13 @@ _DSPARK_MODEL_TYPES = {"minicpmv4_7"}
 def _config_declares_dspark(cfg: Any) -> bool:
     """openbmb MiniCPM-V-4.7 drafters (``Qwen3DSparkModel``, ``dflash_config.projector_type: dspark``) and
     SpecForge ``DSparkDraftModel``. Mirrors panel/src/main/dsparkBundle.ts::configDeclaresDspark."""
-    if not isinstance(cfg, dict):
-        return False
-    if any("dspark" in str(a).lower() for a in cfg.get("architectures") or []):
-        return True
-    projector = (cfg.get("dflash_config") or {}).get("projector_type") or cfg.get("projector_type")
-    return str(projector or "").lower() == "dspark"
+    from ..dspark.runtime import config_declares_dspark
+
+    return config_declares_dspark(cfg)
 
 
 def _load_dspark_runtime(model: Any, model_path: str | Path) -> dict | None:
-    """DSpark drafter for a bundle that declares it, or None.
+    """DSpark drafter for a multimodal bundle that ships it, or None (``vmlx_engine.dspark.runtime``).
 
     Contract: ``jang_config.json["speculative"] = {"method": "dspark",
     "drafter_path": "dspark"}`` (path relative to the bundle; default
@@ -4514,80 +4511,12 @@ def _load_dspark_runtime(model: Any, model_path: str | Path) -> dict | None:
     not don't use it"): a drafter directory present in the bundle (``<bundle>/dspark``, or the stamp's
     ``drafter_path``) is used by default; a bundle shipped without it serves AR (never an error, even when
     ``jang_config`` still declares DSpark). ``VMLX_DSPARK=0`` / ``serve --dspark off`` keeps the bundle on AR. The
-    stamp's ``speculative.default`` is informational only.
+    stamp's ``speculative.default`` is informational only. The draft width is Adaptive's per round up to the
+    verifier's full supported width; a ``speculative.max_draft`` stamp is advisory.
     """
-    override = os.environ.get("VMLX_DSPARK", "").strip().lower()
-    if override in {"0", "false", "off", "no"}:
-        return None
-    root = Path(model_path)
-    try:
-        cfg = json.loads((root / "config.json").read_text())
-    except Exception:
-        return None
-    if str(cfg.get("model_type", "")).lower() not in _DSPARK_MODEL_TYPES:
-        return None
-    spec = {}
-    stamp_path = root / "jang_config.json"
-    if stamp_path.is_file():
-        try:
-            spec = json.loads(stamp_path.read_text()).get("speculative") or {}
-        except Exception:
-            spec = {}
-    if spec and str(spec.get("method", "")).lower() not in ("", "dspark"):
-        return None
-    drafter_dir = root / str(spec.get("drafter_path") or "dspark")
-    if not (drafter_dir / "config.json").is_file():
-        if spec:
-            logger.info("DSpark declared in jang_config but the bundle ships no drafter (%s); serving AR", drafter_dir)
-        return None
-    # Same rule as the panel (dsparkBundle.configDeclaresDspark), which picks the single-request lane from it: a
-    # sidecar config that does not declare DSpark is not a DSpark drafter.
-    try:
-        dcfg_raw = json.loads((drafter_dir / "config.json").read_text())
-    except Exception:
-        dcfg_raw = {}
-    if not _config_declares_dspark(dcfg_raw):
-        logger.info("%s/config.json does not declare a DSpark drafter; serving AR", drafter_dir)
-        return None
-    from ..bundled_draft import validate_bundled_draft
+    from ..dspark.runtime import load_dspark_runtime
 
-    # Admit real, target-compatible weights before allocating a drafter or
-    # attaching hooks to the target. The caller retains ordinary decoding on
-    # failure; Electron uses the same header check for its default lane.
-    validate_bundled_draft(drafter_dir, root)
-    from ..dspark import load_drafter
-    from ..dspark.minicpm_target import MAX_VERIFY_ROWS, MiniCPMDSparkTarget
-
-    target = MiniCPMDSparkTarget(model)
-    drafter = load_drafter(drafter_dir)
-    text_cfg = cfg.get("text_config") or {}
-    dcfg = drafter.cfg
-    if int(dcfg["hidden_size"]) != int(text_cfg.get("hidden_size", -1)):
-        raise ValueError("DSpark drafter hidden_size does not match the target")
-    if int(dcfg["vocab_size"]) > int(text_cfg.get("vocab_size", 0)):
-        raise ValueError("DSpark drafter vocabulary is larger than the target's")
-    if max(drafter.target_layer_ids) >= int(text_cfg.get("num_hidden_layers", 0)):
-        raise ValueError("DSpark drafter taps layers the target does not have")
-    # Expose the verifier's full supported width. At the MoE sort threshold
-    # target.verify uses exact per-row expert calls; their higher cost is not
-    # a correctness ceiling. Per-round width choice and measured AR fallback
-    # own that cost decision. Neither a family preference nor a bundle stamp
-    # may turn it into a hard depth cap.
-    max_draft = MAX_VERIFY_ROWS - 1
-    if spec.get("max_draft") is not None:
-        try:
-            stamped = int(spec["max_draft"])
-        except (TypeError, ValueError):
-            stamped = None
-        if stamped is not None and stamped < max_draft:
-            logger.info("DSpark: bundle speculative.max_draft=%d is advisory; per-round width stays adaptive up to %d",
-                        stamped, max_draft)
-    logger.info(
-        "DSpark drafter loaded from %s: block %d, taps %s, max draft %d per round",
-        drafter_dir, drafter.block, drafter.target_layer_ids, max_draft,
-    )
-    return {"target": target, "drafter": drafter, "path": str(drafter_dir), "max_draft": max_draft,
-            "cost_per_row": float(spec.get("cost_per_row", 0.12))}
+    return load_dspark_runtime(model, model_path, model_types=_DSPARK_MODEL_TYPES)
 
 
 def _video_frames_as_native_clip(frames: list) -> "np.ndarray":
@@ -7400,6 +7329,7 @@ class MLXMultimodalLM:
             for chunk in iter_dspark(
                 target, drafter, prompt_ids, int(max_tokens), eos,
                 prefill_step=step, sampler=sampler, max_draft=runtime["max_draft"],
+                fixed_width=runtime.get("fixed_width"),
                 cost_per_row=runtime["cost_per_row"], stats=stats,
                 # AR steps when drafting measures slower (low-acceptance text); VMLX_DSPARK_AR_FALLBACK=0 = A/B off.
                 ar_fallback=ar_policy,

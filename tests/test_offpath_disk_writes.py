@@ -143,6 +143,7 @@ def test_ssd_only_store_clears_mlx_after_writer_fence(monkeypatch):
         *,
         _write_fence,
         _defer_gc=False,
+        _m3_stream_inflight=None,
     ):
         events.append("store")
         events.append(f"defer_gc={_defer_gc}")

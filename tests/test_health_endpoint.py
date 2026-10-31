@@ -49,6 +49,30 @@ class TestHealthEndpoint:
         assert _loaded_dspark_health_status(engine) is None
         assert _loaded_dspark_health_status(None) is None
 
+    def test_text_lane_dspark_status_reads_the_minimax_runtime(self):
+        """MiniMax-M3 / M3.1 text-lane drafters (dspark.runtime.attach_text_lane -> model._vmlx_dspark_runtime) are
+        reported by /health; the MiniCPM status (which also drives the DSpark session-cache report / clear) is not
+        widened to them."""
+        from vmlx_engine.server import _loaded_dspark_health_status, _text_lane_dspark_health_status
+
+        runtime = {"target": object(), "drafter": object(), "max_draft": 14, "fixed_width": None}
+        engine = SimpleNamespace(_loaded=True, _model=SimpleNamespace(_vmlx_dspark_runtime=runtime))
+        assert _text_lane_dspark_health_status(engine) == {
+            "enabled": True, "method": "dspark", "lane": "text", "draft_model_loaded": True,
+            "num_draft_tokens": 14, "adaptive_width": True, "request_dependent": True,
+        }
+        assert _loaded_dspark_health_status(engine) is None
+        runtime["fixed_width"] = 3                      # VMLX_DSPARK_WIDTH diagnostic lever
+        assert _text_lane_dspark_health_status(engine)["adaptive_width"] is False
+        engine._loaded = False
+        assert _text_lane_dspark_health_status(engine) is None
+        engine._loaded = True
+        runtime["drafter"] = None
+        assert _text_lane_dspark_health_status(engine) is None
+        engine._model = SimpleNamespace(_dspark={"target": object(), "drafter": object(), "max_draft": 6})
+        assert _text_lane_dspark_health_status(engine) is None
+        assert _text_lane_dspark_health_status(None) is None
+
     def test_image_health_does_not_advertise_text_cache_or_sampling(self, monkeypatch, tmp_path):
         from vmlx_engine import server
         monkeypatch.setattr(server, "_model_type", "image")
