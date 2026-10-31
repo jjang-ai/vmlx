@@ -156,14 +156,15 @@ def dsv4_server(request, monkeypatch, tmp_path):
     return SimpleNamespace(tool_parser=tool_parser, call=_call(tool_parser))
 
 
-def _run_chat(deltas, think):
+def _run_chat(deltas, think, tool=TOOL, endpoint_kwargs=None):
     req = ChatCompletionRequest(
         model="dsv41",
         messages=[Message(role="user", content="run")],
         stream=True,
-        tools=[{"type": "function", "function": TOOL}],
+        tools=[{"type": "function", "function": tool}],
         enable_thinking=think,
     )
+    endpoint_kwargs = endpoint_kwargs(req) if endpoint_kwargs else {}
 
     async def go():
         content, reasoning, names, content_deltas = "", "", [], []
@@ -172,6 +173,7 @@ def _run_chat(deltas, think):
             [m.model_dump(exclude_none=True) for m in req.messages],
             req,
             fastapi_request=None,
+            **endpoint_kwargs,
         ):
             if not line.startswith("data: ") or line.strip() == "data: [DONE]":
                 continue
@@ -191,14 +193,15 @@ def _run_chat(deltas, think):
     return asyncio.run(go())
 
 
-def _run_responses(deltas, think):
+def _run_responses(deltas, think, tool=TOOL, endpoint_kwargs=None):
     req = ResponsesRequest(
         model="dsv41",
         input="run",
         stream=True,
-        tools=[{"type": "function", **TOOL}],
+        tools=[{"type": "function", **tool}],
         enable_thinking=think,
     )
+    endpoint_kwargs = endpoint_kwargs(req) if endpoint_kwargs else {}
 
     async def go():
         content, reasoning, names, content_deltas = "", "", [], []
@@ -208,6 +211,7 @@ def _run_responses(deltas, think):
             [{"role": "user", "content": "run"}],
             req,
             fastapi_request=None,
+            **endpoint_kwargs,
         ):
             for row in chunk.splitlines():
                 if not row.startswith("data: "):
@@ -383,3 +387,147 @@ def test_chat_invalid_markup_flush_does_not_double_streamed_whitespace(dsv4_serv
 )
 def test_unstreamed_visible_suffix(candidate, streamed, expected):
     assert server._unstreamed_visible_suffix(candidate, streamed) == expected
+
+
+# ── MiniMax-M3 / M3.1 ───────────────────────────────────────────────────────
+# Same defect, same root cause: M3's ``thinking_mode=enabled`` seeds the
+# minimax_m3 reasoning parser inside its implicit ``<mm:think>`` rail, and the
+# Responses finalizer re-split content-only text with it. Live: "I'll run these
+# commands one at a time in order." showed as "...one at a time in".
+
+M3_NS = "]<]minimax[>["
+M3_TOOL = {
+    "name": "run_shell",
+    "parameters": {
+        "type": "object",
+        "properties": {"cmd": {"type": "string"}},
+        "required": ["cmd"],
+    },
+}
+# Native M3.1 call markup as emitted live (namespace token before every
+# element, no whitespace before the first one).
+M3_CALL = (
+    f"{M3_NS}<tool_call>\n{M3_NS}<invoke name=\"run_shell\">{M3_NS}<cmd>echo two"
+    f"{M3_NS}</cmd>{M3_NS}</invoke>\n{M3_NS}</tool_call>"
+)
+M3_PROSE = "I'll run these commands one at a time in order."
+
+
+@pytest.fixture
+def m3_server(monkeypatch, tmp_path):
+    bundle = tmp_path / "m31-bundle"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "minimax_m3"}))
+    monkeypatch.setattr(server, "_default_timeout", 5.0)
+    monkeypatch.setattr(server, "_model_name", str(bundle))
+    monkeypatch.setattr(server, "_model_path", str(bundle))
+    monkeypatch.setattr(server, "_reasoning_parser", get_parser("minimax_m3")())
+    monkeypatch.setattr(server, "_reasoning_parser_id", "minimax_m3")
+    monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
+    monkeypatch.setattr(server, "_tool_call_parser", "minimax_m3")
+    monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+    monkeypatch.setattr(server, "_enable_auto_tool_choice", True)
+
+    def endpoint_kwargs(req):
+        # The endpoints normalize the public toggle onto M3's template
+        # vocabulary before streaming; pass the same chat_template_kwargs.
+        ct = {}
+        if req.enable_thinking is not None:
+            ct["enable_thinking"] = req.enable_thinking
+        server._normalize_minimax_m3_thinking_mode(ct, req, str(bundle))
+        return {"chat_template_kwargs": ct}
+
+    return endpoint_kwargs
+
+
+M3_CASES = {
+    # name: (enable_thinking -> thinking_mode, deltas, content, reasoning)
+    "disabled_prose_and_marker_in_one_delta": (
+        False,
+        [M3_PROSE[:20], M3_PROSE[20:-7], " order." + M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "",
+    ),
+    "disabled_prose_split_across_deltas": (
+        False,
+        [M3_PROSE[:20], M3_PROSE[20:-7], " order.", M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "",
+    ),
+    "disabled_tool_only_leading_newlines": (
+        False,
+        ["\n\n" + M3_CALL[:14], M3_CALL[14:]],
+        "",
+        "",
+    ),
+    "enabled_prose_and_marker_in_one_delta": (
+        True,
+        ["Plan it.", "</mm:think>" + M3_PROSE[:-7], " order." + M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "Plan it.",
+    ),
+    "enabled_prose_split_across_deltas": (
+        True,
+        ["Plan it.</mm:think>" + M3_PROSE[:20], M3_PROSE[20:-7], " order.",
+         M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "Plan it.",
+    ),
+    "enabled_tool_only_leading_newlines": (
+        True,
+        ["Plan it.</mm:think>", "\n\n" + M3_CALL[:14], M3_CALL[14:]],
+        "",
+        "Plan it.",
+    ),
+    "adaptive_thinks_then_prose_and_marker_in_one_delta": (
+        None,
+        ["<mm:think>Plan it.</mm:think>" + M3_PROSE[:-7], " order." + M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "Plan it.",
+    ),
+    "adaptive_direct_prose_and_marker_in_one_delta": (
+        None,
+        [M3_PROSE[:20], M3_PROSE[20:-7], " order." + M3_CALL[:14], M3_CALL[14:]],
+        M3_PROSE,
+        "",
+    ),
+}
+
+
+def _assert_no_m3_markup(text):
+    assert "minimax[>[" not in text
+    assert "<tool_call>" not in text and "<invoke" not in text
+    assert "mm:think" not in text
+    assert "echo two" not in text
+
+
+@pytest.mark.parametrize("case", list(M3_CASES))
+def test_m3_chat_completions_streams_prose_before_tool_call(m3_server, case):
+    think, deltas, want_content, want_reasoning = M3_CASES[case]
+    content, reasoning, names, content_deltas = _run_chat(
+        deltas, think, tool=M3_TOOL, endpoint_kwargs=m3_server
+    )
+    assert names == ["run_shell"]
+    assert content == want_content
+    assert reasoning == want_reasoning
+    _assert_no_m3_markup(content)
+    if not want_content:
+        assert content_deltas == []
+
+
+@pytest.mark.parametrize("case", list(M3_CASES))
+def test_m3_responses_streams_prose_before_tool_call(m3_server, case):
+    think, deltas, want_content, want_reasoning = M3_CASES[case]
+    content, reasoning, names, content_deltas, done_texts, completed_texts = (
+        _run_responses(deltas, think, tool=M3_TOOL, endpoint_kwargs=m3_server)
+    )
+    assert names == ["run_shell"]
+    assert content == want_content
+    assert reasoning == want_reasoning
+    _assert_no_m3_markup(content)
+    if want_content:
+        assert done_texts == [want_content]
+        assert completed_texts == [want_content]
+    else:
+        assert content_deltas == []
+        assert not any(t.strip() for t in done_texts + completed_texts)
