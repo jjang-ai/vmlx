@@ -187,3 +187,16 @@ describe('native DFlash2 SSD settings', () => {
     expect(result.args).not.toContain('--cache-memory-percent')
   })
 })
+
+describe('session start keeps the RAM copy for the typed DSV4 / MiniMax-M3 caches', () => {
+  // The start path re-applies each family's cache policy; it used to set usePagedCache=false unconditionally for
+  // DSV4 and MiniMax-M3, so a saved RAM + SSD launched --no-paged-cache (seen live: panel saved usePagedCache=true,
+  // the engine argv still had --no-paged-cache).
+  const sessions = readFileSync('src/main/sessions.ts', 'utf-8')
+  it('DSV4 and MiniMax-M3 keep a saved RAM copy only together with Block Disk Cache', () => {
+    expect(sessions).toContain("const dsv4RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false")
+    expect(sessions).toContain('config.usePagedCache = dsv4RamCopy')
+    expect(sessions).toContain("const m3RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false")
+    expect(sessions).toContain('config.usePagedCache = m3RamCopy')
+  })
+})

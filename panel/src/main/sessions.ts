@@ -3019,10 +3019,12 @@ export class SessionManager extends EventEmitter {
           if (freshDsv4Active) {
             const dsv4PoolQuantDefault = freshConfig.dsv4PoolQuantDefault
             const dsv4PrefixEnabled = config.enablePrefixCache !== false
+            // The user's RAM copy (RAM + SSD) survives, but only in front of Block Disk Cache.
+            const dsv4RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false
             const dsv4Changed =
               config.continuousBatching !== true ||
               config.enablePrefixCache === undefined ||
-              config.usePagedCache !== false ||
+              config.usePagedCache !== dsv4RamCopy ||
               config.enableBlockDiskCache === undefined ||
               config.maxCacheBlocks === undefined ||
               config.dsv4PrefixCache !== dsv4PrefixEnabled ||
@@ -3041,7 +3043,7 @@ export class SessionManager extends EventEmitter {
               config.isMultimodal !== false
             config.continuousBatching = true
             if (config.enablePrefixCache === undefined) config.enablePrefixCache = true
-            config.usePagedCache = false
+            config.usePagedCache = dsv4RamCopy
             if (config.enableBlockDiskCache === undefined) config.enableBlockDiskCache = true
             if (config.maxCacheBlocks === undefined) config.maxCacheBlocks = DSV4_MAX_CACHE_BLOCKS
             config.dsv4PrefixCache = config.enablePrefixCache !== false
@@ -3069,21 +3071,22 @@ export class SessionManager extends EventEmitter {
             if (dsv4Changed) {
               this.pushLog(
                 sessionId,
-                `[INFO] DSV4-Flash native cache policy: prefix=${config.enablePrefixCache !== false ? 'on' : 'off'}, paged_ram=off, block_disk_l2=${config.enableBlockDiskCache === true ? 'on' : 'off'}, block_size=${DSV4_PAGED_CACHE_BLOCK_SIZE}, generic_turboquant=off, pool_codec=bundle-derived, activation_qat=${config.dsv4ActivationQat === true ? 'on' : 'off'}`,
+                `[INFO] DSV4-Flash native cache policy: prefix=${config.enablePrefixCache !== false ? 'on' : 'off'}, paged_ram=${config.usePagedCache === true ? 'on' : 'off'}, block_disk_l2=${config.enableBlockDiskCache === true ? 'on' : 'off'}, block_size=${DSV4_PAGED_CACHE_BLOCK_SIZE}, generic_turboquant=off, pool_codec=bundle-derived, activation_qat=${config.dsv4ActivationQat === true ? 'on' : 'off'}`,
               )
             }
           } else if (freshFamily === 'minimax_m3') {
             const m3PrefixEnabled = config.enablePrefixCache !== false
             const m3BlockDiskEnabled = m3PrefixEnabled && config.enableBlockDiskCache !== false
+            const m3RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false
             const m3Changed =
               config.enablePrefixCache === undefined ||
-              config.usePagedCache !== false ||
+              config.usePagedCache !== m3RamCopy ||
               config.enableDiskCache !== false ||
               config.enableBlockDiskCache === undefined ||
               config.kvCacheQuantization !== 'auto' ||
               config.enableJit === true
             if (config.enablePrefixCache === undefined) config.enablePrefixCache = true
-            config.usePagedCache = false
+            config.usePagedCache = m3RamCopy
             config.enableDiskCache = false
             if (config.enableBlockDiskCache === undefined) config.enableBlockDiskCache = true
             config.kvCacheQuantization = 'auto'
@@ -3092,8 +3095,10 @@ export class SessionManager extends EventEmitter {
               this.pushLog(sessionId, !m3PrefixEnabled
                 ? '[INFO] MiniMax-M3 detected; native typed prefix cache explicitly disabled for this session'
                 : m3BlockDiskEnabled
-                  ? '[INFO] MiniMax-M3 detected; using typed MSA SSD-only prefix cache with idx_keys, persistent RAM payloads disabled, generic KV quantization off, and JIT off'
-                  : '[INFO] MiniMax-M3 detected; prefix cache enabled without paged RAM or block-disk L2')
+                  ? m3RamCopy
+                    ? '[INFO] MiniMax-M3 detected; using typed MSA prefix cache in RAM blocks with block-disk L2 (RAM + SSD), generic KV quantization off, and JIT off'
+                    : '[INFO] MiniMax-M3 detected; using typed MSA SSD-only prefix cache with idx_keys, persistent RAM payloads disabled, generic KV quantization off, and JIT off'
+                  : '[INFO] MiniMax-M3 detected; prefix cache in RAM (memory-aware) without block-disk L2')
             }
           } else if (freshFamily === 'glm5-next' && !usesGlmNativeSsdPool(freshConfig, config) && !hasNativeDflashCache(config, config.modelPath)) {
             const staleGenericDiskPair =
