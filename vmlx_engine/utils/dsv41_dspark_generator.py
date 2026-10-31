@@ -57,7 +57,7 @@ def _adaptive_enabled() -> bool:
 # fits runs as one chunk; a longer one in the fewest chunks of at most that width, a multiple of 128 rows. The
 # transient is predicted from a measured DSV4.1 model times a learned scale: after each DSpark prefill the measured
 # peak (at the N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio, and the scale is the
-# median of the last 8. The chooser only picks a width: it never refuses or shortens a prompt. When the allocator
+# median of the last 8, never below 1 (the model is an upper envelope; learning only widens it). The chooser only picks a width: it never refuses or shortens a prompt. When the allocator
 # numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024; one chunk for a prompt of <= 2048 tokens on
 # a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width (diagnostics).
 _GiB = 1 << 30
@@ -73,7 +73,6 @@ _T_ROW = int(1.4 * _GiB) // 1024
 _T_CTX = int(0.9 * _GiB) // 100_000
 _SCALE_WINDOW = 8          # observations the learned scale keeps (their median is the scale)
 _OBSERVE_MIN_ROWS = 256    # shorter prefills are dominated by the base term; not used for learning
-_SCALE_FLOOR = 0.5
 
 # The fixed rule of vMLX <= 1.6.82, kept as the fallback when the allocator numbers cannot be read; its step is also
 # the chooser's narrowest width.
@@ -169,15 +168,18 @@ class PrefillChunkChooser:
     # --- model -----------------------------------------------------------------------------------------------------
     @classmethod
     def scale(cls) -> float:
-        """Median measured / predicted ratio of the recent prefills (1.0 before any), never below _SCALE_FLOOR. The
-        median, not the largest: a request's peak is its worst chunk (the transient is a sawtooth over the context), so
-        one ratio over-states the typical chunk, and the largest would keep every later request narrower than needed."""
+        """Median measured / predicted ratio of the recent prefills, never below 1.0: the model is an upper envelope
+        (measured / model 0.78-1.19), so the scale only ever widens the prediction where a bundle or machine needs more
+        than the model, and a ratio learned at short contexts (where the model has the most slack) cannot make a long
+        prompt's chunks wider than the model allows (JANG_2K, 100k tokens: a 0.9 scale chose 1408 rows, 2.3 GiB under the
+        line, slower than 1024). The median, not the largest: a request's peak is its worst chunk (the transient is a
+        sawtooth over the context), so one ratio over-states the typical chunk."""
         if not cls._ratios:
             return 1.0
         r = sorted(cls._ratios)
         mid = len(r) // 2
         med = r[mid] if len(r) % 2 else 0.5 * (r[mid - 1] + r[mid])
-        return max(_SCALE_FLOOR, med)
+        return max(1.0, med)
 
     @staticmethod
     def predicted_transient(rows: int, ctx: int, scale: float = 1.0) -> float:

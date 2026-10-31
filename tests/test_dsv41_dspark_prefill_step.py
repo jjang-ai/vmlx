@@ -182,23 +182,34 @@ def test_measured_peak_scales_the_prediction():
 def test_learned_scale_is_process_wide_and_windowed():
     a = chooser(7.2)
     a.choose(32_000, 0)
-    a.end(0, 2048, 32_000, 0, peak=int(0.5 * a.predicted_transient(2048, 32_000)))
+    a.end(0, 2048, 32_000, 0, peak=int(1.3 * a.predicted_transient(2048, 32_000)))
     b = chooser(7.2)                           # a rebuilt generator sees the same scale
-    assert b.scale() == pytest.approx(0.5, rel=1e-6)
+    assert b.scale() == pytest.approx(1.3, rel=1e-6)
     for _ in range(G._SCALE_WINDOW):
         b.choose(32_000, 0)
-        b.end(0, 2048, 32_000, 0, peak=int(0.9 * b.predicted_transient(2048, 32_000)))
+        b.end(0, 2048, 32_000, 0, peak=int(1.1 * b.predicted_transient(2048, 32_000)))
     assert len(G.PrefillChunkChooser._ratios) == G._SCALE_WINDOW
-    assert b.scale() == pytest.approx(0.9, rel=1e-3)  # the 0.5 aged out
+    assert b.scale() == pytest.approx(1.1, rel=1e-3)  # the 1.3 aged out
 
 
 def test_learned_scale_is_the_median_so_one_sawtooth_peak_does_not_stick():
     c = chooser(6.2)
-    for r in (0.97, 0.98, 1.08, 0.99):         # one request whose worst chunk sat on a transient peak
+    for r in (1.02, 1.03, 1.25, 1.04):         # one request whose worst chunk sat on a transient peak
         c.choose(32_000, 0)
         c.end(0, 1369, 32_000, 0, peak=int(r * c.predicted_transient(1369, 32_000)))
-    assert c.scale() == pytest.approx(0.985, abs=2e-3)
-    assert c.choose(32_845, 0) >= c.choose(32_845, 0) and c.last["scale"] < 1.0
+    assert c.scale() == pytest.approx(1.035, abs=2e-3)
+
+
+def test_learned_scale_never_goes_below_the_model():
+    c = chooser(6.2)
+    before = c.widest(int(6.2 * GiB), 100_190)
+    for _ in range(G._SCALE_WINDOW):          # short prompts where the model has slack: ratios ~0.9
+        c.choose(12_000, 0)
+        c.end(0, 1536, 12_000, 0, peak=int(0.9 * c.predicted_transient(1536, 12_000)))
+    assert c.scale() == 1.0
+    assert c.widest(int(6.2 * GiB), 100_190) == before   # a 100k prompt is not made wider by short-prompt slack
+    c.end(0, 2048, 32_000, 0, peak=int(0.01 * c.predicted_transient(2048, 32_000)))  # a misread peak
+    assert c.scale() == 1.0
 
 
 def test_no_learning_from_short_prefills_overrides_or_fallbacks(monkeypatch):
@@ -235,13 +246,6 @@ def test_real_device_numbers_are_read_when_available():
     line = G._gc_line_bytes()
     assert line is None or line > 0
     assert G._active_bytes() >= 0
-
-
-def test_learned_scale_has_a_floor():
-    c = chooser(7.2)
-    c.choose(32_000, 0)
-    c.end(0, 2048, 32_000, 0, peak=int(0.01 * c.predicted_transient(2048, 32_000)))  # a misread peak
-    assert c.scale() == G._SCALE_FLOOR
 
 
 def test_never_narrower_than_the_fixed_step_unless_configured():
