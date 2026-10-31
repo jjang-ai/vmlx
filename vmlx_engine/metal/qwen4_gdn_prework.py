@@ -1,7 +1,7 @@
 """Guarded ordinary-AR FP16 GDN prework; no recurrence or cache mutation.
 
-Boundary inspired by ddalcu/mlx-serve 3c6206d94 gdnPreworkFused. Arithmetic
-derived instead from Apple MLX 0.32.2 depthwise_conv_1d, rms_single_row,
+Fused GDN prework boundary. Arithmetic
+derived from Apple MLX 0.32.2 depthwise_conv_1d, rms_single_row,
 Sigmoid/LogAddExp and executing mlx-lm compute_g. MLX 0.32.3 uses its
 native precise sigmoid expression while preserving the 0.32.2 body.
 No upstream BF16 formula

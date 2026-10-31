@@ -1119,8 +1119,8 @@ class FileBackedQuantizedNGramTable:
         sequential pass at drive bandwidth fills the unified page cache;
         afterwards lookups are RAM hits.  Pages stay reclaimable: under memory
         pressure macOS evicts them and lookups fall back to drive reads, which
-        is the pre-warm behaviour, never an error.  TensorFold does the same
-        after load.  VMLX_QWEN4_PLE_WARM=0 disables it.
+        is the pre-warm behaviour, never an error.  VMLX_QWEN4_PLE_WARM=0
+        disables it.
         """
         if os.environ.get("VMLX_QWEN4_PLE_WARM", "1").strip().lower() in {"0", "false", "no", "off"}:
             return None

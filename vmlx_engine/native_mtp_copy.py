@@ -2,9 +2,8 @@
 
 Why: on repetitive, quoted, edited or structured text the next tokens are very often a span that already occurs
 earlier in the prompt or the reply. Proposing that span as the verify window's drafts lands ~90%+ of the time,
-while the MTP head's chained drafts compound their per-depth acceptance. TensorFold's Flash-Next lane does the
-same (``SuffixLookupProposer``, copies preferred over head drafts) and that is where its 130-150 tok/s on
-repetitive text comes from; per-step kernel cost on the M5 Max is within ~15% of ours (R2-03).
+while the MTP head's chained drafts compound their per-depth acceptance, so a matching copy is preferred over
+the head's drafts.
 
 How: the proposer keeps the request's confirmed token stream (prompt + emitted + queued) and an incremental
 index from every 4-gram to its most recent end positions. A proposal needs the current suffix to match an earlier
@@ -121,7 +120,7 @@ class SuffixCopyProposer:
     def propose(self, room: int) -> List[int]:
         """Up to min(width, room) copied tokens, or [] when no earlier span matches the suffix well enough.
 
-        ``width`` adapts like TensorFold's per-stream copy width: it starts at
+        ``width`` adapts per stream: it starts at
         ``_START_WIDTH`` (the 4-row verify shape), grows to ``max_width`` after a
         fully accepted window and falls back after a window that lands under
         half, so a run of reliable copying pays for wide windows and a shaky
