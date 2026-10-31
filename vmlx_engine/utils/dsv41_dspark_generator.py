@@ -75,6 +75,17 @@ def _prompt_chunk(n_tokens: int, start: int, step: int) -> int:
     return step
 
 
+def _prefill_takes_cuts(runner) -> bool:
+    """DSparkRunner.prefill(cuts=, on_cut=) exists (jang_tools after 2.5.52); older runtimes prefill without cuts."""
+    import inspect
+
+    try:
+        params = inspect.signature(runner.prefill).parameters
+    except (TypeError, ValueError):
+        return False
+    return "cuts" in params and "on_cut" in params
+
+
 class DSV41DSparkGenerator(SingleBatchGenerator):
     """SingleBatchGenerator that decodes V4.1 via DSpark speculation when a draft is attached."""
 
@@ -204,8 +215,7 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         seq = _relink(req.cache)
         boundary = {}
 
-        def _on_boundary(_sess):
-            snap = self._clone_dsv41_prompt_boundary(req)
+        def _with_draft_tail(snap):
             # Carry the draft-window seed of the boundary's last positions, so a later prefix hit
             # on this entry drafts with a full window (DSparkRunner.prefill reseeds from it).
             tail_fn = getattr(self._dspark, "main_tail", None)
@@ -213,15 +223,36 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             if snap and tail is not None and int(tail[1]) + int(tail[0].shape[1]) == int(snap[0].offset):
                 snap[0]._seq.dspark_tail = (mx.array(tail[0]), int(tail[1]))
                 mx.eval(snap[0]._seq.dspark_tail[0])
-            boundary["snapshot"] = snap
+            return snap
+
+        def _on_boundary(_sess):
+            boundary["snapshot"] = _with_draft_tail(self._clone_dsv41_prompt_boundary(req))
+
+        checkpoints = []
+
+        def _on_cut(_sess, pos):
+            snap = _with_draft_tail(self._clone_admissible_prompt_cache_snapshot(req.cache))
+            if snap is not None:
+                checkpoints.append((int(pos), snap))
 
         prompt = list(req.prompt_tokens)
+        start = int(getattr(seq, "pos", 0) or 0)
+        end = start + len(prompt)
+        chunk = _prompt_chunk(len(prompt), start, self.prefill_step_size)
+        extra = {}
+        cuts = self._dsv41_cut_positions(req, start, end - 1)
+        if cuts and _prefill_takes_cuts(self._runner):
+            # Each segment picks its own chunk as if it were the whole uncached prompt (the last one runs through
+            # the final token), so a later request restored at a cut chunks the rest exactly as this prefill does.
+            step = self.prefill_step_size
+            chunk = lambda a, b: _prompt_chunk(b - a + (1 if b == end - 1 else 0), a, step)  # noqa: E731
+            extra = {"cuts": cuts, "on_cut": _on_cut}
         with self._stream_context():
             sess, pending, c = self._runner.prefill(
-                prompt, session=seq, on_boundary=_on_boundary,
-                chunk_size=_prompt_chunk(len(prompt), int(getattr(seq, "pos", 0) or 0), self.prefill_step_size),
+                prompt, session=seq, on_boundary=_on_boundary, chunk_size=chunk, **extra,
             )
             mx.eval(pending)
+        req.boundary_checkpoints = checkpoints or None
         req.prompt_cache_snapshot = boundary.get("snapshot")
         req.context_tokens.extend(prompt)
         req.prefill_usage = {
@@ -269,7 +300,8 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                         current_state=req.current_state, match_sequence=req.match_sequence,
                         prompt_cache=req.cache, all_tokens=list(req.context_tokens),
                         prompt_cache_snapshot=getattr(req, 'prompt_cache_snapshot', None), prefill_usage=req.prefill_usage,
-                        mixed_swa_boundary=None, stable_root_snapshot=None, boundary_checkpoints=None)
+                        mixed_swa_boundary=None, stable_root_snapshot=None,
+                        boundary_checkpoints=getattr(req, "boundary_checkpoints", None))
         if req.finish_reason is not None:
             self._request = None
             self._log_dspark_stats(req)

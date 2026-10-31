@@ -3812,6 +3812,157 @@ class Scheduler:
         self._stable_root_supported_for = (gen, supported)
         return supported
 
+    def _insert_accepts_prefix_cuts(self) -> bool:
+        """Does the ACTIVE generator's insert() take prefix_cuts? (SingleBatchGenerator and its subclasses.)"""
+        gen = self.batch_generator
+        cached = getattr(self, "_prefix_cuts_supported_for", None)
+        if cached is not None and cached[0] is gen:
+            return cached[1]
+        import inspect
+
+        try:
+            supported = "prefix_cuts" in inspect.signature(gen.insert).parameters
+        except (TypeError, ValueError):
+            supported = False
+        self._prefix_cuts_supported_for = (gen, supported)
+        return supported
+
+    def _dsv41_user_token_id(self) -> int:
+        """Token id of DeepSeek-V4.1's ``<｜User｜>`` (every user / tool-result turn opens with it), -1 if unknown."""
+        tid = getattr(self, "_dsv41_user_id", None)
+        if tid is None:
+            tid = -1
+            tok = getattr(self, "_actual_tokenizer", None) or self.tokenizer
+            for t in (tok, getattr(tok, "tokenizer", None), getattr(tok, "_tokenizer", None)):
+                try:
+                    v = t.convert_tokens_to_ids("<｜User｜>")
+                except Exception:  # noqa: BLE001 - stub / processor without the method
+                    continue
+                if isinstance(v, int) and v >= 0 and v != getattr(t, "unk_token_id", None):
+                    tid = v
+                    break
+            self._dsv41_user_id = tid
+        return tid
+
+    def _dsv41_prefix_cuts(self, request) -> list:
+        """Absolute prompt positions where a DeepSeek-V4.1 prefill keeps an extra exact snapshot.
+
+        A DeepseekV41Cache cannot be trimmed, so a stored prefix is reusable only at the exact position it was
+        captured at; the N-1 prompt boundary alone gives a later request nothing when it diverges earlier. Two cuts,
+        right after a ``<｜User｜>`` header, cover the common partial hits:
+
+        * the first one ends the system prompt and the tool list: a new conversation (or a request on its behalf)
+          with the same system prompt and tools restores them;
+        * the last one starts the final user / tool-result turn: an edited or regenerated last message restores
+          the whole conversation before it.
+
+        Only cuts inside the uncached part of the prompt and before its last token (the N-1 boundary is stored
+        anyway). A cut costs one extra segment end in the prefill (its own suffix pruning) and one snapshot (the
+        compressed pools + 40 windows: ~5 MB + ~0.9 KB per token). ``VMLX_DSV41_PREFIX_CUTS=0`` disables."""
+        if os.environ.get("VMLX_DSV41_PREFIX_CUTS", "1").strip().lower() in ("0", "false", "off", "no"):
+            return []
+        user_id = self._dsv41_user_token_id()
+        prompt = list(getattr(request, "prompt_token_ids", None) or [])
+        if user_id < 0 or len(prompt) < 3:
+            return []
+        heads = [i + 1 for i, t in enumerate(prompt) if t == user_id]
+        if not heads:
+            return []
+        cached = int(getattr(request, "cached_tokens", 0) or 0)
+        return sorted({c for c in (heads[0], heads[-1]) if cached < c < len(prompt) - 1})
+
+    def _dsv41_generation_end_entry(self, request, response):
+        """(key tokens, live cache) of a finished DeepSeek-V4.1 request: the cache as decode left it, keyed by the
+        prompt + generated tokens it holds.
+
+        The next request of a tool loop renders this turn back (reasoning included: a tools render keeps it) plus
+        the tool result; when the rendered turn is token-identical to what was generated, a hit on this entry
+        prefills only the tool result instead of the whole turn again. The request no longer writes to its cache,
+        so the entry is the live cache itself (no copy). Every layer must sit at one position ``pos`` with
+        ``prompt < pos <= prompt + output`` (decode feeds each token but the last; the one-token lookahead may feed
+        that one too). ``VMLX_DSV41_GENERATION_END_CACHE=0`` disables."""
+        if os.environ.get("VMLX_DSV41_GENERATION_END_CACHE", "1").strip().lower() in ("0", "false", "off", "no"):
+            return None
+        try:
+            raw = response.prompt_cache() if callable(response.prompt_cache) else response.prompt_cache
+        except Exception:  # noqa: BLE001
+            return None
+        if not raw or not all(type(c).__name__ == "DeepseekV41Cache" for c in raw):
+            return None
+        offsets = {int(getattr(c, "offset", -1)) for c in raw}
+        prompt = list(getattr(request, "prompt_token_ids", None) or [])
+        seq = prompt + list(getattr(request, "output_token_ids", None) or [])
+        if len(offsets) != 1:
+            return None
+        pos = offsets.pop()
+        if not (len(prompt) < pos <= len(seq)):
+            return None
+        return (seq[:pos], raw)
+
+    def _store_dsv41_cut_checkpoints(self, request, request_id: str, store_kwargs: Optional[dict] = None) -> int:
+        """Store a finished DeepSeek-V4.1 request's prefix-cut snapshots in the active prefix tier.
+
+        Each snapshot holds exactly ``pos`` tokens (checked: every layer's offset) and is keyed by
+        ``prompt[:pos]``, the same tokens-held == key-length contract as the N-1 entry, so a hit continues the
+        prefill at ``pos``. The first cut (end of system prompt + tools) is stored as a "system" entry, the last
+        one as "user", which the tiers' type-priority eviction keeps ahead of plain assistant turns."""
+        cps = getattr(request, "_dsv41_cut_checkpoints", None) or []
+        gen_end = getattr(request, "_dsv41_generation_end", None)
+        request._dsv41_cut_checkpoints = None
+        request._dsv41_generation_end = None
+        if (not cps and gen_end is None) or not self.config.enable_prefix_cache or getattr(
+            request, "_bypass_prefix_cache", False
+        ):
+            return 0
+        prompt = list(getattr(request, "prompt_token_ids", None) or [])
+        extra = getattr(request, "_cache_extra_keys", None)
+        first = min((int(p) for p, _ in cps), default=-1)
+        entries = []
+        for pos, snap in cps:
+            pos = int(pos)
+            if snap and 0 < pos < len(prompt) - 1:
+                entries.append((prompt[:pos], snap, "system" if pos == first and len(cps) > 1 else "user"))
+        if gen_end is not None:
+            entries.append((list(gen_end[0]), gen_end[1], "assistant"))
+        stored = []
+        for key, snap, cache_type in entries:
+            pos = len(key)
+            offsets = {int(getattr(c, "offset", -1)) for c in snap}
+            if offsets != {pos}:
+                logger.warning(
+                    "DSV4.1 extra prefix entry for %s not stored: cache at offsets %s, not its %d-token key",
+                    request_id, sorted(offsets), pos,
+                )
+                continue
+            try:
+                if self.block_aware_cache is not None:
+                    kwargs = dict(store_kwargs or {})
+                    kwargs["cache_type"] = cache_type
+                    if extra:
+                        kwargs["cache_extra_keys"] = dict(extra)
+                    cid = f"{request_id}:dsv41-{cache_type}-{pos}"
+                    try:
+                        self.block_aware_cache.store_cache(cid, key, self._extract_cache_states(snap), **kwargs)
+                    finally:
+                        self.block_aware_cache.release_cache(cid)
+                elif self.memory_aware_cache is not None:
+                    if not _call_with_optional_cache_extra(
+                        self.memory_aware_cache.store, key, snap, cache_type=cache_type, cache_extra_keys=extra,
+                    ):
+                        continue
+                else:
+                    continue
+                stored.append(f"{cache_type}:{pos}")
+            except Exception as exc:  # noqa: BLE001 - an optional extra entry
+                logger.warning("DSV4.1 extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
+        if stored:
+            logger.info(
+                "DSV4.1 extra prefix entries stored for %s: %s (prompt %d tokens, %s)",
+                request_id, ", ".join(stored), len(prompt),
+                "block" if self.block_aware_cache is not None else "memory-aware",
+            )
+        return len(stored)
+
     def _openpangu_stable_root_len(self, prompt_ids) -> int:
         """Tokens in openPangu's system turn: everything through the first <|message_end|>.
 
@@ -9663,6 +9814,16 @@ class Scheduler:
                         if _root_len >= 64 and 0 < _root_rel < len(tokens_to_process) - 1:
                             insert_kwargs["stable_root_splits"] = [_root_rel]
                             request._stable_root_len = _root_len
+                    # DeepSeek-V4.1: extra exact snapshots at the cuts (see _dsv41_prefix_cuts). A bypass request
+                    # cuts too (it stores nothing): its cold prefill is the reference a hit at a cut must equal.
+                    if (
+                        getattr(self, "_uses_dsv41_cache", False)
+                        and self.config.enable_prefix_cache
+                        and self._insert_accepts_prefix_cuts()
+                    ):
+                        _cuts = self._dsv41_prefix_cuts(request)
+                        if _cuts:
+                            insert_kwargs["prefix_cuts"] = [_cuts]
                     # Where a warm turn would re-feed after restoring. Lets
                     # the cold prefill split at the same boundary so the two
                     # arms are numerically equivalent. CAPABILITY-PROBED:
@@ -10301,6 +10462,18 @@ class Scheduler:
                 # Extract cache for future reuse
                 if getattr(response, "stable_root_snapshot", None) is not None:
                     request._stable_root_snapshot = response.stable_root_snapshot
+                if getattr(self, "_uses_dsv41_cache", False) and getattr(response, "boundary_checkpoints", None):
+                    # (absolute position, exact DeepseekV41Cache snapshot) from the prefix cuts: stored with the N-1
+                    # entry in cleanup (_store_dsv41_cut_checkpoints).
+                    request._dsv41_cut_checkpoints = list(response.boundary_checkpoints)
+                if (
+                    getattr(self, "_uses_dsv41_cache", False)
+                    and finish_reason == "stop"
+                    and string_stop_truncate < 0
+                    and not spec_hit_stop
+                    and self._terminal_cache_capture_enabled(request, response)
+                ):
+                    request._dsv41_generation_end = self._dsv41_generation_end_entry(request, response)
                 if self._terminal_cache_capture_enabled(request, response):
                     try:
                         # CLEAN PROMPT-BOUNDARY SNAPSHOT (DSV4 fast path).
@@ -12335,6 +12508,8 @@ class Scheduler:
                                 _terminal_store_kwargs = dict(_paged_store_kwargs)
                                 if _defer_final_store_gc:
                                     _terminal_store_kwargs["defer_post_fence_gc"] = True
+                                if getattr(self, "_uses_dsv41_cache", False):
+                                    self._store_dsv41_cut_checkpoints(request, request_id, _terminal_store_kwargs)
                                 for _bkey, _bstates in (getattr(request, "_naive_boundary_checkpoints", None) or []):
                                     checkpoint_id = f"{request_id}:native-boundary-{len(_bkey)}"
                                     try:
@@ -12622,6 +12797,8 @@ class Scheduler:
                                         None,
                                     ),
                                 )
+                                if getattr(self, "_uses_dsv41_cache", False):
+                                    self._store_dsv41_cut_checkpoints(request, request_id)
                                 if stored:
                                     if (
                                         getattr(self, "_uses_openpangu_cache", False)
