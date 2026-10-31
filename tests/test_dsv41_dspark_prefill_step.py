@@ -54,7 +54,7 @@ def test_env_override_pins_the_width(monkeypatch):
 def test_bad_env_override_is_ignored(monkeypatch):
     monkeypatch.setenv("VMLX_DSV41_DSPARK_PREFILL_STEP", "junk")
     c = chooser(116.0)
-    assert c.choose(12_000, 0) == 2000
+    assert c.choose(12_000, 0) == 4_000
     assert c.last["rule"] == "adaptive"
 
 
@@ -82,16 +82,16 @@ def test_failed_detection_keeps_the_old_rule(gc_line, active):
 # --- the rule ---------------------------------------------------------------------------------------------------------
 def test_plenty_of_room_runs_the_widest_width_in_equal_chunks():
     c = chooser(116.0)                         # JANGHT on the 256 GB Ultra
-    assert c.choose(12_000, 0) == 2000        # 11,999 body rows -> 6 chunks of <= 2048, equal
-    assert c.last["widest"] == 2048
-    assert c.choose(32_845, 0) == 1_932       # 32,844 body rows -> 17 chunks of <= 2048, equal
+    assert c.choose(12_000, 0) == 4_000       # 11,999 body rows -> 3 chunks of <= 4096, equal
+    assert c.last["widest"] == G._MAX_CHUNK == 4096
+    assert c.choose(32_845, 0) == 3_650       # 32,844 body rows -> 9 chunks of <= 4096, equal
 
 
 def test_a_prompt_that_fits_runs_as_one_chunk():
     c = chooser(116.0)
     assert c.choose(1_382, 0) == 1_381        # the whole body in one chunk
-    assert c.choose(2_049, 0) == 2_048
-    assert c.choose(2_050, 0) == 1_025        # 2,049 body rows: two equal chunks, no 1-row tail
+    assert c.choose(4_097, 0) == 4_096
+    assert c.choose(4_098, 0) == 2_049        # 4,097 body rows: two equal chunks, no 1-row tail
 
 
 def test_one_chunk_only_when_the_rule_would_pick_that_width():
@@ -105,7 +105,7 @@ def test_one_chunk_only_when_the_rule_would_pick_that_width():
 def test_width_follows_the_headroom():
     widths = [chooser(h).widest(int(h * GiB), 12_000) for h in (4.0, 5.0, 6.2, 7.2, 8.0, 20.0)]
     assert widths == sorted(widths)
-    assert widths[-1] == 2048
+    assert widths[-1] == G._MAX_CHUNK
     assert widths[0] == G._MIN_CHUNK
 
 
@@ -126,12 +126,17 @@ def test_no_room_still_chooses_a_width_never_refuses():
     assert chooser(-10.0).choose(10_000_000, 0) <= G._MIN_CHUNK  # any length: a width, never an error
 
 
-def test_configured_step_bounds_the_width():
+def test_a_step_set_below_the_default_bounds_the_width():
     assert chooser(116.0, configured=1024).choose(32_845, 0) <= 1024
     assert chooser(116.0, configured=1024).choose(1_382, 0) == 691  # 1,381 rows in two chunks of <= 1024
     assert chooser(116.0, configured=256).choose(32_845, 0) <= 256
-    assert chooser(116.0, configured=0).choose(32_845, 0) <= 2048   # unset: the chooser's own range
-    assert chooser(116.0, configured=8192).choose(32_845, 0) <= 2048
+    assert chooser(116.0, configured=2047).last is None
+    assert chooser(116.0, configured=2047).choose(32_845, 0) <= 2047
+    # the default (2048), unset, or larger: the chooser's own range
+    for cfg in (2048, 0, None, 8192):
+        c = chooser(116.0, configured=cfg)
+        assert c.choose(32_845, 0) == 3_650 and c.last["widest"] == G._MAX_CHUNK
+    assert chooser(6.2, configured=8192).choose(32_845, 0) < 2048   # still bounded by the headroom
 
 
 @pytest.mark.parametrize("n", [2, 3, 513, 1_025, 1_900, 6_563, 12_000, 32_845, 100_190, 262_144])
@@ -149,7 +154,7 @@ def test_chunks_are_near_equal_never_a_tiny_tail(n, headroom):
 
 def test_single_token_prompt():
     c = chooser(116.0)
-    assert c.choose(1, 0) == 2048             # no body rows: any width, the forward is the last token alone
+    assert c.choose(1, 0) == 4096             # no body rows: any width, the forward is the last token alone
     assert chooser(6.2).choose(1, 500_000) >= 1
 
 

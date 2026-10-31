@@ -37,8 +37,8 @@ def _adaptive_enabled() -> bool:
 
 # --- DSpark prefill chunk width -----------------------------------------------------------------------------------
 # The width trades compute against MLX's allocator working set. Compute: each chunk passes over every routed expert
-# once, so wider chunks cost less per row, up to ~2048 rows (past that the attention core grows faster than the
-# experts save: 4096 is slower than 2048 even with memory to spare). Memory: MLX's allocator keeps freed buffers for
+# once, so wider chunks cost less per row (JANGHT1.4 on a 256 GB M5 Ultra, where memory never binds, 32k-token prompt:
+# 1024 1,515 pp/s, 2048 1,715, 4096 1,900). Memory: MLX's allocator keeps freed buffers for
 # reuse until active + cached memory reaches its GC line, 0.95 x Metal's recommended working set; there it releases
 # cached buffers on every cache miss and allocates fresh Metal buffers. Measured (DSV4.1, draft resident, cold
 # prefill): a chunk runs at full speed while its PEAK active memory stays >= ~2.8 GiB under that line, and slows
@@ -46,7 +46,8 @@ def _adaptive_enabled() -> bool:
 # M5 Max 7.2 GiB). A chunk's transient memory grows with its rows and with the context.
 #
 # So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to
-# _MAX_CHUNK whose predicted peak keeps _GC_RESERVE_BYTES under the line, then the prompt is split into equal chunks of
+# _MAX_CHUNK (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
+# peak keeps _GC_RESERVE_BYTES under the line, then the prompt is split into equal chunks of
 # at most that width (no small tail chunk, and a prompt that fits is one chunk). The transient is predicted from a
 # measured DSV4.1 model scaled by what this process has observed: after each DSpark prefill the measured peak (at the
 # N-1 boundary, before the prompt snapshot) updates the scale. The chooser only picks a width: it never refuses or
@@ -54,8 +55,9 @@ def _adaptive_enabled() -> bool:
 # chunk for a prompt of <= 2048 tokens on a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width
 # (diagnostics). Evidence: jang docs/runtime/dsv41-flash-1017-janght-2026-10-19/evidence/py-adaptive-prefill-step-20261031.
 _GiB = 1 << 30
-_MAX_CHUNK = 2048
+_MAX_CHUNK = 4096
 _MIN_CHUNK = 512
+_DEFAULT_STEP = 2048       # vMLX's --prefill-step-size default; a smaller configured step caps the width
 _GC_RESERVE_BYTES = int(3.0 * _GiB)
 # Transient of one chunk (peak active minus active before it), draft resident: _T_BASE + rows * _T_ROW + context * _T_CTX
 # (upper envelope of the measured chunks, both bundles).
@@ -128,8 +130,8 @@ class PrefillChunkChooser:
     _ratios: list = []      # measured / predicted transient of recent prefills (process-wide)
 
     def __init__(self, configured_step: int | None = None, *, gc_line=_gc_line_bytes, active=_active_bytes):
-        cfg = int(configured_step or _MAX_CHUNK)
-        self.cap = max(1, min(cfg, _MAX_CHUNK))
+        cfg = int(configured_step or _DEFAULT_STEP)
+        self.cap = max(1, cfg) if cfg < _DEFAULT_STEP else _MAX_CHUNK
         self.configured_step = cfg
         self._gc_line = gc_line
         self._active = active
