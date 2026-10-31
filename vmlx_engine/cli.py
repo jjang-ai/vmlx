@@ -1341,6 +1341,20 @@ def _configure_vision_feature_ssd(args, explicit) -> None:
         logger.warning("Vision feature SSD cache unavailable", exc_info=True)
 
 
+def _m3_forces_paged_off(use_paged_cache: bool) -> bool:
+    """Whether a MiniMax-M3 launch turns a requested paged RAM tier off: only without the aligned prefill geometry
+    (``VMLX_M3_ALIGNED_PREFIX=0``) and without the ``VMLX_M3_ALLOW_PAGED`` experiment switch."""
+    import os as _os
+
+    from .models.minimax_m3 import prefill_geometry as _m3_pg
+
+    return (
+        bool(use_paged_cache)
+        and not _os.environ.get("VMLX_M3_ALLOW_PAGED")
+        and not _m3_pg.aligned_prefix_enabled()
+    )
+
+
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
@@ -1503,13 +1517,7 @@ def serve_command(args):
                 # (RAM + SSD), cached == cold 17/17 incl. partial hits at non-aligned divergence points and restart
                 # restores. The override now applies only when that geometry is switched off
                 # (VMLX_M3_ALIGNED_PREFIX=0), the relative chunking the 2026-08-10 corruption was measured on.
-                from .models.minimax_m3 import prefill_geometry as _m3_pg
-
-                if (
-                    getattr(args, "use_paged_cache", False)
-                    and not _m3_os.environ.get("VMLX_M3_ALLOW_PAGED")
-                    and not _m3_pg.aligned_prefix_enabled()
-                ):
+                if _m3_forces_paged_off(getattr(args, "use_paged_cache", False)):
                     args.use_paged_cache = False
                     logger.warning(
                         "MiniMax-M3: forcing paged cache OFF. The paged tier has no "
