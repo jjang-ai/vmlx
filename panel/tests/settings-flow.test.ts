@@ -1211,7 +1211,10 @@ describe('Disk Cache', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         expect(source).toContain('resolveCacheControlPolicy')
         expect(source).toContain('cacheControlUpdatesForDiskToggle')
-        expect(source).not.toContain('cacheControlUpdatesForPagedToggle')
+        // The only paged control is the RAM copy in front of Block Disk Cache (RAM + SSD), shown only with it.
+        expect(source).toContain('onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}')
+        expect(source).toContain('{cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (')
+        expect(source).toContain('data-vmlx-control="ram-copy-cache"')
         expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
         expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
         expect(source).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')

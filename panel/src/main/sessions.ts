@@ -860,10 +860,9 @@ function liftStaleFlatCacheIndex(
 
 function normalizeCacheStackMutualExclusion(config: Partial<ServerConfig>): boolean {
   let changed = false
-  // Persist the same hard-off RAM policy the shared launch builder enforces.
-  // Leaving a stale true in SQLite made settings state disagree with the
-  // disabled checkbox and with the actual --no-paged-cache argv.
-  if (config.usePagedCache !== false) {
+  // Persist the same RAM policy the shared launch builder enforces: the RAM copy (paged RAM blocks) exists only in
+  // front of Block Disk Cache, so a saved true without it would disagree with the --no-paged-cache argv.
+  if (config.usePagedCache !== false && !(config.usePagedCache === true && config.enableBlockDiskCache === true)) {
     config.usePagedCache = false
     changed = true
   }
@@ -5371,9 +5370,9 @@ export class SessionManager extends EventEmitter {
       nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
       continuousBatching: cacheStackActive,
       enablePrefixCache: config.enablePrefixCache !== false,
-      // Accepted for migration compatibility only. The shared builder always
-      // emits --no-paged-cache and never its positive counterpart.
-      usePagedCache: false,
+      // The user's "Keep a RAM copy" (RAM + SSD); the shared builder honours it only with Block Disk Cache, never
+      // for an exact typed prompt-snapshot family (no block store).
+      usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
       enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
       enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
       noMemoryAwareCache: !!config.noMemoryAwareCache,

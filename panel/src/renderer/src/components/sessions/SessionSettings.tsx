@@ -433,7 +433,7 @@ export function buildCommandPreview(
     nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
     continuousBatching: cacheStackActive,
     enablePrefixCache: config.enablePrefixCache !== false,
-    usePagedCache: false,
+    usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
     enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
     enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
     noMemoryAwareCache: !!config.noMemoryAwareCache,
