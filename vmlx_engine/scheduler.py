@@ -7439,6 +7439,7 @@ class Scheduler:
                 _fetch_tokens,
                 cache_extra_keys=_cache_extra_keys,
             )
+            _memory_fetch_kind = getattr(self.memory_aware_cache, "last_fetch_kind", None)
             remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
                 fetch_tokens=_fetch_tokens,
                 remaining=remaining or [],
@@ -7464,7 +7465,14 @@ class Scheduler:
                     request.prompt_cache = cache
                     request.cached_tokens = cached_tokens
                     request.remaining_tokens = remaining
-                    request._cache_detail = "memory"
+                    # A partial entry (cut at the common prefix with a stored key that then differs) is not the
+                    # producer's whole entry: say so, so geometry rules (MiniMax-M3 aligned reuse) never treat its
+                    # rows as an exact-boundary entry.
+                    request._cache_detail = (
+                        "memory-partial"
+                        if _memory_fetch_kind == "partial"
+                        else "memory"
+                    )
                     logger.info(
                         f"Request {request.request_id}: cache hit, "
                         f"{request.cached_tokens} tokens cached, "

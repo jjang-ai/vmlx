@@ -196,6 +196,18 @@ def _estimate_state_memory(state: Any, _seen: set[int] | None = None) -> int:
     return 0
 
 
+def _common_prefix_len(a: tuple, b: tuple) -> int:
+    """Length of the common prefix of two token tuples (binary search over C-speed slice comparisons)."""
+    lo, hi = 0, min(len(a), len(b))
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if a[:mid] == b[:mid]:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def clone_dsv41_cache_at(cache: list[Any], target_len: int) -> list[Any] | None:
     """Independent copy of a DeepSeek-V4.1 layer-cache list that sits exactly at ``target_len`` tokens.
 
@@ -496,6 +508,7 @@ class MemoryAwarePrefixCache:
             self._model_id: str | int = _ck(model, model_path=model_path)
         except Exception:
             self._model_id = id(model)
+        self.last_fetch_kind: str | None = None  # exact | forward | partial | reverse (the last hit)
         self._config = config or MemoryCacheConfig()
 
         # Thread safety: non-reentrant lock (store/fetch/_evict_lru don't
@@ -1266,6 +1279,12 @@ class MemoryAwarePrefixCache:
             best_forward_length = 0
             best_reverse_match: _CacheEntry | None = None
             best_reverse_length = 0
+            # Partial match: the stored key and the request share a prefix and then differ (same system prompt and
+            # tools, same document with another question, an edited last message). The entry is reusable up to the
+            # common prefix when its cache can be cut there (_truncate_cache; families that cannot be trimmed, e.g.
+            # DeepSeek-V4.1, return None and fall back to the other matches).
+            best_partial_match: _CacheEntry | None = None
+            best_partial_length = 0
 
             _scan_entries = () if _hit_entry is not None else self._entries.items()
             for stored_key, entry in _scan_entries:
@@ -1292,6 +1311,18 @@ class MemoryAwarePrefixCache:
                     ):
                         best_reverse_match = entry
                         best_reverse_length = len(tokens)
+                        continue
+                if (
+                    cached_len
+                    and tokens_key[0] == cached_key[0]
+                    and min(cached_len, len(tokens)) > max(best_partial_length, best_forward_length)
+                ):
+                    common = _common_prefix_len(tokens_key, cached_key)
+                    if common < cached_len and common < len(tokens) and common > max(
+                        best_partial_length, best_forward_length
+                    ):
+                        best_partial_match = entry
+                        best_partial_length = common
 
             # Prefer forward match (exact prefix reuse, no truncation needed)
             if _hit_entry is None and best_forward_match is not None:
@@ -1311,18 +1342,40 @@ class MemoryAwarePrefixCache:
             if best_reverse_match is not None:
                 _rev_entry = best_reverse_match
                 _rev_cache = best_reverse_match.cache
+            _part_entry = None
+            _part_cache: list | None = None
+            if (
+                best_partial_match is not None
+                and best_partial_length > (_hit_len if _hit_entry is not None else 0)
+                and _rev_entry is None
+            ):
+                _part_entry = best_partial_match
+                _part_cache = best_partial_match.cache
 
-            if _hit_entry is None and _rev_entry is None:
+            if _hit_entry is None and _rev_entry is None and _part_entry is None:
                 self._stats.misses += 1
                 return None, tokens
 
         # ── clone phase: LOCK RELEASED (issue #233, see header comment) ──
         cloned: list | None = None
         remaining: list[int] = []
-        if _hit_entry is not None:
+        self.last_fetch_kind = None
+        if _part_entry is not None:
+            cloned = self._truncate_cache(_part_cache, best_partial_length)
+            if cloned is not None:
+                _hit_entry, _hit_key = (
+                    _part_entry,
+                    self._entry_key(_part_entry.tokens, cache_extra_keys),
+                )
+                _hit_len = best_partial_length
+                remaining = tokens[best_partial_length:]
+                self.last_fetch_kind = "partial"
+        if cloned is None and _hit_entry is not None and self.last_fetch_kind is None:
             cloned = self._clone_cache_for_fetch(_hit_cache, _hit_len)
             if cloned is not None and _hit_kind == "forward":
                 remaining = tokens[_hit_len:]
+            if cloned is not None:
+                self.last_fetch_kind = _hit_kind
         if cloned is None and _rev_entry is not None:
             # Fall back to reverse match with cache truncation
             cloned = self._truncate_cache(_rev_cache, len(tokens))
@@ -1333,6 +1386,7 @@ class MemoryAwarePrefixCache:
                 )
                 _hit_len = len(tokens)
                 remaining = []
+                self.last_fetch_kind = "reverse"
 
         with self._lock:
             if cloned is None:
