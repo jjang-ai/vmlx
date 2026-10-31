@@ -1117,6 +1117,7 @@
       "bundledDflash2Available": "此模型包包含 DFlash2 草稿模型（{{name}}），目前未选用。可在“推测解码”中启用。性能因工作负载而异。",
       "useBundledDspark": "使用模型包自带的 DSpark 草稿模型 ({{name}})",
       "useBundledDsparkTooltip": "模型包含 DSpark 草稿模型时默认开启；没有则普通解码。文本、图像和视频请求经过精确验证，输出与普通解码相同；音频使用普通解码。开启时模型在单请求通道上运行。关闭 = 普通解码。",
+      "useBundledDsparkTextLaneTooltip": "模型包含 DSpark 草稿模型时默认开启；没有则普通解码。模型会验证每个草稿 token。连续批处理和缓存设置保持原样。关闭 = 普通解码。",
       "useBundledDflash2": "使用内置的 DFlash2 草稿模型（{{name}}）",
       "useBundledDflash2Tooltip": "模型包包含 DFlash2 草稿模型时默认开启。下方填写的草稿模型优先。关闭后使用模型包自带的原生 MTP（自适应/AR）。",
       "nativeMtpOffForDrafter": "选择 DFlash2 草稿模型时原生 MTP 关闭（两者不能共享同一解码步骤）。清空草稿模型或关闭内置草稿模型即可恢复自适应 MTP。",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import partial
 from typing import Callable
 
@@ -224,6 +225,7 @@ def make_minimax_m3_sampler(
     temp_f = float(temp or 0.0)
     top_p_f = float(top_p if top_p is not None else 1.0)
     top_k_i = int(top_k or 0)
+    min_p_f = float(min_p or 0.0)
 
     key = mx.random.key(int(seed)) if seed is not None else None
 
@@ -252,6 +254,12 @@ def make_minimax_m3_sampler(
         else:
             top_indices = None
 
+        if 0.0 < min_p_f < 1.0:
+            # min_p: keep tokens whose probability is at least min_p x the top token's, i.e. (after temperature)
+            # logit >= max logit + log(min_p); the top token always survives.
+            floor = logits.max(axis=-1, keepdims=True) + math.log(min_p_f)
+            logits = mx.where(logits >= floor, logits, -mx.inf)
+
         if top_p_f > 0.0 and top_p_f < 1.0:
             probs = mx.softmax(logits, axis=-1)
             order = mx.argsort(-probs, axis=-1)
@@ -275,7 +283,6 @@ def make_minimax_m3_sampler(
 
     wrapper = _SamplerWrapper(_sample, accepts_logits=True)
     wrapper._vmlx_sampler_kind = "minimax_m3_runtime"
-    wrapper._vmlx_ignores_min_p = bool(float(min_p or 0.0))
     return wrapper
 
 

@@ -2966,7 +2966,7 @@ describe('Default IP and New Settings', () => {
         expect(familyBlock).toContain("config.kvCacheQuantization = 'auto'")
         expect(launchBlock).toContain('exactTypedPromptDiskCache ? false')
         // ffc5bcc6: a DFlash2 speculative session owns its native SSD tier, so the prompt L2 is off there only.
-        expect(launchBlock).toContain('enableDiskCache: !dflash2Speculative && !dsparkActive && !!diskControls.enableDiskCache')
+        expect(launchBlock).toContain('enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache')
 
         for (const file of [
             'src/renderer/src/components/sessions/CreateSession.tsx',
@@ -3022,7 +3022,7 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('enableDiskCache: usesExactTypedPromptDiskCache(detectedFamily, usesGlmNativeSsdPool(detected))')
         expect(source).toContain('enableBlockDiskCache: !usesExactTypedPromptDiskCache(detectedFamily, usesGlmNativeSsdPool(detected))')
         // ffc5bcc6: DFlash2 speculative sessions keep the user's SSD choice for the native session tier.
-        expect(source).toContain('enableBlockDiskCache: dflash2Speculative || dsparkActive ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache')
+        expect(source).toContain('enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache')
 
         for (const file of [
             'src/renderer/src/components/sessions/CreateSession.tsx',

@@ -19,7 +19,7 @@ vi.mock('../src/main/database', () => ({ db }))
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => '/tmp', isPackaged: false },
   powerSaveBlocker: { isStarted: () => false, start: () => 1, stop: () => undefined } }))
 import { SessionManager } from '../src/main/sessions'
-import { addDraftAdmissionWeights } from './helpers/draftAdmissionFixture'
+import { addDraftAdmissionWeights, writeMinimaxDsparkBundle } from './helpers/draftAdmissionFixture'
 const dirs: string[] = []
 function bundle(stampDefault: boolean | null, drafter = true): string {
   const dir = mkdtempSync(join(tmpdir(), 'vmlx-dspark-launch-'))
@@ -33,6 +33,13 @@ function bundle(stampDefault: boolean | null, drafter = true): string {
     writeFileSync(join(dir, 'dspark', 'config.json'), JSON.stringify({ architectures: ['Qwen3DSparkModel'], dflash_config: { projector_type: 'dspark' } }))
     addDraftAdmissionWeights(dir, 'dspark')
   }
+  return dir
+}
+function m3Bundle(drafter = true): string {
+  const dir = mkdtempSync(join(tmpdir(), 'vmlx-dspark-m31-launch-'))
+  dirs.push(dir)
+  writeMinimaxDsparkBundle(dir)
+  if (!drafter) rmSync(join(dir, 'dspark'), { recursive: true, force: true })
   return dir
 }
 function args(manager: SessionManager, row: any): string[] {
@@ -113,5 +120,56 @@ describe('bundled DSpark launch wiring', () => {
     expect(flag(command, '--block-disk-cache-max-percent')).toBe('7')
     await manager.updateSessionConfig(row.id, { enableBlockDiskCache: false })
     expect(args(manager, row)).toContain('--disable-block-disk-cache')
+  })
+})
+
+describe('bundled DSpark launch wiring, MiniMax-M3 / M3.1 (text lane)', () => {
+  // Everything but the model path, the port and --dspark must be the argv of the same bundle without a drafter.
+  const shape = (command: string[], bundleDir: string) => {
+    const out = [...command]
+    const i = out.indexOf('--dspark')
+    if (i >= 0) out.splice(i, 2)
+    return out.map(a => (a === bundleDir ? '<bundle>' : a))
+  }
+  const configs: Array<[Record<string, unknown>, string]> = [
+    [{}, 'auto'], [{ useBundledDspark: true }, 'on'], [{ useBundledDspark: false }, 'off'],
+  ]
+
+  it('default / on / off only choose --dspark; batching and the cache stack match the no-drafter launch', async () => {
+    for (const [extra, mode] of configs) {
+      for (const cache of [{}, { enableBlockDiskCache: true, blockDiskCacheDir: '/private/test-m31-ssd', blockDiskCacheMaxPercent: 7 },
+        { enableDiskCache: true }, { continuousBatching: false }]) {
+        rows.length = 0
+        const manager = new SessionManager()
+        const withDrafter = m3Bundle()
+        const without = m3Bundle(false)
+        const row = await manager.createSession(withDrafter, { port: 8140, ...cache, ...extra })
+        const plain = await manager.createSession(without, { port: 8140, ...cache, ...extra })
+        const command = args(manager, row)
+        expect(flag(command, '--dspark')).toBe(mode)
+        expect(args(manager, plain)).not.toContain('--dspark')
+        expect(shape(command, withDrafter)).toEqual(shape(args(manager, plain), without))
+        if ((cache as any).continuousBatching === false) expect(command).toContain('--no-continuous-batching')
+        else {
+          expect(command).toContain('--continuous-batching')
+          expect(command).not.toContain('--no-continuous-batching')
+        }
+      }
+    }
+  })
+
+  it('toggling the saved choice relaunches with --dspark on / off and the same batching flags', async () => {
+    const manager = new SessionManager()
+    const row = await manager.createSession(m3Bundle(), { port: 8141 })
+    expect(flag(args(manager, row), '--dspark')).toBe('auto')
+    await manager.updateSessionConfig(row.id, { useBundledDspark: false })
+    const off = args(manager, row)
+    await manager.updateSessionConfig(row.id, { useBundledDspark: true })
+    const on = args(manager, row)
+    expect(flag(off, '--dspark')).toBe('off')
+    expect(flag(on, '--dspark')).toBe('on')
+    expect(off).toContain('--continuous-batching')
+    expect(on).toContain('--continuous-batching')
+    expect(shape(off, row.modelPath)).toEqual(shape(on, row.modelPath))
   })
 })

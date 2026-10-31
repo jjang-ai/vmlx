@@ -49,6 +49,7 @@ from .prefix_cache import (
     _write_behind_ready,
     PAGED_CACHE_SCHEMA_VERSION,
     PrefixCacheManager,
+    _model_is_minimax_m3,
     build_block_cache_namespace,
     expected_cache_layer_count,
     compute_model_cache_key,
@@ -611,6 +612,18 @@ def _native_mtp_spec_stats_for(uid) -> Optional[dict]:
     return None
 
 
+def _text_lane_dspark_spec_stats_for(generator, uid) -> Optional[dict]:
+    """The finished request's DSpark stats from the MiniMax-M3 text lane (DSparkTextGenerator.pop_spec_stats), as
+    last_request.speculative. None for any other generator and for requests that took the plain path."""
+    pop = getattr(generator, "pop_spec_stats", None)
+    if not callable(pop):
+        return None
+    try:
+        return pop(uid)
+    except Exception:  # noqa: BLE001 - telemetry must never fail a request
+        return None
+
+
 def _tag_sampling_params(sampler, params, seed=None) -> None:
     """Record the mlx_lm make_sampler parameters on the sampler (read only by the DSV4.1 DSpark generator, whose sampled
     speculation reproduces that sampler's distribution: temperature, then top_p / min_p / top_k on log-probabilities)."""
@@ -910,6 +923,38 @@ class Scheduler:
         )
         self._is_hybrid = self._is_hybrid_model(model)
         self._uses_m3_msa_cache = self._model_uses_m3_msa_cache(model)
+        # MiniMax-M3 aligned-chunk prefix cache (models/minimax_m3/prefill_geometry.py): every M3 prompt prefill is
+        # cut at absolute multiples of the prefill step, at every turn cut (after the end of each non-assistant
+        # message: the previous request's store boundary is one) and at the store boundary, and every cache tier
+        # reuses only a prefix such a cold prefill also ends a chunk at, so a hit is bit-identical to a cold prefill
+        # and a tool loop reuses the whole previous prompt.
+        # VMLX_M3_ALIGNED_PREFIX=0 keeps the previous relative chunking + total-length block key;
+        # VMLX_M3_STRUCTURAL_CUTS=0 keeps the aligned chunks without turn cuts.
+        from .models.minimax_m3 import prefill_geometry as _m3_geometry
+
+        self._m3_aligned_prefix = bool(
+            self._uses_m3_msa_cache
+            and _model_is_minimax_m3(model)
+            and _m3_geometry.aligned_prefix_enabled()
+        )
+        self._m3_turn_markers = None
+        if self._m3_aligned_prefix and _m3_geometry.structural_cuts_enabled():
+            self._m3_turn_markers = _m3_geometry.turn_markers_from_tokenizer(
+                tokenizer
+            )
+            if self._m3_turn_markers is None:
+                logger.warning(
+                    "MiniMax-M3 turn cuts off: the tokenizer does not encode the M3 message markers "
+                    "(%r, %r, %r); prefix reuse stops at prefill-step boundaries",
+                    _m3_geometry.M3_EOS_TEXT,
+                    _m3_geometry.M3_BOS_TEXT,
+                    _m3_geometry.M3_ASSISTANT_ROLE_TEXT,
+                )
+            else:
+                logger.info(
+                    "MiniMax-M3 prefix cache: turn cuts on (%s)",
+                    self._m3_turn_markers.signature(),
+                )
         # Do not silently widen repetition-penalty history for families whose
         # chat templates contain EOS/turn-boundary sentinels in the prompt.
         # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
@@ -1744,6 +1789,11 @@ class Scheduler:
                             self._mixed_attention_cache_model
                         ),
                     )
+                    if getattr(self, "_m3_aligned_prefix", False):
+                        self.block_aware_cache.set_minimax_m3_prefill_step(
+                            self.config.prefill_step_size,
+                            turn_markers=getattr(self, "_m3_turn_markers", None),
+                        )
                 except Exception:
                     self._cleanup_failed_block_cache_initialization(
                         block_disk_store=block_disk_store,
@@ -1865,6 +1915,25 @@ class Scheduler:
                     scope_key,
                     self.model,
                 )
+                if getattr(self, "_m3_aligned_prefix", False):
+                    # Whole-prompt M3 entries are only interchangeable with a cold prefill of the same chunk step and
+                    # turn-cut rule (and entries written before aligned prefill are not): scope the directory by them.
+                    from .models.minimax_m3 import prefill_geometry as _m3_geometry
+
+                    _m3_markers = getattr(self, "_m3_turn_markers", None)
+                    if _m3_markers is None:
+                        scope_key += (
+                            f":m3_prefill={_m3_geometry.SCHEMA}"
+                            f":step={int(self.config.prefill_step_size or 0)}"
+                        )
+                    else:
+                        _m3_turns = _m3_markers.signature()
+                        scope_key += (
+                            f":m3_prefill={_m3_geometry.SCHEMA_TURNS}"
+                            f":step={int(self.config.prefill_step_size or 0)}"
+                            f":turns={_m3_turns['bos']}-{_m3_turns['eos']}-"
+                            + "_".join(str(t) for t in _m3_turns["assistant"])
+                        )
                 model_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
                 cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
@@ -3950,6 +4019,34 @@ class Scheduler:
                 return generator
         except Exception as _mtp_gen_err:
             logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
+
+        if (
+            getattr(self.model, "_vmlx_dspark_runtime", None) is not None
+            and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
+        ):
+            # A text-lane DSpark target (MiniMax-M3 / M3.1) whose bundle ships its drafter (dspark/runtime.py,
+            # attached at load; VMLX_DSPARK=0 keeps plain decoding): DSpark rounds on the engine cache for eligible
+            # requests, the inherited SingleBatchGenerator path for every other request.
+            try:
+                from .utils.dspark_text_generator import DSparkTextGenerator
+                logger.info("DSpark drafter attached — using DSparkTextGenerator (speculative decode, Adaptive width)")
+                return DSparkTextGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=None,
+                    prefill_batch_size=1,
+                    completion_batch_size=1,
+                    prefill_step_size=self.config.prefill_step_size,
+                    prompt_snapshot_max_bytes=_prompt_snapshot_max_bytes,
+                    mixed_swa_boundary_capture=self._mixed_swa_inline_capture_wanted(),
+                    mixed_swa_capture_block_size=int(
+                        getattr(self.block_aware_cache, "block_size", 64) or 64
+                    ),
+                )
+            except Exception as _dspark_text_err:
+                logger.warning("DSpark text generator init failed (%s); AR SingleBatchGenerator", _dspark_text_err)
 
         if (
             getattr(self.model, "_dspark", None) is not None
@@ -6562,6 +6659,217 @@ class Scheduler:
             or _GEN_PROMPT_STRIP_DISABLED
         )
 
+    def _m3_snapshot_from_marker(self, request: Request, snapshot: Any) -> Any:
+        """Resolve a MiniMax-M3 boundary marker into prompt-boundary cache views (no copy) and flag the request for
+        the bounded streamed store; any other snapshot is returned unchanged."""
+        from .models.minimax_m3.prompt_boundary import M3PromptBoundary
+
+        if not isinstance(snapshot, M3PromptBoundary):
+            return snapshot
+        views = snapshot.views()
+        if views is None:
+            logger.warning(
+                "Request %s: MiniMax-M3 prompt boundary (%d rows) no longer held by the live cache; not storing it",
+                request.request_id,
+                snapshot.rows,
+            )
+            return None
+        request._m3_zero_copy_store = True
+        logger.info(
+            "Request %s: MiniMax-M3 prompt boundary taken from the live cache (%d rows, %.1f MB, no copy)",
+            request.request_id,
+            snapshot.rows,
+            snapshot.nbytes() / 1e6,
+        )
+        return views
+
+    def _m3_live_prompt_views(self, request: Request, raw_cache: Any, rows: int) -> Optional[List[Any]]:
+        """Views of the first ``rows`` rows of a live MiniMax-M3 cache (append-only lanes: the prompt's rows), or None
+        (zero-copy off, not an M3 cache list, lanes out of step)."""
+        from .models.minimax_m3 import prompt_boundary
+
+        if not prompt_boundary.zero_copy_enabled() or rows <= 0:
+            return None
+        marker = prompt_boundary.capture(list(raw_cache or []))
+        views = marker.views(rows) if marker is not None and marker.rows >= rows else None
+        if views is not None:
+            request._m3_zero_copy_store = True
+        return views
+
+    @staticmethod
+    def _m3_rows(cache: Any) -> int:
+        from .models.minimax_m3.prefill_geometry import cache_offset
+
+        try:
+            return int(cache_offset(cache) or 0)
+        except Exception:
+            return 0
+
+    def _m3_copy_fits(self, request: Request, cache: Any, rows: int, tier: str) -> bool:
+        """Whether a whole-entry copy of ``rows`` rows of a zero-copy MiniMax-M3 store fits in the free Metal working
+        set (the RAM / prompt-SSD tiers copy the prompt; the block SSD tier streams it and needs no room)."""
+        if not getattr(request, "_m3_zero_copy_store", False):
+            return True
+        from .models.minimax_m3.prompt_boundary import M3PromptBoundary
+        from .utils.memory_limits import (
+            get_effective_metal_working_set_bytes,
+            get_metal_ws_guard_threshold,
+        )
+
+        try:
+            import mlx.core as _mx
+
+            need = M3PromptBoundary(list(cache or []), rows).nbytes(rows)
+            active, maximum = get_effective_metal_working_set_bytes(_mx)
+        except Exception:
+            return True
+        if maximum <= 0:
+            return True
+        headroom = max(0, int(maximum * get_metal_ws_guard_threshold() / 100) - int(active))
+        if need <= headroom:
+            return True
+        logger.warning(
+            "Request %s: MiniMax-M3 %s store skipped: its copy (%.1f MB) exceeds the free Metal working set "
+            "(%.1f MB); the SSD block tier streams the prompt without a copy",
+            request.request_id,
+            tier,
+            need / 1e6,
+            headroom / 1e6,
+        )
+        return False
+
+    def _m3_prefill_boundary(self, request: Request) -> Optional[int]:
+        """The MiniMax-M3 store boundary of this request: the prefix-cache lookup key (the prompt with the
+        generation-prompt suffix stripped exactly as ``add_request`` strips it) minus its final token, which a hit
+        re-feeds. The cold prefill is cut here, so an exact-geometry hit continues from it bit for bit."""
+        tokens = list(getattr(request, "prompt_token_ids", None) or [])
+        gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
+        if self._generation_prompt_strip_active() and 0 < gpl < len(tokens):
+            tokens = tokens[:-gpl]
+        boundary = len(tokens) - 1
+        return boundary if boundary > 0 else None
+
+    def _m3_turn_cuts(self, request: Request) -> List[int]:
+        """The turn cuts of this request's prompt at or below its store boundary (prefill_geometry.turn_cuts); none
+        for a media request (atomic prefill) or without turn markers. Computed once per prompt."""
+        from .models.minimax_m3 import prefill_geometry
+
+        markers = getattr(self, "_m3_turn_markers", None)
+        boundary = self._m3_prefill_boundary(request)
+        tokens = getattr(request, "prompt_token_ids", None) or []
+        if (
+            markers is None
+            or not boundary
+            or prefill_geometry.is_media_request(getattr(request, "_cache_extra_keys", None))
+        ):
+            return []
+        key = (id(markers), id(tokens), len(tokens), int(boundary))
+        cached = getattr(request, "_m3_turn_cuts_memo", None)
+        if cached is not None and cached[0] == key:
+            return list(cached[1])
+        cuts = prefill_geometry.turn_cuts(tokens, markers, boundary)
+        try:
+            request._m3_turn_cuts_memo = (key, tuple(cuts))
+        except Exception:
+            pass
+        return cuts
+
+    def _m3_prefill_plan(self, request: Request) -> Dict[str, Any]:
+        from .models.minimax_m3.prefill_geometry import is_media_request
+
+        plan = {
+            "boundary": self._m3_prefill_boundary(request),
+            "atomic": is_media_request(getattr(request, "_cache_extra_keys", None)),
+        }
+        if getattr(self, "_m3_turn_markers", None) is not None:
+            plan["cuts"] = self._m3_turn_cuts(request)
+        return plan
+
+    def _insert_accepts_m3_prefill_plans(self) -> bool:
+        gen = self.batch_generator
+        cached = getattr(self, "_m3_prefill_plans_supported_for", None)
+        if cached is not None and cached[0] is gen:
+            return cached[1]
+        import inspect
+
+        try:
+            supported = "m3_prefill_plans" in inspect.signature(gen.insert).parameters
+        except (TypeError, ValueError):
+            supported = False
+        self._m3_prefill_plans_supported_for = (gen, supported)
+        return supported
+
+    def _m3_align_restored_prefix(
+        self, request: Request, cache: Any
+    ) -> Tuple[Optional[Any], Optional[str]]:
+        """Cut a restored MiniMax-M3 prefix to what a cold prefill of this request also computes (aligned mode).
+
+        Every cache tier lands here (paged/block-disk, memory, legacy prefix, prompt disk). The restored rows are
+        reusable up to the last chunk boundary or turn cut of this request at or below them (turn cuts are a function
+        of the tokens before them, so any producer with the same tokens cut there too), and up to this request's own
+        store boundary when they were produced with that same boundary (block tiers: the geometry key guarantees it;
+        whole-entry memory / prompt-disk tiers: an untruncated entry of exactly that many rows; the legacy tier also
+        stores role-segment prefixes, so never). Returns (cache to use or None for a full prefill, fallback reason or
+        None)."""
+        from .models.minimax_m3 import prefill_geometry
+
+        cached = max(0, int(getattr(request, "cached_tokens", 0) or 0))
+        offset = prefill_geometry.cache_offset(cache)
+        boundary = self._m3_prefill_boundary(request) or 0
+        step = max(1, int(self.config.prefill_step_size or 1))
+        detail = str(getattr(request, "_cache_detail", "") or "")
+        paged = getattr(request, "block_table", None) is not None
+        whole_entry_exact = detail.split("+")[0] in {"memory", "disk"}
+        # Lanes that disagree (layers at different offsets, an index lane out of step) prove nothing: full prefill.
+        reuse = 0 if offset is None else prefill_geometry.reuse_limit(
+            min(cached, offset),
+            boundary,
+            step,
+            exact_geometry=(paged or whole_entry_exact) and offset == cached,
+            atomic=prefill_geometry.is_media_request(
+                getattr(request, "_cache_extra_keys", None)
+            ),
+            cuts=self._m3_turn_cuts(request),
+        )
+        if offset is not None and reuse == cached == offset:
+            return cache, None
+        trimmed = (
+            prefill_geometry.truncated_cache(cache, reuse) if reuse > 0 else None
+        )
+        if getattr(self, "_m3_turn_markers", None) is None:
+            rule = "chunk-only cuts"
+        elif reuse == boundary:
+            rule = "own boundary"
+        elif reuse and reuse % step == 0:
+            rule = "chunk boundary"
+        else:
+            rule = "turn cut" if reuse else "no cut"
+        logger.info(
+            "Request %s: MiniMax-M3 aligned prefix: restored %s rows (cache offset %s, %s), reuse %d "
+            "(chunk %d, boundary %d, %s)%s",
+            request.request_id,
+            cached,
+            offset,
+            detail or "cache",
+            reuse if trimmed is not None else 0,
+            step,
+            boundary,
+            rule,
+            "" if trimmed is not None else "; full prefill",
+        )
+        if trimmed is None:
+            self._release_unusable_paged_hit(request)
+            request.prompt_cache = None
+            request.cached_tokens = 0
+            request.remaining_tokens = request.prompt_token_ids
+            return None, "minimax_m3_no_aligned_prefix"
+        if paged:
+            self._accept_paged_hit_credit(request, reuse)
+        request.prompt_cache = trimmed
+        request.cached_tokens = reuse
+        request.remaining_tokens = list(request.prompt_token_ids[reuse:])
+        return trimmed, None
+
     def add_request(self, request: Request) -> None:
         """
         Add a new request to the scheduler.
@@ -9150,6 +9458,25 @@ class Scheduler:
                     except Exception as e:
                         logger.debug(f"Memory check failed, skipping: {e}")
 
+            # MiniMax-M3 aligned prefix: whatever tier restored this prefix, keep only the part a cold prefill of
+            # this request also ends a chunk at (models/minimax_m3/prefill_geometry.py).
+            if cache_to_use is not None and getattr(self, "_m3_aligned_prefix", False):
+                _m3_aligned_cache, _m3_reason = self._m3_align_restored_prefix(
+                    request, cache_to_use
+                )
+                if _m3_aligned_cache is not cache_to_use:
+                    cache_to_use = _m3_aligned_cache
+                    tokens_to_process = list(request.remaining_tokens)
+                    if cache_execution is not None:
+                        cache_execution["cached_tokens"] = int(request.cached_tokens or 0)
+                        cache_execution["prefill_tokens"] = len(tokens_to_process)
+                        cache_execution["uncached_prompt_tokens"] = max(
+                            _prompt_tokens - int(request.cached_tokens or 0), 0
+                        )
+                        cache_execution["cache_reuse_applied"] = cache_to_use is not None
+                if _m3_reason is not None:
+                    _cache_fallback_reason = _m3_reason
+
             # Insert into BatchGenerator with optional cache.
             # Wrapped in try/except to prevent lost requests — if insert fails
             # completely, put the request back in the waiting queue.
@@ -9164,7 +9491,8 @@ class Scheduler:
             _m3vl_video_grid = getattr(request, "video_grid_thw", None)
             _m3vl_active = (
                 (_m3vl_pv is not None or _m3vl_pv_video is not None)
-                and self.batch_generator.__class__.__name__ == "SingleBatchGenerator"
+                and self.batch_generator.__class__.__name__
+                in ("SingleBatchGenerator", "DSparkTextGenerator")
             )
             _m3vl_cache_replay = bool(
                 _m3vl_active
@@ -9292,6 +9620,7 @@ class Scheduler:
                             # restored prefix as its context too (all_tokens / prefix store), so list it.
                             "SingleBatchGenerator",
                             "DSV41DSparkGenerator",
+                            "DSparkTextGenerator",
                         ):
                             cached_prefix_len = max(
                                 0, int(getattr(request, "cached_tokens", 0) or 0)
@@ -9348,6 +9677,14 @@ class Scheduler:
                     if self._insert_accepts_gen_prompt_lens():
                         insert_kwargs["gen_prompt_lens"] = [
                             int(getattr(request, "_gen_prompt_len", 0) or 0)
+                        ]
+                    # MiniMax-M3: cut the prefill at absolute chunk boundaries and at the store boundary, for cold
+                    # and cache-hit requests alike (bypass requests too: their output is the reference).
+                    if getattr(
+                        self, "_m3_aligned_prefix", False
+                    ) and self._insert_accepts_m3_prefill_plans():
+                        insert_kwargs["m3_prefill_plans"] = [
+                            self._m3_prefill_plan(request)
                         ]
                     # DeepSeek-V4.1-Flash VL (additive): attach the ImageInput
                     # list + per-token token_types (full-prompt positions); the
@@ -9467,6 +9804,12 @@ class Scheduler:
                                 insert_kwargs["logits_processors"] = [
                                     request_processors
                                 ]
+                        if getattr(
+                            self, "_m3_aligned_prefix", False
+                        ) and self._insert_accepts_m3_prefill_plans():
+                            insert_kwargs["m3_prefill_plans"] = [
+                                self._m3_prefill_plan(request)
+                            ]
                         # DSV4.1 VL: the cache-free retry prefills the whole prompt, so it must
                         # carry every image (the cached attempt may have omitted covered ones).
                         if getattr(request, "dsv41_vl_images", None) is not None and isinstance(
@@ -9905,7 +10248,10 @@ class Scheduler:
                     or getattr(request, "_vmlx_prefill_usage", None)
                 ),
                 spec_stats=(
-                    _native_mtp_spec_stats_for(response.uid)
+                    (
+                        _native_mtp_spec_stats_for(response.uid)
+                        or _text_lane_dspark_spec_stats_for(self.batch_generator, response.uid)
+                    )
                     if getattr(response, "finish_reason", None) is not None
                     else None
                 ),
@@ -9969,6 +10315,13 @@ class Scheduler:
                         # truncation guard entirely.
                         snapshot_cache = getattr(
                             response, "prompt_cache_snapshot", None
+                        )
+                        # MiniMax-M3: the generator hands over a boundary marker (the live cache objects + the
+                        # prompt row count), not a copy. The request has stopped writing, so take the
+                        # prompt-boundary views now: they alias the live buffers and the store copies them block
+                        # by block (models/minimax_m3/prompt_boundary.py).
+                        snapshot_cache = self._m3_snapshot_from_marker(
+                            request, snapshot_cache
                         )
                         # DSV4 EXTENDED STORE: zero-copy delta transport that
                         # continues the prompt chain through decode, ending at
@@ -10157,6 +10510,11 @@ class Scheduler:
                                         and not (
                                             getattr(
                                                 self, "_uses_m3_msa_cache", False
+                                            )
+                                            # Aligned M3 hits continue in the cold prefill's chunks: their
+                                            # prompt snapshot IS the clean prefill state (no re-prefill).
+                                            and not getattr(
+                                                self, "_m3_aligned_prefix", False
                                             )
                                             and int(
                                                 getattr(
@@ -10458,6 +10816,9 @@ class Scheduler:
                                             )
                                             > 0
                                             and m3_key_tokens
+                                            and not getattr(
+                                                self, "_m3_aligned_prefix", False
+                                            )
                                         ):
                                             logger.info(
                                                 "MiniMax-M3 paged prefix store using "
@@ -10475,11 +10836,18 @@ class Scheduler:
                                             cache_for_extract = None
                                         else:
                                             # Cold M3 requests may safely use the
-                                            # generator's clean prompt snapshot.
+                                            # generator's clean prompt snapshot. Without
+                                            # one, the live cache's first N-1 rows are
+                                            # the prompt rows (append-only lanes): take
+                                            # them as views instead of the full
+                                            # host-round-trip copy.
                                             cache_for_extract = (
                                                 snapshot_cache
                                                 if snapshot_cache is not None
-                                                else self._truncate_cache_to_prompt_length(
+                                                else self._m3_live_prompt_views(
+                                                    request, raw_cache, prompt_len - 1
+                                                )
+                                                or self._truncate_cache_to_prompt_length(
                                                     raw_cache, prompt_len
                                                 )
                                             )
@@ -10531,6 +10899,12 @@ class Scheduler:
                                             # disk key is prompt-stripped and
                                             # would mismatch the chain state.
                                             and not extended_store_armed
+                                            and self._m3_copy_fits(
+                                                request,
+                                                cache_for_extract,
+                                                self._m3_rows(cache_for_extract),
+                                                "prompt-SSD",
+                                            )
                                         ):
                                             try:
                                                 from .mllm_batch_generator import (
@@ -10776,6 +11150,9 @@ class Scheduler:
                                         )
                                         > 0
                                         and m3_key_tokens
+                                        and not getattr(
+                                            self, "_m3_aligned_prefix", False
+                                        )
                                     ):
                                         logger.info(
                                             "MiniMax-M3 prefix cache store using "
@@ -11925,6 +12302,21 @@ class Scheduler:
                                     _paged_store_kwargs["cache_extra_keys"] = dict(
                                         request._cache_extra_keys
                                     )
+                                if getattr(self, "_m3_aligned_prefix", False):
+                                    # The geometry the stored rows were computed in is the producing prefill's.
+                                    _paged_store_kwargs["minimax_m3_boundary"] = (
+                                        self._m3_prefill_boundary(request) or 0
+                                    )
+                                if getattr(request, "_m3_zero_copy_store", False):
+                                    # Views of the live cache: copy them to the SSD writer block by block,
+                                    # never more than this many bytes in flight, and hold no RAM copy.
+                                    from .models.minimax_m3.prompt_boundary import (
+                                        store_inflight_bytes as _m3_inflight_bytes,
+                                    )
+
+                                    _paged_store_kwargs["minimax_m3_stream_inflight_bytes"] = (
+                                        _m3_inflight_bytes()
+                                    )
                                 if (
                                     self._is_hybrid
                                     and not self._uses_dsv4_cache
@@ -12094,6 +12486,13 @@ class Scheduler:
                             if cache_key_override is not None:
                                 cache_to_store = request._extracted_cache
                                 cache_key_tokens = list(cache_key_override)
+                            elif not self._m3_copy_fits(
+                                request,
+                                request._extracted_cache,
+                                max(prompt_len - 1, 0),
+                                "whole-prompt",
+                            ):
+                                cache_to_store = None
                             else:
                                 cache_to_store = self._truncate_cache_to_prompt_length(
                                     request._extracted_cache, prompt_len
@@ -12314,6 +12713,13 @@ class Scheduler:
                             if cache_key_override is not None:
                                 cache_to_store = request._extracted_cache
                                 cache_key_tokens = list(cache_key_override)
+                            elif not self._m3_copy_fits(
+                                request,
+                                request._extracted_cache,
+                                max(prompt_len - 1, 0),
+                                "whole-prompt",
+                            ):
+                                cache_to_store = None
                             else:
                                 cache_to_store = self._truncate_cache_to_prompt_length(
                                     request._extracted_cache, prompt_len
@@ -13414,6 +13820,8 @@ class Scheduler:
             generator_path = "single_active"
         elif generator_cls == "DSV41DSparkGenerator":
             generator_path = "dsv41_dspark"
+        elif generator_cls == "DSparkTextGenerator":
+            generator_path = "dspark_text"
         elif generator_cls == "DSV4BatchGenerator":
             generator_path = "dsv4"
         elif generator_cls == "BatchGenerator":
@@ -13520,7 +13928,7 @@ class Scheduler:
                     stats["batch_generator"].update(native_mtp_stats)
             except Exception as exc:
                 logger.debug("Native MTP telemetry snapshot unavailable: %s", exc)
-        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
+        elif generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSparkTextGenerator", "DSV4BatchGenerator"}:
             stats["batch_generator"].update(
                 {
                     "prompt_snapshot_max_bytes": getattr(
@@ -13609,6 +14017,8 @@ class Scheduler:
                 engine_path = "single_active"
             elif generator_cls == "DSV41DSparkGenerator":
                 engine_path = "dsv41_dspark"
+            elif generator_cls == "DSparkTextGenerator":
+                engine_path = "dspark_text"
             elif generator_cls == "DSV4BatchGenerator":
                 engine_path = "dsv4"
             elif generator_cls == "BatchGenerator":
@@ -13623,7 +14033,7 @@ class Scheduler:
                 "single_active_decode": engine_path in {"single_active", "dsv41_dspark"},
                 "max_num_seqs": self.config.max_num_seqs,
             }
-            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSV4BatchGenerator"}:
+            if generator_cls in {"SingleBatchGenerator", "DSV41DSparkGenerator", "DSparkTextGenerator", "DSV4BatchGenerator"}:
                 base["batch_generator"].update(
                     {
                         "prompt_snapshot_max_bytes": getattr(

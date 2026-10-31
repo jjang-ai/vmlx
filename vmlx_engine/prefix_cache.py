@@ -1408,6 +1408,10 @@ def _is_minimax_m3_cache_class(class_name: str) -> bool:
     return (class_name or "") == "MiniMaxM3SparseCache"
 
 
+# _reconstruct_minimax_m3_streamed: "not mine, run the generic reconstruct".
+_M3_STREAM_RESTORE_DECLINED = object()
+
+
 def _model_is_minimax_m3(model: Any) -> bool:
     """Identify the M3 architecture, not merely its reusable cache container.
 
@@ -3159,6 +3163,12 @@ class BlockAwarePrefixCache:
         # discriminator.  The store serializer still detects the payload class
         # independently through _cache_data_has_minimax_m3().
         self._uses_minimax_m3_cache = _model_is_minimax_m3(model)
+        # MiniMax-M3 aligned-chunk geometry (models/minimax_m3/prefill_geometry.py): the prefill step the serving
+        # generator cuts every M3 prompt at. None keeps the previous total-length shape key (set by the scheduler
+        # only when it also runs the aligned prefill). ``_m3_turn_markers``: the turn-cut markers of that prefill
+        # (None = chunk-only cuts).
+        self._m3_aligned_step: Optional[int] = None
+        self._m3_turn_markers: Optional[Any] = None
         if model is not None and hasattr(model, "make_cache"):
             try:
                 _cache = model.make_cache() or []
@@ -3385,12 +3395,33 @@ class BlockAwarePrefixCache:
 
         return bool(disk_only or minimax_m3 or native_tq)
 
+    def set_minimax_m3_prefill_step(self, step: Optional[int], turn_markers: Optional[Any] = None) -> None:
+        """Key MiniMax-M3 blocks by the aligned-chunk geometry of a prefill cut every ``step`` tokens (the serving
+        generator's prefill step) and, with ``turn_markers`` (prefill_geometry.TurnMarkers), at every turn cut. None
+        restores the total-length shape key."""
+        self._m3_aligned_step = max(1, int(step)) if step else None
+        self._m3_turn_markers = turn_markers if step else None
+
+    def _minimax_m3_turn_cuts(self, tokens: List[int], boundary: int) -> List[int]:
+        markers = getattr(self, "_m3_turn_markers", None)
+        if markers is None:
+            return []
+        from .models.minimax_m3 import prefill_geometry
+
+        return prefill_geometry.turn_cuts(tokens, markers, boundary)
+
+    def _minimax_m3_boundary(self, tokens: List[int], *, stored_prompt_boundary: bool) -> int:
+        """The store boundary of the prefill these tokens describe: a lookup gets the stripped prompt (its store
+        boundary is one token shorter), a store gets exactly the stored N-1 key."""
+        return len(tokens) if stored_prompt_boundary else max(0, len(tokens) - 1)
+
     def _shape_scoped_cache_extra_keys(
         self,
         tokens: List[int],
         cache_extra_keys: Optional[Any],
         *,
         stored_prompt_boundary: bool = False,
+        minimax_m3_boundary: Optional[int] = None,
     ) -> Optional[Any]:
         """Bind native M3 blocks to the prefill matrix shape that produced them.
 
@@ -3398,11 +3429,45 @@ class BlockAwarePrefixCache:
         tensors when MLX evaluates them inside different prompt-length matrix
         shapes. Ordinary attention tolerates that numerical drift, but
         MiniMax-M3's Lightning Indexer can select a different sparse block and
-        change greedy decoding. Exact requests and same-length partial-prefix
-        requests still share blocks; cross-length M3 aliases do not.
+        change greedy decoding.
+
+        Aligned mode (``set_minimax_m3_prefill_step``): every M3 prefill is cut
+        at absolute multiples of the step, at its turn cuts (a function of the
+        tokens before each cut) and at its store boundary, so a block's
+        numerics are fixed by the chunk that produced it. Blocks of finished
+        chunks carry only the step (and turn markers) and are shared by any
+        prompt with the same tokens; blocks of the partial chunk that ends at
+        a store boundary that is neither a step multiple nor a turn cut carry
+        that boundary, so only an exact-geometry request reuses them
+        (``models/minimax_m3/prefill_geometry.py``). ``minimax_m3_boundary``
+        names the producing prefill's boundary when a store's token count is
+        not it.
+
+        Previous mode: the total prompt length keys every block, so exact
+        requests and same-length partial-prefix requests share blocks and
+        cross-length M3 aliases do not.
         """
         if not self._uses_minimax_m3_cache:
             return cache_extra_keys
+
+        aligned_step = getattr(self, "_m3_aligned_step", None)
+        if aligned_step:
+            from .models.minimax_m3 import prefill_geometry
+
+            boundary = (
+                int(minimax_m3_boundary)
+                if minimax_m3_boundary is not None
+                else self._minimax_m3_boundary(
+                    tokens, stored_prompt_boundary=stored_prompt_boundary
+                )
+            )
+            return prefill_geometry.cache_extra_keys(
+                cache_extra_keys,
+                boundary=boundary,
+                step=aligned_step,
+                markers=getattr(self, "_m3_turn_markers", None),
+                tokens=tokens,
+            )
 
         # M3 stores the prompt-boundary cache under N-1 token IDs because the
         # final prompt token is re-fed to obtain first-token logits. Lookup
@@ -3698,6 +3763,9 @@ class BlockAwarePrefixCache:
             under the paged-cache lock.
             Every returned table is registered in _request_tables so the
             scheduler's normal completion cleanup can release those refs.
+
+        MiniMax-M3 aligned mode caps every hit to a prefix a cold prefill of
+        the request also ends a chunk at (``_cap_minimax_m3_hit``).
         """
         if not tokens:
             self._record_fetch_telemetry(
@@ -4107,7 +4175,9 @@ class BlockAwarePrefixCache:
                 dsv4_delta_applied=dsv4_matched_tokens is not None,
                 rotating_swa_normalized=_rotating_normalized,
             )
-            return block_table, remaining
+            return self._cap_minimax_m3_hit(
+                request_id, tokens, cache_extra_keys, block_table, remaining
+            )
 
         # Try prefix index for longer matches
         if best_match:
@@ -4381,7 +4451,9 @@ class BlockAwarePrefixCache:
                 dsv4_delta_applied=dsv4_matched_tokens is not None,
                 rotating_swa_normalized=_rotating_normalized,
             )
-            return block_table, remaining
+            return self._cap_minimax_m3_hit(
+                request_id, tokens, cache_extra_keys, block_table, remaining
+            )
 
         # No cache hit
         self._misses += 1
@@ -4394,6 +4466,138 @@ class BlockAwarePrefixCache:
             miss_reason="no_candidate",
         )
         return None, tokens
+
+    def _drop_m3_transient_payloads(self, block_table: BlockTable) -> None:
+        """SSD-only M3: a lookup on a cold index promotes every matched block WITH its payload (the L2 lookup reads
+        each block). The streamed restore re-reads them one payload at a time, so release those transient copies
+        now instead of holding the whole prompt in memory until the restore (which would then peak at twice the
+        prompt cache)."""
+        from .models.minimax_m3.prompt_boundary import streamed_restore_enabled
+
+        if not (
+            bool(getattr(self.paged_cache, "disk_only", False))
+            and getattr(self.paged_cache, "_disk_store", None) is not None
+            and streamed_restore_enabled()
+        ):
+            return
+        released = 0
+        for block_id in list(getattr(block_table, "block_ids", ()) or ()):
+            block = self.paged_cache.allocated_blocks.get(block_id)
+            if (
+                block is not None
+                and block.cache_data is not None
+                and block.block_hash is not None
+                and getattr(block, "cache_data_transient", False)
+                and getattr(block, "cache_data_from_disk", False)
+            ):
+                self.paged_cache.release_resident_payload(block)
+                released += 1
+        if released:
+            logger.debug("MiniMax-M3 lookup released %d transient L2 payload(s) before the streamed restore", released)
+
+    def _cap_minimax_m3_hit(
+        self,
+        request_id: str,
+        tokens: List[int],
+        cache_extra_keys: Optional[Any],
+        block_table: BlockTable,
+        remaining: List[int],
+    ) -> Tuple[Optional[BlockTable], List[int]]:
+        """Keep only the blocks a MiniMax-M3 continuation may reuse bit-exactly.
+
+        A hit of ``m`` tokens is usable as is when it ends at this request's
+        own store boundary (the trailing blocks matched only because they carry
+        that boundary, or the boundary is a turn cut). Otherwise reuse stops at
+        the last chunk boundary or turn cut of this request at or below ``m``:
+        the blocks covering it are kept (the scheduler cuts the restored rows
+        there when it falls inside a block) and the rest are released. Nothing
+        usable is a miss.
+        """
+        step = getattr(self, "_m3_aligned_step", None)
+        if not (getattr(self, "_uses_minimax_m3_cache", False) and step):
+            return block_table, remaining
+        from .models.minimax_m3 import prefill_geometry
+
+        matched = int(block_table.num_tokens)
+        boundary = max(0, len(tokens) - 1)
+        reuse = prefill_geometry.reuse_limit(
+            matched,
+            boundary,
+            step,
+            exact_geometry=True,
+            atomic=prefill_geometry.is_media_request(cache_extra_keys),
+            cuts=self._minimax_m3_turn_cuts(tokens, boundary),
+        )
+        self._drop_m3_transient_payloads(block_table)
+        keep_tokens = (
+            matched
+            if reuse == matched
+            else min(matched, prefill_geometry.block_cover(reuse, self.block_size))
+        )
+        if keep_tokens >= matched:
+            if reuse < matched:
+                logger.info(
+                    "MiniMax-M3 aligned prefix for %s: matched %d, reusable %d "
+                    "(chunk %d); the restored rows are cut inside the last block",
+                    request_id,
+                    matched,
+                    reuse,
+                    step,
+                )
+            return block_table, remaining
+        kept_ids: List[int] = []
+        kept_tokens = 0
+        for block_id in block_table.block_ids:
+            block = self.paged_cache.allocated_blocks.get(block_id)
+            count = int(getattr(block, "token_count", 0) or 0)
+            if kept_tokens + count > keep_tokens:
+                break
+            kept_ids.append(block_id)
+            kept_tokens += count
+        dropped = block_table.block_ids[len(kept_ids):]
+        if dropped:
+            self.paged_cache.release_request_refs(
+                BlockTable(
+                    request_id=request_id,
+                    block_ids=list(dropped),
+                    num_tokens=matched - kept_tokens,
+                )
+            )
+        block_table.block_ids = kept_ids
+        block_table.num_tokens = kept_tokens
+        logger.info(
+            "MiniMax-M3 aligned prefix for %s: matched %d, reuse %d (chunk %d, "
+            "boundary %d); released %d trailing block(s)",
+            request_id,
+            matched,
+            reuse,
+            step,
+            boundary,
+            len(dropped),
+        )
+        try:
+            record = self._fetch_telemetry.get(request_id)
+            if record is not None:
+                record["minimax_m3_matched_tokens"] = matched
+                record["minimax_m3_reuse_tokens"] = reuse
+                record["logical_restored_tokens"] = kept_tokens
+        except Exception:
+            logger.debug("M3 fetch telemetry failed for %s", request_id, exc_info=True)
+        credited = int(self._hit_credits.get(request_id, matched) or 0)
+        self._tokens_saved = max(0, self._tokens_saved - max(0, credited - kept_tokens))
+        if not kept_ids:
+            self._hits = max(0, self._hits - 1)
+            self._misses += 1
+            self._hit_credits.pop(request_id, None)
+            entry = self._request_tables.pop(request_id, None)
+            if entry is not None:
+                for _d in self._entries_by_type.values():
+                    _d.pop(request_id, None)
+            with self.paged_cache._lock:
+                self.paged_cache.request_tables.pop(request_id, None)
+            return None, tokens
+        self._hit_credits[request_id] = kept_tokens
+        return block_table, tokens[kept_tokens:]
 
     def _release_pinned_prefix_match(
         self,
@@ -5401,8 +5605,15 @@ class BlockAwarePrefixCache:
         store_cumulative_state: bool = True,
         *,
         defer_post_fence_gc: bool = False,
+        minimax_m3_boundary: Optional[int] = None,
+        minimax_m3_stream_inflight_bytes: Optional[int] = None,
     ) -> Optional[BlockTable]:
-        """Store cache data and deterministically terminate any begun L2 fence."""
+        """Store cache data and deterministically terminate any begun L2 fence.
+
+        ``minimax_m3_stream_inflight_bytes``: the MiniMax-M3 zero-copy store (``cache_data`` are views of the live
+        cache, models/minimax_m3/prompt_boundary.py). Each SSD block is copied to the writer only while the bytes it
+        has not yet written stay under this cap, and no block keeps a RAM copy (no write-behind hold): peak extra
+        memory is the cap plus one block, whatever the prompt length."""
         # VMLX_STORE_PHASE_TRACE (see _STORE_PHASE_TRACE): read here so this lifecycle wrapper stays self-contained
         marks = [("start", time.perf_counter())] if os.environ.get("VMLX_STORE_PHASE_TRACE", "") == "1" else None
         self._store_phase_marks = marks
@@ -5410,10 +5621,13 @@ class BlockAwarePrefixCache:
             self.settle_write_behind()
         if marks is not None:
             marks.append(("settle_prev", time.perf_counter()))
+        _shape_kwargs: Dict[str, Any] = {"stored_prompt_boundary": True}
+        if minimax_m3_boundary is not None:
+            _shape_kwargs["minimax_m3_boundary"] = minimax_m3_boundary
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
             tokens,
             cache_extra_keys,
-            stored_prompt_boundary=True,
+            **_shape_kwargs,
         )
         write_fence: Dict[str, Any] = {}
         producer_aborted = False
@@ -5427,6 +5641,7 @@ class BlockAwarePrefixCache:
                 store_cumulative_state=store_cumulative_state,
                 _write_fence=write_fence,
                 _defer_gc=defer_post_fence_gc,
+                _m3_stream_inflight=minimax_m3_stream_inflight_bytes,
             )
             if marks is not None:
                 marks.append(("impl_tail", time.perf_counter()))
@@ -5548,6 +5763,7 @@ class BlockAwarePrefixCache:
         *,
         _write_fence: Dict[str, Any],
         _defer_gc: bool = False,
+        _m3_stream_inflight: Optional[int] = None,
     ) -> Optional[BlockTable]:
         """
         Store computed cache for future reuse.
@@ -5856,6 +6072,43 @@ class BlockAwarePrefixCache:
             )
             if callable(record_unadmitted):
                 record_unadmitted(disk_write_fence_id, int(count))
+
+        # MiniMax-M3 zero-copy store: the payloads are views of the live cache. Hand the writer one block copy at a
+        # time while its unwritten bytes stay under the cap, and keep no RAM copy (no write-behind hold).
+        m3_streamed = bool(
+            _m3_stream_inflight
+            and has_minimax_m3_cache_data
+            and disk_store is not None
+            and callable(getattr(disk_store, "wait_for_pending_write_bytes", None))
+        )
+        m3_stream_stats = {"blocks": 0, "waits": 0, "timeouts": 0, "max_pending": 0, "cap": int(_m3_stream_inflight or 0)}
+        if m3_streamed:
+            self._last_m3_stream_store = m3_stream_stats
+
+        def _m3_stream_wait(block_payload) -> None:
+            need = 0
+            for entry in block_payload or ():
+                if isinstance(entry, (tuple, list)):
+                    for value in entry[1:]:
+                        need += int(getattr(value, "nbytes", 0) or 0)
+            limit = max(0, int(_m3_stream_inflight) - need)
+            pending = int(disk_store.pending_write_bytes())
+            m3_stream_stats["blocks"] += 1
+            m3_stream_stats["max_pending"] = max(m3_stream_stats["max_pending"], pending)
+            if pending <= limit:
+                return
+            m3_stream_stats["waits"] += 1
+            if not disk_store.wait_for_pending_write_bytes(
+                limit, timeout=float(self._native_block_disk_admission_timeout)
+            ):
+                m3_stream_stats["timeouts"] += 1
+                logger.warning(
+                    "MiniMax-M3 streamed store %s: the SSD writer still holds %d bytes after %.0f s; admitting the "
+                    "next block under the store-wide budget",
+                    request_id,
+                    int(disk_store.pending_write_bytes()),
+                    float(self._native_block_disk_admission_timeout),
+                )
 
         def _write_block_to_disk(
             block_hash: bytes,
@@ -6622,6 +6875,10 @@ class BlockAwarePrefixCache:
                                     f"{block.block_id} ({_layer_summary}, "
                                     f"{len(block_tokens)} tokens)"
                                 )
+                                if m3_streamed:
+                                    # Bounded in-flight bytes: wait for the writer before
+                                    # handing it the next block's copy.
+                                    _m3_stream_wait(block_kv_data)
                                 _admitted_write = _write_block_to_disk(
                                     block_chain_hash,
                                     np_block,
@@ -6630,6 +6887,7 @@ class BlockAwarePrefixCache:
                                 )
                                 if (
                                     _admitted_write
+                                    and not m3_streamed
                                     and _disk_only
                                     and getattr(self, "_ssd_write_behind", False)
                                     and block_chain_hash in disk_only_fallbacks
@@ -7857,6 +8115,154 @@ class BlockAwarePrefixCache:
             return
         self._reconstruct_memo_arm = True
 
+    def _reconstruct_minimax_m3_streamed(self, block_table: BlockTable) -> Any:
+        """MiniMax-M3 SSD-only restore in bounded memory: allocate each layer's lanes once at the restored length and
+        copy every block (or group-file span) into them as it is read, releasing it before the next read.
+
+        The generic path keeps every block payload until it concatenates each layer, so a restore peaks at twice the
+        prompt cache (a 65k-token M3.1 prompt: ~16 GiB, more than the room left beside the model). Here the peak is
+        the restored cache plus one payload. The result equals the generic path's: sparse layers rebuilt with
+        ``restore_minimax_m3_sparse`` at the exact length, dense KVCache layers padded to the KVCache step with
+        zeros. Returns the cache list, None (a payload could not be read: miss), or _M3_STREAM_RESTORE_DECLINED when
+        the table is not an SSD-only M3 table this path handles (the generic path then runs).
+        """
+        from .models.minimax_m3.prompt_boundary import streamed_restore_enabled
+
+        if not (
+            getattr(self, "_uses_minimax_m3_cache", False)
+            and getattr(self, "_m3_aligned_step", None)
+            and bool(getattr(self.paged_cache, "disk_only", False))
+            and not getattr(self, "_reconstruct_memo_arm", False)
+            and streamed_restore_enabled()
+            and block_table is not None
+            and block_table.block_ids
+        ):
+            return _M3_STREAM_RESTORE_DECLINED
+        disk = getattr(self.paged_cache, "_disk_store", None)
+        blocks = [self.paged_cache.allocated_blocks.get(block_id) for block_id in block_table.block_ids]
+        if disk is None or any(b is None for b in blocks):
+            return _M3_STREAM_RESTORE_DECLINED
+        if any(b.cache_data is None and b.block_hash is None for b in blocks):
+            return _M3_STREAM_RESTORE_DECLINED
+        total = int(block_table.num_tokens)
+        if total <= 0 or sum(int(b.token_count or 0) for b in blocks) != total:
+            return _M3_STREAM_RESTORE_DECLINED
+        from mlx_lm.models.cache import KVCache
+
+        from .models.minimax_m3.cache import restore_minimax_m3_sparse
+
+        span_reader = getattr(disk, "read_group_span_for_reconstruction", None)
+        readahead = getattr(disk, "advise_block_reads", None)
+        release_groups = getattr(disk, "release_group_cache", None)
+        kv_step = int(getattr(KVCache, "step", 256) or 256)
+        allowed_kv = self._get_allowed_n_kv_heads()
+        lanes: Optional[List[Tuple[str, List[Any]]]] = None
+        pos = 0
+        disk_blocks = 0
+        ra_upto = 0
+        i = 0
+        try:
+            while i < len(blocks):
+                if callable(readahead) and ra_upto - i < self._READAHEAD_BLOCKS // 2:
+                    end = min(len(blocks), max(ra_upto, i) + self._READAHEAD_BLOCKS)
+                    hashes = [b.block_hash for b in blocks[max(ra_upto, i):end] if b.cache_data is None]
+                    try:
+                        if hashes:
+                            readahead(hashes)
+                    except Exception:
+                        pass
+                    ra_upto = end
+                block = blocks[i]
+                payload, n, from_disk = block.cache_data, 1, False
+                if payload is None:
+                    span = None
+                    if callable(span_reader):
+                        run = []
+                        for b in blocks[i:i + 64]:
+                            if b.cache_data is not None or b.block_hash is None:
+                                break
+                            run.append(b.block_hash)
+                        span = span_reader(run) if len(run) >= 2 else None
+                    if span is not None:
+                        payload, n = span
+                    else:
+                        payload = disk.read_block(block.block_hash)
+                    from_disk = True
+                if payload is None:
+                    logger.warning(
+                        "MiniMax-M3 streamed restore: block %s could not be read from SSD; cache miss",
+                        block.block_id,
+                    )
+                    return None
+                rows = sum(int(b.token_count or 0) for b in blocks[i:i + n])
+                if lanes is None:
+                    lanes = []
+                    for entry in payload:
+                        tag = entry[0] if isinstance(entry, (tuple, list)) and entry else None
+                        arrays = list(entry[1:4] if tag == "minimax_m3" else entry[1:3]) if tag else []
+                        if tag not in ("minimax_m3", "kv") or any(
+                            a is None or len(a.shape) != 4 for a in arrays
+                        ) or (tag == "minimax_m3" and len(arrays) != 3):
+                            return _M3_STREAM_RESTORE_DECLINED
+                        if allowed_kv and int(arrays[0].shape[1]) not in allowed_kv:
+                            logger.warning(
+                                "M3 head count mismatch: got %s, expected one of %s — forcing cache miss",
+                                arrays[0].shape[1],
+                                sorted(allowed_kv),
+                            )
+                            return None
+                        cap = total if tag == "minimax_m3" else -(-total // kv_step) * kv_step
+                        lanes.append((tag, [
+                            mx.zeros((a.shape[0], a.shape[1], cap, a.shape[3]), dtype=a.dtype) for a in arrays
+                        ]))
+                if len(payload) != len(lanes):
+                    return _M3_STREAM_RESTORE_DECLINED if pos == 0 else None
+                for (tag, dest), entry in zip(lanes, payload):
+                    arrays = list(entry[1:4] if tag == "minimax_m3" else entry[1:3])
+                    if entry[0] != tag or len(arrays) != len(dest) or any(
+                        a is None or int(a.shape[2]) != rows or a.dtype != d.dtype
+                        or tuple(a.shape[:2]) + (a.shape[3],) != tuple(d.shape[:2]) + (d.shape[3],)
+                        for a, d in zip(arrays, dest)
+                    ):
+                        return _M3_STREAM_RESTORE_DECLINED if pos == 0 else None
+                    for j, a in enumerate(arrays):
+                        dest[j][:, :, pos:pos + rows, :] = a
+                mx.eval([a for _tag, dest in lanes for a in dest])
+                payload = None
+                if from_disk:
+                    disk_blocks += n
+                    if callable(release_groups):
+                        release_groups()
+                pos += rows
+                i += n
+            if lanes is None or pos != total:
+                return None
+            caches: List[Any] = []
+            for tag, dest in lanes:
+                if tag == "minimax_m3":
+                    caches.append(restore_minimax_m3_sparse(*dest))
+                else:
+                    cache = KVCache()
+                    cache.keys, cache.values = dest
+                    cache.offset = total
+                    caches.append(cache)
+            self._last_reconstruct_disk_blocks = disk_blocks
+            self._last_reconstruct_tq_blocks = 0
+            logger.info(
+                "MiniMax-M3 streamed restore: %d tokens, %d layers, %d block(s) (%d from SSD), no concatenation copy",
+                total,
+                len(caches),
+                len(blocks),
+                disk_blocks,
+            )
+            return caches
+        finally:
+            if callable(release_groups):
+                try:
+                    release_groups()
+                except Exception:
+                    pass
+
     def reconstruct_cache(
         self,
         block_table: BlockTable,
@@ -7929,6 +8335,10 @@ class BlockAwarePrefixCache:
         if not HAS_MLX:
             logger.warning("Cannot reconstruct cache: MLX not available")
             return None
+
+        streamed = self._reconstruct_minimax_m3_streamed(block_table)
+        if streamed is not _M3_STREAM_RESTORE_DECLINED:
+            return streamed
 
         disk_backed_block_ids: set[int] = set()
         l2_readable_block_ids: set[int] = set()
