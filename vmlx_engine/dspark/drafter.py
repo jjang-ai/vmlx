@@ -280,7 +280,7 @@ class DSparkDrafter(nn.Module):
             if self.sliding_window:
                 k, v, mask = _sliding(k, v, start, length, self.sliding_window, q.dtype, self.ctx_base)
             elif window and int(k.shape[2]) > window + length:
-                # Opt-in recent-context window (TensorFold's DSV4 drafter attends the last 128 rows): the draft
+                # Opt-in recent-context window (e.g. the last 128 rows): the draft
                 # block's attention reads O(window) instead of the whole conversation. Draft-side only.
                 k, v = k[:, :, -(window + length):], v[:, :, -(window + length):]
             o = mx.fast.scaled_dot_product_attention(q, k, v, scale=attn.head_dim**-0.5, mask=mask)
