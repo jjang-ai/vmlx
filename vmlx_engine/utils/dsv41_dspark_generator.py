@@ -36,32 +36,37 @@ def _adaptive_enabled() -> bool:
 
 
 # --- DSpark prefill chunk width -----------------------------------------------------------------------------------
-# The width trades compute against MLX's allocator working set. Compute: each chunk passes over every routed expert
-# once, so wider chunks cost less per row (JANGHT1.4 on a 256 GB M5 Ultra, where memory never binds, 32k-token prompt:
-# 1024 1,515 pp/s, 2048 1,715, 4096 1,900). Memory: MLX's allocator keeps freed buffers for
-# reuse until active + cached memory reaches its GC line, 0.95 x Metal's recommended working set; there it releases
-# cached buffers on every cache miss and allocates fresh Metal buffers. Measured (DSV4.1, draft resident, cold
-# prefill): a chunk runs at full speed while its PEAK active memory stays >= ~2.8 GiB under that line, and slows
-# 5-27 % once it comes closer (the same on both machines and both bundles; moving only the GC line with
-# mx.set_memory_limit reproduces it) (JANG_2K on a 256 GB M5 Ultra sits 6.2 GiB under the line at rest, JANGHT1.4 on a 128 GB
-# M5 Max 7.2 GiB). A chunk's transient memory grows with its rows and with the context.
+# The width trades compute against MLX's allocator working set.
 #
-# So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to
-# _MAX_CHUNK (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
+# Compute: each chunk passes over every routed expert once, so wider chunks cost less per row, up to a width that
+# depends on the GPU: on an M5 Max 2048 rows beat 1536 and 1024 while 2176-2432 lost the gain; on an M5 Ultra (two
+# dies) 4096 still beat 2048 (JANGHT1.4, 32k tokens, memory not binding: 1024 1,515 pp/s, 2048 1,715, 4096 1,895). The
+# widest width is _DIE_MAX_CHUNK per GPU die.
+#
+# Memory: MLX's allocator keeps freed buffers for reuse until active + cached memory reaches its GC line, 0.95 x
+# Metal's recommended working set (or the memory limit, if lower); there it releases cached buffers on every cache
+# miss and allocates fresh Metal buffers. Measured (DSV4.1, draft resident, cold prefill): a chunk runs at full speed
+# while its PEAK active memory stays >= ~2.8 GiB under that line and slows 5-27 % closer to it; moving only the GC
+# line (mx.set_memory_limit) reproduces it. JANG_2K on a 256 GB M5 Ultra rests 6.2 GiB under the line, JANGHT1.4 on a
+# 128 GB M5 Max 7.2 GiB. A chunk's transient memory grows with its rows and with the context.
+#
+# So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to the
+# GPU's widest (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
 # peak keeps _GC_RESERVE_BYTES under the line, never below the fixed rule's 1024 (narrower chunks were slower in every
-# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350). A prompt that fits
-# runs as one chunk; a longer one in the fewest chunks of at most that width, near-equal and a multiple of 128 rows. The transient is predicted from a
-# measured DSV4.1 model scaled by what this process has observed: after each DSpark prefill the measured peak (at the
-# N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio; the scale is the median of the last 8. The chooser only picks a width: it never refuses or
-# shortens a prompt. When the allocator numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024, one
-# chunk for a prompt of <= 2048 tokens on a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width
-# (diagnostics). Evidence: jang docs/runtime/dsv41-flash-1017-janght-2026-10-19/evidence/py-adaptive-prefill-step-20261031.
+# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350). A prompt that
+# fits runs as one chunk; a longer one in the fewest chunks of at most that width, a multiple of 128 rows. The
+# transient is predicted from a measured DSV4.1 model times a learned scale: after each DSpark prefill the measured
+# peak (at the N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio, and the scale is the
+# median of the last 8. The chooser only picks a width: it never refuses or shortens a prompt. When the allocator
+# numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024; one chunk for a prompt of <= 2048 tokens on
+# a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width (diagnostics).
 _GiB = 1 << 30
-_MAX_CHUNK = 4096
+_DIE_MAX_CHUNK = 2048      # widest width per GPU die (an M5 Ultra has two)
 _ALIGN = 128               # a split prompt's chunk width is a multiple of this
 _DEFAULT_STEP = 2048       # vMLX's --prefill-step-size default; a smaller configured step caps the width
 _GC_RESERVE_BYTES = int(2.8 * _GiB)
-# Transient of one chunk (peak active minus active before it), draft resident: _T_BASE + rows * _T_ROW + context * _T_CTX
+# Transient of one chunk (peak active minus active before it), draft resident:
+#   _T_BASE + rows * _T_ROW + context * _T_CTX
 # (upper envelope of the measured chunks, both bundles).
 _T_BASE = int(1.0 * _GiB)
 _T_ROW = int(1.4 * _GiB) // 1024
@@ -100,10 +105,22 @@ def _fallback_chunk(n_tokens: int, start: int, step: int) -> int:
     return step
 
 
+def _device_info() -> dict:
+    return mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+
+
+def _gpu_max_chunk() -> int:
+    """_DIE_MAX_CHUNK x the GPU's dies: two for an Ultra (two Max dies), else one; one when the name is unreadable."""
+    try:
+        name = str(_device_info().get("device_name", ""))
+    except Exception:  # noqa: BLE001
+        name = ""
+    return _DIE_MAX_CHUNK * (2 if "ultra" in name.lower() else 1)
+
+
 def _gc_line_bytes() -> int | None:
     """MLX's allocator GC line: 0.95 x max_recommended_working_set_size, or the memory limit if one is set lower."""
-    info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
-    line = int(0.95 * int(info["max_recommended_working_set_size"]))
+    line = int(0.95 * int(_device_info()["max_recommended_working_set_size"]))
     get_limit = getattr(mx, "get_memory_limit", None)
     if callable(get_limit):
         limit = int(get_limit())
@@ -139,9 +156,11 @@ class PrefillChunkChooser:
 
     _ratios: list = []      # measured / predicted transient of recent prefills (process-wide)
 
-    def __init__(self, configured_step: int | None = None, *, gc_line=_gc_line_bytes, active=_active_bytes):
+    def __init__(self, configured_step: int | None = None, *, gc_line=_gc_line_bytes, active=_active_bytes,
+                 max_chunk=None):
         cfg = int(configured_step or _DEFAULT_STEP)
-        self.cap = max(1, cfg) if cfg < _DEFAULT_STEP else _MAX_CHUNK
+        widest = int(max_chunk) if max_chunk else _gpu_max_chunk()
+        self.cap = max(1, cfg) if cfg < _DEFAULT_STEP else widest
         self.configured_step = cfg
         self._gc_line = gc_line
         self._active = active
@@ -193,8 +212,9 @@ class PrefillChunkChooser:
         ctx = start + n_tokens
         widest = self.widest(line - active, ctx)
         chunk = _split(body, widest) if body > 0 else widest
-        self.last = {"rule": "adaptive", "chunk": chunk, "widest": widest, "headroom_gib": round((line - active) / _GiB, 2),
-                     "scale": round(self.scale(), 3), "n_tokens": n_tokens, "start": start}
+        self.last = {"rule": "adaptive", "chunk": chunk, "widest": widest,
+                     "headroom_gib": round((line - active) / _GiB, 2), "scale": round(self.scale(), 3),
+                     "n_tokens": n_tokens, "start": start}
         return chunk
 
     # --- learning --------------------------------------------------------------------------------------------------
@@ -210,7 +230,7 @@ class PrefillChunkChooser:
             return None
 
     def end(self, mark, rows: int, n_tokens: int, start: int = 0, peak: int | None = None) -> None:
-        """After the body chunks (at the N-1 boundary): record measured / predicted transient for the chunk width used."""
+        """After the body chunks (at the N-1 boundary): record measured / predicted transient for the width used."""
         if mark is None or rows < _OBSERVE_MIN_ROWS or (self.last or {}).get("rule") != "adaptive":
             return
         try:

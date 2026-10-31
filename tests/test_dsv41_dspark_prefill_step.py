@@ -16,9 +16,11 @@ def _clean(monkeypatch):
     yield
 
 
-def chooser(headroom_gib, configured=2048, line_gib=211.58):
+def chooser(headroom_gib, configured=2048, line_gib=211.58, max_chunk=4096):
+    """An Ultra-class chooser (two dies: widest 4096) unless max_chunk says otherwise."""
     line = int(line_gib * GiB)
-    return G.PrefillChunkChooser(configured, gc_line=lambda: line, active=lambda: line - int(headroom_gib * GiB))
+    return G.PrefillChunkChooser(configured, gc_line=lambda: line, active=lambda: line - int(headroom_gib * GiB),
+                                 max_chunk=max_chunk)
 
 
 def chunks_of(body, width):
@@ -83,7 +85,7 @@ def test_failed_detection_keeps_the_old_rule(gc_line, active):
 def test_plenty_of_room_runs_the_widest_width_in_equal_chunks():
     c = chooser(116.0)                         # JANGHT on the 256 GB Ultra
     assert c.choose(12_000, 0) == 4_096       # 11,999 body rows -> 3 chunks of <= 4096 (4096 + 4096 + 3807)
-    assert c.last["widest"] == G._MAX_CHUNK == 4096
+    assert c.last["widest"] == 2 * G._DIE_MAX_CHUNK == 4096
     assert c.choose(32_845, 0) == 3_712       # 32,844 body rows -> 9 chunks: share 3650 rounded up to 128
 
 
@@ -105,7 +107,7 @@ def test_one_chunk_only_when_the_rule_would_pick_that_width():
 def test_width_follows_the_headroom():
     widths = [chooser(h).widest(int(h * GiB), 12_000) for h in (4.0, 5.0, 6.2, 7.2, 8.0, 20.0)]
     assert widths == sorted(widths)
-    assert widths[-1] == G._MAX_CHUNK
+    assert widths[-1] == 2 * G._DIE_MAX_CHUNK
     assert widths[0] == G._MIN_CHUNK
 
 
@@ -135,7 +137,7 @@ def test_a_step_set_below_the_default_bounds_the_width():
     # the default (2048), unset, or larger: the chooser's own range
     for cfg in (2048, 0, None, 8192):
         c = chooser(116.0, configured=cfg)
-        assert c.choose(32_845, 0) == 3_712 and c.last["widest"] == G._MAX_CHUNK
+        assert c.choose(32_845, 0) == 3_712 and c.last["widest"] == 2 * G._DIE_MAX_CHUNK
     assert chooser(6.2, configured=8192).choose(32_845, 0) < 2048   # still bounded by the headroom
 
 
@@ -256,3 +258,25 @@ def test_split_examples():
     assert G._split(100_189, 1_024) == 1_024
     assert G._split(5, 1_024) == 5
     assert G._split(3_000, 100) == 100          # a width under _ALIGN is used as is
+
+
+@pytest.mark.parametrize("name, widest", [("Apple M5 Ultra", 4096), ("Apple M5 Max", 2048), ("Apple M4 Pro", 2048),
+                                          ("", 2048)])
+def test_widest_width_per_gpu_die(monkeypatch, name, widest):
+    monkeypatch.setattr(G, "_device_info", lambda: {"device_name": name, "max_recommended_working_set_size": 1 << 40})
+    assert G._gpu_max_chunk() == widest
+    assert G.PrefillChunkChooser(2048, gc_line=lambda: 1 << 40, active=lambda: 1 << 30).choose(32_845, 0) <= widest
+
+
+def test_unreadable_device_name_keeps_one_die(monkeypatch):
+    def boom():
+        raise RuntimeError("no device")
+    monkeypatch.setattr(G, "_device_info", boom)
+    assert G._gpu_max_chunk() == G._DIE_MAX_CHUNK
+
+
+def test_max_class_gpu_with_room_runs_2048_rows():
+    c = chooser(7.2, line_gib=102.14, max_chunk=2048)     # JANGHT on the 128 GB M5 Max
+    assert c.choose(12_000, 0) == 2048                   # 11,999 rows: 6 x 2048 (5 x 2048 + 1759)
+    assert c.choose(32_845, 0) == 2048
+    assert c.choose(1_900, 0) == 1_899                   # fits: one chunk
