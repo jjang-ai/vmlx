@@ -2868,16 +2868,13 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.enableBlockDiskCache = false')
     })
 
-    it('re-detect normalizes a saved In-Memory Paged Cache (RAM)=On to Off and logs it', () => {
-        // Inverse of the removed "stale saved In-Memory Paged Cache (RAM)=Off
-        // was reset to auto-safe On" behaviour: with the RAM tier retired, a
-        // saved On is what is stale, and re-detect must force it Off — never
-        // the other way around.
+    it('re-detect never turns the RAM copy on, and drops a saved On without Block Disk Cache', () => {
+        // Re-detect once flipped a deliberate Off back to On; the RAM copy is now only the user's checkbox and only
+        // in front of Block Disk Cache (RAM + SSD), so re-detect keeps a saved On with the block store and drops it
+        // without one.
         const source = readFileSync('src/main/sessions.ts', 'utf8')
-        expect(source).toContain('if (config.usePagedCache === true) {')
-        expect(source).toContain(
-            'In-Memory Paged Cache (RAM) forced Off — SSD block-disk cache (L2) is the only cache tier',
-        )
+        expect(source).toContain('if (config.usePagedCache === true && config.enableBlockDiskCache === false) {')
+        expect(source).toContain('Keep a RAM copy needs Block Disk Cache; launching RAM only (memory-aware prefix cache)')
         expect(source).not.toContain('stale saved In-Memory Paged Cache (RAM)=Off was reset to auto-safe On')
     })
 

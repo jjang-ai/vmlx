@@ -3171,14 +3171,12 @@ export class SessionManager extends EventEmitter {
           // ===false (Force Off) must survive — do NOT let detected VL clobber a
           // deliberate Force Off. buildArgs emits --text-only for a detected-VL model
           // the user forced off so the engine honors it (is_mllm_model force_text_only).
-          // In-RAM paged cache is OFF for every family (SSD block-disk L2 is the
-          // only tier), so a saved Off is never "stale" and is never reset to On.
-          // This block used to silently flip a deliberate Off back to On on
-          // re-detect, which is how paged RAM kept coming back after being
-          // turned off.
-          if (config.usePagedCache === true) {
+          // The RAM copy (paged RAM blocks) is only ever the user's own choice and only in front of Block Disk Cache
+          // (RAM + SSD): re-detection never turns it on (that is how paged RAM once kept coming back), and a saved
+          // On without the block store it fronts is dropped.
+          if (config.usePagedCache === true && config.enableBlockDiskCache === false) {
             config.usePagedCache = false
-            this.pushLog(sessionId, `[INFO] In-Memory Paged Cache (RAM) forced Off — SSD block-disk cache (L2) is the only cache tier`)
+            this.pushLog(sessionId, `[INFO] Keep a RAM copy needs Block Disk Cache; launching RAM only (memory-aware prefix cache)`)
           }
           // Log if model type changed
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
