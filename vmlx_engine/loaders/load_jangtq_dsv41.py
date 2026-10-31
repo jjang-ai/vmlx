@@ -46,16 +46,46 @@ def load_jangtq_dsv41_model(model_path: str, *, skip_params_eval: bool = False) 
     return model, tokenizer
 
 
-def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
-    """Load the bundle's self-contained dSpark MTP draft and attach it as ``model._dspark`` so a V4.1
-    spec-decode generator can drive it (DECODE_DSPARK_METHODS.md M1). DSpark adaptive is now the
-    DEFAULT (per Eric 2026-10-25: 50+ tok/s easy code) — the generator + prefix-cache coexistence are
-    proven; set ``VMLX_DSV41_DSPARK=0`` to force the plain AR path. Loading is additive (the draft is a
-    separate attached module) and the generator still falls back to AR per-request for VL turns."""
-    import json
+_OFF_VALUES = frozenset({"0", "false", "off", "no"})
+_ON_VALUES = frozenset({"1", "true", "on", "yes"})
+
+
+def dsv41_dspark_decision() -> Tuple[bool, str]:
+    """Whether a V4.1 bundle's dSpark draft is attached at load, and the reason (logged as the receipt).
+
+    Precedence (highest first):
+      1. ``VMLX_DSPARK`` = the serve flag ``--dspark on|off``, which cli.serve exports as ``1`` / ``0`` before the model
+         loads. It is the switch every DSpark family reads (dspark/runtime.load_dspark_runtime), so the app's DSpark
+         checkbox and ``vmlx serve --dspark`` govern V4.1 like MiniCPM-V-4.7 and MiniMax-M3.1. An explicit choice is
+         the user's: ``on`` attaches the draft even when the diagnostic lever below says 0.
+      2. ``VMLX_DSV41_DSPARK=0`` (diagnostic lever, V4.1 only): plain AR when no explicit ``--dspark`` was given.
+      3. ``--dspark auto`` (the default): attach whenever the bundle ships the draft (``runtime.bundle_has_mtp``).
+    Draft depth is never chosen here: the generator's Adaptive governor picks every round's width."""
     import os
 
-    if os.environ.get("VMLX_DSV41_DSPARK", "1").strip().lower() in {"0", "false", "off", "no"}:
+    choice = os.environ.get("VMLX_DSPARK", "").strip().lower()
+    if choice in _OFF_VALUES:
+        return False, "--dspark off (VMLX_DSPARK=0)"
+    if choice in _ON_VALUES:
+        return True, "--dspark on (VMLX_DSPARK=1)"
+    lever = os.environ.get("VMLX_DSV41_DSPARK", "").strip().lower()
+    if lever in _OFF_VALUES:
+        return False, "VMLX_DSV41_DSPARK=0 (diagnostic lever; --dspark auto)"
+    return True, "--dspark auto (bundle draft is used when shipped)"
+
+
+def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
+    """Load the bundle's self-contained dSpark MTP draft and attach it as ``model._dspark``; the scheduler then serves
+    with DSV41DSparkGenerator (speculative decode, Adaptive width). Without ``model._dspark`` it serves the plain
+    SingleBatchGenerator (AR). On by default for bundles that ship the draft; ``--dspark off`` (or the diagnostic
+    ``VMLX_DSV41_DSPARK=0`` under ``--dspark auto``) serves AR. See ``dsv41_dspark_decision`` for the precedence.
+    Loading is additive (the draft is a separate attached module) and the generator still falls back to AR
+    per-request for VL turns."""
+    import json
+
+    wanted, reason = dsv41_dspark_decision()
+    if not wanted:
+        logger.info("DSV4.1: dSpark draft not attached: %s; serving AR (SingleBatchGenerator)", reason)
         return
     try:
         cfg = json.loads((bundle / "config.json").read_text())
@@ -64,7 +94,7 @@ def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
         return
     rt = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
     if not rt.get("bundle_has_mtp"):
-        logger.info("DSV4.1: VMLX_DSV41_DSPARK set but bundle advertises no MTP draft; serving AR-only")
+        logger.info("DSV4.1: bundle advertises no dSpark draft (runtime.bundle_has_mtp); serving AR (%s)", reason)
         return
     try:
         from jang_tools.dsv41.dspark import load_dspark
@@ -75,7 +105,7 @@ def _maybe_load_dsv41_dspark(model, bundle: Path) -> None:
             return
         ds = load_dspark(str(bundle), runtime.args, runtime.model.embed, runtime.model.head)
         model._dspark = ds
-        logger.info("DSV4.1: dSpark MTP draft attached (model._dspark), bs=%s", getattr(ds, "bs", "?"))
+        logger.info("DSV4.1: dSpark MTP draft attached (model._dspark), bs=%s; %s", getattr(ds, "bs", "?"), reason)
     except Exception as exc:  # pragma: no cover
         logger.warning("DSV4.1: dSpark draft load failed (%s); serving AR-only", exc)
 
