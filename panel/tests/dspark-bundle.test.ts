@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { bundledDsparkDefault, configDeclaresDspark, dsparkUsesTextLane, findBundledDsparkDrafter } from '../src/main/dsparkBundle'
 import { buildCommandPreview } from '../src/renderer/src/components/sessions/SessionSettings'
 import { DEFAULT_CONFIG } from '../src/renderer/src/components/sessions/SessionConfigForm'
-import { addDraftAdmissionWeights, writeMinimaxDsparkBundle } from './helpers/draftAdmissionFixture'
+import { addDraftAdmissionWeights, writeDsv41Bundle, writeMinimaxDsparkBundle, type Dsv41Layout } from './helpers/draftAdmissionFixture'
 
 function bundle(drafter: Record<string, unknown> | null, dir = 'dspark', stamp?: Record<string, unknown>): string {
   const root = mkdtempSync(join(tmpdir(), 'dspark-bundle-'))
@@ -130,6 +130,56 @@ describe('MiniMax-M3 / M3.1 bundled DSpark drafter (text lane)', () => {
   })
 })
 
+function dsv41Bundle(layout: Dsv41Layout): string {
+  const root = mkdtempSync(join(tmpdir(), 'dspark-dsv41-'))
+  writeDsv41Bundle(root, layout)
+  return root
+}
+
+describe('DeepSeek-V4.1 bundled dSpark draft (engine loader admission)', () => {
+  it('finds the draft of each release layout: JANGHT1.4 and JANG_2K ship dspark/dspark.safetensors, no dspark/config.json', () => {
+    for (const layout of ['janght', 'jang2k'] as const) {
+      const root = dsv41Bundle(layout)
+      expect(findBundledDsparkDrafter(root)).toBe(join(root, 'dspark'))
+      expect(bundledDsparkDefault(root)).toBe(true)
+      expect(dsparkUsesTextLane(root)).toBe(true)
+    }
+    const rootFile = dsv41Bundle('root-file')
+    expect(findBundledDsparkDrafter(rootFile)).toBe(rootFile)
+    // A non-JANGHT bundle reads the release mtp.* tensors from its own shards (load_dspark's source path).
+    const shards = dsv41Bundle('source-shards')
+    expect(findBundledDsparkDrafter(shards)).toBe(shards)
+  })
+
+  it('serves AR (no control) when the bundle declares no draft or ships none', () => {
+    expect(findBundledDsparkDrafter(dsv41Bundle('none'))).toBeNull()
+    expect(bundledDsparkDefault(dsv41Bundle('none'))).toBe(false)
+    // Declared but the draft file is gone: JANGHT has no shard fallback (load_dspark raises, the engine serves AR).
+    const janght = dsv41Bundle('janght')
+    unlinkSync(join(janght, 'dspark', 'dspark.safetensors'))
+    expect(findBundledDsparkDrafter(janght)).toBeNull()
+    // A JANG_2K-style (affine) bundle without the file and without mtp.* in its shards has nothing to load either.
+    const jang2k = dsv41Bundle('jang2k')
+    unlinkSync(join(jang2k, 'dspark', 'dspark.safetensors'))
+    expect(findBundledDsparkDrafter(jang2k)).toBeNull()
+    // The file alone does not declare the draft: the loader gates on runtime.bundle_has_mtp first.
+    const undeclared = dsv41Bundle('janght')
+    const cfg = JSON.parse(readFileSync(join(undeclared, 'config.json'), 'utf8'))
+    cfg.runtime.bundle_has_mtp = false
+    writeFileSync(join(undeclared, 'config.json'), JSON.stringify(cfg))
+    expect(findBundledDsparkDrafter(undeclared)).toBeNull()
+  })
+
+  it('a DeepSeek-V4 (V4.0) bundle with the same files gets no DSpark control: V4.0 has no dSpark runtime', () => {
+    const root = dsv41Bundle('janght')
+    const cfg = JSON.parse(readFileSync(join(root, 'config.json'), 'utf8'))
+    cfg.model_type = 'deepseek_v4'
+    writeFileSync(join(root, 'config.json'), JSON.stringify(cfg))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    expect(dsparkUsesTextLane(root)).toBe(false)
+  })
+})
+
 const flat = (cmd: string) => cmd.replace(/\s*\\\n\s*/g, ' ')
 
 describe('command preview with a bundled DSpark drafter', () => {
@@ -164,6 +214,24 @@ describe('command preview with a bundled DSpark drafter', () => {
 
   it('bundles without a drafter get no --dspark flag', () => {
     expect(preview({}, false)).not.toContain('--dspark')
+  })
+
+  it('DeepSeek-V4.1: --dspark auto / on / off on the DSV4 lane (--max-num-seqs 1, batching on), nothing else changes', () => {
+    const v41 = { family: 'deepseek-v4', isMultimodal: false }
+    const run = (cfg: any, dspark: any) => flat(buildCommandPreview('/m', { ...base, ...cfg }, v41, '', false, undefined, dspark))
+    const strip = (cmd: string) => cmd.replace(/ --dspark (auto|on|off)/, '')
+    const lane = { default: true, textLane: true }
+    expect(run({}, false)).not.toContain('--dspark')
+    for (const [cfg, mode] of [[{}, 'auto'], [{ useBundledDspark: true }, 'on'], [{ useBundledDspark: false }, 'off'],
+      // A stale draft model does not turn V4.1's own draft off: the DSV4 engine drops --speculative-model.
+      [{ speculativeModel: '/models/other-draft' }, 'auto']] as const) {
+      const cmd = run(cfg, lane)
+      expect(cmd).toContain(`--dspark ${mode}`)
+      expect(cmd).toContain('--max-num-seqs 1')
+      expect(cmd).toContain('--continuous-batching')
+      expect(cmd).not.toContain('--no-continuous-batching')
+      expect(strip(cmd)).toBe(strip(run(cfg, false)))
+    }
   })
 
   it('a text-lane (M3.1) drafter only selects --dspark: batching and every cache flag stay as without a drafter', () => {

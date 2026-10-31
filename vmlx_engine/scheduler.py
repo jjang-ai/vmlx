@@ -4052,7 +4052,8 @@ class Scheduler:
             getattr(self.model, "_dspark", None) is not None
             and int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1
         ):
-            # V4.1 DSpark draft attached (default-on; VMLX_DSV41_DSPARK=0 to disable): speculative decode with
+            # V4.1 DSpark draft attached at load (default-on; --dspark off leaves it unattached, so this lane is
+            # skipped and the plain SingleBatchGenerator below serves AR): speculative decode with
             # DSparkRunner.prefill(session=<engine cache>) + decode_stream. Subclasses SingleBatchGenerator (same
             # ctor), so it only engages when a draft is present; the default AR path is never affected.
             try:
