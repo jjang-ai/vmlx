@@ -874,7 +874,7 @@
       "hybridSsdOnlyNote": "混合/Mamba 纯 SSD 模式将注意力 KV 块保存在 Block Disk L2 中，并从类型化 SSD 存储或干净预填充恢复全精度 SSM/GDN 状态。",
       "glmNativeSsdNote": "GLM 在共享 SSD 池中存储精确的原生检查点，不在 RAM 中保留载荷，也不使用通用 KV 块。复用要求单个活动请求，并开启前缀缓存和 SSD。图像或视频复用要求完整匹配的媒体输入；实际可用性由运行中的引擎报告。关闭 SSD 将禁用复用。",
       "m3SsdOnlyNote": "MiniMax-M3 纯 SSD 模式在 Block Disk L2 中保留原生 MSA 的 keys、values、idx_keys 和绝对偏移，同时保持持久化 RAM 负载禁用。",
-      "m3NativeMsaNote": "MiniMax-M3 使用原生类型化 MSA 分页缓存，保留 keys、values、idx_keys 和绝对偏移。块磁盘缓存提供其持久化 L2；通用 KV q4/q8 保持禁用。",
+      "m3NativeMsaNote": "MiniMax-M3 在 RAM 层保留其原生 MSA 状态（keys、values、idx_keys、绝对偏移）：内存感知前缀缓存（仅 RAM），或块磁盘 L2 之前的 RAM 块（RAM + SSD）；通用 KV q4/q8 保持关闭。",
       "openPanguNoPagedNote": "openPangu 不使用通用分页块：因果卷积状态是累积的，无法从任意块重建。请改用前缀缓存加提示词级磁盘缓存 (L2)。",
       "pagedKVCacheTooltip": "此版本已禁用并锁定关闭。应用始终以 --no-paged-cache 启动；块磁盘缓存 (SSD / L2) 是可复用前缀的权威层。",
       "blockSizeTokens": "块大小 (token)",

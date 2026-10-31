@@ -874,7 +874,7 @@
       "hybridSsdOnlyNote": "ハイブリッド/Mamba SSD 専用モードは Attention KV ブロックを Block Disk L2 に保存し、完全精度の SSM/GDN 状態を型付き SSD ストアまたはクリーンプレフィルから復元します。",
       "glmNativeSsdNote": "GLM は共有 SSD プールに正確なネイティブチェックポイントを保存し、RAM へのペイロード保持や汎用 KV ブロックは使用しません。再利用には同時実行1件、接頭辞キャッシュと SSD の有効化が必要です。画像・動画の再利用にはメディア入力全体の一致が必要です。実際の利用可否は稼働中のエンジンが報告します。SSD をオフにすると再利用も無効になります。",
       "m3SsdOnlyNote": "MiniMax-M3 の SSD 専用モードは、永続的な RAM ペイロードを無効のままにしつつ、ネイティブ MSA の keys、values、idx_keys、絶対オフセットを Block Disk L2 に保持します。",
-      "m3NativeMsaNote": "MiniMax-M3 は keys、values、idx_keys、絶対オフセットを保持するネイティブ型付き MSA ページキャッシュを使用します。ブロックディスクキャッシュが永続 L2 を提供し、汎用 KV q4/q8 は無効のままです。",
+      "m3NativeMsaNote": "MiniMax-M3 はネイティブ MSA 状態 (keys、values、idx_keys、絶対オフセット) を RAM 階層に保持します: メモリ対応プレフィックスキャッシュ (RAM のみ)、または Block Disk L2 の前段の RAM ブロック (RAM + SSD)。汎用 KV q4/q8 はオフのままです。",
       "openPanguNoPagedNote": "openPangu は汎用ページブロックを使用しません。因果畳み込み状態は累積的で、任意のブロックから再構築できません。代わりにプレフィックスキャッシュとプロンプトレベルのディスクキャッシュ (L2) を使用してください。",
       "pagedKVCacheTooltip": "このリリースでは無効固定です。アプリは常に --no-paged-cache で起動し、ブロックディスクキャッシュ (SSD / L2) が再利用プレフィックスの権威ある階層です。",
       "blockSizeTokens": "ブロックサイズ (トークン)",

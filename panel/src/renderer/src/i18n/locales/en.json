@@ -874,7 +874,7 @@
       "hybridSsdOnlyNote": "Hybrid/Mamba SSD-only mode keeps attention KV blocks in Block Disk L2 while restoring full-precision SSM/GDN companion state from its typed SSD store or clean-prefill rederive.",
       "glmNativeSsdNote": "GLM stores exact native checkpoints in the shared SSD pool, with no retained RAM payload or generic KV blocks. Reuse requires one active request, Prefix Cache and SSD enabled. Image/video reuse requires a complete matching media input; the running engine reports actual availability. Turning SSD off disables reuse.",
       "m3SsdOnlyNote": "MiniMax-M3 SSD-only mode preserves native MSA keys, values, idx_keys, and absolute offsets in Block Disk L2 while keeping persistent RAM payloads disabled.",
-      "m3NativeMsaNote": "MiniMax-M3's retained RAM tier is disabled. Enable Block Disk Cache for persistent typed MSA prefix reuse; generic KV q4/q8 remains disabled.",
+      "m3NativeMsaNote": "MiniMax-M3 keeps its native MSA state (keys, values, idx_keys, absolute offsets) in the RAM tier: the memory-aware prefix cache (RAM only) or RAM blocks in front of Block Disk L2 (RAM + SSD); generic KV q4/q8 stays off.",
       "openPanguNoPagedNote": "openPangu does not use generic paged blocks: causal-convolution state is cumulative and cannot be reconstructed from an arbitrary block. Use Prefix Cache plus prompt-level Disk Cache (L2) instead.",
       "pagedKVCacheTooltip": "Disabled and locked off for this release. The app always launches --no-paged-cache; Block Disk Cache (SSD / L2) is the authoritative reusable-prefix tier.",
       "blockSizeTokens": "Block Size (tokens)",
