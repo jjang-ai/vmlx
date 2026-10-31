@@ -3953,6 +3953,11 @@ class Scheduler:
                 else:
                     continue
                 stored.append(f"{cache_type}:{pos}")
+                if cache_type == "assistant":
+                    # The next request's lookup logs where its prompt leaves this generation-end key
+                    # (_log_dsv4_extended_match_divergence): a re-rendered turn that drifts from the generated
+                    # tokens shows up as the exact first differing token instead of a silent shorter hit.
+                    self._dsv4_last_extended_key_tokens = list(key)
             except Exception as exc:  # noqa: BLE001 - an optional extra entry
                 logger.warning("DSV4.1 extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
         if stored:
@@ -7465,12 +7470,17 @@ class Scheduler:
                         f"{request.cached_tokens} tokens cached, "
                         f"{len(remaining)} remaining to process"
                     )
+                    if getattr(self, "_uses_dsv41_cache", False):
+                        request._cache_matched_tokens = int(request.cached_tokens or 0)
+                        self._log_dsv4_extended_match_divergence(request)
             else:
                 request.remaining_tokens = request.prompt_token_ids
                 logger.info(
                     f"Request {request.request_id}: cache miss, "
                     f"processing all {len(request.prompt_token_ids)} tokens"
                 )
+                if getattr(self, "_uses_dsv41_cache", False):
+                    self._log_dsv4_extended_match_divergence(request)
         elif self.prefix_cache is not None and not _bypass:
             # Use legacy prefix cache (gpl-stripped fetch; suffix re-attached)
             cache, remaining = _call_with_optional_cache_extra(
