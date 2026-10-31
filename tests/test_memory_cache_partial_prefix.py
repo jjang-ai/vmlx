@@ -29,6 +29,7 @@ def _kv(n, layers=2, seed=0):
         c = KVCache()
         k = mx.random.normal((1, 2, n, 8), key=mx.random.key(seed + i))
         c.update_and_fetch(k, k + 1)
+        mx.eval(c.keys, c.values)
         out.append(c)
     return out
 
@@ -82,3 +83,28 @@ def test_untrimmable_cache_falls_back(monkeypatch):
     monkeypatch.setattr(mem, "_truncate_cache", lambda cache, n, *a, **k: None if n == 40 else real(cache, n, *a, **k))
     cache, remaining = mem.fetch(req)
     assert mem.last_fetch_kind == "forward" and remaining == req[20:]
+
+
+def test_partial_cut_runs_on_the_stream_owner_and_never_copies_cumulative_state(monkeypatch):
+    """The cut array must be born on the generation thread (else decode fails with "no Stream(gpu, 0) in current
+    thread", measured on MiniMax-M3.1), and a partial hit must not allow the cumulative-state copy."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    mem = MemoryAwarePrefixCache(model=None, config=MemoryCacheConfig(max_memory_mb=64))
+    ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-worker",
+                            initializer=lambda: mx.set_default_device(mx.cpu))
+    mem.set_clone_executor(ex)
+    stored = list(range(100, 160))
+    mem.store(stored, _kv(len(stored)))
+    seen = []
+    real = mem._truncate_cache
+
+    def spy(cache, n, allow=False):
+        seen.append((threading.current_thread().name, n, allow))
+        return real(cache, n, allow)
+    monkeypatch.setattr(mem, "_truncate_cache", spy)
+    cache, remaining = mem.fetch(stored[:33] + [1, 2])
+    ex.shutdown()
+    assert cache is not None and remaining == [1, 2]
+    assert seen == [(seen[0][0], 33, False)] and seen[0][0].startswith("llm-worker")

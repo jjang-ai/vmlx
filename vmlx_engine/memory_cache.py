@@ -664,7 +664,9 @@ class MemoryAwarePrefixCache:
             worker_name_prefix = getattr(executor, "_thread_name_prefix", "") or "llm-worker"
         self._clone_worker_prefix = worker_name_prefix
 
-    def _clone_on_stream_owner(self, cache: list[Any], length: int) -> list[Any] | None:
+    def _clone_on_stream_owner(
+        self, cache: list[Any], length: int, allow_cumulative_clone: bool = True
+    ) -> list[Any] | None:
         """Build the isolate-clone on the thread that owns the MLX stream.
 
         _truncate_cache slices the stored KV arrays, and MLX binds each new array
@@ -693,11 +695,11 @@ class MemoryAwarePrefixCache:
         executor = getattr(self, "_clone_executor", None)
         prefix = getattr(self, "_clone_worker_prefix", "llm-worker")
         if executor is None or threading.current_thread().name.startswith(prefix):
-            cloned = self._truncate_cache(cache, length, True)
+            cloned = self._truncate_cache(cache, length, allow_cumulative_clone)
         else:
             try:
                 cloned = executor.submit(
-                    self._truncate_cache, cache, length, True
+                    self._truncate_cache, cache, length, allow_cumulative_clone
                 ).result()
             except Exception as exc:
                 # A clone we cannot build on the owning worker is a cache miss, not
@@ -1361,7 +1363,9 @@ class MemoryAwarePrefixCache:
         remaining: list[int] = []
         self.last_fetch_kind = None
         if _part_entry is not None:
-            cloned = self._truncate_cache(_part_cache, best_partial_length)
+            # Cut on the stream owner (F11, see _clone_on_stream_owner) and never copy cumulative state: SSM / conv
+            # / typed path-dependent layers cannot be reduced to a shorter prefix, so such an entry is no partial hit.
+            cloned = self._clone_on_stream_owner(_part_cache, best_partial_length, False)
             if cloned is not None:
                 _hit_entry, _hit_key = (
                     _part_entry,
