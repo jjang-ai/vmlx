@@ -47,8 +47,9 @@ def _adaptive_enabled() -> bool:
 #
 # So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to
 # _MAX_CHUNK (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
-# peak keeps _GC_RESERVE_BYTES under the line, then the prompt is split into equal chunks of
-# at most that width (no small tail chunk, and a prompt that fits is one chunk). The transient is predicted from a
+# peak keeps _GC_RESERVE_BYTES under the line, never below the fixed rule's 1024 (narrower chunks were slower in every
+# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350); then the prompt is
+# split into equal chunks of at most that width (no small tail chunk, and a prompt that fits is one chunk). The transient is predicted from a
 # measured DSV4.1 model scaled by what this process has observed: after each DSpark prefill the measured peak (at the
 # N-1 boundary, before the prompt snapshot) updates the scale. The chooser only picks a width: it never refuses or
 # shortens a prompt. When the allocator numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024, one
@@ -56,7 +57,6 @@ def _adaptive_enabled() -> bool:
 # (diagnostics). Evidence: jang docs/runtime/dsv41-flash-1017-janght-2026-10-19/evidence/py-adaptive-prefill-step-20261031.
 _GiB = 1 << 30
 _MAX_CHUNK = 4096
-_MIN_CHUNK = 512
 _DEFAULT_STEP = 2048       # vMLX's --prefill-step-size default; a smaller configured step caps the width
 _GC_RESERVE_BYTES = int(3.0 * _GiB)
 # Transient of one chunk (peak active minus active before it), draft resident: _T_BASE + rows * _T_ROW + context * _T_CTX
@@ -68,8 +68,10 @@ _SCALE_WINDOW = 8          # observations the learned scale keeps (largest ratio
 _OBSERVE_MIN_ROWS = 256    # shorter prefills are dominated by the base term; not used for learning
 _SCALE_FLOOR = 0.5
 
-# The fixed rule of vMLX <= 1.6.82, kept as the fallback when the allocator numbers cannot be read.
+# The fixed rule of vMLX <= 1.6.82, kept as the fallback when the allocator numbers cannot be read; its step is also
+# the chooser's narrowest width.
 _FALLBACK_STEP = 1024
+_MIN_CHUNK = _FALLBACK_STEP
 _SHORT_PROMPT_ONE_CHUNK = 2048
 _SHORT_CHUNK_MAX_CONTEXT = 65536
 
@@ -149,7 +151,8 @@ class PrefillChunkChooser:
         return scale * (_T_BASE + rows * _T_ROW + ctx * _T_CTX)
 
     def widest(self, headroom: int, ctx: int) -> int:
-        """Widest width (_MIN_CHUNK .. cap) whose predicted peak keeps _GC_RESERVE_BYTES under the GC line."""
+        """Widest width (_MIN_CHUNK .. cap) whose predicted peak keeps _GC_RESERVE_BYTES under the GC line; _MIN_CHUNK
+        when none does."""
         s = self.scale()
         room = headroom - _GC_RESERVE_BYTES
         rows = int((room / s - _T_BASE - ctx * _T_CTX) // _T_ROW)

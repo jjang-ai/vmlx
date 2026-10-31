@@ -116,12 +116,12 @@ def test_width_narrows_as_the_context_grows():
     assert ws[0] > ws[-1]
 
 
-def test_no_room_still_chooses_a_width_never_refuses():
+def test_no_room_keeps_the_fixed_step_never_refuses():
     for headroom in (2.0, 0.5, 0.0, -10.0):
         c = chooser(headroom)
         w = c.choose(100_000, 0)
-        assert c.last["widest"] == G._MIN_CHUNK
-        assert w == 511                        # 99,999 body rows in 196 equal chunks of <= 512
+        assert c.last["widest"] == G._MIN_CHUNK == 1024  # the fixed rule's step: never narrower
+        assert w == 1021                       # 99,999 body rows in 98 equal chunks of <= 1024
         assert c.last["rule"] == "adaptive"
     assert chooser(-10.0).choose(10_000_000, 0) <= G._MIN_CHUNK  # any length: a width, never an error
 
@@ -225,3 +225,10 @@ def test_learned_scale_has_a_floor():
     c.choose(32_000, 0)
     c.end(0, 2048, 32_000, 0, peak=int(0.01 * c.predicted_transient(2048, 32_000)))  # a misread peak
     assert c.scale() == G._SCALE_FLOOR
+
+
+def test_never_narrower_than_the_fixed_step_unless_configured():
+    for headroom in (0.0, 3.0, 5.0, 6.2, 7.2):
+        for ctx in (1_000, 100_190, 524_288, 1_048_576):
+            assert chooser(headroom).widest(int(headroom * GiB), ctx) >= 1024
+    assert chooser(0.0, configured=512).widest(0, 1_048_576) == 512
