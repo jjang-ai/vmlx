@@ -167,6 +167,17 @@ def test_cut_positions_first_and_last_user_header():
     assert s._dsv41_prefix_cuts(short) == []   # a cut at the last token is the N-1 entry's job
 
 
+def test_cuts_only_near_the_end_of_the_prompt(monkeypatch):
+    """A cut far from the end costs the late layers' pruned tail again (measured -5.5 % cold prefill at 32k with a
+    3k system prompt): only cuts within VMLX_DSV41_PREFIX_CUT_MAX_TAIL tokens of the end are taken."""
+    s = _sched()
+    prompt = [0, 1, USER] + [5] * 700 + [1, USER] + [6] * 40 + [7, 8]
+    req = SimpleNamespace(prompt_token_ids=prompt, cached_tokens=0)
+    assert s._dsv41_prefix_cuts(req) == [705]                  # the first cut is 744 tokens before the end
+    monkeypatch.setenv("VMLX_DSV41_PREFIX_CUT_MAX_TAIL", "1000")
+    assert s._dsv41_prefix_cuts(req) == [3, 705]
+
+
 def test_cut_positions_disabled_by_env(monkeypatch):
     monkeypatch.setenv("VMLX_DSV41_PREFIX_CUTS", "0")
     req = SimpleNamespace(prompt_token_ids=[0, 1, USER, 4, 5, 6], cached_tokens=0)

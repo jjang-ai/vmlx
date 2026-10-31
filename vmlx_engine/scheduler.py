@@ -3857,8 +3857,13 @@ class Scheduler:
           the whole conversation before it.
 
         Only cuts inside the uncached part of the prompt and before its last token (the N-1 boundary is stored
-        anyway). A cut costs one extra segment end in the prefill (its own suffix pruning) and one snapshot (the
-        compressed pools + 40 windows: ~5 MB + ~0.9 KB per token). ``VMLX_DSV41_PREFIX_CUTS=0`` disables."""
+        anyway), and only cuts at most ``VMLX_DSV41_PREFIX_CUT_MAX_TAIL`` (512) tokens before the end of the prompt:
+        a cut ends a prefill segment, whose suffix pruning computes the late layers' last ~2.4k rows before the cut
+        again; measured on JANG_2K (M5 Ultra) a cut after a 3k-token system prompt in a 32k-token cold prompt cost
+        5.5 % of the cold prefill (1607 -> 1518 pp/s), while a cut within the last 512 tokens overlaps the rows the
+        final segment computes anyway. In an agent's first turn (system + tools, short task) the first cut is that
+        close; a prompt with a long first message is not cut there (its N-1 entry still is stored). A snapshot costs
+        ~5 MB + ~0.9 KB per token. ``VMLX_DSV41_PREFIX_CUTS=0`` disables the cuts."""
         if os.environ.get("VMLX_DSV41_PREFIX_CUTS", "1").strip().lower() in ("0", "false", "off", "no"):
             return []
         user_id = self._dsv41_user_token_id()
@@ -3869,7 +3874,12 @@ class Scheduler:
         if not heads:
             return []
         cached = int(getattr(request, "cached_tokens", 0) or 0)
-        return sorted({c for c in (heads[0], heads[-1]) if cached < c < len(prompt) - 1})
+        try:
+            max_tail = max(0, int(os.environ.get("VMLX_DSV41_PREFIX_CUT_MAX_TAIL", "512")))
+        except ValueError:
+            max_tail = 512
+        end = len(prompt) - 1
+        return sorted({c for c in (heads[0], heads[-1]) if cached < c < end and end - c <= max_tail})
 
     def _dsv41_generation_end_entry(self, request, response):
         """(key tokens, live cache) of a finished DeepSeek-V4.1 request: the cache as decode left it, keyed by the
