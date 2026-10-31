@@ -6142,6 +6142,78 @@ def _visible_prefix_before_unparsed_tool_markup(
     return prefix if preserve_whitespace or not partial_len else prefix.rstrip()
 
 
+def _tool_turn_visible_prose(
+    cleaned_text: str | None,
+    request_parser,
+    *,
+    parse_source: str,
+) -> str:
+    """Return the visible prose a tool parser left beside its parsed calls.
+
+    ``parse_source`` names the rail the parser was fed:
+
+    * ``"content"``: the reasoning parser's content-only accumulator. It is
+      already visible text. Splitting it again by the parser's prompt seed is
+      wrong: a parser seeded with an implicit ``<think>`` (DSV4/V4.1 thinking
+      on) classifies marker-less content as unclosed reasoning, which silently
+      dropped the prose that shared a delta with the first DSML marker. Only
+      explicit reasoning markup inside the text is still separated.
+    * ``"reasoning"``: the private reasoning rail. Its prose is reasoning, not
+      assistant text.
+    * ``"raw"``: the undivided stream (an early-stopped raw candidate, or no
+      reasoning parser). Separate any reasoning before treating it as visible.
+    """
+    text = cleaned_text or ""
+    if not text or parse_source == "reasoning":
+        return ""
+    if parse_source == "content" and request_parser is not None:
+        markers = getattr(request_parser, "reasoning_marker_pairs", None) or (
+            (
+                getattr(request_parser, "start_token", None) or "<think>",
+                getattr(request_parser, "end_token", None) or "</think>",
+            ),
+        )
+        if not any(
+            marker and marker in text for pair in markers for marker in pair
+        ):
+            return text
+    if request_parser is not None and parse_source in ("raw", "content"):
+        reasoning_text, content_text = request_parser.extract_reasoning(text)
+        if content_text:
+            return content_text
+        if reasoning_text:
+            return ""
+    return text
+
+
+def _unstreamed_visible_suffix(candidate: str | None, streamed: str) -> str:
+    """Return the part of the final visible ``candidate`` not yet streamed.
+
+    SSE deltas cannot be retracted, so only a suffix consistent with what was
+    already sent may follow. ``candidate`` is stripped by the parsers while
+    ``streamed`` keeps its exact bytes; comparing against a stripped copy of
+    ``streamed`` re-sent its trailing whitespace (``"time, "`` followed by
+    ``" waiting"`` rendered ``"time,  waiting"``).
+    """
+    candidate = (candidate or "").strip()
+    if not candidate:
+        return ""
+    sent = streamed.lstrip()
+    if not sent.strip():
+        return candidate
+    if candidate.startswith(sent):
+        remainder = candidate[len(sent):]
+    else:
+        core = sent.rstrip()
+        if not candidate.startswith(core):
+            return ""
+        remainder = candidate[len(core):]
+        if sent != core:
+            # The stream already delivered a separator after ``core``.
+            remainder = remainder.lstrip()
+    return remainder if remainder.strip() else ""
+
+
 def _parser_routes_tools_via_reasoning_channel(request_parser, harmony_active: bool) -> bool:
     """GPT-OSS/Harmony emit tool calls through the commentary channel that the
     reasoning parser surfaces alongside reasoning text, so the reasoning tail must
@@ -28324,14 +28396,23 @@ async def stream_chat_completion(
             # parser-truncated raw candidate instead of an incomplete content
             # accumulator. Preserve any native pre-call visible prose.
             parse_text = _early_stopped_tool_text
+            # The stop candidate is content-only only when the reasoning
+            # parser split it; otherwise it still carries the private rail.
+            _tool_parse_source = (
+                "content" if request_parser and not _allow_reasoning_tools
+                else "raw"
+            )
         elif request_parser and accumulated_content.strip():
             parse_text = accumulated_content.strip()
+            _tool_parse_source = "content"
         elif request_parser and accumulated_reasoning.strip():
             # Only native private-rail tool dialects may promote reasoning.
             # Qwen examples remain reasoning, even when their JSON is valid.
             parse_text = accumulated_reasoning.strip() if _allow_reasoning_tools else ""
+            _tool_parse_source = "reasoning"
         else:
             parse_text = _strip_think_for_tool_parse(accumulated_text)
+            _tool_parse_source = "raw"
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
             (
                 parse_text if request_parser and not _allow_reasoning_tools
@@ -28343,28 +28424,20 @@ async def stream_chat_completion(
             # but ONLY the portion that wasn't already streamed.
             # streamed_content tracks what was ACTUALLY yielded to the client
             # (not just accumulated — content in the same delta as a tool marker
-            # may be accumulated but never yielded due to buffering).
-            unemitted_content = None
-            if (
-                cleaned_text
-                and cleaned_text.strip()
-            ):
-                already_sent = streamed_content.strip()
-                candidate = cleaned_text.strip()
-                if not already_sent:
-                    # Nothing was streamed yet — emit all cleaned content
-                    unemitted_content = candidate
-                elif candidate.startswith(already_sent):
-                    # Subtract the already-streamed portion. Leading whitespace
-                    # of the remainder is INTERNAL to the full text (e.g. the
-                    # \n\n paragraph separator before the flushed portion) —
-                    # stripping it glued paragraphs together in clients.
-                    remainder = candidate[len(already_sent) :]
-                    unemitted_content = remainder if remainder.strip() else None
-                else:
-                    # Content doesn't overlap (rare: reasoning redirect, etc.)
-                    # Emit the full candidate only if nothing was sent
-                    unemitted_content = candidate if not content_was_emitted else None
+            # may be accumulated but never yielded due to buffering). Leading
+            # whitespace of the remainder is INTERNAL to the full text (e.g. the
+            # \n\n paragraph separator before the flushed portion) and is kept.
+            unemitted_content = (
+                _unstreamed_visible_suffix(
+                    _tool_turn_visible_prose(
+                        cleaned_text,
+                        request_parser,
+                        parse_source=_tool_parse_source,
+                    ),
+                    streamed_content,
+                )
+                or None
+            )
 
             if unemitted_content:
                 content_chunk = ChatCompletionChunk(
@@ -30699,6 +30772,7 @@ async def stream_responses_api(
     tool_calls = None
     cleaned_text = full_text
     _tool_parse_from_reasoning_only = False
+    _tool_parse_source = "raw"
     if tool_call_active:
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
@@ -30707,11 +30781,17 @@ async def stream_responses_api(
             # See Chat Completions sibling: the stop point precedes processing
             # the close-marker delta, so use the complete truncated raw call.
             parse_text = _early_stopped_tool_text
+            _tool_parse_source = (
+                "content" if request_parser and not _allow_reasoning_tools
+                else "raw"
+            )
         elif request_parser and accumulated_content.strip():
             parse_text = accumulated_content.strip()
+            _tool_parse_source = "content"
         elif request_parser and accumulated_reasoning.strip():
             parse_text = accumulated_reasoning.strip() if _allow_reasoning_tools else ""
             _tool_parse_from_reasoning_only = True
+            _tool_parse_source = "reasoning"
         else:
             parse_text = _strip_think_for_tool_parse(full_text)
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
@@ -30896,15 +30976,16 @@ async def stream_responses_api(
     display_text = ""
 
     if tool_calls:
-        # Apply reasoning parser to the cleaned (pre-tool-call) text
-        if request_parser and cleaned_text:
-            reasoning_text, content_text = request_parser.extract_reasoning(
-                cleaned_text
-            )
-            if content_text:
-                cleaned_text = content_text
-            elif reasoning_text:
-                cleaned_text = ""
+        # Separate reasoning from the cleaned (pre-tool-call) text only when
+        # the parser was fed the raw stream. Content-only text is already
+        # visible; re-splitting it with a parser seeded inside an implicit
+        # <think> rail classified it as reasoning and dropped the prose that
+        # shared a delta with the first native tool marker.
+        cleaned_text = _tool_turn_visible_prose(
+            cleaned_text,
+            request_parser,
+            parse_source=_tool_parse_source,
+        )
 
         # A native tool parser may intentionally return no cleaned prose (GLM47
         # does so when a call is present). That cannot retract output_text bytes
