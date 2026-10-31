@@ -57,9 +57,10 @@ def _adaptive_enabled() -> bool:
 # fits runs as one chunk; a longer one in the fewest chunks of at most that width, a multiple of 128 rows. The
 # transient is predicted from a measured DSV4.1 model times a learned scale: after each DSpark prefill the measured
 # peak (at the N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio, and the scale is the
-# median of the last 8, never below 1 (the model is an upper envelope; learning only widens it). The chooser only picks a width: it never refuses or shortens a prompt. When the allocator
-# numbers cannot be read it keeps the fixed rule of vMLX <= 1.6.82 (1024; one chunk for a prompt of <= 2048 tokens on
-# a short session). VMLX_DSV41_DSPARK_PREFILL_STEP pins the width (diagnostics).
+# median of the last 8, never below 1 (the model is an upper envelope; learning only widens it). The chooser only
+# picks a width: it never refuses or shortens a prompt. When the allocator numbers cannot be read it keeps the fixed
+# rule of vMLX <= 1.6.82 (1024; one chunk for a prompt of <= 2048 tokens on a short session).
+# VMLX_DSV41_DSPARK_PREFILL_STEP pins the width (diagnostics).
 _GiB = 1 << 30
 _DIE_MAX_CHUNK = 2048      # widest width per GPU die (an M5 Ultra has two)
 _ALIGN = 128               # a split prompt's chunk width is a multiple of this
@@ -134,9 +135,9 @@ def _active_bytes() -> int:
 
 
 def _split(body: int, widest: int) -> int:
-    """Width for body rows: one chunk if they fit in widest, else the fewest chunks of at most widest rows, the width
-    the near-equal share rounded up to a multiple of _ALIGN (an unaligned 950 + 949 split of 1,899 rows ran 2 % slower
-    than 1024 + 875 on JANG_2K and JANGHT alike)."""
+    """Width for body rows: one chunk if they fit in widest; else the fewest chunks of at most widest rows, the width
+    being their near-equal share rounded up to a multiple of _ALIGN (an unaligned 950 + 949 split of 1,899 rows ran
+    2 % slower than 1024 + 875 on JANG_2K and JANGHT alike)."""
     widest = max(1, int(widest))
     if body <= widest:
         return body
@@ -171,9 +172,9 @@ class PrefillChunkChooser:
         """Median measured / predicted ratio of the recent prefills, never below 1.0: the model is an upper envelope
         (measured / model 0.78-1.19), so the scale only ever widens the prediction where a bundle or machine needs more
         than the model, and a ratio learned at short contexts (where the model has the most slack) cannot make a long
-        prompt's chunks wider than the model allows (JANG_2K, 100k tokens: a 0.9 scale chose 1408 rows, 2.3 GiB under the
-        line, slower than 1024). The median, not the largest: a request's peak is its worst chunk (the transient is a
-        sawtooth over the context), so one ratio over-states the typical chunk."""
+        prompt's chunks wider than the model allows (JANG_2K, 100k tokens: a 0.9 scale chose 1408 rows, 2.3 GiB under
+        the line, slower than 1024). The median, not the largest: a request's peak is its worst chunk (the transient is
+        a sawtooth over the context), so one ratio over-states the typical chunk."""
         if not cls._ratios:
             return 1.0
         r = sorted(cls._ratios)
