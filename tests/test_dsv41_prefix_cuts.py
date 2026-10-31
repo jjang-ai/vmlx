@@ -249,3 +249,34 @@ def test_generation_end_disabled_by_env(monkeypatch):
     monkeypatch.setenv("VMLX_DSV41_GENERATION_END_CACHE", "0")
     req = SimpleNamespace(prompt_token_ids=list(range(1, 11)), output_token_ids=[40, 41])
     assert _sched()._dsv41_generation_end_entry(req, SimpleNamespace(prompt_cache=_snap_at(11))) is None
+
+
+@pytest.mark.parametrize("eos_at", [1, 2, 3])
+def test_dspark_stream_ending_mid_block_leaves_exactly_the_emitted_tokens(eos_at):
+    """A DSpark step verifies several drafted tokens at once; when the EOS is one of them (not the last) the
+    session used to keep the tokens after it, so the finished cache held more than prompt + output and could not be
+    stored as the generation-end entry. The session now holds exactly the emitted tokens."""
+    if DSV41DSparkGenerator not in _gens():
+        pytest.skip("jang_tools DSparkRunner without the end-of-stream commit")
+    prompt = [11, 3, 4, 5, 6, 7]
+    eos = _expected(prompt, 6)[eos_at]
+    rt = FakeRuntime()
+    model = _model(rt)
+    model._dspark = FakeDraft(win=4, bs=5)
+    gen = DSV41DSparkGenerator(model, sampler=_greedy_sampler(), max_tokens=16, prefill_step_size=4,
+                               stop_tokens=[eos])
+    gen.insert([prompt], max_tokens=[16])
+    out, last = [], None
+    while True:
+        prompt_resp, gen_resp = gen.next()
+        resp = (prompt_resp or gen_resp or [None])[0]
+        if resp is None:
+            break
+        out.append(resp.token)
+        last = resp
+        if resp.finish_reason is not None:
+            break
+    assert out[-1] == eos and len(out) == eos_at + 1
+    pos = {int(c.offset) for c in last.prompt_cache}
+    assert pos <= {len(prompt) + len(out)} or pos <= {len(prompt) + len(out) - 1}, pos
+    assert max(pos) <= len(prompt) + len(out)

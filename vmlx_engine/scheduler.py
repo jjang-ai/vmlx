@@ -11807,6 +11807,10 @@ class Scheduler:
                 and self._uses_dsv4_cache
                 and request.status == RequestStatus.FINISHED_LENGTH_CAPPED
                 and not getattr(request, "_extracted_cache_from_prompt_snapshot", False)
+                # DSV4.1 always stores the generator's exact N-1 prompt snapshot (taken before decode), on every
+                # tier; only the memory-aware path never set the flag above, so a max_tokens-capped reply left the
+                # RAM tier without the prompt entry and the next turn re-prefilled the whole conversation.
+                and not getattr(self, "_uses_dsv41_cache", False)
             ):
                 # DSV4 DeepseekV4Cache includes CSA/HCA pool state in addition
                 # to local SWA KV. After a length-capped decode, the live cache
