@@ -9,6 +9,7 @@ import { useTranslation } from '../../i18n'
 import {
   cacheControlUpdatesForBlockDiskToggle,
   cacheControlUpdatesForDiskToggle,
+  cacheControlUpdatesForPagedToggle,
   resolveCacheControlPolicy,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
@@ -1197,13 +1198,35 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           </>
         )}
         {!nativeGlmSsdActive && !batchingOff && !effectiveUsePagedCache && !exactTypedPromptDiskCache && <InfoNote text={t('sessions.config.blockDiskPureSsdNote')} />}
-        <CheckField
-          label={t('sessions.cache.blockDiskCache')}
-          tooltip={t('sessions.config.blockDiskCacheTooltip')}
-          checked={cachePolicy.blockDiskCacheChecked}
-          onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
-          disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}
-        />
+        <div data-vmlx-control="block-disk-cache" data-vmlx-state={cachePolicy.blockDiskCacheChecked ? 'on' : 'off'}>
+          <CheckField
+            label={t('sessions.cache.blockDiskCache')}
+            tooltip={t('sessions.config.blockDiskCacheTooltip')}
+            checked={cachePolicy.blockDiskCacheChecked}
+            onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
+            disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}
+          />
+        </div>
+        {/* Cache tier, the user's choice: RAM only (Block Disk Cache off), SSD only (on, no RAM copy) or RAM + SSD
+            (on + this RAM copy). The RAM copy fronts the block store, so it exists only with Block Disk Cache. */}
+        {cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (
+          <div data-vmlx-control="ram-copy-cache" data-vmlx-state={effectiveUsePagedCache ? 'on' : 'off'}>
+            <CheckField
+              label={t('sessions.config.ramCopyWithSsd')}
+              tooltip={t('sessions.config.ramCopyWithSsdTooltip')}
+              checked={effectiveUsePagedCache}
+              onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}
+              disabled={cachePolicy.pagedCacheDisabled}
+            />
+          </div>
+        )}
+        <InfoNote text={t(
+          batchingOff || prefixOff
+            ? 'sessions.config.cacheTierOff'
+            : !cachePolicy.blockDiskCacheChecked
+              ? 'sessions.config.cacheTierRamOnly'
+              : effectiveUsePagedCache ? 'sessions.config.cacheTierRamSsd' : 'sessions.config.cacheTierSsdOnly',
+        )} />
         {cachePolicy.blockDiskCacheChecked && (
           <>
             <SliderField settingKey="blockDiskCacheMaxPercent"

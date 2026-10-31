@@ -860,10 +860,9 @@ function liftStaleFlatCacheIndex(
 
 function normalizeCacheStackMutualExclusion(config: Partial<ServerConfig>): boolean {
   let changed = false
-  // Persist the same hard-off RAM policy the shared launch builder enforces.
-  // Leaving a stale true in SQLite made settings state disagree with the
-  // disabled checkbox and with the actual --no-paged-cache argv.
-  if (config.usePagedCache !== false) {
+  // Persist the same RAM policy the shared launch builder enforces: the RAM copy (paged RAM blocks) exists only in
+  // front of Block Disk Cache, so a saved true without it would disagree with the --no-paged-cache argv.
+  if (config.usePagedCache !== false && !(config.usePagedCache === true && config.enableBlockDiskCache === true)) {
     config.usePagedCache = false
     changed = true
   }
@@ -3020,10 +3019,12 @@ export class SessionManager extends EventEmitter {
           if (freshDsv4Active) {
             const dsv4PoolQuantDefault = freshConfig.dsv4PoolQuantDefault
             const dsv4PrefixEnabled = config.enablePrefixCache !== false
+            // The user's RAM copy (RAM + SSD) survives, but only in front of Block Disk Cache.
+            const dsv4RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false
             const dsv4Changed =
               config.continuousBatching !== true ||
               config.enablePrefixCache === undefined ||
-              config.usePagedCache !== false ||
+              config.usePagedCache !== dsv4RamCopy ||
               config.enableBlockDiskCache === undefined ||
               config.maxCacheBlocks === undefined ||
               config.dsv4PrefixCache !== dsv4PrefixEnabled ||
@@ -3042,7 +3043,7 @@ export class SessionManager extends EventEmitter {
               config.isMultimodal !== false
             config.continuousBatching = true
             if (config.enablePrefixCache === undefined) config.enablePrefixCache = true
-            config.usePagedCache = false
+            config.usePagedCache = dsv4RamCopy
             if (config.enableBlockDiskCache === undefined) config.enableBlockDiskCache = true
             if (config.maxCacheBlocks === undefined) config.maxCacheBlocks = DSV4_MAX_CACHE_BLOCKS
             config.dsv4PrefixCache = config.enablePrefixCache !== false
@@ -3070,21 +3071,22 @@ export class SessionManager extends EventEmitter {
             if (dsv4Changed) {
               this.pushLog(
                 sessionId,
-                `[INFO] DSV4-Flash native cache policy: prefix=${config.enablePrefixCache !== false ? 'on' : 'off'}, paged_ram=off, block_disk_l2=${config.enableBlockDiskCache === true ? 'on' : 'off'}, block_size=${DSV4_PAGED_CACHE_BLOCK_SIZE}, generic_turboquant=off, pool_codec=bundle-derived, activation_qat=${config.dsv4ActivationQat === true ? 'on' : 'off'}`,
+                `[INFO] DSV4-Flash native cache policy: prefix=${config.enablePrefixCache !== false ? 'on' : 'off'}, paged_ram=${config.usePagedCache === true ? 'on' : 'off'}, block_disk_l2=${config.enableBlockDiskCache === true ? 'on' : 'off'}, block_size=${DSV4_PAGED_CACHE_BLOCK_SIZE}, generic_turboquant=off, pool_codec=bundle-derived, activation_qat=${config.dsv4ActivationQat === true ? 'on' : 'off'}`,
               )
             }
           } else if (freshFamily === 'minimax_m3') {
             const m3PrefixEnabled = config.enablePrefixCache !== false
             const m3BlockDiskEnabled = m3PrefixEnabled && config.enableBlockDiskCache !== false
+            const m3RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false
             const m3Changed =
               config.enablePrefixCache === undefined ||
-              config.usePagedCache !== false ||
+              config.usePagedCache !== m3RamCopy ||
               config.enableDiskCache !== false ||
               config.enableBlockDiskCache === undefined ||
               config.kvCacheQuantization !== 'auto' ||
               config.enableJit === true
             if (config.enablePrefixCache === undefined) config.enablePrefixCache = true
-            config.usePagedCache = false
+            config.usePagedCache = m3RamCopy
             config.enableDiskCache = false
             if (config.enableBlockDiskCache === undefined) config.enableBlockDiskCache = true
             config.kvCacheQuantization = 'auto'
@@ -3093,8 +3095,10 @@ export class SessionManager extends EventEmitter {
               this.pushLog(sessionId, !m3PrefixEnabled
                 ? '[INFO] MiniMax-M3 detected; native typed prefix cache explicitly disabled for this session'
                 : m3BlockDiskEnabled
-                  ? '[INFO] MiniMax-M3 detected; using typed MSA SSD-only prefix cache with idx_keys, persistent RAM payloads disabled, generic KV quantization off, and JIT off'
-                  : '[INFO] MiniMax-M3 detected; prefix cache enabled without paged RAM or block-disk L2')
+                  ? m3RamCopy
+                    ? '[INFO] MiniMax-M3 detected; using typed MSA prefix cache in RAM blocks with block-disk L2 (RAM + SSD), generic KV quantization off, and JIT off'
+                    : '[INFO] MiniMax-M3 detected; using typed MSA SSD-only prefix cache with idx_keys, persistent RAM payloads disabled, generic KV quantization off, and JIT off'
+                  : '[INFO] MiniMax-M3 detected; prefix cache in RAM (memory-aware) without block-disk L2')
             }
           } else if (freshFamily === 'glm5-next' && !usesGlmNativeSsdPool(freshConfig, config) && !hasNativeDflashCache(config, config.modelPath)) {
             const staleGenericDiskPair =
@@ -3167,14 +3171,12 @@ export class SessionManager extends EventEmitter {
           // ===false (Force Off) must survive — do NOT let detected VL clobber a
           // deliberate Force Off. buildArgs emits --text-only for a detected-VL model
           // the user forced off so the engine honors it (is_mllm_model force_text_only).
-          // In-RAM paged cache is OFF for every family (SSD block-disk L2 is the
-          // only tier), so a saved Off is never "stale" and is never reset to On.
-          // This block used to silently flip a deliberate Off back to On on
-          // re-detect, which is how paged RAM kept coming back after being
-          // turned off.
-          if (config.usePagedCache === true) {
+          // The RAM copy (paged RAM blocks) is only ever the user's own choice and only in front of Block Disk Cache
+          // (RAM + SSD): re-detection never turns it on (that is how paged RAM once kept coming back), and a saved
+          // On without the block store it fronts is dropped.
+          if (config.usePagedCache === true && config.enableBlockDiskCache === false) {
             config.usePagedCache = false
-            this.pushLog(sessionId, `[INFO] In-Memory Paged Cache (RAM) forced Off — SSD block-disk cache (L2) is the only cache tier`)
+            this.pushLog(sessionId, `[INFO] Keep a RAM copy needs Block Disk Cache; launching RAM only (memory-aware prefix cache)`)
           }
           // Log if model type changed
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
@@ -5371,9 +5373,9 @@ export class SessionManager extends EventEmitter {
       nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
       continuousBatching: cacheStackActive,
       enablePrefixCache: config.enablePrefixCache !== false,
-      // Accepted for migration compatibility only. The shared builder always
-      // emits --no-paged-cache and never its positive counterpart.
-      usePagedCache: false,
+      // The user's "Keep a RAM copy" (RAM + SSD); the shared builder honours it only with Block Disk Cache, never
+      // for an exact typed prompt-snapshot family (no block store).
+      usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
       enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
       enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
       noMemoryAwareCache: !!config.noMemoryAwareCache,

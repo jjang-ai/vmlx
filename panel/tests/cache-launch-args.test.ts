@@ -6,7 +6,7 @@ import { buildCacheLaunchArgs } from '../src/shared/cacheLaunchArgs'
 const SSD_ONLY = {
   continuousBatching: true,
   enablePrefixCache: true,
-  usePagedCache: true, // stale persisted value must be harmless
+  usePagedCache: false,
   enableDiskCache: false,
   enableBlockDiskCache: true,
   cacheMemoryMb: 8192,
@@ -19,7 +19,37 @@ const SSD_ONLY = {
 }
 
 describe('authoritative cache launch arguments', () => {
-  it('builds SSD-only argv with no RAM tier or RAM budget even from stale paged state', () => {
+  it('builds RAM + SSD argv from the saved RAM copy: paged RAM blocks with their RAM budget, then the block store', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, usePagedCache: true })
+
+    expect(result.policy.effectiveUsePagedCache).toBe(true)
+    expect(result.blockDiskOnly).toBe(false)
+    expect(result.args).toEqual([
+      '--use-paged-cache',
+      '--no-vision-memory-cache',
+      '--ssm-state-cache-size', '0',
+      '--ssm-state-cache-mb', '0',
+      '--cache-memory-mb', '8192',
+      '--cache-memory-percent', '0.35',
+      '--cache-ttl-minutes', '60',
+      '--paged-cache-block-size', '64',
+      '--max-cache-blocks', '4097',
+      '--enable-block-disk-cache',
+      '--block-disk-cache-max-percent', '10',
+    ])
+    expect(result.args).not.toContain('--no-paged-cache')
+  })
+
+  it('a saved RAM copy without Block Disk Cache launches RAM only (memory-aware), never paged RAM', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, usePagedCache: true, enableBlockDiskCache: false })
+
+    expect(result.policy.effectiveUsePagedCache).toBe(false)
+    expect(result.args[0]).toBe('--no-paged-cache')
+    expect(result.args).toContain('--disable-block-disk-cache')
+    expect(result.args).not.toContain('--use-paged-cache')
+  })
+
+  it('builds SSD-only argv with no RAM tier or RAM budget', () => {
     const result = buildCacheLaunchArgs(SSD_ONLY)
 
     expect(result.policy.effectiveUsePagedCache).toBe(false)
@@ -155,5 +185,18 @@ describe('native DFlash2 SSD settings', () => {
     expect(result.args).not.toContain('--enable-block-disk-cache')
     expect(result.args).not.toContain('--cache-memory-mb')
     expect(result.args).not.toContain('--cache-memory-percent')
+  })
+})
+
+describe('session start keeps the RAM copy for the typed DSV4 / MiniMax-M3 caches', () => {
+  // The start path re-applies each family's cache policy; it used to set usePagedCache=false unconditionally for
+  // DSV4 and MiniMax-M3, so a saved RAM + SSD launched --no-paged-cache (seen live: panel saved usePagedCache=true,
+  // the engine argv still had --no-paged-cache).
+  const sessions = readFileSync('src/main/sessions.ts', 'utf-8')
+  it('DSV4 and MiniMax-M3 keep a saved RAM copy only together with Block Disk Cache', () => {
+    expect(sessions).toContain("const dsv4RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false")
+    expect(sessions).toContain('config.usePagedCache = dsv4RamCopy')
+    expect(sessions).toContain("const m3RamCopy = config.usePagedCache === true && config.enableBlockDiskCache !== false")
+    expect(sessions).toContain('config.usePagedCache = m3RamCopy')
   })
 })

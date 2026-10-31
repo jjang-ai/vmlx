@@ -123,3 +123,26 @@ def test_offset_mismatch_is_rejected():
     fetched, _ = bac.fetch_cache("fetch-bad", tokens + [1])
     assert fetched is not None and fetched.num_tokens == n
     assert bac.reconstruct_cache(fetched) is None
+
+
+def test_partial_hit_backs_off_to_the_shorter_terminal_entry():
+    """A request that shares the full blocks of a LONGER entry (same document, different question) used to land on
+    that entry's interior blocks (no composite state) and go cold, although a shorter stored entry (system prompt +
+    tools, a prefix cut) ends inside its prefix. It now restores the shorter entry, at its exact non-aligned length."""
+    mgr = PagedCacheManager(block_size=BLOCK, max_blocks=400)
+    bac = BlockAwarePrefixCache(object(), mgr)
+    long_n, short_n = 9 * BLOCK + 17, 3 * BLOCK + 29          # neither is a block multiple
+    tokens = list(range(1000, 1000 + long_n))
+    assert bac.store_cache("short", tokens[:short_n], _states(_caches(short_n, seed=1))) is not None
+    assert bac.store_cache("long", tokens, _states(_caches(long_n, seed=2))) is not None
+    for rid in ("short", "long"):
+        bac.release_cache(rid)
+    diverging = tokens[: 7 * BLOCK + 5] + [5, 6, 7, 8]           # shares 7 full blocks of the long entry only
+    fetched, remaining = bac.fetch_cache("partial", diverging)
+    assert fetched is not None and fetched.num_tokens == short_n
+    assert remaining == diverging[short_n:]
+    rec = bac.reconstruct_cache(fetched)
+    assert rec is not None and {int(c.offset) for c in rec} == {short_n}
+    # exact repeat of the long entry still restores the long one
+    fetched2, _ = bac.fetch_cache("repeat", tokens + [1])
+    assert fetched2 is not None and fetched2.num_tokens == long_n

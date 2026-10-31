@@ -1211,7 +1211,10 @@ describe('Disk Cache', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         expect(source).toContain('resolveCacheControlPolicy')
         expect(source).toContain('cacheControlUpdatesForDiskToggle')
-        expect(source).not.toContain('cacheControlUpdatesForPagedToggle')
+        // The only paged control is the RAM copy in front of Block Disk Cache (RAM + SSD), shown only with it.
+        expect(source).toContain('onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}')
+        expect(source).toContain('{cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (')
+        expect(source).toContain('data-vmlx-control="ram-copy-cache"')
         expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
         expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
         expect(source).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')
@@ -2865,16 +2868,13 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.enableBlockDiskCache = false')
     })
 
-    it('re-detect normalizes a saved In-Memory Paged Cache (RAM)=On to Off and logs it', () => {
-        // Inverse of the removed "stale saved In-Memory Paged Cache (RAM)=Off
-        // was reset to auto-safe On" behaviour: with the RAM tier retired, a
-        // saved On is what is stale, and re-detect must force it Off — never
-        // the other way around.
+    it('re-detect never turns the RAM copy on, and drops a saved On without Block Disk Cache', () => {
+        // Re-detect once flipped a deliberate Off back to On; the RAM copy is now only the user's checkbox and only
+        // in front of Block Disk Cache (RAM + SSD), so re-detect keeps a saved On with the block store and drops it
+        // without one.
         const source = readFileSync('src/main/sessions.ts', 'utf8')
-        expect(source).toContain('if (config.usePagedCache === true) {')
-        expect(source).toContain(
-            'In-Memory Paged Cache (RAM) forced Off — SSD block-disk cache (L2) is the only cache tier',
-        )
+        expect(source).toContain('if (config.usePagedCache === true && config.enableBlockDiskCache === false) {')
+        expect(source).toContain('Keep a RAM copy needs Block Disk Cache; launching RAM only (memory-aware prefix cache)')
         expect(source).not.toContain('stale saved In-Memory Paged Cache (RAM)=Off was reset to auto-safe On')
     })
 
@@ -4078,11 +4078,11 @@ describe('JIT Toggle', () => {
         expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
         expect(form).toContain("t('sessions.config.m3NativeMsaNote')")
-        expect(enLocale).toContain("MiniMax-M3's retained RAM tier is disabled")
+        expect(enLocale).toContain('MiniMax-M3 keeps its native MSA state (keys, values, idx_keys, absolute offsets) in the RAM tier')
         expect(form).toContain("t('sessions.config.m3SsdOnlyNote')")
         expect(enLocale).toContain('MiniMax-M3 SSD-only mode preserves native MSA keys, values, idx_keys, and absolute offsets')
         expect(form).toContain('architectureBlockDiskOnlySupported && !nativeSpeculativeCache && !nativeGlmSsdActive && !nativeOmniStage1 && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked')
-        expect(enLocale).toContain('Enable Block Disk Cache for persistent typed MSA prefix reuse')
+        expect(enLocale).toContain('RAM blocks in front of Block Disk L2 (RAM + SSD)')
         expect(form).not.toContain('LOCKED OFF')
         expect(form).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')
     })

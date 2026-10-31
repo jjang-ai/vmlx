@@ -180,6 +180,11 @@ class _Request:
     # into (boundary, cache) from the N-1 snapshot for the scheduler to store before the N-1 checkpoint.
     boundary_windows: list = field(default_factory=list)
     boundary_checkpoints: Optional[list] = None
+    # DeepSeek-V4.1 prefix cuts: absolute cache positions inside this prefill at which the prefill ends a segment
+    # (its own prompt_end) and keeps an exact snapshot, returned as boundary_checkpoints [(position, cache)] for the
+    # scheduler to store as extra reusable prefixes (a new chat with the same system prompt and tools, an edited
+    # last message). The state cannot be trimmed, so a prefix is reusable only where a snapshot was taken.
+    prefix_cuts: Optional[list] = None
 
 
 @dataclass
@@ -752,6 +757,35 @@ class SingleBatchGenerator:
             req.boundary_windows.append((start, windows))
         return cold_tokens
 
+    def _dsv41_cut_positions(self, req: "_Request", start: int, end: int) -> list[int]:
+        """The request's prefix cuts strictly inside ``(start, end)`` (absolute cache positions); DSV4.1 text only."""
+        cuts = getattr(req, "prefix_cuts", None)
+        if not cuts or req.dsv41_vl_images is not None or not self._cache_uses_dsv41(req.cache):
+            return []
+        return [int(c) for c in cuts if start < int(c) < end]
+
+    def _prefill_dsv41_cuts(self, cold_tokens: list[int], req: "_Request") -> list[int]:
+        """DeepSeek-V4.1: prefill up to each prefix cut as its own segment (``_prefill`` gives every segment its own
+        prompt_end, so the state at the cut is that of a prefill ending there) and keep an exact snapshot at each cut
+        in ``req.boundary_checkpoints``. Returns the tokens left to prefill after the last cut."""
+        try:
+            start = int(req.cache[0]._seq.pos) if req.cache else 0
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return cold_tokens
+        cuts = self._dsv41_cut_positions(req, start, start + len(cold_tokens))
+        if not cuts:
+            return cold_tokens
+        done = 0
+        checkpoints = list(req.boundary_checkpoints or [])
+        for cut in cuts:
+            self._prefill(cold_tokens[done:cut - start], req)
+            done = cut - start
+            snap = self._clone_admissible_prompt_cache_snapshot(req.cache)
+            if snap is not None:
+                checkpoints.append((cut, snap))
+        req.boundary_checkpoints = checkpoints or None
+        return cold_tokens[done:]
+
     def _assemble_naive_boundaries(self, req, snapshot):
         from ..models.naive_n05_flash.cache_snapshot import assemble_boundary_checkpoint
 
@@ -825,8 +859,10 @@ class SingleBatchGenerator:
         gen_prompt_lens: Optional[list[int]] = None,
         stable_root_splits: Optional[list[int]] = None,
         m3_prefill_plans: Optional[list[Optional[dict]]] = None,
+        prefix_cuts: Optional[list[Optional[list[int]]]] = None,
     ):
         max_tokens = max_tokens or [self.max_tokens] * len(prompts)
+        prefix_cuts = prefix_cuts or [None] * len(prompts)
         gen_prompt_lens = gen_prompt_lens or [0] * len(prompts)
         stable_root_splits = stable_root_splits or [0] * len(prompts)
         m3_prefill_plans = m3_prefill_plans or [None] * len(prompts)
@@ -868,6 +904,7 @@ class SingleBatchGenerator:
             gen_prompt_len,
             stable_root_split,
             m3_plan,
+            cuts,
         ) in zip(
             prompts,
             max_tokens,
@@ -885,6 +922,7 @@ class SingleBatchGenerator:
             gen_prompt_lens,
             stable_root_splits,
             m3_prefill_plans,
+            prefix_cuts,
         ):
             prompt_tokens = list(prompt)
             if not prompt_tokens:
@@ -913,6 +951,7 @@ class SingleBatchGenerator:
                 gen_prompt_len=int(gen_prompt_len or 0),
                 stable_root_split=int(stable_root_split or 0),
                 m3_plan=dict(m3_plan) if m3_plan is not None else None,
+                prefix_cuts=sorted({int(c) for c in cuts}) if cuts else None,
             )
             self._unprocessed.append(req)
             uids.append(uid)
@@ -1687,6 +1726,7 @@ class SingleBatchGenerator:
                 req.stable_root_snapshot = self._clone_admissible_prompt_cache_snapshot(req.cache)
                 _cold_tokens = _cold_tokens[_root:]
             _cold_tokens = self._prefill_naive_boundaries(_cold_tokens, req)
+            _cold_tokens = self._prefill_dsv41_cuts(_cold_tokens, req)
             if _tail > 0 and len(_cold_tokens) > _tail:
                 # Log so an A/B can PROVE the path engaged. A guard that
                 # silently declines makes the comparison stock-vs-stock.
