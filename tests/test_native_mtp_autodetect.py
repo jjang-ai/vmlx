@@ -849,10 +849,10 @@ class TestNativeMtpAutodetect:
         )
         (tmp_path / "jang_config.json").write_text(json.dumps(jang_cfg))
         calls = []
-        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: True)
+        monkeypatch.setattr(native_mtp, "_install_native_mtp_hooks", lambda: True)
         monkeypatch.setattr(
             native_mtp,
-            "_set_mtp_active",
+            "_set_draft_head_loading",
             lambda active: calls.append(("active", active)),
         )
 
@@ -1714,8 +1714,8 @@ class TestNativeMtpAutodetect:
         _write_qwen36_jang_mtp_bundle(tmp_path)
         calls = []
 
-        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: calls.append("apply") or True)
-        monkeypatch.setattr(native_mtp, "_set_mtp_active", lambda active: calls.append(("active", active)))
+        monkeypatch.setattr(native_mtp, "_install_native_mtp_hooks", lambda: calls.append("apply") or True)
+        monkeypatch.setattr(native_mtp, "_set_draft_head_loading", lambda active: calls.append(("active", active)))
 
         status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
 
@@ -1731,8 +1731,8 @@ class TestNativeMtpAutodetect:
         _write_qwen36_jang_mtp_bundle(tmp_path)
         calls = []
 
-        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: calls.append("apply") or True)
-        monkeypatch.setattr(native_mtp, "_set_mtp_active", lambda active: calls.append(("active", active)))
+        monkeypatch.setattr(native_mtp, "_install_native_mtp_hooks", lambda: calls.append("apply") or True)
+        monkeypatch.setattr(native_mtp, "_set_draft_head_loading", lambda active: calls.append(("active", active)))
 
         status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=False)
 
@@ -1751,10 +1751,10 @@ class TestNativeMtpAutodetect:
         calls = []
 
         monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", tmp_path)
-        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: False)
+        monkeypatch.setattr(native_mtp, "_install_native_mtp_hooks", lambda: False)
         monkeypatch.setattr(
             native_mtp,
-            "_set_mtp_active",
+            "_set_draft_head_loading",
             lambda active: calls.append(("active", active)),
         )
 
@@ -2081,8 +2081,8 @@ class TestNativeMtpAutodetect:
         monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_USE_TUNING", raising=False)
         monkeypatch.delenv("VMLX_NATIVE_MTP_USE_TUNING", raising=False)
-        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: True)
-        monkeypatch.setattr(native_mtp, "_set_mtp_active", lambda _active: None)
+        monkeypatch.setattr(native_mtp, "_install_native_mtp_hooks", lambda: True)
+        monkeypatch.setattr(native_mtp, "_set_draft_head_loading", lambda _active: None)
         monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", None, raising=False)
         _write_qwen36_mxfp4_mtp_bundle(tmp_path)
         # A tuning block is honoured only when it attests its own measurement
@@ -2215,9 +2215,9 @@ class TestNativeMtpAutodetect:
         assert stats["batch_generator"]["max_num_seqs"] == 2
 
     def test_qwen_patch_preserves_nested_text_config_mtp_layers(self):
-        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+        from vmlx_engine.text_mtp import qwen_family as qwen35_model
 
-        if not qwen35_model.apply():
+        if not qwen35_model.install():
             raise AssertionError("qwen35_model patch did not apply")
 
         from mlx_lm.models.qwen3_5 import TextModelArgs
@@ -2252,9 +2252,9 @@ class TestNativeMtpAutodetect:
     def test_qwen_text_sanitize_shifts_unshifted_mtp_artifact_norms(self):
         import mlx.core as mx
 
-        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+        from vmlx_engine.text_mtp import qwen_family as qwen35_model
 
-        if not qwen35_model.apply():
+        if not qwen35_model.install():
             raise AssertionError("qwen35_model patch did not apply")
 
         from mlx_lm.models.qwen3_5 import TextModel
@@ -2285,9 +2285,9 @@ class TestNativeMtpAutodetect:
     def test_qwen_text_sanitize_mixed_shard_shifts_only_raw_mtp_norms(self):
         import mlx.core as mx
 
-        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+        from vmlx_engine.text_mtp import qwen_family as qwen35_model
 
-        if not qwen35_model.apply():
+        if not qwen35_model.install():
             raise AssertionError("qwen35_model patch did not apply")
 
         from mlx_lm.models.qwen3_5 import TextModel

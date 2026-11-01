@@ -6,9 +6,9 @@ import pytest
 
 @pytest.mark.parametrize("depth", [3, 2, 1])
 def test_text_safety_descends_adjacent_rung_and_updates_telemetry(monkeypatch, depth):
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+    from vmlx_engine.text_mtp import lane, lane_policy
 
-    state = lane._MtpState()
+    state = lane.LaneState()
     state.depth = state.stats.depth = depth
     state.depth_ceiling = 3
     state.ar_step_ms = 10.0
@@ -18,8 +18,8 @@ def test_text_safety_descends_adjacent_rung_and_updates_telemetry(monkeypatch, d
         reason=lambda d: f"windowed_ar_safety d{d}",
         log_text=lambda d, *, target_depth=0, baseline_label="AR": f"losing d{d} -> D{target_depth}",
     )
-    monkeypatch.setattr(lane, "ar_safety_step", lambda *args, **kwargs: trip)
-    fallback = lane._text_mtp_maybe_ar_safety_fallback("adjacent", state)
+    monkeypatch.setattr(lane_policy, "ar_safety_step", lambda *args, **kwargs: trip)
+    fallback = lane_policy.apply_safety_valve("adjacent", state)
     assert fallback is (depth == 1)
     assert state.ar_fallback_pending is (depth == 1)
     if depth > 1:

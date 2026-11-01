@@ -2,7 +2,7 @@
 
 Both MTP schedulers must agree on how a drafted token is accepted, or the same
 bundle behaves differently depending on whether it loaded through the text path
-(``patches/mlx_lm_mtp/batch_generator.py``) or the MLLM path
+(``text_mtp/lane.py``) or the MLLM path
 (``mllm_batch_generator.py``).  That divergence is not hypothetical: the server
 advertised ``stochastic=rejection-sampling-acceptance`` on /health while the
 MLLM path implemented exact-match only, so every ``--is-mllm`` bundle had to pin
@@ -37,9 +37,11 @@ def accept_lp_for(sampler: Optional[Callable[[Any], Any]], lp: Any) -> Any:
     probability than raw softmax suggests, and using the raw value understates
     ``p_draft`` and over-accepts.
 
-    Sampling params are read off the callable as attributes.  For stock
-    samplers that expose no reusable filter helpers, ``lp`` is returned
-    unchanged, which matches the pre-PR-990 raw-lp acceptance behaviour.
+    A vMLX sampler carries its exact distribution as
+    ``_vmlx_acceptance_logprobs``. Otherwise the sampling params are read off
+    the callable as attributes and replayed with mlx-lm's own filters
+    (``mlx_lm.sample_utils``); when those are unavailable ``lp`` is returned
+    unchanged (raw-logprob acceptance).
     """
     if sampler is None:
         return lp
@@ -47,12 +49,9 @@ def accept_lp_for(sampler: Optional[Callable[[Any], Any]], lp: Any) -> Any:
     if exact_contract is not None:
         return exact_contract(lp)
     try:
-        from omlx.utils.sampling import apply_min_p, apply_top_k, apply_top_p
+        from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
     except Exception:
-        try:
-            from mlx_lm.sample_utils import apply_min_p, apply_top_k, apply_top_p
-        except Exception:
-            return lp
+        return lp
 
     temp = float(getattr(sampler, "temp", 0.0) or 0.0)
     if temp == 0.0:

@@ -629,7 +629,7 @@ def analyze_reporter_log(root: Path) -> dict[str, Any]:
         "exists": path.exists(),
         "sha256": sha256_file(path),
         "installed_bundled_python_seen": "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3" in text,
-        "model_path_seen": "/Users/example/.omlx/models/MiniMax-M2.7-JANGTQ_K" in text,
+        "model_path_seen": "/Users/example/models/MiniMax-M2.7-JANGTQ_K" in text,
         "responses_stream_request_seen": '"wireApi":"responses"' in text
         and '"stream":true' in text,
         "reasoning_parser_seen": "--reasoning-parser minimax_m2" in text,
@@ -1666,7 +1666,7 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "executable": "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3",
                 "module": "vmlx_engine.cli",
                 "subcommand": "serve",
-                "model_path": "/Users/example/.omlx/models/MiniMax-M2.7-JANGTQ_K",
+                "model_path": "/Users/example/models/MiniMax-M2.7-JANGTQ_K",
                 "host": "127.0.0.1",
                 "port": 8000,
                 "timeout": 300,

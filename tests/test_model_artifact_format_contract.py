@@ -37,7 +37,7 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
     assert "vmlx_engine/loaders/load_zaya.py" in sources
     assert "vmlx_engine/loaders/load_laguna.py" in sources
     assert "vmlx_engine/loaders/load_mistral3.py" in sources
-    assert "vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py" in sources
+    assert "vmlx_engine/text_mtp/qwen_family.py" in sources
     assert "vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py" in sources
 
     command = gate.COMMANDS["model_artifact_format_pytest"]
