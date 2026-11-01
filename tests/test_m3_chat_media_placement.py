@@ -56,3 +56,41 @@ async def test_m3_chat_preserves_historical_image_and_current_video(monkeypatch,
     assert turns[2]["content"][1]["type"] == "video_url"
     assert not captured[0].get("images")
     assert not captured[0].get("videos")
+
+
+@pytest.mark.asyncio
+async def test_dsv41_ollama_stream_retains_image_in_original_turn(monkeypatch):
+    captured = []
+
+    class Engine:
+        tokenizer = SimpleNamespace(has_thinking=False)
+        is_mllm = False
+        preserve_native_tool_format = True
+
+        async def stream_chat(self, **kwargs):
+            captured.append(kwargs)
+            yield GenerationOutput(text="red", new_text="red", tokens=[],
+                                   prompt_tokens=20, completion_tokens=1,
+                                   finished=True, finish_reason="stop")
+
+    monkeypatch.setattr(server, "_engine", Engine())
+    monkeypatch.setattr(server, "_m3_vl_media_ok", lambda _: False)
+    monkeypatch.setattr(server, "_dsv41_vl_media_ok", lambda _: True)
+    for name in ("_api_key", "_reasoning_parser", "_tool_call_parser", "_model_path"):
+        monkeypatch.setattr(server, name, None)
+    for name in ("_model_name", "_served_model_name"):
+        monkeypatch.setattr(server, name, "dsv41-media-placement-test")
+    messages = [
+        {"role": "user", "content": "Describe this image", "images": ["AA=="]},
+        {"role": "assistant", "content": "Red."},
+        {"role": "user", "content": "Recall the color."},
+    ]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
+        response = await client.post("/api/chat", json={
+            "model": "dsv41-media-placement-test", "messages": messages, "stream": True,
+        })
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    turns = captured[0]["messages"]
+    assert any(p.get("type") == "image_url" for p in turns[0]["content"])
+    assert turns[2]["content"] == "Recall the color."

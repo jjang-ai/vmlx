@@ -19301,7 +19301,8 @@ async def ollama_chat(fastapi_request: Request):
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm or (
-        _m3_vl_media_ok(engine) and _messages_have_multimodal(chat_req.messages)
+        (_m3_vl_media_ok(engine) or _dsv41_vl_media_ok(engine))
+        and _messages_have_multimodal(chat_req.messages)
     ):
         messages = []
         for msg in chat_req.messages:
