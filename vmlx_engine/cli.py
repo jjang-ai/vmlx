@@ -887,10 +887,21 @@ def _apply_dsv41_runtime_policy(args, logger):
         args.speculative_model = None
         changes.append("speculative_model=off")
         logger.warning("DSV4.1-Flash detected — ignoring --speculative-model; the bundle's own "
-                       "dSpark draft is used (VMLX_DSV41_DSPARK=0 disables it).")
+                       "dSpark draft is used (--dspark off disables it).")
     if changes:
         logger.info("DSV4.1-Flash runtime policy: %s", ", ".join(changes))
     return True, tuple(changes)
+
+
+def export_dspark_choice(args) -> None:
+    """Export ``--dspark on|off`` as ``VMLX_DSPARK=1|0`` before the model loads.
+
+    Every bundled-DSpark loader reads it: dspark/runtime.load_dspark_runtime (MiniCPM-V-4.7, MiniMax-M3 / M3.1) and
+    loaders/load_jangtq_dsv41.dsv41_dspark_decision (DeepSeek-V4.1, where it also outranks the diagnostic
+    ``VMLX_DSV41_DSPARK`` lever). ``auto`` exports nothing: a bundle that ships a drafter uses it."""
+    mode = getattr(args, "dspark", "auto")
+    if mode in ("on", "off"):
+        os.environ["VMLX_DSPARK"] = "1" if mode == "on" else "0"
 
 
 def _runtime_is_mllm(args) -> bool:
@@ -1341,6 +1352,20 @@ def _configure_vision_feature_ssd(args, explicit) -> None:
         logger.warning("Vision feature SSD cache unavailable", exc_info=True)
 
 
+def _m3_forces_paged_off(use_paged_cache: bool) -> bool:
+    """Whether a MiniMax-M3 launch turns a requested paged RAM tier off: only without the aligned prefill geometry
+    (``VMLX_M3_ALIGNED_PREFIX=0``) and without the ``VMLX_M3_ALLOW_PAGED`` experiment switch."""
+    import os as _os
+
+    from .models.minimax_m3 import prefill_geometry as _m3_pg
+
+    return (
+        bool(use_paged_cache)
+        and not _os.environ.get("VMLX_M3_ALLOW_PAGED")
+        and not _m3_pg.aligned_prefix_enabled()
+    )
+
+
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
@@ -1497,9 +1522,13 @@ def serve_command(args):
                 # app registry) cannot silently corrupt M3. M3 keeps its native MSA
                 # cache plus the M3-aware prefix/block-disk L2 tier. Escape hatch for
                 # experiments only: VMLX_M3_ALLOW_PAGED=1.
-                if getattr(args, "use_paged_cache", False) and not _m3_os.environ.get(
-                    "VMLX_M3_ALLOW_PAGED"
-                ):
+                # Since the aligned prefill geometry (models/minimax_m3/prefill_geometry.py, default on) every
+                # tier, the paged RAM blocks included, reuses only chunk-boundary / turn-cut prefixes computed in a
+                # cold prefill's own chunks: measured 2026-10-31 on MiniMax-M3.1 JANGHT1.9 with --use-paged-cache
+                # (RAM + SSD), cached == cold 17/17 incl. partial hits at non-aligned divergence points and restart
+                # restores. The override now applies only when that geometry is switched off
+                # (VMLX_M3_ALIGNED_PREFIX=0), the relative chunking the 2026-08-10 corruption was measured on.
+                if _m3_forces_paged_off(getattr(args, "use_paged_cache", False)):
                     args.use_paged_cache = False
                     logger.warning(
                         "MiniMax-M3: forcing paged cache OFF. The paged tier has no "
@@ -2981,10 +3010,7 @@ def serve_command(args):
         if ignored:
             print(f"  NOTE: These settings require --continuous-batching and will be ignored: {', '.join(ignored)}")
 
-    # --dspark on/off overrides the bundle's speculative.default stamp (read by models/mllm._load_dspark_runtime).
-    _dspark_mode = getattr(args, "dspark", "auto")
-    if _dspark_mode in ("on", "off"):
-        os.environ["VMLX_DSPARK"] = "1" if _dspark_mode == "on" else "0"
+    export_dspark_choice(args)
     # DSpark (a drafter shipped inside the bundle, loaded with the model): its multi-turn session tier lives in the
     # same managed SSD pool and budget as the block cache; off with --disable-block-disk-cache (dspark/session.py).
     try:
@@ -4592,9 +4618,12 @@ Examples:
         "--dspark",
         choices=("auto", "on", "off"),
         default="auto",
-        help="DSpark drafter shipped inside the bundle (<bundle>/dspark, MiniCPM-V-4.7 / Naive N0.5): auto / on = use "
-             "it whenever the bundle ships one (a bundle without it serves AR), off = AR only. Runs on the "
-             "single-request lane (--no-continuous-batching); text, image and video requests.",
+        help="DSpark drafter shipped inside the bundle (<bundle>/dspark, MiniCPM-V-4.7 / Naive N0.5 / MiniMax-M3.1 / "
+             "DeepSeek-V4.1): auto / on = use it whenever the bundle ships one (a bundle without it serves AR), "
+             "off = AR only. MiniCPM runs on the single-request lane (--no-continuous-batching; text, image and video "
+             "requests); MiniMax-M3.1 and DeepSeek-V4.1 run on the engine's single-sequence lane (text requests). "
+             "For DeepSeek-V4.1 an explicit on / off outranks the diagnostic VMLX_DSV41_DSPARK lever. "
+             "Adaptive picks the draft width.",
     )
     serve_parser.add_argument(
         "--num-draft-tokens",

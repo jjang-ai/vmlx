@@ -41,7 +41,63 @@ function tensorsIn(file: string): Record<string, any> {
   } finally { closeSync(fd) }
 }
 
-/** Mirrors engine bundled_draft admission, including stored affine fc geometry. */
+/**
+ * MiniMax-M3.1 `DSparkMiniMaxDraftModel` drafter (engine dspark/drafter.is_minimax_config): geometry under
+ * `text_config`, taps in `dspark_target_layer_ids`, tensors under the release's module prefix.
+ */
+function isMinimaxDraftConfig(cfg: any): boolean {
+  const archs: unknown[] = Array.isArray(cfg?.architectures) ? cfg.architectures : []
+  return archs.includes('DSparkMiniMaxDraftModel') || 'dspark_block_size' in (cfg?.text_config || cfg || {})
+}
+
+/** engine bundled_draft._draft_geometry: the flat DFlash / DSpark layout or the MiniMax-M3.1 layout. */
+function draftGeometry(cfg: any) {
+  if (isMinimaxDraftConfig(cfg)) {
+    const text = cfg.text_config || cfg
+    return { hidden: text.hidden_size, vocab: text.vocab_size, layers: text.num_hidden_layers, minimax: true,
+      taps: text.dspark_target_layer_ids ?? text.dspark_config?.target_layer_ids,
+      numTargetLayers: text.num_target_layers ?? cfg.num_target_layers }
+  }
+  return { hidden: cfg.hidden_size, vocab: cfg.vocab_size, layers: cfg.num_hidden_layers, minimax: false,
+    taps: cfg.dflash_config?.target_layer_ids, numTargetLayers: cfg.num_target_layers }
+}
+
+/** engine dspark/drafter.minimax_tensor_name: the release's tensor names under the drafter's module names. */
+function minimaxTensorName(name: string): string {
+  const prefix = 'language_model.model.dspark.'
+  const stripped = (name.startsWith(prefix) ? name.slice(prefix.length) : name).split('.decoder_layer.').join('.')
+  return stripped.startsWith('final_norm.') ? 'norm.' + stripped.slice('final_norm.'.length) : stripped
+}
+
+/** engine bundled_draft._check_fc: the drafter's fc projection fits hidden x (hidden * taps). */
+function fcFits(tensors: Record<string, any>, quant: any, hidden: number, width: number): boolean {
+  const fc = tensors['fc.weight']
+  if ('fc.weight_scale_inv' in tensors) {
+    // MXFP8 as released: e4m3 bytes + one e8m0 scale per 32 inputs.
+    return ['U8', 'F8_E4M3'].includes(fc?.dtype) && JSON.stringify(fc.shape) === JSON.stringify([hidden, width]) &&
+      width % 32 === 0 && JSON.stringify(tensors['fc.weight_scale_inv'].shape) === JSON.stringify([hidden, width / 32])
+  }
+  if ('fc.scales' in tensors) {
+    // mlx-lm's per-module entry for fc (keyed by its live path), else the block's top-level settings.
+    const q = quant.fc && typeof quant.fc === 'object' ? quant.fc : quant
+    const mode = q.mode || 'affine'
+    if (mode === 'mxfp8') {
+      if (![undefined, 8].includes(q.bits) || ![undefined, 32].includes(q.group_size) || width % 32 || fc?.dtype !== 'U32') return false
+      if (JSON.stringify(tensors['fc.scales'].shape) !== JSON.stringify([hidden, width / 32]) || 'fc.biases' in tensors) return false
+      width = width * 8 / 32
+    } else if (mode === 'affine') {
+      if (![2, 3, 4, 5, 6, 8].includes(q.bits) || ![32, 64, 128].includes(q.group_size)) return false
+      if (width * q.bits % 32 || width % q.group_size || fc?.dtype !== 'U32') return false
+      for (const key of ['fc.scales', 'fc.biases']) {
+        if (JSON.stringify(tensors[key]?.shape) !== JSON.stringify([hidden, width / q.group_size])) return false
+      }
+      width = width * q.bits / 32
+    } else return false
+  } else if (!['F16', 'BF16', 'F32'].includes(fc?.dtype)) return false
+  return JSON.stringify(fc.shape) === JSON.stringify([hidden, width])
+}
+
+/** Mirrors engine bundled_draft admission, including stored affine / MXFP8 fc geometry and the MiniMax layout. */
 export function bundledDraftFits(draft: string, target: string): boolean {
   try {
     const cfg = JSON.parse(readFileSync(join(draft, 'config.json'), 'utf8'))
@@ -49,10 +105,12 @@ export function bundledDraftFits(draft: string, target: string): boolean {
     const text = root.text_config || root
     const { hidden_size: hidden, vocab_size: vocab, num_hidden_layers: layers } = text
     if (![hidden, vocab, layers].every(n => Number.isSafeInteger(n) && n > 0)) return false
-    if (cfg.hidden_size !== hidden || !(cfg.vocab_size > 0 && cfg.vocab_size <= vocab)) return false
-    const taps = cfg.dflash_config?.target_layer_ids
+    const geo = draftGeometry(cfg)
+    if (geo.hidden !== hidden || !(geo.vocab > 0 && geo.vocab <= vocab)) return false
+    const taps = geo.taps
     if (!Array.isArray(taps) || !taps.length || taps.some(i => !Number.isInteger(i) || i < 0 || i >= layers)) return false
-    if (cfg.num_target_layers !== undefined && cfg.num_target_layers !== layers) return false
+    if (geo.numTargetLayers !== undefined && geo.numTargetLayers !== null && geo.numTargetLayers !== layers) return false
+    const rename = geo.minimax ? minimaxTensorName : (name: string) => name
     const files = readdirSync(draft)
     const shards = files.filter(f => f.endsWith('.safetensors') && !f.startsWith('._'))
     if (!shards.length) return false
@@ -60,27 +118,16 @@ export function bundledDraftFits(draft: string, target: string): boolean {
     const owners: Record<string, string> = {}
     for (const file of shards) {
       const header = tensorsIn(join(draft, file))
-      if (Object.keys(header).some(key => key in tensors)) return false
-      Object.assign(tensors, header)
-      for (const key of Object.keys(header)) owners[key] = file
+      const names = Object.keys(header).map(rename)
+      if (new Set(names).size !== names.length || names.some(key => key in tensors)) return false
+      Object.keys(header).forEach((key, i) => { tensors[names[i]] = header[key]; owners[key] = file })
     }
-    const fc = tensors['fc.weight']
-    let width = hidden * taps.length
-    if ('fc.scales' in tensors) {
-      const q = cfg.quantization || cfg.quantization_config || {}
-      if ((q.mode || 'affine') !== 'affine' || ![2, 3, 4, 5, 6, 8].includes(q.bits) || ![32, 64, 128].includes(q.group_size)) return false
-      if (width * q.bits % 32 || width % q.group_size || fc?.dtype !== 'U32') return false
-      for (const key of ['fc.scales', 'fc.biases']) {
-        if (JSON.stringify(tensors[key]?.shape) !== JSON.stringify([hidden, width / q.group_size])) return false
-      }
-      width = width * q.bits / 32
-    } else if (!['F16', 'BF16', 'F32'].includes(fc?.dtype)) return false
-    if (JSON.stringify(fc.shape) !== JSON.stringify([hidden, width])) return false
-    if (!Number.isSafeInteger(cfg.num_hidden_layers) || cfg.num_hidden_layers <= 0 || cfg.num_hidden_layers > Object.keys(tensors).length) return false
-    for (let i = 0; i < cfg.num_hidden_layers; i++) {
+    if (!fcFits(tensors, cfg.quantization || cfg.quantization_config || {}, hidden, hidden * taps.length)) return false
+    if (!Number.isSafeInteger(geo.layers) || geo.layers <= 0 || geo.layers > Object.keys(tensors).length) return false
+    for (let i = 0; i < geo.layers; i++) {
       if (!tensors[`layers.${i}.self_attn.q_proj.weight`]) return false
     }
-    for (const index of files.filter(f => f.endsWith('.safetensors.index.json'))) {
+    for (const index of files.filter(f => f.endsWith('.safetensors.index.json') && !f.startsWith('._'))) {
       const mapping = JSON.parse(readFileSync(join(draft, index), 'utf8')).weight_map
       for (const [name, file] of Object.entries(mapping)) {
         if (typeof file !== 'string' || basename(file) !== file || owners[name] !== file) return false

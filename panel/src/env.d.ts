@@ -25,7 +25,7 @@ declare global {
         ) => Promise<{ success: boolean }>;
         browseDirectory: () => Promise<{ canceled: boolean; path?: string }>;
         classifyDflash2: (path?: string) => Promise<boolean>
-        dsparkDrafter?: (bundlePath?: string) => Promise<{ name: string; path: string; default: boolean } | null>
+        dsparkDrafter?: (bundlePath?: string) => Promise<{ name: string; path: string; default: boolean; textLane?: boolean } | null>
         dflash2Drafters: (bundlePath?: string, scanLibrary?: boolean) => Promise<Array<{ name: string; path: string; bundled?: boolean }>>
         detectConfig: (modelPath: string) => Promise<{
           nativeGlmSsd?: boolean

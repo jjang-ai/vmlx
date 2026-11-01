@@ -14348,6 +14348,27 @@ def _loaded_dspark_health_status(engine) -> dict | None:
     }
 
 
+def _text_lane_dspark_health_status(engine) -> dict | None:
+    """Report the MiniMax-M3 / M3.1 text-lane drafter (dspark/runtime.attach_text_lane puts the runtime on the loaded
+    model as ``_vmlx_dspark_runtime``; ``_loaded_dspark_health_status`` reads only the MiniCPM lane's ``_dspark``).
+    Health only: the text lane decodes on the engine's own prefix cache, so there is no DSpark session cache to
+    report or clear."""
+    if engine is None or getattr(engine, "_loaded", False) is not True:
+        return None
+    runtime = getattr(getattr(engine, "_model", None), "_vmlx_dspark_runtime", None)
+    if not isinstance(runtime, dict) or runtime.get("drafter") is None or runtime.get("target") is None:
+        return None
+    return {
+        "enabled": True,
+        "method": "dspark",
+        "lane": "text",
+        "draft_model_loaded": True,
+        "num_draft_tokens": runtime.get("max_draft"),
+        "adaptive_width": runtime.get("fixed_width") is None,
+        "request_dependent": True,
+    }
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -14557,6 +14578,10 @@ async def health():
     dspark_info = _loaded_dspark_health_status(_engine)
     if dspark_info is not None:
         spec_info = {"speculative_decoding": dspark_info}
+    else:
+        _text_dspark_info = _text_lane_dspark_health_status(_engine)
+        if _text_dspark_info is not None:
+            spec_info = {"speculative_decoding": _text_dspark_info}
 
     if _model_type == "image":
         result = {

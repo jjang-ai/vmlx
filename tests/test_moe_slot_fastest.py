@@ -96,7 +96,8 @@ def test_one_row_decode_keeps_the_original_kernels(monkeypatch):
     import vmlx_engine.jangt.switch as JTS
     import vmlx_engine.jangh.switch as JHS
     src = inspect.getsource(JTS.JTMixedSwitchGLU._decode_h) + inspect.getsource(JTS.JTMixedSwitchGLU._decode_down)
-    assert src.count("slot_fastest=x2.shape[0] > 1") == 2 and src.count("slot_fastest=idx2.shape[0] > 1") == 2
+    # _decode_h: JANGT gate/up, JANGH fused gate/up, JANGH single-weight gate + up (SwiGLU-OAI); _decode_down: 2
+    assert src.count("slot_fastest=x2.shape[0] > 1") == 3 and src.count("slot_fastest=idx2.shape[0] > 1") == 2
     jh = inspect.getsource(JHS)
     assert "slot_fastest=xf.shape[0] > 1" in jh and "slot_fastest=idx2.shape[0] > 1" in jh
     assert "threadgroup_position_in_grid.z" in K.swap_grid_yz("threadgroup_position_in_grid.y")

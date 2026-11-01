@@ -295,7 +295,7 @@ export function buildCommandPreview(
   detectedDflash2Path = '',
   hasBundledDrafter = false,
   explicitDflash2?: boolean,
-  bundledDspark: false | { default: boolean } = false,
+  bundledDspark: false | { default: boolean; textLane?: boolean } = false,
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const requestedDistributed = !!(config as any).distributedEnabled
@@ -394,13 +394,16 @@ export function buildCommandPreview(
   const dflash2Speculative = !dsv4Active && (config.speculativeModel
     ? (explicitDflash2 ?? /dflash2/i.test(config.speculativeModel))
     : !!detectedDflash2Path)
-  // A bundled DSpark drafter (<bundle>/dspark) runs on the single-request lane, on by default (sessions.ts).
+  // A bundled DSpark drafter (<bundle>/dspark) is on by default (sessions.ts). MiniCPM-V-4.7 drafts on the
+  // single-request lane; MiniMax-M3 / M3.1 and DeepSeek-V4.1 (textLane) keep batching and the cache stack as
+  // configured. The DSV4 family drops an external draft model, so it never overrides V4.1's draft.
   const dsparkChoice = config.useBundledDspark
-  const dsparkActive = !dsv4Active && !!bundledDspark && (dsparkChoice ?? bundledDspark.default) &&
-    !config.speculativeModel && !dflash2Speculative
+  const dsparkOverridden = !dsv4Active && (!!config.speculativeModel || dflash2Speculative)
+  const dsparkActive = !!bundledDspark && (dsparkChoice ?? bundledDspark.default) && !dsparkOverridden
+  const dsparkSingleRequest = dsparkActive && !(bundledDspark && bundledDspark.textLane)
   const cacheStackActive = dsv4Active
     ? true
-    : dflash2Speculative || dsparkActive
+    : dflash2Speculative || dsparkSingleRequest
       ? false
       : config.continuousBatching !== false
   if (cacheStackActive) {
@@ -428,12 +431,12 @@ export function buildCommandPreview(
   // and spawned by sessions.ts. Do not rebuild this fragment in the renderer.
   const cacheLaunch = buildCacheLaunchArgs({
     // DSpark's multi-turn session tier is native speculative state like DFlash2's: it keeps the SSD settings.
-    nativeSpeculativeCache: dflash2Speculative || dsparkActive,
+    nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
     continuousBatching: cacheStackActive,
     enablePrefixCache: config.enablePrefixCache !== false,
-    usePagedCache: false,
-    enableDiskCache: !dflash2Speculative && !dsparkActive && !!diskControls.enableDiskCache,
-    enableBlockDiskCache: dflash2Speculative || dsparkActive ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
+    usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
+    enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
+    enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
     noMemoryAwareCache: !!config.noMemoryAwareCache,
     forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active,
     prefixCacheSize: config.prefixCacheSize,
@@ -528,8 +531,7 @@ export function buildCommandPreview(
   if (!config.speculativeModel && config.useBundledDflash2 === false && hasBundledDrafter) {
     parts.push('--no-bundled-dflash2')
   }
-  if (bundledDspark && !dsv4Active) {
-    const dsparkOverridden = !!config.speculativeModel || dflash2Speculative
+  if (bundledDspark) {
     parts.push('--dspark', dsparkOverridden ? 'off' : dsparkChoice === undefined ? 'auto' : dsparkActive ? 'on' : 'off')
   }
   if (compatibleExternalSpeculative) {
@@ -614,7 +616,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [previewMetadataState, setPreviewMetadataState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
   const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; supportsThinking?: boolean; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; runtimeModalities?: string[]; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; nativeGlmSsd?: boolean; dsv4PoolQuantDefault?: boolean; architectureHints?: Record<string, string | number | boolean>; maxContextLength?: number; nativeMtp?: { supported?: boolean; adapter?: 'nemotron_lilicorr'; depth?: number; depthSource?: string; defaultMode?: 'auto' | 'off'; blockedReason?: string } } | null>(null)
   const [previewDrafters, setPreviewDrafters] = useState<Array<{ path: string; bundled?: boolean }>>([])
-  const [previewDspark, setPreviewDspark] = useState<false | { default: boolean }>(false)
+  const [previewDspark, setPreviewDspark] = useState<false | { default: boolean; textLane?: boolean }>(false)
   const explicitDflash2 = useDflash2Selection(config.speculativeModel || '')
   const sessionIdRef = useRef(sessionId)
   const resetRequestRef = useRef(0)
@@ -662,7 +664,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
           if (active) {
             setConfig(current => applyBundleDsv4PoolQuantToSessionConfig(current, det))
             setPreviewDrafters(drafters)
-            setPreviewDspark(dspark ? { default: dspark.default !== false } : false)
+            setPreviewDspark(dspark ? { default: dspark.default !== false, textLane: dspark.textLane === true } : false)
             setDetectedConfig(det && det.family !== 'unknown' ? det : null)
             setPreviewMetadataState(det && det.family !== 'unknown' ? 'ready' : 'unavailable')
           }

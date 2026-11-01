@@ -2,7 +2,8 @@
 """DeepSeek-V4.1-Flash DSpark speculative-decode generator for the vMLX engine.
 
 Selected (scheduler) only when a bundle's dSpark draft is attached as ``model._dspark`` (default-on
-for bundles that ship the draft; ``VMLX_DSV41_DSPARK=0`` disables it) and max_num_seqs == 1. It subclasses
+for bundles that ship the draft; ``--dspark off`` disables it, see load_jangtq_dsv41.dsv41_dspark_decision) and
+max_num_seqs == 1. It subclasses
 ``SingleBatchGenerator`` to reuse its request lifecycle (insert/remove/Response/stop machinery) and
 overrides only the decode path: it prefills the request's ENGINE cache with
 ``jang_tools.dsv41.dspark.DSparkRunner.prefill(session=<engine DeepseekV41Cache list>)`` (so the prompt
@@ -103,6 +104,17 @@ def _fallback_chunk(n_tokens: int, start: int, step: int) -> int:
     if step < n_tokens <= _SHORT_PROMPT_ONE_CHUNK and start + n_tokens <= _SHORT_CHUNK_MAX_CONTEXT:
         return n_tokens
     return step
+
+
+def _prefill_takes_cuts(runner) -> bool:
+    """DSparkRunner.prefill(cuts=, on_cut=) exists (jang_tools after 2.5.52); older runtimes prefill without cuts."""
+    import inspect
+
+    try:
+        params = inspect.signature(runner.prefill).parameters
+    except (TypeError, ValueError):
+        return False
+    return "cuts" in params and "on_cut" in params
 
 
 def _device_info() -> dict:
@@ -390,10 +402,7 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         chunk = chooser.choose(len(prompt), start)
         mark = chooser.begin()
 
-        def _on_boundary(_sess):
-            # Peak of the body chunks, read before the prompt snapshot allocates.
-            chooser.end(mark, min(chunk, len(prompt) - 1), len(prompt), start)
-            snap = self._clone_dsv41_prompt_boundary(req)
+        def _with_draft_tail(snap):
             # Carry the draft-window seed of the boundary's last positions, so a later prefix hit
             # on this entry drafts with a full window (DSparkRunner.prefill reseeds from it).
             tail_fn = getattr(self._dspark, "main_tail", None)
@@ -401,13 +410,45 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             if snap and tail is not None and int(tail[1]) + int(tail[0].shape[1]) == int(snap[0].offset):
                 snap[0]._seq.dspark_tail = (mx.array(tail[0]), int(tail[1]))
                 mx.eval(snap[0]._seq.dspark_tail[0])
-            boundary["snapshot"] = snap
+            return snap
 
+        widths = [chunk]
+
+        def _on_boundary(_sess):
+            # Peak of the body chunks, read before the prompt snapshot allocates.
+            chooser.end(mark, min(max(widths), len(prompt) - 1), len(prompt), start)
+            boundary["snapshot"] = _with_draft_tail(self._clone_dsv41_prompt_boundary(req))
+
+        checkpoints = []
+
+        def _on_cut(_sess, pos):
+            snap = _with_draft_tail(self._clone_admissible_prompt_cache_snapshot(req.cache))
+            if snap is not None:
+                checkpoints.append((int(pos), snap))
+
+        end = start + len(prompt)
+        extra = {}
+        cuts = self._dsv41_cut_positions(req, start, end - 1)
+        if cuts and _prefill_takes_cuts(self._runner):
+            # Each segment picks its own chunk as if it were the whole uncached prompt, so a later request restored
+            # at a cut chunks the rest like this prefill does. choose(n) splits n - 1 body rows (the final token
+            # runs alone), and every segment's b - a rows are body rows, hence b - a + 1.
+            widths.clear()
+
+            def chunk(a, b):
+                w = chooser.choose(b - a + 1, a)
+                widths.append(w)
+                return w
+
+            extra = {"cuts": cuts, "on_cut": _on_cut}
         with self._stream_context():
-            sess, pending, c = self._runner.prefill(prompt, session=seq, on_boundary=_on_boundary, chunk_size=chunk)
+            sess, pending, c = self._runner.prefill(
+                prompt, session=seq, on_boundary=_on_boundary, chunk_size=chunk, **extra,
+            )
             mx.eval(pending)
+        req.boundary_checkpoints = checkpoints or None
         logger.info("DSV4.1 DSpark prefill %s: %s tokens from pos %s, chunk %s (%s)", req.uid, len(prompt), start,
-                    chunk, chooser.describe())
+                    widths[0] if len(widths) == 1 else widths, chooser.describe())
         req.prompt_cache_snapshot = boundary.get("snapshot")
         req.context_tokens.extend(prompt)
         req.prefill_usage = {
@@ -455,7 +496,8 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                         current_state=req.current_state, match_sequence=req.match_sequence,
                         prompt_cache=req.cache, all_tokens=list(req.context_tokens),
                         prompt_cache_snapshot=getattr(req, 'prompt_cache_snapshot', None), prefill_usage=req.prefill_usage,
-                        mixed_swa_boundary=None, stable_root_snapshot=None, boundary_checkpoints=None)
+                        mixed_swa_boundary=None, stable_root_snapshot=None,
+                        boundary_checkpoints=getattr(req, "boundary_checkpoints", None))
         if req.finish_reason is not None:
             self._request = None
             self._log_dspark_stats(req)

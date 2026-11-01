@@ -5,8 +5,8 @@ MLX #3922 fixes a pre-clamp signed-short conversion in the sorted expert
 kernel. Affected builds leave rows unwritten above 32768 expanded expert rows.
 The independent ragged-K defect (#3887) is not addressed here.
 
-The bounded sorted-call approach is also used by oMLX's m5_gather_qmm patch
-(Apache-2.0). We qualify the ROW defect independently, on the executing device;
+Each sorted call is bounded below the overflow. We qualify the ROW defect
+independently, on the executing device;
 a ragged-K canary cannot establish whether the row fix is present.
 No quantization metadata, expert choices, reduction axes, or cache state change.
 """

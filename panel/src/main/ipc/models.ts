@@ -19,7 +19,7 @@ import { db } from "../database";
 import { detectModelConfigFromDir } from "../model-config-registry";
 import { configDeclaresDflash2 } from "../../shared/dflash2Drafter";
 import { findBundledDflash2Drafter, isDflash2DrafterSelection } from "../dflash2Bundle";
-import { bundledDsparkDefault, findBundledDsparkDrafter } from "../dsparkBundle";
+import { bundledDsparkDefault, dsparkUsesTextLane, findBundledDsparkDrafter } from "../dsparkBundle";
 import { getBundledPythonPath, getDevelopmentProjectVenv } from "../engine-manager";
 import {
   getImageModelEncoderType,
@@ -1155,10 +1155,11 @@ async function findDflash2Drafters(): Promise<Array<{ name: string; path: string
 
 export function registerModelHandlers(): void {
   ipcMain.handle("models:classifyDflash2", (_e, path?: string) => isDflash2DrafterSelection(path));
-  // DSpark drafter shipped inside the bundle (<bundle>/dspark): one directory listing.
+  // DSpark drafter shipped inside the bundle (<bundle>/dspark): one directory listing. `textLane`: the engine drafts
+  // on the text lane (MiniMax-M3 / M3.1), so the session keeps its batching and cache settings.
   ipcMain.handle("models:dsparkDrafter", (_e, bundlePath?: string) => {
     const found = bundlePath ? findBundledDsparkDrafter(bundlePath) : null;
-    return found ? { name: drafterLabel(found), path: found, default: bundledDsparkDefault(bundlePath) } : null;
+    return found ? { name: drafterLabel(found), path: found, default: bundledDsparkDefault(bundlePath), textLane: dsparkUsesTextLane(bundlePath) } : null;
   });
   // Scan for available models in all configured directories
   ipcMain.handle("models:dflash2Drafters", async (_e, bundlePath?: string, scanLibrary: boolean = true) => {

@@ -12,10 +12,10 @@ def test_real_gdn_rejected_suffix_restores_accepted_state(drafts, accepted, bits
     import mlx.nn as nn
     from mlx_lm.models import qwen3_5
     from mlx_lm.models.cache import ArraysCache
-    from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _restore_or_trim_caches
+    from vmlx_engine.text_mtp import qwen_family as qwen35_model
+    from vmlx_engine.text_mtp.lane import rewind_backbone
 
-    qwen35_model.apply()
+    qwen35_model.install()
     mx.random.seed(617)
     args = qwen3_5.TextModelArgs(hidden_size=64, linear_num_value_heads=2,
         linear_num_key_heads=2, linear_key_head_dim=32, linear_value_head_dim=32)
@@ -32,10 +32,10 @@ def test_real_gdn_rejected_suffix_restores_accepted_state(drafts, accepted, bits
     mx.eval(layer(inputs[:, :1 + accepted], cache=original, n_confirmed=1))
     mx.eval(layer(inputs, cache=speculative, n_confirmed=1))
     assert speculative.supports_partial_rollback
-    assert _restore_or_trim_caches([speculative], drafts - accepted)
+    assert rewind_backbone([speculative], drafts - accepted)
     for want, got in zip(original.state, speculative.state):
         assert mx.allclose(want, got, atol=2e-5, rtol=2e-5).item()
-    assert speculative._vmlx_qwen_rollback is None
+    assert speculative._vmlx_partial_restore is None
     assert speculative.rollback_state is None
     tail = mx.random.normal((1, 1, 64))
     want, got = layer(tail, cache=original), layer(tail, cache=speculative)
@@ -50,8 +50,8 @@ def test_float32_first_rejection_preserves_confirmed_snapshot(drafts):
     # At first rejection, the exact existing confirmed snapshot is the oracle.
     from mlx_lm.models import qwen3_5
     from mlx_lm.models.cache import ArraysCache
-    from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
-    qwen35_model.apply()
+    from vmlx_engine.text_mtp import qwen_family as qwen35_model
+    qwen35_model.install()
     mx.random.seed(617)
     layer = qwen3_5.GatedDeltaNet(qwen3_5.TextModelArgs(
         hidden_size=64, linear_num_value_heads=2, linear_num_key_heads=2,
@@ -68,39 +68,38 @@ def test_float32_first_rejection_preserves_confirmed_snapshot(drafts):
 
 def test_invalid_rollback_is_rejected_before_any_layer_mutation():
     from mlx_lm.models.cache import ArraysCache
-    from vmlx_engine.patches.mlx_lm_mtp.qwen_rollback import prepare_qwen_rollback
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _restore_or_trim_caches
+    from vmlx_engine.text_mtp.hybrid_state import arm_partial_rollback
+    from vmlx_engine.text_mtp.lane import rewind_backbone
     events = []
     kv = SimpleNamespace(is_trimmable=lambda: True, trim=lambda n: events.append(n))
     empty = ArraysCache(2)
-    prepare_qwen_rollback(empty)
-    assert not _restore_or_trim_caches([kv, empty], 1)
+    arm_partial_rollback(empty)
+    assert not rewind_backbone([kv, empty], 1)
     assert not events
 
 
 def test_commit_releases_capture_and_restores_sequence_lengths():
     from mlx_lm.models.cache import ArraysCache
-    from vmlx_engine.patches.mlx_lm_mtp.qwen_rollback import (
-        prepare_qwen_rollback, record_qwen_rollback)
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _clear_rollback
+    from vmlx_engine.text_mtp.hybrid_state import (
+        arm_partial_rollback, remember_partial_rollback)
+    from vmlx_engine.text_mtp.lane import commit_backbone
     cache = ArraysCache(2)
     cache.prepare([8])
-    prepare_qwen_rollback(cache)
-    record_qwen_rollback(cache, 3, lambda k: (mx.array([k]), mx.array([k])))
+    arm_partial_rollback(cache)
+    remember_partial_rollback(cache, 3, lambda k: (mx.array([k]), mx.array([k])))
     cache.advance(4)
     assert cache.rollback_speculative(2)
     assert cache.lengths.item() == 6
-    record_qwen_rollback(cache, 3, lambda k: (None, None))
-    _clear_rollback([cache])
-    assert cache._vmlx_qwen_rollback is None
+    remember_partial_rollback(cache, 3, lambda k: (None, None))
+    commit_backbone([cache])
+    assert cache._vmlx_partial_restore is None
     assert not cache.can_rollback_speculative(1)
 
 
 def test_nonfallback_telemetry_keeps_seed_measurement():
-    from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-        _MtpStats, _native_mtp_payload)
-    stats = _MtpStats(seed_ar_step_ms=123.456, depth=3)
-    payload = _native_mtp_payload("slow-cached-turn", stats, "stop")
+    from vmlx_engine.text_mtp.lane_stats import LaneStats; from vmlx_engine.text_mtp.lane_stats import build_record
+    stats = LaneStats(seed_ar_step_ms=123.456, depth=3)
+    payload = build_record("slow-cached-turn", stats, "stop")
     assert payload["seed_ar_step_ms"] == 123.456
     assert payload["fallback_reason"] is None
-    assert _native_mtp_payload("unmeasured", _MtpStats(), "stop")["seed_ar_step_ms"] is None
+    assert build_record("unmeasured", LaneStats(), "stop")["seed_ar_step_ms"] is None

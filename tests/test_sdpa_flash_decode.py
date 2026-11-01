@@ -1,4 +1,4 @@
-"""metal/sdpa_flash_decode.py (oMLX port) on MiMo-V2.6 full-attention decode shapes: 64 q heads over 4 kv heads,
+"""metal/sdpa_flash_decode.py (split-key decode attention) on MiMo-V2.6 full-attention decode shapes: 64 q heads over 4 kv heads,
 q/k 192, v 128, 1-4 rows, key counts that do not divide the 8-key tiles or the split chunk; and the model routing."""
 import pytest
 

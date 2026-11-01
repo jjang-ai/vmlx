@@ -9,6 +9,7 @@ import { useTranslation } from '../../i18n'
 import {
   cacheControlUpdatesForBlockDiskToggle,
   cacheControlUpdatesForDiskToggle,
+  cacheControlUpdatesForPagedToggle,
   resolveCacheControlPolicy,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
@@ -458,9 +459,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     return () => { alive = false }
   }, [bundlePath, qwen38Dense27b, isImage])
   const bundledDflash2 = dflash2Drafters.find(d => d.bundled) || null
-  // DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5); `default` is the bundle's
-  // measured stamp, used until the user sets the checkbox.
-  const [bundledDspark, setBundledDspark] = useState<{ name: string; path: string; default: boolean } | null>(null)
+  // DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1, DeepSeek-V4.1);
+  // `default` is on whenever the bundle ships one, used until the user sets the checkbox; `textLane`: MiniMax-M3 /
+  // M3.1 and DeepSeek-V4.1.
+  const [bundledDspark, setBundledDspark] = useState<{ name: string; path: string; default: boolean; textLane?: boolean } | null>(null)
   useEffect(() => {
     setBundledDspark(null)
     if (isImage || !bundlePath) return
@@ -468,7 +470,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     const api = (window as any).api?.models
     if (typeof api?.dsparkDrafter !== 'function') return
     api.dsparkDrafter(bundlePath)
-      .then((found: unknown) => { if (alive) setBundledDspark((found as { name: string; path: string; default: boolean } | null) || null) })
+      .then((found: unknown) => { if (alive) setBundledDspark((found as { name: string; path: string; default: boolean; textLane?: boolean } | null) || null) })
       .catch(() => { /* advisory only */ })
     return () => { alive = false }
   }, [bundlePath, isImage])
@@ -476,16 +478,21 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveDraftModel = config.speculativeModel || (bundledDflash2Active ? bundledDflash2!.path : '')
   const selectedDflash2 = useDflash2Selection(effectiveDraftModel)
   const dflash2Speculative = selectedDflash2 || (!config.speculativeModel && bundledDflash2Active)
-  // Mirrors sessions.ts: an explicit or DFlash2 draft model takes precedence over the bundled DSpark drafter.
-  const dsparkOverridden = !!config.speculativeModel || dflash2Speculative
+  // Mirrors sessions.ts: an explicit or DFlash2 draft model takes precedence over the bundled DSpark drafter (not on
+  // the DSV4 family, whose engine drops an external draft model and keeps DeepSeek-V4.1's own draft).
+  const dsparkOverridden = !dsv4Active && (!!config.speculativeModel || dflash2Speculative)
   const dsparkActive = !!bundledDspark && (config.useBundledDspark ?? bundledDspark.default) && !dsparkOverridden
-  const nativeSpeculativeCache = dflash2Speculative || dsparkActive
+  // MiniCPM-V-4.7 drafts on the single-request lane (batching off, native speculative cache policy). MiniMax-M3 /
+  // M3.1 and DeepSeek-V4.1 draft on the engine's single-sequence lane: the checkbox only selects --dspark, batching
+  // and the cache stack stay as configured.
+  const dsparkSingleRequest = dsparkActive && !bundledDspark?.textLane
+  const nativeSpeculativeCache = dflash2Speculative || dsparkSingleRequest
   const singleActiveControls = dsv4Active || glmSingleActive || nativeSpeculativeCache
   const hybridCacheActive =
     detectedCacheType === 'hybrid' ||
     detectedCacheType === 'mamba' ||
     detectedCacheType === 'rotating_kv'
-  const effectiveContinuousBatching = dsv4Active ? true : dflash2Speculative || dsparkActive ? false : config.continuousBatching
+  const effectiveContinuousBatching = dsv4Active ? true : dflash2Speculative || dsparkSingleRequest ? false : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
   const effectivePrefixCacheEnabled = config.enablePrefixCache
@@ -553,12 +560,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const architectureRequiresPagedCache = false
   const zayaSsdReuseUnavailable = zayaCcaActive && !batchingOff && !prefixOff
   const cacheControlState = {
-    nativeSpeculativeCache: dflash2Speculative || dsparkActive,
+    nativeSpeculativeCache: dflash2Speculative || dsparkSingleRequest,
     continuousBatching: effectiveContinuousBatching,
     enablePrefixCache: effectivePrefixCacheEnabled,
     usePagedCache: exactTypedPromptDiskCache ? false : config.usePagedCache,
-    enableDiskCache: dsv4Active || dflash2Speculative || dsparkActive ? false : !!diskControls.enableDiskCache,
-    enableBlockDiskCache: dflash2Speculative || dsparkActive ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
+    enableDiskCache: dsv4Active || dflash2Speculative || dsparkSingleRequest ? false : !!diskControls.enableDiskCache,
+    enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
     architectureRequiresPagedCache,
     architectureSupportsBlockDiskOnly: architectureBlockDiskOnlySupported,
   }
@@ -805,7 +812,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Product-wide cache contract: the retained paged-RAM tier is locked off
           and SSD is authoritative. Keep this visible outside the collapsed
           section so users can confirm the launched memory policy at a glance. */}
-      {!isImage && <InfoNote text={t(dflash2Speculative || dsparkActive ? 'sessions.config.nativeDflashCacheNote' : 'sessions.config.ramCacheTradeoffNotice', { runtime: dsparkActive ? 'DSpark' : 'DFlash2' })} />}
+      {!isImage && <InfoNote text={t(dflash2Speculative || dsparkSingleRequest ? 'sessions.config.nativeDflashCacheNote' : 'sessions.config.ramCacheTradeoffNotice', { runtime: dsparkSingleRequest ? 'DSpark' : 'DFlash2' })} />}
 
       {/* Server Settings */}
       <Section title={t('sessions.config.serverSettings')} sectionKey="server" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
@@ -1022,14 +1029,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             : t('sessions.config.continuousBatchingTooltip')}
           checked={effectiveContinuousBatching}
           onChange={v => onChange('continuousBatching', v)}
-          disabled={dsv4Active || dflash2Speculative || dsparkActive}
+          disabled={dsv4Active || dflash2Speculative || dsparkSingleRequest}
         />
         {!singleActiveControls && <PerformanceHint text={t('sessions.config.continuousBatchingHint')} />}
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4BatchPathNote')} />}
-        {!effectiveContinuousBatching && !dflash2Speculative && !dsparkActive && effectivePrefixCacheEnabled && (
+        {!effectiveContinuousBatching && !dflash2Speculative && !dsparkSingleRequest && effectivePrefixCacheEnabled && (
           <InfoNote text={t('sessions.config.cacheFlagsOmittedNote')} />
         )}
-        {!effectiveContinuousBatching && !dflash2Speculative && !dsparkActive && (
+        {!effectiveContinuousBatching && !dflash2Speculative && !dsparkSingleRequest && (
           <InfoNote text={t('sessions.config.batchingOffDisablesNote')} />
         )}
         <InfoNote text={t('sessions.config.metalWiredLimitHelp')} />
@@ -1056,7 +1063,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}
         {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguTypedCacheNote')} />}
         {nativeGlmSsdActive && !dflash2Speculative && <div data-vmlx-section="nativeGlmSsd"><InfoNote text={t('sessions.config.glmNativeSsdNote')} /></div>}
-        {batchingOff && !dflash2Speculative && !dsparkActive && <IncompatWarning text={t('sessions.config.prefixCacheRequiresBatching')} />}
+        {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.prefixCacheRequiresBatching')} />}
         <CheckField label={t('sessions.config.enablePrefixCache')} tooltip={t('sessions.config.enablePrefixCacheTooltip')} checked={effectivePrefixCacheEnabled} onChange={v => onChange('enablePrefixCache', v)} disabled={nativeSpeculativeCache} />
         {!nativeGlmSsdActive && !dsv4Active && !blockDiskOnly && !cachePolicy.legacyDiskCacheChecked && effectivePrefixCacheEnabled && (
           <>
@@ -1194,13 +1201,35 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           </>
         )}
         {!nativeGlmSsdActive && !batchingOff && !effectiveUsePagedCache && !exactTypedPromptDiskCache && <InfoNote text={t('sessions.config.blockDiskPureSsdNote')} />}
-        <CheckField
-          label={t('sessions.cache.blockDiskCache')}
-          tooltip={t('sessions.config.blockDiskCacheTooltip')}
-          checked={cachePolicy.blockDiskCacheChecked}
-          onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
-          disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}
-        />
+        <div data-vmlx-control="block-disk-cache" data-vmlx-state={cachePolicy.blockDiskCacheChecked ? 'on' : 'off'}>
+          <CheckField
+            label={t('sessions.cache.blockDiskCache')}
+            tooltip={t('sessions.config.blockDiskCacheTooltip')}
+            checked={cachePolicy.blockDiskCacheChecked}
+            onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
+            disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}
+          />
+        </div>
+        {/* Cache tier, the user's choice: RAM only (Block Disk Cache off), SSD only (on, no RAM copy) or RAM + SSD
+            (on + this RAM copy). The RAM copy fronts the block store, so it exists only with Block Disk Cache. */}
+        {cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (
+          <div data-vmlx-control="ram-copy-cache" data-vmlx-state={effectiveUsePagedCache ? 'on' : 'off'}>
+            <CheckField
+              label={t('sessions.config.ramCopyWithSsd')}
+              tooltip={t('sessions.config.ramCopyWithSsdTooltip')}
+              checked={effectiveUsePagedCache}
+              onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}
+              disabled={cachePolicy.pagedCacheDisabled}
+            />
+          </div>
+        )}
+        <InfoNote text={t(
+          batchingOff || prefixOff
+            ? 'sessions.config.cacheTierOff'
+            : !cachePolicy.blockDiskCacheChecked
+              ? 'sessions.config.cacheTierRamOnly'
+              : effectiveUsePagedCache ? 'sessions.config.cacheTierRamSsd' : 'sessions.config.cacheTierSsdOnly',
+        )} />
         {cachePolicy.blockDiskCacheChecked && (
           <>
             <SliderField settingKey="blockDiskCacheMaxPercent"
@@ -1270,7 +1299,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </div>
           </>
         )}
-        {batchingOff && !dflash2Speculative && !dsparkActive && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
+        {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
         {!batchingOff && prefixOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresPrefix')} />}
         {!effectivelyNoBatching && !prefixOff && mixedSwaCacheActive && <PerformanceHint text={t('sessions.config.mixedSwaAutoHint')} />}
         {!effectivelyNoBatching && !prefixOff && hy3Active && <PerformanceHint text={t('sessions.config.hy3AutoHint')} />}
@@ -1830,7 +1859,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
 
       {/* Native in-model MTP */}
-      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
+      {/* DSV4 family: only DeepSeek-V4.1's bundled DSpark checkbox (its engine drops external drafters). */}
+      <Section title={t('sessions.config.specDecoding')} sectionKey="specDecode" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || (dsv4Active && !bundledDspark)}>
+        {dsv4Active && bundledDspark && (
+          <div data-vmlx-control="use-bundled-dspark">
+            <CheckField
+              label={t('sessions.config.useBundledDspark', { name: bundledDspark.name })}
+              tooltip={t('sessions.config.useBundledDsparkTextLaneTooltip')}
+              checked={dsparkActive}
+              onChange={v => onChange('useBundledDspark', v)}
+            />
+          </div>
+        )}
+        {!dsv4Active && <>
         {nativeMtpDetected && <div data-vmlx-section="nativeMtp">
         {!nativeMtpSupported && (
           <IncompatWarning text={detectedNativeMtp?.blockedReason || t('sessions.config.nativeMtpBlockedFallback')} />
@@ -1874,7 +1915,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <div data-vmlx-control="use-bundled-dspark">
             <CheckField
               label={t('sessions.config.useBundledDspark', { name: bundledDspark.name })}
-              tooltip={t('sessions.config.useBundledDsparkTooltip')}
+              tooltip={t(bundledDspark.textLane ? 'sessions.config.useBundledDsparkTextLaneTooltip' : 'sessions.config.useBundledDsparkTooltip')}
               checked={dsparkActive}
               disabled={dsparkOverridden}
               onChange={v => onChange('useBundledDspark', v)}
@@ -1921,6 +1962,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           />
         )}
         {dflash2Speculative && <InfoNote text={t('sessions.config.dflash2AdaptiveBlockNote')} />}
+        </>}
       </Section>
 
       {/* Speculative Decoding */}

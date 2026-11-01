@@ -33,6 +33,7 @@ Created by Jinho Jang (eric@jangq.ai).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import mlx.core as mx
@@ -50,7 +51,37 @@ class MiniMaxM3SparseCache(KVCache):
     through the same serialization path.
     """
 
+    # ── lane ownership for in-place appends (fused attention, models/minimax_m3/fused_attn.py) ──
+    # The fused decode / verify attention writes new K / V / index rows straight into the lane buffers from a Metal
+    # kernel, which MLX cannot see. That is only safe while no other array aliases a lane buffer: MLX's own slice
+    # update copies a shared buffer (copy on write), the kernel would overwrite rows under a view someone else keeps
+    # (e.g. a zero-copy prefix-store view, once a trim lets new rows land below its extent). So every public read of a
+    # lane array (``keys`` / ``values`` / ``idx_keys``, hence ``state`` and the stock update paths) and every
+    # assignment of one marks that lane shared; the fused path appends to a shared lane with MLX slice updates (copy
+    # on write, ``fused_append``), after which the lane is the cache's own again, and writes in place only while all
+    # three lanes are its own (``fused_reserve``). Trim / offset / nbytes never expose a lane.
+    def _lane_property(i: int, name: str) -> property:  # noqa: N805 - class-body helper, deleted below
+        """A lane attribute: reading or assigning it marks the lane shared."""
+
+        def get(self):
+            excl = self.__dict__.get("_lane_excl")
+            if excl is not None:
+                excl[i] = False
+            return self.__dict__.get(name)
+
+        def put(self, value):
+            self.__dict__[name] = value
+            self.__dict__.setdefault("_lane_excl", [False, False, False])[i] = False
+
+        return property(get, put)
+
+    keys = _lane_property(0, "_keys")
+    values = _lane_property(1, "_values")
+    idx_keys = _lane_property(2, "_idx_keys")
+    del _lane_property
+
     def __init__(self):
+        self._lane_excl = [False, False, False]
         super().__init__()
         self.idx_keys: mx.array | None = None
         self._idx_offset = 0
@@ -93,6 +124,63 @@ class MiniMaxM3SparseCache(KVCache):
     # ``offset``; the record validator accepts a longer physical backing.
     idx_step = 256
 
+    # ── prefill capacity reservation (``reserve_prefill`` below decides; VMLX_M3_PREFILL_RESERVE) ──
+    # The stock growth re-allocates every lane at each prefill chunk (new buffer = old rows + the chunk, rounded to the
+    # step) and copies the old rows into it: an N-token prefill in chunks of C allocates and copies ~N^2 / (2C) rows
+    # per lane (32k: ~38 GB of fresh, zero-filled Metal buffers across the model; 100k: ~350 GB). A prefill that knows
+    # its remaining length reserves those rows; the next growth makes room for all of them (rounded up to the step, so
+    # the final capacity is the one the chunked growth reaches). Only capacity changes: rows below the offset, and every
+    # reader (``state``, ``update_and_fetch``, ``update_index``: all sliced to the logical extent), are the same.
+    def reserve(self, rows: int) -> None:
+        """Make the next capacity growth of the K / V and index lanes room for ``rows`` rows past the current
+        offset (a prefill of known length). A hint only: nothing is allocated here."""
+        until = int(self.offset or 0) + max(0, int(rows))
+        self.__dict__["_reserve_until"] = until
+        self.__dict__["_idx_reserve_until"] = until
+
+    def row_bytes(self) -> int:
+        """Bytes one more row costs on the K / V / index lanes (0 while a lane does not exist yet)."""
+        total = 0
+        for name in ("_keys", "_values", "_idx_keys"):
+            a = self.__dict__.get(name)
+            if a is None or a.ndim != 4 or not int(a.shape[2]):
+                return 0
+            total += a.nbytes // int(a.shape[2])
+        return int(total)
+
+    def _grow_rows(self, key: str, prev: int, n: int, step: int) -> int:
+        """Rows a growth at ``prev`` for ``n`` new rows allocates: the stock ceil(n / step) * step, or enough for
+        the reservation (consumed once the offset reaches it)."""
+        until = int(self.__dict__.get(key) or 0)
+        need = max(n, until - prev)
+        if until and prev + n >= until:
+            self.__dict__.pop(key, None)
+        return ((need + step - 1) // step) * step
+
+    def update_and_fetch(self, keys, values):  # noqa: D102 - KVCache.update_and_fetch with the reservation
+        prev = int(self.offset)
+        n = int(keys.shape[2])
+        d = self.__dict__
+        if d.get("_keys") is None or prev + n > int(d["_keys"].shape[2]):
+            rows = self._grow_rows("_reserve_until", prev, n, self.step)
+            B, H, _, Dk = keys.shape
+            new_k = mx.zeros((B, H, rows, Dk), keys.dtype)
+            new_v = mx.zeros((B, int(values.shape[1]), rows, int(values.shape[3])), values.dtype)
+            if d.get("_keys") is not None:
+                k_old, v_old = self.keys, self.values
+                if prev % self.step != 0:
+                    k_old, v_old = k_old[..., :prev, :], v_old[..., :prev, :]
+                self.keys = mx.concatenate([k_old, new_k], axis=2)
+                self.values = mx.concatenate([v_old, new_v], axis=2)
+            else:
+                self.keys, self.values = new_k, new_v
+        elif d.get("_reserve_until") and prev + n >= int(d["_reserve_until"]):
+            d.pop("_reserve_until", None)
+        self.offset = prev + n
+        self.keys[..., prev:self.offset, :] = keys
+        self.values[..., prev:self.offset, :] = values
+        return self.keys[..., :self.offset, :], self.values[..., :self.offset, :]
+
     def update_index(self, idx_k: mx.array) -> mx.array:
         """Append this step's idx_k [B, H, T, D] and return the index history.
 
@@ -108,14 +196,16 @@ class MiniMaxM3SparseCache(KVCache):
         n = int(idx_k.shape[2])
         if self.idx_keys is None or prev + n > int(self.idx_keys.shape[2]):
             B, H, _, D = idx_k.shape
-            n_steps = (self.idx_step + n - 1) // self.idx_step
-            grown = mx.zeros((B, H, n_steps * self.idx_step, D), dtype=idx_k.dtype)
+            grown = mx.zeros((B, H, self._grow_rows("_idx_reserve_until", prev, n, self.idx_step), D),
+                             dtype=idx_k.dtype)
             if self.idx_keys is None:
                 self.idx_keys = grown
             else:
                 if prev % self.idx_step != 0:
                     self.idx_keys = self.idx_keys[..., :prev, :]
                 self.idx_keys = mx.concatenate([self.idx_keys, grown], axis=2)
+        elif self.__dict__.get("_idx_reserve_until") and prev + n >= int(self.__dict__["_idx_reserve_until"]):
+            self.__dict__.pop("_idx_reserve_until", None)
         self.idx_keys[..., prev : prev + n, :] = idx_k
         self._idx_offset = prev + n
         if self.offset and self._idx_offset != int(self.offset):
@@ -165,11 +255,116 @@ class MiniMaxM3SparseCache(KVCache):
         Returns the number actually trimmed.
         """
         trimmed = super().trim(n)
-        if self.idx_keys is not None and trimmed:
+        if self.__dict__.get("_idx_keys") is not None and trimmed:
             self._idx_offset = self.offset
         if trimmed:
             self._truncate_derived()
         return trimmed
+
+    # ── metadata without exposing a lane ──
+    @property
+    def nbytes(self):  # type: ignore[override]
+        keys, values = self.__dict__.get("_keys"), self.__dict__.get("_values")
+        return 0 if keys is None else keys.nbytes + values.nbytes
+
+    def empty(self):  # type: ignore[override]
+        return self.__dict__.get("_keys") is None
+
+    def has_index_lane(self) -> bool:
+        return self.__dict__.get("_idx_keys") is not None
+
+    def __copy__(self):
+        # A shallow copy shares the lane buffers: neither object owns them alone any more.
+        new = type(self).__new__(type(self))
+        new.__dict__.update(self.__dict__)
+        new.__dict__["_lane_excl"] = [False, False, False]
+        self.__dict__["_lane_excl"] = [False, False, False]
+        return new
+
+    def __deepcopy__(self, memo):
+        import copy
+
+        new = type(self).__new__(type(self))
+        memo[id(self)] = new
+        for key, value in self.__dict__.items():
+            new.__dict__[key] = copy.deepcopy(value, memo)
+        new.__dict__["_lane_excl"] = [False, False, False]
+        self.__dict__["_lane_excl"] = [False, False, False]
+        return new
+
+    # ── fused attention appends (models/minimax_m3/fused_attn.py) ──
+    def fused_lanes(self):
+        """(keys, values, idx_keys) lane buffers, full capacity, without marking them shared: for the fused kernels,
+        which read rows < offset + new rows only and write new rows only while ``fused_reserve`` says they may."""
+        d = self.__dict__
+        return d.get("_keys"), d.get("_values"), d.get("_idx_keys")
+
+    def fused_reserve(self, n: int, kv_heads: int, head_dim: int, k_dtype, v_dtype, idx_dim: int, idx_dtype) -> bool:
+        """Capacity for ``n`` more rows on every lane (the stock growth: K / V in steps of ``step``, the index lane in
+        steps of ``idx_step``; existing lanes keep their dtypes) and whether those rows may be written in place: True
+        only while all three lane buffers are this cache's alone. A buffer this call allocates is; a lane read or
+        assigned from outside is not until ``fused_append`` re-owns it."""
+        prev = int(self.offset)
+        if int(self._idx_offset) != prev and self.__dict__.get("_idx_keys") is not None:
+            raise ValueError(
+                f"sparse index lane desynchronised from K/V: idx_offset={self._idx_offset} kv_offset={prev}")
+        d = self.__dict__
+        excl = d.setdefault("_lane_excl", [False, False, False])
+        keys, values = d.get("_keys"), d.get("_values")
+        if keys is None or prev + n > int(keys.shape[2]):
+            n_steps = (self.step + n - 1) // self.step
+            new_k = mx.zeros((1, kv_heads, n_steps * self.step, head_dim), keys.dtype if keys is not None else k_dtype)
+            new_v = mx.zeros((1, kv_heads, n_steps * self.step, head_dim),
+                             values.dtype if values is not None else v_dtype)
+            if keys is not None:
+                if prev % self.step != 0:
+                    keys, values = keys[..., :prev, :], values[..., :prev, :]
+                keys, values = mx.concatenate([keys, new_k], axis=2), mx.concatenate([values, new_v], axis=2)
+            else:
+                keys, values = new_k, new_v
+            d["_keys"], d["_values"] = keys, values
+            excl[0] = excl[1] = True
+        idx = d.get("_idx_keys")
+        if idx is None or prev + n > int(idx.shape[2]):
+            n_steps = (self.idx_step + n - 1) // self.idx_step
+            grown = mx.zeros((1, 1, n_steps * self.idx_step, idx_dim), idx.dtype if idx is not None else idx_dtype)
+            if idx is None:
+                idx = grown
+            else:
+                if prev % self.idx_step != 0:
+                    idx = idx[..., :prev, :]
+                idx = mx.concatenate([idx, grown], axis=2)
+            d["_idx_keys"] = idx
+            excl[2] = True
+        return bool(excl[0] and excl[1] and excl[2])
+
+    def fused_append(self, k: mx.array, v: mx.array, idx_k: mx.array) -> None:
+        """Write rows [offset, offset + n) of every lane with MLX slice updates (a shared buffer is copied first, so
+        no other holder sees the write); afterwards every lane buffer is this cache's own. The offset moves in
+        ``fused_commit``."""
+        prev = int(self.offset)
+        n = int(k.shape[2])
+        d = self.__dict__
+        d["_keys"][..., prev:prev + n, :] = k
+        d["_values"][..., prev:prev + n, :] = v
+        d["_idx_keys"][..., prev:prev + n, :] = idx_k
+        d["_lane_excl"] = [True, True, True]
+
+    def fused_commit(self, n: int, after: mx.array | None = None) -> None:
+        """Advance every lane's logical length by the ``n`` rows the fused attention wrote (in lockstep).
+
+        ``after``: an output of a launch that ran behind a memory barrier following the in-place writes (the fused
+        attention passes its MSA output). The lanes are re-issued as ``mx.depends(lanes, after)`` (same buffers), so
+        every later reader of a lane -- a growth copy, a slice update, a ``state`` view -- is encoded after that launch
+        and sees the rows. Without it MLX, which does not know a kernel wrote the lane, may encode such a reader before
+        the write lands (seen: a lazily chained decode step's growth copy lost the previous steps' rows)."""
+        self.offset = int(self.offset) + int(n)
+        self._idx_offset = self.offset
+        if after is not None:
+            d = self.__dict__
+            lanes = [d.get("_keys"), d.get("_values"), d.get("_idx_keys")]
+            if all(lane is not None for lane in lanes):
+                d["_keys"], d["_values"], d["_idx_keys"] = mx.depends(lanes, [after])
 
 
 class BatchMiniMaxM3SparseCache(BatchKVCache):
@@ -460,6 +655,57 @@ def truncate_minimax_m3_cache(cache: list, length: int) -> None:
             trim(offset - length)
 
 
+RESERVE_ENV = "VMLX_M3_PREFILL_RESERVE"
+RESERVE_MARGIN_ENV = "VMLX_M3_PREFILL_RESERVE_MARGIN_GB"
+
+
+def allocator_headroom_bytes() -> int | None:
+    """Bytes MLX's Metal allocator can still hand out before it starts releasing its buffer cache on every allocation
+    that misses it (its GC threshold, 0.95 x the device's recommended working set in MLX 0.32's MetalAllocator), minus
+    what is active now. None when MLX does not report it."""
+    try:
+        rec = int(mx.device_info().get("max_recommended_working_set_size") or 0)
+        if rec <= 0:
+            return None
+        return int(0.95 * rec) - int(mx.get_active_memory())
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def reserve_prefill(cache, rows: int):
+    """Reserve every ``MiniMaxM3SparseCache`` lane for the next ``rows`` prompt rows (``MiniMaxM3SparseCache.reserve``)
+    so the lanes grow once instead of at every chunk. Callers (SingleBatchGenerator's M3 prefill paths, the DSpark text
+    lane) ask before each piece until this returns True or False:
+
+    * None: the lanes do not exist yet (a cold cache before its first piece); ask again before the next piece;
+    * False: not reserved, the lanes keep the stock chunk-by-chunk growth: ``VMLX_M3_PREFILL_RESERVE=0``, or the
+      reserved rows would leave MLX's allocator less than ``VMLX_M3_PREFILL_RESERVE_MARGIN_GB`` (default 4) below its
+      GC threshold. Measured on a 128 GB M5 Max (95.5 GiB M3.1 bundle) at 100k tokens: the whole KV reserved at the
+      start kept the allocator over that threshold for the entire prefill, so every chunk's transients came back as
+      fresh, zero-filled buffers (3.9 TB zero-filled vs 1.1 TB with the chunked growth) and the prefill ran 2 % slower.
+      The growth strategy is the only thing decided here; the prefill runs either way;
+    * True: reserved. Capacity only: rows and readers are unchanged."""
+    if os.environ.get(RESERVE_ENV, "1").strip().lower() in {"0", "false", "off", "no"}:
+        return False
+    layers = [layer for layer in cache or () if callable(getattr(layer, "reserve", None))]
+    if not layers:
+        return False
+    per_row = [layer.row_bytes() for layer in layers]
+    if not all(per_row):
+        return None
+    headroom = allocator_headroom_bytes()
+    if headroom is not None:
+        try:
+            margin = float(os.environ.get(RESERVE_MARGIN_ENV, "4"))
+        except (TypeError, ValueError):
+            margin = 4.0
+        if sum(per_row) * int(rows) + int(margin * 2 ** 30) > headroom:
+            return False
+    for layer in layers:
+        layer.reserve(int(rows))
+    return True
+
+
 def make_minimax_m3_cache(config) -> list:
     """Per-layer cache list for the whole model.
 
@@ -474,6 +720,11 @@ def make_minimax_m3_cache(config) -> list:
     sca = (tc.get("sparse_attention_config", {}) if isinstance(tc, dict)
            else getattr(tc, "sparse_attention_config", {})) or {}
     freq = sca.get("sparse_attention_freq")
+    if freq is None and not isinstance(tc, dict):
+        # ModelArgs (Model.make_cache) carries the per-layer list flattened. Without
+        # this, M3.1 (sparse on every layer) fell back to the MoE layout below and
+        # gave layers 0-2 a plain KVCache, so their indexer lost its keys on decode.
+        freq = getattr(tc, "sparse_attention_freq", None)
     if freq is None:
         moe = tc.get("moe_layer_freq") if isinstance(tc, dict) else getattr(tc, "moe_layer_freq", None)
         freq = moe if moe is not None else [0, 0, 0] + [1] * (n_layers - 3)

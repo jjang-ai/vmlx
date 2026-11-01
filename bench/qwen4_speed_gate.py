@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cache-safe streamed speed harness shared by vMLX and MTPLX servers."""
+"""Cache-safe streamed speed harness for a vMLX OpenAI-compatible server."""
 
 from __future__ import annotations
 
@@ -121,8 +121,6 @@ def request_stream(
     temperature: float,
     top_p: float,
     top_k: int,
-    generation_mode: str | None,
-    depth: int | None,
     timeout: float,
 ) -> dict:
     sampling_seed = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
@@ -139,17 +137,10 @@ def request_stream(
         "enable_thinking": False,
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    if generation_mode:
-        body["generation_mode"] = generation_mode
-    if depth is not None:
-        body["depth"] = int(depth)
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "X-MTPLX-Allow-Client-Controls": "1",
-        },
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
     started = time.monotonic()
@@ -199,7 +190,7 @@ def request_stream(
                 request_id = request_id or event_id
             if isinstance(event.get("usage"), dict):
                 usage = event["usage"]
-            for key in ("mtplx_stats", "vmlx_stats", "stats"):
+            for key in ("vmlx_stats", "stats"):
                 if isinstance(event.get(key), dict):
                     server_stats.update(event[key])
             choices = event.get("choices") or []
@@ -367,8 +358,6 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--top-k", type=int, default=20)
-    parser.add_argument("--generation-mode", choices=("mtp", "ar"))
-    parser.add_argument("--depth", type=int)
     parser.add_argument("--server-pid", type=int)
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--max-attempts", type=int, default=3)
@@ -412,8 +401,6 @@ def main() -> int:
             "cache_claim": "service cache settings unchanged; unique nonce; verify cached_tokens per result",
             "prefill_metric": "usage.prompt_tokens / streamed TTFT",
             "decode_metric": "usage.completion_tokens / (wall time - TTFT)",
-            "generation_mode": args.generation_mode,
-            "depth": args.depth,
             "exact_contexts": args.exact_contexts,
             "sustained_task": args.sustained_task,
             "warmup_context": args.warmup_context,
@@ -433,8 +420,6 @@ def main() -> int:
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
-        generation_mode=args.generation_mode,
-        depth=args.depth,
         timeout=args.timeout,
     )
     if not result["warmup"]["protocol_valid"]:
@@ -458,8 +443,6 @@ def main() -> int:
                     temperature=args.temperature,
                     top_p=args.top_p,
                     top_k=args.top_k,
-                    generation_mode=args.generation_mode,
-                    depth=args.depth,
                     timeout=args.timeout,
                 )
                 if not candidate["protocol_valid"]:

@@ -78,12 +78,11 @@ _FAMILY_ALIAS = {
     "qwen4_exp_text": "qwen4_exp",
 }
 
-# Keep this narrow. The copied mlx-lm patch currently wires Qwen3.5/3.6 MTP
-# through GenerationBatch. DeepSeek-V4 has model-side code copied for later
-# work, but vMLX's DSV4 runtime uses a custom generator, so do not advertise
-# it as native-MTP active yet.
+# Keep this narrow. vmlx_engine/text_mtp wires these families through mlx-lm's
+# GenerationBatch (or their own MLLM lane). DeepSeek-V4 decodes through its own
+# DSV4BatchGenerator and has no native-MTP runtime, so it is not listed.
 # hy_v3 (Tencent Hy3): model-side hooks live in jang_tools.hy3.model
-# (Hy3MTPLayer + mtp_forward/make_mtp_cache); patches/mlx_lm_mtp/hy_v3_model.py
+# (Hy3MTPLayer + mtp_forward/make_mtp_cache); text_mtp/hy3_family.py
 # gates head attachment. Bundle ships the DSV3-style head as mtp.0.* tensors.
 _RUNTIME_SUPPORTED_FAMILIES = {
     "qwen3_5",
@@ -1249,19 +1248,19 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
     }
 
 
-def _apply_mlx_lm_mtp_patch() -> bool:
-    from .patches.mlx_lm_mtp import apply_mlx_lm_mtp_patch
+def _install_native_mtp_hooks() -> bool:
     from .patches.mlx_vlm_mtp import apply_mlx_vlm_mtp_patch
+    from .text_mtp import install
 
-    lm_ok = apply_mlx_lm_mtp_patch()
+    lm_ok = install()
     vl_ok = apply_mlx_vlm_mtp_patch()
     return bool(lm_ok and vl_ok)
 
 
-def _set_mtp_active(active: bool) -> None:
-    from .patches.mlx_lm_mtp import set_mtp_active
+def _set_draft_head_loading(active: bool) -> None:
+    from .text_mtp import set_draft_head_loading
 
-    set_mtp_active(active)
+    set_draft_head_loading(active)
 
 
 def native_mtp_active_model_path() -> Path | None:
@@ -1281,7 +1280,7 @@ def deactivate_native_mtp() -> None:
     _ACTIVE_NATIVE_MTP_MODEL_PATH = None
     set_native_mtp_drafter_max_depth(None)
     try:
-        _set_mtp_active(False)
+        _set_draft_head_loading(False)
     except Exception:
         pass
     # Clear the published v3 bundle layer count, or the NEXT model loaded in
@@ -1333,8 +1332,8 @@ def maybe_apply_native_mtp(
     )
 
     if should_patch_for_sanitize:
-        if _apply_mlx_lm_mtp_patch():
-            _set_mtp_active(runtime_active)
+        if _install_native_mtp_hooks():
+            _set_draft_head_loading(runtime_active)
             _ACTIVE_NATIVE_MTP_MODEL_PATH = Path(model_path) if runtime_active else None
             # v3 capability-schema bundles declare the head in jang_config's
             # mtp block; publish the bundle-declared count for the qwen35_vl
@@ -1386,7 +1385,7 @@ def maybe_apply_native_mtp(
         else:
             _ACTIVE_NATIVE_MTP_MODEL_PATH = None
             try:
-                _set_mtp_active(False)
+                _set_draft_head_loading(False)
             except Exception:
                 pass
             status["runtime_available"] = False
