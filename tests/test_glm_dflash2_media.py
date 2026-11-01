@@ -265,3 +265,39 @@ def test_stream_chunks_carry_the_prefill_receipt(monkeypatch):
                                          prompt_tokens=list(range(40))))
     want = {"tokens": 10, "seconds": 0.5, "scope": "model_prefill_and_prompt_state", "path": "glm_dflash2_with_vision"}
     assert [c.prefill_usage for c in chunks] == [want, want]
+
+
+@pytest.mark.parametrize("length,step,expected", [
+    (112, 2048, [112]),
+    (32, 8, [8, 8, 8, 8]),
+    (4096, 2048, [2048, 2048]),
+    (4097, 2048, [2048, 2048, 1]),
+])
+@pytest.mark.parametrize("hidden_limit", [None, 3])
+def test_prefill_keeps_chunk_geometry_and_media_rows(length, step, expected, hidden_limit):
+    from types import SimpleNamespace
+    from vmlx_engine.glm_dflash2 import _prefill
+
+    class Target:
+        def __init__(self):
+            self.rows = []
+
+        def forward(self, ids, cache, *, verify, taps, last_row, inputs_embeds):
+            assert not verify and taps and last_row
+            self.rows.append(ids.shape[1])
+            assert inputs_embeds.reshape(-1).tolist() == (ids.reshape(-1) + 100).tolist()
+            self.saved = inputs_embeds
+            cache[0].state = ids[:, -1:]
+            return inputs_embeds[:, -1:]
+
+        def hidden(self):
+            return self.saved
+
+    target = Target()
+    ids = mx.arange(length)
+    embeds = (ids + 100)[None, :, None].astype(mx.float32)
+    logits, hidden = _prefill(target, ids, [SimpleNamespace(state=None)], step, hidden_limit, embeds=embeds)
+    assert target.rows == expected
+    assert logits.item() == length + 99
+    kept = length if hidden_limit is None else min(length, hidden_limit)
+    assert hidden.reshape(-1).tolist() == list(range(length - kept + 100, length + 100))
