@@ -14,7 +14,7 @@ def _weight(n, k, bits):
     return q, s.astype(mx.bfloat16), b.astype(mx.bfloat16)
 
 
-@pytest.mark.parametrize("bits", [4, 5, 6, 8])
+@pytest.mark.parametrize("bits", [2, 3, 4, 5, 6, 8])
 def test_rows_match_solo_calls_and_reference(bits):
     mx.random.seed(bits)
     q, s, b = _weight(256, 512, bits)
