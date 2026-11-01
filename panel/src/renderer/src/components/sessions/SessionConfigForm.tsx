@@ -1065,10 +1065,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {nativeGlmSsdActive && !dflash2Speculative && <div data-vmlx-section="nativeGlmSsd"><InfoNote text={t('sessions.config.glmNativeSsdNote')} /></div>}
         {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.prefixCacheRequiresBatching')} />}
         <CheckField label={t('sessions.config.enablePrefixCache')} tooltip={t('sessions.config.enablePrefixCacheTooltip')} checked={effectivePrefixCacheEnabled} onChange={v => onChange('enablePrefixCache', v)} disabled={nativeSpeculativeCache} />
-        {!nativeGlmSsdActive && !dsv4Active && !blockDiskOnly && !cachePolicy.legacyDiskCacheChecked && effectivePrefixCacheEnabled && (
+        {!nativeGlmSsdActive && !blockDiskOnly && !cachePolicy.legacyDiskCacheChecked && effectivePrefixCacheEnabled && (
           <>
             {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguMemoryAwareNote')} />}
-            <CheckField label={t('sessions.config.legacyEntryCountCache')} tooltip={t('sessions.config.legacyEntryCountCacheTooltip')} checked={exactTypedPromptDiskCache ? false : config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} disabled={exactTypedPromptDiskCache} />
+            {!dsv4Active && <CheckField label={t('sessions.config.legacyEntryCountCache')} tooltip={t('sessions.config.legacyEntryCountCacheTooltip')} checked={exactTypedPromptDiskCache ? false : config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} disabled={exactTypedPromptDiskCache} />}
             {!dsv4Active && !exactTypedPromptDiskCache && config.noMemoryAwareCache ? (
               <>
                 <InfoNote text={t('sessions.config.legacyModeActiveNote')} />
