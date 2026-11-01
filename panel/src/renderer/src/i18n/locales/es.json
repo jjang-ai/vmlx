@@ -1117,6 +1117,7 @@
       "bundledDflash2Available": "Este paquete incluye un borrador DFlash2 ({{name}}), actualmente sin seleccionar. Actívelo en Decodificación especulativa. El rendimiento varía según la tarea.",
       "useBundledDspark": "Usar el borrador DSpark incluido ({{name}})",
       "useBundledDsparkTooltip": "Activado por defecto cuando el paquete del modelo incluye un borrador DSpark; sin él, decodificación normal. Las solicitudes de texto, imagen y vídeo se verifican de forma exacta (misma salida que la decodificación normal); el audio usa la decodificación normal. Mientras está activado, el modelo usa el carril de una sola solicitud. Desactivado = decodificación normal.",
+      "useBundledDsparkTextLaneTooltip": "Activado por defecto cuando el paquete del modelo incluye un borrador DSpark; sin él, decodificación normal. El modelo verifica cada token propuesto. El procesamiento por lotes continuo y la configuración de caché se mantienen como estén configurados. Desactivado = decodificación normal.",
       "useBundledDflash2": "Usar el drafter DFlash2 incluido ({{name}})",
       "useBundledDflash2Tooltip": "Activado por defecto cuando el paquete del modelo incluye un drafter DFlash2. Un modelo borrador indicado abajo tiene prioridad. Desactivado = se usa el MTP nativo del paquete (Adaptativo/AR).",
       "nativeMtpOffForDrafter": "El MTP nativo está desactivado mientras haya un drafter DFlash2 seleccionado (no pueden compartir el paso de decodificación). Borra el modelo borrador o desactiva el drafter incluido para volver a usar MTP adaptativo.",

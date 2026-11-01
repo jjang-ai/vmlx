@@ -469,6 +469,61 @@ def pad_rows(U: dict, align_words: int) -> dict:
     return V
 
 
+# ------------------------------------------------------------------------------------------- SwiGLU variants
+# Every gate/up epilogue of the JTMixedSwitchGLU paths (decode v3, fused decode, sorted prefill, unfused fallbacks)
+# turns the gate pre-activation g and the up pre-activation u into h with one of two activations:
+#   "silu" (default): h = silu(g') * u'                        GLM-5.3 / DSV4.1 (limit L > 0), N0.5 / MiMo (L = 0)
+#   "oai":            h = g' * sigmoid(alpha * g') * (u' + 1)  MiniMax-M3 / M3.1 (alpha 1.702, L 7)
+# where, when L > 0, g' = min(g, L) (the gate is clipped from above only) and u' = clip(u, -L, L); else g' = g, u' = u.
+# "silu" generates exactly the source (and kernel names) these kernels had before the variants existed.
+ACTS = ("silu", "oai")
+
+
+def check_act(act: str) -> str:
+    if act not in ACTS:
+        raise ValueError(f"jangt: unknown SwiGLU variant {act!r} (expected one of {ACTS})")
+    return act
+
+
+def f32_literal(v: float) -> str:
+    """Metal expression for the float32 nearest to v, bit-exact: the value MLX uses when it multiplies a float32 array
+    by the Python float."""
+    return f"as_type<float>({int(np.array(v, np.float32).view(np.uint32))}u)"
+
+
+def act_clamp_metal(limit: float, g: str = "g", u: str = "u") -> str:
+    """Metal statements clamping g / u in place (empty when limit <= 0)."""
+    if not limit > 0:
+        return ""
+    return f" {g} = metal::min({g}, {float(limit)}f); {u} = metal::clamp({u}, {-float(limit)}f, {float(limit)}f);"
+
+
+def act_value_metal(act: str, alpha: float = 0.0, g: str = "g", u: str = "u") -> str:
+    """Metal float expression h(g, u) of the (already clamped) pre-activations."""
+    if check_act(act) == "oai":
+        return f"({g} / (1.0f + metal::fast::exp(-({f32_literal(alpha)} * {g})))) * ({u} + 1.0f)"
+    return f"({g} / (1.0f + metal::fast::exp(-{g}))) * {u}"
+
+
+def act_tag(act: str, limit: float, alpha: float = 0.0) -> str:
+    """Kernel-name suffix of an activation: '' (plain SiLU) and '_lim10p0' (clamped SiLU) as before; '_oai1p702_lim7p0'.
+    Every generated source variant needs its own name: MLX caches compiled kernels by name."""
+    lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
+    if check_act(act) == "oai":
+        return f"_oai{str(float(alpha)).replace('.', 'p').replace('-', 'm')}{lim}"
+    return lim
+
+
+def act_mlx(g: mx.array, u: mx.array, act: str = "silu", limit: float = 0.0, alpha: float = 0.0) -> mx.array:
+    """The same activation in MLX ops (unfused fallbacks and references); computes in the inputs' dtype."""
+    if limit > 0:
+        g = mx.minimum(g, limit)
+        u = mx.clip(u, -limit, limit)
+    if check_act(act) == "oai":
+        return g * mx.sigmoid(alpha * g) * (u + 1)
+    return g * mx.sigmoid(g) * u
+
+
 # ------------------------------------------------------------------------------------------- v3: JANGH qmv structure
 # Measured 2026-10-09: the SAME trellis decode inside MLX/JANGH's qmv_fast skeleton (row pointers formed once, pointer
 # increments per 512-value block, unrolled x loads, no per-iteration index math) runs at 519 GB/s on N0.5 gate+up K=2
@@ -543,7 +598,7 @@ def _blocks(kin: int, body: str, advance: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float = 0.0, rot_out: bool = False,
-           guard: bool = True, yz: bool = False):
+           guard: bool = True, yz: bool = False, act: str = "silu", alpha: float = 0.0):
     mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
     gu_body = f"""{_xload3(guard)}
       {_UNROLL} for (uint r = 0; r < 4u; r++) {{
@@ -562,13 +617,15 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
                                                    ou[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
     {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og[r] = simd_sum(og[r]); ou[r] = simd_sum(ou[r]); }}"""
     outl = "" if n_out == 0 else " g += og[r]; u += ou[r];"
-    # clamped SwiGLU (GLM-5.3: silu(min(g, L)) * clip(u, -L, L), the JANGH tq_act rule); limit 0 = plain SwiGLU (N0.5)
-    clamp = "" if not limit > 0 else f" g = metal::min(g, {float(limit)}f); u = metal::clamp(u, {-float(limit)}f, {float(limit)}f);"
+    # SwiGLU variant (act_value_metal): plain / clamped SiLU (GLM-5.3: silu(min(g, L)) * clip(u, -L, L), the JANGH tq_act
+    # rule; limit 0 = plain SwiGLU, N0.5) or SwiGLU-OAI (MiniMax-M3)
+    clamp = act_clamp_metal(limit)
+    hval = act_value_metal(act, alpha)
     # rot_out (2026-10-10): 8 simdgroups x 4 rows = 32 rows = one Hadamard-32 block per threadgroup; the activations are
     # rotated in the epilogue (the JANGH down unit's input basis), removing the separate h32_rows dispatch per MoE layer.
     # Same butterfly as jangh.kernels.h32_rows (5 shuffle stages, 1/sqrt(32)).
     if rot_out:
-        store = "hb[sgi * 4u + r] = (g / (1.0f + metal::fast::exp(-g))) * u;"
+        store = f"hb[sgi * 4u + r] = {hval};"
         epi = f"""
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (sgi == 0u) {{
@@ -577,7 +634,7 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
       out[(size_t)ts * {N}u + threadgroup_position_in_grid.y * 32u + lane] = {odt}(v * 0.17677669529663687f);
     }}"""
     else:
-        store = f"out[(size_t)ts * {N}u + row0 + r] = {odt}((g / (1.0f + metal::fast::exp(-g))) * u);"
+        store = f"out[(size_t)ts * {N}u + row0 + r] = {odt}({hval});"
         epi = ""
     src = f"""
     uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;{"" if not rot_out else chr(10) + "    threadgroup float hb[32];"}
@@ -602,7 +659,7 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
     }}{epi}
     """
     ins = ["xr", "x", "idx", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
-    lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
+    lim = act_tag(act, limit, alpha)
     ro = "_ro" if rot_out else ""
     from vmlx_engine.jangh.kernels import swap_grid_yz
     return mx.fast.metal_kernel(name=f"jt4_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{ro}{'' if guard else '_ng'}{'_yz' if yz else ''}",
@@ -654,9 +711,10 @@ def _down_v3(kin: int, N: int, K, L: int, n_out: int, kslots: int, W: int, hdt: 
 
 
 def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float = 0.0, rot_out: bool = False,
-                             slot_fastest: bool = False):
+                             slot_fastest: bool = False, act: str = "silu", alpha: float = 0.0):
     """rot_out: return the activations already Hadamard-32 rotated (input basis of a JANGH down unit); N % 32 == 0.
-    slot_fastest: put the slot on grid axis y for multi-row calls (jangh.kernels.slot_fastest_enabled)."""
+    slot_fastest: put the slot on grid axis y for multi-row calls (jangh.kernels.slot_fastest_enabled).
+    act / alpha / limit: the SwiGLU variant (act_value_metal; default plain SiLU, clamped when limit > 0)."""
     from vmlx_engine.jangh.kernels import slot_fastest_enabled
     T, kin = x.shape; k = idx.shape[1]; N = U["gate"]["scale"].shape[1]; n_out = U["gate"]["n_out"]; W = int(U["gate"]["packed"].shape[-1])
     rot_out = bool(rot_out) and N % 32 == 0
@@ -664,7 +722,7 @@ def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float 
     ins = [xr, x, idx.reshape(-1).astype(mx.uint32), mx.array([k], dtype=mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     kern = _gu_v3(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype], float(limit), rot_out,
-                   _fp16_guard(), yz)
+                   _fp16_guard(), yz, check_act(act), float(alpha) if act == "oai" else 0.0)
     tiles = N // 32 if rot_out else N // 8
     grid = (256 if rot_out else 64, T * k, tiles) if yz else (256 if rot_out else 64, tiles, T * k)
     return kern(inputs=ins, grid=grid, threadgroup=(256 if rot_out else 64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]

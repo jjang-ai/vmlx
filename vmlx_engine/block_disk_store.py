@@ -2471,6 +2471,24 @@ class BlockDiskStore:
             )
             self._pending_write_condition.notify_all()
 
+    def pending_write_bytes(self) -> int:
+        """Bytes admitted to the writer and not yet written (frozen payloads it still owns)."""
+        with self._pending_write_condition:
+            return int(self._pending_write_bytes)
+
+    def wait_for_pending_write_bytes(self, at_most: int, *, timeout: float) -> bool:
+        """Block until the writer owns at most ``at_most`` pending bytes (a producer's own in-flight cap, below the
+        store-wide budget). False when ``timeout`` seconds pass first."""
+        limit = max(0, int(at_most))
+        deadline = time.monotonic() + max(0.0, float(timeout or 0.0))
+        with self._pending_write_condition:
+            while self._pending_write_bytes > limit:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return False
+                self._pending_write_condition.wait(timeout=remaining)
+        return True
+
     @staticmethod
     def _detach_safetensors_tensors(
         tensors: Dict[str, Any],

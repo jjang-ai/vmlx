@@ -1585,11 +1585,20 @@ class BatchedEngine(BaseEngine):
                     _mx_pre.synchronize()
             except Exception:
                 pass
-            return load_model_with_fallback(
+            loaded = load_model_with_fallback(
                 self._model_name,
                 tokenizer_config=tokenizer_config,
                 skip_turboquant=_skip_tq,
             )
+            # Text-lane DSpark (MiniMax-M3 / M3.1 bundles that ship dspark/): attach the drafter runtime on this
+            # worker thread; the scheduler then decodes eligible requests with DSparkTextGenerator.
+            try:
+                from ..dspark.runtime import attach_text_lane
+
+                attach_text_lane(loaded[0], self._model_name)
+            except Exception as _dspark_err:  # noqa: BLE001
+                logger.warning("DSpark text lane not attached: %s", _dspark_err)
+            return loaded
 
         self._model, self._tokenizer = await loop.run_in_executor(
             loader_executor, _load

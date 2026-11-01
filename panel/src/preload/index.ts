@@ -21,7 +21,7 @@ const api = {
   models: {
     scan: (modelType?: string) => ipcRenderer.invoke('models:scan', modelType),
     classifyDflash2: (path?: string): Promise<boolean> => ipcRenderer.invoke('models:classifyDflash2', path),
-    dsparkDrafter: (bundlePath?: string): Promise<{ name: string; path: string; default: boolean } | null> => ipcRenderer.invoke('models:dsparkDrafter', bundlePath),
+    dsparkDrafter: (bundlePath?: string): Promise<{ name: string; path: string; default: boolean; textLane?: boolean } | null> => ipcRenderer.invoke('models:dsparkDrafter', bundlePath),
     dflash2Drafters: (bundlePath?: string, scanLibrary?: boolean): Promise<Array<{ name: string; path: string; bundled?: boolean }>> => ipcRenderer.invoke('models:dflash2Drafters', bundlePath, scanLibrary),
     info: (modelPath: string) => ipcRenderer.invoke('models:info', modelPath),
     getDirectories: (modelType?: string) => ipcRenderer.invoke('models:getDirectories', modelType),
