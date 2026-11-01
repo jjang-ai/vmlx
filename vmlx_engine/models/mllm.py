@@ -4569,6 +4569,8 @@ def _order_images_and_video_frames(chat_messages: list[dict], images: list, fram
 def _expand_video_placeholders_to_image_frames(
     chat_messages: list[dict],
     frame_counts: list[int],
+    *,
+    glm_timestamps: list[list[float]] | None = None,
 ) -> list[dict]:
     """Replace each video placeholder with N image placeholders.
 
@@ -4581,6 +4583,9 @@ def _expand_video_placeholders_to_image_frames(
         return chat_messages
 
     counts = iter(frame_counts)
+    if glm_timestamps is not None and len(glm_timestamps) != len(frame_counts):
+        raise ValueError("GLM video timestamps must match the clips")
+    timestamps = iter(glm_timestamps) if glm_timestamps is not None else None
     rewritten: list[dict] = []
     changed = False
     for msg in chat_messages:
@@ -4592,7 +4597,22 @@ def _expand_video_placeholders_to_image_frames(
         for part in content:
             if isinstance(part, dict) and part.get("type") == "video":
                 count = max(1, int(next(counts, 1) or 1))
-                new_content.extend({"type": "image"} for _ in range(count))
+                if timestamps is None:
+                    new_content.extend({"type": "image"} for _ in range(count))
+                else:
+                    times = next(timestamps)
+                    if len(times) != count or any(t is None or not np.isfinite(t) or t < 0 for t in times):
+                        raise ValueError("GLM sampled frames require matching finite nonnegative timestamps")
+                    # Match Glm5NextProcessor's preserve_frames prompt format.
+                    # The image lane already duplicates each moment within its
+                    # temporal patch; retain the clip boundaries and time axis too.
+                    new_content.append({"type": "text", "text": "<|begin_of_video|>"})
+                    for stamp in times:
+                        new_content.extend([
+                            {"type": "image"},
+                            {"type": "text", "text": f"{stamp:.1f} seconds"},
+                        ])
+                    new_content.append({"type": "text", "text": "<|end_of_video|>"})
                 changed = True
             else:
                 new_content.append(part)
@@ -5245,7 +5265,8 @@ class MLXMultimodalLM:
         max_frames: int = MAX_FRAMES,
         controls: Any = None,
         frame_cap: int | None = None,
-    ) -> list[str]:
+        return_metadata: bool = False,
+    ) -> list[str] | tuple[list[str], list[dict]]:
         """
         Process video input and extract frames.
 
@@ -5267,11 +5288,13 @@ class MLXMultimodalLM:
         video_path = process_video_input(video_input)
 
         # Extract frames
-        frames = extract_video_frames_smart(
+        extracted = extract_video_frames_smart(
             video_path,
             fps=fps,
             max_frames=max_frames,
+            **({"return_metadata": True} if return_metadata else {}),
         )
+        frames, metadata = extracted if return_metadata else (extracted, None)
         # Every SimpleEngine video reaches the model as sampled frames sent as
         # images. Plan them exactly like the batched engine's frame fallback
         # (engine/batched.py): per-video frame cap (the request's image limit
@@ -5325,6 +5348,8 @@ class MLXMultimodalLM:
             pixel_ceiling=image_ceiling,
         )
         frames = subsample_frames_evenly(frames, plan.num_frames)
+        if metadata is not None:
+            metadata = subsample_frames_evenly(metadata, plan.num_frames)
         bounds = controls.fallback_bounds(
             default_long_edge=long_edge,
             num_frames=len(frames),
@@ -5343,7 +5368,8 @@ class MLXMultimodalLM:
             plan.expected_total, plan.budget if plan.budget is not None else "-",
             plan.met if plan.met is not None else "-", plan.reason,
         )
-        return save_frames_to_temp(frames)
+        paths = save_frames_to_temp(frames)
+        return (paths, metadata) if return_metadata else paths
 
     def _guard_simple_image_prefill(
         self,
@@ -7035,11 +7061,9 @@ class MLXMultimodalLM:
                 int(v) for v in (getattr(config, "image_token_id", None), getattr(config, "video_token_id", None))
                 if v is not None
             }
-            video_start = getattr(config, "video_start_token_id", None)
             if (
                 extra.get("pixel_values_videos") is not None
                 or extra.get("video_grid_thw") is not None
-                or (video_start is not None and int(video_start) in tokens)
             ):
                 logger.info(
                     "DFlash2 media request on %s: GLM video in the conversation; native VLM path",
@@ -7679,20 +7703,27 @@ class MLXMultimodalLM:
         video_fps = _video_controls.effective_fps() if _video_controls else DEFAULT_FPS
         video_max_frames = _video_controls.effective_max_frames() if _video_controls else MAX_FRAMES
         video_frame_counts: list[int] = []
-        for video_path in videos:
-            frames = self._prepare_video(
-                video_path, fps=video_fps, max_frames=video_max_frames, controls=_video_controls,
-                frame_cap=_simple_video_frame_cap(kwargs, len(videos), len(prepared_images)),
-            )
-            all_images.extend(frames)
-            video_frame_counts.append(len(frames))
-            video_frame_lists.append(list(frames))
-
         model_type = (
             str(self.config.get("model_type", "") or "").lower()
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
+        glm_video_times = [] if model_type == "glm5_next" else None
+        for video_path in videos:
+            prepared = self._prepare_video(
+                video_path, fps=video_fps, max_frames=video_max_frames, controls=_video_controls,
+                frame_cap=_simple_video_frame_cap(kwargs, len(videos), len(prepared_images)),
+                **({"return_metadata": True} if glm_video_times is not None else {}),
+            )
+            if glm_video_times is not None:
+                frames, metadata = prepared
+                glm_video_times.append([item["timestamp_seconds"] for item in metadata])
+            else:
+                frames = prepared
+            all_images.extend(frames)
+            video_frame_counts.append(len(frames))
+            video_frame_lists.append(list(frames))
+
         if model_type in _VIDEO_FRAME_FALLBACK_MODEL_TYPES and video_frame_counts:
             ordered_media = _order_images_and_video_frames(chat_messages, prepared_images, video_frame_lists)
             if ordered_media is not None:
@@ -7702,6 +7733,7 @@ class MLXMultimodalLM:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,
+                glm_timestamps=glm_video_times,
             )
         native_video_clips = None
         if model_type in _NATIVE_VIDEO_FRAME_MODEL_TYPES and video_frame_lists:
