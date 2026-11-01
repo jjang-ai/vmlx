@@ -1224,7 +1224,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           </div>
         )}
         <InfoNote text={t(
-          batchingOff || prefixOff
+          (batchingOff || prefixOff) && !nativeSpeculativeCache
             ? 'sessions.config.cacheTierOff'
             : !cachePolicy.blockDiskCacheChecked
               ? 'sessions.config.cacheTierRamOnly'
