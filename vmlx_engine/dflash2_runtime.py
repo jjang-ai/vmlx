@@ -333,8 +333,8 @@ class _VLMGDNStateCapture:
             gdn_index += 1
 
 
-def _prefill_last_logits(runtime: Any, adapter: Any, *args):
-    """runtime._prefill_target in prompt mode: last-row head, no GDN sink.
+def _prefill_last_logits(runtime: Any, adapter: Any, prompt, cache, hidden_limit, step_size):
+    """Prefill complete chunks: last-row head, no GDN sink.
 
     (1) Upstream ``_prefill_target`` returns ``logits[:, -1:]`` of the final
     chunk; MLX does not push that slice through the matmul, so the whole chunk
@@ -345,10 +345,38 @@ def _prefill_last_logits(runtime: Any, adapter: Any, *args):
     every chunk's per-layer qkv rows and recurrent state alive until decode.
     Hidden states (what the drafter consumes) and caches are unchanged.
     """
+    # Do not inherit upstream's separate final-token forward. The adapter
+    # already selects the last head row. Splitting that token changes the
+    # target's quantized projections from prefill QMM to decode QMV, including
+    # the recurrent state stored at each SSD checkpoint.
+    import mlx.core as mx
+
+    if step_size <= 0:
+        raise ValueError("prefill_step_size must be positive.")
     previous = getattr(adapter, "last_row_logits", False)
     try:
         adapter.last_row_logits = True
-        return runtime._prefill_target(adapter, *args)
+        hidden_chunks = []
+        start = 0
+        while start < prompt.size:
+            end = min(start + step_size, prompt.size)
+            logits = adapter(prompt[None, start:end], cache)
+            hidden = mx.concatenate(adapter._hidden_states, axis=-1)
+            if hidden_limit is None:
+                hidden_chunks.append(hidden)
+            else:
+                if hidden_chunks:
+                    hidden = mx.concatenate((hidden_chunks[0], hidden), axis=1)
+                hidden_chunks = [hidden[:, -hidden_limit:]]
+            if end < prompt.size:
+                mx.eval([c.state for c in cache], hidden_chunks[-1])
+                mx.clear_cache()
+            start = end
+        hidden = (
+            hidden_chunks[0] if len(hidden_chunks) == 1
+            else mx.concatenate(hidden_chunks, axis=1)
+        )
+        return logits[:, -1:], hidden, prompt.size - hidden.shape[1]
     finally:
         adapter.last_row_logits = previous
 

@@ -7,6 +7,44 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
+@pytest.mark.parametrize("length,step,expected", [
+    (8, 2048, [8]),
+    (32, 8, [8, 8, 8, 8]),
+    (4096, 2048, [2048, 2048]),
+    (4097, 2048, [2048, 2048, 1]),
+])
+@pytest.mark.parametrize("hidden_limit", [None, 3])
+def test_dflash_prefill_preserves_complete_chunk_and_hidden_history(length, step, expected, hidden_limit):
+    import mlx.core as mx
+    import dflash.model_mlx as runtime
+    from vmlx_engine.dflash2_runtime import _prefill_last_logits
+
+    class Target:
+        last_row_logits = False
+
+        def __init__(self):
+            self.rows = []
+
+        def __call__(self, tokens, cache):
+            assert self.last_row_logits
+            self.rows.append(int(tokens.shape[1]))
+            self._hidden_states = [tokens[..., None].astype(mx.float32)]
+            cache[0].state = tokens[:, -1:]
+            return tokens[:, -1:, None].astype(mx.float32)
+
+    target = Target()
+    tokens = mx.arange(length)
+    logits, hidden, offset = _prefill_last_logits(
+        runtime, target, tokens, [SimpleNamespace(state=None)], hidden_limit, step
+    )
+    assert target.rows == expected
+    assert not target.last_row_logits
+    assert logits.item() == length - 1
+    kept = length if hidden_limit is None else min(length, hidden_limit)
+    assert hidden.reshape(-1).tolist() == list(range(length - kept, length))
+    assert offset == length - kept
+
+
 def test_dflash2_effective_width_comes_from_checkpoint_config(tmp_path):
     from vmlx_engine.speculative import resolve_num_draft_tokens
 
