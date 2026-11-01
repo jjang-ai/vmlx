@@ -944,14 +944,25 @@ class AdaptiveSpec:
     2.55x an AR step). Every `explore_every` rounds the next round tries a neighbour of the best block (b+1, then
     b-1) so the cost/acceptance tables are filled by measurement, not by the prior (with a 0.35 prior the policy
     locked onto blocks 2-3 while block 4 was 6-12% faster).
+
+    With grow_horizon, bmax is only the starting range. A profitable fully accepted boundary probes one wider
+    round; only a measured win over both that boundary and AR retains the wider horizon. A losing probe retreats
+    and waits 32 measured rounds before retrying. Compile and post-AR context-ingest samples do not decide growth.
     """
 
     def __init__(self, bmax: int, bmin: int = 2, decay: float = 0.97, prior_p: float = 0.6, prior_n: float = 2.0,
                  probe_every: int = 24, margin: float = 0.05, ar_burst: int = 8, slope: float = 0.22,
                  explore_every: int = 6, costs: dict | None = None, ar_reprobe_rounds: int | None = None,
                  ar_reprobe_tokens: int | None = None, ar_min_sample_tokens: int | None = None,
-                 ar_outlier_ratio: float = 3.0):
+                 ar_outlier_ratio: float = 3.0, grow_horizon: bool = False):
         self.bmax, self.bmin = int(bmax), int(bmin)
+        self.initial_horizon = self.bmax
+        self.grow_horizon = bool(grow_horizon)
+        self.horizon_probes = self.horizon_promotions = 0
+        self._horizon_probe = None
+        self._horizon_probe_issued = False
+        self._horizon_retry = 0
+        self._prior_n, self._prior_p = prior_n, prior_p
         self.decay, self.probe_every, self.margin, self.ar_burst = decay, probe_every, margin, ar_burst
         self.n_try = [prior_n] * (self.bmax + 1)
         self.n_acc = [prior_n * prior_p] * (self.bmax + 1)
@@ -1022,6 +1033,9 @@ class AdaptiveSpec:
         return base * (1 + self.slope * (b - 1))
 
     def choose(self) -> tuple[str, int]:
+        if self._horizon_probe is not None:
+            self._horizon_probe_issued = True
+            return ("spec", self.bmax)
         cands = range(self.bmin, self.bmax + 1)
         best = max(cands, key=lambda b: self.expected(b) / self.cost(b))
         if self.t_ar is None:                       # need one AR measurement before comparing
@@ -1047,6 +1061,36 @@ class AdaptiveSpec:
             return ("spec", best)
         return ("ar", self.ar_burst)
 
+    def _observe_horizon(self, b: int, accepted: int, dt: float, after_ar: bool) -> None:
+        # A trained block is the initial exploration horizon, not a verifier limit.
+        # Do not price context ingestion after AR as a steady-state verify round.
+        if not self.grow_horizon or after_ar or dt <= 0:
+            return
+        rate = (accepted + 1) / dt
+        if self._horizon_probe is not None:
+            if not self._horizon_probe_issued:
+                return
+            previous, baseline = self._horizon_probe
+            self._horizon_probe = None
+            self._horizon_probe_issued = False
+            if b == self.bmax and rate > baseline and self.t_ar and rate > 1 / self.t_ar:
+                self.horizon_promotions += 1
+            else:
+                self.bmax = previous
+                self._horizon_retry = 32
+            return
+        if self._horizon_retry:
+            self._horizon_retry -= 1
+            return
+        if b != self.bmax or accepted != b - 1 or not self.t_ar or rate <= 1 / self.t_ar:
+            return
+        self._horizon_probe = (self.bmax, rate)
+        self.bmax += 1
+        while len(self.n_try) <= self.bmax:
+            self.n_try.append(self._prior_n)
+            self.n_acc.append(self._prior_n * self._prior_p)
+        self.horizon_probes += 1
+
     def update_spec(self, b: int, accepted: int, dt: float, after_ar: bool = False) -> None:
         """after_ar: the round right after an AR burst feeds the drafter all of the burst's context rows and is
         slower than a steady-state round; its acceptance counts, its time does not."""
@@ -1067,6 +1111,7 @@ class AdaptiveSpec:
                 return
         if not after_ar or b not in self.t_round:
             self.t_round[b] = dt if b not in self.t_round else 0.7 * self.t_round[b] + 0.3 * dt
+        self._observe_horizon(b, accepted, dt, after_ar)
 
     def update_ar(self, dt_per_token: float, tokens: int) -> None:
         self.ar_since_probe += tokens
@@ -1205,7 +1250,7 @@ def _dflash2_rounds(target: GLMDFlashTarget, draft, prompt_ids, max_tokens: int,
         yield [tokens[-1]], 0
         if tokens[-1] in eos:
             return
-        policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0)) if adaptive else None
+        policy = AdaptiveSpec(bs0, costs=adaptive_costs(target, bs0), grow_horizon=True) if adaptive else None
 
         def sample_row(lg, hist):
             last = lg[:, -1:]
