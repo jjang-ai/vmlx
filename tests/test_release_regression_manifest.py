@@ -16421,6 +16421,60 @@ def _scoped_prepackage_fixture(tmp_path, monkeypatch):
     return runner, root, path, data, provenance
 
 
+def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp_path, monkeypatch):
+    runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
+    required = runner.SCOPED_REQUIRED_RECEIPTS | runner.SCOPED_DFLASH_RECEIPTS | runner.SCOPED_DSPARK_RECEIPTS
+    data.update(schema=runner.SCOPED_RUNTIME_SCHEMA, models=sorted(runner.SCOPED_RUNTIME_MODELS))
+
+    def write(name, value):
+        p = path.parent / name
+        p.write_text(value if isinstance(value, str) else json.dumps(value))
+        return {"path": name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+
+    for owner in required - data['receipts'].keys():
+        entry = json.loads(json.dumps(data['receipts']['CACHE_API']))
+        original = json.loads((path.parent / entry['receipt']['path']).read_text())
+        original['owner'] = owner
+        entry['receipt'] = write(owner + '.json', original)
+        data['receipts'][owner] = entry
+    stream = write('completed.sse', 'data: {"type":"response.output_text.delta","delta":"fixture"}\n\n'
+                   'data: {"type":"response.completed","response":{"status":"completed"}}\n\n')
+    raw, image, _ = data['receipts']['CACHE_API']['artifacts']
+    row = {'status': 'PASS', 'active_gaps': [], 'source_commit': 'a' * 40,
+           'bundle_config_sha256': 'b' * 64, 'runtime_identity': raw, 'review': raw,
+           'retention_decision': raw, 'modalities': raw,
+           'turns': [{'status': 'PASS', 'visual': image, 'api': stream, 'review': raw} for _ in range(3)]}
+    scope = {'models': data['models'], 'required_receipts': sorted(required),
+             'authority': 'explicit campaign', 'limits': 'paired source-bound rows',
+             'model_evidence': {name: json.loads(json.dumps(row)) for name in data['models']}}
+
+    def validate():
+        data['scope_document'] = write('scope.json', scope)
+        path.write_text(json.dumps(data))
+        return runner.validate_scoped_prepackage(root, path, provenance=provenance, expected_version='1.6.74')
+
+    assert validate()['status'] == 'pass'
+    for name in data['models']:
+        removed = scope['model_evidence'].pop(name)
+        assert validate()['status'] == 'fail'
+        scope['model_evidence'][name] = removed
+        removed['active_gaps'] = ['image accuracy unresolved']
+        assert validate()['status'] == 'fail'
+        removed['active_gaps'] = []
+        removed['turns'][1]['status'] = 'FAIL'
+        assert validate()['status'] == 'fail'
+        removed['turns'][1]['status'] = 'PASS'
+        turn = removed['turns'].pop()
+        assert validate()['status'] == 'fail'
+        removed['turns'].append(turn)
+    selected = scope['model_evidence'][data['models'][0]]
+    selected['turns'][0]['api'] = raw
+    assert validate()['status'] == 'fail'
+    selected['turns'][0]['api'] = stream
+    (path.parent / stream['path']).write_text('truncated')
+    assert validate()['status'] == 'fail'
+
+
 def test_scoped_prepackage_validates_bound_evidence_only(tmp_path, monkeypatch):
     runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
     result = runner.validate_scoped_prepackage(root, path, provenance=provenance, expected_version="1.6.74")
