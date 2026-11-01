@@ -23078,6 +23078,14 @@ def _native_eos_visible_answer(parser, request, output, raw_text, visible_conten
         not isinstance(parser, BaseThinkingReasoningParser)
         or getattr(parser, "reasoning_closed_by_eos", False)
         or _TOOL_CALL_REJECTED.get()
+        # Chat reaches terminal classification before final tool validation.
+        # Do not reclassify private prose preceding a native call as an answer
+        # when that call is later rejected. Pure tool envelopes still reach
+        # the existing native-EOS tool extraction path without a prose rail.
+        or (
+            _has_tool_marker_or_partial_suffix(raw_text or "")
+            and bool(_visible_prefix_before_unparsed_tool_markup(raw_text or "").strip())
+        )
         or getattr(request, "enable_thinking", None) is False
     ):
         return None
@@ -28719,6 +28727,7 @@ async def stream_chat_completion(
         not tool_calls_emitted
         and not content_was_emitted
         and not m3_reasoning_only_answer_enabled
+        and not _TOOL_CALL_REJECTED.get()
         and m3_tools_fallback_answer_budget is not None
         and accumulated_reasoning.strip()
     ):
@@ -30965,6 +30974,7 @@ async def stream_responses_api(
 
     _rearm_reasoning_answer = bool(
         not tool_calls
+        and not _TOOL_CALL_REJECTED.get()
         and not (_fallback_visible_content or "").strip()
         and not reasoning_only_answer_enabled
         and reasoning_tools_fallback_answer_budget is not None
@@ -30976,6 +30986,7 @@ async def stream_responses_api(
         not tool_calls
         and not (_fallback_visible_content or "").strip()
         and not m3_reasoning_only_answer_enabled
+        and not _TOOL_CALL_REJECTED.get()
         and m3_tools_fallback_answer_budget is not None
         and accumulated_reasoning.strip()
     ):
