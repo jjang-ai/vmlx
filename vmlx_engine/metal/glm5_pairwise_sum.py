@@ -54,7 +54,7 @@ def _compatible_runtime() -> bool:
         device = mx.device_info().get("device_name", "")
         return (
             (version == "0.32.2" and "Apple M5" in device)
-            or (version == "0.32.3" and device == "Apple M5 Max")
+            or (version in ("0.32.3", "0.32.5.dev20261101+360078a8") and device == "Apple M5 Max")
         )
     except (importlib.metadata.PackageNotFoundError, RuntimeError):
         return False
