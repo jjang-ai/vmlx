@@ -449,6 +449,12 @@ SCOPED_DSV41_RECEIPTS = {
     "ARTIFACT_FORMAT", "PARSER", "REASONING", "GENERATION", "TOOL_CALL",
     "FAMILY_DETECTION", "JANG_COMPAT", "QUALITY_LIMITS",
 }
+SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
+SCOPED_RUNTIME_MODELS = {
+    "minimax-m31-janght", "deepseek-v41-affine", "deepseek-v41-janght",
+    "glm5-dflash2", "flash-next-native-mtp", "qwen27b-dflash2-affine4d",
+    "mimo-v26-dflash2", "ornith-native-mtp-dflash2",
+}
 SCOPED_REQUIRED_RECEIPTS = {
     "PROVENANCE", "SETTINGS", "CACHE_API", "MEDIA_UI", "QUOTA", "REGRESSION",
     "NATIVE_MTP", "API_CACHE", "API_SURFACE", "MCP", "JANG_COMPAT",
@@ -464,6 +470,34 @@ SCOPED_PENDING_STAGES = [
     "both_flavor_packaged_integrity", "signing_notarization_stapling",
     "installed_electron_and_api", "publication_and_readback",
 ]
+
+
+def _validate_runtime_scope(scope: dict, bound_file) -> None:
+    """Bind each active format's retained paired turns; unresolved rows fail closed."""
+    models = scope.get("model_evidence")
+    if not isinstance(models, dict) or set(models) != SCOPED_RUNTIME_MODELS:
+        raise ValueError("runtime scope requires every active model/format")
+    for name, row in models.items():
+        if row.get("status") != "PASS" or row.get("active_gaps") != []:
+            raise ValueError(f"{name}: unresolved model acceptance")
+        for field, size in (("source_commit", 40), ("bundle_config_sha256", 64)):
+            if not re.fullmatch(r"[0-9a-f]{%d}" % size, row.get(field, "")):
+                raise ValueError(f"{name}: missing {field}")
+        for field in ("runtime_identity", "review", "retention_decision", "modalities"):
+            bound_file(row.get(field))
+        turns = row.get("turns")
+        if not isinstance(turns, list) or len(turns) < 3:
+            raise ValueError(f"{name}: three paired turns required")
+        for turn in turns:
+            if turn.get("status") != "PASS":
+                raise ValueError(f"{name}: failed or unreviewed turn")
+            visual = bound_file(turn.get("visual")).read_bytes()
+            if not visual.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")):
+                raise ValueError(f"{name}: turn requires visual image bytes")
+            api = bound_file(turn.get("api")).read_bytes()
+            if not (_is_completed_responses_stream(api) or _is_captured_chat_event_stream(api)):
+                raise ValueError(f"{name}: turn requires completed raw API stream")
+            bound_file(turn.get("review"))
 
 
 def _is_captured_chat_event_stream(raw: bytes) -> bool:
@@ -572,9 +606,10 @@ def validate_scoped_prepackage(
         data = json.loads(raw)
         result["receipt_sha256"] = hashlib.sha256(raw).hexdigest()
         evidence_root = path.resolve().parent
-        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA}:
+        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA}:
             raise ValueError("unsupported scoped prepackage schema")
         dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
+        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
@@ -583,6 +618,9 @@ def validate_scoped_prepackage(
             required_receipts |= SCOPED_DSPARK_RECEIPTS
         if dsv41:
             required_models, required_receipts = SCOPED_DSV41_MODELS, SCOPED_DSV41_RECEIPTS
+        if runtime:
+            required_models = SCOPED_RUNTIME_MODELS
+            required_receipts = SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:
@@ -622,11 +660,13 @@ def validate_scoped_prepackage(
         if dsv41:
             result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
             result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
+        if runtime:
+            _validate_runtime_scope(scope, bound_file)
         exclusions = data.get("exclusions")
         if not isinstance(exclusions, list):
             raise ValueError("historical exclusions must be explicit")
         for item in exclusions:
-            if (expanded and item.get("id") == "dflash2-27b-implementation"):
+            if ((expanded or runtime) and item.get("id") == "dflash2-27b-implementation"):
                 raise ValueError("active DFlash2 acceptance cannot be excluded")
             if (item.get("id") not in SCOPED_HISTORICAL_EXCLUSIONS
                     or item.get("status") != "unproven_outside_scope"
@@ -704,7 +744,7 @@ def validate_scoped_prepackage(
                            for d in proof["visual"]):
                     raise ValueError(f"{owner}: visual proof requires actual image bytes")
                 if not any(b"data:" in (raw := verified_files[d].read_bytes())
-                           or (expanded and _is_captured_chat_event_stream(raw))
+                           or ((expanded or runtime) and _is_captured_chat_event_stream(raw))
                            for d in proof["api"]):
                     raise ValueError(f"{owner}: API proof requires raw streaming capture")
             for failure in entry.get("resolved_failures", []):
