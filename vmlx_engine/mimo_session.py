@@ -73,9 +73,14 @@ def attach_ssd(target_path: str, drafter_path: Optional[str]) -> None:
         return
     try:
         from .dflash2_session_disk import DFlash2SessionSSD, model_identity
+        from .models.mimo_v26 import _MIMO_RUNTIME_IDENTITY
 
         key = ("mimo-dflash|" + model_identity(str(target_path), str(drafter_path)) if drafter_path is not None
                else "mimo-ar|" + model_identity(str(target_path), str(target_path)))
+        # The JANG media/text ports can change without a distribution-version
+        # change. Match the standard MiMo cache's frozen external source identity
+        # so native AR and DFlash never restore KV made by another runtime.
+        key += "|mimo-runtime=" + _MIMO_RUNTIME_IDENTITY
         SSD = DFlash2SessionSSD(root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"], model_key=key)
         logger.info("MiMo DFlash session SSD tier: %s", SSD.store.directory)
     except Exception:

@@ -539,6 +539,7 @@ def test_drafterless_ssd_tier_uses_its_own_namespace(tmp_path, monkeypatch):
     from vmlx_engine import mimo_session
     from vmlx_engine import dflash2_session_disk as disk
     from vmlx_engine.dspark import session as dspark_session
+    from vmlx_engine.models import mimo_v26
 
     seen = []
 
@@ -553,6 +554,15 @@ def test_drafterless_ssd_tier_uses_its_own_namespace(tmp_path, monkeypatch):
     monkeypatch.setattr(disk, "DFlash2SessionSSD", FakeSSD)
     monkeypatch.setattr(disk, "model_identity", lambda t, d: f"{t}+{d}")
     monkeypatch.setattr(mimo_session, "SSD", None)
+    monkeypatch.setattr(mimo_v26, "_MIMO_RUNTIME_IDENTITY", "media-before")
     mimo_session.attach_ssd("/m/target", "/m/target/dflash")
     mimo_session.attach_ssd("/m/target", None)
-    assert seen == ["mimo-dflash|/m/target+/m/target/dflash", "mimo-ar|/m/target+/m/target"]
+    monkeypatch.setattr(mimo_v26, "_MIMO_RUNTIME_IDENTITY", "media-after")
+    mimo_session.attach_ssd("/m/target", "/m/target/dflash")
+    mimo_session.attach_ssd("/m/target", None)
+    assert seen == [
+        "mimo-dflash|/m/target+/m/target/dflash|mimo-runtime=media-before",
+        "mimo-ar|/m/target+/m/target|mimo-runtime=media-before",
+        "mimo-dflash|/m/target+/m/target/dflash|mimo-runtime=media-after",
+        "mimo-ar|/m/target+/m/target|mimo-runtime=media-after",
+    ]
