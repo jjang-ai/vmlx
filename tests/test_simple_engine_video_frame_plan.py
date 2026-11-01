@@ -125,3 +125,40 @@ def test_glm_timeline_markers_keep_dflash_image_plan_but_native_tensors_do_not(m
         assert plan["prompt_tokens"] == [12, 10, 10, 10, 10, 13, 42]
         assert plan["first_media_index"] == 1
         assert plan["media_end"] == 5
+
+
+def test_mimo_stream_uses_selected_frames_and_decoder_timestamps(monkeypatch):
+    lm = _lm(monkeypatch, n_frames=5, h=28, w=28)
+    lm._loaded = True
+    lm.model = SimpleNamespace(_mimo_v26_runtime=True)
+    lm.config = SimpleNamespace(model_type="mimo_v2")
+    frames = [np.full((28, 28, 3), i, dtype=np.uint8) for i in range(5)]
+    metadata = [{"frame_index": i, "timestamp_seconds": t}
+                for i, t in enumerate([0.0, 0.2, 1.3, 2.8, 5.0])]
+    decoded = []
+
+    def extract(path, **kwargs):
+        decoded.append((path, kwargs))
+        return (frames, metadata) if kwargs.get("return_metadata") else frames
+
+    monkeypatch.setattr(mllm, "extract_video_frames_smart", extract)
+    messages = [{"role": "user", "content": [{"type": "video", "video": "clip.mp4"}]}]
+    monkeypatch.setattr(lm, "_extract_multimodal_messages", lambda m: (m, [], ["clip.mp4"], []))
+    monkeypatch.setattr(lm, "_normalize_text_only_messages_for_processor", lambda m, **kw: m)
+    monkeypatch.setattr(lm, "_apply_chat_template", lambda *a, **kw: "video prompt")
+    monkeypatch.setattr(lm, "_mimo_dflash_draft", lambda: None)
+    observed = {}
+
+    def stream(*args, **kwargs):
+        observed.update(kwargs)
+        yield "finished"
+
+    monkeypatch.setattr(lm, "_stream_mimo_dflash", stream)
+    assert list(lm.stream_chat(messages, video_fps=2.0, video_max_frames=2)) == ["finished"]
+    assert len(decoded) == 1
+    assert decoded[0][1]["fps"] == 2.0
+    clip = observed["videos"][0]
+    assert isinstance(clip, np.ndarray), "MiMo must not reopen the original file at hard-coded 1 fps"
+    assert clip.shape == (2, 28, 28, 3)
+    assert clip[:, 0, 0, 0].tolist() == [0, 4]
+    assert observed["video_timestamps"] == [[0.0, 5.0]]

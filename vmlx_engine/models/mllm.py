@@ -7433,14 +7433,14 @@ class MLXMultimodalLM:
         return draft if isinstance(draft, tuple) and len(draft) == 2 else None
 
     def _stream_mimo_dflash(self, formatted_prompt: str, max_tokens: int, temperature: float, kwargs: dict, *,
-                            draft, images: list, videos: list, audio: list):
+                            draft, images: list, videos: list, audio: list, video_timestamps=None):
         """MiMo-V2.6 DFlash lane for text, image, video and audio requests, streamed as MLLMOutput chunks.
 
         The generic routes failed every MiMo media request on this lane (2026-10-15 baseline): images reached the
         native mlx-vlm stream (no ``stopping_criteria`` on MiMo's tokenizer), videos were split into image frames
         against MiMo's video placeholder (count mismatch), audio arrived as decoded arrays (the MiMo processor takes
         files). Here MiMo's own processor builds the prompt ids and media rows exactly as the batched lane does
-        (videos by local path, sampled by the processor at 1 fps; audio by path), the omni model merges the vision /
+        (videos as the selected frames with decoder timestamps; audio by path), the omni model merges the vision /
         audio features (``get_input_embeddings``) and the lane prefills those embeddings, then drafts from the
         target's taps as for text. Media positions carry salted session-key ids (one digest per item: its pixel or
         audio-code rows), so a follow-up turn about the same media resumes past it and different media never match.
@@ -7470,7 +7470,7 @@ class MLXMultimodalLM:
         tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
         has_media = bool(images or videos or audio)
         inputs = self.processor(formatted_prompt, images=list(images) or None, videos=list(videos) or None,
-                                audio=list(audio) or None)
+                                audio=list(audio) or None, video_timestamps=video_timestamps)
         prompt_ids = [int(t) for t in np.array(inputs["input_ids"])[0].tolist()]
         items = list(inputs.get("_vmlx_mimo26_media_items") or [])
         key_ids, media_end = list(prompt_ids), 0
@@ -7708,16 +7708,18 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        glm_video_times = [] if model_type == "glm5_next" else None
+        sampled_video_times = [] if (
+            model_type == "glm5_next" or getattr(self.model, "_mimo_v26_runtime", False)
+        ) else None
         for video_path in videos:
             prepared = self._prepare_video(
                 video_path, fps=video_fps, max_frames=video_max_frames, controls=_video_controls,
                 frame_cap=_simple_video_frame_cap(kwargs, len(videos), len(prepared_images)),
-                **({"return_metadata": True} if glm_video_times is not None else {}),
+                **({"return_metadata": True} if sampled_video_times is not None else {}),
             )
-            if glm_video_times is not None:
+            if sampled_video_times is not None:
                 frames, metadata = prepared
-                glm_video_times.append([item["timestamp_seconds"] for item in metadata])
+                sampled_video_times.append([item["timestamp_seconds"] for item in metadata])
             else:
                 frames = prepared
             all_images.extend(frames)
@@ -7733,7 +7735,7 @@ class MLXMultimodalLM:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,
-                glm_timestamps=glm_video_times,
+                glm_timestamps=sampled_video_times,
             )
         native_video_clips = None
         if model_type in _NATIVE_VIDEO_FRAME_MODEL_TYPES and video_frame_lists:
@@ -7797,7 +7799,8 @@ class MLXMultimodalLM:
         if _mimo_draft is not None or getattr(self.model, "_mimo_v26_runtime", False):
             yield from self._stream_mimo_dflash(
                 formatted_prompt, max_tokens, temperature, kwargs, draft=_mimo_draft, images=list(prepared_images),
-                videos=[process_video_input(v) for v in videos], audio=list(all_audio),
+                videos=[_video_frames_as_native_clip(frames) for frames in video_frame_lists],
+                audio=list(all_audio), video_timestamps=sampled_video_times,
             )
             return
 
