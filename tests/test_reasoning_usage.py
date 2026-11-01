@@ -21,6 +21,24 @@ def test_prompt_open_reasoning_not_charged_as_generated_tokens():
     parser=Parser();parser._think_in_prompt=True
     assert count_reasoning_tokens([1,2,12,13,3],parser,None)==2
 
+@pytest.mark.parametrize('text,expected', [
+    ('private</mm:think>answer', 7),
+    ('private</think>answer', 7),
+    ('plain answer', 0),
+    ('prefix<mm:think>private</mm:think>answer', 7),
+    ('<think>private</think>answer', 7),
+    ('private</mm:thi', 0),
+])
+def test_minimax_end_only_usage_matches_its_reasoning_contract(text, expected):
+    from vmlx_engine.reasoning.minimax_m3_parser import MiniMaxM3ReasoningParser
+    tokenizer = SimpleNamespace(encode=lambda text, **kwargs: list(map(ord, text)))
+    parser = MiniMaxM3ReasoningParser()
+    parser.reset_state(adaptive_mode=True)
+    assert count_reasoning_tokens(list(map(ord, text)), parser, tokenizer) == expected
+
+def test_other_parsers_do_not_gain_an_implicit_end_only_contract():
+    assert count_reasoning_tokens([1, 2, 12, 13, 3], Parser(), None) == 0
+
 def test_unknown_is_not_a_fabricated_zero():
     assert count_reasoning_tokens(None,Parser(),None) is None
     parser=SimpleNamespace(reasoning_tag_token_seqs=lambda _: {})

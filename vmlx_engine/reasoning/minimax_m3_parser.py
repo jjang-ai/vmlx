@@ -19,6 +19,10 @@ from .think_xml_parser import ThinkXmlReasoningParser
 class MiniMaxM3ReasoningParser(ThinkXmlReasoningParser):
     """Reasoning parser for MiniMax-M3 think blocks."""
 
+    # Adaptive M3 can generate an implicit rail with only a closing marker.
+    # Token usage must honor the same contract as text extraction.
+    supports_end_only_reasoning = True
+
     _ALIASES = (
         ("<mm:think>", "</mm:think>"),
         ("<think>", "</think>"),

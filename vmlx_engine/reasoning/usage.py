@@ -26,6 +26,15 @@ def count_reasoning_tokens(token_ids, parser, tokenizer):
     max_end_length = max(map(len, ends), default=0)
     ids = list(token_ids)
     inside = bool(getattr(parser, '_think_in_prompt', False))
+    if not inside and getattr(parser, 'supports_end_only_reasoning', False):
+        # Only opted-in families own this shape. A complete close before any
+        # opener identifies an implicit rail; marker-free answers stay content.
+        for offset in range(len(ids)):
+            if any(tuple(ids[offset:offset+len(s)]) == s for s in starts):
+                break
+            if any(tuple(ids[offset:offset+len(s)]) == s for s in ends):
+                inside = True
+                break
     # eos_token_ids is a list on most tokenizer wrappers but a bare int on others (GLM-5.3-Flash via the VLM
     # processor): a set() of an int raised and turned every non-streaming chat completion into HTTP 500 (2026-10-10)
     raw = getattr(tokenizer, "eos_token_ids", None)
