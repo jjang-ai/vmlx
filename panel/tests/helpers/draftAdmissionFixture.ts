@@ -58,3 +58,37 @@ export function writeMinimaxDsparkBundle(root: string, child = 'dspark', modelTy
   writeFileSync(join(root, child, 'model.safetensors.index.json'), JSON.stringify({
     weight_map: Object.fromEntries(specs.map(([name]) => [name, file])) }))
 }
+
+/**
+ * A weightless DeepSeek-V4.1-Flash bundle shaped like the releases (`deepseek_v41`, `runtime.bundle_has_mtp`):
+ * - `janght`: JANGHT1.4 (mxfp8 / jangt quantization entries, `dspark/dspark.safetensors` + README, no dspark/config.json)
+ * - `jang2k`: JANG_2K (affine quantization, `dspark/dspark.safetensors` + README + dspark_convert.json)
+ * - `root-file`: the prestacked draft at `<bundle>/dspark.safetensors`
+ * - `source-shards`: a non-JANGHT bundle whose own shards carry the release `mtp.*` tensors (no draft file)
+ * - `none`: `bundle_has_mtp` false and no draft
+ * The engine only checks the draft's presence before loading it (load_jangtq_dsv41 / jang_tools load_dspark), so the
+ * draft files are empty placeholders. Not for inference.
+ */
+export type Dsv41Layout = 'janght' | 'jang2k' | 'root-file' | 'source-shards' | 'none'
+export function writeDsv41Bundle(root: string, layout: Dsv41Layout): void {
+  const janght = layout === 'janght'
+  const quantization: Record<string, unknown> = { group_size: 64, bits: 8, mode: 'affine',
+    'layers.0.ffn.experts.gate_proj': janght ? { mode: 'jangt', kbits: 2 } : { group_size: 64, bits: 3, mode: 'affine' },
+    'layers.0.attn.wq_a': janght ? { mode: 'mxfp8' } : { group_size: 64, bits: 8, mode: 'affine' } }
+  const runtime = layout === 'none' ? { engram_tables: 'disk', engram_dir: 'engram' }
+    : { bundle_has_mtp: true, mtp_mode: janght ? 'dspark_subdir_jangt' : layout === 'source-shards' ? 'source' : 'dspark_subdir',
+      dspark_dir: 'dspark', engram_tables: 'disk', engram_dir: 'engram' }
+  writeFileSync(join(root, 'config.json'), JSON.stringify({ architectures: ['DeepseekV41ForCausalLM'], model_type: 'deepseek_v41',
+    quantization, runtime, text_config: { hidden_size: 32, num_hidden_layers: 4, vocab_size: 64 }, vision_config: {} }))
+  writeFileSync(join(root, 'jang_config.json'), JSON.stringify({ format: 'jang', drafter: { type: 'dspark', path: 'dspark/' } }))
+  const weightMap: Record<string, string> = { 'embed.weight': 'model-00001-of-00001.safetensors' }
+  if (layout === 'source-shards') weightMap['mtp.0.attn.wq_a.weight'] = 'model-00001-of-00001.safetensors'
+  writeFileSync(join(root, 'model.safetensors.index.json'), JSON.stringify({ metadata: {}, weight_map: weightMap }))
+  if (layout === 'janght' || layout === 'jang2k') {
+    mkdirSync(join(root, 'dspark'), { recursive: true })
+    writeFileSync(join(root, 'dspark', 'dspark.safetensors'), '')
+    writeFileSync(join(root, 'dspark', 'README.md'), '# dSpark draft\n')
+    if (layout === 'jang2k') writeFileSync(join(root, 'dspark', 'dspark_convert.json'), '{}')
+  }
+  if (layout === 'root-file') writeFileSync(join(root, 'dspark.safetensors'), '')
+}
