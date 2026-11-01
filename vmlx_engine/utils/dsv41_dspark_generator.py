@@ -36,19 +36,50 @@ def _adaptive_enabled() -> bool:
     return os.environ.get("VMLX_DSV41_DSPARK_ADAPTIVE", "1").strip().lower() not in {"", "0", "false", "off", "no"}
 
 
-# Prefill chunk with the draft resident. The draft adds 8.3 GB, which puts a 2048-token chunk's
-# active memory plus the allocator cache over Metal's recommended working set (222.7 GiB on a
-# 256 GB machine), and the GPU slows down. Draft resident, 12k-token cold prompt: chunk 2048
-# 545 pp/s, 1536 643, 1024 708, 768 684. Without the draft 2048 stays best (~770).
-# VMLX_DSV41_DSPARK_PREFILL_STEP overrides.
-_DRAFT_PREFILL_STEP = 1024
+# --- DSpark prefill chunk width -----------------------------------------------------------------------------------
+# The width trades compute against MLX's allocator working set.
+#
+# Compute: each chunk passes over every routed expert once, so wider chunks cost less per row, up to a width that
+# depends on the GPU: on an M5 Max 2048 rows beat 1536 and 1024 while 2176-2432 lost the gain; on an M5 Ultra (two
+# dies) 4096 still beat 2048 (JANGHT1.4, 32k tokens, memory not binding: 1024 1,515 pp/s, 2048 1,715, 4096 1,895). The
+# widest width is _DIE_MAX_CHUNK per GPU die.
+#
+# Memory: MLX's allocator keeps freed buffers for reuse until active + cached memory reaches its GC line, 0.95 x
+# Metal's recommended working set (or the memory limit, if lower); there it releases cached buffers on every cache
+# miss and allocates fresh Metal buffers. Measured (DSV4.1, draft resident, cold prefill): a chunk runs at full speed
+# while its PEAK active memory stays >= ~2.8 GiB under that line and slows 5-27 % closer to it; moving only the GC
+# line (mx.set_memory_limit) reproduces it. JANG_2K on a 256 GB M5 Ultra rests 6.2 GiB under the line, JANGHT1.4 on a
+# 128 GB M5 Max 7.2 GiB. A chunk's transient memory grows with its rows and with the context.
+#
+# So the width is CHOSEN per request from the live headroom (GC line - active memory now): the widest width up to the
+# GPU's widest (or up to --prefill-step-size when that is set below vMLX's default 2048, as before) whose predicted
+# peak keeps _GC_RESERVE_BYTES under the line, never below the fixed rule's 1024 (narrower chunks were slower in every
+# measurement, including 1M-token prompts where no width keeps the reserve: 1024 417 pp/s, 512 350). A prompt that
+# fits runs as one chunk; a longer one in the fewest chunks of at most that width, a multiple of 128 rows. The
+# transient is predicted from a measured DSV4.1 model times a learned scale: after each DSpark prefill the measured
+# peak (at the N-1 boundary, before the prompt snapshot) gives a measured / predicted ratio, and the scale is the
+# median of the last 8, never below 1 (the model is an upper envelope; learning only widens it). The chooser only
+# picks a width: it never refuses or shortens a prompt. When the allocator numbers cannot be read it keeps the fixed
+# rule of vMLX <= 1.6.82 (1024; one chunk for a prompt of <= 2048 tokens on a short session).
+# VMLX_DSV41_DSPARK_PREFILL_STEP pins the width (diagnostics).
+_GiB = 1 << 30
+_DIE_MAX_CHUNK = 2048      # widest width per GPU die (an M5 Ultra has two)
+_ALIGN = 128               # a split prompt's chunk width is a multiple of this
+_DEFAULT_STEP = 2048       # vMLX's --prefill-step-size default; a smaller configured step caps the width
+_GC_RESERVE_BYTES = int(2.8 * _GiB)
+# Transient of one chunk (peak active minus active before it), draft resident:
+#   _T_BASE + rows * _T_ROW + context * _T_CTX
+# (upper envelope of the measured chunks, both bundles).
+_T_BASE = int(1.0 * _GiB)
+_T_ROW = int(1.4 * _GiB) // 1024
+_T_CTX = int(0.9 * _GiB) // 100_000
+_SCALE_WINDOW = 8          # observations the learned scale keeps (their median is the scale)
+_OBSERVE_MIN_ROWS = 256    # shorter prefills are dominated by the base term; not used for learning
 
-
-# A prompt (or uncached tail) of up to this many tokens runs as ONE chunk while the session stays short: every
-# chunk passes over all routed experts, so a 1.4k-token prompt split 1024 + 380 paid that pass twice. Measured
-# (DeepSeek-V4.1 JANGHT, M5 Max 128 GB, draft resident, warm server, unique text, two interleaved pairs of 3): ~1.35k
-# tokens 507 -> 541 pp/s (median). Past _SHORT_CHUNK_MAX_CONTEXT the step stays: 2048-token chunks over a long context
-# outgrow the working set (they failed past 512k on a 128 GB machine).
+# The fixed rule of vMLX <= 1.6.82, kept as the fallback when the allocator numbers cannot be read; its step is also
+# the chooser's narrowest width.
+_FALLBACK_STEP = 1024
+_MIN_CHUNK = _FALLBACK_STEP
 _SHORT_PROMPT_ONE_CHUNK = 2048
 _SHORT_CHUNK_MAX_CONTEXT = 65536
 
@@ -61,16 +92,15 @@ def _prefill_override() -> int:
 
 
 def _draft_prefill_step(configured: int) -> int:
+    """Step of this generator's inherited AR prefill (VL turns), which keeps the fixed rule."""
     override = _prefill_override()
     if override > 0:
         return override
-    return min(int(configured), _DRAFT_PREFILL_STEP)
+    return min(int(configured), _FALLBACK_STEP)
 
 
-def _prompt_chunk(n_tokens: int, start: int, step: int) -> int:
-    """Chunk size for one DSpark prefill of n_tokens from position start (VMLX_DSV41_DSPARK_PREFILL_STEP wins)."""
-    if _prefill_override() > 0:
-        return step
+def _fallback_chunk(n_tokens: int, start: int, step: int) -> int:
+    """The fixed rule of vMLX <= 1.6.82: the step, or one chunk for a short prompt on a short session."""
     if step < n_tokens <= _SHORT_PROMPT_ONE_CHUNK and start + n_tokens <= _SHORT_CHUNK_MAX_CONTEXT:
         return n_tokens
     return step
@@ -87,6 +117,156 @@ def _prefill_takes_cuts(runner) -> bool:
     return "cuts" in params and "on_cut" in params
 
 
+def _device_info() -> dict:
+    return mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+
+
+def _gpu_max_chunk() -> int:
+    """_DIE_MAX_CHUNK x the GPU's dies: two for an Ultra (two Max dies), else one; one when the name is unreadable."""
+    try:
+        name = str(_device_info().get("device_name", ""))
+    except Exception:  # noqa: BLE001
+        name = ""
+    return _DIE_MAX_CHUNK * (2 if "ultra" in name.lower() else 1)
+
+
+def _gc_line_bytes() -> int | None:
+    """MLX's allocator GC line: 0.95 x max_recommended_working_set_size, or the memory limit if one is set lower."""
+    line = int(0.95 * int(_device_info()["max_recommended_working_set_size"]))
+    get_limit = getattr(mx, "get_memory_limit", None)
+    if callable(get_limit):
+        limit = int(get_limit())
+        if limit > 0:
+            line = min(line, limit)
+    return line if line > 0 else None
+
+
+def _active_bytes() -> int:
+    get = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+    return int(get())
+
+
+def _split(body: int, widest: int) -> int:
+    """Width for body rows: one chunk if they fit in widest; else the fewest chunks of at most widest rows, the width
+    being their near-equal share rounded up to a multiple of _ALIGN (an unaligned 950 + 949 split of 1,899 rows ran
+    2 % slower than 1024 + 875 on JANG_2K and JANGHT alike)."""
+    widest = max(1, int(widest))
+    if body <= widest:
+        return body
+    top = widest // _ALIGN * _ALIGN or widest
+    k = -(-body // top)
+    share = -(-body // k)
+    return min(top, -(-share // _ALIGN) * _ALIGN)
+
+
+class PrefillChunkChooser:
+    """Chooses the DSpark prefill chunk width of each request from the allocator headroom (see the notes above).
+
+    choose(n_tokens, start) -> width for jang_tools DSparkRunner.prefill(chunk_size=...); begin() / end() bracket the
+    prefill so the measured peak teaches the transient scale. The learned state is shared by every chooser in the
+    process (the scheduler rebuilds its generator when sampling parameters change; the model and memory stay)."""
+
+    _ratios: list = []      # measured / predicted transient of recent prefills (process-wide)
+
+    def __init__(self, configured_step: int | None = None, *, gc_line=_gc_line_bytes, active=_active_bytes,
+                 max_chunk=None):
+        cfg = int(configured_step or _DEFAULT_STEP)
+        widest = int(max_chunk) if max_chunk else _gpu_max_chunk()
+        self.cap = max(1, cfg) if cfg < _DEFAULT_STEP else widest
+        self.configured_step = cfg
+        self._gc_line = gc_line
+        self._active = active
+        self.last = None
+
+    # --- model -----------------------------------------------------------------------------------------------------
+    @classmethod
+    def scale(cls) -> float:
+        """Median measured / predicted ratio of the recent prefills, never below 1.0: the model is an upper envelope
+        (measured / model 0.78-1.19), so the scale only ever widens the prediction where a bundle or machine needs more
+        than the model, and a ratio learned at short contexts (where the model has the most slack) cannot make a long
+        prompt's chunks wider than the model allows (JANG_2K, 100k tokens: a 0.9 scale chose 1408 rows, 2.3 GiB under
+        the line, slower than 1024). The median, not the largest: a request's peak is its worst chunk (the transient is
+        a sawtooth over the context), so one ratio over-states the typical chunk."""
+        if not cls._ratios:
+            return 1.0
+        r = sorted(cls._ratios)
+        mid = len(r) // 2
+        med = r[mid] if len(r) % 2 else 0.5 * (r[mid - 1] + r[mid])
+        return max(1.0, med)
+
+    @staticmethod
+    def predicted_transient(rows: int, ctx: int, scale: float = 1.0) -> float:
+        return scale * (_T_BASE + rows * _T_ROW + ctx * _T_CTX)
+
+    def widest(self, headroom: int, ctx: int) -> int:
+        """Widest width (_MIN_CHUNK .. cap) whose predicted peak keeps _GC_RESERVE_BYTES under the GC line; _MIN_CHUNK
+        when none does."""
+        s = self.scale()
+        room = headroom - _GC_RESERVE_BYTES
+        rows = int((room / s - _T_BASE - ctx * _T_CTX) // _T_ROW)
+        return max(min(_MIN_CHUNK, self.cap), min(self.cap, rows))
+
+    # --- choice ----------------------------------------------------------------------------------------------------
+    def choose(self, n_tokens: int, start: int = 0) -> int:
+        n_tokens, start = int(n_tokens), max(0, int(start))
+        override = _prefill_override()
+        if override > 0:
+            self.last = {"rule": "override", "chunk": override}
+            return override
+        body = n_tokens - 1  # the last prompt token runs alone after the N-1 boundary
+        try:
+            line = self._gc_line()
+            active = self._active()
+            if not line or active <= 0:
+                raise ValueError("no allocator numbers")
+        except Exception as exc:  # noqa: BLE001 - failed detection keeps the fixed rule, never something stricter
+            step = min(self.configured_step, _FALLBACK_STEP)
+            chunk = _fallback_chunk(n_tokens, start, step)
+            self.last = {"rule": "fallback", "reason": str(exc), "chunk": chunk}
+            return chunk
+        ctx = start + n_tokens
+        widest = self.widest(line - active, ctx)
+        chunk = _split(body, widest) if body > 0 else widest
+        self.last = {"rule": "adaptive", "chunk": chunk, "widest": widest,
+                     "headroom_gib": round((line - active) / _GiB, 2), "scale": round(self.scale(), 3),
+                     "n_tokens": n_tokens, "start": start}
+        return chunk
+
+    # --- learning --------------------------------------------------------------------------------------------------
+    def begin(self):
+        """Before the prefill: active bytes now (None if unreadable); resets MLX's peak counter so the boundary read is
+        this prefill's peak."""
+        try:
+            a0 = self._active()
+            reset = getattr(mx, "reset_peak_memory", None) or mx.metal.reset_peak_memory
+            reset()
+            return a0
+        except Exception:  # noqa: BLE001 - learning is optional
+            return None
+
+    def end(self, mark, rows: int, n_tokens: int, start: int = 0, peak: int | None = None) -> None:
+        """After the body chunks (at the N-1 boundary): record measured / predicted transient for the width used."""
+        if mark is None or rows < _OBSERVE_MIN_ROWS or (self.last or {}).get("rule") != "adaptive":
+            return
+        try:
+            if peak is None:
+                get = getattr(mx, "get_peak_memory", None) or mx.metal.get_peak_memory
+                peak = int(get())
+        except Exception:  # noqa: BLE001
+            return
+        measured = int(peak) - int(mark)
+        if measured <= 0:
+            return
+        ratio = measured / self.predicted_transient(int(rows), int(start) + int(n_tokens))
+        cls = type(self)
+        cls._ratios.append(ratio)
+        del cls._ratios[:-_SCALE_WINDOW]
+        self.last = dict(self.last or {}, measured_gib=round(measured / _GiB, 3), ratio=round(ratio, 3))
+
+    def describe(self) -> dict:
+        return dict(self.last or {}, scale=round(self.scale(), 3), ratios=[round(r, 3) for r in self._ratios])
+
+
 class DSV41DSparkGenerator(SingleBatchGenerator):
     """SingleBatchGenerator that decodes V4.1 via DSpark speculation when a draft is attached."""
 
@@ -94,8 +274,9 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         super().__init__(model, *args, **kwargs)
         from jang_tools.dsv41.dspark import DSparkRunner
 
-        # Applies to the DSpark prefill and to this generator's inherited AR prefill (VL turns), which
-        # run with the same draft resident.
+        # The DSpark prefill chooses its width per request (PrefillChunkChooser); this generator's inherited AR
+        # prefill (VL turns), which runs with the same draft resident, keeps the fixed step.
+        self._chunk_chooser = PrefillChunkChooser(self.prefill_step_size)
         self.prefill_step_size = _draft_prefill_step(self.prefill_step_size)
 
         self._dspark = getattr(model, "_dspark", None)
@@ -209,12 +390,17 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         # prefix-HIT requests, so DSpark output populates the prefix cache AND a restored prefix is
         # CONTINUED by DSpark (not re-prefilled). On a hit the scheduler restores req.cache and passes
         # only the uncached tail as prompt_tokens; prefill() forwards it from the session's absolute
-        # pos, in prefill_step_size chunks, and calls back at the exact N-1 prompt boundary -- the
+        # pos, in chunks of the chosen width, and calls back at the exact N-1 prompt boundary -- the
         # state the scheduler stores under prompt[:-1] (same contract as the AR path).
         from jang_tools.dsv4_1.mlx_model import _relink
 
         seq = _relink(req.cache)
         boundary = {}
+        prompt = list(req.prompt_tokens)
+        start = int(getattr(seq, "pos", 0) or 0)
+        chooser = self._chunk_chooser
+        chunk = chooser.choose(len(prompt), start)
+        mark = chooser.begin()
 
         def _with_draft_tail(snap):
             # Carry the draft-window seed of the boundary's last positions, so a later prefix hit
@@ -226,7 +412,11 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                 mx.eval(snap[0]._seq.dspark_tail[0])
             return snap
 
+        widths = [chunk]
+
         def _on_boundary(_sess):
+            # Peak of the body chunks, read before the prompt snapshot allocates.
+            chooser.end(mark, min(max(widths), len(prompt) - 1), len(prompt), start)
             boundary["snapshot"] = _with_draft_tail(self._clone_dsv41_prompt_boundary(req))
 
         checkpoints = []
@@ -236,17 +426,20 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             if snap is not None:
                 checkpoints.append((int(pos), snap))
 
-        prompt = list(req.prompt_tokens)
-        start = int(getattr(seq, "pos", 0) or 0)
         end = start + len(prompt)
-        chunk = _prompt_chunk(len(prompt), start, self.prefill_step_size)
         extra = {}
         cuts = self._dsv41_cut_positions(req, start, end - 1)
         if cuts and _prefill_takes_cuts(self._runner):
-            # Each segment picks its own chunk as if it were the whole uncached prompt (the last one runs through
-            # the final token), so a later request restored at a cut chunks the rest exactly as this prefill does.
-            step = self.prefill_step_size
-            chunk = lambda a, b: _prompt_chunk(b - a + (1 if b == end - 1 else 0), a, step)  # noqa: E731
+            # Each segment picks its own chunk as if it were the whole uncached prompt, so a later request restored
+            # at a cut chunks the rest like this prefill does. choose(n) splits n - 1 body rows (the final token
+            # runs alone), and every segment's b - a rows are body rows, hence b - a + 1.
+            widths.clear()
+
+            def chunk(a, b):
+                w = chooser.choose(b - a + 1, a)
+                widths.append(w)
+                return w
+
             extra = {"cuts": cuts, "on_cut": _on_cut}
         with self._stream_context():
             sess, pending, c = self._runner.prefill(
@@ -254,6 +447,8 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             )
             mx.eval(pending)
         req.boundary_checkpoints = checkpoints or None
+        logger.info("DSV4.1 DSpark prefill %s: %s tokens from pos %s, chunk %s (%s)", req.uid, len(prompt), start,
+                    widths[0] if len(widths) == 1 else widths, chooser.describe())
         req.prompt_cache_snapshot = boundary.get("snapshot")
         req.context_tokens.extend(prompt)
         req.prefill_usage = {
