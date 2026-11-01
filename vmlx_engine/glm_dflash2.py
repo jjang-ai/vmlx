@@ -817,10 +817,28 @@ def session_cache_stats() -> dict:
 def clear_sessions(include_ssd: bool) -> int:
     """Called on the model worker with the engine generation lock held."""
     removed = 0
+    cleared_disk = False
     for store in list(_PREFIX_STORES.values()):
         if include_ssd and store.disk is not None:
             removed += store.disk.clear()
+            cleared_disk = True
         store.entries.clear()
+    if include_ssd and not cleared_disk and _PREFIX_DISK["root"]:
+        # A restarted server has a configured namespace but no PrefixStore
+        # until its first request. Clear that namespace too, without opening
+        # a model-bound RAM store or touching other bundles in the SSD pool.
+        import math
+        from .utils.glm_prefix_disk_store import GlmPrefixDiskStore
+
+        cap = _PREFIX_DISK["max_bytes"]
+        disk = GlmPrefixDiskStore(
+            _PREFIX_DISK["root"], _PREFIX_DISK["model_key"],
+            int(cap) if math.isfinite(cap) else 0,
+        )
+        try:
+            removed += disk.clear()
+        finally:
+            disk.close()
     return removed
 
 
