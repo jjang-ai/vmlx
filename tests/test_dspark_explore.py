@@ -107,3 +107,62 @@ def test_dspark_greedy_equals_ar_with_exploration(monkeypatch, prompt_len, tmp_p
     assert out == reference
     assert stats.rounds > 3 and 0 < stats.accepted < stats.drafted
     assert getattr(policy, "planned_rounds", 0) == stats.rounds          # the lever's planner ran every round
+
+
+@pytest.mark.parametrize("mode", ["winning", "losing", "rejected", "finite", "fixed", "wider_loses"])
+def test_growable_horizon_preserves_tokens_and_only_promotes_winning_boundaries(tmp_path, mode, monkeypatch):
+    """Run the real tiny target/drafter graph past the old 2x block ceiling.
+
+    Script proposals and the planner only to make boundary acceptance/cost
+    deterministic; target verification, cache rollback and output remain real.
+    """
+    pytest.importorskip("mlx.core")
+    import tests.test_minimax_m3_dspark as TD
+    from vmlx_engine.dspark import DSparkStats, generate_ar, generate_dspark, load_drafter
+    from vmlx_engine.dspark.minimax_target import MiniMaxM3DSparkTarget
+    import vmlx_engine.dspark.generate as loop
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=0.0)
+    def tick():
+        clock.now += 0.001
+        return clock.now
+    monkeypatch.setattr(loop, "time", SimpleNamespace(perf_counter=tick))
+
+    target = MiniMaxM3DSparkTarget(TD._model())
+    initial = 2 * TD.DRAFT_BLOCK
+    verify = target.verify
+    def timed_verify(tokens, cache, taps):
+        if mode == "wider_loses" and tokens.shape[1] > initial + 1:
+            clock.now += 1.0
+        return verify(tokens, cache, taps)
+    target.verify = timed_verify
+    if mode == "finite":
+        target.max_verify_rows = initial + 1
+    prompt = TD._ids(129, 11)
+    reference = generate_ar(target, prompt, 64, set(), prefill_step=256)
+    directory = TD._save_release_drafter(tmp_path / "dspark")
+    drafter = TD._Scripted(load_drafter(directory), prompt + reference,
+                          TD._every_fifth if mode == "rejected" else lambda _: False)
+
+    class BoundaryPolicy(TD._WidthOnly):
+        def __init__(self):
+            super().__init__()
+            self.ar_seconds = 1e-12 if mode == "losing" else 10.0
+
+        def planned_width(self, max_draft, cost_per_row):
+            return max_draft
+
+    stats = DSparkStats()
+    result = generate_dspark(target, drafter, prompt, 64, set(), stats=stats,
+                             prefill_step=256, max_draft=initial, grow_draft_ladder=True,
+                             fixed_width=initial if mode == "fixed" else None,
+                             ar_fallback=BoundaryPolicy())
+    assert result == reference
+    if mode == "winning":
+        assert stats.horizon_promotions > 0 and max(stats.widths) > initial + 1
+    elif mode == "wider_loses":
+        assert stats.horizon_probes == 1 and stats.horizon_promotions == 0
+        assert stats.draft_horizon == initial and max(stats.widths) == initial + 2
+    else:
+        assert stats.horizon_promotions == 0 and max(stats.widths) <= initial + 1

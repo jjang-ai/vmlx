@@ -132,6 +132,7 @@ class DSparkTextGenerator(SingleBatchGenerator):
             rt["target"], rt["drafter"], prompt_ids, max(1, int(req.max_tokens)), eos,
             prefill_step=self.prefill_step_size, sampler=draft_sampler, max_draft=rt["max_draft"],
             cost_per_row=rt["cost_per_row"], fixed_width=rt.get("fixed_width"), stats=stats,
+            grow_draft_ladder=rt.get("grow_draft_ladder", False),
             ar_fallback=policy, resume=resume, session=session, pick=pick,
             prefill_plan=getattr(req, "m3_plan", None),
         )

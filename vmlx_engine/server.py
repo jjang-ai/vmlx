@@ -14430,12 +14430,15 @@ def _text_lane_dspark_health_status(engine) -> dict | None:
     runtime = getattr(getattr(engine, "_model", None), "_vmlx_dspark_runtime", None)
     if not isinstance(runtime, dict) or runtime.get("drafter") is None or runtime.get("target") is None:
         return None
+    growable = bool(runtime.get("grow_draft_ladder") and runtime.get("fixed_width") is None)
     return {
         "enabled": True,
         "method": "dspark",
         "lane": "text",
         "draft_model_loaded": True,
-        "num_draft_tokens": runtime.get("max_draft"),
+        "num_draft_tokens": None if growable else runtime.get("max_draft"),
+        **({"initial_draft_tokens": runtime.get("max_draft"), "adaptive_ceiling": None,
+            "draft_ladder_grows": True} if growable else {}),
         "adaptive_width": runtime.get("fixed_width") is None,
         "request_dependent": True,
     }

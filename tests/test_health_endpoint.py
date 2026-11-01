@@ -62,6 +62,11 @@ class TestHealthEndpoint:
             "num_draft_tokens": 14, "adaptive_width": True, "request_dependent": True,
         }
         assert _loaded_dspark_health_status(engine) is None
+        runtime["grow_draft_ladder"] = True
+        growing = _text_lane_dspark_health_status(engine)
+        assert growing["num_draft_tokens"] is None
+        assert growing["initial_draft_tokens"] == 14
+        assert growing["adaptive_ceiling"] is None and growing["draft_ladder_grows"] is True
         runtime["fixed_width"] = 3                      # VMLX_DSPARK_WIDTH diagnostic lever
         assert _text_lane_dspark_health_status(engine)["adaptive_width"] is False
         engine._loaded = False
