@@ -37,3 +37,15 @@ def test_namespace_cleanup_does_not_rewrite_normal_minimax_prose():
 
     assert result.tools_called is False
     assert result.content == text
+
+
+def test_malformed_native_call_keeps_only_preceding_prose():
+    raw = (
+        'Checking now.\n]<]minimax[>[<tool_call>name="run_command">\n'
+        '<parameter name="command">python3 -c "print(866525 % 97)"</parameter>\n'
+        '</invoke>\n{"status": "success", "output": "24"}'
+    )
+    result = MiniMaxM3ToolParser().extract_tool_calls(raw)
+    assert not result.tools_called
+    assert result.tool_calls == []
+    assert result.content == "Checking now."
