@@ -1151,7 +1151,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
           </>
         )}
-        {dsv4Active && <InfoNote text={t('sessions.config.dsv4PagedNote')} />}
+        {dsv4Active && blockDiskOnly && <InfoNote text={t('sessions.config.dsv4PagedNote')} />}
         {zayaSsdReuseUnavailable && <IncompatWarning text={t('sessions.config.zayaTypedCacheNote')} />}
         {dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={blockDiskOnly
           ? t('sessions.config.dsv4SsdOnlyNote')
