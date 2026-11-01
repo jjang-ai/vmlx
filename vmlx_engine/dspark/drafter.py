@@ -18,6 +18,14 @@ dspark``). Semantics follow vLLM ``qwen3_dflash.py`` / ``qwen3_dspark.py``:
 - Markov head: ``logits_i += markov_w2 @ markov_w1[prev_i]`` with prev_0 = the
   anchor and prev_i = the token drafted at i - 1 (sequential);
 - confidence head: ``sigmoid(proj([h_i ; markov_w1[prev_i]]))`` in float32.
+
+MiniMax-M3.1 flavor (``dspark/`` in the MiniMax-M3.1-Flash release,
+``DSparkMiniMaxDraftModel``): the same block drafter with MiniMax layers, i.e.
+Gemma-style ``(1 + w)`` norms (also on the per-head q / k norms, ``hidden_norm``
+and the final norm), partial RoPE over ``rotary_dim`` of ``head_dim``, a dense
+SwiGLU-OAI FFN, and sliding-window attention: a block row at position p reads
+context keys at positions > p - ``sliding_window`` plus the whole block. The
+checkpoint's linears are MXFP8 (kept as stored); ``fc`` and both heads are BF16.
 """
 
 from __future__ import annotations
@@ -32,35 +40,44 @@ import mlx.nn as nn
 
 
 class _Attention(nn.Module):
-    def __init__(self, hidden: int, heads: int, kv_heads: int, head_dim: int, eps: float):
+    def __init__(self, cfg: dict):
         super().__init__()
+        hidden, heads, kv_heads, head_dim = (cfg["hidden_size"], cfg["num_attention_heads"],
+                                             cfg["num_key_value_heads"], cfg["head_dim"])
         self.heads, self.kv_heads, self.head_dim = heads, kv_heads, head_dim
         self.q_proj = nn.Linear(hidden, heads * head_dim, bias=False)
         self.k_proj = nn.Linear(hidden, kv_heads * head_dim, bias=False)
         self.v_proj = nn.Linear(hidden, kv_heads * head_dim, bias=False)
         self.o_proj = nn.Linear(heads * head_dim, hidden, bias=False)
-        self.q_norm = nn.RMSNorm(head_dim, eps=eps)
-        self.k_norm = nn.RMSNorm(head_dim, eps=eps)
+        self.q_norm = _norm(cfg, head_dim)
+        self.k_norm = _norm(cfg, head_dim)
 
 
 class _MLP(nn.Module):
-    def __init__(self, hidden: int, inter: int):
+    def __init__(self, cfg: dict):
         super().__init__()
+        hidden, inter = cfg["hidden_size"], cfg["intermediate_size"]
         self.gate_proj = nn.Linear(hidden, inter, bias=False)
         self.up_proj = nn.Linear(hidden, inter, bias=False)
         self.down_proj = nn.Linear(inter, hidden, bias=False)
+        self._oai = (cfg["swiglu_alpha"], cfg["swiglu_limit"]) if cfg.get("flavor") == "minimax" else None
+
+    def __call__(self, y: mx.array) -> mx.array:
+        if self._oai is None:
+            return self.down_proj(nn.silu(self.gate_proj(y)) * self.up_proj(y))
+        from ..models.minimax_m3.minimax_m3 import swiglu
+
+        return self.down_proj(swiglu(self.up_proj(y), self.gate_proj(y), *self._oai))
 
 
 class _Layer(nn.Module):
     def __init__(self, cfg: dict):
         super().__init__()
-        hidden, eps = cfg["hidden_size"], cfg["rms_norm_eps"]
-        self.self_attn = _Attention(
-            hidden, cfg["num_attention_heads"], cfg["num_key_value_heads"], cfg["head_dim"], eps
-        )
-        self.mlp = _MLP(hidden, cfg["intermediate_size"])
-        self.input_layernorm = nn.RMSNorm(hidden, eps=eps)
-        self.post_attention_layernorm = nn.RMSNorm(hidden, eps=eps)
+        hidden = cfg["hidden_size"]
+        self.self_attn = _Attention(cfg)
+        self.mlp = _MLP(cfg)
+        self.input_layernorm = _norm(cfg, hidden)
+        self.post_attention_layernorm = _norm(cfg, hidden)
 
 
 class _Markov(nn.Module):
@@ -76,7 +93,67 @@ class _Confidence(nn.Module):
         self.proj = nn.Linear(dims, 1, bias=True)
 
 
+def is_minimax_config(raw: dict) -> bool:
+    return "DSparkMiniMaxDraftModel" in (raw.get("architectures") or []) or "dspark_block_size" in (
+        raw.get("text_config") or raw)
+
+
+def minimax_config(raw: dict) -> dict:
+    """The MiniMax-M3.1 draft config in this module's flat schema (``flavor: minimax``)."""
+    t = raw.get("text_config") or raw
+    dsc = t.get("dspark_config") or {}
+    problems = []
+    if str(t.get("dspark_markov_head_type", dsc.get("markov_head_type", "vanilla"))) != "vanilla":
+        problems.append("markov head is not vanilla")
+    if not t.get("dspark_use_dense_ffn", dsc.get("use_dense_ffn", True)):
+        problems.append("MoE draft FFN")
+    if t.get("dspark_hybrid_context_fusion", dsc.get("hybrid_context_fusion", False)):
+        problems.append("hybrid context fusion")
+    if any(lt != "sliding_attention" for lt in t.get("layer_types") or []):
+        problems.append("non-sliding draft layers")
+    if not (raw.get("enable_confidence_head", t.get("enable_confidence_head"))
+            and raw.get("confidence_head_with_markov", t.get("confidence_head_with_markov", True))):
+        problems.append("confidence head without the Markov latent")
+    if problems:
+        raise ValueError("MiniMax DSpark drafter not supported: " + ", ".join(problems))
+    head_dim = int(t["head_dim"])
+    return {
+        "flavor": "minimax",
+        "hidden_size": int(t["hidden_size"]),
+        "num_hidden_layers": int(t["num_hidden_layers"]),
+        "num_attention_heads": int(t["num_attention_heads"]),
+        "num_key_value_heads": int(t["num_key_value_heads"]),
+        "head_dim": head_dim,
+        "rotary_dim": int(t.get("rotary_dim") or head_dim * float(t.get("partial_rotary_factor", 1.0))),
+        "rms_norm_eps": float(t.get("rms_norm_eps", 1e-6)),
+        "vocab_size": int(t["vocab_size"]),
+        "intermediate_size": int(t.get("dspark_ffn_hidden_size") or dsc.get("ffn_hidden_size")
+                                 or t["dense_intermediate_size"]),
+        "swiglu_alpha": float(t.get("swiglu_alpha", 1.702)),
+        "swiglu_limit": float(t.get("swiglu_limit", 7.0)),
+        "sliding_window": int(t["sliding_window"]),
+        "block_size": int(t["dspark_block_size"]),
+        "rope_parameters": {"rope_theta": float(t["rope_theta"])},
+        "enable_confidence_head": True,
+        "dflash_config": {
+            "mask_token_id": int(t.get("dspark_noise_token_id", dsc.get("mask_token_id"))),
+            "target_layer_ids": [int(i) for i in t["dspark_target_layer_ids"]],
+            "markov_rank": int(t.get("dspark_markov_rank", dsc.get("markov_rank"))),
+        },
+    }
+
+
+def _norm(cfg: dict, dims: int) -> nn.Module:
+    if cfg.get("flavor") == "minimax":
+        from ..models.minimax_m3.minimax_m3 import GemmaRMSNorm
+
+        return GemmaRMSNorm(dims, cfg["rms_norm_eps"])
+    return nn.RMSNorm(dims, eps=cfg["rms_norm_eps"])
+
+
 def _check_config(cfg: dict) -> None:
+    if cfg.get("flavor") == "minimax":
+        return  # checked in minimax_config
     dc = cfg.get("dflash_config") or {}
     problems = []
     if dc.get("projector_type") != "dspark":
@@ -111,11 +188,14 @@ class DSparkDrafter(nn.Module):
         self.mask_token_id = int(dc["mask_token_id"])
         self.target_layer_ids = [int(i) for i in dc["target_layer_ids"]]
         self.head_dim = int(cfg["head_dim"])
+        self.rope_dims = int(cfg.get("rotary_dim") or self.head_dim)
         self.rope_theta = float((cfg.get("rope_parameters") or {}).get("rope_theta", 1e7))
+        # Model-defined sliding window (MiniMax); 0 = the whole context.
+        self.sliding_window = int(cfg.get("sliding_window") or 0)
         self.layers = [_Layer(cfg) for _ in range(cfg["num_hidden_layers"])]
         self.fc = nn.Linear(len(self.target_layer_ids) * hidden, hidden, bias=False)
-        self.hidden_norm = nn.RMSNorm(hidden, eps=cfg["rms_norm_eps"])
-        self.norm = nn.RMSNorm(hidden, eps=cfg["rms_norm_eps"])
+        self.hidden_norm = _norm(cfg, hidden)
+        self.norm = _norm(cfg, hidden)
         rank = int(cfg.get("markov_rank") or dc["markov_rank"])
         vocab = int(cfg["vocab_size"])
         self.markov_head = _Markov(vocab, int(cfg.get("draft_vocab_size") or vocab), rank)
@@ -151,7 +231,7 @@ class DSparkDrafter(nn.Module):
         return [a for c in self._ctx for a in (c.keys, c.values) if a is not None]
 
     def _rope(self, x: mx.array, offset: int) -> mx.array:
-        return mx.fast.rope(x, self.head_dim, traditional=False, base=self.rope_theta, scale=1.0, offset=offset)
+        return mx.fast.rope(x, self.rope_dims, traditional=False, base=self.rope_theta, scale=1.0, offset=offset)
 
     def add_context(self, features: mx.array) -> None:
         """Append target tap features (1, C, n_taps * H) at positions [ctx_len, ctx_len + C)."""
@@ -186,14 +266,16 @@ class DSparkDrafter(nn.Module):
             # off again below (the next add_context overwrites them), so no per-round copy of the context.
             k, v = self._ctx[li].update_and_fetch(k, v)
             self._ctx[li].trim(length)
-            if window and int(k.shape[2]) > window + length:
+            mask = None
+            if self.sliding_window:
+                k, v, mask = _sliding(k, v, start, length, self.sliding_window, q.dtype)
+            elif window and int(k.shape[2]) > window + length:
                 # Opt-in recent-context window (TensorFold's DSV4 drafter attends the last 128 rows): the draft
                 # block's attention reads O(window) instead of the whole conversation. Draft-side only.
                 k, v = k[:, :, -(window + length):], v[:, :, -(window + length):]
-            o = mx.fast.scaled_dot_product_attention(q, k, v, scale=attn.head_dim**-0.5, mask=None)
+            o = mx.fast.scaled_dot_product_attention(q, k, v, scale=attn.head_dim**-0.5, mask=mask)
             h = h + attn.o_proj(o.transpose(0, 2, 1, 3).reshape(1, length, -1))
-            y = layer.post_attention_layernorm(h)
-            h = h + layer.mlp.down_proj(nn.silu(layer.mlp.gate_proj(y)) * layer.mlp.up_proj(y))
+            h = h + layer.mlp(layer.post_attention_layernorm(h))
         return self.norm(h)
 
     def draft(self, block_hidden: mx.array, anchor: mx.array, lm_head, count: int, sampler=None,
@@ -262,6 +344,20 @@ class DSparkDrafter(nn.Module):
         return mx.concatenate(tokens), mx.stack(confs)
 
 
+def _sliding(k: mx.array, v: mx.array, start: int, length: int, window: int, dtype):
+    """Keys for a block at positions [start, start + length) under a model sliding window: context key positions
+    > p - window for the row at position p, and the whole block (block attention is non-causal). ``k`` / ``v`` hold
+    the context rows [0, start) followed by the block rows."""
+    if start + length - 1 - window < 0:  # even the last block row reads every context row
+        return k, v, None
+    first = max(0, start + 1 - window)  # the earliest context row any block row can read (the anchor row's)
+    k, v = k[:, :, first:], v[:, :, first:]
+    kpos = mx.concatenate([mx.arange(first, start), mx.full((length,), start + length, dtype=mx.int32)])
+    qpos = mx.arange(start, start + length)[:, None]
+    keep = kpos[None, :] > qpos - window  # block keys carry start + length, i.e. always inside the window
+    return k, v, mx.where(keep, 0.0, -mx.inf).astype(dtype)[None, None]
+
+
 def _draft_window() -> int:
     """VMLX_DSPARK_DRAFT_WINDOW=N: the draft block attends the last N context rows (0 / unset = all). Changes
     acceptance only (drafts are verified); positions stay absolute."""
@@ -292,6 +388,8 @@ def load_drafter(path: str | Path, bits: Optional[int] = None) -> DSparkDrafter:
     """
     path = Path(path)
     cfg = json.loads((path / "config.json").read_text())
+    if is_minimax_config(cfg):
+        return _load_minimax_drafter(path, cfg)
     model = DSparkDrafter(cfg)
     weights = mx.load(str(path / "model.safetensors"))
     stored = cfg.get("quantization")
@@ -317,6 +415,24 @@ def load_drafter(path: str | Path, bits: Optional[int] = None) -> DSparkDrafter:
             )
         elif bits != 16:
             raise ValueError(f"DSpark drafter bits={bits}: 8 or 16 are supported")
+    mx.eval(model.parameters())
+    return model
+
+
+def _load_minimax_drafter(path: Path, raw_cfg: dict) -> DSparkDrafter:
+    """The MiniMax-M3.1 ``dspark/`` checkpoint as stored (MXFP8 linears; fc, Markov and confidence heads BF16)."""
+    from ..models.minimax_m3.source_format import convert_mxfp8_linears
+
+    model = DSparkDrafter(minimax_config(raw_cfg))
+    weights = {}
+    for f in sorted(path.glob("*.safetensors")):
+        weights.update(mx.load(str(f)))
+    renamed = {}
+    for k, v in weights.items():
+        k = k.removeprefix("language_model.model.dspark.").replace(".decoder_layer.", ".")
+        renamed["norm." + k[len("final_norm."):] if k.startswith("final_norm.") else k] = v
+    convert_mxfp8_linears(model, renamed)
+    model.load_weights(list(renamed.items()), strict=True)
     mx.eval(model.parameters())
     return model
 

@@ -474,6 +474,11 @@ def make_minimax_m3_cache(config) -> list:
     sca = (tc.get("sparse_attention_config", {}) if isinstance(tc, dict)
            else getattr(tc, "sparse_attention_config", {})) or {}
     freq = sca.get("sparse_attention_freq")
+    if freq is None and not isinstance(tc, dict):
+        # ModelArgs (Model.make_cache) carries the per-layer list flattened. Without
+        # this, M3.1 (sparse on every layer) fell back to the MoE layout below and
+        # gave layers 0-2 a plain KVCache, so their indexer lost its keys on decode.
+        freq = getattr(tc, "sparse_attention_freq", None)
     if freq is None:
         moe = tc.get("moe_layer_freq") if isinstance(tc, dict) else getattr(tc, "moe_layer_freq", None)
         freq = moe if moe is not None else [0, 0, 0] + [1] * (n_layers - 3)
