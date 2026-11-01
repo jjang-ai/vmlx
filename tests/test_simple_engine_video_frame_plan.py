@@ -6,8 +6,10 @@ clips over 10 s -- while the batched engine planned the same clip to the per-vid
 full resolution (~882 tokens/frame vs ~292 batched).
 """
 import inspect
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 import vmlx_engine.models.mllm as mllm
 from vmlx_engine.models.mllm import MLXMultimodalLM, _simple_video_frame_cap
@@ -57,3 +59,69 @@ def test_image_limit_is_advisory_on_every_simple_engine_path():
     assert "including video frames) \"\n" not in src
     assert src.count("above the advisory") == 4
     assert "exceeds limit of" not in src
+
+
+def test_sampled_timestamps_follow_frames_after_budget_subsampling(monkeypatch):
+    lm = _lm(monkeypatch, n_frames=5, h=28, w=28)
+    frames = [np.full((28, 28, 3), i, dtype=np.uint8) for i in range(5)]
+    metadata = [{"frame_index": i, "timestamp_seconds": t}
+                for i, t in enumerate([0.0, 0.2, 1.3, 2.8, 5.0])]
+    monkeypatch.setattr(mllm, "extract_video_frames_smart",
+                        lambda *a, **kw: (frames, metadata))
+    selected, times = lm._prepare_video("clip.mp4", frame_cap=3, return_metadata=True)
+    assert [int(f[0, 0, 0]) for f in selected] == [0, 2, 4]
+    assert [m["timestamp_seconds"] for m in times] == [0.0, 1.3, 5.0]
+
+
+def test_glm_frame_fallback_keeps_clip_boundaries_and_original_timestamps():
+    earlier = {"role": "user", "content": [{"type": "image"}]}
+    current = {"role": "user", "content": [
+        {"type": "video"}, {"type": "text", "text": "then"}, {"type": "video"},
+    ]}
+    out = mllm._expand_video_placeholders_to_image_frames(
+        [earlier, current], [2, 1], glm_timestamps=[[0.0, 1.75], [4.2]],
+    )
+    assert out[0] == earlier
+    text = [p["text"] for p in out[1]["content"] if p["type"] == "text"]
+    assert text == ["<|begin_of_video|>", "0.0 seconds", "1.8 seconds", "<|end_of_video|>",
+                    "then", "<|begin_of_video|>", "4.2 seconds", "<|end_of_video|>"]
+    assert sum(p["type"] == "image" for p in out[1]["content"]) == 3
+    assert current["content"][0]["type"] == "video"
+
+
+@pytest.mark.parametrize("times", [[None], [float("nan")], [-1.0], []])
+def test_glm_frame_fallback_does_not_invent_missing_timestamps(times):
+    with pytest.raises(ValueError, match="timestamps"):
+        mllm._expand_video_placeholders_to_image_frames(
+            [{"role": "user", "content": [{"type": "video"}]}], [1], glm_timestamps=[times],
+        )
+
+
+@pytest.mark.parametrize("native_video_pixels", [False, True])
+def test_glm_timeline_markers_keep_dflash_image_plan_but_native_tensors_do_not(monkeypatch, native_video_pixels):
+    import mlx.core as mx
+    import mlx_vlm.utils
+    import vmlx_engine.glm_dflash2
+
+    lm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    lm.model_name = "glm"
+    lm.processor = object()
+    lm.model = SimpleNamespace(
+        language_model=SimpleNamespace(),
+        get_input_embeddings=lambda *a, **kw: pytest.fail("media materialization must stay lazy"),
+        config=SimpleNamespace(image_token_id=10, video_token_id=11, video_start_token_id=12),
+    )
+    inputs = {"input_ids": mx.array([[12, 10, 10, 10, 10, 13, 42]]),
+              "pixel_values": mx.zeros((4, 8)), "image_grid_thw": mx.array([[1, 2, 2]])}
+    if native_video_pixels:
+        inputs["pixel_values_videos"] = mx.zeros((4, 8))
+        inputs["video_grid_thw"] = mx.array([[1, 2, 2]])
+    monkeypatch.setattr(mlx_vlm.utils, "prepare_inputs", lambda *a, **kw: inputs)
+    monkeypatch.setattr(vmlx_engine.glm_dflash2, "is_glm5_next", lambda model: True)
+    plan = lm._dflash2_media_plan("timeline", ["frame"], {})
+    if native_video_pixels:
+        assert plan is None
+    else:
+        assert plan["prompt_tokens"] == [12, 10, 10, 10, 10, 13, 42]
+        assert plan["first_media_index"] == 1
+        assert plan["media_end"] == 5
