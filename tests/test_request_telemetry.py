@@ -202,15 +202,15 @@ async def test_health_and_cache_stats_publish_the_record(monkeypatch):
 
 
 def test_mtp_record_is_attached_only_to_its_own_request(monkeypatch):
-    """Text lane: the mlx_lm MTP patch keeps ONE process-global record keyed by generator uid."""
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as mtp_bg
+    """Text lane: the MTP lane keeps ONE process-global record keyed by generator uid."""
+    from vmlx_engine.text_mtp import lane_stats
     from vmlx_engine.scheduler import _native_mtp_spec_stats_for
 
-    monkeypatch.setattr(mtp_bg, "_LAST_NATIVE_MTP", {"request_id": "7", "acceptance_rate": 0.5, "drafted_tokens": 10,
+    monkeypatch.setattr(lane_stats, "_last", {"request_id": "7", "acceptance_rate": 0.5, "drafted_tokens": 10,
                                                       "accepted_tokens": 5, "cycles": 6, "final_depth": 1})
     assert _native_mtp_spec_stats_for(7)["acceptance"] == 0.5
     assert _native_mtp_spec_stats_for(8) is None          # another request's record never leaks
-    monkeypatch.setattr(mtp_bg, "_LAST_NATIVE_MTP", None)
+    monkeypatch.setattr(lane_stats, "_last", None)
     assert _native_mtp_spec_stats_for(7) is None
 
 

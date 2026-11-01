@@ -246,11 +246,11 @@ def test_disabled_by_kill_switch(monkeypatch):
 
 
 def test_text_lane_trips_under_fixed_policy(monkeypatch):
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as tl
+    from vmlx_engine.text_mtp import lane, lane_policy
 
     monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
-    state = tl._MtpState()
+    state = lane.LaneState()
     state.adaptive_enabled = False
     state.depth = 3
     state.ar_step_ms = 10.0
@@ -261,30 +261,30 @@ def test_text_lane_trips_under_fixed_policy(monkeypatch):
     state.stats.cycles = 40
     state.stats.draft_tokens_accepted = 0
     state.ar_safety.ring = [(31 + i, 31 + i, base_t + i * 0.020) for i in range(9)]
-    assert tl._text_mtp_maybe_cost_fallback("req", state, now=time.perf_counter()) is False
+    assert lane_policy.apply_cost_gate("req", state, now=time.perf_counter()) is False
     # Each measured loss descends one rung: D3 -> D2 -> D1.
-    assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is False
+    assert lane_policy.apply_safety_valve("req", state) is False
     assert state.depth == 2 and state.ar_fallback_pending is False
     state.stats.cycles = 60
     state.ar_safety.anchor_cycle_ms = 20.0
     state.ar_safety.ring = [(51 + i, 51 + i, base_t + i * 0.020) for i in range(9)]
-    assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is False
+    assert lane_policy.apply_safety_valve("req", state) is False
     assert state.depth == 1 and state.ar_fallback_pending is False
     # Final rung: D1 -> AR.
     state.stats.cycles = 80
     state.ar_safety.anchor_cycle_ms = 20.0
     state.ar_safety.ring = [(71 + i, 71 + i, base_t + i * 0.020) for i in range(9)]
-    assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is True
+    assert lane_policy.apply_safety_valve("req", state) is True
     assert state.ar_fallback_pending is True
     assert "windowed_ar_safety d1" in (state.ar_fallback_reason or "")
     assert state.stats.fallback_reason == state.ar_fallback_reason
 
 
 def test_text_lane_fast_window_holds(monkeypatch):
-    from vmlx_engine.patches.mlx_lm_mtp import batch_generator as tl
+    from vmlx_engine.text_mtp import lane, lane_policy
 
     monkeypatch.delenv("VMLX_NATIVE_MTP_AR_SAFETY", raising=False)
-    state = tl._MtpState()
+    state = lane.LaneState()
     state.depth = 3
     state.ar_step_ms = 10.0
     state.ar_safety.prompt_tokens = 100
@@ -293,7 +293,7 @@ def test_text_lane_fast_window_holds(monkeypatch):
     state.stats.cycles = 40
     state.stats.draft_tokens_accepted = 40
     state.ar_safety.ring = [(31 + i, 2 * (31 + i), base_t + i * 0.010) for i in range(9)]
-    assert tl._text_mtp_maybe_ar_safety_fallback("req", state) is False
+    assert lane_policy.apply_safety_valve("req", state) is False
     assert state.ar_fallback_pending is False
 
 

@@ -2,9 +2,9 @@
 
 The controller could only ever LOWER draft depth, so a bundle whose tuning
 sidecar says depth 1 stayed at depth 1 no matter how well its head performed.
-That caps throughput at (1 + acceptance) tokens per cycle. MTPLX runs the same
-model family at depth 3 with 0.95/0.88/0.80 acceptance = 3.46 tokens per cycle,
-which is the whole difference between a 1.5x and a 2.5x speedup.
+That caps throughput at (1 + acceptance) tokens per cycle. A strong head at
+depth 3 with 0.95/0.88/0.80 acceptance yields 3.46 tokens per cycle, which is
+the whole difference between a 1.5x and a 2.5x speedup.
 
 The rolling wall-value controller has its own focused suite.  These tests run
 with that controller disabled so the older cumulative acceptance gates remain
@@ -159,7 +159,7 @@ class TestDraftMarginReduction:
 
 class TestRaises:
     def test_excellent_d1_climbs_to_depth_two(self):
-        """0.95 at depth 1 — the MTPLX-grade head we are building toward."""
+        """0.95 at depth 1 — the head quality we are building toward."""
         state = _State(1, [200, 0, 0], [190, 0, 0])
         gen._native_mtp_maybe_adapt_depth("req", state)
         assert state.depth == 2

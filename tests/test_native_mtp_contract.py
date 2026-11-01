@@ -35,7 +35,7 @@ def test_native_mtp_contract_pins_named_policy_and_panel_edges():
     assert "lets users choose AR (MTP off) without leaving sampling overrides behind" in required
     assert "keeps non-MTP models on bundle-owned generation defaults" in required
     assert "real session launcher and settings form expose exactly the two native MTP modes" in required
-    assert "vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py" in sources
+    assert "vmlx_engine/text_mtp/qwen_family.py" in sources
     assert "vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py" in sources
 
     engine_command = gate.COMMANDS["engine_native_mtp_contracts"][1]

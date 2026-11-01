@@ -112,12 +112,12 @@ def _run_generation(model, prompt, max_tokens: int):
 
 
 def _tokens_at_depth(monkeypatch, depth, attach_mtp: bool, max_tokens=24):
-    from vmlx_engine.patches.mlx_lm_mtp import (
-        apply_mlx_lm_mtp_patch,
-        set_mtp_active,
+    from vmlx_engine.text_mtp import (
+        install,
+        set_draft_head_loading,
     )
 
-    assert apply_mlx_lm_mtp_patch() is True
+    assert install() is True
     if depth is None:
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
     else:
@@ -126,15 +126,15 @@ def _tokens_at_depth(monkeypatch, depth, attach_mtp: bool, max_tokens=24):
 
     prev = None
     try:
-        from vmlx_engine.patches.mlx_lm_mtp import is_mtp_active
+        from vmlx_engine.text_mtp import draft_head_loading_enabled
 
-        prev = is_mtp_active()
-        set_mtp_active(attach_mtp)
+        prev = draft_head_loading_enabled()
+        set_draft_head_loading(attach_mtp)
         model = _build_model(attach_mtp)
         return _run_generation(model, [3, 5, 7, 11, 13], max_tokens)
     finally:
         if prev is not None:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
 
 
 class TestMtpDepthGreedyIdentity:
@@ -156,23 +156,23 @@ class TestMtpDepthGreedyIdentity:
 
 
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         gm = sys.modules["mlx_lm.generate"]
 
-        prev = is_mtp_active()
+        prev = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = _build_model(attach_mtp=True)
             batch = _make_batch(model, [3, 5, 7], 16)
-            state = batch._omlx_mtp_state
+            state = batch._vmlx_text_mtp_lane
             assert state.depth == 3
             assert state.stats.depth == 3
             # post-init drafts a full chain of `depth` tokens. The chain is
@@ -192,24 +192,24 @@ class TestMtpDepthGreedyIdentity:
             # A fresh chain is always drafted for the next cycle.
             assert len(state.draft_toks) == 3
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
 
     def test_adaptive_starts_shallow_and_retains_configured_ceiling(self, monkeypatch):
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
-        prev = is_mtp_active()
+        prev = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = _build_model(attach_mtp=True)
             batch = _make_batch(model, [3, 5, 7], 16)
-            state = batch._omlx_mtp_state
+            state = batch._vmlx_text_mtp_lane
             assert state.depth == 1
             assert state.depth_ceiling == 3
             assert state.stats.starting_depth == 1
@@ -217,26 +217,22 @@ class TestMtpDepthGreedyIdentity:
             assert state.stats.depth_policy == "adaptive"
             assert len(state.draft_toks) == 1
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
 
     def test_adaptive_promotes_only_after_measured_shallow_cycles(self, monkeypatch):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _MtpState,
-            _adaptive_arm_cycle,
-            _adaptive_finish_cycle,
-        )
+        from vmlx_engine.text_mtp.lane import LaneState; from vmlx_engine.text_mtp.lane_policy import arm_cycle; from vmlx_engine.text_mtp.lane_policy import settle_cycle
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_VALUE_MIN_SAMPLES", "2")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_VALUE_COOLDOWN_CYCLES", "2")
-        state = _MtpState(depth=1, depth_ceiling=3, adaptive_enabled=True)
+        state = LaneState(depth=1, depth_ceiling=3, adaptive_enabled=True)
         state.stats.depth = 1
-        _adaptive_arm_cycle(state, now=1.0)
+        arm_cycle(state, now=1.0)
 
         # Production holds the configured/profile seed for 48 cycles so a
         # cold MTP-head cache cannot trigger a false early depth decision.
         # Exercise the final two measured D1 cycles at that boundary.
         state.stats.cycles = 47
-        _adaptive_finish_cycle(
+        settle_cycle(
             "adaptive-row",
             state,
             completed_depth=1,
@@ -244,10 +240,10 @@ class TestMtpDepthGreedyIdentity:
             now=2.0,
         )
         assert state.depth == 1
-        _adaptive_arm_cycle(state, now=2.0)
+        arm_cycle(state, now=2.0)
 
         state.stats.cycles = 48
-        _adaptive_finish_cycle(
+        settle_cycle(
             "adaptive-row",
             state,
             completed_depth=1,
@@ -264,12 +260,9 @@ class TestMtpDepthGreedyIdentity:
     def test_text_cost_fallback_is_measured_and_explicit_for_fixed_depth(
         self, monkeypatch
     ):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _MtpState,
-            _text_mtp_maybe_cost_fallback,
-        )
+        from vmlx_engine.text_mtp.lane import LaneState; from vmlx_engine.text_mtp.lane_policy import apply_cost_gate
 
-        state = _MtpState(depth=3, depth_ceiling=3, adaptive_enabled=False)
+        state = LaneState(depth=3, depth_ceiling=3, adaptive_enabled=False)
         state.stats.cycles = 8
         state.stats.draft_tokens_accepted = 8
         state.stats.backbone_ms = 320.0
@@ -278,7 +271,7 @@ class TestMtpDepthGreedyIdentity:
 
         # Fixed D3 is an exact UI/user selection. The default adaptive runtime
         # gate must never override it.
-        assert not _text_mtp_maybe_cost_fallback("fixed", state, now=10.0)
+        assert not apply_cost_gate("fixed", state, now=10.0)
         assert state.ar_fallback_pending is False
 
         # The benchmark/research switch supplies its matched AR calibration
@@ -287,7 +280,7 @@ class TestMtpDepthGreedyIdentity:
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_AR_STEP_MS", "10")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_RATIO_THRESHOLD", "1.0")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_MIN_CYCLES", "8")
-        assert _text_mtp_maybe_cost_fallback("fixed", state, now=10.0)
+        assert apply_cost_gate("fixed", state, now=10.0)
         assert state.ar_fallback_pending is True
         assert state.stats.fallback_cost_ratio == pytest.approx(2.0)
         assert "calibrated_cost" in (state.ar_fallback_reason or "")
@@ -295,14 +288,11 @@ class TestMtpDepthGreedyIdentity:
     def test_text_runtime_cost_gate_only_owns_active_adaptive_requests(
         self, monkeypatch
     ):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _MtpState,
-            _text_mtp_maybe_cost_fallback,
-        )
+        from vmlx_engine.text_mtp.lane import LaneState; from vmlx_engine.text_mtp.lane_policy import apply_cost_gate
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_RUNTIME_COST_MIN_CYCLES", "8")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_RUNTIME_COST_MARGIN", "1.25")
-        state = _MtpState(
+        state = LaneState(
             depth=1,
             depth_ceiling=3,
             adaptive_enabled=True,
@@ -311,28 +301,26 @@ class TestMtpDepthGreedyIdentity:
         )
         state.stats.cycles = 8
         state.stats.draft_tokens_accepted = 8
-        assert _text_mtp_maybe_cost_fallback("adaptive", state, now=1.3)
+        assert apply_cost_gate("adaptive", state, now=1.3)
         assert state.stats.fallback_cost_ratio == pytest.approx(1.875)
         assert "runtime_cost" in (state.ar_fallback_reason or "")
 
     def test_text_cost_fallback_drains_verified_queue_then_matches_ar(
         self, monkeypatch
     ):
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            native_mtp_stats_snapshot,
-        )
+        from vmlx_engine.text_mtp.lane_stats import native_mtp_stats_snapshot
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         prompt = [3, 5, 7, 11, 13]
         max_tokens = 24
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         try:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
             baseline = _run_generation(
                 _build_model(attach_mtp=False), prompt, max_tokens
             )
@@ -343,7 +331,7 @@ class TestMtpDepthGreedyIdentity:
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_AR_STEP_MS", "0.0001")
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_RATIO_THRESHOLD", "1")
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_COST_MIN_CYCLES", "1")
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(
                 _build_model(attach_mtp=True), prompt, max_tokens
             )
@@ -357,7 +345,7 @@ class TestMtpDepthGreedyIdentity:
                     break
 
             assert got == baseline
-            assert getattr(batch, "_omlx_mtp_state", None) is None
+            assert getattr(batch, "_vmlx_text_mtp_lane", None) is None
             receipt = native_mtp_stats_snapshot()["last_native_mtp"]
             assert receipt["finish_reason"] == "length"
             assert receipt["final_depth"] == 0
@@ -365,7 +353,7 @@ class TestMtpDepthGreedyIdentity:
             assert receipt["recovery"]["productive_ar_tokens"] > 0
             assert receipt["recovery"]["attempts"] == 0
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     @pytest.mark.parametrize("depth", [1, 2, 3])
     @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
@@ -378,30 +366,30 @@ class TestMtpDepthGreedyIdentity:
         productive stock steps, post-init must consume the *pending* sample,
         not the last visible token, and emit it exactly once.
         """
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install, draft_head_loading_enabled, set_draft_head_loading,
         )
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _post_init_mtp
+        from vmlx_engine.text_mtp.lane import seed_lane
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         prompt, limit = [3, 5, 7, 11, 13], 48
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         try:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
             expected = _run_generation(_FakeCacheModel(), prompt, limit)
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
             # The shared fixture passes the complete prompt to stock init,
             # whose initial _step appends the final prompt token. Isolate
             # handoff/re-entry mutations from that existing fixture convention.
             initial_history = list(batch.tokens[0])
-            state = batch._omlx_mtp_state
+            state = batch._vmlx_text_mtp_lane
             state.ar_fallback_pending = True
             state.ar_fallback_reason = "test controlled performance handoff"
             got = []
-            while getattr(batch, "_omlx_mtp_state", None) is not None:
+            while getattr(batch, "_vmlx_text_mtp_lane", None) is not None:
                 got.extend(int(r.token) for r in batch.next())
                 assert len(got) < limit
             for _ in range(5):
@@ -410,13 +398,13 @@ class TestMtpDepthGreedyIdentity:
             for cache in batch.prompt_cache:
                 assert cache.offset == len(prompt) + len(got)
             pending = int(batch._next_tokens.item())
-            _post_init_mtp(batch)
-            assert batch._omlx_mtp_state.stats.seed_context_tokens == len(prompt) + len(got)
-            assert batch._omlx_mtp_state.stats.seed_context_source == "logical_cache_offset"
-            assert batch._omlx_mtp_state.ar_safety.prompt_tokens == len(prompt) + len(got)
+            seed_lane(batch)
+            assert batch._vmlx_text_mtp_lane.stats.seed_context_tokens == len(prompt) + len(got)
+            assert batch._vmlx_text_mtp_lane.stats.seed_context_source == "logical_cache_offset"
+            assert batch._vmlx_text_mtp_lane.ar_safety.prompt_tokens == len(prompt) + len(got)
             # Re-priming computes ahead, but cannot publish or append history.
             assert batch.tokens[0] == initial_history + got
-            assert batch._omlx_mtp_state.queue[0][0] == pending
+            assert batch._vmlx_text_mtp_lane.queue[0][0] == pending
             first = batch.next()
             assert int(first[0].token) == pending
             got.extend(int(r.token) for r in first)
@@ -428,19 +416,19 @@ class TestMtpDepthGreedyIdentity:
                     break
             assert got == expected
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     @pytest.mark.parametrize("depth", [1, 2, 3])
     @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
     def test_automatic_ar_reentry_keeps_ceiling_and_exact_output(
         self, monkeypatch, depth, wrong_from_step
     ):
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install, draft_head_loading_enabled, set_draft_head_loading,
         )
         from vmlx_engine.native_mtp_recovery import NativeMTPRecovery
-        assert apply_mlx_lm_mtp_patch()
-        previous = is_mtp_active()
+        assert install()
+        previous = draft_head_loading_enabled()
         prompt, limit = [3, 5, 7, 11], 180
         # Deterministic timing input tests policy/identity, not performance.
         observe = NativeMTPRecovery.observe_standard
@@ -448,19 +436,19 @@ class TestMtpDepthGreedyIdentity:
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         try:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
             expected = _run_generation(_FakeCacheModel(), prompt, limit)
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
-            batch._omlx_mtp_state.ar_fallback_pending = True
-            batch._omlx_mtp_state.ar_fallback_reason = "controlled performance park"
+            batch._vmlx_text_mtp_lane.ar_fallback_pending = True
+            batch._vmlx_text_mtp_lane.ar_fallback_reason = "controlled performance park"
             got, entered = [], False
             while len(got) < limit:
-                before = getattr(batch, "_omlx_mtp_state", None)
+                before = getattr(batch, "_vmlx_text_mtp_lane", None)
                 responses = batch.next()
                 assert responses
                 got.extend(int(r.token) for r in responses)
-                state = getattr(batch, "_omlx_mtp_state", None)
+                state = getattr(batch, "_vmlx_text_mtp_lane", None)
                 if before is None and state is not None:
                     entered = True
                     assert state.depth == 1
@@ -476,48 +464,48 @@ class TestMtpDepthGreedyIdentity:
             assert entered and got == expected
             assert not hasattr(batch, "_vmlx_mtp_recovery")
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     @pytest.mark.parametrize("depth", [1, 2, 3])
     @pytest.mark.parametrize("wrong_from_step", [None, 1, 2])
     def test_scheduled_calibration_preserves_rung_history_and_exact_output(
         self, monkeypatch, depth, wrong_from_step
     ):
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install, draft_head_loading_enabled, set_draft_head_loading,
         )
-        from vmlx_engine.patches.mlx_lm_mtp import batch_generator as lane
+        from vmlx_engine.text_mtp import hooks, lane, lane_policy, lane_stats
         from vmlx_engine.native_mtp_recovery import NativeMTPRecovery
 
-        assert apply_mlx_lm_mtp_patch()
-        previous = is_mtp_active()
+        assert install()
+        previous = draft_head_loading_enabled()
         prompt, limit = [3, 5, 7, 11], 960
         observe = NativeMTPRecovery.observe_standard
         monkeypatch.setattr(NativeMTPRecovery, "observe_standard", lambda self, ms: observe(self, 100.0))
         # Isolate scheduling and actual cache/token handoff, not timing policy.
-        monkeypatch.setattr(lane, "_text_mtp_maybe_ar_safety_fallback", lambda *a: False)
-        monkeypatch.setattr(lane, "_text_mtp_maybe_cost_fallback", lambda *a, **k: False)
-        monkeypatch.setattr(lane, "_adaptive_finish_cycle", lambda *a, **k: None)
+        monkeypatch.setattr(lane_policy, "apply_safety_valve", lambda *a: False)
+        monkeypatch.setattr(lane_policy, "apply_cost_gate", lambda *a, **k: False)
+        monkeypatch.setattr(lane_policy, "settle_cycle", lambda *a, **k: None)
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         try:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
             expected = _run_generation(_FakeCacheModel(), prompt, limit)
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(_FakeCacheModel(wrong_from_step), prompt, limit)
             initial_history = list(batch.tokens[0])
-            value = batch._omlx_mtp_state.adaptive_value
+            value = batch._vmlx_text_mtp_lane.adaptive_value
             value.probe_revert_counts[0] = 3
             value.last_probe_cycle[0] = 12
             value.last_change_cycle = 10
             got, resumed, deadlines = [], 0, []
             while len(got) < limit:
-                before = getattr(batch, "_omlx_mtp_state", None)
+                before = getattr(batch, "_vmlx_text_mtp_lane", None)
                 pending = int(batch._next_tokens.item()) if before is None else None
                 responses = batch.next()
                 assert responses
                 got.extend(int(r.token) for r in responses)
-                state = getattr(batch, "_omlx_mtp_state", None)
+                state = getattr(batch, "_vmlx_text_mtp_lane", None)
                 if before is not None and state is None and responses[-1].finish_reason is None:
                     assert batch.tokens[0] == initial_history + got
                     for cache in batch.prompt_cache:
@@ -541,7 +529,7 @@ class TestMtpDepthGreedyIdentity:
             assert resumed == 2 and deadlines[1] > deadlines[0]
             assert got == expected
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     def test_cache_length_tracks_emitted_tokens_exactly(self, monkeypatch):
         """Rollback must leave the KV cache exactly at the confirmed prefix.
@@ -554,20 +542,20 @@ class TestMtpDepthGreedyIdentity:
 
 
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         gm = sys.modules["mlx_lm.generate"]
 
-        prev = is_mtp_active()
+        prev = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = _build_model(attach_mtp=True)
             prompt = [3, 5, 7, 11]
             import sys as _s; cache = [_s.modules["mlx_lm.generate"].BatchKVCache(left_padding=[0]) for _ in model.layers]
@@ -591,7 +579,7 @@ class TestMtpDepthGreedyIdentity:
                         f"{len(prompt) + emitted} — rollback under-trimmed"
                     )
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)
 
 
 class _FakeCacheModel:
@@ -751,20 +739,20 @@ def _run_fake(monkeypatch, depth: int, wrong_from_step=None, max_tokens=18,
               attach: bool = True, model_cls=_FakeCacheModel):
     import sys
 
-    from vmlx_engine.patches.mlx_lm_mtp import (
-        apply_mlx_lm_mtp_patch,
-        is_mtp_active,
-        set_mtp_active,
+    from vmlx_engine.text_mtp import (
+        install,
+        draft_head_loading_enabled,
+        set_draft_head_loading,
     )
 
-    assert apply_mlx_lm_mtp_patch() is True
+    assert install() is True
     monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
     monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
     gm = sys.modules["mlx_lm.generate"]
 
-    prev = is_mtp_active()
+    prev = draft_head_loading_enabled()
     try:
-        set_mtp_active(attach)
+        set_draft_head_loading(attach)
         model = model_cls(wrong_from_step=wrong_from_step)
         if not attach:
             model.mtp = None
@@ -782,8 +770,8 @@ def _run_fake(monkeypatch, depth: int, wrong_from_step=None, max_tokens=18,
             max_tokens=[max_tokens],
         )
         # Grab the stats object now: the finish path deletes
-        # ``_omlx_mtp_state`` from the batch before returning the last token.
-        state = getattr(batch, "_omlx_mtp_state", None)
+        # ``_vmlx_text_mtp_lane`` from the batch before returning the last token.
+        state = getattr(batch, "_vmlx_text_mtp_lane", None)
         stats = state.stats if state is not None else None
 
         out = []
@@ -797,16 +785,16 @@ def _run_fake(monkeypatch, depth: int, wrong_from_step=None, max_tokens=18,
                     return out, stats, cache
         return out, stats, cache
     finally:
-        set_mtp_active(prev)
+        set_draft_head_loading(prev)
 
 
 class TestMtpAcceptPathWithOracleDrafts:
     """Force 100% acceptance so the accept branch is actually covered."""
 
     def test_cache_snapshot_runs_once_at_terminal_not_per_cycle(self, monkeypatch):
-        import vmlx_engine.patches.mlx_lm_mtp.batch_generator as mtp_batch
+        from vmlx_engine.text_mtp import hooks, lane, lane_policy, lane_stats
 
-        original_snapshot = mtp_batch.native_mtp_cache_snapshot
+        original_snapshot = lane_stats.native_mtp_cache_snapshot
         snapshot_calls = []
 
         def snapshot_spy(cache):
@@ -814,7 +802,7 @@ class TestMtpAcceptPathWithOracleDrafts:
             return original_snapshot(cache)
 
         monkeypatch.setattr(
-            mtp_batch,
+            lane_stats,
             "native_mtp_cache_snapshot",
             snapshot_spy,
         )
@@ -833,9 +821,9 @@ class TestMtpAcceptPathWithOracleDrafts:
     def test_failed_rollback_publishes_fallback_without_false_retention(
         self, monkeypatch
     ):
-        import vmlx_engine.patches.mlx_lm_mtp.batch_generator as mtp_batch
+        from vmlx_engine.text_mtp import hooks, lane, lane_policy, lane_stats
 
-        original_snapshot = mtp_batch.native_mtp_cache_snapshot
+        original_snapshot = lane_stats.native_mtp_cache_snapshot
         snapshot_calls = []
 
         def snapshot_spy(cache):
@@ -843,13 +831,13 @@ class TestMtpAcceptPathWithOracleDrafts:
             return original_snapshot(cache)
 
         monkeypatch.setattr(
-            mtp_batch,
+            lane_stats,
             "native_mtp_cache_snapshot",
             snapshot_spy,
         )
         monkeypatch.setattr(
-            mtp_batch,
-            "_restore_or_trim_caches",
+            lane,
+            "rewind_backbone",
             lambda *_args, **_kwargs: False,
         )
 
@@ -857,7 +845,7 @@ class TestMtpAcceptPathWithOracleDrafts:
         # cache — no continuation is sound, so the cycle now fails the
         # request loudly (uniform with the MLLM path) after publishing
         # terminal telemetry. No false retention count either way.
-        retained_before = mtp_batch.native_mtp_stats_snapshot()["native_mtp_totals"][
+        retained_before = lane_stats.native_mtp_stats_snapshot()["native_mtp_totals"][
             "mtp_cache_retained_on_rejects"
         ]
         with pytest.raises(RuntimeError, match="rejected rollback"):
@@ -867,7 +855,7 @@ class TestMtpAcceptPathWithOracleDrafts:
                 wrong_from_step=1,
                 max_tokens=8,
             )
-        snapshot = mtp_batch.native_mtp_stats_snapshot()
+        snapshot = lane_stats.native_mtp_stats_snapshot()
         published = snapshot["last_native_mtp"]
 
         assert published["finish_reason"] == "rollback_refused"
@@ -904,19 +892,19 @@ class TestMtpAcceptPathWithOracleDrafts:
         for depth in (1, 2, 3):
             import sys
 
-            from vmlx_engine.patches.mlx_lm_mtp import (
-                apply_mlx_lm_mtp_patch,
-                is_mtp_active,
-                set_mtp_active,
+            from vmlx_engine.text_mtp import (
+                install,
+                draft_head_loading_enabled,
+                set_draft_head_loading,
             )
 
-            assert apply_mlx_lm_mtp_patch() is True
+            assert install() is True
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", str(depth))
             monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
             gm = sys.modules["mlx_lm.generate"]
-            prev = is_mtp_active()
+            prev = draft_head_loading_enabled()
             try:
-                set_mtp_active(True)
+                set_draft_head_loading(True)
                 model = _FakeCacheModel()
                 batch = gm.GenerationBatch(
                     model=model,
@@ -940,7 +928,7 @@ class TestMtpAcceptPathWithOracleDrafts:
                         break
                 calls[depth] = model.n_backbone_calls
             finally:
-                set_mtp_active(prev)
+                set_draft_head_loading(prev)
 
         assert calls[2] < calls[1], f"depth 2 not cheaper: {calls}"
         assert calls[3] < calls[2], f"depth 3 not cheaper: {calls}"
@@ -972,9 +960,7 @@ class TestMtpAcceptPathWithOracleDrafts:
 
 class TestGlmAlignedHeadCache:
     def test_gate_is_exact_family_and_default_off(self, monkeypatch):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _glm_aligned_head_cache_enabled,
-        )
+        from vmlx_engine.text_mtp.glm_seam import aligned_head_history_enabled
 
         monkeypatch.delenv(
             "VMLX_GLM5_ALIGNED_MTP_HEAD_CACHE", raising=False
@@ -986,38 +972,33 @@ class TestGlmAlignedHeadCache:
         class _Batch:
             model = type("Model", (), {"model_type": "glm5_next"})()
 
-        assert _glm_aligned_head_cache_enabled(_Batch()) is False
+        assert aligned_head_history_enabled(_Batch()) is False
         monkeypatch.setenv("VMLX_GLM5_ALIGNED_MTP_HEAD_CACHE", "1")
-        assert _glm_aligned_head_cache_enabled(_Batch()) is True
+        assert aligned_head_history_enabled(_Batch()) is True
         _Batch.model.model_type = "qwen4_exp"
-        assert _glm_aligned_head_cache_enabled(_Batch()) is False
+        assert aligned_head_history_enabled(_Batch()) is False
 
     def test_prompt_priming_gate_is_exact_family_and_default_off(
         self, monkeypatch
     ):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _glm_prompt_priming_enabled,
-        )
+        from vmlx_engine.text_mtp.glm_seam import prompt_priming_enabled
 
         monkeypatch.delenv("VMLX_GLM5_MTP_PROMPT_PRIMING", raising=False)
         monkeypatch.delenv("VMLINUX_GLM5_MTP_PROMPT_PRIMING", raising=False)
         glm = type("Model", (), {"model_type": "glm5_next"})()
         qwen = type("Model", (), {"model_type": "qwen4_exp"})()
-        assert _glm_prompt_priming_enabled(glm) is False
+        assert prompt_priming_enabled(glm) is False
         monkeypatch.setenv("VMLX_GLM5_MTP_PROMPT_PRIMING", "1")
-        assert _glm_prompt_priming_enabled(glm) is True
-        assert _glm_prompt_priming_enabled(qwen) is False
+        assert prompt_priming_enabled(glm) is True
+        assert prompt_priming_enabled(qwen) is False
 
     def test_trim_removes_only_unverified_chain_pairs(self):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _MtpState,
-            _trim_glm_head_chain,
-        )
+        from vmlx_engine.text_mtp.lane import LaneState; from vmlx_engine.text_mtp.glm_seam import drop_unverified_head_pairs
 
         cache = _TrackingMtpCache()
         cache.history = [10, 11, 90, 91]
-        state = _MtpState(mtp_cache=[cache], head_chain_pairs=2)
-        assert _trim_glm_head_chain(state) is True
+        state = LaneState(mtp_cache=[cache], head_chain_pairs=2)
+        assert drop_unverified_head_pairs(state) is True
         assert cache.history == [10, 11]
         assert state.head_chain_pairs == 0
 
@@ -1046,20 +1027,20 @@ class TestGlmAlignedHeadCache:
     ):
         import sys
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLX_GLM5_ALIGNED_MTP_HEAD_CACHE", "1")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         gm = sys.modules["mlx_lm.generate"]
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = _AlignedGlmFakeCacheModel(wrong_from_step=2)
             batch = gm.GenerationBatch(
                 model=model,
@@ -1084,28 +1065,28 @@ class TestGlmAlignedHeadCache:
                 model.aligned_commit_prefixes[0][0]
             ]
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
 
 class TestDepthGating:
     def test_adaptive_tuned_batch_starts_d1_with_supported_ceiling(self, monkeypatch):
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp import apply_mlx_lm_mtp_patch, is_mtp_active, set_mtp_active
+        from vmlx_engine.text_mtp import install, draft_head_loading_enabled, set_draft_head_loading
 
-        assert apply_mlx_lm_mtp_patch()
+        assert install()
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
         monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (2, "vmlx_mtp_tuning.json:best_depth"))
         monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(_build_model(attach_mtp=True), [3, 5, 7], 16)
-            state = batch._omlx_mtp_state
+            state = batch._vmlx_text_mtp_lane
             assert state.depth == state.stats.starting_depth == 1
             assert state.depth_ceiling == state.stats.depth_ceiling == 3
             assert state.stats.depth_policy == "adaptive"
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     @pytest.mark.parametrize("adaptive", [False, True])
     @pytest.mark.parametrize("recommended", [1, 2, 3])
@@ -1113,39 +1094,39 @@ class TestDepthGating:
     def test_adaptive_recommendation_is_not_rollback_ceiling(self, monkeypatch, adaptive, recommended, safe):
         from types import SimpleNamespace
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+        from vmlx_engine.text_mtp.lane_policy import resolve_depth
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", str(int(adaptive)))
         monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (recommended, "vmlx_mtp_tuning.json:best_depth"))
         monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
         batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: safe)])
-        assert _effective_depth_resolution(batch)[0] == (recommended if safe else 1)
-        assert _effective_depth_resolution(batch, adaptive_ceiling=True)[0] == ((3 if adaptive else recommended) if safe else 1)
+        assert resolve_depth(batch)[0] == (recommended if safe else 1)
+        assert resolve_depth(batch, adaptive_ceiling=True)[0] == ((3 if adaptive else recommended) if safe else 1)
 
     @pytest.mark.parametrize("source", ["VMLINUX_NATIVE_MTP_DEPTH", "VMLX_NATIVE_MTP_DEPTH", "resolution_error"])
     def test_adaptive_keeps_explicit_and_safety_limits(self, monkeypatch, source):
         from types import SimpleNamespace
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+        from vmlx_engine.text_mtp.lane_policy import resolve_depth
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
         monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (1, source))
         batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: True)])
-        assert _effective_depth_resolution(batch, adaptive_ceiling=True) == (1, source)
+        assert resolve_depth(batch, adaptive_ceiling=True) == (1, source)
 
     @pytest.mark.parametrize("source", ["family", "family_default:hy_v3", "bundle:recommended_num_drafts", "default"])
     def test_adaptive_advisory_depths_only_seed_the_start(self, monkeypatch, source):
         # Adaptive governs depth: a family default or a bundle stamp chooses the start, never the ladder top.
         from types import SimpleNamespace
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth_resolution
+        from vmlx_engine.text_mtp.lane_policy import resolve_depth
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
         monkeypatch.setattr(native_mtp, "native_mtp_effective_depth", lambda _: (1, source))
         monkeypatch.setattr(native_mtp, "native_mtp_max_depth", lambda: 3)
         batch = SimpleNamespace(prompt_cache=[SimpleNamespace(is_trimmable=lambda: True)])
-        assert _effective_depth_resolution(batch, adaptive_ceiling=True) == (3, source)
-        assert _effective_depth_resolution(batch) == (1, source)
+        assert resolve_depth(batch, adaptive_ceiling=True) == (3, source)
+        assert resolve_depth(batch) == (1, source)
 
     def test_non_trimmable_cache_forces_depth_1(self, monkeypatch):
         """Depth > 1 needs partial rollback, which only trimmable KV supports.
@@ -1154,7 +1135,7 @@ class TestDepthGating:
         prefix wholesale) and must clamp to depth 1 so its proven behavior is
         untouched.
         """
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth
+        from vmlx_engine.text_mtp.lane_policy import resolved_depth
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
 
@@ -1177,12 +1158,12 @@ class TestDepthGating:
             def __init__(self, cache):
                 self.prompt_cache = cache
 
-        assert _effective_depth(_Batch([_Trimmable(), _Trimmable()])) == 3
-        assert _effective_depth(_Batch([_Trimmable(), _SsmLike()])) == 1
-        assert _effective_depth(_Batch([_Untrimmable()])) == 1
+        assert resolved_depth(_Batch([_Trimmable(), _Trimmable()])) == 3
+        assert resolved_depth(_Batch([_Trimmable(), _SsmLike()])) == 1
+        assert resolved_depth(_Batch([_Untrimmable()])) == 1
 
     def test_env_depth_clamped_to_1_3(self, monkeypatch):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth
+        from vmlx_engine.text_mtp.lane_policy import resolved_depth
 
         class _Trimmable:
             rollback_state = None
@@ -1194,15 +1175,13 @@ class TestDepthGating:
             prompt_cache = [_Trimmable()]
 
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "9")
-        assert _effective_depth(_Batch()) == 3
+        assert resolved_depth(_Batch()) == 3
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "0")
-        assert _effective_depth(_Batch()) == 1
+        assert resolved_depth(_Batch()) == 1
 
     def test_adaptive_unmeasured_text_workload_stays_ar(self, monkeypatch):
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _adaptive_mtp_activation_decision,
-        )
+        from vmlx_engine.text_mtp.lane_policy import activation_decision
 
         class _Cache:
             rollback_state = None
@@ -1220,7 +1199,7 @@ class TestDepthGating:
         )
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
 
-        assert _adaptive_mtp_activation_decision(_Batch()) == (
+        assert activation_decision(_Batch()) == (
             False,
             3,
             "adaptive_unseen_ar",
@@ -1228,16 +1207,14 @@ class TestDepthGating:
 
     def test_adaptive_unmeasured_generation_batch_skips_seed(self, monkeypatch):
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            native_mtp_stats_snapshot,
-        )
+        from vmlx_engine.text_mtp.lane_stats import native_mtp_stats_snapshot
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setattr(
             native_mtp,
             "native_mtp_effective_depth",
@@ -1245,11 +1222,11 @@ class TestDepthGating:
         )
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
 
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             batch = _make_batch(_build_model(attach_mtp=True), [3, 5, 7], 16)
-            assert getattr(batch, "_omlx_mtp_state", None) is None
+            assert getattr(batch, "_vmlx_text_mtp_lane", None) is None
             skip = native_mtp_stats_snapshot()["last_native_mtp_skip"]
             assert skip == {
                 "uid": "0",
@@ -1257,13 +1234,11 @@ class TestDepthGating:
                 "configured_depth": 3,
             }
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     def test_adaptive_validated_tuning_activates_text_mtp(self, monkeypatch):
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _adaptive_mtp_activation_decision,
-        )
+        from vmlx_engine.text_mtp.lane_policy import activation_decision
 
         class _Cache:
             rollback_state = None
@@ -1282,13 +1257,11 @@ class TestDepthGating:
         )
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "1")
 
-        assert _adaptive_mtp_activation_decision(_Batch()) == (True, 2, source)
+        assert activation_decision(_Batch()) == (True, 2, source)
 
     def test_fixed_depth_policy_still_activates_exact_depth(self, monkeypatch):
         from vmlx_engine import native_mtp
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _adaptive_mtp_activation_decision,
-        )
+        from vmlx_engine.text_mtp.lane_policy import activation_decision
 
         class _Cache:
             rollback_state = None
@@ -1306,7 +1279,7 @@ class TestDepthGating:
         )
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
 
-        assert _adaptive_mtp_activation_decision(_Batch()) == (
+        assert activation_decision(_Batch()) == (
             True,
             2,
             "fixed_policy",
@@ -1319,18 +1292,18 @@ class TestMeasurementHooksDefaultOff:
     which would silently change production behavior if left on."""
 
     def test_profile_and_bypass_default_off(self):
-        from vmlx_engine.patches.mlx_lm_mtp import batch_generator as bg
+        from vmlx_engine.text_mtp import hooks, lane, lane_policy, lane_stats
 
-        assert bg._MTP_PROFILE is False
-        assert bg._MTP_BYPASS is False
+        assert lane.PROFILE_PHASES is False
+        assert hooks.HEAD_RESIDENT_AR is False
 
     def test_pbar_is_noop_when_profiling_off(self, monkeypatch):
-        """_pbar must not force an eval (or import mlx) when profiling is off."""
-        from vmlx_engine.patches.mlx_lm_mtp import batch_generator as bg
+        """phase_barrier must not force an eval (or import mlx) when profiling is off."""
+        from vmlx_engine.text_mtp import hooks, lane, lane_policy, lane_stats
 
-        monkeypatch.setattr(bg, "_MTP_PROFILE", False)
+        monkeypatch.setattr(lane, "PROFILE_PHASES", False)
         # Passing a bare object would raise inside mx.eval; a no-op ignores it.
-        bg._pbar(object(), object())  # must not raise
+        lane.phase_barrier(object(), object())  # must not raise
 
 
 class TestBundleDepthSidecar:
@@ -1376,24 +1349,24 @@ class TestTqLiveEncodeCrossingGuard:
         """
         import sys
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "1")
 
-        prev = is_mtp_active()
+        prev = draft_head_loading_enabled()
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             model = _build_model(attach_mtp=True)
             prompt = [3, 5, 7, 11]
             gm = sys.modules["mlx_lm.generate"]
             cache = [gm.BatchKVCache(left_padding=[0]) for _ in model.layers]
             batch = _make_batch(model, prompt, 16, cache=cache)
-            assert getattr(batch, "_omlx_mtp_state", None) is not None
+            assert getattr(batch, "_vmlx_text_mtp_lane", None) is not None
 
             # Arm a TQ-style crossing on one layer: post-init leaves the
             # cache at prompt+1 positions, so the first verify advance
@@ -1414,6 +1387,6 @@ class TestTqLiveEncodeCrossingGuard:
             # the crossing and drops MTP state; the standard path continues
             # emitting — no exception, no dead generation.
             assert emitted >= 3
-            assert getattr(batch, "_omlx_mtp_state", None) is None
+            assert getattr(batch, "_vmlx_text_mtp_lane", None) is None
         finally:
-            set_mtp_active(prev)
+            set_draft_head_loading(prev)

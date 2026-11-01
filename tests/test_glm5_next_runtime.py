@@ -67,17 +67,17 @@ def glm5():
 
 @pytest.fixture(scope="module")
 def tiny_model(glm5):
-    from vmlx_engine.patches.mlx_lm_mtp import (
-        is_mtp_active,
-        set_mtp_active,
+    from vmlx_engine.text_mtp import (
+        draft_head_loading_enabled,
+        set_draft_head_loading,
     )
 
-    previous = is_mtp_active()
-    set_mtp_active(False)
+    previous = draft_head_loading_enabled()
+    set_draft_head_loading(False)
     try:
         model = glm5.Model(glm5.ModelArgs.from_dict(TINY_CFG))
     finally:
-        set_mtp_active(previous)
+        set_draft_head_loading(previous)
     mx.eval(model.parameters())
     return model
 
@@ -1316,15 +1316,15 @@ class TestSparseDSA:
 
 class TestNativeMTP:
     def _active_model(self, glm5):
-        from vmlx_engine.patches.mlx_lm_mtp import set_mtp_active
+        from vmlx_engine.text_mtp import set_draft_head_loading
 
-        set_mtp_active(True)
+        set_draft_head_loading(True)
         try:
             model = glm5.Model(glm5.ModelArgs.from_dict(TINY_CFG))
             mx.eval(model.parameters())
             return model
         finally:
-            set_mtp_active(False)
+            set_draft_head_loading(False)
 
     def test_layer45_head_attaches_and_runs(self, glm5):
         model = self._active_model(glm5)
@@ -1350,21 +1350,21 @@ class TestNativeMTP:
     ):
         from mlx_lm.generate import BatchGenerator
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLX_GLM5_MTP_PROMPT_PRIMING", "1")
         monkeypatch.setenv("VMLX_GLM5_ALIGNED_MTP_HEAD_CACHE", "1")
         monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
         monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
         generator = None
         try:
-            set_mtp_active(True)
+            set_draft_head_loading(True)
             # Construct before the request policy is enabled. The request plan,
             # not a stale model-construction snapshot of the environment, owns
             # whether prompt capture runs.
@@ -1386,7 +1386,7 @@ class TestNativeMTP:
             for _ in range(4):
                 generator.next()
                 state = getattr(
-                    generator._generation_batch, "_omlx_mtp_state", None
+                    generator._generation_batch, "_vmlx_text_mtp_lane", None
                 )
                 if state is not None:
                     break
@@ -1400,23 +1400,23 @@ class TestNativeMTP:
         finally:
             if generator is not None:
                 generator.close()
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     def test_vectorized_verify_generation_matches_ar_at_all_depths(
         self, glm5, monkeypatch
     ):
         from mlx_lm.generate import BatchGenerator
 
-        from vmlx_engine.patches.mlx_lm_mtp import (
-            apply_mlx_lm_mtp_patch,
-            is_mtp_active,
-            set_mtp_active,
+        from vmlx_engine.text_mtp import (
+            install,
+            draft_head_loading_enabled,
+            set_draft_head_loading,
         )
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         monkeypatch.setenv("VMLX_GLM5_VECTOR_KDA_VERIFY", "1")
         monkeypatch.setenv("VMLX_NATIVE_MTP_ADAPTIVE_DEPTH", "0")
-        previous = is_mtp_active()
+        previous = draft_head_loading_enabled()
 
         def generate(*, attach_mtp: bool, depth: int | None) -> list[int]:
             if depth is None:
@@ -1424,7 +1424,7 @@ class TestNativeMTP:
             else:
                 monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", str(depth))
             mx.random.seed(7713)
-            set_mtp_active(attach_mtp)
+            set_draft_head_loading(attach_mtp)
             model = glm5.Model(glm5.ModelArgs.from_dict(TINY_CFG))
             model.eval()
             mx.eval(model.parameters())
@@ -1451,7 +1451,7 @@ class TestNativeMTP:
                 for depth in (1, 2, 3):
                     assert generate(attach_mtp=True, depth=depth) == baseline
         finally:
-            set_mtp_active(previous)
+            set_draft_head_loading(previous)
 
     def test_mtp_batch_generator_carries_exact_n_minus_one_snapshot(
         self, glm5
@@ -1464,9 +1464,9 @@ class TestNativeMTP:
         """
         from mlx_lm.generate import BatchGenerator
 
-        from vmlx_engine.patches.mlx_lm_mtp import apply_mlx_lm_mtp_patch
+        from vmlx_engine.text_mtp import install
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         model = self._active_model(glm5)
         generator = BatchGenerator(model, max_tokens=1)
         generator.insert([[10, 11, 12, 13]])
@@ -1521,9 +1521,9 @@ class TestNativeMTP:
         """
         from mlx_lm.generate import BatchGenerator
 
-        from vmlx_engine.patches.mlx_lm_mtp import apply_mlx_lm_mtp_patch
+        from vmlx_engine.text_mtp import install
 
-        assert apply_mlx_lm_mtp_patch() is True
+        assert install() is True
         model = self._active_model(glm5)
         generator = BatchGenerator(model, max_tokens=1)
         boundaries = []
@@ -1624,9 +1624,7 @@ class TestNativeMTP:
     def test_depth3_partial_rejection_restores_accepted_prefix(
         self, glm5, monkeypatch, vectorized_verify
     ):
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import (
-            _restore_or_trim_caches,
-        )
+        from vmlx_engine.text_mtp.lane import rewind_backbone
 
         monkeypatch.setenv(
             "VMLX_GLM5_VECTOR_KDA_VERIFY",
@@ -1660,7 +1658,7 @@ class TestNativeMTP:
         )[0]
         mx.eval(sequential_logits, verify_logits)
         assert float(mx.abs(sequential_logits - verify_logits).max()) < 3e-2
-        assert _restore_or_trim_caches(verify, 1) is True
+        assert rewind_backbone(verify, 1) is True
         assert control[3].offset == verify[3].offset == 8
 
         for expected_cache, actual_cache in zip(control, verify):
@@ -1675,11 +1673,11 @@ class TestNativeMTP:
     def test_depth_policy_accepts_glm_partial_rollback_cache(self, glm5, monkeypatch):
         from types import SimpleNamespace
 
-        from vmlx_engine.patches.mlx_lm_mtp.batch_generator import _effective_depth
+        from vmlx_engine.text_mtp.lane_policy import resolved_depth
 
         model = self._active_model(glm5)
         monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
-        assert _effective_depth(SimpleNamespace(prompt_cache=model.make_cache())) == 3
+        assert resolved_depth(SimpleNamespace(prompt_cache=model.make_cache())) == 3
 
     def test_bundle_inspection_marks_appended_layer_runtime_ready_when_explicit(
         self, tmp_path, monkeypatch
@@ -1877,9 +1875,9 @@ class TestVisionRuntime:
         from vmlx_engine.models.glm5_next.config import ModelConfig, VisionConfig
         from vmlx_engine.models.glm5_next.glm5_next import ModelArgs
         from vmlx_engine.models.glm5_next.vlm import Model
-        from vmlx_engine.patches import mlx_lm_mtp
+        from vmlx_engine import text_mtp
 
-        monkeypatch.setattr(mlx_lm_mtp, "is_mtp_active", lambda: True)
+        monkeypatch.setattr(text_mtp, "draft_head_loading_enabled", lambda: True)
         text = ModelArgs.from_dict(TINY_CFG)
         config = ModelConfig(text_config=text, vision_config=VisionConfig(depth=0))
         model = Model(config)
