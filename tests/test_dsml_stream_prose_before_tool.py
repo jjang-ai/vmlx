@@ -97,12 +97,14 @@ class _V41BundleEncoder:
 
 
 class _Engine:
+    calls = 0
     tokenizer = SimpleNamespace(has_thinking=True)
 
     def __init__(self, deltas):
         self.deltas = deltas
 
     async def _stream(self):
+        type(self).calls += 1
         text = ""
         last = len(self.deltas)
         for i, delta in enumerate(self.deltas, 1):
@@ -531,3 +533,31 @@ def test_m3_responses_streams_prose_before_tool_call(m3_server, case):
     else:
         assert content_deltas == []
         assert not any(t.strip() for t in done_texts + completed_texts)
+
+
+@pytest.mark.parametrize("wire", ["chat", "responses"])
+def test_invalid_call_in_unclosed_reasoning_stays_private(dsv4_server, wire):
+    bad = dsv4_server.call.replace('name="run_command"', 'name="not_offered"')
+    private = "I should privately consider the command before invoking it.\n"
+    deltas = [private, bad]
+    _Engine.calls = 0
+    run = _run_chat if wire == "chat" else _run_responses
+    content, reasoning, names, *_ = run(deltas, True)
+    assert names == []
+    assert content == ""
+    assert private.strip() in reasoning
+    assert _Engine.calls == 1, "Rejected native calls must not generate a replacement answer"
+
+
+@pytest.mark.parametrize("wire", ["chat", "responses"])
+@pytest.mark.parametrize("terminal_chunk", [False, True])
+def test_m3_native_tool_turn_does_not_publish_model_generated_result(m3_server, wire, terminal_chunk):
+    tail = "The command already returned alpha without execution."
+    deltas = [M3_PROSE + M3_CALL + tail] if terminal_chunk else [M3_PROSE, M3_CALL] + [tail] * 8
+    run = _run_chat if wire == "chat" else _run_responses
+    content, reasoning, names, *_ = run(
+        deltas, False, tool=M3_TOOL, endpoint_kwargs=m3_server
+    )
+    assert names == ["run_shell"]
+    assert content == M3_PROSE
+    assert reasoning == ""

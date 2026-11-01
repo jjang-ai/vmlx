@@ -59,7 +59,8 @@ async def test_native_eos_tool_is_executable_not_visible_or_reasoning(monkeypatc
             try:
                 response = await server.create_chat_completion(request, fastapi_request=None)
             except HTTPException as error:
-                assert tool_choice == "none" and error.status_code == 502
+                assert tool_choice == "none" and error.status_code == 422
+                assert error.detail["code"] == "tool_calls_rejected"
                 assert engine.calls == 1
                 return
             body = response.model_dump() if hasattr(response, "model_dump") else json.loads(response.body)

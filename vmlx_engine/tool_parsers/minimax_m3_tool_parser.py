@@ -141,6 +141,7 @@ class MiniMaxM3ToolParser(ToolParser):
     SUPPORTS_NATIVE_TOOL_FORMAT = True
     STRICT_NATIVE_TOOL_FORMAT = True
     SUPPRESS_INVALID_NATIVE_MARKUP = True
+    STREAM_STOPS_AFTER_COMPLETE_CALL = True
 
     def _safe_invalid_protocol_content(self, text: str) -> str:
         cleaned = self._strip_noise(text)
@@ -196,9 +197,11 @@ class MiniMaxM3ToolParser(ToolParser):
                 content=self._safe_invalid_protocol_content(model_output),
             )
 
-        # Content = everything outside the tool_call wrapper.
+        # A native call hands control to the client. Text generated after
+        # its wrapper cannot be a result from the tool the client has yet to
+        # execute, including when the whole turn arrives in one final delta.
         if blocks:
-            content = _TOOLCALL_RE.sub("", cleaned).strip()
+            content = cleaned[:_TOOLCALL_RE.search(cleaned).start()].strip()
         else:
             content = re.sub(r"<tool_call>.*$", "", cleaned, flags=re.DOTALL).strip()
             content = _INVOKE_RE.sub("", content).strip()
@@ -207,6 +210,47 @@ class MiniMaxM3ToolParser(ToolParser):
             tool_calls=tool_calls,
             content=content or None,
         )
+
+    def _stream_tool_call_stop_end(self, buffered_text: str) -> int | None:
+        """Locate a closed native turn without cutting an opening sibling call."""
+        matches = list(_TOOLCALL_RE.finditer(buffered_text))
+        if not matches or buffered_text.count("<tool_call>") != len(matches):
+            return None
+        end = matches[-1].end()
+        tail = buffered_text[end:]
+        for marker in (NS_TOKEN, "<tool_call>", "<invoke"):
+            if marker in tail or any(
+                tail.endswith(marker[:n]) for n in range(1, len(marker))
+            ):
+                return None
+        candidate = self._strip_noise(buffered_text[:end])
+        invokes = list(_INVOKE_RE.finditer(candidate))
+        if not invokes or candidate.count("<invoke") != len(invokes):
+            return None
+        calls = self._invokes_to_calls(candidate)
+        request = getattr(self, "_stream_stop_request", None)
+        if request is not None:
+            from vmlx_engine.api.tool_calling import validate_json_schema
+
+            names = self._request_tool_names(request)
+            for call in calls:
+                if call["name"] not in names:
+                    return None
+                schema = self._function_schema_for_tool(request, call["name"])
+                if schema is not None:
+                    valid, _error = validate_json_schema(
+                        json.loads(call["arguments"]), schema
+                    )
+                    if not valid:
+                        return None
+        return end if calls else None
+
+    def stream_tool_calls_complete(self, buffered_text: str) -> bool:
+        return self._stream_tool_call_stop_end(buffered_text) is not None
+
+    def stream_tool_call_stop_truncate(self, buffered_text: str) -> str:
+        end = self._stream_tool_call_stop_end(buffered_text)
+        return buffered_text if end is None else buffered_text[:end]
 
     def extract_tool_calls_streaming(
         self,
