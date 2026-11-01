@@ -59,14 +59,15 @@ function r20Toolchain() {
   );
 }
 
+const mlxRuntimeSpec = JSON.parse(read("scripts/mlx-runtime.json"));
 const r20RuntimeContracts = {
   sequoia: {
     mlx_wheel_platform: "macosx_14_0_arm64",
-    minimum_system_version: "14.5.0",
+    minimum_system_version: mlxRuntimeSpec.platforms.macosx_14_0_arm64.minimum_system_version,
   },
   tahoe: {
     mlx_wheel_platform: "macosx_26_0_arm64",
-    minimum_system_version: "26.0.0",
+    minimum_system_version: mlxRuntimeSpec.platforms.macosx_26_0_arm64.minimum_system_version,
   },
 };
 

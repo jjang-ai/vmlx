@@ -1602,17 +1602,17 @@ build_one() {
   case "$flavor" in
     sequoia)
       wheel_tag="macosx_14_0_arm64"
-      minimum_system_version="14.5.0"
       ;;
     tahoe)
       wheel_tag="macosx_26_0_arm64"
-      minimum_system_version="26.0.0"
       ;;
     *)
       echo "ERROR: unsupported release flavor: $flavor" >&2
       exit 1
       ;;
   esac
+
+  minimum_system_version="$(python3 ./scripts/mlx-runtime.py minimum-os --platform "$wheel_tag")"
 
   assert_r20_source_identity "before ${flavor} bundle"
   echo "==> Building vMLX ${VERSION} ${flavor} DMG (${wheel_tag})"

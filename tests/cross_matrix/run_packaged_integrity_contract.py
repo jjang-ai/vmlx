@@ -230,14 +230,15 @@ INSTALLED_RELEASE_MANIFEST_FIELDS = {
 INSTALLED_BUNDLED_PYTHON_RELATIVE_PATH = Path(
     "Contents/Resources/bundled-python/python/bin/python3"
 )
+MLX_RUNTIME_SPEC = json.loads((REPO_ROOT / "panel/scripts/mlx-runtime.json").read_text())
 R20_FLAVOR_RUNTIME_CONTRACTS = {
     "sequoia": {
         "mlx_wheel_platform": "macosx_14_0_arm64",
-        "minimum_system_version": "14.5.0",
+        "minimum_system_version": MLX_RUNTIME_SPEC["platforms"]["macosx_14_0_arm64"]["minimum_system_version"],
     },
     "tahoe": {
         "mlx_wheel_platform": "macosx_26_0_arm64",
-        "minimum_system_version": "26.0.0",
+        "minimum_system_version": MLX_RUNTIME_SPEC["platforms"]["macosx_26_0_arm64"]["minimum_system_version"],
     },
 }
 R20_PINNED_TOOL_NAMES = (

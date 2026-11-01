@@ -303,7 +303,14 @@ echo "==> Upgrading pip..."
 # release currently has no macOS ARM wheel and would trigger a non-reproducible
 # source build. OpenCV's packages share the cv2 namespace and must not coexist.
 #
-MLX_VERSION="0.32.3"
+MLX_VERSION="$("$PYTHON" "$SCRIPT_DIR/mlx-runtime.py" version)"
+"$PYTHON" - "$SCRIPT_DIR/bundled-python-constraints.txt" "$BUNDLE_DIR/runtime-constraints.txt" "$MLX_VERSION" <<'PY'
+from pathlib import Path
+import sys
+source, target, version = sys.argv[1:]
+Path(target).write_text(Path(source).read_text() + f"\nmlx=={version}\nmlx-metal=={version}\n")
+PY
+export PIP_CONSTRAINT="$BUNDLE_DIR/runtime-constraints.txt"
 MLX_LM_VERSION="0.31.3"
 MLX_VLM_VERSION="0.5.0"
 MFLUX_VERSION="0.23.0"
@@ -360,17 +367,20 @@ MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"
 WHEELHOUSE="$BUNDLE_DIR/wheelhouse"
 mkdir -p "$WHEELHOUSE"
 echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
-"$PYTHON" -m pip download --only-binary=:all: --no-deps \
-  --dest "$WHEELHOUSE" \
-  --platform "$MLX_WHEEL_PLATFORM" \
-  --implementation cp --python-version 312 --abi cp312 \
-  "mlx==$MLX_VERSION"
-"$PYTHON" -m pip download --only-binary=:all: --no-deps \
-  --dest "$WHEELHOUSE" \
-  --platform "$MLX_WHEEL_PLATFORM" \
-  --implementation py --python-version 312 --abi none \
-  "mlx-metal==$MLX_VERSION"
-"$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
+MLX_CACHE_ROOT="${VMLX_MLX_BUILD_CACHE:-$HOME/Library/Caches/vmlx/mlx-runtime}"
+MLX_WHEEL_SOURCE="${VMLX_MLX_WHEELHOUSE:-$MLX_CACHE_ROOT/wheels/$MLX_VERSION/$MLX_WHEEL_PLATFORM}"
+if [ -z "${VMLX_MLX_WHEELHOUSE:-}" ]; then
+  "$PYTHON" "$SCRIPT_DIR/mlx-runtime.py" prepare \
+    --platform "$MLX_WHEEL_PLATFORM" --output "$MLX_WHEEL_SOURCE" \
+    --build-root "$MLX_CACHE_ROOT/builds"
+fi
+"$PYTHON" "$SCRIPT_DIR/mlx-runtime.py" verify \
+  --platform "$MLX_WHEEL_PLATFORM" --output "$MLX_WHEEL_SOURCE"
+cp "$MLX_WHEEL_SOURCE"/mlx-"$MLX_VERSION"-*"$MLX_WHEEL_PLATFORM".whl "$WHEELHOUSE/"
+cp "$MLX_WHEEL_SOURCE"/mlx_metal-"$MLX_VERSION"-*"$MLX_WHEEL_PLATFORM".whl "$WHEELHOUSE/"
+cp "$MLX_WHEEL_SOURCE/mlx-wheel-provenance.json" "$BUNDLE_DIR/"
+cp "$SCRIPT_DIR/mlx-runtime.json" "$BUNDLE_DIR/"
+"$PYTHON" -m pip install --no-deps "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
 
 echo "==> Installing dependencies..."
 # Match the qualified native MiniCPM-V-4.7 processor environment. The former
