@@ -96,10 +96,10 @@ def main():
         ref = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale,
                                                   mask=mask, force_fused=True)
         if total_tokens >= sparse_impl.MIN_CONTEXT:
-            selected = sparse_impl.native.qsa_prefill_direct_topk_buffer(
+            selected = sparse_impl.direct.selected_block_buffer(
                 ids, valid, pos_start=pos_start)
-            got = sparse_impl.native._EXT.qwen4_qsa_sparse_gqa_attention_nax(
-                q, k, v, selected, scale, pos_start)
+            got = sparse_impl.kernels.sparse_online_attention(
+                q, k, v, selected, pos_start, scale)
             diff = got.astype(mx.float32) - ref.astype(mx.float32)
             rms = mx.sqrt(mx.mean(mx.square(diff)))
             reference_rms = mx.sqrt(mx.mean(mx.square(ref.astype(mx.float32))))
