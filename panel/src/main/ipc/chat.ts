@@ -83,6 +83,7 @@ import {
   promptTooLongChatErrorContent,
 } from "../../shared/chatErrorDisplay";
 import {
+  observeVisibleToolMarkup,
   reconcileResponsesToolBufferAtStreamEnd,
   resolveNeverEmptyAssistantAnswer,
   TOOL_CALL_MARKER_LINE_START,
@@ -2817,10 +2818,22 @@ export function registerChatHandlers(
           } catch (_) {}
         };
 
-        // Client-side tool call buffering: suppress content when leaked tool call XML detected.
-        // Must check RAW content before template token stripping, since markers like
-        // <minimax:tool_call> get stripped by TEMPLATE_TOKEN_REGEX and never reach fullContent.
+        // Tool call generation in progress, signalled either by the server
+        // (Responses `response.heartbeat` / `tool_call_generating`) or by leaked
+        // markup detected below. Drives the "Generating tool call" status, the
+        // stall watchdog and stream-end reconciliation.
         let clientToolCallBuffering = false;
+        // Client-side markup suppression: set ONLY when this client sees leaked
+        // tool-call XML in the RAW visible text. Must check RAW content before
+        // template token stripping, since markers like <minimax:tool_call> get
+        // stripped by TEMPLATE_TOKEN_REGEX and never reach fullContent.
+        // A server heartbeat is not markup: the server withholds native markup
+        // itself and, at stream end, sends the prose that shared a delta with
+        // the first marker as ordinary output_text. Suppressing on the
+        // heartbeat dropped that prose from the bubble and from the history
+        // replayed on the next tool step ("...waiting" for "...waiting for
+        // each result.").
+        let clientToolMarkupBuffering = false;
         // Set when the Responses reconciler rejects an all-markup terminal
         // payload. Never rendered; drives the never-empty notice at finalize.
         let rejectedControlMarkupText = "";
@@ -2874,26 +2887,27 @@ export function registerChatHandlers(
             rawAccumulated += delta;
             // Only activate buffering when tool call markers appear at the start of a line,
             // not when the model is explaining tool syntax in prose (e.g., "I'll use <tool_call>...")
-            if (!clientToolCallBuffering) {
-              // Catch real tool call formats and common hallucinated tool-call tags.
-              // Use trailing window (last 200 chars) to avoid O(n) regex on full response
-              const lineStartPattern = TOOL_CALL_MARKER_LINE_START;
-              const searchWindow =
-                rawAccumulated.length > 200
-                  ? rawAccumulated.slice(-200)
-                  : rawAccumulated;
-              if (lineStartPattern.test(searchWindow)) {
-                clientToolCallBuffering = true;
-                console.log(`[CHAT] Client-side tool call buffering activated`);
-                emitToolStatus(
-                  "generating",
-                  "",
-                  "Generating tool call...",
-                  toolIteration,
-                );
-              }
+            // Catch real tool call formats and common hallucinated tool-call tags.
+            const observed = observeVisibleToolMarkup(
+              {
+                generating: clientToolCallBuffering,
+                markupDetected: clientToolMarkupBuffering,
+              },
+              rawAccumulated,
+              TOOL_CALL_MARKER_LINE_START,
+            );
+            clientToolCallBuffering = observed.state.generating;
+            clientToolMarkupBuffering = observed.state.markupDetected;
+            if (observed.startedGenerating) {
+              console.log(`[CHAT] Client-side tool call buffering activated`);
+              emitToolStatus(
+                "generating",
+                "",
+                "Generating tool call...",
+                toolIteration,
+              );
             }
-            suppressVisibleToolDelta = clientToolCallBuffering;
+            suppressVisibleToolDelta = observed.suppress;
           }
 
           // Strip any leaked chat template tokens from the delta
@@ -3706,6 +3720,7 @@ export function registerChatHandlers(
                         toolIteration,
                       );
                       clientToolCallBuffering = false;
+                      clientToolMarkupBuffering = false;
                       try {
                         await rdr.cancel();
                       } catch (_) {}
@@ -3782,6 +3797,7 @@ export function registerChatHandlers(
           if (!reconciliation.clearSpeculativeBuffering) return;
 
           clientToolCallBuffering = false;
+          clientToolMarkupBuffering = false;
           if (reconciliation.rejectedControlMarkup) {
             // Retained (never rendered as prose) so the finalizer can tell the
             // user why this turn has no answer instead of leaving it blank.
@@ -4473,6 +4489,7 @@ export function registerChatHandlers(
               ? allGeneratedContent.length + 2
               : 0;
             clientToolCallBuffering = false;
+            clientToolMarkupBuffering = false;
             clientSideThinkParsing = false;
             clientSideThinkHoldback = "";
             cumulativeTokenOffset += iterationTokenCount; // Save completed iteration tokens for cumulative total
@@ -4580,6 +4597,7 @@ export function registerChatHandlers(
             seenResponsesApiEvents.clear();
             lastFinishReason = undefined; // Reset for next iteration
             clientToolCallBuffering = false;
+            clientToolMarkupBuffering = false;
             clientSideThinkParsing = false;
             clientSideThinkHoldback = "";
             receivedToolCalls = [];
