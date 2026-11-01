@@ -64,9 +64,7 @@ miniaudio==1.71
 mlx-audio==0.5.8
 mlx-embeddings==0.1.0
 mlx-lm==0.31.3
-mlx-metal==0.32.3
 mlx-vlm==0.5.0
-mlx==0.32.3
 more-itertools==11.0.2
 mpmath==1.3.0
 msgpack==1.2.3

@@ -291,3 +291,17 @@ def test_dspark_stream_ending_mid_block_leaves_exactly_the_emitted_tokens(eos_at
     pos = {int(c.offset) for c in last.prompt_cache}
     assert pos <= {len(prompt) + len(out)} or pos <= {len(prompt) + len(out) - 1}, pos
     assert max(pos) <= len(prompt) + len(out)
+
+
+def test_dspark_cut_segment_that_fits_runs_as_one_chunk():
+    """With the adaptive chooser, a cut segment that fits the chosen width is one forward: every segment row is a
+    body row, so the chooser is asked for b - a + 1 tokens (a b - a request would split it (b - a - 1) + 1)."""
+    if DSV41DSparkGenerator not in _gens():
+        pytest.skip("jang_tools DSparkRunner.prefill has no cuts")
+    pos, prompt = 20, list(range(20, 61))
+    rt, _, gen = _make(DSV41DSparkGenerator, step=2048)
+    gen._chunk_chooser._gc_line = lambda: 100 << 30   # ample headroom: the chooser's widest width applies
+    gen._chunk_chooser._active = lambda: 1 << 30
+    _run(gen, prompt, cuts=[pos])
+    prefill = [(p, len(ids)) for p, ids in rt.forwards if p < len(prompt)]
+    assert prefill == [(0, pos), (pos, len(prompt) - 1 - pos), (len(prompt) - 1, 1)]

@@ -72,6 +72,36 @@ def test_ram_clear_preserves_disk(monkeypatch):
     assert store.entries == {}
 
 
+@pytest.mark.parametrize('include_ssd', [False, True])
+def test_clear_before_first_request_after_restart(tmp_path, monkeypatch, include_ssd):
+    from vmlx_engine.utils.glm_prefix_disk_store import GlmPrefixDiskStore
+
+    owned = GlmPrefixDiskStore(tmp_path, 'loaded-bundle', 65536)
+    neighbor = GlmPrefixDiskStore(tmp_path, 'other-bundle', 65536)
+    try:
+        owned.save('a' * 40, 3, lambda path: path.write_bytes(b'owned'))
+        neighbor.save('b' * 40, 3, lambda path: path.write_bytes(b'neighbor'))
+        owned.close()
+        # Startup configures the disk namespace, but opens no PrefixStore
+        # until the first inference request.
+        monkeypatch.setattr(runtime, '_PREFIX_STORES', {})
+        monkeypatch.setattr(runtime, '_PREFIX_DISK', {
+            'root': str(tmp_path), 'max_bytes': 65536,
+            'model_key': 'loaded-bundle',
+        })
+        assert runtime.clear_sessions(include_ssd) == int(include_ssd)
+        reopened = GlmPrefixDiskStore(tmp_path, 'loaded-bundle', 65536)
+        try:
+            assert reopened.contains('a' * 40, 3) is (not include_ssd)
+            assert neighbor.contains('b' * 40, 3)
+            assert runtime._PREFIX_STORES == {}
+        finally:
+            reopened.close()
+    finally:
+        owned.close()
+        neighbor.close()
+
+
 def test_loaded_bundle_selects_native_cache_owner(monkeypatch):
     from vmlx_engine import server, dflash2_runtime
     for family in ('glm5_next', 'glm5_next_text'):

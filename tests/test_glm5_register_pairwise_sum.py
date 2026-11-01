@@ -146,6 +146,9 @@ def test_explicit_non_one_preserves_disable(monkeypatch, value):
     ("Apple M5 Pro", "0.32.2", True, False),
     ("Apple M3 Ultra", "0.32.2", True, False),
     ("Apple M5 Max", "0.32.3", True, True),
+    ("Apple M5 Max", "0.32.5.dev20261101+360078a8", True, True),
+    ("Apple M5 Ultra", "0.32.5.dev20261101+360078a8", True, False),
+    ("Apple M5 Max", "0.32.5.dev20261101+360078a8", False, False),
     ("Apple M5 Max", "0.32.4", True, False),
     ("Apple M5 Max", "0.33.0", True, False),
     ("Apple M5 Pro", "0.32.3", True, False),
@@ -196,6 +199,8 @@ def test_automatic_selection_does_not_promote_batched_prefill(monkeypatch, batch
 @pytest.mark.parametrize("version,device,expected", [
     ("0.32.2", "Apple M5 Max", True),
     ("0.32.3", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M5 Ultra", False),
     ("0.32.2", "Apple M5 Pro", True),
     ("0.32.3", "Apple M5 Pro", False),
     ("0.32.3", "Apple M5 Ultra", False),

@@ -1577,10 +1577,15 @@ def test_minimax_m3_vl_preprocess_builds_native_video_tensors(monkeypatch):
             }
 
     monkeypatch.setattr(m3_vl_preprocess, "_get_processor", lambda _path: _Processor())
+    def load_video(_videos, *, metadata_out):
+        metadata_out.append({"total_num_frames": 8, "fps": 4.0,
+                             "frames_indices": [0, 2, 4, 7]})
+        return [[object(), object(), object(), object()]]
+
     monkeypatch.setattr(
         m3_vl_preprocess,
         "_load_pil_videos",
-        lambda _videos: [[object(), object(), object(), object()]],
+        load_video,
     )
 
     result = m3_vl_preprocess.preprocess_m3_vl_messages(
@@ -1607,7 +1612,10 @@ def test_minimax_m3_vl_preprocess_builds_native_video_tensors(monkeypatch):
     assert video_values.shape == (4, 3, 4)
     assert video_grid.tolist() == [[4, 1, 1]]
     assert seen["messages"][0]["content"][0] == {"type": "video"}
-    assert seen["processor_kwargs"]["videos_kwargs"] == {"do_resize": True}
+    assert seen["processor_kwargs"]["videos_kwargs"] == {
+        "do_resize": True, "video_metadata": [{"total_num_frames": 8,
+        "fps": 4.0, "frames_indices": [0, 2, 4, 7]}],
+    }
     assert len(seen["processor_kwargs"]["videos"][0]) == 4
 
 

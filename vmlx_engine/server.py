@@ -19300,7 +19300,10 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["_vmlx_tools_present"] = True
 
     # Extract messages (same logic as create_chat_completion)
-    if engine.is_mllm:
+    if engine.is_mllm or (
+        (_m3_vl_media_ok(engine) or _dsv41_vl_media_ok(engine))
+        and _messages_have_multimodal(chat_req.messages)
+    ):
         messages = []
         for msg in chat_req.messages:
             if hasattr(msg, "model_dump"):
@@ -21436,7 +21439,10 @@ async def create_chat_completion(
 
     engine = get_engine()
     _chat_requested_modalities = _messages_requested_modalities(request.messages)
-    if _chat_requested_modalities and _m3_vl_media_ok(engine):
+    _m3_preserve_media_turns = bool(
+        _chat_requested_modalities and _m3_vl_media_ok(engine)
+    )
+    if _m3_preserve_media_turns:
         # M3 VL media is served by the text-routed M3 path.
         _chat_requested_modalities = {
             m for m in _chat_requested_modalities
@@ -21456,7 +21462,9 @@ async def create_chat_completion(
 
     # For MLLM models, keep original messages with embedded images
     # (MLLM.chat() extracts images from message content internally)
-    if engine.is_mllm:
+    if engine.is_mllm or _m3_preserve_media_turns:
+        # Native M3 preprocessing also needs the original media placement.
+        # Flattening would move historical images into the latest video turn.
         # Convert Pydantic messages to dicts, excluding None fields.
         # CRITICAL: model_dump() without exclude_none includes ALL optional fields
         # (e.g. image_url=None on text items). The Jinja2 chat template checks

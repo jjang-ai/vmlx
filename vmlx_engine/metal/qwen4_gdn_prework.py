@@ -43,7 +43,7 @@ def gdn_prework_requested():
 @lru_cache(maxsize=1)
 def _compatible_runtime():
     try:
-        return (importlib.metadata.version("mlx") in ("0.32.2", "0.32.3")
+        return (importlib.metadata.version("mlx") in ("0.32.2", "0.32.3", "0.32.5.dev20261101+360078a8")
                 and mx.device_info().get("device_name") == "Apple M5 Max")
     except (importlib.metadata.PackageNotFoundError, RuntimeError, OSError):
         return False
@@ -143,7 +143,7 @@ _SOURCE = r'''
 def _source_for_version(version):
     if version == "0.32.2":
         return _SOURCE
-    if version != "0.32.3":
+    if version not in ("0.32.3", "0.32.5.dev20261101+360078a8"):
         raise ValueError("unqualified Qwen GDN prework MLX version")
     # MLX 0.32.3 Sigmoid uses precise::exp and its native expression
     # promotion. Half exponential/denominator temporaries change its bits.
@@ -163,7 +163,7 @@ def _kernel():
     version = importlib.metadata.version("mlx")
     source = _source_for_version(version)
     return mx.fast.metal_kernel(
-        name="vmlx_qwen4_gdn_prework_f16_f32coeff_v1_" + version.replace(".", "_"),
+        name="vmlx_qwen4_gdn_prework_f16_f32coeff_v1_" + version.replace(".", "_").replace("+", "_"),
         input_names=["qkv", "a", "b", "history", "weight", "A_log", "dt_bias",
                      "axis", "eps", "scales"],
         output_names=["q", "k", "v", "next_history", "g", "beta"],

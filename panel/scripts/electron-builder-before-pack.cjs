@@ -49,14 +49,15 @@ const R20_CODESIGN_IDENTITY =
 // that include the "Developer ID Application:" certificate-type prefix.
 const R20_CSC_NAME = "ShieldStack LLC (55KGF2S5AY)";
 const R20_FIXED_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+const MLX_RUNTIME_SPEC = require("./mlx-runtime.json");
 const R20_RUNTIME_CONTRACTS = {
   sequoia: {
     mlx_wheel_platform: "macosx_14_0_arm64",
-    minimum_system_version: "14.5.0",
+    minimum_system_version: MLX_RUNTIME_SPEC.platforms.macosx_14_0_arm64.minimum_system_version,
   },
   tahoe: {
     mlx_wheel_platform: "macosx_26_0_arm64",
-    minimum_system_version: "26.0.0",
+    minimum_system_version: MLX_RUNTIME_SPEC.platforms.macosx_26_0_arm64.minimum_system_version,
   },
 };
 const R20_PINNED_TOOL_NAMES = [

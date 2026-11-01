@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
+from functools import partial
 from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,17 @@ def _get_processor(model_path: str):
     from transformers import AutoProcessor
 
     proc = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+    video_processor = getattr(proc, "video_processor", None)
+    if video_processor is not None:
+        preprocess = video_processor._preprocess
+        rgb = inspect.signature(preprocess).parameters.get("do_convert_rgb")
+        if rgb is not None and rgb.default is inspect.Parameter.empty:
+            # Recent Transformers converts RGB before _preprocess and consumes
+            # this option. Older MiniMax bundles still require the argument.
+            # Bind the processor's own default; explicit callers can override it.
+            video_processor._preprocess = partial(
+                preprocess, do_convert_rgb=video_processor.do_convert_rgb
+            )
     _PROCESSOR_CACHE[model_path] = proc
     return proc
 
@@ -85,7 +98,10 @@ def _load_pil_images(images: List[Any]):
     return out
 
 
-def _load_pil_videos(videos: List[Any], *, max_frames: int | None = None):
+def _load_pil_videos(
+    videos: List[Any], *, max_frames: int | None = None,
+    metadata_out: Optional[List[dict]] = None,
+):
     """Resolve video inputs to bounded RGB frame lists for the M3 processor.
 
     The bundled processor delegates path decoding to PyAV, which is not shipped
@@ -113,7 +129,9 @@ def _load_pil_videos(videos: List[Any], *, max_frames: int | None = None):
             raise ValueError(f"M3 VL: failed to open video input {path!r}")
 
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
         frames = []
+        frame_indices = []
         if frame_count > 0:
             indices = np.linspace(
                 0,
@@ -127,17 +145,25 @@ def _load_pil_videos(videos: List[Any], *, max_frames: int | None = None):
                 if not ok:
                     continue
                 frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+                frame_indices.append(int(index))
         else:
             while len(frames) < max_frames:
                 ok, frame = cap.read()
                 if not ok:
                     break
                 frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+                frame_indices.append(len(frame_indices))
         cap.release()
 
         if not frames:
             raise ValueError(f"M3 VL: video input {path!r} produced no frames")
         decoded.append(frames)
+        if metadata_out is not None:
+            metadata_out.append({
+                "total_num_frames": frame_count or len(frames),
+                "fps": fps if fps > 0 else None,
+                "frames_indices": frame_indices,
+            })
     return decoded
 
 
@@ -203,6 +229,7 @@ def preprocess_m3_vl_messages(
     extra_videos: Optional[List[Any]] = None,
     add_generation_prompt: bool = True,
     enable_thinking: Optional[bool] = None,
+    tools: Optional[List[dict]] = None,
 ) -> Optional[Tuple[List[int], Any, Any, Any, Any]]:
     """Template messages and return text ids plus image/video tensors.
 
@@ -273,6 +300,8 @@ def preprocess_m3_vl_messages(
         tmpl_kwargs = {"thinking_mode": "enabled"}
     else:
         tmpl_kwargs = {"thinking_mode": "adaptive"}
+    if tools:
+        tmpl_kwargs["tools"] = tools
     try:
         txt = tok.apply_chat_template(
             norm_msgs,
@@ -286,10 +315,14 @@ def preprocess_m3_vl_messages(
             norm_msgs,
             add_generation_prompt=add_generation_prompt,
             tokenize=False,
+            **({"tools": tools} if tools else {}),
         )
 
     pil_images = _load_pil_images(raw_images) if raw_images else []
-    pil_videos = _load_pil_videos(raw_videos) if raw_videos else []
+    video_metadata: List[dict] = []
+    pil_videos = (
+        _load_pil_videos(raw_videos, metadata_out=video_metadata) if raw_videos else []
+    )
     proc_kwargs = {"text": [txt], "return_tensors": "np"}
     if pil_images:
         proc_kwargs["images"] = pil_images
@@ -297,7 +330,12 @@ def preprocess_m3_vl_messages(
         proc_kwargs["videos"] = pil_videos
         # The bundle's processor defaults video resizing off, but arbitrary UI
         # clips are not guaranteed to be multiples of patch_size*merge_size.
-        proc_kwargs["videos_kwargs"] = {"do_resize": True}
+        proc_kwargs["videos_kwargs"] = {
+            "do_resize": True,
+            # The native processor renders timestamps from the source FPS and
+            # sampled indices. In-memory PIL frames alone lose this timeline.
+            "video_metadata": video_metadata,
+        }
     out = proc(**proc_kwargs)
     ids = np.asarray(out["input_ids"][0]).astype(np.int64)
     input_ids = [int(x) for x in ids.tolist()]

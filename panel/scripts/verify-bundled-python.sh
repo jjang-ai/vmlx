@@ -325,17 +325,19 @@ if [ "$RELEASE_SCOPE" = "r20_production" ] && [ -z "$EXPECTED_MLX_WHEEL_PLATFORM
   exit 1
 fi
 EXPECTED_MLX_VERSION="$(
-  sed -n 's/^MLX_VERSION="\([^"]*\)"/\1/p' "$PANEL/scripts/bundle-python.sh" \
-    | head -1
+  run_bundled_python "$PANEL/scripts/mlx-runtime.py" version
 )"
 if [ -z "$EXPECTED_MLX_VERSION" ]; then
-  echo "❌ RELEASE BLOCKED — cannot resolve the pinned MLX version from bundle-python.sh"
+  echo "❌ RELEASE BLOCKED — cannot resolve the pinned MLX runtime specification"
   exit 1
 fi
 run_bundled_python - \
   "$PROVENANCE_FILE" \
   "$EXPECTED_MLX_WHEEL_PLATFORM" \
-  "$EXPECTED_MLX_VERSION" <<'PYEOF'
+  "$EXPECTED_MLX_VERSION" \
+  "$PANEL/scripts/mlx-runtime.json" \
+  "$BUNDLE_ROOT" <<'PYEOF'
+import hashlib
 import importlib.metadata
 import json
 import pathlib
@@ -344,6 +346,22 @@ import sys
 provenance = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = sys.argv[2] or provenance.get("mlx_wheel_platform", "")
 expected_version = sys.argv[3]
+spec_path = pathlib.Path(sys.argv[4])
+bundle_root = pathlib.Path(sys.argv[5])
+spec_bytes = spec_path.read_bytes()
+spec = json.loads(spec_bytes)
+if (bundle_root / "mlx-runtime.json").read_bytes() != spec_bytes:
+    raise SystemExit("bundled MLX specification differs from the release source")
+mlx_receipt = json.loads((bundle_root / "mlx-wheel-provenance.json").read_text())
+for key, value in {
+    "runtime_spec_sha256": hashlib.sha256(spec_bytes).hexdigest(),
+    "version": expected_version, "source": spec["source"],
+    "platform": expected, "target": spec["platforms"].get(expected),
+}.items():
+    if mlx_receipt.get(key) != value:
+        raise SystemExit(f"bundled MLX wheel provenance mismatch: {key}")
+if len(mlx_receipt.get("wheels", [])) != 2:
+    raise SystemExit("bundled MLX provenance must identify both wheel hashes")
 if expected not in {"macosx_14_0_arm64", "macosx_26_0_arm64"}:
     raise SystemExit(f"invalid expected MLX wheel platform: {expected!r}")
 if provenance.get("mlx_wheel_platform") != expected:

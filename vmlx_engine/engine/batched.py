@@ -580,6 +580,7 @@ class BatchedEngine(BaseEngine):
         videos: list | None,
         *,
         enable_thinking: bool | None = None,
+        tools: list[dict] | None = None,
     ):
         """Run the MiniMax processor for image and/or video content."""
         from ..models.minimax_m3.m3_vl_preprocess import preprocess_m3_vl_messages
@@ -589,10 +590,11 @@ class BatchedEngine(BaseEngine):
         )
         return preprocess_m3_vl_messages(
             model_path,
-            messages,
+            self._normalize_tool_call_arguments_for_template(messages),
             extra_images=images or None,
             extra_videos=videos or None,
             enable_thinking=enable_thinking,
+            tools=tools,
         )
 
     def _dsv41_vl_active(self, images: list | None) -> bool:
@@ -3199,6 +3201,7 @@ class BatchedEngine(BaseEngine):
                 all_images,
                 all_videos,
                 enable_thinking=thinking_enabled,
+                tools=template_tools,
             )
             if _m3 is not None:
                 _ids, _pv, _grid, _pv_video, _video_grid = _m3
@@ -3404,6 +3407,7 @@ class BatchedEngine(BaseEngine):
                 all_images,
                 all_videos,
                 enable_thinking=thinking_enabled,
+                tools=template_tools,
             )
             if _m3 is not None:
                 _ids, _pv, _grid, _pv_video, _video_grid = _m3

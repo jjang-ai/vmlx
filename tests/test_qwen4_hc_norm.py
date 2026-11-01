@@ -140,6 +140,8 @@ def test_native_fp16_primitive_bit_parity(pattern):
 @pytest.mark.parametrize("version,device,expected", [
     ("0.32.2", "Apple M5 Max", True),
     ("0.32.3", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M4 Max", False),
     ("0.32.4", "Apple M5 Max", False),
     ("0.32.3", "Apple M5 Ultra", False),
     ("0.32.3", "Apple M4 Max", False),

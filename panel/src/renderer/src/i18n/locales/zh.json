@@ -1124,6 +1124,8 @@
       "dflash2AdaptiveBlockNote": "DFlash2 自适应选择验证宽度。初始草稿宽度设置不适用。",
       "ramCopyWithSsd": "同时保留 RAM 副本 (RAM + SSD)",
       "ramCopyWithSsdTooltip": "在块磁盘缓存之前把缓存块保留在统一内存中：命中时从 RAM 恢复，SSD 副本在重启后仍然保留。最多使用缓存内存上限 / 缓存内存 % 的 RAM。关闭 = 仅 SSD。",
+      "cacheTierNativeSsd": "缓存层：原生 SSD。提示状态持久保存在 SSD 上，重启后可恢复。正在处理的请求也可能使用 RAM。",
+      "cacheTierNativeRam": "缓存层：仅原生 RAM。内存中的提示状态会在重启后丢失。启用 Block Disk Cache 可将其持久保存在 SSD 上。",
       "cacheTierOff": "缓存层：关闭（不复用前缀）。",
       "cacheTierRamOnly": "缓存层：仅 RAM。前缀缓存位于统一内存中（缓存内存上限 / %），重启后丢失。开启块磁盘缓存以使用 SSD。",
       "cacheTierSsdOnly": "缓存层：仅 SSD。前缀块持久化到 SSD 并从 SSD 恢复，不保留 RAM 副本。开启“同时保留 RAM 副本”即为 RAM + SSD。",

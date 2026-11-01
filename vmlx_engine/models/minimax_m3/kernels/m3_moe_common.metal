@@ -88,31 +88,17 @@ inline void jt_xload(const device float* xp, thread half2* xh, thread float& xi,
 }
 
 // ------------------------------------------------------------------------------------------------ affine 4-bit qmv
-// MLX quantized.h load_vector<T, float, 16, 4> and qdot<float, 16, 4> (bits = 4, values_per_thread = 16).
+// Use the installed MLX helpers supplied by fused_moe.metal_source, with the
+// qmv traversal checked by row_exact_qmv. In particular, newer MLX promotes
+// inputs before summing the affine bias term; copying the old expression here
+// would make fused decode differ from the shared expert's row-exact verify.
 template <typename T>
 inline float aq4_load_vector(const device T* x, thread float* x_thread) {
-  float sum = 0;
-  for (int i = 0; i < 16; i += 4) {
-    sum += x[i] + x[i + 1] + x[i + 2] + x[i + 3];
-    x_thread[i] = x[i];
-    x_thread[i + 1] = x[i + 1] / 16.0f;
-    x_thread[i + 2] = x[i + 2] / 256.0f;
-    x_thread[i + 3] = x[i + 3] / 4096.0f;
-  }
-  return sum;
+  return load_vector<T, float, 16, 4>(x, x_thread);
 }
 
 inline float aq4_qdot(const device uint8_t* w, const thread float* x_thread, float scale, float bias, float sum) {
-  float accum = 0;
-  const device uint16_t* ws = (const device uint16_t*)w;
-  for (int i = 0; i < 4; i++) {
-    accum +=
-        (x_thread[4 * i] * (ws[i] & 0x000f) +
-         x_thread[4 * i + 1] * (ws[i] & 0x00f0) +
-         x_thread[4 * i + 2] * (ws[i] & 0x0f00) +
-         x_thread[4 * i + 3] * (ws[i] & 0xf000));
-  }
-  return scale * accum + sum * bias;
+  return qdot<float, 16, 4>(w, x_thread, scale, bias, sum);
 }
 
 // ------------------------------------------------------------------------------------------------ SwiGLU-OAI

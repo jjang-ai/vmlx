@@ -14,6 +14,13 @@ from vmlx_engine.engine.base import GenerationOutput
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("finish", ["stop", "length"])
 @pytest.mark.parametrize("parser,text,tool_policy", [
+    pytest.param(
+        "minimax_m3",
+        ']<]minimax[>[<tool_call>name="file_info">\n'
+        '<parameter name="path">report.md</parameter>\n</invoke>\n'
+        '{"status": "success"}',
+        "auto", id="minimax-m3-malformed-native",
+    ),
     ("auto", "<tool_call>UNSAFE_ORPHAN_SUFFIX", "auto"),
     ("auto", '<tool_call>{"name":"unavailable_tool","arguments":{"path":"x"}}</tool_call>', "auto"),
     ("auto", '<tool_call>{"name":"file_info","arguments":{}}</tool_call>', "auto"),

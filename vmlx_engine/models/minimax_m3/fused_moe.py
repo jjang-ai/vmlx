@@ -67,7 +67,12 @@ def enabled() -> bool:
 
 def metal_source(name: str) -> tuple[str, str]:
     """(header, body) of a kernel, exactly as handed to mx.fast.metal_kernel (and MLXFast.metalKernel)."""
-    return (KDIR / "m3_moe_common.metal").read_text(), (KDIR / f"{name}.metal").read_text()
+    from vmlx_engine.metal.row_exact_qmv import _mlx_qmv_header
+
+    upstream = _mlx_qmv_header()
+    if upstream is None:
+        raise RuntimeError("Fused MiniMax MoE requires compatible installed MLX QMV headers")
+    return upstream + "\n" + (KDIR / "m3_moe_common.metal").read_text(), (KDIR / f"{name}.metal").read_text()
 
 
 @functools.lru_cache(maxsize=None)
@@ -110,6 +115,10 @@ def _affine4(q) -> bool:
 def supported(block, x: mx.array) -> bool:
     """The fused kernels' contract: a JANGT (gate/up and down) SwiGLU-OAI routed stack, an affine-4 / group-64
     shared expert, an fp32 router with top-k > 1 normalized, n_group 1, 1..16 rows, bf16 / fp16 activations."""
+    from vmlx_engine.metal.row_exact_qmv import _mlx_qmv_header
+
+    if _mlx_qmv_header() is None:
+        return False
     sw = getattr(block, "switch_mlp", None)
     if sw is None or not getattr(sw, "is_jangt", False) or sw.gu_fmt != "jangt" or sw.dn_fmt != "jangt":
         return False

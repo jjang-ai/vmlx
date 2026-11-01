@@ -139,6 +139,14 @@ class MiniMaxM3ToolParser(ToolParser):
     NATIVE_MARKERS = ("]<]minimax[>[",)
 
     SUPPORTS_NATIVE_TOOL_FORMAT = True
+    STRICT_NATIVE_TOOL_FORMAT = True
+    SUPPRESS_INVALID_NATIVE_MARKUP = True
+
+    def _safe_invalid_protocol_content(self, text: str) -> str:
+        cleaned = self._strip_noise(text)
+        # Preserve preceding prose, never promote malformed control or a
+        # model-authored result after it into an executable call or answer.
+        return re.split(r"</?(?:tool_call|invoke)\b", cleaned, maxsplit=1)[0].strip()
 
     def _strip_noise(self, text: str) -> str:
         text = text.replace(NS_TOKEN, "")
@@ -169,7 +177,8 @@ class MiniMaxM3ToolParser(ToolParser):
 
         if "<invoke" not in cleaned:
             return ExtractedToolCallInformation(
-                tools_called=False, tool_calls=[], content=cleaned
+                tools_called=False, tool_calls=[],
+                content=self._safe_invalid_protocol_content(model_output),
             )
 
         blocks = _TOOLCALL_RE.findall(cleaned)
@@ -183,7 +192,8 @@ class MiniMaxM3ToolParser(ToolParser):
         tool_calls = self._invokes_to_calls(search_space)
         if not tool_calls:
             return ExtractedToolCallInformation(
-                tools_called=False, tool_calls=[], content=cleaned
+                tools_called=False, tool_calls=[],
+                content=self._safe_invalid_protocol_content(model_output),
             )
 
         # Content = everything outside the tool_call wrapper.
