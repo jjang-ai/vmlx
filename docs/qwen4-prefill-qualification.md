@@ -8,12 +8,12 @@ measured on the serving host.
 | --- | --- | --- |
 | `VMLX_QWEN4_GDN_BLOCKED_PREFILL` | Blocked gated-delta prefill | Supported head shapes and dtypes, at least 16 tokens; existing path otherwise |
 | `VMLX_QWEN4_VERIFY_SDPA` | Sparse QK, stock softmax, tail-aligned sparse PV | Batch 1, 3–4 queries, context at least 8192, 24 query / 2 KV heads, head dimension 256, fp16/bf16 |
-| `VMLX_QWEN4_PREFILL_DIRECT` | Native sparse QSA prefill | Evaluation prefills of at least 256 rows and context at least 8192, supported geometry, compatible built extension; existing path otherwise |
+| `VMLX_QWEN4_PREFILL_DIRECT` | Sparse-score QSA prefill (selected-key QK only, stock softmax/PV) | Evaluation prefills of at least 256 rows and context at least 8192, supported geometry, NAX-capable GPU, passed bit-exact preflight; existing path otherwise |
 | `VMLX_QWEN4_COALESCE_PREFILL_CHECKPOINTS` | One lazy graph preserving stock segments and SSM/PLE checkpoints | Fresh batch-1 short requests with two supported boundaries through 4096; existing split prefill otherwise |
 | `VMLX_QWEN4_ALIGNED_MOE_PREFILL` | Expert-aligned q4 prefill tiles | Stock evaluation SwitchGLU, 512 experts / top-10, 2560→640→2560 affine q4/group-64, fp16/bf16, 4096–10240 routed rows; qualified MLX 0.32.2 headers required, stock fallback otherwise |
 
 The flags default to off. Prefix-cache identities include the effective math
-flags and, for direct prefill, the native artifact content identity. Cache
+flags and, for the sparse QSA lanes, an identity of the in-tree kernel math. Cache
 state from incompatible configurations must not be reused. Coalescing errors
 propagate after temporary checkpoint attributes are removed; they must not
 retry the already mutated cache as another prefill.
@@ -36,17 +36,16 @@ Current eligibility is MLX 0.32.2 on `applegpu_g17s`, batch 1, FP16,
 256–4096 query rows and 32768–131072 logical context tokens. Other shapes
 retain their existing path; these are dispatch bounds, not context limits.
 There is no change to decode, MTP, quantization, selection, or cache format.
-The flag and native artifact identity separate prefix-cache namespaces.
+The flag and the kernel-math identity separate prefix-cache namespaces.
 
-An ABI check and nonzero, bit-exact current-SDPA preflight run before this
+A nonzero, bit-exact current-SDPA preflight runs before this
 consumer can receive selected blocks. A failed preflight leaves stock active.
 An execution error after cache mutation propagates; it never retries that
 chunk against the mutated cache. Component thresholds do not replace
 full-model quality, cache, UI/API and performance qualification.
 
 Use the existing component benchmark with `--stock-path runtime --candidate
-nax` to compare against today's fused masked path. `--candidate fused` denotes
-the older SIMD implementation, which failed the full-model numerical gate.
+online` to compare against today's fused masked path.
 Numerical differences
 are reported, not silently treated as exactness or product acceptance.
 The same-weight gate can isolate this experiment with `--arms sparse_fused
@@ -54,22 +53,19 @@ The same-weight gate can isolate this experiment with `--arms sparse_fused
 production-admission claim is made for this experimental flag.
 
 For numerical diagnosis, `--arms sparse_oracle` preserves the selected-block
-route but reconstructs a mask for stock fused SDPA. It compares the native
+route but reconstructs a mask for stock fused SDPA. It compares the sparse
 consumer on the same real tensors without propagating its result, separating
 consumer arithmetic from the surrounding route. Optional `--attention-fixture`
 saves the first real attention inputs for component-only investigation.
 `--arms repeat` checks stock-versus-stock repeatability. These controls are not
 performance or product-admission receipts.
 
-### Optional extension build
+### Sparse QSA kernels
 
-Use an isolated serving environment with the repository lockfile. For the
-optional native QSA extension, follow
-[`VMLX_INTEGRATION.md`](../native_extensions/qsa_kernels/VMLX_INTEGRATION.md).
-The current extension requires MLX 0.32.2 and nanobind 2.15.0 at build time.
-Build it with the serving Python; rebuild after an MLX/Python change. The main
-vMLX wheel remains pure Python and does not implicitly install the extension.
-Imported source notices and licenses accompany their respective packages.
+Both sparse QSA lanes use `vmlx_engine/metal/qwen4_qsa_sparse_kernels.py`,
+compiled at first use through `mx.fast.metal_kernel`; there is no separate
+build step. They require a GPU with NAX matrix units (Apple GPU generation 17+);
+on other GPUs both lanes report unsupported and stock attention runs.
 
 Aligned MoE loads the installed MLX headers lazily and verifies their source
 hashes before compiling a custom Metal kernel. It shares GPU routing metadata
@@ -145,7 +141,7 @@ The commands return a nonzero exit code on failed checks. Inspect every
 recorded result as well as the exit code.
 
 Run the recorded Qwen4, native-MTP, hybrid-prefix/SSM, batch-generator and disk
-cache regression suite with Metal available and the optional extension built.
+cache regression suite with Metal available.
 The manifest is the exact file selection used for the 1,101-test qualification:
 
 ```sh
@@ -157,7 +153,7 @@ Run this after releasing the full serving model, as in the recorded campaign.
 Test counts may change when upstream adds cases; inspect the JUnit report for
 failures, errors, and skips rather than treating the historical count as a gate.
 Check cold/warm cache reuse, reuse after restart, cancellation followed by a
-new request, incompatible native ABI fallback, and clean installed-wheel
+new request, a failed-preflight fallback, and clean installed-wheel
 execution. Record any skipped tests and untested device/OS combinations.
 
 ## Qualification scope

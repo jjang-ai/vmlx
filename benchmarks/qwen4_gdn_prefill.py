@@ -10,8 +10,8 @@ from pathlib import Path
 import mlx.core as mx
 from mlx_lm.models.gated_delta import gated_delta_update as stock
 
-from vmlx_engine.metal.qwen4_gdn_blocked_prefill import (
-    qwen4_blocked_gated_delta_update as candidate,
+from vmlx_engine.metal.qwen4_gdn_tiled_prefill import (
+    qwen4_gated_delta_prefill as candidate,
 )
 
 

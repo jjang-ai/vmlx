@@ -1,11 +1,11 @@
-"""Dispatch invariants for experimental Qwen4 blocked prefill."""
+"""Dispatch invariants for the opt-in Qwen4 staged GDN prefill."""
 
 import mlx.core as mx
 import pytest
 from mlx_lm.models.gated_delta import gated_delta_update as stock
-from vmlx_engine.metal.qwen4_gdn_blocked_prefill import (
-    _normalize_block_t,
-    qwen4_blocked_gated_delta_update as candidate,
+from vmlx_engine.metal.qwen4_gdn_tiled_prefill import (
+    qwen4_gated_delta_prefill as candidate,
+    resolve_token_tile,
 )
 
 
@@ -47,9 +47,9 @@ def test_unsupported_inputs_fall_back(key_dim, masked, monkeypatch):
 
 
 def test_float32_threadgroup_memory_guard():
-    assert _normalize_block_t(None, mx.float32) == 16
+    assert resolve_token_tile(None, mx.float32) == 16
     with pytest.raises(ValueError, match="threadgroup memory"):
-        _normalize_block_t(32, mx.float32)
+        resolve_token_tile(32, mx.float32)
 
 
 @pytest.mark.parametrize("dtype", [mx.float16, mx.bfloat16, mx.float32])

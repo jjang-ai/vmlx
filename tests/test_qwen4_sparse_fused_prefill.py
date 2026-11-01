@@ -1,4 +1,4 @@
-"""Current-SDPA numerical contract, dispatch bounds and native cache isolation."""
+"""Current-SDPA numerical contract, dispatch bounds and kernel-math cache isolation."""
 
 from copy import deepcopy
 from types import SimpleNamespace
@@ -16,7 +16,7 @@ def active(monkeypatch):
     monkeypatch.setattr(fused, "_state", "unproven")
     monkeypatch.setattr(fused, "_first_dispatch", False)
     if not fused.ready():
-        pytest.skip("optional M5/MLX 0.32.2 native kernel unavailable")
+        pytest.skip("measured M5 / MLX 0.32.2 runtime unavailable")
 
 
 def test_off_by_default(monkeypatch):
@@ -35,13 +35,10 @@ def test_failed_preflight_disables_without_retry(monkeypatch):
     monkeypatch.setenv("VMLX_QWEN4_SPARSE_FUSED_PREFILL", "1")
     monkeypatch.setattr(fused, "_state", "unproven")
     monkeypatch.setattr(fused, "_hardware_allowed", lambda: True)
-    monkeypatch.setattr(fused.native, "_lane_unavailable_reason", lambda **kw: None)
-    # Isolate the preflight-failure logic from the build/runtime gates that
-    # ready() checks first (MLX version pin in enabled(), the optional native
-    # extension and its NAX export), which are absent in an unbuilt checkout.
+    monkeypatch.setattr(fused.direct, "lane_unavailable_reason", lambda **kw: None)
+    # Isolate the preflight-failure logic from the runtime gates ready()
+    # checks first (MLX version / GPU pin, matrix units).
     monkeypatch.setattr(fused, "enabled", lambda: True)
-    monkeypatch.setattr(fused.native, "_EXT",
-                        SimpleNamespace(qwen4_qsa_sparse_gqa_attention_nax=lambda *a, **k: None))
     calls = []
     def fail():
         calls.append(1)
@@ -132,8 +129,8 @@ def test_namespace_separates_math_and_artifact(monkeypatch):
     monkeypatch.setenv("VMLX_QWEN4_SPARSE_FUSED_PREFILL","0")
     stock = prefix_cache.compute_model_cache_key(model)
     monkeypatch.setenv("VMLX_QWEN4_SPARSE_FUSED_PREFILL","1")
-    monkeypatch.setattr(prefix_cache,"_qwen4_native_artifact_identity",lambda: "artifact-a")
+    monkeypatch.setattr(prefix_cache,"_qwen4_qsa_kernel_identity",lambda: "math-a")
     first = prefix_cache.compute_model_cache_key(model)
-    monkeypatch.setattr(prefix_cache,"_qwen4_native_artifact_identity",lambda: "artifact-b")
+    monkeypatch.setattr(prefix_cache,"_qwen4_qsa_kernel_identity",lambda: "math-b")
     second = prefix_cache.compute_model_cache_key(model)
     assert len({stock,first,second}) == 3

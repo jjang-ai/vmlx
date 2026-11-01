@@ -1,6 +1,0 @@
-build/
-*.so
-*.dylib
-*.metallib
-*.egg-info/
-__pycache__/

@@ -45,7 +45,7 @@ tests/test_qwen4_exp_multirow_group_gates.py
 tests/test_qwen4_exp_qsa_pool_retention.py
 tests/test_qwen4_exp_qsa_rope_qualification.py
 tests/test_qwen4_exp_runtime.py
-tests/test_qwen4_gdn_blocked_prefill.py
+tests/test_qwen4_gdn_tiled_prefill.py
 tests/test_qwen4_prefill_checkpoints.py
 tests/test_qwen4_prefill_direct.py
 tests/test_qwen4_quality_gate.py
