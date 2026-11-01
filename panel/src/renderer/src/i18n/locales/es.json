@@ -1124,6 +1124,8 @@
       "dflash2AdaptiveBlockNote": "DFlash2 selecciona el ancho de verificación de forma adaptativa. El ajuste de ancho inicial no se aplica.",
       "ramCopyWithSsd": "Mantener una copia en RAM (RAM + SSD)",
       "ramCopyWithSsdTooltip": "Mantiene los bloques de caché en la memoria unificada delante de la Caché de bloques en disco: los aciertos se restauran desde la RAM y la copia en SSD sobrevive a los reinicios. Usa hasta el Límite de memoria de caché / % de memoria de caché. Desactivado = solo SSD.",
+      "cacheTierNativeSsd": "Nivel de caché: SSD nativo. El estado del contexto se guarda en SSD y se restaura tras reiniciar. Las solicitudes activas también pueden usar RAM.",
+      "cacheTierNativeRam": "Nivel de caché: solo RAM nativa. El estado del contexto en memoria se pierde al reiniciar. Active Block Disk Cache para conservarlo en SSD.",
       "cacheTierOff": "Nivel de caché: desactivado (sin reutilización de prefijos).",
       "cacheTierRamOnly": "Nivel de caché: solo RAM. La caché de prefijos vive en la memoria unificada (Límite / % de memoria de caché) y se pierde al reiniciar. Active la Caché de bloques en disco para usar SSD.",
       "cacheTierSsdOnly": "Nivel de caché: solo SSD. Los bloques de prefijos persisten en SSD y se restauran desde él; sin copia retenida en RAM. Active Mantener una copia en RAM para RAM + SSD.",

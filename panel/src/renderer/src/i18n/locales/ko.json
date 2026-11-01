@@ -1124,6 +1124,8 @@
       "dflash2AdaptiveBlockNote": "DFlash2는 검증 폭을 적응적으로 선택합니다. 초기 드래프트 폭 설정은 적용되지 않습니다.",
       "ramCopyWithSsd": "RAM에도 사본 유지 (RAM + SSD)",
       "ramCopyWithSsdTooltip": "캐시 블록을 블록 디스크 캐시 앞단으로 통합 메모리에 유지합니다. 히트는 RAM에서 복원되고 SSD 사본은 재시작 후에도 남습니다. 캐시 메모리 한도 / 캐시 메모리 %까지 RAM을 사용합니다. 끄면 SSD만 사용합니다.",
+      "cacheTierNativeSsd": "캐시 계층: 네이티브 SSD. 프롬프트 상태를 SSD에 저장하고 재시작 후 복원합니다. 처리 중인 요청은 RAM도 사용할 수 있습니다.",
+      "cacheTierNativeRam": "캐시 계층: 네이티브 RAM 전용. 메모리의 프롬프트 상태는 재시작하면 사라집니다. SSD에 유지하려면 Block Disk Cache를 켜세요.",
       "cacheTierOff": "캐시 계층: 꺼짐 (프리픽스 재사용 없음).",
       "cacheTierRamOnly": "캐시 계층: RAM 전용. 프리픽스 캐시는 통합 메모리(캐시 메모리 한도 / %)에 있으며 재시작하면 사라집니다. SSD를 쓰려면 블록 디스크 캐시를 켜세요.",
       "cacheTierSsdOnly": "캐시 계층: SSD 전용. 프리픽스 블록은 SSD에 저장되고 SSD에서 복원되며 RAM 사본은 유지하지 않습니다. RAM + SSD를 쓰려면 'RAM에도 사본 유지'를 켜세요.",

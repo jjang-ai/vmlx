@@ -1124,6 +1124,8 @@
       "dflash2AdaptiveBlockNote": "DFlash2 selects its verification width adaptively. The initial draft width setting does not apply.",
       "ramCopyWithSsd": "Keep a RAM copy (RAM + SSD)",
       "ramCopyWithSsdTooltip": "Keeps the cache blocks in unified memory in front of Block Disk Cache: hits restore from RAM, and the SSD copy survives restarts. Uses up to Cache Memory Limit / Cache Memory % of RAM. Off = SSD only.",
+      "cacheTierNativeSsd": "Cache tier: native SSD. Prompt state persists on SSD and restores after restart. Active requests may also use RAM.",
+      "cacheTierNativeRam": "Cache tier: native RAM only. In-memory prompt state is lost on restart. Turn on Block Disk Cache for SSD persistence.",
       "cacheTierOff": "Cache tier: off (no prefix reuse).",
       "cacheTierRamOnly": "Cache tier: RAM only. The prefix cache lives in unified memory (Cache Memory Limit / %) and is lost on restart. Turn on Block Disk Cache for SSD.",
       "cacheTierSsdOnly": "Cache tier: SSD only. Prefix blocks persist on SSD and restore from it; no retained RAM copy. Turn on Keep a RAM copy for RAM + SSD.",
