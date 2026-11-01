@@ -45,7 +45,8 @@ describe('Console settings and responsive layout contract', () => {
     const form = read('renderer/src/components/sessions/SessionConfigForm.tsx')
     const groups = [...form.matchAll(/<Section [^\n]*sectionKey="([^"]+)"/g)].map(m => m[1])
     expect(groups).toEqual(['server', 'concurrent', 'prefixCache', 'power', 'performance', 'tools', 'specDecode'])
-    expect(form).not.toContain('cacheControlUpdatesForPagedToggle(v')
+    // The RAM copy (RAM + SSD) is the only paged control, inside the prefix-cache group with Block Disk Cache.
+    expect(form).toContain("label={t('sessions.config.ramCopyWithSsd')}")
     expect(form).not.toContain('DistributedNodeList')
     expect(form).toContain('data-vmlx-section="retired-distributed"')
     expect(form).toContain("onChange('distributedEnabled', false)")

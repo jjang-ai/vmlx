@@ -43,7 +43,7 @@ describe('cache control policy', () => {
     ])
   })
 
-  it('fails a paged-cache opt-in closed without changing any SSD/prefix controls', () => {
+  it('turning the RAM copy on turns on the block store it fronts (RAM + SSD), with Prefix Cache', () => {
     const updates = cacheControlUpdatesForPagedToggle(true, {
       continuousBatching: true,
       enablePrefixCache: false,
@@ -52,7 +52,24 @@ describe('cache control policy', () => {
       enableBlockDiskCache: false,
     })
 
-    expect(updates).toEqual([['usePagedCache', false]])
+    expect(updates).toEqual([
+      ['enablePrefixCache', true],
+      ['enableDiskCache', false],
+      ['enableBlockDiskCache', true],
+      ['usePagedCache', true],
+    ])
+  })
+
+  it('turning Block Disk Cache off (RAM only) also drops the RAM copy it fronted', () => {
+    const updates = cacheControlUpdatesForBlockDiskToggle(false, {
+      continuousBatching: true,
+      enablePrefixCache: true,
+      usePagedCache: true,
+      enableDiskCache: false,
+      enableBlockDiskCache: true,
+    })
+
+    expect(updates).toEqual([['usePagedCache', false], ['enableBlockDiskCache', false]])
   })
 
   it('keeps block disk cache when paged RAM is turned off', () => {
@@ -134,27 +151,44 @@ describe('cache control policy', () => {
     expect(policy.enableBlockDiskCache).toBe(false)
   })
 
-  it('launch policy emits block disk cache and keeps paged RAM off despite a saved paged toggle', () => {
-    const policy = resolveCacheLaunchPolicy({
+  it('launch policy runs RAM + SSD only from the saved RAM copy toggle together with block disk cache', () => {
+    const ramSsd = resolveCacheLaunchPolicy({
       continuousBatching: true,
       enablePrefixCache: true,
       usePagedCache: true,
       enableDiskCache: true,
       enableBlockDiskCache: true,
     })
+    expect(ramSsd.prefixCacheOff).toBe(false)
+    expect(ramSsd.effectiveUsePagedCache).toBe(true)
+    expect(ramSsd.enableLegacyDiskCache).toBe(false)
+    expect(ramSsd.enableBlockDiskCache).toBe(true)
 
-    expect(policy.prefixCacheOff).toBe(false)
-    // A saved usePagedCache=true never launches the RAM tier.
-    expect(policy.effectiveUsePagedCache).toBe(false)
-    expect(policy.enableLegacyDiskCache).toBe(false)
-    expect(policy.enableBlockDiskCache).toBe(true)
-  })
-
-  it('launch policy returns effectiveUsePagedCache=false even when the saved toggle AND the architecture both demand paged', () => {
-    const policy = resolveCacheLaunchPolicy({
+    // A saved toggle without the block store it fronts launches no paged RAM.
+    const noBlock = resolveCacheLaunchPolicy({
       continuousBatching: true,
       enablePrefixCache: true,
       usePagedCache: true,
+      enableDiskCache: false,
+      enableBlockDiskCache: false,
+    })
+    expect(noBlock.effectiveUsePagedCache).toBe(false)
+    // Nor for a native speculative lane, which owns its SSD store.
+    expect(resolveCacheLaunchPolicy({
+      continuousBatching: false,
+      nativeSpeculativeCache: true,
+      enablePrefixCache: true,
+      usePagedCache: true,
+      enableDiskCache: false,
+      enableBlockDiskCache: true,
+    }).effectiveUsePagedCache).toBe(false)
+  })
+
+  it('an architecture "requires paged" claim never turns the RAM copy on by itself', () => {
+    const policy = resolveCacheLaunchPolicy({
+      continuousBatching: true,
+      enablePrefixCache: true,
+      usePagedCache: false,
       enableDiskCache: false,
       enableBlockDiskCache: true,
       architectureRequiresPagedCache: true,
@@ -234,8 +268,8 @@ describe('cache control policy', () => {
     })
 
     expect(ui.architectureForcedPagedActive).toBe(false)
-    // The paged control is hard-disabled for every family, hybrid included.
-    expect(ui.pagedCacheDisabled).toBe(true)
+    // The RAM copy is the user's choice for every family, hybrid included: available, not forced.
+    expect(ui.pagedCacheDisabled).toBe(false)
     expect(ui.effectiveUsePagedCache).toBe(false)
     expect(launch.effectiveUsePagedCache).toBe(false)
     expect(launch.enableBlockDiskCache).toBe(true)
