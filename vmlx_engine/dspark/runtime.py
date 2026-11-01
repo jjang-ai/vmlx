@@ -10,9 +10,9 @@ Targets: MiniCPM-V-4.7 (``minicpmv4_7``, the multimodal lane) and MiniMax-M3 / M
 MiniMax ``DSparkMiniMaxDraftModel`` (as released with MXFP8 linears, or pre-quantized).
 
 Draft width (Eric's rule: no hard draft depth): Adaptive picks the width of every round (``generate.ARFallback``:
-acceptance history / confidence head, measured AR fallback). The ladder's top is the target's verify coverage
-(``target.max_verify_rows``) and otherwise twice the drafter's trained block (the DFlash2 lane's ceiling); a round
-drafting past the trained block runs a longer block. Bundle stamps (``speculative.max_draft``, a drafter's
+acceptance history / confidence head, measured AR fallback). A finite target verify coverage
+(``target.max_verify_rows``) is a correctness limit. Otherwise twice the trained block only seeds the ladder:
+a fully accepted, measured winning boundary round opens a deeper probe. Bundle stamps (``speculative.max_draft``, a drafter's
 ``block_size`` / ``dspark_block_size``, any recommended depth) never lower it. Diagnostic env levers only:
 ``VMLX_DSPARK_MAX_DRAFT=<n>`` (ladder top) and ``VMLX_DSPARK_WIDTH=<n>`` (pin every round's width).
 """
@@ -62,11 +62,11 @@ def _env_int(name: str) -> Optional[int]:
 
 
 def ladder_top(target, drafter) -> int:
-    """The widest draft Adaptive may choose: the target's verify coverage, else twice the trained block."""
+    """Initial search horizon, or the target's finite verify coverage; never a trained-block correctness limit."""
     top = 2 * int(drafter.block)
     cover = getattr(target, "max_verify_rows", None)
     if cover is not None:
-        top = min(top, int(cover) - 1)
+        top = int(cover) - 1
     pinned = _env_int("VMLX_DSPARK_MAX_DRAFT")
     if pinned is not None:
         logger.warning("DSpark: VMLX_DSPARK_MAX_DRAFT=%d limits the draft ladder (diagnostic lever)", pinned)
@@ -83,7 +83,7 @@ def _advisory_stamps(spec: dict, drafter_cfg: dict, drafter, top: int) -> None:
         "drafter recommended_num_drafts": text.get("recommended_num_drafts"),
     }
     present = {k: v for k, v in stamps.items() if v is not None}
-    logger.info("DSpark: stamps %s are advisory (start points only); Adaptive picks each round's width up to %d",
+    logger.info("DSpark: stamps %s are advisory (start points only); initial Adaptive search horizon %d",
                 present, top)
 
 
@@ -149,12 +149,19 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
     max_draft = ladder_top(target, drafter)
     _advisory_stamps(spec, dcfg_raw, drafter, max_draft)
     fixed_width = _env_int("VMLX_DSPARK_WIDTH")
+    if fixed_width is not None and _env_int("VMLX_DSPARK_MAX_DRAFT") is None:
+        cover = getattr(target, "max_verify_rows", None)
+        max_draft = max(max_draft, fixed_width) if cover is None else min(max(max_draft, fixed_width), int(cover) - 1)
+    grow_draft_ladder = (getattr(target, "max_verify_rows", None) is None
+                         and _env_int("VMLX_DSPARK_MAX_DRAFT") is None and fixed_width is None)
     if fixed_width is not None:
         logger.warning("DSpark: VMLX_DSPARK_WIDTH=%d pins every round's width (diagnostic lever)", fixed_width)
-    logger.info("DSpark drafter loaded from %s: %s target, block %d, taps %s, draft ladder 1..%d (Adaptive)",
-                drafter_dir, model_type, drafter.block, drafter.target_layer_ids, max_draft)
+    logger.info("DSpark drafter loaded from %s: %s target, block %d, taps %s, initial draft ladder 1..%d (%s)",
+                drafter_dir, model_type, drafter.block, drafter.target_layer_ids, max_draft,
+                "Adaptive, growable" if grow_draft_ladder else "Adaptive, explicit/verify limit")
     return {"target": target, "drafter": drafter, "path": str(drafter_dir), "max_draft": max_draft,
-            "fixed_width": fixed_width, "cost_per_row": float(spec.get("cost_per_row", 0.12)),
+            "fixed_width": fixed_width, "grow_draft_ladder": grow_draft_ladder,
+            "cost_per_row": float(spec.get("cost_per_row", 0.12)),
             "model_type": model_type}
 
 

@@ -44,11 +44,18 @@ def test_bundle_stamps_never_cap_the_ladder(tmp_path, target, stamp, extra, monk
     rt = load_dspark_runtime(target.model, root)
     assert isinstance(rt["target"], MiniMaxM3DSparkTarget)
     assert rt["max_draft"] == 2 * DRAFT_BLOCK and rt["fixed_width"] is None
+    assert rt.get("grow_draft_ladder") is True  # trained block seeds, never caps, an unrestricted verifier
     # Only explicit env levers limit or pin the width (diagnostics).
     monkeypatch.setenv("VMLX_DSPARK_MAX_DRAFT", "3")
     monkeypatch.setenv("VMLX_DSPARK_WIDTH", "2")
     rt = load_dspark_runtime(target.model, root)
     assert rt["max_draft"] == 3 and rt["fixed_width"] == 2
+    assert rt.get("grow_draft_ladder") is False
+    monkeypatch.delenv("VMLX_DSPARK_MAX_DRAFT")
+    monkeypatch.setenv("VMLX_DSPARK_WIDTH", str(3 * DRAFT_BLOCK))
+    rt = load_dspark_runtime(target.model, root)
+    assert rt["max_draft"] == rt["fixed_width"] == 3 * DRAFT_BLOCK
+    assert rt["grow_draft_ladder"] is False
 
 
 # ----------------------------------------------------------------------------------------------- serving

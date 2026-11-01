@@ -37,6 +37,10 @@ class DSparkStats:
     prefill_s: float = 0.0
     decode_s: float = 0.0
     widths: dict = field(default_factory=dict)
+    initial_draft_horizon: int = 0
+    draft_horizon: int = 0
+    horizon_probes: int = 0
+    horizon_promotions: int = 0
 
     @property
     def tokens_per_round(self) -> float:
@@ -54,6 +58,9 @@ class DSparkStats:
             "decode_s": round(self.decode_s, 3),
             "decode_tok_s": round((self.tokens - 1) / self.decode_s, 2) if self.decode_s > 0 else None,
             "widths": dict(sorted(self.widths.items())),
+            "initial_draft_horizon": self.initial_draft_horizon,
+            "draft_horizon": self.draft_horizon, "horizon_probes": self.horizon_probes,
+            "horizon_promotions": self.horizon_promotions,
         }
 
 
@@ -296,6 +303,7 @@ def iter_dspark(
     max_draft: int = MAX_VERIFY_ROWS - 1,
     cost_per_row: float = 0.12,
     fixed_width: Optional[int] = None,
+    grow_draft_ladder: bool = False,
     stats: Optional[DSparkStats] = None,
     ar_fallback: Optional[ARFallback] = None,
     resume: Optional[dict] = None,
@@ -323,16 +331,21 @@ def iter_dspark(
     ``sampler`` on log-probabilities); a serving lane passes its own decode pick so every committed token is chosen
     exactly as its plain decode would choose it.
 
-    Draft width: the ladder's top is ``max_draft`` within the target's verify coverage (``target.max_verify_rows``;
-    None = any width). The drafter's trained block is not a ceiling: a round drafting more tokens than the block runs
-    a longer block of mask rows. Exactness never depends on the width.
+    Draft width: ``max_draft`` is an initial horizon when ``grow_draft_ladder`` is enabled for an unrestricted
+    target, otherwise a caller/verify limit. Winning boundary rounds probe one deeper; a slower probe retreats and
+    can be retried later. The trained block is not a ceiling: wider rounds run longer mask blocks. Exactness never
+    depends on the width.
 
     ``prefill_plan``: a target's aligned-prefill plan (MiniMax-M3: absolute chunk cuts, turn cuts and the prefix
     cache's store boundary, models/minimax_m3/prefill_geometry.py), handed to ``target.prefill`` when it takes one."""
     cover = getattr(target, "max_verify_rows", MAX_VERIFY_ROWS)
     max_draft = max(1, int(max_draft) if cover is None else min(int(max_draft), int(cover) - 1))
+    grow_draft_ladder = bool(grow_draft_ladder and cover is None and fixed_width is None)
+    pending_width_probe = None
+    next_horizon_probe = 0
     choose = (lambda lg: _pick(lg, sampler)) if pick is None else pick
     stats = stats if stats is not None else DSparkStats()
+    stats.initial_draft_horizon = stats.draft_horizon = max_draft
     taps = drafter.target_layer_ids
     ids = [int(t) for t in prompt_ids]
     if resume is not None:
@@ -479,9 +492,14 @@ def iter_dspark(
             drop_carry()                                 # a draft round follows: its verify starts at the anchor
             t_round = time.perf_counter()
             n = min(max_draft, room - 1) if room > 1 else 0
+            width_probe = (pending_width_probe if pending_width_probe is not None
+                           and n >= pending_width_probe[0] else None)
+            pending_width_probe = None  # an intervening AR burst may have consumed the probe's output room
             k = 0
             if n >= 1 and pipelined:
                 k = fixed_width if fixed_width is not None else ar_fallback.planned_width(max_draft, cost_per_row)
+                if width_probe is not None:
+                    k = width_probe[0]
                 k = max(1, min(int(k), n))
             # The trained block, or a longer one when this round drafts past it.
             span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
@@ -504,6 +522,8 @@ def iter_dspark(
                     k = ar_fallback.choose_width(conf.tolist(), max_draft, cost_per_row)
                 else:
                     k = choose_width(conf.tolist(), max_draft, cost_per_row)
+                if width_probe is not None:
+                    k = width_probe[0]
                 k = max(1, min(int(k), n))
                 proposal = drafts[:k]
             else:
@@ -527,10 +547,34 @@ def iter_dspark(
             stats.rounds += 1
             stats.drafted += k
             stats.accepted += accepted
+            round_seconds = time.perf_counter() - t_round
             if ar_fallback is not None:
-                ar_fallback.record_draft(len(new), time.perf_counter() - t_round, rows=k + 1)
+                ar_fallback.record_draft(len(new), round_seconds, rows=k + 1)
                 if hasattr(ar_fallback, "record_acceptance"):
                     ar_fallback.record_acceptance(k, accepted)
+            ar_seconds = getattr(ar_fallback, "ar_seconds", None)
+            round_rate = len(new) / max(round_seconds, 1e-9)
+            if width_probe is not None:
+                stats.horizon_probes += 1
+                if round_rate > width_probe[2]:
+                    stats.horizon_promotions += 1
+                else:
+                    # A wider round must beat the preceding winning rung, not
+                    # merely AR. Retreat after a loss, but leave it eligible for
+                    # a later measured probe when the workload changes.
+                    max_draft = width_probe[1]
+                    next_horizon_probe = stats.rounds + ARFallback.explore_every
+                stats.draft_horizon = max_draft
+            if (grow_draft_ladder and k == max_draft and accepted == k
+                    and ar_seconds is not None and round_seconds < len(new) * ar_seconds
+                    and stats.rounds >= next_horizon_probe
+                    and max_new - produced - len(new) > max_draft + 1):
+                # A trained block is only a starting horizon. Measure one deeper
+                # rung after a boundary win; the ordinary chooser/AR fallback may
+                # immediately retreat if that probe loses. Remaining output room
+                # bounds allocation, rather than an arbitrary model depth stamp.
+                pending_width_probe = (max_draft + 1, max_draft, round_rate)
+                max_draft += 1
             stats.widths[k + 1] = stats.widths.get(k + 1, 0) + 1
             cut = next((i for i, t in enumerate(new) if t in eos), None)
             if cut is not None:
