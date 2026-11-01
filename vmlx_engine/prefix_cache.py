@@ -17,6 +17,7 @@ This module provides two implementations:
 import copy
 import hashlib
 import importlib.metadata
+import json
 import pathlib
 import logging
 import os
@@ -217,6 +218,18 @@ def _resolve_runtime_cache_fingerprint() -> str:
     tf32_policy = os.environ.get("MLX_ENABLE_TF32")
     if tf32_policy not in (None, "1"):
         parts.append(f"mlx_tf32={tf32_policy!r}")
+    # MiniMax's diagnostic numerical paths can intentionally differ in their
+    # arithmetic (notably fused attention and fast JANGT). Source/version
+    # identity alone cannot separate two launches with different overrides.
+    # Conservatively bind all family overrides so a new numerical lever cannot
+    # silently reuse incompatible state. Preserve unset defaults; explicit
+    # values stay distinct rather than guessing each kernel's parsing policy.
+    minimax_policy = {
+        name: value for name, value in sorted(os.environ.items())
+        if name.startswith(("VMLX_M3_", "VMLX_MINIMAX_")) or name == "VMLX_JANGT_FAST"
+    }
+    if minimax_policy:
+        parts.append("minimax_policy_v1=" + json.dumps(minimax_policy, separators=(",", ":")))
     from .utils.glm_video_policy import glm_video_temporal_mode
     glm_video_mode = glm_video_temporal_mode()
     if glm_video_mode != "native_pairs":

@@ -17,8 +17,29 @@ the ~180 ms hash, so the source id is computed ONLY inside a git checkout.
 
 import pathlib
 from types import SimpleNamespace
+import pytest
 
 from vmlx_engine import prefix_cache
+
+
+@pytest.mark.parametrize("name", ["VMLX_M3_FUSED_ATTN", "VMLX_JANGT_FAST", "VMLX_M3_FUSED_MOE", "VMLX_MINIMAX_MSA"])
+def test_minimax_numerical_overrides_isolate_persistent_state(monkeypatch, name):
+    monkeypatch.delenv(name, raising=False)
+    baseline = prefix_cache._resolve_runtime_cache_fingerprint()
+    monkeypatch.setenv(name, "0")
+    disabled = prefix_cache._resolve_runtime_cache_fingerprint()
+    monkeypatch.setenv(name, "1")
+    enabled = prefix_cache._resolve_runtime_cache_fingerprint()
+    assert len({baseline, disabled, enabled}) == 3
+    assert enabled == prefix_cache._resolve_runtime_cache_fingerprint()
+    monkeypatch.delenv(name)
+    assert prefix_cache._resolve_runtime_cache_fingerprint() == baseline
+
+
+def test_minimax_policy_is_frozen_for_a_running_process(monkeypatch):
+    baseline = prefix_cache.runtime_cache_fingerprint()
+    monkeypatch.setenv("VMLX_M3_FUSED_ATTN", "0")
+    assert prefix_cache.runtime_cache_fingerprint() == baseline
 
 
 def test_full_precision_cache_identity_isolated_from_default(monkeypatch):
