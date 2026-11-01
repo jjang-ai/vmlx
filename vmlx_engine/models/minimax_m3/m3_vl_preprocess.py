@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
+from functools import partial
 from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,17 @@ def _get_processor(model_path: str):
     from transformers import AutoProcessor
 
     proc = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+    video_processor = getattr(proc, "video_processor", None)
+    if video_processor is not None:
+        preprocess = video_processor._preprocess
+        rgb = inspect.signature(preprocess).parameters.get("do_convert_rgb")
+        if rgb is not None and rgb.default is inspect.Parameter.empty:
+            # Recent Transformers converts RGB before _preprocess and consumes
+            # this option. Older MiniMax bundles still require the argument.
+            # Bind the processor's own default; explicit callers can override it.
+            video_processor._preprocess = partial(
+                preprocess, do_convert_rgb=video_processor.do_convert_rgb
+            )
     _PROCESSOR_CACHE[model_path] = proc
     return proc
 
