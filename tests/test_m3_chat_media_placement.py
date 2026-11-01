@@ -10,7 +10,8 @@ from vmlx_engine.engine.base import GenerationOutput
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-async def test_m3_chat_preserves_historical_image_and_current_video(monkeypatch, stream):
+@pytest.mark.parametrize("endpoint", ["/v1/chat/completions", "/api/chat"])
+async def test_m3_chat_preserves_historical_image_and_current_video(monkeypatch, stream, endpoint):
     captured = []
 
     class Engine:
@@ -45,7 +46,7 @@ async def test_m3_chat_preserves_historical_image_and_current_video(monkeypatch,
          {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AA=="}}]},
     ]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://test") as client:
-        response = await client.post("/v1/chat/completions", json={
+        response = await client.post(endpoint, json={
             "model": "media-placement-test", "messages": messages, "stream": stream,
         })
     assert response.status_code == 200, response.text

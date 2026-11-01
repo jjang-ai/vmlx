@@ -19300,7 +19300,9 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["_vmlx_tools_present"] = True
 
     # Extract messages (same logic as create_chat_completion)
-    if engine.is_mllm:
+    if engine.is_mllm or (
+        _m3_vl_media_ok(engine) and _messages_have_multimodal(chat_req.messages)
+    ):
         messages = []
         for msg in chat_req.messages:
             if hasattr(msg, "model_dump"):
