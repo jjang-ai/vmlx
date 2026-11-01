@@ -7,8 +7,8 @@ reduction order differs, so every verify row's logits differ from the logits
 the same token gets in an ordinary single-token decode step (measured on
 Qwen3.8 Flash-Next JANGH4, MLX 0.32.3: tens of elements per projection row,
 ~1.3k of 248k lm_head logits at M=4). Greedy native MTP therefore did not
-reproduce AR output byte for byte. TensorFold, mlx-serve and oMLX all keep
-each verify row bit-identical to its solo decode call.
+reproduce AR output byte for byte. The fix is to keep each verify row
+bit-identical to its solo decode call.
 
 How: this kernel is MLX's ``qmv_fast_impl`` with every x row handled inside
 the same threadgroup. Each row runs exactly the per-row operation sequence of

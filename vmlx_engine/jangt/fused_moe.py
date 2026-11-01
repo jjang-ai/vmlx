@@ -3,7 +3,7 @@
 WHY: a DeepSeek-V4.1 JANGHT decode layer ran the routed experts in 4 dispatches (rotate x, trellis gate/up/SwiGLU,
 rotate h, trellis down) plus the mxfp8 shared expert as ~10 more (w1, w3, two casts, clip, minimum, silu, multiply,
 cast, w2, cast, add): ~14 small dispatches per layer x 40 layers per token, the dispatch-bound part of decode (the
-affine bundles got the same treatment in jang_tools.dsv41.metal_decode.moe_decode, mlx-serve MOE_GU / MOE_DN).
+affine bundles got the same treatment in jang_tools.dsv41.metal_decode.moe_decode).
 
 HOW (per layer, R rows, k routed slots):
   1. rotate:  xr = H128(x * su_gu)                                   (moe_kernels.rotate_rows, unchanged)
