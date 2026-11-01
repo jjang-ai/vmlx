@@ -216,6 +216,7 @@ def preprocess_m3_vl_messages(
     extra_videos: Optional[List[Any]] = None,
     add_generation_prompt: bool = True,
     enable_thinking: Optional[bool] = None,
+    tools: Optional[List[dict]] = None,
 ) -> Optional[Tuple[List[int], Any, Any, Any, Any]]:
     """Template messages and return text ids plus image/video tensors.
 
@@ -286,6 +287,8 @@ def preprocess_m3_vl_messages(
         tmpl_kwargs = {"thinking_mode": "enabled"}
     else:
         tmpl_kwargs = {"thinking_mode": "adaptive"}
+    if tools:
+        tmpl_kwargs["tools"] = tools
     try:
         txt = tok.apply_chat_template(
             norm_msgs,
@@ -299,6 +302,7 @@ def preprocess_m3_vl_messages(
             norm_msgs,
             add_generation_prompt=add_generation_prompt,
             tokenize=False,
+            **({"tools": tools} if tools else {}),
         )
 
     pil_images = _load_pil_images(raw_images) if raw_images else []
