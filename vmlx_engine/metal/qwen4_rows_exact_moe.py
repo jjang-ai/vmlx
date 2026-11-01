@@ -75,7 +75,7 @@ def _pair_rows_kernel(config):
 
 @lru_cache(maxsize=1)
 def _down_rows_kernel():
-    from .qwen4_exact_down import _HEADER, _SOURCE
+    from .qwen4_exact_down import _kernel_header, _SOURCE
     src = _SOURCE.replace("uint tile=threadgroup_position_in_grid.x;",
                           "uint tile=threadgroup_position_in_grid.x;\n    uint trow=threadgroup_position_in_grid.y;", 1)
     src = src.replace("expert_ids[route]", "expert_ids[trow*10u+route]")
@@ -85,7 +85,7 @@ def _down_rows_kernel():
     if src.count("trow") < 5:
         raise ValueError("exact-down source layout changed; refusing to build a row-indexed copy")
     return mx.fast.metal_kernel(
-        name="vmlx_qwen4_exact_down_v2_rows", header=_HEADER, source=src,
+        name="vmlx_qwen4_exact_down_v2_rows", header=_kernel_header(), source=src,
         input_names=["activated", "weight", "scales", "biases", "expert_ids", "route_scores"],
         output_names=["output"], ensure_row_contiguous=True)
 

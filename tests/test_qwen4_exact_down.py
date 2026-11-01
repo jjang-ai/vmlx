@@ -65,6 +65,30 @@ def test_disabled_and_outside_ar_do_not_inspect_or_dispatch(monkeypatch):
     assert candidate.qwen4_exact_down(None, None, None, None, enabled=True) is None
 
 
+@pytest.mark.parametrize("bits,group", [(2, 32), (2, 64), (3, 64), (4, 64), (6, 64), (8, 64)])
+def test_verify_rows_down_matches_native_projection(bits, group):
+    if not mx.metal.is_available() or not candidate._compatible_runtime():
+        pytest.skip("requires qualified MLX / M5 Max")
+    from vmlx_engine.metal.qwen4_rows_exact_moe import _down_rows_kernel
+    p = projection(bits, group)
+    ids = mx.array([[[9, 1, 11, 0, 7, 3, 10, 2, 5, 8],
+                     [0, 2, 4, 6, 8, 10, 1, 3, 5, 7]]], dtype=mx.uint32)
+    scores = mx.softmax(mx.random.normal((1, 2, 10)), axis=-1).astype(mx.float16)
+    z = (mx.random.normal((1, 2, 10, 1, 640)) * .2).astype(mx.float16)
+    expected = mx.concatenate([
+        (p(z[:, i:i+1], ids[:, i:i+1]).squeeze(-2) * scores[:, i:i+1, :, None]).sum(axis=-2)
+        for i in range(2)
+    ], axis=1)
+    got = _down_rows_kernel()(
+        inputs=[z, p.weight, p.scales, p.biases, ids, scores],
+        template=[("T", mx.float16), ("BITS", bits), ("GS", group),
+                  ("EXPERTS", p.weight.shape[0]), ("ROWS", 8)],
+        grid=(320 * 320, 2, 1), threadgroup=(320, 1, 1),
+        output_shapes=[(1, 2, 2560)], output_dtypes=[mx.float16])[0]
+    mx.eval(got, expected)
+    np.testing.assert_array_equal(np.asarray(got).view(np.uint16), np.asarray(expected).view(np.uint16))
+
+
 def test_rejects_changed_shape_dtype_and_projection():
     p = projection()
     z = mx.zeros((1, 1, 10, 1, 640), dtype=mx.float16)
@@ -99,6 +123,8 @@ def test_invalid_internal_id_cannot_read_outside_weight_bank():
 @pytest.mark.parametrize("version,device,expected", [
     ("0.32.2", "Apple M5 Max", True),
     ("0.32.3", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M4 Max", False),
     ("0.32.4", "Apple M5 Max", False),
     ("0.32.3", "Apple M5 Ultra", False),
     ("0.32.3", "Apple M4 Max", False),

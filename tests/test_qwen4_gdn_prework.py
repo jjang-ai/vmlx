@@ -226,6 +226,8 @@ def test_six_outputs_and_unchanged_recurrence_exact(pattern, coefficient_dtype):
 @pytest.mark.parametrize("version,device,expected", [
     ("0.32.2", "Apple M5 Max", True),
     ("0.32.3", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M5 Max", True),
+    ("0.32.5.dev20261101+360078a8", "Apple M4 Max", False),
     ("0.32.4", "Apple M5 Max", False),
     ("0.33.0", "Apple M5 Max", False),
     ("0.32.3", "Apple M5 Ultra", False),
@@ -243,5 +245,6 @@ def test_qualified_version_and_device(monkeypatch, version, device, expected):
 
 def test_version_source_preserves_old_math_and_rejects_future():
     assert pre._source_for_version("0.32.2") == pre._SOURCE
+    assert pre._source_for_version("0.32.5.dev20261101+360078a8") == pre._source_for_version("0.32.3")
     with pytest.raises(ValueError, match="unqualified"):
         pre._source_for_version("0.32.4")

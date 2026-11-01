@@ -166,7 +166,7 @@ _SOURCE = r'''
 @lru_cache(maxsize=1)
 def _compatible_runtime():
     try:
-        return (importlib.metadata.version("mlx") in ("0.32.2", "0.32.3")
+        return (importlib.metadata.version("mlx") in ("0.32.2", "0.32.3", "0.32.5.dev20261101+360078a8")
                 and mx.device_info().get("device_name") == "Apple M5 Max")
     except (importlib.metadata.PackageNotFoundError, RuntimeError):
         return False
@@ -190,9 +190,32 @@ def _eligible(projection, activated, indices, scores):
 
 
 @lru_cache(maxsize=1)
+def _kernel_header():
+    if importlib.metadata.version("mlx") in ("0.32.2", "0.32.3"):
+        return _HEADER
+    # Newer MLX promotes each input before the bias sum. Reuse the installed
+    # arithmetic instead of carrying another copy that can drift on upgrades.
+    from .row_exact_qmv import _mlx_qmv_header
+    header = _mlx_qmv_header()
+    if header is None:
+        raise RuntimeError("qualified Qwen down projection requires MLX QMV helpers")
+    return "#include <metal_stdlib>\nusing namespace metal;\n" + header + r'''
+template<typename T, int B, int V>
+inline float qwen_down_load(const device T* x, thread float* a) {
+    return load_vector<T, float, V, B>(x, a);
+}
+template<int B, int V>
+inline float qwen_down_dot(const device uint8_t* w, const thread float* a,
+                          float scale, float bias, float sum) {
+    return qdot<float, V, B>(w, a, scale, bias, sum);
+}
+'''
+
+
+@lru_cache(maxsize=1)
 def _kernel():
     return mx.fast.metal_kernel(
-        name="vmlx_qwen4_exact_down_v2", header=_HEADER, source=_SOURCE,
+        name="vmlx_qwen4_exact_down_v2", header=_kernel_header(), source=_SOURCE,
         input_names=["activated", "weight", "scales", "biases", "expert_ids", "route_scores"],
         output_names=["output"], ensure_row_contiguous=True)
 
@@ -218,8 +241,8 @@ def qwen4_exact_down(projection, activated, indices, scores, *, enabled=None):
             mx.eval(output)
             _OBSERVED = True
             logger.info("Qwen exact down fusion active: bits=%s group=%s "
-                        "fp16 K640 N2560 top10 scope=productive_ar math=mlx0322",
-                        projection.bits, projection.group_size)
+                        "fp16 K640 N2560 top10 scope=productive_ar math=mlx%s",
+                        projection.bits, projection.group_size, importlib.metadata.version("mlx"))
         return output
     except (RuntimeError, ValueError):
         _FAILED = True
