@@ -78,6 +78,31 @@ class TestHealthEndpoint:
         assert _text_lane_dspark_health_status(engine) is None
         assert _text_lane_dspark_health_status(None) is None
 
+    def test_native_dsv41_dspark_health_requires_the_loaded_native_objects(self):
+        from vmlx_engine.server import _native_dsv41_dspark_health_status
+        from vmlx_engine.utils.dsv41_dspark_generator import DSV41DSparkGenerator
+
+        gen = DSV41DSparkGenerator.__new__(DSV41DSparkGenerator)
+        gen._runner = SimpleNamespace(adaptive=True)
+        scheduler = SimpleNamespace(batch_generator=gen)
+        model = SimpleNamespace(model_type="deepseek_v41", _rt=object(), _dspark=object())
+        engine = SimpleNamespace(_loaded=True, _model=model,
+                                 _engine=SimpleNamespace(engine=SimpleNamespace(scheduler=scheduler)))
+        status = _native_dsv41_dspark_health_status(engine)
+        assert status["enabled"] is True and status["draft_model_loaded"] is True
+        assert status["method"] == "dspark" and status["lane"] == "deepseek-v4.1"
+        assert status["adaptive_governor"] is True
+        scheduler.batch_generator = None
+        assert _native_dsv41_dspark_health_status(engine)["adaptive_governor"] is None
+        model._dspark = None
+        assert _native_dsv41_dspark_health_status(engine) is None
+        model._dspark = object()
+        model.model_type = "other"
+        assert _native_dsv41_dspark_health_status(engine) is None
+        model.model_type = "deepseek_v41"
+        engine._loaded = False
+        assert _native_dsv41_dspark_health_status(engine) is None
+
     def test_image_health_does_not_advertise_text_cache_or_sampling(self, monkeypatch, tmp_path):
         from vmlx_engine import server
         monkeypatch.setattr(server, "_model_type", "image")

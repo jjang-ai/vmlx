@@ -14444,6 +14444,28 @@ def _text_lane_dspark_health_status(engine) -> dict | None:
     }
 
 
+def _native_dsv41_dspark_health_status(engine) -> dict | None:
+    """Read the attached native drafter and instantiated governor, without changing either."""
+    if engine is None or getattr(engine, "_loaded", False) is not True:
+        return None
+    model = getattr(engine, "_model", None)
+    if (getattr(model, "model_type", None) != "deepseek_v41"
+            or getattr(model, "_rt", None) is None
+            or getattr(model, "_dspark", None) is None):
+        return None
+    core = getattr(getattr(engine, "_engine", None), "engine", None)
+    scheduler = getattr(core, "scheduler", None)
+    generator = getattr(scheduler, "batch_generator", None)
+    runner = (getattr(generator, "_runner", None)
+              if type(generator).__name__ == "DSV41DSparkGenerator" else None)
+    return {
+        "enabled": True, "method": "dspark", "lane": "deepseek-v4.1",
+        "draft_model_loaded": True,
+        "adaptive_governor": getattr(runner, "adaptive", None),
+        "request_dependent": True,
+    }
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -14657,6 +14679,10 @@ async def health():
         _text_dspark_info = _text_lane_dspark_health_status(_engine)
         if _text_dspark_info is not None:
             spec_info = {"speculative_decoding": _text_dspark_info}
+        else:
+            _native_dspark_info = _native_dsv41_dspark_health_status(_engine)
+            if _native_dspark_info is not None:
+                spec_info = {"speculative_decoding": _native_dspark_info}
 
     if _model_type == "image":
         result = {
