@@ -931,6 +931,20 @@ class TestCacheAndForward:
         assert mx.allclose(candidate[1], reference[1], rtol=2e-4, atol=2e-5)
         assert mx.allclose(candidate[2], reference[2], rtol=2e-4, atol=2e-5)
 
+    @pytest.mark.parametrize("rows", [1, 2, 4])
+    def test_hc_place_preserves_bf16_intermediate_rounding(self, rows, glm5):
+        # Exactly representable inputs put the product at a BF16 midpoint.
+        # Rounding only after the residual addition loses one BF16 step.
+        post = mx.full((1, rows, 4), 1.5, dtype=mx.float32)
+        comb = mx.broadcast_to(mx.eye(4), (1, rows, 4, 4))
+        out = mx.full((1, rows, 64), 1.0078125, dtype=mx.bfloat16)
+        residual = mx.full((1, rows, 4, 64), 0.0078125, dtype=mx.bfloat16)
+        reference = glm5.hc_place(post, comb, out, residual)
+        candidate = glm5.hc_place(post, comb, out, residual, fused_decode=True)
+        mx.eval(reference, candidate)
+        assert mx.all(reference == 1.5234375).item()
+        assert mx.array_equal(candidate, reference).item()
+
     @pytest.mark.parametrize("rows", [2, 3, 4])
     def test_mhc_decode_fusion_matches_mtp_verify_slabs(self, rows, glm5):
         from vmlx_engine.metal.glm5_mhc_decode import glm5_mhc_decode
