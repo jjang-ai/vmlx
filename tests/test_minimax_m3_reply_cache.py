@@ -252,6 +252,46 @@ def test_stopped_turn_keeps_its_partial_reply(model, tmp_path, monkeypatch):
         sched.shutdown()
 
 
+def test_stopped_dspark_turn_keeps_its_partial_reply(model, tmp_path, monkeypatch):
+    """The default lane. DSpark commits tokens in bursts, so at a stop the cache can hold rows past the tokens emitted.
+    The plain-lane test above cannot see this: it passed while the real Stop button reused only the prompt."""
+    import json
+
+    from tests.test_minimax_m3_aligned_prefix_cache import _drafter_config, _m3_config, _save_release_drafter
+    from vmlx_engine.dspark.runtime import load_dspark_runtime
+    from vmlx_engine.request import Request, SamplingParams
+
+    root = tmp_path / "bundle"
+    root.mkdir()
+    (root / "config.json").write_text(json.dumps(_m3_config()))
+    _save_release_drafter(root / "dspark", _drafter_config())
+    object.__setattr__(model, "_vmlx_dspark_runtime", load_dspark_runtime(model, root))
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path / "ssd", STEP, tok=_TurnTok())
+    try:
+        first = _first_prompt("adaptive")
+        req = Request(request_id="stopped", prompt=list(first), sampling_params=SamplingParams(max_tokens=200, temperature=0.0))
+        req.prompt_token_ids = list(first)
+        req.num_prompt_tokens = len(first)
+        req._gen_prompt_len = len(_gen("adaptive"))
+        sched.add_request(req)
+        for _ in range(60):
+            sched.step()
+        assert type(sched.batch_generator).__name__ == "DSparkTextGenerator"
+        partial = list(req.output_token_ids)
+        assert len(partial) > 30, len(partial)
+        live = sched.batch_generator._find(next(iter(sched.uid_to_request_id)))
+        ahead = int(live.cache[0].offset) - (len(first) + len(partial))
+        sched.abort_request("stopped")
+        sched.step()
+        nxt = _exact_next(first, partial, _ids(41, 7))
+        two = _run(sched, trace, nxt, max_tokens=8)
+        assert _rows_held(two) >= len(first) + len(partial) - 2, (two["cached"], len(first), len(partial), ahead)
+    finally:
+        sched.shutdown()
+        object.__setattr__(model, "_vmlx_dspark_runtime", None)
+
+
 def test_cold_prefill_cuts_do_not_change(model):
     """An assistant turn's end stays out of the cold prefill plan: only what a hit may reuse changes."""
     first = _first_prompt("adaptive")

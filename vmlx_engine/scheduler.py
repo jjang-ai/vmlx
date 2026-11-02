@@ -3966,10 +3966,18 @@ class Scheduler:
             return False
         logger.info("Request %s: stopped request kept its %d prompt rows", request_id, rows)
         if reply_allowed:
-            request._dsv41_generation_end = self._dsv41_generation_end_entry(
-                request, types.SimpleNamespace(prompt_cache=raw)
-            )
-            self._store_dsv41_cut_checkpoints(request, request_id)
+            live_rows = raw
+            if getattr(self, "_m3_aligned_prefix", False):
+                # DSpark commits in bursts, so a stop can leave rows past the emitted tokens. M3's lanes are append-only:
+                # keep exactly the emitted rows. V4.1's cache cannot be cut, so its entry check below drops such a reply.
+                emitted = len(prompt) + len(getattr(request, "output_token_ids", None) or [])
+                if offset > emitted:
+                    live_rows = self._m3_live_prompt_views(request, raw, emitted)
+            if live_rows is not None:
+                request._dsv41_generation_end = self._dsv41_generation_end_entry(
+                    request, types.SimpleNamespace(prompt_cache=live_rows)
+                )
+                self._store_dsv41_cut_checkpoints(request, request_id)
         return True
 
     def _store_dsv41_cut_checkpoints(self, request, request_id: str, store_kwargs: Optional[dict] = None) -> int:
