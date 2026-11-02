@@ -451,8 +451,12 @@ SCOPED_DSV41_RECEIPTS = {
 }
 SCOPED_CHECKPOINT_SCHEMA = "vmlx-scoped-prepackage-v6"
 SCOPED_CHECKPOINT_MODELS = {"deepseek-v41-affine", "deepseek-v41-janght", "minimax-m31-janght"}
-# This checkpoint retains every functional owner. Only the active model set changes;
-# the broad campaign reader remains available as v5.
+SCOPED_CHECKPOINT_RECEIPTS = SCOPED_DSV41_RECEIPTS | {
+    "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
+    "API_SURFACE", "PANEL_SETTINGS", "CACHE_ARCHITECTURE", "OUTPUT_CONTEXT", "QUOTA",
+}
+# Keep the checkpoint's native runtime, transport, UI and resource owners explicit.
+# The wider DFlash/MTP campaign remains available as v5.
 SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
 SCOPED_RUNTIME_MODELS = {
     "minimax-m31-janght", "deepseek-v41-affine", "deepseek-v41-janght",
@@ -626,7 +630,8 @@ def validate_scoped_prepackage(
             required_models, required_receipts = SCOPED_DSV41_MODELS, SCOPED_DSV41_RECEIPTS
         if runtime:
             required_models = SCOPED_CHECKPOINT_MODELS if checkpoint else SCOPED_RUNTIME_MODELS
-            required_receipts = SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS
+            required_receipts = (SCOPED_CHECKPOINT_RECEIPTS if checkpoint else
+                                 SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS)
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:

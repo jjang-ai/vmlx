@@ -16736,7 +16736,7 @@ def test_scoped_dsv41_completed_stream_rejects_truncation_and_summaries():
 
 def test_scoped_runtime_checkpoint_keeps_functional_owners_and_rejects_gaps(tmp_path, monkeypatch):
     runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
-    required = runner.SCOPED_REQUIRED_RECEIPTS | runner.SCOPED_DFLASH_RECEIPTS | runner.SCOPED_DSPARK_RECEIPTS
+    required = runner.SCOPED_CHECKPOINT_RECEIPTS
     data.update(schema=runner.SCOPED_CHECKPOINT_SCHEMA, models=sorted(runner.SCOPED_CHECKPOINT_MODELS))
 
     def write(name, value):
@@ -16744,6 +16744,7 @@ def test_scoped_runtime_checkpoint_keeps_functional_owners_and_rejects_gaps(tmp_
         p.write_text(value if isinstance(value, str) else json.dumps(value))
         return {"path": name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
 
+    data['receipts'] = {k: v for k, v in data['receipts'].items() if k in required}
     for owner in required - data['receipts'].keys():
         entry = json.loads(json.dumps(data['receipts']['CACHE_API']))
         original = json.loads((path.parent / entry['receipt']['path']).read_text())
