@@ -11,7 +11,7 @@ _OBSERVED = False
 
 
 def fused_glm5_hc_place_requested() -> bool:
-    # default on since 2026-10-10: +1.3% GLM decode, KL 0.005 (inside the split-order floor 0.002-0.005)
+    # Keep decode and verify fused while preserving stock placement rounding.
     value = os.environ.get("VMLX_GLM5_FUSED_HC_PLACE", "1").strip().lower()
     return value not in {"", "0", "false", "off", "no"}
 
@@ -40,13 +40,17 @@ def _kernel(streams: int, hidden: int, rows: int):
 
         size_t stream_base = (size_t)token * {streams * hidden}u;
         size_t comb_base = (size_t)token * {streams * streams}u;
-        float value = float(T(post[(size_t)token * {streams}u + target])) *
-            float(block_out[(size_t)token * {hidden}u + dim]);
+        // Stock placement rounds the product and residual matmul separately
+        // before adding them. A single final cast changes BF16 decode state.
+        float placed = float(T(
+            float(T(post[(size_t)token * {streams}u + target])) *
+            float(block_out[(size_t)token * {hidden}u + dim])));
+        float mixed = 0.0f;
         for (uint source = 0u; source < {streams}u; ++source) {{
-            value += float(T(comb[comb_base + source * {streams}u + target])) *
+            mixed += float(T(comb[comb_base + source * {streams}u + target])) *
                 float(residual[stream_base + source * {hidden}u + dim]);
         }}
-        output[index] = T(value);
+        output[index] = T(placed + float(T(mixed)));
 """
     return mx.fast.metal_kernel(
         name=f"vmlx_glm5_hc_place_h{streams}_d{hidden}",
