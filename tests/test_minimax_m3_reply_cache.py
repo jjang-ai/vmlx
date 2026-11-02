@@ -224,6 +224,34 @@ def test_stopped_turn_keeps_its_prompt(model, tmp_path, monkeypatch):
         sched.shutdown()
 
 
+def test_stopped_turn_keeps_its_partial_reply(model, tmp_path, monkeypatch):
+    """Found with the real Stop button: the panel keeps a stopped reply's text in history, so the next turn must not
+    prefill those rows again. The tail the panel does not render back stops the chain at the first difference."""
+    from vmlx_engine.request import Request, SamplingParams
+
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path, STEP, tok=_TurnTok())
+    try:
+        first = _first_prompt("adaptive")
+        req = Request(request_id="stopped", prompt=list(first), sampling_params=SamplingParams(max_tokens=200, temperature=0.0))
+        req.prompt_token_ids = list(first)
+        req.num_prompt_tokens = len(first)
+        req._gen_prompt_len = len(_gen("adaptive"))
+        sched.add_request(req)
+        for _ in range(80):
+            sched.step()
+        partial = list(req.output_token_ids)
+        assert len(partial) > 40, len(partial)
+        sched.abort_request("stopped")
+        sched.step()
+        nxt = _exact_next(first, partial, _ids(41, 7))
+        two = _run(sched, trace, nxt, max_tokens=8)
+        assert _rows_held(two) >= len(first) + len(partial) - 2, (two["cached"], len(first), len(partial))
+        assert two["cached"] < len(nxt)
+    finally:
+        sched.shutdown()
+
+
 def test_cold_prefill_cuts_do_not_change(model):
     """An assistant turn's end stays out of the cold prefill plan: only what a hit may reuse changes."""
     first = _first_prompt("adaptive")

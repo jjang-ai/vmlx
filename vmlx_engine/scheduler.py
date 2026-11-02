@@ -21,6 +21,7 @@ import os
 import random
 import re
 import time
+import types
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
@@ -3921,34 +3922,54 @@ class Scheduler:
             getattr(request, "_cache_extra_keys", None)
         )
 
-    def _m3_salvage_stopped_prompt(self, uid, request_id: str, request) -> bool:
-        """Store a stopped MiniMax-M3 request's prompt from its live cache, so the next turn does not prefill the
-        whole conversation again. The generators here hold the cache themselves (no prompt snapshot to take); the
-        rows of a request that stopped before its prefill finished are left out."""
-        from .models.minimax_m3.prefill_geometry import cache_offset
+    def _salvage_stopped_request(self, uid, request_id: str, request) -> bool:
+        """Keep a stopped MiniMax-M3 or DeepSeek-V4.1 request's work, so the next turn does not prefill it again: its
+        prompt rows, and its partial reply when the panel keeps that text in history.
 
-        boundary = self._m3_prefill_boundary(request) or 0
+        These generators hold the cache themselves (no snapshot to take through ``take_prompt_snapshots``, which is why
+        a stop used to store nothing for them). A request that stopped before its prefill finished keeps nothing."""
         finder = getattr(self.batch_generator, "_find", None)
         live = finder(uid) if callable(finder) else None
         raw = getattr(live, "cache", None)
-        offset = cache_offset(raw) if raw else None
-        if not boundary or offset is None or offset < boundary:
+        if not raw:
             return False
-        views = self._m3_live_prompt_views(request, raw, boundary)
-        if views is None:
+        prompt = list(request.prompt_token_ids)
+        if getattr(self, "_m3_aligned_prefix", False):
+            from .models.minimax_m3.prefill_geometry import cache_offset
+
+            boundary = self._m3_prefill_boundary(request) or 0
+            offset = cache_offset(raw)
+            if not boundary or offset is None or offset < boundary:
+                return False
+            snapshot = self._m3_live_prompt_views(request, raw, boundary)
+            rows = boundary
+            reply_allowed = self._m3_generation_end_enabled(request)
+        else:
+            snapshot = getattr(live, "prompt_cache_snapshot", None)
+            offsets = {int(getattr(c, "offset", -1)) for c in snapshot or ()}
+            if len(offsets) != 1 or not (0 < next(iter(offsets)) < len(prompt)):
+                return False
+            rows = next(iter(offsets))
+            reply_allowed = True
+        if snapshot is None:
             return False
-        key_tokens = list(request.prompt_token_ids)[:boundary]
+        key_tokens = prompt[:rows]
         if self.block_aware_cache is not None:
-            self._store_aborted_prompt_snapshot(request_id, request, views, key_tokens)
+            self._store_aborted_prompt_snapshot(request_id, request, snapshot, key_tokens)
         elif self.memory_aware_cache is not None:
             _call_with_optional_cache_extra(
-                self.memory_aware_cache.store, key_tokens, views,
+                self.memory_aware_cache.store, key_tokens, snapshot,
                 cache_type=self._pick_cache_type_for_request(request),
                 cache_extra_keys=getattr(request, "_cache_extra_keys", None),
             )
         else:
             return False
-        logger.info("Request %s: stopped MiniMax-M3 request kept its %d prompt rows", request_id, boundary)
+        logger.info("Request %s: stopped request kept its %d prompt rows", request_id, rows)
+        if reply_allowed:
+            request._dsv41_generation_end = self._dsv41_generation_end_entry(
+                request, types.SimpleNamespace(prompt_cache=raw)
+            )
+            self._store_dsv41_cut_checkpoints(request, request_id)
         return True
 
     def _store_dsv41_cut_checkpoints(self, request, request_id: str, store_kwargs: Optional[dict] = None) -> int:
@@ -7934,7 +7955,11 @@ class Scheduler:
             # clean prompt-boundary snapshot into the prefix cache (#58) —
             # otherwise an identical retry re-prefills the whole prompt.
             if (
-                (self.block_aware_cache is not None or getattr(self, "_m3_aligned_prefix", False))
+                (
+                    self.block_aware_cache is not None
+                    or getattr(self, "_m3_aligned_prefix", False)
+                    or getattr(self, "_uses_dsv41_cache", False)
+                )
                 and not getattr(request, "_bypass_prefix_cache", False)
                 and int(getattr(request, "cached_tokens", 0) or 0)
                 < len(request.prompt_token_ids)
@@ -8009,11 +8034,13 @@ class Scheduler:
                     # remove() drops the generator request (#58). Metal has
                     # synchronized by this point so the snapshot is safe to
                     # detach and store.
-                    if salvage_req is not None and getattr(self, "_m3_aligned_prefix", False):
+                    if salvage_req is not None and (
+                        getattr(self, "_m3_aligned_prefix", False) or getattr(self, "_uses_dsv41_cache", False)
+                    ):
                         try:
-                            self._m3_salvage_stopped_prompt(uid, request_id, salvage_req)
+                            self._salvage_stopped_request(uid, request_id, salvage_req)
                         except Exception as e:
-                            logger.warning(f"MiniMax-M3 stopped-prompt salvage failed for {request_id}: {e}")
+                            logger.warning(f"Stopped-request salvage failed for {request_id}: {e}")
                     elif (
                         salvage_req is not None
                         and self.block_aware_cache is not None
