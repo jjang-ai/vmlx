@@ -770,3 +770,37 @@ def test_rejection_sample_with_candidate_indices_is_exact(gamma):
     band = np.quantile([0.5 * np.abs(np.bincount(rng.choice(V, size=N, p=target), minlength=V) / N - target).sum()
                         for _ in range(40)], 0.99)
     assert tv <= 1.25 * band, (tv, band)
+
+
+@pytest.mark.parametrize("length,step", [(1, 8), (8, 8), (9, 8), (41, 16)])
+def test_ar_control_prefill_matches_speculative_state_without_hidden_capture(length, step):
+    """Chunk-sensitive recurrent state must not change when hidden capture is disabled."""
+    from vmlx_engine.glm_dflash2 import _prefill
+
+    class Target:
+        def __init__(self):
+            self.calls = []
+            self.state = 0
+            self.h = None
+
+        def forward(self, ids, cache, *, verify, taps, last_row, inputs_embeds):
+            self.calls.append((ids.tolist(), inputs_embeds.tolist()))
+            # A chunk-sensitive state exposes changes to the recurrent execution geometry.
+            self.state = self.state * 7 + ids.shape[1]
+            if taps:
+                self.h = inputs_embeds
+            return mx.array([[[self.state]]])
+
+        def hidden(self):
+            assert self.h is not None
+            return self.h
+
+    prompt = mx.arange(length)
+    embeds = mx.arange(length * 2).reshape(1, length, 2)
+    speculative, ar = Target(), Target()
+    expected, hidden = _prefill(speculative, prompt, [], step, None, embeds=embeds)
+    actual, no_hidden = _prefill(ar, prompt, [], step, None, taps=False, embeds=embeds)
+    assert actual.tolist() == expected.tolist()
+    assert ar.calls == speculative.calls
+    assert hidden.tolist() == embeds.tolist()
+    assert no_hidden is None and ar.h is None

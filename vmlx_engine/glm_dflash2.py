@@ -172,7 +172,9 @@ def _prefill(target: GLMDFlashTarget, prompt: mx.array, cache, step: int, hidden
     while start < prompt.size:
         raise_if_generation_cancelled()          # cooperative cancel at each prefill chunk (SimpleEngine scope)
         rem = prompt.size - start
-        end = start + (1 if rem == 1 else min(step, rem - 1)) if taps else start + min(step, rem)
+        # Hidden capture must not change recurrent prefill geometry: the AR
+        # control needs the same single-token tail as speculative generation.
+        end = start + (1 if rem == 1 else min(step, rem - 1))
         logits = target.forward(prompt[None, start:end], cache, verify=False, taps=taps, last_row=True,
                                 inputs_embeds=None if embeds is None else embeds[:, start:end])
         if taps:
