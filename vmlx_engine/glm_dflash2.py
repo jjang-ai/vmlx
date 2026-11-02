@@ -172,10 +172,7 @@ def _prefill(target: GLMDFlashTarget, prompt: mx.array, cache, step: int, hidden
     while start < prompt.size:
         raise_if_generation_cancelled()          # cooperative cancel at each prefill chunk (SimpleEngine scope)
         rem = prompt.size - start
-        # Keep prompt rows in the prefill geometry. An artificial one-row tail
-        # switches projection/recurrent dispatch and can alter multimodal answers.
-        # forward(last_row=True) already selects the final logits after prefill.
-        end = start + min(step, rem)
+        end = start + (1 if rem == 1 else min(step, rem - 1)) if taps else start + min(step, rem)
         logits = target.forward(prompt[None, start:end], cache, verify=False, taps=taps, last_row=True,
                                 inputs_embeds=None if embeds is None else embeds[:, start:end])
         if taps:
