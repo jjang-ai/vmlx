@@ -4016,8 +4016,14 @@ describe('JIT Toggle', () => {
             'src/renderer/src/i18n/locales/en.json',
             'utf-8',
         )
-        // copy lives in the locale catalog now that the panel is translated
-        expect(cachePanelCopy).toContain('Block Disk Cache (SSD / L2)')
+        // copy lives in the locale catalog now that the panel is translated;
+        // the Cache tab names the tiers the way Server Settings does (SSD cache /
+        // RAM cache), not with the old Block Disk Cache / L1 / L2 jargon
+        expect(cachePanelCopy).toContain('"blockDiskCache": "SSD cache"')
+        expect(cachePanelCopy).not.toContain('"blockDiskCache": "Block Disk Cache (SSD / L2)"')
+        expect(cachePanelCopy).toContain('"diskCacheL2": "SSD prompt cache"')
+        expect(cachePanelCopy).toContain('"l1IndexedTokens": "RAM Indexed Tokens"')
+        expect(cachePanelCopy).toContain('"l2TokensOnDisk": "Tokens on SSD"')
         expect(cachePanel).toContain("t('sessions.cache.managedRootSize')")
         expect(cachePanelCopy).toContain('Managed Root Size')
         expect(cachePanel).toContain("t('sessions.cache.managedRootLimit')")

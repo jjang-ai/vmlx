@@ -14475,14 +14475,14 @@ class TestTurboQuantKVTelemetry:
         assert _panel_label_is_rendered(cache_panel_source, "Tokens on Disk")
         assert _panel_label_is_rendered(cache_panel_source, "Cache Totals")
         assert _panel_label_is_rendered(cache_panel_source, "RAM Resident Tokens")
-        assert _panel_label_is_rendered(cache_panel_source, "L1 Indexed Tokens")
-        assert _panel_label_is_rendered(cache_panel_source, "L1 Resident Memory")
-        assert _panel_label_is_rendered(cache_panel_source, "L1 Evictions")
+        assert _panel_label_is_rendered(cache_panel_source, "RAM Indexed Tokens")
+        assert _panel_label_is_rendered(cache_panel_source, "RAM Resident Memory")
+        assert _panel_label_is_rendered(cache_panel_source, "RAM Evictions")
         assert "l2_tokens_on_disk" in cache_panel_source
         assert "l2_block_tokens_on_disk" in cache_panel_source
         assert "l2_ssm_tokens_on_disk" in cache_panel_source
         assert _panel_label_is_rendered(cache_panel_source, "Companion Evictions")
-        assert _panel_label_is_rendered(cache_panel_source, "L2 Tokens on Disk")
+        assert _panel_label_is_rendered(cache_panel_source, "Tokens on SSD")
         assert _panel_label_is_rendered(cache_panel_source, "Companion L2 Tokens")
         assert _panel_label_is_rendered(cache_panel_source, "Persisted Block Reads")
         assert _panel_label_is_rendered(cache_panel_source, "This Engine Reads H / M")

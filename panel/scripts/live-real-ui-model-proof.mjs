@@ -2592,8 +2592,9 @@ export function resolveDevElectronExecutable(panelRoot, env = process.env) {
       'Electron.app', 'Contents', 'MacOS', 'Electron')
 }
 
-// The SSD-only UI deliberately omits the RAM checkbox. Absence by itself is
-// not proof of Off: require its visible locked-Off policy or a real checkbox.
+// DFlash2 / DSpark lanes deliberately omit the RAM cache checkbox. Absence by
+// itself is not proof of Off: require a real checkbox, or positive evidence
+// that the section rendered without one (the sibling SSD cache checkbox).
 export function visiblePagedCachePolicy({ present, checked, disabled, policyVisible }) {
   return {
     established: present || policyVisible,
@@ -10116,26 +10117,41 @@ async function main() {
               return !!btn;
             };
             await expandSection('Prefix Cache');
-            await expandSection('In-Memory Paged Cache');
-            const preLabelFor = (text) => [...(preDrawer?.querySelectorAll('label') || [])]
-              .find((label) => (label.innerText || '').includes(text));
-            const preInputFor = (text) => preLabelFor(text)?.querySelector('input[type="checkbox"]');
-            const pagedPre = preInputFor('In-Memory Paged Cache (RAM)');
-            const blockPre = preInputFor('Block Disk Cache (SSD / L2)');
+            // The Prefix Cache section is two choices, "SSD cache" and "RAM
+            // cache", each a checkbox under its data-vmlx-control hook
+            // (cacheControlPolicy.ts maps them onto the saved keys). The RAM
+            // choice is absent on DFlash2 / DSpark single-request lanes.
+            // SSD on + RAM off is the SSD-only lane.
+            const preCacheInput = (name) => preDrawer?.querySelector(
+              '[data-vmlx-control="' + name + '"] input[type="checkbox"]'
+            );
+            const ssdPre = () => preCacheInput('ssd-cache');
+            const ramPre = () => preCacheInput('ram-cache');
             const percentSetting = () => preDrawer?.querySelector(
               '[data-setting-label="SSD Cache Size (% of disk)"]'
             );
             const percentRange = () => percentSetting()?.querySelector(
               'input[type="range"]'
             );
-            const before = {
-              usePagedCache: !!pagedPre?.checked,
-              enableBlockDiskCache: !!blockPre?.checked,
-              pagedDisabled: !!pagedPre?.disabled,
-              blockDiskCacheMaxPercent: percentSetting()
-                ? Number(percentSetting().getAttribute('data-setting-value'))
-                : null,
+            const readPreCacheChoices = () => {
+              const ssd = ssdPre();
+              const ram = ramPre();
+              const ssdOn = !!ssd?.checked;
+              const ramOn = !!ram?.checked;
+              return {
+                ssdCache: { present: !!ssd, checked: ssdOn, disabled: !!ssd?.disabled },
+                ramCache: { present: !!ram, checked: ramOn, disabled: !!ram?.disabled },
+                tier: !ssd ? null : ssdOn ? (ramOn ? 'ram-ssd' : 'ssd') : ramOn ? 'ram' : 'off',
+                // Saved-key view of the same two choices.
+                usePagedCache: ssdOn && ramOn,
+                enableBlockDiskCache: ssdOn,
+                pagedDisabled: !!ram?.disabled,
+                blockDiskCacheMaxPercent: percentSetting()
+                  ? Number(percentSetting().getAttribute('data-setting-value'))
+                  : null,
+              };
             };
+            const before = readPreCacheChoices();
             const requestedImageBudget = ${JSON.stringify(imageTokenBudgetOverride)};
             if (requestedImageBudget != null) {
               const section = preDrawer?.querySelector('[data-vmlx-control="section-performance"]');
@@ -10153,15 +10169,21 @@ async function main() {
               input.dispatchEvent(new Event('change', { bubbles: true }));
               await new Promise((r) => setTimeout(r, 150));
             }
-            if (${JSON.stringify(forceSsdOnlyLane)} && blockPre && !blockPre.checked && !blockPre.disabled) {
-              blockPre.scrollIntoView({ block: 'center' });
-              blockPre.click();
-              await new Promise((r) => setTimeout(r, 150));
-            }
-            if (${JSON.stringify(forceSsdOnlyLane)} && pagedPre && pagedPre.checked && !pagedPre.disabled) {
-              pagedPre.scrollIntoView({ block: 'center' });
-              pagedPre.click();
-              await new Promise((r) => setTimeout(r, 150));
+            if (${JSON.stringify(forceSsdOnlyLane)}) {
+              // SSD first: turning SSD on keeps the RAM choice as it was, and
+              // turning RAM off afterwards leaves SSD on (the SSD-only tier).
+              const ssd = ssdPre();
+              if (ssd && !ssd.checked && !ssd.disabled) {
+                ssd.scrollIntoView({ block: 'center' });
+                ssd.click();
+                await new Promise((r) => setTimeout(r, 150));
+              }
+              const ram = ramPre();
+              if (ram && ram.checked && !ram.disabled) {
+                ram.scrollIntoView({ block: 'center' });
+                ram.click();
+                await new Promise((r) => setTimeout(r, 150));
+              }
             }
             const requestedPercent = ${JSON.stringify(blockDiskCacheMaxPercentOverride)};
             if (requestedPercent != null) {
@@ -10214,24 +10236,23 @@ async function main() {
             }
             ssdOnlyLaneSelection = {
               requested: true,
-              pagedControlFound: !!pagedPre,
-              blockDiskControlFound: !!blockPre,
+              ssdControlFound: before.ssdCache.present,
+              ramControlFound: before.ramCache.present,
               before,
-              after: {
-                usePagedCache: !!preInputFor('In-Memory Paged Cache (RAM)')?.checked,
-                enableBlockDiskCache: !!preInputFor('Block Disk Cache (SSD / L2)')?.checked,
-                pagedDisabled: !!preInputFor('In-Memory Paged Cache (RAM)')?.disabled,
-                blockDiskCacheMaxPercent: percentSetting()
-                  ? Number(percentSetting().getAttribute('data-setting-value'))
-                  : null,
-              },
+              after: readPreCacheChoices(),
               savedVia,
               saveCandidateCount: saveCandidates.length,
+              persistedPrefixCacheAfterSave: persistedAfterSave
+                ? persistedAfterSave.enablePrefixCache
+                : null,
               persistedUsePagedCacheAfterSave: persistedAfterSave
                 ? persistedAfterSave.usePagedCache
                 : null,
               persistedBlockDiskAfterSave: persistedAfterSave
                 ? persistedAfterSave.enableBlockDiskCache
+                : null,
+              persistedDiskCacheAfterSave: persistedAfterSave
+                ? persistedAfterSave.enableDiskCache
                 : null,
               persistedBlockDiskCacheMaxPercentAfterSave: persistedAfterSave
                 ? persistedAfterSave.blockDiskCacheMaxPercent
@@ -11973,9 +11994,9 @@ async function main() {
             });
             return !!clickable;
           };
+          // Prefix Cache holds both cache choices (SSD cache, RAM cache); the
+          // former In-Memory Paged Cache and Disk Cache sections no longer exist.
           await clickSection('Prefix Cache');
-          await clickSection('In-Memory Paged Cache');
-          await clickSection('Disk Cache');
           // MCP lives in its own collapsed section, so the first capture read
           // an unopened accordion and reported every MCP field absent. The
           // section's title is the i18n string 'Tool Integration (MCP)' — my
@@ -12039,37 +12060,72 @@ async function main() {
               valueAfter: mcpInput ? String(mcpInput.value || '') : null,
             };
           }
-          const labelFor = (text) => [...(drawer?.querySelectorAll('label') || [])]
-            .find((label) => (label.innerText || '').includes(text));
-          const inputFor = (text) => labelFor(text)?.querySelector('input[type="checkbox"]');
-          const promptDiskInput = inputFor('Enable Disk Cache');
-          const blockDiskInput = inputFor('Block Disk Cache (SSD / L2)');
-          const pagedInput = inputFor('In-Memory Paged Cache (RAM)');
-          const prefixInput = inputFor('Enable Prefix Cache')
-            || inputFor('DSV4 Native Composite Prefix Cache');
+          // The Prefix Cache section is two choices, "SSD cache" and "RAM
+          // cache", each a checkbox under its data-vmlx-control hook. The
+          // old "Enable Prefix Cache" / "In-Memory Paged Cache (RAM)" /
+          // "Block Disk Cache (SSD / L2)" / "Enable Disk Cache" controls are
+          // gone; cacheControlPolicy.ts (resolveSimpleCacheTier) maps the two
+          // choices onto those saved keys, and the saved-key view below is
+          // its inverse so the evidence validator can still compare the
+          // visible state with the persisted session config.
+          const cacheControl = (name) => drawer?.querySelector(
+            '[data-vmlx-control="' + name + '"]'
+          );
+          const cacheInput = (name) => cacheControl(name)?.querySelector('input[type="checkbox"]');
+          const ssdControl = cacheControl('ssd-cache');
+          const ramControl = cacheControl('ram-cache');
+          const ssdInput = cacheInput('ssd-cache');
+          const ramInput = cacheInput('ram-cache');
+          const ssdOn = !!ssdInput?.checked;
+          const ramOn = !!ramInput?.checked;
+          const bodyText = drawer?.innerText || '';
+          // openPangu / native GLM keep the SSD choice as the exact typed
+          // prompt store (enableDiskCache) and say so under the SSD checkbox;
+          // every other lane's SSD choice is the block store
+          // (enableBlockDiskCache). Both keys are off whenever SSD is off.
+          const exactTypedPromptDiskLane = ssdOn
+            && bodyText.includes('This model keeps its reusable prompts on SSD only');
           const pagedPolicy = (${visiblePagedCachePolicy.toString()})({
-            present: !!pagedInput,
-            checked: !!pagedInput?.checked,
-            disabled: !!pagedInput?.disabled,
-            policyVisible: [...drawer.querySelectorAll('*')].some((element) =>
-              isVisible(element)
-              && element.children.length === 0
-              && (element.textContent || '').includes(
-                'SSD-only cache policy: In-Memory Paged Cache and Media Preprocess RAM Cache are locked OFF for every model.'
-              )
-            ),
+            present: !!ramInput,
+            checked: ramOn,
+            disabled: !!ramInput?.disabled,
+            // The RAM choice is omitted only on the DFlash2 / DSpark
+            // single-request lanes, which keep just an SSD store. With no RAM
+            // checkbox, the rendered SSD checkbox in the same section is the
+            // evidence that the section is open and the lane has no RAM
+            // choice; a collapsed or missing section renders neither control
+            // and establishes nothing.
+            policyVisible: !!ssdInput && isVisible(ssdControl),
           });
+          const cacheTier = !ssdInput
+            ? null
+            : ssdOn ? (ramOn ? 'ram-ssd' : 'ssd') : ramOn ? 'ram' : 'off';
           const initialCacheControls = {
-            pagedControlPresent: !!pagedInput,
+            ssdCache: {
+              present: !!ssdInput,
+              checked: ssdOn,
+              disabled: !!ssdInput?.disabled,
+              state: ssdControl?.getAttribute('data-vmlx-state') || null,
+            },
+            ramCache: {
+              present: !!ramInput,
+              checked: ramOn,
+              disabled: !!ramInput?.disabled,
+              state: ramControl?.getAttribute('data-vmlx-state') || null,
+            },
+            tier: cacheTier,
+            exactTypedPromptDiskLane,
+            pagedControlPresent: !!ramInput,
             pagedPolicyEstablished: pagedPolicy.established,
             pagedPolicyLockedOff: pagedPolicy.lockedOff,
-            enablePrefixCache: !!prefixInput?.checked,
-            usePagedCache: pagedPolicy.usePagedCache,
-            enableDiskCache: !!promptDiskInput?.checked,
-            enableBlockDiskCache: !!blockDiskInput?.checked,
-            usePagedCacheDisabled: !!pagedInput?.disabled,
-            diskCachePresent: !!promptDiskInput,
-            blockDiskCachePresent: !!blockDiskInput,
+            // Saved-key view of the two visible choices.
+            enablePrefixCache: ssdOn || ramOn,
+            usePagedCache: ssdOn && ramOn,
+            enableDiskCache: ssdOn && exactTypedPromptDiskLane,
+            enableBlockDiskCache: ssdOn && !exactTypedPromptDiskLane,
+            usePagedCacheDisabled: !!ramInput?.disabled,
+            diskCachePresent: !!ssdInput,
+            blockDiskCachePresent: !!ssdInput,
             blockDiskCacheMaxPercent: (() => {
               const setting = drawer?.querySelector(
                 '[data-setting-label="SSD Cache Size (% of disk)"]'
@@ -12079,14 +12135,11 @@ async function main() {
                 : null;
             })(),
           };
-          const bodyText = drawer?.innerText || '';
           const labels = [
-            'Enable Prefix Cache',
-            'DSV4 Native Composite Prefix Cache',
-            'In-Memory Paged Cache (RAM)',
-            'Block Disk Cache (SSD / L2)',
-            'Enable Disk Cache',
-            'Stored Cache Quantization',
+            'SSD cache',
+            'SSD Cache Size (% of disk)',
+            'RAM cache',
+            'RAM Cache Size (% of RAM)',
           ]
             .filter((label) => bodyText.includes(label));
           const cacheExpectationMatches = !cacheExpectRegex || new RegExp(cacheExpectRegex, 'i').test(bodyText);
@@ -12094,14 +12147,11 @@ async function main() {
           // settled outside this page context against the engine's live
           // /health native_cache, which is only available after this drawer
           // read. See the pagedCache parity block below.
-          const verified = initialCacheControls.enablePrefixCache === true
-            && (
-              (initialCacheControls.enableBlockDiskCache === true
-                && initialCacheControls.blockDiskCachePresent === true)
-              || (initialCacheControls.enableDiskCache === true
-                && initialCacheControls.diskCachePresent === true)
-            )
-            && !!prefixInput
+          // Verified = the SSD choice exists and is on (a real SSD store, so
+          // prefix reuse is on too), the RAM choice is accounted for, and the
+          // optional wording expectation held.
+          const verified = !!ssdInput
+            && ssdOn === true
             && pagedPolicy.established
             && (!expectPagedCacheLocked || pagedPolicy.lockedOff)
             && cacheExpectationMatches;
@@ -12113,6 +12163,9 @@ async function main() {
             verified,
             runningSessionDrawer: true,
             controlScope: 'running-session-toolbar',
+            visibleCacheTier: initialCacheControls.tier,
+            visibleSsdCacheChecked: initialCacheControls.ssdCache.checked,
+            visibleRamCacheChecked: initialCacheControls.ramCache.checked,
             visibleBlockDiskChecked: initialCacheControls.enableBlockDiskCache,
             visiblePromptDiskChecked: initialCacheControls.enableDiskCache,
             cacheExpectRegex,
