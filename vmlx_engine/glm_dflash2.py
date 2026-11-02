@@ -467,6 +467,16 @@ class PrefixStore:
         return sum(_cache_nbytes(e.cache) for e in self.entries.values())
 
 
+class _FrozenPrefixSnapshot:
+    """CPU-owned safetensors image; no MLX arrays cross into the IO worker."""
+
+    __slots__ = ("data", "parent")
+
+    def __init__(self, data: bytes, parent):
+        self.data = data
+        self.parent = None if parent is None else dict(parent)
+
+
 class PrefixDiskTier:
     """SSD tier of the GLM DFlash2 prefix store (2026-10-10): every snapshot the RAM store keeps is also written to
     `root` by a background thread (one safetensors file per snapshot: each layer's native cache state + typed
@@ -533,7 +543,16 @@ class PrefixDiskTier:
             receipt.set_result({"outcome": "already_durable", "durable": True,
                                 "retained_tokens": len(key), "detail": "glm-dflash2-prefix-disk"})
             return receipt
-        self._queue.put((name, key, snap, receipt, parent_receipt))
+        try:
+            frozen = self._freeze(key, snap)
+        except Exception as e:
+            self.errors += 1
+            import logging
+            logging.getLogger(__name__).warning("glm dflash2 prefix snapshot freeze failed: %s", e)
+            receipt.set_result({"outcome": "failed", "durable": False,
+                                "retained_tokens": 0, "detail": str(e)[:200]})
+            return receipt
+        self._queue.put((name, key, frozen, receipt, parent_receipt))
         return receipt
 
     def flush(self) -> None:
@@ -601,7 +620,17 @@ class PrefixDiskTier:
         except Exception:
             return False
 
-    def _write(self, name, key, snap):
+    @classmethod
+    def _freeze(cls, key, snap):
+        """Evaluate and serialize on the model-owning thread before handing off.
+
+        Hidden rows and logits can still carry pending MLX graphs even when
+        the cache state was evaluated. Serialization on the IO thread can
+        evaluate those graphs on a missing or concurrently used Metal stream.
+        BytesIO also detaches the payload from Metal-backed memory before the
+        writer owns it, preserving native dtypes and the existing file format.
+        """
+        import io
         import json
         # int64: image prefixes are keyed with per-item ids above the int32 range (_dflash2_rounds key_ids).
         arrays = {"ids": mx.array(list(key), dtype=mx.int64), "hidden": snap.hidden, "logits": snap.logits}
@@ -614,10 +643,15 @@ class PrefixDiskTier:
                 if v is not None:
                     arrays[f"c{i}.{j}"] = v
         parent = getattr(snap, "parent", None)
-        self._catalog.save(name, len(key), lambda tmp: mx.save_safetensors(
-            str(tmp), arrays, metadata={"format": self.FORMAT, "layers": json.dumps(layers),
-                                        "parent": json.dumps(parent)},
-        ))
+        buffer = io.BytesIO()
+        mx.save_safetensors(buffer, arrays, metadata={
+            "format": cls.FORMAT, "layers": json.dumps(layers),
+            "parent": json.dumps(parent),
+        })
+        return _FrozenPrefixSnapshot(buffer.getvalue(), parent)
+
+    def _write(self, name, key, snap):
+        self._catalog.save(name, len(key), lambda tmp: tmp.write_bytes(snap.data))
         self._load_index()
         with self._lock:
             self.writes += 1
