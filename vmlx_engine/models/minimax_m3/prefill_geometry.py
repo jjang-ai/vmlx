@@ -18,7 +18,9 @@ The rule (one for every cache tier, cold prefill and continuation alike):
 * rows of the partial chunk that ends at ``boundary`` were computed in a chunk only a request with the SAME boundary
   runs, so they are reusable only by an exact-geometry request (reuse == its own boundary);
 * a media request (M3 VL) prefills ``[0, boundary)`` atomically (every placeholder must meet its vision tensor in one
-  forward), then ``[boundary, N)``; it can only reuse an exact-geometry boundary.
+  forward), then ``[boundary, N)``; it can reuse an exact-geometry boundary, or any rows past its last placeholder
+  (those hold every image, whose content is in the media key, and only text is left to prefill). A new image changes
+  that key, so that turn prefills the whole conversation.
 
 Rows of one same-shape chunk were also measured to be independent of the other rows' content (MoE sorted gather,
 MSA selection and attention kernels), but that does not let a hit stop mid-chunk: the continuation would then run
@@ -272,6 +274,17 @@ def is_media_request(cache_extra_keys) -> bool:
     return isinstance(cache_extra_keys, dict) and MEDIA_KEY in cache_extra_keys
 
 
+# image_token_index and video_token_index in the MiniMax-M3 config.
+MEDIA_TOKEN_IDS = (200025, 200026)
+
+
+def media_rows_covered(tokens: Sequence[int], matched: int) -> bool:
+    """Do the first ``matched`` rows hold every image and video placeholder of ``tokens``? No placeholder: no."""
+    media = set(MEDIA_TOKEN_IDS)
+    last = max((i for i, t in enumerate(tokens) if int(t) in media), default=-1)
+    return last >= 0 and int(matched) > last
+
+
 def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Optional[TurnMarkers] = None,
                      tokens: Optional[Sequence[int]] = None, generation_end: bool = False):
     """The request's cache extra keys plus the M3 geometry of the rows a prefill with this boundary produces.
@@ -281,7 +294,7 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     Text requests add a trailing-chunk key scoped from the start of the partial chunk that ends at ``boundary``
     (absent when the boundary is itself a chunk boundary or a turn cut of ``tokens``), so only an exact-geometry
     request matches those blocks; blocks of finished chunks stay shareable by any prompt with the same tokens (their
-    cuts are a function of the tokens). Media requests are keyed by their boundary from block 0 (atomic prefill)."""
+    cuts are a function of the tokens). Media requests are keyed by their tokens and image content alone."""
     from ...cache_key import CACHE_EXTRA_SCOPES_KEY
 
     boundary = max(0, int(boundary))
@@ -293,7 +306,8 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     else:
         out = {"__vmlx_request_extra_keys__": cache_extra_keys}
     if is_media_request(cache_extra_keys):
-        out[GEOMETRY_KEY] = {"schema": SCHEMA, "atomic_boundary": boundary}
+        # No boundary in the key: the next turn has a longer prompt and has to find these rows (see reuse_limit callers).
+        out[GEOMETRY_KEY] = {"schema": SCHEMA, "atomic": True}
         return out
     if markers is None:
         out[GEOMETRY_KEY] = {"schema": SCHEMA, "step": step}

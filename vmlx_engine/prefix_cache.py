@@ -4519,17 +4519,20 @@ class BlockAwarePrefixCache:
 
         matched = int(block_table.num_tokens)
         boundary = max(0, len(tokens) - 1)
+        media = prefill_geometry.is_media_request(cache_extra_keys)
+        media_covered = media and prefill_geometry.media_rows_covered(tokens, matched)
         reuse = prefill_geometry.reuse_limit(
             matched,
             boundary,
             step,
             exact_geometry=True,
-            atomic=prefill_geometry.is_media_request(cache_extra_keys),
+            atomic=media and not media_covered,
             cuts=[
                 *self._minimax_m3_turn_cuts(tokens, boundary),
                 *(
                     [matched]
-                    if prefill_geometry.inside_assistant_turn(
+                    if media_covered
+                    or prefill_geometry.inside_assistant_turn(
                         tokens, getattr(self, "_m3_turn_markers", None), matched
                     )
                     else []

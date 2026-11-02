@@ -694,4 +694,4 @@ def test_prefill_pieces_and_reuse_limit():
     assert prefill_geometry.TRAILING_KEY in cache_extra_keys_for_token_range(keys, 960, 1009)
     assert prefill_geometry.TRAILING_KEY not in prefill_geometry.cache_extra_keys(None, boundary=960, step=320)
     media = prefill_geometry.cache_extra_keys({"mllm_media": "x"}, boundary=1009, step=320)
-    assert media[prefill_geometry.GEOMETRY_KEY]["atomic_boundary"] == 1009
+    assert media[prefill_geometry.GEOMETRY_KEY] == {"schema": prefill_geometry.SCHEMA, "atomic": True}

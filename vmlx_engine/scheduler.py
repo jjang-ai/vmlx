@@ -3912,15 +3912,12 @@ class Scheduler:
         return (seq[:pos], raw)
 
     def _m3_generation_end_enabled(self, request) -> bool:
-        """A finished MiniMax-M3 text request stores its reply (models/minimax_m3/prefill_geometry.py). A media
-        request's blocks are keyed by its own boundary, so nothing could find them."""
+        """A finished MiniMax-M3 request stores its reply (models/minimax_m3/prefill_geometry.py)."""
         if not getattr(self, "_m3_aligned_prefix", False):
             return False
         from .models.minimax_m3 import prefill_geometry
 
-        return prefill_geometry.generation_end_enabled() and not prefill_geometry.is_media_request(
-            getattr(request, "_cache_extra_keys", None)
-        )
+        return prefill_geometry.generation_end_enabled()
 
     def _salvage_stopped_request(self, uid, request_id: str, request) -> bool:
         """Keep a stopped MiniMax-M3 or DeepSeek-V4.1 request's work, so the next turn does not prefill it again: its
@@ -7064,25 +7061,31 @@ class Scheduler:
         detail = str(getattr(request, "_cache_detail", "") or "")
         paged = getattr(request, "block_table", None) is not None
         whole_entry_exact = detail.split("+")[0] in {"memory", "disk"}
+        media = prefill_geometry.is_media_request(getattr(request, "_cache_extra_keys", None))
+        media_covered = (
+            media
+            and offset is not None
+            and prefill_geometry.media_rows_covered(
+                getattr(request, "prompt_token_ids", None) or [], min(cached, offset)
+            )
+        )
         # Lanes that disagree (layers at different offsets, an index lane out of step) prove nothing: full prefill.
         reuse = 0 if offset is None else prefill_geometry.reuse_limit(
             min(cached, offset),
             boundary,
             step,
             exact_geometry=(paged or whole_entry_exact) and offset == cached,
-            atomic=prefill_geometry.is_media_request(
-                getattr(request, "_cache_extra_keys", None)
-            ),
+            atomic=media and not media_covered,
             cuts=[
                 *self._m3_turn_cuts(request),
                 *(
                     [min(cached, offset)]
                     if offset is not None
-                    and prefill_geometry.inside_assistant_turn(
+                    and (media_covered or prefill_geometry.inside_assistant_turn(
                         getattr(request, "prompt_token_ids", None) or [],
                         getattr(self, "_m3_turn_markers", None),
                         min(cached, offset),
-                    )
+                    ))
                     else []
                 ),
             ],

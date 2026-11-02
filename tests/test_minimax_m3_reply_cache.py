@@ -321,6 +321,94 @@ def test_stopped_dspark_turn_keeps_its_partial_reply(model, tmp_path, monkeypatc
         object.__setattr__(model, "_vmlx_dspark_runtime", None)
 
 
+def _media_run(sched, trace, prompt, digest, *, max_tokens):
+    """One image request. The vision splice itself has its own tests; these are about which rows may be reused."""
+    from vmlx_engine.request import Request, SamplingParams
+
+    req = Request(request_id=f"img-{len(trace.inserts)}", prompt=list(prompt),
+                  sampling_params=SamplingParams(max_tokens=max_tokens, temperature=0.0))
+    req.prompt_token_ids = list(prompt)
+    req.num_prompt_tokens = len(prompt)
+    req._gen_prompt_len = len(_gen("adaptive"))
+    req._cache_extra_keys = {"mllm_media": digest}
+    sched.add_request(req)
+    for _ in range(max_tokens + 8):
+        if any(o.finished for o in sched.step().outputs):
+            break
+    else:
+        pytest.fail("image request did not finish")
+    return {"tokens": list(req.output_token_ids), "cached": int(req.cached_tokens or 0), "insert": trace.inserts[-1]}
+
+
+def _image_chat(monkeypatch):
+    img = 77
+    monkeypatch.setattr(prefill_geometry, "MEDIA_TOKEN_IDS", (img,))
+    return img, _msg(SYS, _ids(173, 3)) + _msg(USER, _ids(61, 5) + [img] * 16 + _ids(23, 6)) + _gen("adaptive")
+
+
+@pytest.mark.parametrize("step", [STEP, 64])
+def test_turn_after_an_image_reuses_the_rows_that_hold_it(model, tmp_path, monkeypatch, step):
+    """Same image still in history: only the new text is prefilled. 678 tokens, 0 cached on the real model before."""
+    _, first = _image_chat(monkeypatch)
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path / "ssd", step, tok=_TurnTok())
+    try:
+        one = _media_run(sched, trace, first, "image-a", max_tokens=40)
+        second = _exact_next(first, one["tokens"], _ids(41, 7))
+        two = _media_run(sched, trace, second, "image-a", max_tokens=8)
+        assert two["cached"] == _reply_floor(first, one["tokens"]), two["cached"]
+        third = _exact_next(second, two["tokens"], _ids(19, 8))
+        three = _media_run(sched, trace, third, "image-a", max_tokens=8)
+        assert three["cached"] == _reply_floor(second, two["tokens"]), three["cached"]
+    finally:
+        sched.shutdown()
+
+
+def test_a_different_image_with_the_same_tokens_reuses_nothing(model, tmp_path, monkeypatch):
+    """The dangerous shape: same size, so same placeholder tokens. Rows from the first image must never answer for it."""
+    _, first = _image_chat(monkeypatch)
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path / "ssd", STEP, tok=_TurnTok())
+    try:
+        one = _media_run(sched, trace, first, "image-a", max_tokens=40)
+        second = _exact_next(first, one["tokens"], _ids(41, 7))
+        # The next turn, with another image's digest: every row it could find belongs to image-a.
+        assert _media_run(sched, trace, second, "image-b", max_tokens=4)["cached"] == 0
+        # The same prompt again, with yet another image.
+        assert _media_run(sched, trace, first, "image-c", max_tokens=4)["cached"] == 0
+        # A second image in a later turn changes the digest: the whole conversation is prefilled, as before.
+        assert _media_run(sched, trace, second, "image-a+image-d", max_tokens=4)["cached"] == 0
+        # Rows of image-a are still there for image-a, so the zeros above are not an empty cache.
+        assert _media_run(sched, trace, second, "image-a", max_tokens=4)["cached"] == _reply_floor(first, one["tokens"])
+    finally:
+        sched.shutdown()
+
+
+def test_a_hit_that_ends_before_the_image_is_not_used(model, tmp_path, monkeypatch):
+    """Those rows do not hold the image, and the vision tensor has to meet every placeholder in one forward."""
+    img, first = _image_chat(monkeypatch)
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path / "ssd", STEP, tok=_TurnTok())
+    try:
+        _media_run(sched, trace, first, "image-a", max_tokens=8)
+        at = first.index(img)
+        changed = first[:at - 1] + [first[at - 1] + 1] + first[at:]
+        assert _media_run(sched, trace, changed, "image-a", max_tokens=4)["cached"] == 0
+    finally:
+        sched.shutdown()
+
+
+def test_media_rows_are_covered_only_past_the_last_placeholder(monkeypatch):
+    monkeypatch.setattr(prefill_geometry, "MEDIA_TOKEN_IDS", (9,))
+    tokens = [1, 9, 9, 2, 9, 3, 4]
+    assert prefill_geometry.media_rows_covered(tokens, 5) is True
+    assert prefill_geometry.media_rows_covered(tokens, 4) is False
+    assert prefill_geometry.media_rows_covered(tokens, 2) is False
+    assert prefill_geometry.media_rows_covered([1, 2, 3], 3) is False, "no placeholder found proves nothing"
+    keys = lambda boundary: prefill_geometry.cache_extra_keys({"mllm_media": "x"}, boundary=boundary, step=320)
+    assert keys(1009) == keys(1500), "the next turn has to find these rows"
+
+
 def test_cold_prefill_cuts_do_not_change(model):
     """An assistant turn's end stays out of the cold prefill plan: only what a hit may reuse changes."""
     first = _first_prompt("adaptive")
