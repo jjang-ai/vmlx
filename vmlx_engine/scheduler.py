@@ -614,8 +614,8 @@ def _native_mtp_spec_stats_for(uid) -> Optional[dict]:
 
 
 def _text_lane_dspark_spec_stats_for(generator, uid) -> Optional[dict]:
-    """The finished request's DSpark stats from the MiniMax-M3 text lane (DSparkTextGenerator.pop_spec_stats), as
-    last_request.speculative. None for any other generator and for requests that took the plain path."""
+    """Consume completed native/text DSpark metadata as last_request.speculative.
+    None for generators without telemetry and requests that took the plain path."""
     pop = getattr(generator, "pop_spec_stats", None)
     if not callable(pop):
         return None

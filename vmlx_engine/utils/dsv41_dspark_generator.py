@@ -22,6 +22,7 @@ or a logprobs request falls back to the inherited AR path (per request).
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 import os
 import time
 
@@ -283,6 +284,9 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
 
     def __init__(self, model, *args, **kwargs):
         super().__init__(model, *args, **kwargs)
+        # Completed-request metadata only; the scheduler consumes each uid once.
+        self._spec_stats: OrderedDict = OrderedDict()
+        self.last_dspark_stats = None
         from jang_tools.dsv41.dspark import DSparkRunner
 
         # The DSpark prefill chooses its width per request (PrefillChunkChooser); this generator's inherited AR
@@ -528,11 +532,26 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             self._log_dspark_stats(req)
         return resp
 
-    @staticmethod
-    def _log_dspark_stats(req) -> None:
+    def _log_dspark_stats(self, req) -> None:
         st = getattr(req, "_dspark_stats", None) or {}
         if not st:
             return
+        steps = int(st.get("steps") or 0)
+        emitted = int(st.get("emitted") or 0)
+        drafted = int(st.get("drafted") or 0)
+        summary = {
+            "kind": "dspark", "lane": "deepseek-v4.1", **st,
+            "tokens": emitted, "cycles": steps,
+            "emitted_per_cycle": emitted / steps if steps else 0.0,
+            "acceptance": int(st.get("accepted") or 0) / drafted if drafted else 0.0,
+            # DSparkRunner's AR branch commits exactly one token per ar_step.
+            "ar_tokens": int(st.get("ar_steps") or 0),
+            "adaptive_governor": bool(getattr(self._runner, "adaptive", False)),
+        }
+        self.last_dspark_stats = summary
+        self._spec_stats[req.uid] = summary
+        while len(self._spec_stats) > 16:
+            self._spec_stats.popitem(last=False)
         logger.info(
             "DSV4.1 DSpark request %s: emitted=%s steps=%s spec_steps=%s ar_steps=%s accept=%s/%s "
             "spec_ms_per_tok=%s ar_ms_per_tok=%s",
@@ -541,6 +560,10 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             None if st.get("spec_s_per_tok") is None else round(st["spec_s_per_tok"] * 1000, 2),
             None if st.get("ar_s_per_tok") is None else round(st["ar_s_per_tok"] * 1000, 2),
         )
+
+    def pop_spec_stats(self, uid):
+        """Return this finished request's telemetry once; never reuse another uid's record."""
+        return self._spec_stats.pop(uid, None)
 
     def _yield_current_and_schedule_next(self, req, *, prompt_cache_snapshot=None) -> Response:
         if getattr(req, "_dspark_on", False):
