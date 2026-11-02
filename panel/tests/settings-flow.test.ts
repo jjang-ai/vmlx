@@ -3003,7 +3003,7 @@ describe('Default IP and New Settings', () => {
         expect(form).not.toContain("normalizedDetectedFamily === 'openpangu_v2'")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
         expect(form).toContain("t('sessions.config.openPanguTypedCacheNote')")
-        expect(enLocale).toContain('openPangu v2 uses exact typed N-1 prompt snapshots')
+        expect(enLocale).toContain('openPangu keeps its reusable prompts exactly as the model produced them')
         // The exact typed prompt store is the lane's SSD choice; it keeps no RAM copy next to it.
         expect(form).toContain('const cacheLane = { exactTypedPromptDiskCache }')
         expect(form).toContain("{exactTypedPromptDiskCache && simpleCacheTier.ssdOn && <InfoNote text={t('sessions.config.ssdOnlyLaneNote')} />}")
@@ -3837,7 +3837,7 @@ describe('JIT Toggle', () => {
         expect(form).toContain("t('sessions.config.zayaTypedCacheNote')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('ZAYA CCA SSD prefix reconstruction is not yet available')
+        ).toContain('ZAYA cannot restore prompts from SSD yet')
         expect(settings).toContain('buildCacheLaunchArgs')
         expect(sessions).toContain('buildCacheLaunchArgs')
         expect(sessions).not.toContain("args.push('--use-paged-cache')")
@@ -3937,7 +3937,7 @@ describe('JIT Toggle', () => {
         expect(form).toContain("t('sessions.config.dsv4BatchPathNote')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('Prefix reuse defaults On and Block Disk Cache (SSD / L2) defaults On as the warm/cold stack')
+        ).toContain('The SSD cache is on by default')
         expect(form).not.toContain('cacheControlUpdatesForDsv4CompositeToggle')
         expect(form).not.toContain('cacheControlUpdatesForDsv4BlockDiskToggle')
         expect(form).not.toContain('applyDsv4CompositeCacheToggle')
@@ -4104,7 +4104,7 @@ describe('JIT Toggle', () => {
 
         expect(form).not.toContain('Persist DeepSeek-V4 native SWA+CSA/HCA composite cache records to SSD')
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('defaults On as the warm/cold stack')
+        expect(enLocale).toContain('The SSD cache is on by default')
         // No separate legacy prompt-disk control exists any more; the SSD choice covers both store kinds.
         expect(form).not.toContain('data-vmlx-section="typed-disk-cache"')
         expect(form).not.toContain("label={t('sessions.config.enableDiskCache')}")
