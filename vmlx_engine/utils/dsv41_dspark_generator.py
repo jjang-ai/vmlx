@@ -106,6 +106,17 @@ def _fallback_chunk(n_tokens: int, start: int, step: int) -> int:
     return step
 
 
+def _prefill_takes_images(runner) -> bool:
+    """DSparkRunner.prefill(images=, token_types=) exists; older runtimes keep image turns on AR."""
+    import inspect
+
+    try:
+        params = inspect.signature(runner.prefill).parameters
+    except (TypeError, ValueError):
+        return False
+    return "images" in params and "token_types" in params
+
+
 def _prefill_takes_cuts(runner) -> bool:
     """DSparkRunner.prefill(cuts=, on_cut=) exists (jang_tools after 2.5.52); older runtimes prefill without cuts."""
     import inspect
@@ -369,8 +380,17 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
         return True, SpecSampler(spec["temperature"], top_p=spec.get("top_p", 0.0), min_p=spec.get("min_p", 0.0),
                                  top_k=spec.get("top_k", 0), seed=spec.get("seed"))
 
+    def _vl_spec_ok(self, req) -> bool:
+        """An image turn drafts its text answer when the runner can prefill the image (the draft head is text-only).
+        Anything else that marks a request as vision keeps the AR path. VMLX_DSV41_DSPARK_VL=0 restores AR."""
+        if getattr(req, "pixel_values", None) is not None or getattr(req, "pixel_values_videos", None) is not None:
+            return False
+        if os.environ.get("VMLX_DSV41_DSPARK_VL", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return False
+        return _prefill_takes_images(self._runner)
+
     def _use_dspark(self, req) -> bool:
-        if self._runner is None or self._is_vl(req):
+        if self._runner is None or (self._is_vl(req) and not self._vl_spec_ok(req)):
             return False
         ok, sampler = self._spec_sampler(req)
         req._dspark_sampler = sampler
@@ -441,11 +461,16 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
                 return w
 
             extra = {"cuts": cuts, "on_cut": _on_cut}
+        if getattr(req, "dsv41_vl_images", None) is not None:
+            extra["images"] = req.dsv41_vl_images
+            extra["token_types"] = req.dsv41_vl_token_types or []
         with self._stream_context():
             sess, pending, c = self._runner.prefill(
                 prompt, session=seq, on_boundary=_on_boundary, chunk_size=chunk, **extra,
             )
             mx.eval(pending)
+        req.dsv41_vl_images = None  # fully consumed: decode stays on the text path, as on the AR lane
+        req.dsv41_vl_token_types = None
         req.boundary_checkpoints = checkpoints or None
         logger.info("DSV4.1 DSpark prefill %s: %s tokens from pos %s, chunk %s (%s)", req.uid, len(prompt), start,
                     widths[0] if len(widths) == 1 else widths, chooser.describe())

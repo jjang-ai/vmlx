@@ -278,4 +278,4 @@ constraint-dependencies = [
 # Pin the reviewed JANG runtime: DeepSeek-V4.1 prefill trimming, exact DSpark
 # prefix snapshots, runtime naming cleanup, and rotating-cache API compatibility.
 [tool.uv.sources]
-jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "f7031c4de853249e2f86d4d9efb5b50289cf7e52", subdirectory = "jang-tools" }
+jang = { git = "https://github.com/jjang-ai/jangq.git", rev = "e20180086bf949003bfe1cfd6cb853fe81fe2bd3", subdirectory = "jang-tools" }
