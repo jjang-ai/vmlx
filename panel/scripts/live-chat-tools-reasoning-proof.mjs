@@ -830,7 +830,7 @@ async function main() {
           return !!button;
         };
         clickSection('Prefix Cache');
-        const box = (name) => document.querySelector(`[data-vmlx-control="${name}"] input[type="checkbox"]`);
+        const box = (name) => document.querySelector('[data-vmlx-control="' + name + '"] input[type="checkbox"]');
         await wait(() => box('ssd-cache') && box('ram-cache'));
         const state = () => ({ ssdCache: !!box('ssd-cache')?.checked, ramCache: !!box('ram-cache')?.checked });
         const choose = async (ssd, ram) => {

@@ -712,15 +712,9 @@ def test_dsv4_cache_ui_uses_shared_cache_owner_without_duplicate_labels():
     assert "DSV4 Block Disk Cache (SSD / L2)" not in en_catalog
     assert "sessions.config.enablePrefixCache" not in form
     assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
-    assert "checked={cachePolicy.blockDiskCacheChecked}" in form
-    assert "sessions.config.blockDiskPureSsdNote" in form
-    assert 'className="cfg-input" disabled' in form
-    assert "const effectiveStoredCacheQuantization = 'auto'" in form
-    assert '<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>' in form, (
-        "the stored-codec selector must stay visibly disabled at auto for "
-        "every family; a re-enabled selector would reintroduce lossy stored "
-        "prefixes"
-    )
+    assert "checked={simpleCacheTier.ssdOn}" in form
+    assert "blockDiskPureSsdNote" not in form
+    assert "effectiveStoredCacheQuantization" not in form
 
     # A stale label would reach users through a catalog entry now, so check
     # both surfaces.
