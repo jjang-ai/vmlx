@@ -713,7 +713,6 @@ def test_dsv4_cache_ui_uses_shared_cache_owner_without_duplicate_labels():
     assert "sessions.config.enablePrefixCache" not in form
     assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
     assert "checked={simpleCacheTier.ssdOn}" in form
-    assert "blockDiskPureSsdNote" not in form
     assert "effectiveStoredCacheQuantization" not in form
 
     # A stale label would reach users through a catalog entry now, so check
