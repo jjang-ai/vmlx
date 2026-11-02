@@ -1462,16 +1462,23 @@ class Glm5NextIndexer(nn.Module):
         self._state_dtype = (
             mx.bfloat16 if _dsa_bf16_state_requested() else mx.float32
         )
+        self._pool_math_dtype = None
 
     def packed_states(self, x: mx.array) -> mx.array:
         """Per-token indexer state: [B, T, head_dim(k) + head_dim(gate)]."""
+        projected = self.wk(x)
+        # The release indexer rounds LayerNorm and gate outputs to the
+        # projection dtype before pooling. FP32 cache storage must not remove
+        # those activation boundaries: small score changes alter top-k pools.
+        self._pool_math_dtype = projected.dtype
         k = mx.fast.layer_norm(
-            self.wk(x).astype(mx.float32),
+            projected.astype(mx.float32),
             self.k_norm.weight.astype(mx.float32),
             self.k_norm.bias.astype(mx.float32),
             1e-6,
-        )
-        gate = x.astype(mx.float32) @ self.index_kpool_compress_gate.astype(mx.float32).T
+        ).astype(projected.dtype)
+        gate = (x.astype(mx.float32)
+                @ self.index_kpool_compress_gate.astype(mx.float32).T).astype(projected.dtype)
         return mx.concatenate([k, gate], axis=-1).astype(self._state_dtype)
 
     def compress_pool_keys(self, packed: mx.array) -> mx.array:
@@ -1485,17 +1492,22 @@ class Glm5NextIndexer(nn.Module):
         n_pools = T // self.kpool
         if n_pools == 0:
             return mx.zeros((B, 0, self.head_dim), dtype=self._state_dtype)
-        keys, gates = mx.split(
-            packed.astype(mx.float32), [self.head_dim], axis=-1
-        )
+        # packed_states establishes this on every forward, including after an
+        # SSD restore. Standalone FP32 callers retain their original precision.
+        math_dtype = self._pool_math_dtype or packed.dtype
+        keys, gates = mx.split(packed.astype(math_dtype), [self.head_dim], axis=-1)
         keys = keys.reshape(B, n_pools, self.kpool, self.head_dim)
         gates = gates.reshape(B, n_pools, self.kpool, self.head_dim)
-        logits = gates + self.index_kpool_compress_ape.astype(mx.float32)[
-            None, None
-        ]
-        return mx.sum(mx.softmax(logits, axis=2) * keys, axis=2).astype(
-            self._state_dtype
-        )
+        logits = gates.astype(mx.float32) + self.index_kpool_compress_ape.astype(
+            math_dtype
+        ).astype(mx.float32)[None, None]
+        probabilities = mx.softmax(logits, axis=2).astype(math_dtype)
+        products = (probabilities * keys).astype(math_dtype)
+        # Match the reference's low-precision product and sum output, with
+        # FP32 reduction accumulation; keep the configured cache layout.
+        return mx.sum(products.astype(mx.float32), axis=2).astype(
+            math_dtype
+        ).astype(self._state_dtype)
 
     def update_pool_cache(
         self,

@@ -23,6 +23,7 @@ def test_close_drains_queued_writes_and_terminates_worker(tmp_path, monkeypatch)
         return {"outcome": "stored", "durable": True, "retained_tokens": len(key)}
 
     monkeypatch.setattr(runtime.PrefixDiskTier, "_write", write)
+    monkeypatch.setattr(runtime.PrefixDiskTier, "_freeze", lambda self, key, snap: snap)
     disk = runtime.PrefixDiskTier(tmp_path, 1024)
     first = disk.put((1,), None)
     second = disk.put((2,), None)
@@ -76,6 +77,7 @@ def test_native_writer_receipt_fences_next_tool_but_not_terminal(tmp_path, monke
         assert release.wait(3)
         return {"outcome": "stored", "durable": True, "retained_tokens": len(key)}
     monkeypatch.setattr(runtime.PrefixDiskTier, "_write", write)
+    monkeypatch.setattr(runtime.PrefixDiskTier, "_freeze", lambda self, key, snap: snap)
     disk = runtime.PrefixDiskTier(tmp_path, 1024)
     receipt = disk.put((1, 2, 3), None)
 
@@ -111,6 +113,7 @@ def test_writer_failure_is_settled_as_not_durable(tmp_path, monkeypatch):
     def fail(*args):
         raise OSError("disk write failed")
     monkeypatch.setattr(runtime.PrefixDiskTier, "_write", fail)
+    monkeypatch.setattr(runtime.PrefixDiskTier, "_freeze", lambda self, key, snap: snap)
     disk = runtime.PrefixDiskTier(tmp_path, 1024)
     try:
         result = disk.put((1, 2), None).result(timeout=1)
