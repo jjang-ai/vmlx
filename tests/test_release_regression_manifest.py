@@ -16732,3 +16732,56 @@ def test_scoped_dsv41_completed_stream_rejects_truncation_and_summaries():
     assert not _is_completed_responses_stream(b'data: {"type":"response.output_text.delta","delta":"hi"}\n')
     assert not _is_completed_responses_stream(b'data: {"type":"response.completed"}\n')
     assert not _is_completed_responses_stream(b'data: null\n')
+
+
+def test_scoped_runtime_checkpoint_keeps_functional_owners_and_rejects_gaps(tmp_path, monkeypatch):
+    runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
+    required = runner.SCOPED_CHECKPOINT_RECEIPTS
+    data.update(schema=runner.SCOPED_CHECKPOINT_SCHEMA, models=sorted(runner.SCOPED_CHECKPOINT_MODELS))
+
+    def write(name, value):
+        p = path.parent / name
+        p.write_text(value if isinstance(value, str) else json.dumps(value))
+        return {"path": name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+
+    data['receipts'] = {k: v for k, v in data['receipts'].items() if k in required}
+    for owner in required - data['receipts'].keys():
+        entry = json.loads(json.dumps(data['receipts']['CACHE_API']))
+        original = json.loads((path.parent / entry['receipt']['path']).read_text())
+        original['owner'] = owner
+        entry['receipt'] = write(owner + '.json', original)
+        data['receipts'][owner] = entry
+    stream = write('completed.sse', 'data: {"type":"response.output_text.delta","delta":"fixture"}\n\n'
+                   'data: {"type":"response.completed","response":{"status":"completed"}}\n\n')
+    raw, image, _ = data['receipts']['CACHE_API']['artifacts']
+    row = {'status': 'PASS', 'active_gaps': [], 'source_commit': 'a' * 40,
+           'bundle_config_sha256': 'b' * 64, 'runtime_identity': raw, 'review': raw,
+           'retention_decision': raw, 'modalities': raw,
+           'turns': [{'status': 'PASS', 'visual': image, 'api': stream, 'review': raw} for _ in range(3)]}
+    scope = {'models': data['models'], 'required_receipts': sorted(required),
+             'authority': 'explicit checkpoint', 'limits': 'media observations retained',
+             'checkpoint_focus': 'deepseek-minimax-text-tools-cache-adaptive',
+             'media_quality_authority': 'user accepts imperfect multimodal quality',
+             'text_tool_gaps': [],
+             'model_evidence': {name: json.loads(json.dumps(row)) for name in data['models']}}
+
+    def validate():
+        data['scope_document'] = write('scope.json', scope)
+        path.write_text(json.dumps(data))
+        return runner.validate_scoped_prepackage(root, path, provenance=provenance, expected_version='1.6.74')
+
+    assert validate()['status'] == 'pass'
+    saved = scope['model_evidence'].pop('minimax-m31-janght')
+    assert validate()['status'] == 'fail'
+    scope['model_evidence']['minimax-m31-janght'] = saved
+    scope['text_tool_gaps'] = ['wrong tool result']
+    assert validate()['status'] == 'fail'
+    scope['text_tool_gaps'] = []
+    scope['media_quality_authority'] = ''
+    assert validate()['status'] == 'fail'
+    scope['media_quality_authority'] = 'explicit user decision'
+    saved['turns'][0]['status'] = 'FAIL'
+    assert validate()['status'] == 'fail'
+    saved['turns'][0]['status'] = 'PASS'
+    del data['receipts']['DSPARK_DEFAULTS']
+    assert validate()['status'] == 'fail'
