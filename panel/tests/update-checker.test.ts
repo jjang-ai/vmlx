@@ -184,6 +184,21 @@ describe('native macOS update asset selection', () => {
     expect(selected.sha256).toBe('t'.repeat(64))
   })
 
+  it('keeps macOS 26.0 and 26.1 on compatibility when native requires 26.2', () => {
+    for (const os of ['26.0.0', '26.1.1']) {
+      const selected = selectDownloadForMacOS(manifest, os)
+      expect(selected.url).toContain('-sequoia-arm64.dmg')
+      expect(selected.sha256).toBe('s'.repeat(64))
+    }
+  })
+
+  it('honors a newer artifact minimum from the feed', () => {
+    const release = { ...manifest, downloads: { ...manifest.downloads,
+      tahoe: { ...manifest.downloads.tahoe, minimumSystemVersion: '27.1.0' } } }
+    expect(selectDownloadForMacOS(release, '27.0.1').url).toContain('-sequoia-arm64.dmg')
+    expect(selectDownloadForMacOS(release, '27.1.0').url).toContain('-tahoe-arm64.dmg')
+  })
+
   it('keeps the Sequoia-compatible DMG on macOS 15', () => {
     const selected = selectDownloadForMacOS(manifest, '15.6.0')
 
@@ -196,7 +211,7 @@ describe('native macOS update asset selection', () => {
       version: '1.5.49',
       url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-sequoia-arm64.dmg',
       sha256: 's'.repeat(64),
-    }, '26.0.0')
+    }, '26.2.0')
 
     expect(selected.url).toBe('https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-tahoe-arm64.dmg')
     expect(selected.sha256).toBeUndefined()

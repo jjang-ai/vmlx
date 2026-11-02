@@ -15,6 +15,51 @@ from pathlib import Path
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
+def update_download_cards(html: str, downloads: dict, runtime: dict) -> str:
+    """Keep visible checksums, sizes and OS requirements tied to the release."""
+    floors = {
+        "tahoe": runtime["platforms"]["macosx_26_0_arm64"]["minimum_system_version"],
+        "sequoia": runtime["platforms"]["macosx_14_0_arm64"]["minimum_system_version"],
+    }
+    floors = {key: value.removesuffix(".0") for key, value in floors.items()}
+    seen: set[str] = set()
+    cards = re.compile(
+        r'(<div class="build-h"><span>[^<]*</span><span>)([^<]*)'
+        r'(</span></div>.*?<div class="sha"><em>sha256</em>)([0-9a-fA-F]{64})'
+        r'(</div>\s*<a class="get" href=")([^"]+)(")', re.DOTALL,
+    )
+
+    def replace(match: re.Match) -> str:
+        flavor = next((name for name, entry in downloads.items()
+                       if entry["url"] == match[6]), None)
+        if flavor not in floors or flavor in seen:
+            raise SystemExit("ERROR: ambiguous download card artifact")
+        entry = downloads[flavor]
+        if (not re.fullmatch(r"[0-9a-f]{64}", str(entry.get("sha256", "")))
+                or not isinstance(entry.get("bytes"), int) or entry["bytes"] <= 0):
+            raise SystemExit(f"ERROR: invalid {flavor} checksum/size")
+        seen.add(flavor)
+        middle = match[3]
+        middle = re.sub(r'(<div class="n">).*?(</div>)',
+                        rf'\g<1>macOS {floors[flavor]}+\g<2>', middle, count=1)
+        description = (f"Native MLX wheels for macOS {floors[flavor]} or later."
+                       if flavor == "tahoe" else
+                       f"Compatible with macOS {floors[flavor]} and later, including earlier Tahoe versions.")
+        middle = re.sub(r'(<div class="d">).*?(</div>)',
+                        lambda item: item[1] + description + item[2], middle, count=1)
+        size = f"{entry['bytes'] / (1024 * 1024):.0f} MiB"
+        return match[1] + size + middle + entry["sha256"] + match[5] + match[6] + match[7]
+
+    html = cards.sub(replace, html)
+    if seen != set(floors):
+        raise SystemExit("ERROR: page must contain one checksum card per release flavor")
+    guidance = (f"Choose the native build on macOS {floors['tahoe']} or later. "
+                f"The compatibility build supports macOS {floors['sequoia']} or later.")
+    html = re.sub(r'(<section id="builds".*?<p class="sec-lede">).*?(</p>)',
+                  lambda item: item[1] + guidance + item[2], html, count=1, flags=re.DOTALL)
+    return html
+
+
 def atomic_write(path: Path, content: bytes, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -35,6 +80,9 @@ def main() -> int:
     parser.add_argument("--site-root", type=Path, required=True)
     parser.add_argument("--updater", type=Path, required=True)
     parser.add_argument("--backup-root", type=Path, required=True)
+    parser.add_argument("--runtime-spec", type=Path, default=(
+        Path(__file__).resolve().parents[2] / "panel/scripts/mlx-runtime.json"
+    ))
     args = parser.parse_args()
 
     updater = json.loads(args.updater.read_text(encoding="utf-8"))
@@ -69,11 +117,15 @@ def main() -> int:
         current_updater = json.loads(updater_target.read_text(encoding="utf-8"))
         if current_updater != updater:
             raise SystemExit("ERROR: current-version website updater differs from candidate")
-        for entry in (tahoe, sequoia):
-            if entry["url"] not in html:
-                raise SystemExit(
-                    f"ERROR: current-version page is missing {entry['url']}"
-                )
+
+    updated = html.replace(f"vMLX-{old_version}-", f"vMLX-{version}-")
+    updated = updated.replace(f"/v{old_version}/", f"/v{version}/")
+    updated = updated.replace(f'"softwareVersion": "{old_version}"', f'"softwareVersion": "{version}"')
+    updated = re.sub(r'"fileSize"\s*:\s*"[0-9]+ bytes"',
+                     f'"fileSize": "{tahoe.get("bytes", 0)} bytes"', updated, count=1)
+    updated = re.sub(rf"(?<![0-9.]){re.escape(old_version)}(?![0-9]|\.[0-9])", version, updated)
+    updated = update_download_cards(updated, downloads, json.loads(args.runtime_spec.read_text()))
+    if old_version == version and updated == html:
         print(f"Website release surfaces already match {version}")
         return 0
 
@@ -92,20 +144,6 @@ def main() -> int:
             shutil.copy2(updater_target, backup / "latest.json")
         shutil.copy2(download_page, backup / "download-index.html")
 
-    updated = html.replace(f"vMLX-{old_version}-", f"vMLX-{version}-")
-    updated = updated.replace(f"/v{old_version}/", f"/v{version}/")
-    updated = updated.replace(f'"softwareVersion": "{old_version}"', f'"softwareVersion": "{version}"')
-    updated = re.sub(
-        r'"fileSize"\s*:\s*"[0-9]+ bytes"',
-        f'"fileSize": "{tahoe.get("bytes", 0)} bytes"',
-        updated,
-        count=1,
-    )
-    updated = re.sub(
-        rf"(?<![0-9.]){re.escape(old_version)}(?![0-9]|\.[0-9])",
-        version,
-        updated,
-    )
     for entry in (tahoe, sequoia):
         if entry["url"] not in updated:
             raise SystemExit(f"ERROR: patched page is missing {entry['url']}")
