@@ -180,6 +180,35 @@ def test_ram_tiers_restore_the_reply(model, tmp_path, monkeypatch, tier):
         sched.shutdown()
 
 
+def test_ram_tier_evicts_the_oldest_chat_first(model, tmp_path, monkeypatch):
+    """Eric: the RAM cache grows per turn and evicts the oldest. Real prompts are stored as "user" and the tier evicts
+    every "assistant" entry before any "user" one, so a reply stored as "assistant" went before an older chat's prompt."""
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    monkeypatch.setattr(Scheduler, "_pick_cache_type_for_request", staticmethod(lambda _request: "user"))
+    trace = _Trace(monkeypatch)
+    sched = Scheduler(model, _TurnTok(), SchedulerConfig(
+        max_num_seqs=1, prefill_step_size=STEP, enable_prefix_cache=True, use_paged_cache=False,
+        use_memory_aware_cache=True, enable_block_disk_cache=False,
+    ))
+    tier = sched.memory_aware_cache
+    try:
+        chats = [_msg(SYS, _ids(173, 40 + i)) + _msg(USER, _ids(41, 50 + i)) + _gen("adaptive") for i in range(3)]
+        first = _run(sched, trace, chats[0], max_tokens=40)
+        assert len(tier._entries) >= 2, "a prompt entry and a reply entry"
+        one_entry = max(e.memory_bytes for e in tier._entries.values())
+        second = _run(sched, trace, chats[1], max_tokens=40)
+        # Room for four of the six entries: the third chat fits only if two go, and they should be the oldest chat's.
+        tier._max_memory = int(one_entry * 4.5)
+        _run(sched, trace, chats[2], max_tokens=40)
+        middle = _run(sched, trace, _exact_next(chats[1], second["tokens"], _ids(41, 7)), max_tokens=8)
+        assert _rows_held(middle) == _reply_floor(chats[1], second["tokens"]), "the middle chat must keep its reply"
+        oldest = _run(sched, trace, _exact_next(chats[0], first["tokens"], _ids(41, 7)), max_tokens=8)
+        assert oldest["cached"] < _boundary(chats[0]), ("the oldest chat must be gone", oldest["cached"])
+    finally:
+        sched.shutdown()
+
+
 def test_ram_and_ssd_tier_restores_the_reply(model, tmp_path, monkeypatch):
     from vmlx_engine.scheduler import Scheduler, SchedulerConfig
 

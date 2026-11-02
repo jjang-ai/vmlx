@@ -4030,8 +4030,11 @@ class Scheduler:
                     finally:
                         self.block_aware_cache.release_cache(cid)
                 elif self.memory_aware_cache is not None:
+                    # The RAM tier evicts every "assistant" entry before any "user" one. A reply belongs to its chat, so
+                    # it is stored next to that chat's prompt and the oldest chat goes first.
+                    ram_type = "user" if cache_type == "assistant" else cache_type
                     if not _call_with_optional_cache_extra(
-                        self.memory_aware_cache.store, key, snap, cache_type=cache_type, cache_extra_keys=extra,
+                        self.memory_aware_cache.store, key, snap, cache_type=ram_type, cache_extra_keys=extra,
                     ):
                         continue
                 else:
