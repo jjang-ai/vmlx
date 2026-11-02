@@ -3892,10 +3892,10 @@ describe("Phase 6: Cache API Data Flow", () => {
       // copy lives in the locale catalog now that the panel is translated
       expect(cachePanelCopy).toContain("Clear RAM");
       expect(source).toContain("handleClear('prefix')");
-      expect(cachePanelCopy).toContain("Clear Prefix + L2");
+      expect(cachePanelCopy).toContain("Clear Prefix + SSD");
       // tooltip copy lives in the locale catalog now that the panel is translated
       expect(source).toContain("title={t('sessions.cache.clearRamTitle')}");
-      expect(cachePanelCopy).toContain("preserving disk-backed L2");
+      expect(cachePanelCopy).toContain("keep what is saved on SSD");
     });
   });
 });

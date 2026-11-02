@@ -14483,7 +14483,7 @@ class TestTurboQuantKVTelemetry:
         assert "l2_ssm_tokens_on_disk" in cache_panel_source
         assert _panel_label_is_rendered(cache_panel_source, "Companion Evictions")
         assert _panel_label_is_rendered(cache_panel_source, "Tokens on SSD")
-        assert _panel_label_is_rendered(cache_panel_source, "Companion L2 Tokens")
+        assert _panel_label_is_rendered(cache_panel_source, "Companion Tokens on SSD")
         assert _panel_label_is_rendered(cache_panel_source, "Persisted Block Reads")
         assert _panel_label_is_rendered(cache_panel_source, "This Engine Reads H / M")
         assert _panel_label_is_rendered(cache_panel_source, "This Engine Writes")
