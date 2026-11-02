@@ -53,6 +53,14 @@ jobs:
           path: jangq
           persist-credentials: false
 
+      - name: Bootstrap isolated build Python
+        working-directory: vmlx
+        run: |
+          set -euo pipefail
+          UV_BIN="$(command -v uv)"
+          "$UV_BIN" venv --seed --python 3.13 .venv
+          .venv/bin/python -c 'import pathlib, sys; assert sys.version_info[:2] == (3, 13), sys.version; assert pathlib.Path(sys.executable).absolute() == (pathlib.Path.cwd() / ".venv/bin/python").absolute(), sys.executable'
+
       - name: Capture source provenance
         id: provenance
         working-directory: vmlx
@@ -62,7 +70,7 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           source_tree="$(git rev-parse 'HEAD^{tree}')"
           jang_sha="$(git -C ../jangq rev-parse HEAD)"
-          version="$(/usr/bin/python3 - <<'PY'
+          version="$(.venv/bin/python - <<'PY'
           import tomllib
           with open('pyproject.toml', 'rb') as handle:
               print(tomllib.load(handle)['project']['version'])
@@ -84,9 +92,8 @@ jobs:
         working-directory: vmlx
         run: |
           set -euo pipefail
-          /usr/bin/python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip build twine
-          .venv/bin/python -m pip install -e '.[dev]'
+          .venv/bin/python -m pip install -e ../jangq/jang-tools -e '.[dev]'
           cd panel
           /opt/homebrew/bin/npm ci
 
@@ -103,11 +110,12 @@ jobs:
           panel/scripts/build-release-dmgs.sh '${{ inputs.flavor }}'
 
       - name: Write development provenance
+        working-directory: vmlx
         env:
           OUTPUT_DIR: ${{ runner.temp }}/vmlx-dev-${{ github.run_id }}
         run: |
           set -euo pipefail
-          /usr/bin/python3 - "$OUTPUT_DIR" <<'PY'
+          .venv/bin/python - "$OUTPUT_DIR" <<'PY'
           import hashlib
           import json
           import os
