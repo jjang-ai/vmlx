@@ -684,7 +684,7 @@ def test_reuse_limit_trailing_key_and_markers():
     # Media requests: atomic, the turn markers change nothing.
     media = prefill_geometry.cache_extra_keys({"mllm_media": "x"}, boundary=k, step=320, markers=MARKERS,
                                               tokens=prompt)
-    assert media[prefill_geometry.GEOMETRY_KEY] == {"schema": prefill_geometry.SCHEMA, "atomic_boundary": k}
+    assert media[prefill_geometry.GEOMETRY_KEY] == {"schema": prefill_geometry.SCHEMA, "atomic": True}
     P = prefill_geometry.plan_pieces
     assert P(0, 1013, 320, {"boundary": 1009, "atomic": False, "cuts": [100, 640, 1009]}) == [
         (0, 100), (100, 320), (320, 640), (640, 960), (960, 1009), (1009, 1013)]

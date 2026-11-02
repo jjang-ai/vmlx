@@ -6,42 +6,21 @@ export type CacheControlKey =
 
 export type CacheControlUpdate = [CacheControlKey, boolean]
 
+/**
+ * The saved cache keys (unchanged on disk, so every existing session keeps its
+ * meaning). The panel shows them as exactly two choices, SSD cache and RAM
+ * cache; `resolveSimpleCacheTier` is the only place that maps between the two.
+ */
 export interface CacheControlState {
   continuousBatching: boolean
-  /** DFlash2 owns an SSD store independently of the batched prefix stack. */
+  /** DFlash2 / DSpark single-request lanes own an SSD store independently of the batched prefix stack. */
   nativeSpeculativeCache?: boolean
   enablePrefixCache: boolean
   usePagedCache: boolean
   enableDiskCache: boolean
   enableBlockDiskCache: boolean
   architectureRequiresPagedCache?: boolean
-  /**
-   * The architecture has non-KV companion state, but the engine can pair the
-   * disk-only KV block index with a typed companion SSD store/rederive path.
-   * This is true for hybrid/Mamba SSM caches and native rotating/mixed-SWA
-   * caches whose typed metadata is carried in each block record. This includes
-   * DSV4, M3, and hybrid/Mamba cache contracts with a complete
-   * typed block-disk representation. It remains false for ZAYA/openPangu contracts
-   * that still require their architecture-specific in-memory or prompt-level
-   * cache lane.
-   */
   architectureSupportsBlockDiskOnly?: boolean
-}
-
-export interface CacheControlPolicy {
-  batchingOff: boolean
-  prefixOff: boolean
-  architectureRequiresPagedCache: boolean
-  architectureForcedPagedActive: boolean
-  userPagedCacheActive: boolean
-  effectiveUsePagedCache: boolean
-  pagedCacheDisabled: boolean
-  legacyDiskCacheDisabled: boolean
-  blockDiskCacheVisible: boolean
-  blockDiskCacheDisabled: boolean
-  legacyDiskCacheChecked: boolean
-  blockDiskCacheChecked: boolean
-  legacyDiskCacheUnavailableReason?: 'batching-off' | 'paged-cache-active' | 'architecture-requires-paged-cache'
 }
 
 export interface CacheLaunchPolicy {
@@ -49,99 +28,140 @@ export interface CacheLaunchPolicy {
   effectiveUsePagedCache: boolean
   enableLegacyDiskCache: boolean
   enableBlockDiskCache: boolean
+  /**
+   * A RAM tier the engine bounds with `--cache-memory-percent`: the memory-aware
+   * prefix cache (RAM only) or the paged RAM blocks in front of the block store
+   * (RAM + SSD). False for SSD only, for both-off, and for the native
+   * speculative and exact typed prompt-snapshot lanes.
+   */
+  ramCacheActive: boolean
 }
 
-export function resolveCacheControlPolicy(state: CacheControlState): CacheControlPolicy {
-  const batchingOff = !state.continuousBatching
-  const prefixOff = !state.enablePrefixCache
-  // Three user-chosen tiers, never chosen by a family or a registry capability:
-  //   RAM only  : Prefix Cache on, Block Disk Cache off (memory-aware prefix cache);
-  //   SSD only  : Block Disk Cache on, RAM copy off (the default);
-  //   RAM + SSD : Block Disk Cache on + "Keep a RAM copy" (paged RAM blocks in front of the SSD blocks).
-  // The RAM copy is a front for the block store, so it is live only with Block Disk Cache (and never for the
-  // native speculative lanes, which own their SSD store).
-  const architectureRequiresPagedCache = false
-  const architectureForcedPagedActive = false
-  const blockDiskCacheActive = (state.nativeSpeculativeCache || (!batchingOff && !prefixOff)) && !!state.enableBlockDiskCache
-  const ramCopyAvailable = blockDiskCacheActive && !state.nativeSpeculativeCache
-  const userPagedCacheActive = ramCopyAvailable && !!state.usePagedCache
-  const effectiveUsePagedCache = userPagedCacheActive
-  const pagedCacheDisabled = !ramCopyAvailable
-  const legacyDiskCacheDisabled = batchingOff || blockDiskCacheActive
-  const blockDiskCacheVisible = !!state.nativeSpeculativeCache || !batchingOff
-  const blockDiskCacheDisabled = batchingOff && !state.nativeSpeculativeCache
-  const legacyDiskCacheChecked = !!state.enableDiskCache && !legacyDiskCacheDisabled && !prefixOff
-  const blockDiskCacheChecked = blockDiskCacheActive
-  const legacyDiskCacheUnavailableReason = batchingOff
-    ? 'batching-off'
-    : architectureRequiresPagedCache
-      ? 'architecture-requires-paged-cache'
-      : effectiveUsePagedCache
-        ? 'paged-cache-active'
-        : undefined
+export type SimpleCacheTier = 'off' | 'ram' | 'ssd' | 'ram-ssd'
 
-  return {
-    batchingOff,
-    prefixOff,
-    architectureRequiresPagedCache,
-    architectureForcedPagedActive,
-    userPagedCacheActive,
-    effectiveUsePagedCache,
-    pagedCacheDisabled,
-    legacyDiskCacheDisabled,
-    blockDiskCacheVisible,
-    blockDiskCacheDisabled,
-    legacyDiskCacheChecked,
-    blockDiskCacheChecked,
-    legacyDiskCacheUnavailableReason,
+export interface SimpleCacheLane {
+  /**
+   * openPangu / native GLM: the SSD choice is the exact typed prompt store
+   * (`enableDiskCache`, `--enable-disk-cache --disk-cache-pool`). That lane
+   * keeps no RAM copy next to its SSD store (the launcher passes
+   * `--cache-memory-mb 0`), so RAM is offered only while SSD is off.
+   */
+  exactTypedPromptDiskCache?: boolean
+}
+
+export interface SimpleCacheTierState {
+  ssdOn: boolean
+  ramOn: boolean
+  /** Whether the RAM choice can be turned on from the current state of this lane. */
+  ramAvailable: boolean
+  tier: SimpleCacheTier
+}
+
+function batchedPrefixActive(state: CacheControlState): boolean {
+  return !!state.continuousBatching && !!state.enablePrefixCache
+}
+
+/**
+ * Old saved keys -> the two user-facing choices.
+ *
+ *   SSD on  = Block Disk Cache on (generic) / Disk Cache on (exact typed lane) / native SSD store on (speculative lane)
+ *   RAM on  = Prefix Cache on with no SSD store (the memory-aware prefix cache, "RAM only"),
+ *             or Prefix Cache + Block Disk Cache + the saved RAM copy (`usePagedCache`, "RAM + SSD")
+ *   both off = Prefix Cache off (no reuse)
+ */
+export function resolveSimpleCacheTier(state: CacheControlState, lane: SimpleCacheLane = {}): SimpleCacheTierState {
+  if (state.nativeSpeculativeCache) {
+    const ssdOn = !!state.enableBlockDiskCache
+    return { ssdOn, ramOn: false, ramAvailable: false, tier: ssdOn ? 'ssd' : 'off' }
   }
+  const prefix = batchedPrefixActive(state)
+  if (lane.exactTypedPromptDiskCache) {
+    const ssdOn = prefix && !!state.enableDiskCache
+    const ramOn = prefix && !ssdOn
+    return { ssdOn, ramOn, ramAvailable: !!state.continuousBatching && !ssdOn, tier: ssdOn ? 'ssd' : ramOn ? 'ram' : 'off' }
+  }
+  const ssdOn = prefix && !!state.enableBlockDiskCache
+  const ramOn = prefix && (!ssdOn || !!state.usePagedCache)
+  const tier: SimpleCacheTier = !prefix ? 'off' : ssdOn ? (ramOn ? 'ram-ssd' : 'ssd') : 'ram'
+  return { ssdOn, ramOn, ramAvailable: !!state.continuousBatching, tier }
 }
 
 export function resolveCacheLaunchPolicy(state: CacheControlState): CacheLaunchPolicy {
-  const batchingOff = !state.continuousBatching
-  const prefixEnabled = !batchingOff && !!state.enablePrefixCache
+  const prefixEnabled = batchedPrefixActive(state)
   const enableBlockDiskCache = !!state.enableBlockDiskCache && (prefixEnabled || !!state.nativeSpeculativeCache)
-  // The RAM copy (paged RAM blocks) only ever comes from the user's own checkbox, and only in front of the
-  // block store. Neither a per-family registry capability (`detected.usePagedCache`) nor an architecture
-  // "requires paged" claim may turn it on -- both once did, which is how 18 families ended up launching with
-  // --use-paged-cache nobody asked for.
+  // Paged RAM blocks only ever come from the user's own RAM choice, and only in front of the block store. Neither a
+  // per-family registry capability nor an architecture "requires paged" claim may turn it on -- both once did, which
+  // is how 18 families ended up launching with --use-paged-cache nobody asked for.
   const effectiveUsePagedCache = !!state.usePagedCache && enableBlockDiskCache && !state.nativeSpeculativeCache
+  const enableLegacyDiskCache = !!state.enableDiskCache && prefixEnabled && !enableBlockDiskCache
+  const ramCacheActive =
+    prefixEnabled &&
+    !state.nativeSpeculativeCache &&
+    (effectiveUsePagedCache || (!enableBlockDiskCache && !enableLegacyDiskCache))
 
   return {
     prefixCacheOff: !prefixEnabled,
     effectiveUsePagedCache,
-    enableLegacyDiskCache: !!state.enableDiskCache && prefixEnabled && !enableBlockDiskCache,
+    enableLegacyDiskCache,
     enableBlockDiskCache,
+    ramCacheActive,
   }
 }
 
-export function cacheControlUpdatesForPagedToggle(enabled: boolean, state: CacheControlState): CacheControlUpdate[] {
-  // "Keep a RAM copy" fronts the block store: turning it on also turns Block Disk Cache (and so Prefix Cache) on,
-  // so the saved state always launches what the checkbox shows (RAM + SSD).
-  const updates: CacheControlUpdate[] = []
-  if (enabled && !state.enablePrefixCache) updates.push(['enablePrefixCache', true])
-  if (enabled && state.enableDiskCache) updates.push(['enableDiskCache', false])
-  if (enabled && !state.enableBlockDiskCache) updates.push(['enableBlockDiskCache', true])
-  updates.push(['usePagedCache', enabled])
-  return updates
+/** The SSD choice. Turning it on or off never silently changes whether RAM caching was wanted. */
+export function cacheControlUpdatesForSsdToggle(
+  enabled: boolean,
+  state: CacheControlState,
+  lane: SimpleCacheLane = {},
+): CacheControlUpdate[] {
+  if (state.nativeSpeculativeCache) return [['enableBlockDiskCache', enabled]]
+  const current = resolveSimpleCacheTier(state, lane)
+  if (lane.exactTypedPromptDiskCache) {
+    if (enabled) {
+      return [
+        ['enablePrefixCache', true],
+        ['usePagedCache', false],
+        ['enableBlockDiskCache', false],
+        ['enableDiskCache', true],
+      ]
+    }
+    // Off = RAM only (the lane's memory-aware cache) while reuse stays wanted. The GLM text lane reads a saved
+    // native-pool On bit as the same disk choice, so an explicit Off clears that bit too.
+    return [['enableDiskCache', false], ['enableBlockDiskCache', false], ['usePagedCache', false]]
+  }
+  if (enabled) {
+    return [
+      ['enablePrefixCache', true],
+      ['enableDiskCache', false],
+      ['enableBlockDiskCache', true],
+      // RAM only -> RAM + SSD keeps the RAM choice; SSD only when RAM was off.
+      ['usePagedCache', current.ramOn],
+    ]
+  }
+  return [
+    ['enableBlockDiskCache', false],
+    ['usePagedCache', false],
+    // RAM + SSD -> RAM only; SSD only -> off (no reuse).
+    ['enablePrefixCache', current.ramOn],
+  ]
 }
 
-export function cacheControlUpdatesForDiskToggle(enabled: boolean, state: CacheControlState): CacheControlUpdate[] {
-  const updates: CacheControlUpdate[] = []
-  if (enabled && !state.enablePrefixCache) updates.push(['enablePrefixCache', true])
-  if (enabled && state.usePagedCache) updates.push(['usePagedCache', false])
-  if (enabled && state.enableBlockDiskCache) updates.push(['enableBlockDiskCache', false])
-  updates.push(['enableDiskCache', enabled])
-  return updates
-}
-
-export function cacheControlUpdatesForBlockDiskToggle(enabled: boolean, state: CacheControlState): CacheControlUpdate[] {
-  const updates: CacheControlUpdate[] = []
-  if (enabled && !state.enablePrefixCache) updates.push(['enablePrefixCache', true])
-  if (enabled && state.enableDiskCache) updates.push(['enableDiskCache', false])
-  // Block Disk Cache off = RAM only: the RAM copy has nothing to front, so it goes off with it (it would otherwise
-  // come back on with the next Block Disk Cache click without the user asking).
-  if (!enabled && state.usePagedCache) updates.push(['usePagedCache', false])
-  updates.push(['enableBlockDiskCache', enabled])
-  return updates
+/** The RAM choice. Turning it on or off never changes the SSD choice. */
+export function cacheControlUpdatesForRamToggle(
+  enabled: boolean,
+  state: CacheControlState,
+  lane: SimpleCacheLane = {},
+): CacheControlUpdate[] {
+  if (state.nativeSpeculativeCache) return []
+  const current = resolveSimpleCacheTier(state, lane)
+  if (enabled) {
+    if (current.ssdOn && lane.exactTypedPromptDiskCache) return []
+    return [
+      ['enablePrefixCache', true],
+      // With SSD on: the RAM copy in front of the block store (RAM + SSD). Without: the memory-aware cache (RAM only).
+      ['usePagedCache', current.ssdOn],
+    ]
+  }
+  if (current.ssdOn) return [['usePagedCache', false]]
+  return [['enablePrefixCache', false], ['usePagedCache', false]]
 }

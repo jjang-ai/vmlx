@@ -21,6 +21,7 @@ import os
 import random
 import re
 import time
+import types
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
@@ -3897,7 +3898,8 @@ class Scheduler:
             raw = response.prompt_cache() if callable(response.prompt_cache) else response.prompt_cache
         except Exception:  # noqa: BLE001
             return None
-        if not raw or not all(type(c).__name__ == "DeepseekV41Cache" for c in raw):
+        kinds = {type(c).__name__ for c in raw or ()}
+        if kinds != {"DeepseekV41Cache"} and not ("MiniMaxM3SparseCache" in kinds and kinds <= {"MiniMaxM3SparseCache", "KVCache"}):
             return None
         offsets = {int(getattr(c, "offset", -1)) for c in raw}
         prompt = list(getattr(request, "prompt_token_ids", None) or [])
@@ -3908,6 +3910,79 @@ class Scheduler:
         if not (len(prompt) < pos <= len(seq)):
             return None
         return (seq[:pos], raw)
+
+    def _m3_generation_end_enabled(self, request) -> bool:
+        """A finished MiniMax-M3 request stores its reply (models/minimax_m3/prefill_geometry.py)."""
+        if not getattr(self, "_m3_aligned_prefix", False):
+            return False
+        from .models.minimax_m3 import prefill_geometry
+
+        return prefill_geometry.generation_end_enabled()
+
+    def _stores_reply(self, request, finish_reason) -> bool:
+        """The live cache holds the reply (prompt + generated rows), and the next turn renders it back. A reply that hit
+        its token limit is in history the same as one that finished."""
+        if finish_reason not in ("stop", "length"):
+            return False
+        return bool(getattr(self, "_uses_dsv41_cache", False) or self._m3_generation_end_enabled(request))
+
+    def _salvage_stopped_request(self, uid, request_id: str, request) -> bool:
+        """Keep a stopped MiniMax-M3 or DeepSeek-V4.1 request's work, so the next turn does not prefill it again: its
+        prompt rows, and its partial reply when the panel keeps that text in history.
+
+        These generators hold the cache themselves (no snapshot to take through ``take_prompt_snapshots``, which is why
+        a stop used to store nothing for them). A request that stopped before its prefill finished keeps nothing."""
+        finder = getattr(self.batch_generator, "_find", None)
+        live = finder(uid) if callable(finder) else None
+        raw = getattr(live, "cache", None)
+        if not raw:
+            return False
+        prompt = list(request.prompt_token_ids)
+        if getattr(self, "_m3_aligned_prefix", False):
+            from .models.minimax_m3.prefill_geometry import cache_offset
+
+            boundary = self._m3_prefill_boundary(request) or 0
+            offset = cache_offset(raw)
+            if not boundary or offset is None or offset < boundary:
+                return False
+            snapshot = self._m3_live_prompt_views(request, raw, boundary)
+            rows = boundary
+            reply_allowed = self._m3_generation_end_enabled(request)
+        else:
+            snapshot = getattr(live, "prompt_cache_snapshot", None)
+            offsets = {int(getattr(c, "offset", -1)) for c in snapshot or ()}
+            if len(offsets) != 1 or not (0 < next(iter(offsets)) < len(prompt)):
+                return False
+            rows = next(iter(offsets))
+            reply_allowed = True
+        if snapshot is None:
+            return False
+        key_tokens = prompt[:rows]
+        if self.block_aware_cache is not None:
+            self._store_aborted_prompt_snapshot(request_id, request, snapshot, key_tokens)
+        elif self.memory_aware_cache is not None:
+            _call_with_optional_cache_extra(
+                self.memory_aware_cache.store, key_tokens, snapshot,
+                cache_type=self._pick_cache_type_for_request(request),
+                cache_extra_keys=getattr(request, "_cache_extra_keys", None),
+            )
+        else:
+            return False
+        logger.info("Request %s: stopped request kept its %d prompt rows", request_id, rows)
+        if reply_allowed:
+            live_rows = raw
+            if getattr(self, "_m3_aligned_prefix", False):
+                # DSpark commits in bursts, so a stop can leave rows past the emitted tokens. M3's lanes are append-only:
+                # keep exactly the emitted rows. V4.1's cache cannot be cut, so its entry check below drops such a reply.
+                emitted = len(prompt) + len(getattr(request, "output_token_ids", None) or [])
+                if offset > emitted:
+                    live_rows = self._m3_live_prompt_views(request, raw, emitted)
+            if live_rows is not None:
+                request._dsv41_generation_end = self._dsv41_generation_end_entry(
+                    request, types.SimpleNamespace(prompt_cache=live_rows)
+                )
+                self._store_dsv41_cut_checkpoints(request, request_id)
+        return True
 
     def _store_dsv41_cut_checkpoints(self, request, request_id: str, store_kwargs: Optional[dict] = None) -> int:
         """Store a finished DeepSeek-V4.1 request's prefix-cut snapshots in the active prefix tier.
@@ -3940,7 +4015,7 @@ class Scheduler:
             offsets = {int(getattr(c, "offset", -1)) for c in snap}
             if offsets != {pos}:
                 logger.warning(
-                    "DSV4.1 extra prefix entry for %s not stored: cache at offsets %s, not its %d-token key",
+                    "Extra prefix entry for %s not stored: cache at offsets %s, not its %d-token key",
                     request_id, sorted(offsets), pos,
                 )
                 continue
@@ -3950,14 +4025,20 @@ class Scheduler:
                     kwargs["cache_type"] = cache_type
                     if extra:
                         kwargs["cache_extra_keys"] = dict(extra)
+                    if getattr(self, "_m3_aligned_prefix", False):
+                        kwargs["minimax_m3_boundary"] = pos
+                        kwargs["minimax_m3_generation_end"] = True
                     cid = f"{request_id}:dsv41-{cache_type}-{pos}"
                     try:
                         self.block_aware_cache.store_cache(cid, key, self._extract_cache_states(snap), **kwargs)
                     finally:
                         self.block_aware_cache.release_cache(cid)
                 elif self.memory_aware_cache is not None:
+                    # The RAM tier evicts every "assistant" entry before any "user" one. A reply belongs to its chat, so
+                    # it is stored next to that chat's prompt and the oldest chat goes first.
+                    ram_type = "user" if cache_type == "assistant" else cache_type
                     if not _call_with_optional_cache_extra(
-                        self.memory_aware_cache.store, key, snap, cache_type=cache_type, cache_extra_keys=extra,
+                        self.memory_aware_cache.store, key, snap, cache_type=ram_type, cache_extra_keys=extra,
                     ):
                         continue
                 else:
@@ -3969,10 +4050,10 @@ class Scheduler:
                     # tokens shows up as the exact first differing token instead of a silent shorter hit.
                     self._dsv4_last_extended_key_tokens = list(key)
             except Exception as exc:  # noqa: BLE001 - an optional extra entry
-                logger.warning("DSV4.1 extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
+                logger.warning("Extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
         if stored:
             logger.info(
-                "DSV4.1 extra prefix entries stored for %s: %s (prompt %d tokens, %s)",
+                "Extra prefix entries stored for %s: %s (prompt %d tokens, %s)",
                 request_id, ", ".join(stored), len(prompt),
                 "block" if self.block_aware_cache is not None else "memory-aware",
             )
@@ -6987,16 +7068,36 @@ class Scheduler:
         detail = str(getattr(request, "_cache_detail", "") or "")
         paged = getattr(request, "block_table", None) is not None
         whole_entry_exact = detail.split("+")[0] in {"memory", "disk"}
+        media = prefill_geometry.is_media_request(getattr(request, "_cache_extra_keys", None))
+        media_covered = (
+            media
+            and offset is not None
+            and prefill_geometry.media_rows_covered(
+                getattr(request, "prompt_token_ids", None) or [], min(cached, offset)
+            )
+        )
         # Lanes that disagree (layers at different offsets, an index lane out of step) prove nothing: full prefill.
-        reuse = 0 if offset is None else prefill_geometry.reuse_limit(
+        reuse = 0 if offset is None else prefill_geometry.media_reuse(
+            getattr(request, "prompt_token_ids", None) or [], min(cached, offset), boundary
+        ) if prefill_geometry.has_per_image_keys(getattr(request, "_cache_extra_keys", None)) else prefill_geometry.reuse_limit(
             min(cached, offset),
             boundary,
             step,
             exact_geometry=(paged or whole_entry_exact) and offset == cached,
-            atomic=prefill_geometry.is_media_request(
-                getattr(request, "_cache_extra_keys", None)
-            ),
-            cuts=self._m3_turn_cuts(request),
+            atomic=media and not media_covered,
+            cuts=[
+                *self._m3_turn_cuts(request),
+                *(
+                    [min(cached, offset)]
+                    if offset is not None
+                    and (media_covered or prefill_geometry.inside_assistant_turn(
+                        getattr(request, "prompt_token_ids", None) or [],
+                        getattr(self, "_m3_turn_markers", None),
+                        min(cached, offset),
+                    ))
+                    else []
+                ),
+            ],
         )
         if offset is not None and reuse == cached == offset:
             return cache, None
@@ -7450,6 +7551,19 @@ class Scheduler:
                 _fetch_tokens,
                 cache_extra_keys=_cache_extra_keys,
             )
+            if not cache:
+                # This tier compares a stored entry's whole key: a turn that added an image looks its earlier turns up
+                # under the key those turns had.
+                from .cache_key import per_item_key_fallbacks
+
+                for _earlier_keys in per_item_key_fallbacks(_cache_extra_keys):
+                    cache, remaining = _call_with_optional_cache_extra(
+                        self.memory_aware_cache.fetch,
+                        _fetch_tokens,
+                        cache_extra_keys=_earlier_keys,
+                    )
+                    if cache:
+                        break
             _memory_fetch_kind = getattr(self.memory_aware_cache, "last_fetch_kind", None)
             remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
                 fetch_tokens=_fetch_tokens,
@@ -7877,7 +7991,11 @@ class Scheduler:
             # clean prompt-boundary snapshot into the prefix cache (#58) —
             # otherwise an identical retry re-prefills the whole prompt.
             if (
-                self.block_aware_cache is not None
+                (
+                    self.block_aware_cache is not None
+                    or getattr(self, "_m3_aligned_prefix", False)
+                    or getattr(self, "_uses_dsv41_cache", False)
+                )
                 and not getattr(request, "_bypass_prefix_cache", False)
                 and int(getattr(request, "cached_tokens", 0) or 0)
                 < len(request.prompt_token_ids)
@@ -7952,7 +8070,14 @@ class Scheduler:
                     # remove() drops the generator request (#58). Metal has
                     # synchronized by this point so the snapshot is safe to
                     # detach and store.
-                    if (
+                    if salvage_req is not None and (
+                        getattr(self, "_m3_aligned_prefix", False) or getattr(self, "_uses_dsv41_cache", False)
+                    ):
+                        try:
+                            self._salvage_stopped_request(uid, request_id, salvage_req)
+                        except Exception as e:
+                            logger.warning(f"Stopped-request salvage failed for {request_id}: {e}")
+                    elif (
                         salvage_req is not None
                         and self.block_aware_cache is not None
                         and hasattr(self.batch_generator, "take_prompt_snapshots")
@@ -8011,6 +8136,8 @@ class Scheduler:
         }
         if getattr(request, "_cache_extra_keys", None):
             store_kwargs["cache_extra_keys"] = dict(request._cache_extra_keys)
+        if getattr(self, "_m3_aligned_prefix", False):
+            store_kwargs["minimax_m3_boundary"] = self._m3_prefill_boundary(request) or 0
         if (
             self._is_hybrid
             and not self._uses_dsv4_cache
@@ -9680,7 +9807,24 @@ class Scheduler:
                 and getattr(request, "_cache_extra_keys", None)
                 and _m3_vl_cached_prefix_covers_media_tokens(self.model, request)
             )
-            if _m3vl_active and cache_to_use is not None and not _m3vl_cache_replay:
+            # Restored rows end before a new image: that image alone goes through vision, with the text around it.
+            _m3vl_tail = None
+            if (
+                _m3vl_active
+                and cache_to_use is not None
+                and not _m3vl_cache_replay
+                and _m3vl_pv_video is None
+            ):
+                from .models.minimax_m3 import prefill_geometry as _m3_geometry
+
+                if _m3_geometry.has_per_image_keys(getattr(request, "_cache_extra_keys", None)):
+                    _m3vl_tail = _m3_geometry.tail_pixels(
+                        request.prompt_token_ids,
+                        int(getattr(request, "cached_tokens", 0) or 0),
+                        _m3vl_pv,
+                        _m3vl_grid,
+                    )
+            if _m3vl_active and cache_to_use is not None and not _m3vl_cache_replay and _m3vl_tail is None:
                 logger.info(
                     "Request %s: M3 VL cache prefix ends before the final media "
                     "placeholder; releasing hit and using atomic full vision prefill",
@@ -9692,7 +9836,7 @@ class Scheduler:
                 request.cached_tokens = 0
                 request.remaining_tokens = request.prompt_token_ids
                 _cache_fallback_reason = "media_placeholders_outside_cached_prefix"
-            if _m3vl_active and not _m3vl_cache_replay:
+            if _m3vl_active and not _m3vl_cache_replay and _m3vl_tail is None:
                 tokens_to_process = list(request.prompt_token_ids)
             # DeepSeek-V4.1 VL with a media-salted prefix hit: the restored state already holds
             # every image whose span ends inside the cached prefix. If ALL images are covered the
@@ -9733,6 +9877,15 @@ class Scheduler:
                             insert_kwargs["all_tokens"] = [
                                 list(request.prompt_token_ids[:cached_prefix_len])
                             ]
+                        elif _m3vl_tail is not None:
+                            cached_prefix_len = max(
+                                0, int(getattr(request, "cached_tokens", 0) or 0)
+                            )
+                            insert_kwargs["all_tokens"] = [
+                                list(request.prompt_token_ids[:cached_prefix_len])
+                            ]
+                            insert_kwargs["pixel_values"] = [_m3vl_tail[0]]
+                            insert_kwargs["image_grid_thw"] = [_m3vl_tail[1]]
                         else:
                             if _m3vl_pv is not None:
                                 insert_kwargs["pixel_values"] = [_m3vl_pv]
@@ -10496,12 +10649,12 @@ class Scheduler:
                     # entry in cleanup (_store_dsv41_cut_checkpoints).
                     request._dsv41_cut_checkpoints = list(response.boundary_checkpoints)
                 if (
-                    getattr(self, "_uses_dsv41_cache", False)
-                    and finish_reason == "stop"
+                    self._stores_reply(request, finish_reason)
                     and string_stop_truncate < 0
                     and not spec_hit_stop
                     and self._terminal_cache_capture_enabled(request, response)
                 ):
+                    # The live cache holds the reply (prompt + generated rows): the next turn renders it back.
                     request._dsv41_generation_end = self._dsv41_generation_end_entry(request, response)
                 if self._terminal_cache_capture_enabled(request, response):
                     try:
@@ -12541,7 +12694,7 @@ class Scheduler:
                                 _terminal_store_kwargs = dict(_paged_store_kwargs)
                                 if _defer_final_store_gc:
                                     _terminal_store_kwargs["defer_post_fence_gc"] = True
-                                if getattr(self, "_uses_dsv41_cache", False):
+                                if getattr(self, "_uses_dsv41_cache", False) or getattr(self, "_m3_aligned_prefix", False):
                                     self._store_dsv41_cut_checkpoints(request, request_id, _terminal_store_kwargs)
                                 for _bkey, _bstates in (getattr(request, "_naive_boundary_checkpoints", None) or []):
                                     checkpoint_id = f"{request_id}:native-boundary-{len(_bkey)}"
@@ -12830,7 +12983,7 @@ class Scheduler:
                                         None,
                                     ),
                                 )
-                                if getattr(self, "_uses_dsv41_cache", False):
+                                if getattr(self, "_uses_dsv41_cache", False) or getattr(self, "_m3_aligned_prefix", False):
                                     self._store_dsv41_cut_checkpoints(request, request_id)
                                 if stored:
                                     if (

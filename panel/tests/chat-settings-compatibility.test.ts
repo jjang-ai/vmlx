@@ -135,7 +135,8 @@ describe('chat settings cross-family compatibility warnings', () => {
     expect(source).toContain('detectedReasoningEfforts ?? (')
     expect(source).toContain('setDetectedDefaultReasoningEffort(detected?.defaultReasoningEffort)')
     expect(source).toContain('data-reasoning-effort={effort}')
-    expect(source).toContain('onClick={() => updateThinkingMode(true, effort)}')
+    // Picking a level keeps an explicit Adaptive choice (MiniMax-M3.1 renders <effort> under adaptive too).
+    expect(source).toContain('onClick={() => selectReasoningEffort(effort)}')
     expect(source).toContain("return t('chat.settings.effortMax')")
     expect(source).not.toContain('const dsv4MaxEnabled =')
     expect(source).not.toContain("sessionConfig?.dsv4ForceDirect")

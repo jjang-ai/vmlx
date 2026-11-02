@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
 import { glmNativeSsdRuntimeEnabled, resolveGlmDiskCacheControls, usesExactTypedPromptDiskCache, usesGlmNativeSsdPool } from '../src/shared/detectedFamilyNames'
 import { buildCacheLaunchArgs } from '../src/shared/cacheLaunchArgs'
+import { cacheControlUpdatesForSsdToggle } from '../src/shared/cacheControlPolicy'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -82,8 +83,10 @@ describe('GLM native SSD defaults preserve runtime route and saved choices', () 
     expect(resolveGlmDiskCacheControls('glm5-next', true, saved)).toEqual(saved)
     expect(resolveGlmDiskCacheControls('qwen4_exp', false, saved)).toEqual(saved)
     expect(JSON.stringify(saved)).toBe(before)
-    const form = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-    expect(form).toContain("if (normalizedDetectedFamily === 'glm5-next' && !nativeGlmSsdActive) onChange('enableBlockDiskCache', false)")
+    // Explicit text-disk Off must clear the saved native-pool On bit too, or launch normalization would re-enable it.
+    const off = cacheControlUpdatesForSsdToggle(false, { continuousBatching: true, enablePrefixCache: true, usePagedCache: false, enableDiskCache: true, enableBlockDiskCache: true }, { exactTypedPromptDiskCache: true })
+    expect(off).toContainEqual(['enableDiskCache', false])
+    expect(off).toContainEqual(['enableBlockDiskCache', false])
   })
 
   it.each(['glm5_next', 'glm5_next_text', 'glm5-next'])('preserves the explicit SSD switch and cap for %s', (family) => {
@@ -124,10 +127,9 @@ describe('GLM native SSD defaults preserve runtime route and saved choices', () 
     const form = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
     expect(form).toContain('const nativeGlmSsdActive = usesGlmNativeSsdPool({')
     expect(form).toContain('isMultimodal: detectedIsMultimodal, forceTextOnly: detectedForceTextOnly')
-    expect(form).toContain('!nativeGlmSsdActive && !dsv4Active && !blockDiskOnly')
-    expect(form).toContain('!nativeGlmSsdActive && !nativeSpeculativeCache && (effectiveUsePagedCache || cachePolicy.blockDiskCacheChecked)')
-    expect(form).toContain('!nativeGlmSsdActive && (exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked)')
-    expect(form).toContain('data-vmlx-section="nativeGlmSsd"')
+    // Native GLM and the text lane both get the same two choices; the exact typed lane just has no RAM copy next to SSD.
+    expect(form).toContain('const cacheLane = { exactTypedPromptDiskCache }')
+    expect(form).toContain("{exactTypedPromptDiskCache && simpleCacheTier.ssdOn && <InfoNote text={t('sessions.config.ssdOnlyLaneNote')} />}")
     for (const language of ['en', 'zh', 'ko', 'ja', 'es']) {
       const locale = JSON.parse(readFileSync(`src/renderer/src/i18n/locales/${language}.json`, 'utf8'))
       expect(locale.sessions.config.glmNativeSsdNote.length).toBeGreaterThan(40)

@@ -57,6 +57,9 @@ def _defaults(monkeypatch):
     for name in ("VMLX_M3_ALIGNED_PREFIX", "VMLX_DSPARK", "VMLX_DSPARK_MAX_DRAFT", "VMLX_DSPARK_WIDTH",
                  "VMLX_DSPARK_SAMPLED", "VMLX_DSPARK_AR_FALLBACK", "VMLX_DISABLE_GEN_PROMPT_STRIP"):
         monkeypatch.delenv(name, raising=False)
+    # These tests pin the bit-identical rule for prompt rows: a stored reply's rows come from decode and are not, so its
+    # reuse is off here and covered by tests/test_minimax_m3_reply_cache.py.
+    monkeypatch.setenv("VMLX_M3_GENERATION_END_CACHE", "0")
     # The SSD-only tier may pick a clean prefill over a disk hit from measured rates; on this tiny model prefill is
     # nearly free, so under a busy disk that cost choice flips run to run. It is not under test: always take the hit.
     from vmlx_engine.scheduler import Scheduler
@@ -691,4 +694,4 @@ def test_prefill_pieces_and_reuse_limit():
     assert prefill_geometry.TRAILING_KEY in cache_extra_keys_for_token_range(keys, 960, 1009)
     assert prefill_geometry.TRAILING_KEY not in prefill_geometry.cache_extra_keys(None, boundary=960, step=320)
     media = prefill_geometry.cache_extra_keys({"mllm_media": "x"}, boundary=1009, step=320)
-    assert media[prefill_geometry.GEOMETRY_KEY]["atomic_boundary"] == 1009
+    assert media[prefill_geometry.GEOMETRY_KEY] == {"schema": prefill_geometry.SCHEMA, "atomic": True}

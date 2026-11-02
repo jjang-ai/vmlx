@@ -260,6 +260,11 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).toContain("label={t('sessions.config.dsv4ActivationQat')}")
     expect(source).toContain("checked={config.dsv4ActivationQat === true}")
     expect(source).toContain("onChange={v => onChange('dsv4ActivationQat', v)}")
+    // The toggle lives with the DSV4 runtime controls, not in the Prefix Cache
+    // section (which holds only SSD cache and RAM cache).
+    const prefixSection = source.slice(source.indexOf('sectionKey="prefixCache"'), source.indexOf('sectionKey="power"'))
+    expect(prefixSection).not.toContain('dsv4ActivationQat')
+    expect(source.indexOf('data-vmlx-control="dsv4-activation-qat"')).toBeGreaterThan(source.indexOf('sectionKey="performance"'))
     const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
     expect(enLocale).toContain('"dsv4ActivationQat": "DSV4 Activation QAT"')
     expect(enLocale).toContain('E4M3 round-trips for attention KV and compressed pools')
@@ -293,26 +298,27 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).not.toContain('DSV4 Flash composite prefix cache is disabled')
     const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
     expect(source).toContain("text={t('sessions.config.dsv4BatchPathNote')}")
-    expect(enLocale).toContain('Prefix reuse defaults On')
-    expect(enLocale).toContain('Block Disk Cache (SSD / L2) defaults On')
-    expect(enLocale).toContain('CSA/HCA pool codec remains bundle-derived')
-    expect(source).toContain("<CheckField label={t('sessions.config.enablePrefixCache')}")
+    expect(enLocale).toContain('The SSD cache is on by default')
+    // DSV4 gets the same two choices as every family: SSD cache (default on) and RAM cache (default off).
+    expect(source).toContain("label={t('sessions.config.ssdCache')}")
+    expect(source).toContain("label={t('sessions.config.ramCache')}")
     expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
-    expect(source).toContain('cacheControlUpdatesForBlockDiskToggle(v, cacheControlState)')
-    expect(source).toContain("label={t('sessions.cache.blockDiskCache')}")
-    expect(enLocale).toContain('require fixed 256-token blocks')
-    expect(source).toContain('disabled={dsv4Active}')
-    expect(source).toContain("t('sessions.config.storedQuantNativeTyped')")
-    expect(enLocale).toContain('Native typed codec (bundle-derived)')
-    // copy lives in the locale catalog now that the form is translated
-    expect(
-      fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8'),
-    ).toContain('Native CSA/HCA Pool Codec')
-    expect(source).toContain("config.dsv4PoolQuant === true")
-    expect(source).toContain("t('sessions.config.poolQuantOnBundle')")
-    expect(source).toContain("t('sessions.config.poolQuantOffBundle')")
-    expect(enLocale).toContain('ON (BUNDLE)')
-    expect(enLocale).toContain('OFF (BUNDLE)')
+    expect(source).toContain('cacheControlUpdatesForSsdToggle(v, cacheControlState, cacheLane)')
+    expect(source).toContain('cacheControlUpdatesForRamToggle(v, cacheControlState, cacheLane)')
+    expect(source).toContain('disabled={ssdCacheToggleDisabled}')
+    // The Prefix Cache section holds only those two choices: no read-only
+    // pool-codec row and no stored-codec select. The pool codec stays
+    // bundle-derived in launch (sessions.ts) without a display row.
+    expect(source).not.toContain("t('sessions.config.storedQuantNativeTyped')")
+    expect(source).not.toContain('effectiveStoredCacheQuantization')
+    expect(source).not.toContain("t('sessions.config.nativePoolCodec')")
+    expect(source).not.toContain("config.dsv4PoolQuant === true")
+    expect(source).not.toContain("t('sessions.config.poolQuantOnBundle')")
+    expect(source).not.toContain("t('sessions.config.poolQuantOffBundle')")
+    expect(enLocale).not.toContain('Native typed codec (bundle-derived)')
+    expect(enLocale).not.toContain('Native CSA/HCA Pool Codec')
+    expect(enLocale).not.toContain('ON (BUNDLE)')
+    expect(enLocale).not.toContain('OFF (BUNDLE)')
     expect(source).toContain('const singleActiveControls = dsv4Active || glmSingleActive')
     expect(source).toContain("{!singleActiveControls && <PerformanceHint text={t('sessions.config.continuousBatchingHint')} />}")
     expect(source).toContain('{showCachingHelp && <Modal')

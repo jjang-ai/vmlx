@@ -9,35 +9,91 @@ const SSD_ONLY = {
   usePagedCache: false,
   enableDiskCache: false,
   enableBlockDiskCache: true,
-  cacheMemoryMb: 8192,
   cacheMemoryPercent: 35,
-  cacheTtlMinutes: 60,
   effectivePagedCacheBlockSize: 64,
   maxCacheBlocks: 4097,
   blockDiskCacheMaxGb: 0,
   blockDiskCacheMaxPercent: 10,
 }
 
-describe('authoritative cache launch arguments', () => {
-  it('builds RAM + SSD argv from the saved RAM copy: paged RAM blocks with their RAM budget, then the block store', () => {
-    const result = buildCacheLaunchArgs({ ...SSD_ONLY, usePagedCache: true })
+const RETAINED_RAM_OFF = ['--no-vision-memory-cache', '--ssm-state-cache-size', '0', '--ssm-state-cache-mb', '0']
 
-    expect(result.policy.effectiveUsePagedCache).toBe(true)
-    expect(result.blockDiskOnly).toBe(false)
+describe('authoritative cache launch arguments: the four modes', () => {
+  it('SSD only (the default): block store with its disk percent, no RAM tier or RAM budget', () => {
+    const result = buildCacheLaunchArgs(SSD_ONLY)
+
+    expect(result.policy.effectiveUsePagedCache).toBe(false)
+    expect(result.policy.ramCacheActive).toBe(false)
+    expect(result.blockDiskOnly).toBe(true)
     expect(result.args).toEqual([
-      '--use-paged-cache',
-      '--no-vision-memory-cache',
-      '--ssm-state-cache-size', '0',
-      '--ssm-state-cache-mb', '0',
-      '--cache-memory-mb', '8192',
-      '--cache-memory-percent', '0.35',
-      '--cache-ttl-minutes', '60',
+      '--no-paged-cache',
+      ...RETAINED_RAM_OFF,
       '--paged-cache-block-size', '64',
       '--max-cache-blocks', '4097',
       '--enable-block-disk-cache',
       '--block-disk-cache-max-percent', '10',
     ])
-    expect(result.args).not.toContain('--no-paged-cache')
+    expect(result.args).not.toContain('--cache-memory-percent')
+    expect(result.args).not.toContain('--block-disk-cache-max-gb')
+  })
+
+  it('RAM only: the memory-aware prefix cache bounded by --cache-memory-percent, block store off', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, enableBlockDiskCache: false })
+
+    expect(result.policy.ramCacheActive).toBe(true)
+    expect(result.args).toEqual([
+      '--no-paged-cache',
+      ...RETAINED_RAM_OFF,
+      '--cache-memory-percent', '0.35',
+      '--disable-block-disk-cache',
+    ])
+  })
+
+  it('RAM + SSD: paged RAM blocks bounded by the same --cache-memory-percent, then the block store', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, usePagedCache: true })
+
+    expect(result.policy.effectiveUsePagedCache).toBe(true)
+    expect(result.policy.ramCacheActive).toBe(true)
+    expect(result.blockDiskOnly).toBe(false)
+    expect(result.args).toEqual([
+      '--use-paged-cache',
+      ...RETAINED_RAM_OFF,
+      '--cache-memory-percent', '0.35',
+      '--paged-cache-block-size', '64',
+      '--max-cache-blocks', '4097',
+      '--enable-block-disk-cache',
+      '--block-disk-cache-max-percent', '10',
+    ])
+  })
+
+  it('both off: prefix cache off, no RAM tier, SSD store explicitly off', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, enablePrefixCache: false, enableBlockDiskCache: false })
+
+    expect(result.args).toEqual(['--no-paged-cache', ...RETAINED_RAM_OFF, '--disable-prefix-cache'])
+  })
+
+  it('prefix off beats stale tier bits (the master switch)', () => {
+    const result = buildCacheLaunchArgs({ ...SSD_ONLY, enablePrefixCache: false, usePagedCache: true })
+    expect(result.args).toEqual(['--no-paged-cache', ...RETAINED_RAM_OFF, '--disable-prefix-cache'])
+  })
+
+  it('the percent is the ONLY RAM budget the panel sends: no mb, TTL or entry-count flags from saved values', () => {
+    const stale = {
+      ...SSD_ONLY,
+      usePagedCache: true,
+      cacheMemoryMb: 8192,
+      cacheTtlMinutes: 60,
+      noMemoryAwareCache: true,
+      prefixCacheSize: 100,
+      prefixCacheMaxBytes: 1024,
+    } as Record<string, unknown>
+    for (const state of [stale, { ...stale, usePagedCache: false, enableBlockDiskCache: false }]) {
+      const args = buildCacheLaunchArgs(state as any).args
+      for (const flag of ['--cache-memory-mb', '--cache-ttl-minutes', '--no-memory-aware-cache', '--prefix-cache-size', '--prefix-cache-max-bytes']) {
+        expect(args, flag).not.toContain(flag)
+      }
+      expect(args[args.indexOf('--cache-memory-percent') + 1]).toBe('0.35')
+    }
   })
 
   it('a saved RAM copy without Block Disk Cache launches RAM only (memory-aware), never paged RAM', () => {
@@ -46,55 +102,7 @@ describe('authoritative cache launch arguments', () => {
     expect(result.policy.effectiveUsePagedCache).toBe(false)
     expect(result.args[0]).toBe('--no-paged-cache')
     expect(result.args).toContain('--disable-block-disk-cache')
-    expect(result.args).not.toContain('--use-paged-cache')
-  })
-
-  it('builds SSD-only argv with no RAM tier or RAM budget', () => {
-    const result = buildCacheLaunchArgs(SSD_ONLY)
-
-    expect(result.policy.effectiveUsePagedCache).toBe(false)
-    expect(result.args).toEqual([
-      '--no-paged-cache',
-      '--no-vision-memory-cache',
-      '--ssm-state-cache-size', '0',
-      '--ssm-state-cache-mb', '0',
-      '--paged-cache-block-size', '64',
-      '--max-cache-blocks', '4097',
-      '--enable-block-disk-cache',
-      '--block-disk-cache-max-percent', '10',
-    ])
-    expect(result.args).not.toContain('--use-paged-cache')
-    expect(result.args).not.toContain('--enable-vision-memory-cache')
-    expect(result.args).not.toContain('--cache-memory-mb')
-    expect(result.args).not.toContain('--cache-memory-percent')
-    expect(result.args).not.toContain('--block-disk-cache-max-gb')
-  })
-
-  it('emits the engine-default override when the visible SSD toggle is off', () => {
-    const result = buildCacheLaunchArgs({
-      ...SSD_ONLY,
-      usePagedCache: false,
-      enableBlockDiskCache: false,
-    })
-
-    expect(result.args).toContain('--no-paged-cache')
-    expect(result.args).toContain('--disable-block-disk-cache')
-    expect(result.args).not.toContain('--enable-block-disk-cache')
-  })
-
-  it('keeps the prefix master switch authoritative', () => {
-    const result = buildCacheLaunchArgs({
-      ...SSD_ONLY,
-      enablePrefixCache: false,
-    })
-
-    expect(result.args).toEqual([
-      '--no-paged-cache',
-      '--no-vision-memory-cache',
-      '--ssm-state-cache-size', '0',
-      '--ssm-state-cache-mb', '0',
-      '--disable-prefix-cache',
-    ])
+    expect(result.args).toContain('--cache-memory-percent')
   })
 
   it('puts exact typed prompt snapshots in the managed SSD pool with the block budget, not a flat GB', () => {
@@ -102,7 +110,6 @@ describe('authoritative cache launch arguments', () => {
       ...SSD_ONLY,
       enableDiskCache: true,
       enableBlockDiskCache: false,
-      forceMemoryAwareCache: true,
       diskCacheMaxGb: 10,
       blockDiskCacheMaxPercent: 7,
     }
@@ -127,17 +134,16 @@ describe('authoritative cache launch arguments', () => {
     }
   })
 
-  it('keeps openPangu-style exact prompt L2 memory-aware and non-paged', () => {
+  it('keeps openPangu-style exact prompt L2 memory-aware, non-paged and without a retained RAM copy', () => {
     const result = buildCacheLaunchArgs({
       ...SSD_ONLY,
       enableDiskCache: true,
       enableBlockDiskCache: false,
-      noMemoryAwareCache: true,
-      forceMemoryAwareCache: true,
       diskCacheDir: '/tmp/prompt-l2',
       diskCacheMaxGb: 10,
     })
 
+    expect(result.policy.ramCacheActive).toBe(false)
     expect(result.args).toContain('--no-paged-cache')
     expect(result.args).not.toContain('--no-memory-aware-cache')
     expect(result.args).toContain('--enable-disk-cache')
@@ -145,7 +151,6 @@ describe('authoritative cache launch arguments', () => {
     expect(budgetIndex).toBeGreaterThan(-1)
     expect(result.args[budgetIndex + 1]).toBe('0')
     expect(result.args).not.toContain('--cache-memory-percent')
-    expect(result.args).not.toContain('--cache-ttl-minutes')
     expect(result.args).toContain('--disable-block-disk-cache')
   })
 
@@ -161,11 +166,17 @@ describe('authoritative cache launch arguments', () => {
     expect(launcher).toContain('args.push(...cacheLaunch.args)')
     expect(renderer).not.toContain("parts.push('--use-paged-cache')")
     expect(launcher).not.toContain("args.push('--use-paged-cache')")
+    // Neither caller forwards the removed knobs behind the user's back.
+    for (const src of [renderer, launcher]) {
+      for (const key of ['cacheMemoryMb: config.cacheMemoryMb', 'cacheTtlMinutes: config.cacheTtlMinutes', 'noMemoryAwareCache: !!config.noMemoryAwareCache', 'prefixCacheSize: config.prefixCacheSize']) {
+        expect(src).not.toContain(key)
+      }
+      expect(src).toContain('cacheMemoryPercent: config.cacheMemoryPercent')
+    }
   })
 })
 
-
-describe('native DFlash2 SSD settings', () => {
+describe('native DFlash2 / DSpark SSD settings', () => {
   it('passes the saved SSD location and budget despite the disabled batched prefix stack', () => {
     const result = buildCacheLaunchArgs({ ...SSD_ONLY, continuousBatching: false,
       nativeSpeculativeCache: true, blockDiskCacheDir: '/private/test-cache',
@@ -175,6 +186,7 @@ describe('native DFlash2 SSD settings', () => {
     expect(result.args[result.args.indexOf('--block-disk-cache-dir') + 1]).toBe('/private/test-cache')
     expect(result.args[result.args.indexOf('--block-disk-cache-max-percent') + 1]).toBe('7')
     expect(result.args).not.toContain('--cache-memory-mb')
+    expect(result.args).not.toContain('--cache-memory-percent')
     expect(result.args).not.toContain('--paged-cache-block-size')
   })
 

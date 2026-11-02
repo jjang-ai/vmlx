@@ -18,7 +18,9 @@ The rule (one for every cache tier, cold prefill and continuation alike):
 * rows of the partial chunk that ends at ``boundary`` were computed in a chunk only a request with the SAME boundary
   runs, so they are reusable only by an exact-geometry request (reuse == its own boundary);
 * a media request (M3 VL) prefills ``[0, boundary)`` atomically (every placeholder must meet its vision tensor in one
-  forward), then ``[boundary, N)``; it can only reuse an exact-geometry boundary.
+  forward), then ``[boundary, N)``; it can reuse an exact-geometry boundary, or any rows past its last placeholder
+  (those hold every image, whose content is in the media key, and only text is left to prefill). A new image changes
+  that key, so that turn prefills the whole conversation.
 
 Rows of one same-shape chunk were also measured to be independent of the other rows' content (MoE sorted gather,
 MSA selection and attention kernels), but that does not let a hit stop mid-chunk: the continuation would then run
@@ -47,6 +49,14 @@ previous assistant turn, so the previous ``K`` is a turn cut of the next prompt,
   plus the tool output, and a cut between them would cost one more forward on every tool call for no loop reuse;
 * the block key of a text prompt carries the step and the turn markers; the partial chunk ending at ``K`` carries
   ``K`` only when ``K`` is not itself a step multiple or a turn cut (then only an exact-geometry request matches it).
+
+Replies (default on). A finished request also stores its live cache, prompt + generated rows, so the next turn does not
+prefill the reply again: at long reasoning that re-prefill was the whole TTFT (10,600 generated tokens, 8 s per turn).
+Those rows come from decode, not from a prefill chunk, so a hit that stops inside an assistant turn is not bit-identical
+to a cold prefill of the same prompt; rows of one prefix differ by floating-point rounding. Cold prefills are cut as
+before: an assistant turn's end is still not a prefill cut, only a place a hit may stop (``inside_assistant_turn``), and
+a reply that does not render back token for token ends the block chain at the first difference.
+``VMLX_M3_GENERATION_END_CACHE=0`` keeps the bit-identical rule for A/B.
 
 ``VMLX_M3_STRUCTURAL_CUTS=0`` keeps the chunk-only rule (``minimax_m3_aligned_prefill_v1``) for A/B.
 ``VMLX_M3_ALIGNED_PREFIX=0`` restores the previous behaviour (prefill chunked relative to the restored offset,
@@ -78,6 +88,31 @@ MEDIA_KEY = "mllm_media"
 
 def aligned_prefix_enabled() -> bool:
     return os.environ.get(ENV, "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def generation_end_enabled() -> bool:
+    return os.environ.get("VMLX_M3_GENERATION_END_CACHE", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def inside_assistant_turn(tokens: Sequence[int], markers: Optional["TurnMarkers"], matched: int) -> bool:
+    """Whether ``tokens[:matched]`` ends in an assistant turn's content or right after that turn's end-of-message.
+
+    A hit may stop there because such rows can only come from a stored reply or from a prefill that held the same
+    tokens. The generation prompt alone (``bos`` + role) does not count: those rows belong to the previous boundary."""
+    if markers is None or not generation_end_enabled():
+        return False
+    matched = min(int(matched), len(tokens))
+    if matched <= 0:
+        return False
+    bos, eos, role = int(markers.bos), int(markers.eos), tuple(int(t) for t in markers.assistant)
+    for i in range(matched - 1, -1, -1):
+        t = int(tokens[i])
+        if t == eos and i != matched - 1:
+            return False
+        if t == bos:
+            return (tuple(int(x) for x in tokens[i + 1: i + 1 + len(role)]) == role
+                    and matched > i + 1 + len(role))
+    return False
 
 
 def structural_cuts_enabled() -> bool:
@@ -239,8 +274,120 @@ def is_media_request(cache_extra_keys) -> bool:
     return isinstance(cache_extra_keys, dict) and MEDIA_KEY in cache_extra_keys
 
 
+# image_token_index and video_token_index in the MiniMax-M3 config.
+MEDIA_TOKEN_IDS = (200025, 200026)
+
+
+PER_IMAGE = "per-image-v1"
+
+
+def media_runs(tokens: Sequence[int]) -> List[Tuple[int, int]]:
+    """``[start, end)`` of each run of image or video placeholders."""
+    media = set(MEDIA_TOKEN_IDS)
+    runs: List[Tuple[int, int]] = []
+    for i, t in enumerate(tokens):
+        if int(t) in media:
+            if runs and runs[-1][1] == i:
+                runs[-1] = (runs[-1][0], i + 1)
+            else:
+                runs.append((i, i + 1))
+    return runs
+
+
+def _image_slices(tokens, pixel_values, image_grid_thw) -> Optional[List[Tuple[Tuple[int, int], int, int]]]:
+    """For each image: its placeholder run and its ``[start, end)`` in the pixel tensor. None if they do not line up."""
+    if pixel_values is None or image_grid_thw is None:
+        return None
+    grid = [tuple(int(v) for v in row) for row in image_grid_thw.tolist()]
+    runs = media_runs(tokens)
+    if not grid or len(runs) != len(grid):
+        return None
+    patches = [t * h * w for t, h, w in grid]
+    placeholders = sum(e - s for s, e in runs)
+    if sum(patches) != int(pixel_values.shape[0]) or not placeholders or sum(patches) % placeholders:
+        return None
+    per_placeholder = sum(patches) // placeholders
+    out, at = [], 0
+    for run, n in zip(runs, patches):
+        if (run[1] - run[0]) * per_placeholder != n:
+            return None
+        out.append((run, at, at + n))
+        at += n
+    return out
+
+
+def per_image_cache_keys(tokens, pixel_values, image_grid_thw) -> Optional[dict]:
+    """One key per image, active from its first placeholder: rows before a new image keep their keys, so a new image
+    only prefills the new part of the chat. Same-size images have the same tokens, and their pixels tell them apart.
+    None when the images do not line up with the placeholders (the caller keeps one key over all of them)."""
+    import hashlib
+
+    import mlx.core as mx
+    import numpy as np
+
+    from ...cache_key import MEDIA_ITEM_PREFIX, scope_cache_extra_key
+
+    slices = _image_slices(tokens, pixel_values, image_grid_thw)
+    if slices is None:
+        return None
+    arr = pixel_values
+    if arr.dtype in (mx.bfloat16, mx.float16):
+        arr = arr.view(mx.uint16)
+    data = np.asarray(arr)
+    grid = image_grid_thw.tolist()
+    keys: dict = {MEDIA_KEY: PER_IMAGE}
+    for i, ((start, _), a, b) in enumerate(slices):
+        h = hashlib.sha256(b"vmlx-m3-image-v1")
+        h.update(repr((str(pixel_values.dtype), tuple(pixel_values.shape[1:]), grid[i])).encode())
+        h.update(data[a:b].tobytes())
+        name = f"{MEDIA_ITEM_PREFIX}{i}"
+        keys[name] = h.hexdigest()[:32]
+        keys = scope_cache_extra_key(keys, name, start)
+    return keys
+
+
+def has_per_image_keys(cache_extra_keys) -> bool:
+    return isinstance(cache_extra_keys, dict) and cache_extra_keys.get(MEDIA_KEY) == PER_IMAGE
+
+
+def media_reuse(tokens: Sequence[int], matched: int, boundary: int) -> int:
+    """Rows a per-image request may reuse: never stopping inside an image, whose placeholders must all meet the vision
+    tensor in one forward. A prompt with no placeholder found proves nothing and reuses nothing."""
+    runs = media_runs(tokens)
+    if not runs:
+        return 0
+    rows = min(int(matched), int(boundary))
+    for start, end in runs:
+        if start < rows < end:
+            return start
+    return max(0, rows)
+
+
+def tail_pixels(tokens, cached: int, pixel_values, image_grid_thw):
+    """(pixels, grid) of the images after ``cached`` restored rows. None if ``cached`` is inside an image, the images do
+    not line up, or no image is left (the caller then replays text)."""
+    import mlx.core as mx
+
+    slices = _image_slices(tokens, pixel_values, image_grid_thw)
+    cached = int(cached)
+    if slices is None or any(s < cached < e for (s, e), _, _ in slices):
+        return None
+    left = [i for i, ((s, _), _, _) in enumerate(slices) if s >= cached]
+    if not left:
+        return None
+    first = slices[left[0]][1]
+    return pixel_values[first:], mx.array(image_grid_thw.tolist()[left[0]:], dtype=image_grid_thw.dtype)
+
+
+def media_rows_covered(tokens: Sequence[int], matched: int) -> bool:
+    """Do the first ``matched`` rows hold every image and video placeholder of ``tokens``? No placeholder: no."""
+    media = set(MEDIA_TOKEN_IDS)
+    last = max((i for i, t in enumerate(tokens) if int(t) in media), default=-1)
+    return last >= 0 and int(matched) > last
+
+
 def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Optional[TurnMarkers] = None,
-                     tokens: Optional[Sequence[int]] = None):
+                     tokens: Optional[Sequence[int]] = None, generation_end: bool = False):
     """The request's cache extra keys plus the M3 geometry of the rows a prefill with this boundary produces.
 
     All blocks carry the step (rows from a different step were computed in different chunks), and with turn
@@ -248,7 +395,7 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     Text requests add a trailing-chunk key scoped from the start of the partial chunk that ends at ``boundary``
     (absent when the boundary is itself a chunk boundary or a turn cut of ``tokens``), so only an exact-geometry
     request matches those blocks; blocks of finished chunks stay shareable by any prompt with the same tokens (their
-    cuts are a function of the tokens). Media requests are keyed by their boundary from block 0 (atomic prefill)."""
+    cuts are a function of the tokens). Media requests are keyed by their tokens and image content alone."""
     from ...cache_key import CACHE_EXTRA_SCOPES_KEY
 
     boundary = max(0, int(boundary))
@@ -260,7 +407,8 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     else:
         out = {"__vmlx_request_extra_keys__": cache_extra_keys}
     if is_media_request(cache_extra_keys):
-        out[GEOMETRY_KEY] = {"schema": SCHEMA, "atomic_boundary": boundary}
+        # No boundary in the key: the next turn has a longer prompt and has to find these rows (see reuse_limit callers).
+        out[GEOMETRY_KEY] = {"schema": SCHEMA, "atomic": True}
         return out
     if markers is None:
         out[GEOMETRY_KEY] = {"schema": SCHEMA, "step": step}
@@ -268,7 +416,8 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     else:
         out[GEOMETRY_KEY] = {"schema": SCHEMA_TURNS, "step": step, "turns": markers.signature()}
         cuts = turn_cuts(tokens or (), markers, boundary)
-    start = trailing_chunk_start(boundary, step, cuts)
+    # A stored reply's blocks must be found by the next prompt, whose chain has no trailing key at this length.
+    start = boundary if generation_end else trailing_chunk_start(boundary, step, cuts)
     if start < boundary:
         out[TRAILING_KEY] = {"boundary": boundary}
         scopes = out.get(CACHE_EXTRA_SCOPES_KEY)

@@ -40,11 +40,14 @@ describe('mixed-SWA subtype membership lives in one policy', () => {
     ).toBe(true)
   })
 
-  it('the form delegates both consumers to the policy', () => {
+  it('the form delegates its remaining consumer to the policy', () => {
+    // The display-only consumer (mixedSwaCacheActive, which drove the removed
+    // cache-codec badge) is gone with the badge; the one consumer left still
+    // reads the shared policy rather than an inlined chain.
     expect(form).toContain('shared/storedKvQuantPolicy')
     expect(form).toContain('const mixedSwaBundle = isMixedSwaBundle(')
-    expect(form).toContain('const mixedSwaCacheActive = mixedSwaBundle')
     expect(form).toContain('const mixedSwaBlockDiskOnlySupported = mixedSwaBundle')
+    expect(form).not.toContain('mixedSwaCacheActive')
   })
 
   it('neither consumer re-inlines the subtype chain', () => {

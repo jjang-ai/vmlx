@@ -94,3 +94,36 @@ def canonical_cache_extra_marker(cache_extra_keys: Optional[Any]) -> Optional[st
         )
     except Exception:
         return repr(cache_extra_keys)
+
+
+# One key per image, active from that image's first token. Rows before a new image keep their keys.
+MEDIA_ITEM_PREFIX = "media_item_"
+
+
+def merge_cache_extra_keys(base: Optional[Any], extra: dict) -> dict:
+    """``base`` plus ``extra``, keeping the scopes of both."""
+    if isinstance(base, dict):
+        merged = dict(base)
+    elif base is None:
+        merged = {}
+    else:
+        merged = {"request": repr(base)}
+    scopes = {**(merged.get(CACHE_EXTRA_SCOPES_KEY) or {}), **(extra.get(CACHE_EXTRA_SCOPES_KEY) or {})}
+    merged.update(extra)
+    if scopes:
+        merged[CACHE_EXTRA_SCOPES_KEY] = scopes
+    return merged
+
+
+def per_item_key_fallbacks(cache_extra_keys: Optional[Any]) -> list[dict]:
+    """The keys of the same conversation before its newest image, then before the one before it, and so on.
+
+    A whole-entry tier (RAM) compares a stored entry's complete key, so a turn that added an image has to look its
+    earlier turns up under the key those turns had."""
+    if not isinstance(cache_extra_keys, dict):
+        return []
+    scopes = cache_extra_keys.get(CACHE_EXTRA_SCOPES_KEY)
+    if not isinstance(scopes, dict):
+        return []
+    starts = sorted({int(v) for k, v in scopes.items() if str(k).startswith(MEDIA_ITEM_PREFIX)}, reverse=True)
+    return [cache_extra_keys_for_token_range(cache_extra_keys, 0, start) for start in starts]

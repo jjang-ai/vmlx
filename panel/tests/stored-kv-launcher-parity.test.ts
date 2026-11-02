@@ -40,15 +40,19 @@ describe("production stored cache stays architecture-native", () => {
     expect(renderer).not.toContain('parts.push("--kv-cache-quantization"')
   })
 
-  it("the visible setting is a disabled single native option", () => {
+  it("the form exposes no stored codec setting at all", () => {
     const form = read(FORM)
-    const start = form.indexOf("{/* Stored prefix representation. Auto adds no codec. */}")
-    const block = form.slice(start, start + 800)
-    expect(block).toContain('<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>')
-    expect(block).toContain('<option value="auto">')
-    expect(block).not.toContain('<option value="none">')
-    expect(block).not.toContain('value="q8"')
-    expect(block).not.toContain('value="q4"')
+    // The Prefix Cache section holds only SSD cache and RAM cache; there is no
+    // stored-codec select (not even a disabled one) and no q4/q8/none option.
+    const prefixSection = form.slice(form.indexOf('sectionKey="prefixCache"'), form.indexOf('sectionKey="power"'))
+    expect(prefixSection).toContain("label={t('sessions.config.ssdCache')}")
+    expect(prefixSection).toContain("label={t('sessions.config.ramCache')}")
+    expect(prefixSection).not.toContain("<select")
+    expect(form).not.toContain("effectiveStoredCacheQuantization")
+    expect(form).not.toContain("onChange('kvCacheQuantization'")
+    expect(form).not.toContain('<option value="none">')
+    expect(form).not.toContain('value="q8"')
+    expect(form).not.toContain('value="q4"')
   })
 
   it("the shared policy rejects added codecs for every topology", () => {

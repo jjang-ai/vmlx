@@ -776,15 +776,17 @@ describe('Prefix Cache', () => {
         expect(source).not.toContain('force prefix cache ON')
     })
 
-    it('legacy mode: sets --no-memory-aware-cache and --prefix-cache-size', () => {
-        const out = preview({ enablePrefixCache: true, noMemoryAwareCache: true, prefixCacheSize: 500 })
-        expect(hasFlag(out, '--no-memory-aware-cache')).toBe(true)
-        expect(getFlagValue(out, '--prefix-cache-size')).toBe('500')
+    it('a saved legacy entry-count mode is no longer forwarded: RAM only sends the percent and nothing else', () => {
+        const out = preview({ enablePrefixCache: true, noMemoryAwareCache: true, prefixCacheSize: 500, enableBlockDiskCache: false })
+        expect(hasFlag(out, '--no-memory-aware-cache')).toBe(false)
+        expect(hasFlag(out, '--prefix-cache-size')).toBe(false)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(true)
     })
 
-    it('memory-aware mode: sets --cache-memory-mb', () => {
-        const out = preview({ enablePrefixCache: true, cacheMemoryMb: 4096, usePagedCache: false, enableBlockDiskCache: false })
-        expect(getFlagValue(out, '--cache-memory-mb')).toBe('4096')
+    it('a saved --cache-memory-mb is no longer forwarded: the percent is the one RAM budget', () => {
+        const out = preview({ enablePrefixCache: true, cacheMemoryMb: 4096, cacheMemoryPercent: 30, usePagedCache: false, enableBlockDiskCache: false })
+        expect(hasFlag(out, '--cache-memory-mb')).toBe(false)
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
     it('release cache profile is SSD-only: L2 budget emitted, no L1 RAM budget flags at all', () => {
@@ -816,10 +818,17 @@ describe('Prefix Cache', () => {
             const { args } = buildCacheLaunchArgs({
                 continuousBatching: true, enablePrefixCache: true,
                 usePagedCache: false, enableBlockDiskCache: false,
-                enableDiskCache, cacheMemoryMb: 4096,
+                enableDiskCache, cacheMemoryPercent: 40,
             })
-            expect(args.filter(arg => arg === '--cache-memory-mb')).toHaveLength(1)
-            expect(args[args.indexOf('--cache-memory-mb') + 1]).toBe(enableDiskCache ? '0' : '4096')
+            if (enableDiskCache) {
+                // Exact typed prompt lane: no retained RAM copy next to the SSD store.
+                expect(args.filter(arg => arg === '--cache-memory-mb')).toHaveLength(1)
+                expect(args[args.indexOf('--cache-memory-mb') + 1]).toBe('0')
+                expect(args).not.toContain('--cache-memory-percent')
+            } else {
+                expect(args).not.toContain('--cache-memory-mb')
+                expect(args[args.indexOf('--cache-memory-percent') + 1]).toBe('0.4')
+            }
         }
         expect(launcher).toContain("import { buildCacheLaunchArgs }")
         expect(renderer).toContain("import { buildCacheLaunchArgs }")
@@ -832,9 +841,9 @@ describe('Prefix Cache', () => {
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
-    it('sets --cache-ttl-minutes when > 0 and paged cache off', () => {
+    it('a saved cache TTL is no longer forwarded (the RAM cache evicts oldest-first at its percent)', () => {
         const out = preview({ enablePrefixCache: true, cacheTtlMinutes: 60, usePagedCache: false, enableBlockDiskCache: false })
-        expect(getFlagValue(out, '--cache-ttl-minutes')).toBe('60')
+        expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
     })
 
     it('suppresses --cache-ttl-minutes when paged cache is on', () => {
@@ -943,10 +952,12 @@ describe('KV Cache Quantization', () => {
         )
 
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecEngineNative')")
-        expect(enLocale).toContain('Architecture-native cache')
-        expect(source).toContain("t('sessions.config.hybridStatefulHint')")
-        expect(enLocale).toContain('Generic TurboQuant KV is disabled unless a tested override exists')
+        // The Prefix Cache section no longer shows a live-codec row or
+        // per-architecture codec hints; it holds only SSD cache and RAM cache.
+        expect(source).not.toContain("t('sessions.config.codecEngineNative')")
+        expect(enLocale).not.toContain('Architecture-native cache')
+        expect(source).not.toContain("t('sessions.config.hybridStatefulHint')")
+        expect(enLocale).not.toContain('Generic TurboQuant KV is disabled unless a tested override exists')
         expect(source).not.toContain('ON · Default')
         expect(source).not.toContain('TurboQuant only')
     })
@@ -960,51 +971,53 @@ describe('KV Cache Quantization', () => {
 
         expect(source).toContain("isMixedSwaBundle(")
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecMixedSwa')")
-        expect(enLocale).toContain('Native full/sliding KV + rotating metadata')
-        expect(enLocale).toContain("preserves the model's native cache-slot and rotating-window metadata")
-        expect(enLocale).toContain('Generic TurboQuant is not added')
-        expect(source).toContain("'NATIVE · GENERIC TQ OFF'")
-        expect(source).toContain("const effectiveStoredCacheQuantization = 'auto'")
+        // No live-codec label, badge or stored-codec select in the Prefix Cache section.
+        expect(source).not.toContain("t('sessions.config.codecMixedSwa')")
+        expect(enLocale).not.toContain('Native full/sliding KV + rotating metadata')
+        expect(source).not.toContain("'NATIVE · GENERIC TQ OFF'")
+        expect(source).not.toContain('effectiveStoredCacheQuantization')
         expect(source).not.toContain('value="q8"')
         expect(source).not.toContain('value="q4"')
         expect(source).not.toContain("'TQ8 AUTO'")
     })
 
-    it('reports HY3 native cache and MTP copy semantics', () => {
+    it('shows no HY3 cache-codec row or hint in the Prefix Cache section', () => {
         const fs = require('fs')
         const source = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(source).toContain("normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'")
+        // The form no longer special-cases HY3 for a display-only codec label.
+        expect(source).not.toContain("normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'")
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecHy3')")
-        expect(enLocale).toContain('Native HY3 KV (no added cache codec)')
-        expect(source).toContain("'NATIVE · GENERIC TQ OFF'")
-        expect(enLocale).toContain('Native MTP D1 copies this cache independently before batch split/verify')
+        expect(source).not.toContain("t('sessions.config.codecHy3')")
+        expect(source).not.toContain("t('sessions.config.hy3AutoHint')")
+        expect(enLocale).not.toContain('Native HY3 KV (no added cache codec)')
+        expect(source).not.toContain("'NATIVE · GENERIC TQ OFF'")
     })
 
-    it('reports Qwen and Bonsai architecture-native cache layouts', () => {
+    it('shows no Qwen or Bonsai cache-layout rows in the Prefix Cache section', () => {
         const fs = require('fs')
         const source = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(source).toContain("const bonsaiActive = normalizedModelIdentity.includes('bonsai')")
-        expect(source).toContain("const qwenFullTqActive = !isMambaCache")
+        // Display-only family detectors for the codec label are gone with the row.
+        expect(source).not.toContain('bonsaiActive')
+        expect(source).not.toContain('qwenFullTqActive')
+        expect(source).not.toContain('qwenHybridTqActive')
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecQwenFull')")
-        expect(enLocale).toContain('Native Qwen full-attention KV')
+        expect(source).not.toContain("t('sessions.config.codecQwenFull')")
+        expect(enLocale).not.toContain('Native Qwen full-attention KV')
         expect(source).not.toContain('MIXED TQ4/8 AUTO')
-        expect(source).toContain("t('sessions.config.codecQwenHybrid')")
-        expect(enLocale).toContain('Native Qwen attention KV + native hybrid state')
-        expect(source).toContain("t('sessions.config.codecBonsaiHybrid')")
-        expect(enLocale).toContain('Native Bonsai attention KV + native hybrid state')
-        expect(enLocale).toContain('Qwen hybrid cache detected — Auto preserves native attention KV')
-        expect(enLocale).toContain('Bonsai hybrid cache detected — Auto preserves native attention KV')
+        expect(source).not.toContain("t('sessions.config.codecQwenHybrid')")
+        expect(enLocale).not.toContain('Native Qwen attention KV + native hybrid state')
+        expect(source).not.toContain("t('sessions.config.codecBonsaiHybrid')")
+        expect(enLocale).not.toContain('Native Bonsai attention KV + native hybrid state')
+        expect(enLocale).not.toContain('Qwen hybrid cache detected — Auto preserves native attention KV')
+        expect(enLocale).not.toContain('Bonsai hybrid cache detected — Auto preserves native attention KV')
     })
 
     it('chat reasoning Auto copy avoids force-language', () => {
@@ -1207,19 +1220,17 @@ describe('Disk Cache', () => {
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
     })
 
-    it('session cache controls use shared policy so stale paged state cannot grey out disk cache', () => {
+    it('session cache controls use the shared two-choice policy (SSD cache, RAM cache)', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        expect(source).toContain('resolveCacheControlPolicy')
-        expect(source).toContain('cacheControlUpdatesForDiskToggle')
-        // The only paged control is the RAM copy in front of Block Disk Cache (RAM + SSD), shown only with it.
-        expect(source).toContain('onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}')
-        expect(source).toContain('{cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (')
-        expect(source).toContain('data-vmlx-control="ram-copy-cache"')
-        expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
+        expect(source).toContain('resolveSimpleCacheTier')
+        expect(source).toContain('onChange={v => applyCacheControlUpdates(cacheControlUpdatesForSsdToggle(v, cacheControlState, cacheLane))}')
+        expect(source).toContain('onChange={v => applyCacheControlUpdates(cacheControlUpdatesForRamToggle(v, cacheControlState, cacheLane))}')
+        expect(source).toContain('data-vmlx-control="ssd-cache"')
+        expect(source).toContain('data-vmlx-control="ram-cache"')
+        // No paged / block-disk / legacy-disk controls remain for a stale saved value to grey out.
         expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
-        expect(source).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')
-        expect(source).toContain('disabled={dsv4Active || cachePolicy.legacyDiskCacheDisabled}')
-        expect(source).toContain('checked={cachePolicy.legacyDiskCacheChecked}')
+        expect(source).not.toContain('data-vmlx-control="ram-copy-cache"')
+        expect(source).not.toContain('cachePolicy.legacyDiskCacheChecked')
         expect(source).not.toContain('disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged}')
         expect(source).not.toContain('disabled={batchingOff || prefixOff || effectiveUsePagedCache}')
     })
@@ -2986,15 +2997,16 @@ describe('Default IP and New Settings', () => {
         }
 
         const form = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        expect(form).toContain("normalizedDetectedFamily === 'openpangu_v2'")
+        // The form reaches openPangu through the shared exact-typed lane detector, not a
+        // display-only family literal (that literal fed the removed cache-codec row).
+        expect(form).toContain('const exactTypedPromptDiskCache = usesExactTypedPromptDiskCache(normalizedDetectedFamily, nativeGlmSsdActive)')
+        expect(form).not.toContain("normalizedDetectedFamily === 'openpangu_v2'")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
         expect(form).toContain("t('sessions.config.openPanguTypedCacheNote')")
-        expect(enLocale).toContain('openPangu v2 uses exact typed N-1 prompt snapshots')
-        expect(form).toContain('disabled={exactTypedPromptDiskCache}')
-        expect(form).toContain("t('sessions.config.openPanguMemoryAwareNote')")
-        expect(enLocale).toContain("Memory-aware mode is required for openPangu's non-aliasing typed cache clone")
-        // ffc5bcc6: the typed-prompt lock does not apply to a DFlash2 speculative session's native SSD tier.
-        expect(form).toContain('cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)')
+        expect(enLocale).toContain('openPangu keeps its reusable prompts exactly as the model produced them')
+        // The exact typed prompt store is the lane's SSD choice; it keeps no RAM copy next to it.
+        expect(form).toContain('const cacheLane = { exactTypedPromptDiskCache }')
+        expect(form).toContain("{exactTypedPromptDiskCache && simpleCacheTier.ssdOn && <InfoNote text={t('sessions.config.ssdOnlyLaneNote')} />}")
     })
 
     it('GLM-5.3 preserves the text-only typed prompt L2 route across startup, reset, adoption, and launch', () => {
@@ -3692,10 +3704,11 @@ describe('JIT Toggle', () => {
         )
 
         expect(form).toContain('detectedFamily')
-        expect(form).toContain("t('sessions.config.codecDsv4')")
+        // The DSV4 live-codec label row is gone from the Prefix Cache section.
+        expect(form).not.toContain("t('sessions.config.codecDsv4')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('DeepSeek-V4 native composite cache')
+        ).not.toContain('DeepSeek-V4 native composite cache')
         expect(settings).toContain('detectedFamily={detectedConfig?.family}')
         expect(create).toContain('detectedFamily={detectedFamily}')
         expect(drawer).toContain('detectedFamily={detectedFamily}')
@@ -3761,10 +3774,10 @@ describe('JIT Toggle', () => {
             'utf8',
         )
 
-        expect(form).toContain("t('sessions.config.codecMixedSwa')")
+        // No live-codec row at all: neither a native label nor a TQ promise.
+        expect(form).not.toContain("t('sessions.config.codecMixedSwa')")
         const enLocale = readFileSync(resolve(__dirname, '../src/renderer/src/i18n/locales/en.json'), 'utf8')
-        expect(enLocale).toContain('Native full/sliding KV + rotating metadata')
-        expect(enLocale).toContain('Generic TurboQuant is not added')
+        expect(enLocale).not.toContain('Native full/sliding KV + rotating metadata')
         expect(form).not.toContain('TQ4 full-attention KV + native rotating SWA')
     })
 
@@ -3824,7 +3837,7 @@ describe('JIT Toggle', () => {
         expect(form).toContain("t('sessions.config.zayaTypedCacheNote')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('ZAYA CCA SSD prefix reconstruction is not yet available')
+        ).toContain('ZAYA cannot restore prompts from SSD yet')
         expect(settings).toContain('buildCacheLaunchArgs')
         expect(sessions).toContain('buildCacheLaunchArgs')
         expect(sessions).not.toContain("args.push('--use-paged-cache')")
@@ -3838,7 +3851,6 @@ describe('JIT Toggle', () => {
         )
 
         expect(form).toContain("detectedCacheType === 'rotating_kv'")
-        expect(form).toContain("t('sessions.config.mixedSwaSsdOnlyNote')")
         expect(form).not.toContain('nativeCacheRequiresPaged')
     })
 
@@ -3887,11 +3899,6 @@ describe('JIT Toggle', () => {
         const envTypes = fs.readFileSync('src/env.d.ts', 'utf-8')
 
         expect(form).toContain('detectedCacheSubtype')
-        expect(form).toContain("detectedCacheSubtype === 'step3p7_full_sliding_kv'")
-        expect(form).toContain("t('sessions.config.stepSsdOnlyNote')")
-        expect(
-            fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('Under tight Metal headroom, long cold-prompt stores can be skipped')
         expect(settings).toContain('detectedCacheSubtype={detectedConfig?.cacheSubtype}')
         expect(settings).toContain('buildCacheLaunchArgs')
         expect(sessions).toContain('buildCacheLaunchArgs')
@@ -3930,7 +3937,7 @@ describe('JIT Toggle', () => {
         expect(form).toContain("t('sessions.config.dsv4BatchPathNote')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('Prefix reuse defaults On and Block Disk Cache (SSD / L2) defaults On as the warm/cold stack')
+        ).toContain('The SSD cache is on by default')
         expect(form).not.toContain('cacheControlUpdatesForDsv4CompositeToggle')
         expect(form).not.toContain('cacheControlUpdatesForDsv4BlockDiskToggle')
         expect(form).not.toContain('applyDsv4CompositeCacheToggle')
@@ -3941,18 +3948,14 @@ describe('JIT Toggle', () => {
         expect(form).not.toContain("dsv4Active ? applyDsv4CompositeCacheToggle(v) : applyCacheControlUpdates(cacheControlUpdatesForPagedToggle")
         expect(form).not.toContain("dsv4Active ? cacheControlUpdatesForDsv4BlockDiskToggle(v) : cacheControlUpdatesForBlockDiskToggle")
         expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
-        expect(form).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')
-        expect(form).toContain("t('sessions.config.blockSizeTooltipDsv4')")
-        expect(
-            fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('require fixed 256-token blocks')
-        expect(form).toContain('disabled={dsv4Active}')
+        expect(form).toContain('disabled={ssdCacheToggleDisabled}')
         expect(form).not.toContain('checked={config.dsv4PrefixCache !== false}')
         expect(form).not.toContain('checked={dsv4Active ? true : config.enablePrefixCache}')
+        // DSV4's 256-token / 4097-block geometry still travels to argv from the saved config; it is no longer a control.
         expect(form).toContain('export const DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
         expect(form).toContain('export const DSV4_MAX_CACHE_BLOCKS = 4097')
-        expect(form).toContain('defaultValue={dsv4Active ? DSV4_MAX_CACHE_BLOCKS : DEFAULT_CONFIG.maxCacheBlocks}')
-        expect(form).toContain('max={100000}')
+        expect(form).not.toContain('settingKey="maxCacheBlocks"')
+        expect(form).not.toContain('settingKey="pagedCacheBlockSize"')
         expect(createSession).toContain("maxCacheBlocks: detected?.family === 'deepseek-v4' ? DSV4_MAX_CACHE_BLOCKS")
         expect(createSession).toContain('base.maxCacheBlocks = DSV4_MAX_CACHE_BLOCKS')
         expect(settingsDrawer).toContain('base.maxCacheBlocks = DSV4_MAX_CACHE_BLOCKS')
@@ -3976,20 +3979,24 @@ describe('JIT Toggle', () => {
 
         expect(countOccurrences(form, 'label="DSV4 Native Composite Prefix Cache"')).toBe(0)
         expect(countOccurrences(form, 'label="DSV4 CSA/HCA Pool Codec"')).toBe(0)
-        expect(countOccurrences(form, "label={t('sessions.cache.blockDiskCache')}")).toBe(1)
+        expect(countOccurrences(form, "label={t('sessions.config.ssdCache')}")).toBe(1)
+        expect(countOccurrences(form, "label={t('sessions.config.ramCache')}")).toBe(1)
         expect(countOccurrences(form, "label={t('sessions.config.pagedKVCache')}")).toBe(0)
         expect(form).not.toContain('LOCKED OFF')
-        expect(form).toContain("t('sessions.config.blockDiskPureSsdNote')")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('Locked Off')
-        expect(enLocale).toContain('The app always launches --no-paged-cache')
         expect(form).not.toContain('limited GPU RAM')
         expect(form).toContain("e.preventDefault()")
         expect(form).toContain('className="relative inline-flex ml-1"\n      onClick={handleClick}')
         expect(form).not.toContain('disabled={dsv4CompositeRequiresPaged}')
-        expect(form).toContain('<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>')
-        expect(form).toContain("t('sessions.config.storedQuantNativeTyped')")
-        expect(enLocale).toContain('Native typed codec (bundle-derived)')
+        // The Prefix Cache section holds only the SSD and RAM choices: no
+        // stored-codec select, no native-typed codec row.
+        const prefixSection = form.slice(form.indexOf('sectionKey="prefixCache"'), form.indexOf('sectionKey="power"'))
+        expect(prefixSection).toContain("label={t('sessions.config.ssdCache')}")
+        expect(prefixSection).toContain("label={t('sessions.config.ramCache')}")
+        expect(prefixSection).not.toContain('<select')
+        expect(form).not.toContain('effectiveStoredCacheQuantization')
+        expect(form).not.toContain("t('sessions.config.storedQuantNativeTyped')")
+        expect(enLocale).not.toContain('Native typed codec (bundle-derived)')
         expect(form).not.toContain('DSV4 Native Cache')
         expect(form).not.toContain('DSV4 Composite Prefix Cache')
         expect(form).not.toContain('DSV4 Pool Quantization')
@@ -4009,8 +4016,14 @@ describe('JIT Toggle', () => {
             'src/renderer/src/i18n/locales/en.json',
             'utf-8',
         )
-        // copy lives in the locale catalog now that the panel is translated
-        expect(cachePanelCopy).toContain('Block Disk Cache (SSD / L2)')
+        // copy lives in the locale catalog now that the panel is translated;
+        // the Cache tab names the tiers the way Server Settings does (SSD cache /
+        // RAM cache), not with the old Block Disk Cache / L1 / L2 jargon
+        expect(cachePanelCopy).toContain('"blockDiskCache": "SSD cache"')
+        expect(cachePanelCopy).not.toContain('"blockDiskCache": "Block Disk Cache (SSD / L2)"')
+        expect(cachePanelCopy).toContain('"diskCacheL2": "SSD prompt cache"')
+        expect(cachePanelCopy).toContain('"l1IndexedTokens": "RAM Indexed Tokens"')
+        expect(cachePanelCopy).toContain('"l2TokensOnDisk": "Tokens on SSD"')
         expect(cachePanel).toContain("t('sessions.cache.managedRootSize')")
         expect(cachePanelCopy).toContain('Managed Root Size')
         expect(cachePanel).toContain("t('sessions.cache.managedRootLimit')")
@@ -4044,29 +4057,30 @@ describe('JIT Toggle', () => {
         expect(form).toContain("t('sessions.config.blockCacheMaxPercentTooltip')")
         expect(form).toContain("t('sessions.config.blockCacheSharedBudgetNote')")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('Maximum physical disk space for the managed block-cache root')
-        expect(enLocale).toContain('shared across model/config namespaces and typed companion state')
-        expect(enLocale).toContain('the smallest finite limit is enforced')
-        expect(enLocale).toContain('Set to 0 for unlimited only when no live session supplies a finite limit')
-        expect(enLocale).toContain('the size limit applies across all managed subdirectories and typed companions in this root')
+        expect(enLocale).toContain('Largest share of this disk the SSD cache may use')
+        expect(enLocale).toContain('shared by every model and session')
+        expect(enLocale).toContain('the oldest prompts are removed first')
+        expect(enLocale).toContain('0 means no limit')
     })
 
-    it('settings form disables generic stored KV codec controls for MiniMax-M3 native MSA cache', () => {
+    it('settings form shows no generic stored KV codec controls for MiniMax-M3 native MSA cache', () => {
         const form = readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(form).toContain("const effectiveStoredCacheQuantization = 'auto'")
-        expect(form).toContain("? t('sessions.config.codecOpenPangu')")
-        expect(form).toContain("? t('sessions.config.codecM3')")
-        expect(form).toContain("const liveCacheCodecBadge = 'NATIVE · GENERIC TQ OFF'")
+        // Neither a stored-codec select nor a live-codec label/badge/hint row exists any more.
+        expect(form).not.toContain('effectiveStoredCacheQuantization')
+        expect(form).not.toContain("t('sessions.config.codecOpenPangu')")
+        expect(form).not.toContain("t('sessions.config.codecM3')")
+        expect(form).not.toContain("t('sessions.config.m3KvQuantHint')")
+        expect(form).not.toContain("t('sessions.config.openPanguKvQuantHint')")
+        expect(form).not.toContain('liveCacheCodecBadge')
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('openPangu typed composite cache')
-        expect(enLocale).toContain('MiniMax-M3 native MSA cache')
-        expect(enLocale).toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
-        expect(enLocale).toContain('native MSA snapshots with keys, values, idx_keys, and absolute offsets')
-        expect(form).toContain('<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>')
+        expect(enLocale).not.toContain('openPangu typed composite cache')
+        expect(enLocale).not.toContain('"codecM3"')
+        expect(enLocale).not.toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
+        expect(form).not.toContain('<select value={effectiveStoredCacheQuantization}')
     })
 
     it('settings form exposes MiniMax-M3 typed SSD cache while keeping its native codec', () => {
@@ -4077,14 +4091,14 @@ describe('JIT Toggle', () => {
 
         expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(form).toContain("t('sessions.config.m3NativeMsaNote')")
-        expect(enLocale).toContain('MiniMax-M3 keeps its native MSA state (keys, values, idx_keys, absolute offsets) in the RAM tier')
-        expect(form).toContain("t('sessions.config.m3SsdOnlyNote')")
-        expect(enLocale).toContain('MiniMax-M3 SSD-only mode preserves native MSA keys, values, idx_keys, and absolute offsets')
-        expect(form).toContain('architectureBlockDiskOnlySupported && !nativeSpeculativeCache && !nativeGlmSsdActive && !nativeOmniStage1 && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked')
-        expect(enLocale).toContain('RAM blocks in front of Block Disk L2 (RAM + SSD)')
+        // MiniMax-M3 gets the same two choices as every batched family; the native MSA codec stays automatic
+        // and is not described by a display row.
+        expect(form).not.toContain("t('sessions.config.codecM3')")
+        expect(enLocale).not.toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
+        expect(form).not.toContain('m3NativeMsaNote')
+        expect(form).not.toContain('m3SsdOnlyNote')
         expect(form).not.toContain('LOCKED OFF')
-        expect(form).toContain('disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}')
+        expect(form).toContain('disabled={ssdCacheToggleDisabled}')
     })
 
     it('settings form keeps legacy prompt disk unavailable while exposing DSV4 Block Disk L2', () => {
@@ -4096,13 +4110,10 @@ describe('JIT Toggle', () => {
 
         expect(form).not.toContain('Persist DeepSeek-V4 native SWA+CSA/HCA composite cache records to SSD')
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('Its retained paged-RAM mirror is disabled')
-        expect(enLocale).toContain('defaults On as the warm/cold stack')
-        expect(form).toContain('disabled={dsv4Active || cachePolicy.legacyDiskCacheDisabled}')
-        expect(form).toContain('{!nativeGlmSsdActive && (exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked) && <div data-vmlx-section="typed-disk-cache">')
-        expect(enLocale).toContain('DSV4 uses Block Disk Cache (SSD / L2) above for persistent native composite blocks')
-        expect(form).toContain("t('sessions.config.dsv4SsdOnlyNote')")
-        expect(enLocale).toContain('DSV4 SSD-only mode preserves typed SWA plus CSA/HCA state')
+        expect(enLocale).toContain('The SSD cache is on by default')
+        // No separate legacy prompt-disk control exists any more; the SSD choice covers both store kinds.
+        expect(form).not.toContain('data-vmlx-section="typed-disk-cache"')
+        expect(form).not.toContain("label={t('sessions.config.enableDiskCache')}")
         expect(form).toContain('{showCachingHelp && <Modal')
         expect(form).not.toContain('DSV4 Native Composite Prefix Cache')
     })
@@ -4269,18 +4280,19 @@ describe('Feature Interaction', () => {
     it('noMemoryAwareCache suppresses memory-aware flags', () => {
         const out = preview({
             enablePrefixCache: true,
+            enableBlockDiskCache: false,
             noMemoryAwareCache: true,
             cacheMemoryMb: 2048,
             cacheMemoryPercent: 30,
             cacheTtlMinutes: 60,
             prefixCacheSize: 200,
         })
-        expect(hasFlag(out, '--no-memory-aware-cache')).toBe(true)
-        expect(hasFlag(out, '--prefix-cache-size')).toBe(true)
-        // Memory-aware flags must NOT appear
+        // The entry-count mode is gone from the panel: the saved flag is ignored and only the percent is sent.
+        expect(hasFlag(out, '--no-memory-aware-cache')).toBe(false)
+        expect(hasFlag(out, '--prefix-cache-size')).toBe(false)
         expect(hasFlag(out, '--cache-memory-mb')).toBe(false)
-        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
         expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
     it('CLI preview includes prefixCacheMaxBytes like session launch args', () => {
@@ -4291,8 +4303,10 @@ describe('Feature Interaction', () => {
         )
         const launchSource = fs.readFileSync('src/main/sessions.ts', 'utf-8')
 
-        expect(previewSource).toContain('--prefix-cache-max-bytes')
-        expect(launchSource).toContain('--prefix-cache-max-bytes')
+        // Neither consumer hand-rolls the removed byte limit; both take the shared fragment.
+        expect(previewSource).not.toContain("push('--prefix-cache-max-bytes'")
+        expect(launchSource).not.toContain("push('--prefix-cache-max-bytes'")
+        expect(previewSource).toContain('buildCacheLaunchArgs({')
     })
 
     it('cacheMemoryPercent default 15 emits 0.15 when legacy memory cache is active', () => {
@@ -4361,8 +4375,8 @@ describe('Feature Interaction', () => {
         const previewSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionSettings.tsx'), 'utf-8')
         const launchSource = readFileSync(resolve(__dirname, '../src/main/sessions.ts'), 'utf-8')
         const shared = readFileSync(resolve(__dirname, '../src/shared/cacheLaunchArgs.ts'), 'utf-8')
-        expect(previewSource).toContain('forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active')
-        expect(launchSource).toContain('forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active')
+        expect(previewSource).toContain('cacheMemoryPercent: config.cacheMemoryPercent')
+        expect(launchSource).toContain('cacheMemoryPercent: config.cacheMemoryPercent')
         expect(shared).toContain("'--no-paged-cache'")
         expect(shared).not.toContain("args.push('--use-paged-cache')")
     })
@@ -4378,15 +4392,15 @@ describe('Feature Interaction', () => {
             resolve(__dirname, '../src/renderer/src/i18n/locales/en.json'),
             'utf-8',
         )
-        expect(source).toContain('resolvePagedCacheCapacity')
-        expect(source).toContain('<InfoNote text={effectiveBlockDiskCapacityText} />')
+        // The capacity arithmetic, the memory-budget sliders and the TTL control left the form with the
+        // block-size / max-blocks knobs; only the two percent sliders remain.
+        expect(source).not.toContain('resolvePagedCacheCapacity')
+        expect(source).not.toContain('effectiveBlockDiskCapacityText')
         expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
-        expect(source).toContain("t('sessions.config.pagedCacheMemoryIgnored')")
-        expect(catalog).toContain('Effective in-memory cache capacity')
-        expect(catalog).toContain('Cache TTL does not apply while In-Memory Paged Cache is on')
-        expect(source).toContain('pagedCacheControlsState')
-        expect(source).toContain('memoryBudgetControlsDisabled')
-        expect(source).toContain('cacheTtlDisabled')
+        expect(source).not.toContain('pagedCacheControlsState')
+        expect(source).toContain('settingKey="blockDiskCacheMaxPercent"')
+        expect(source).toContain('settingKey="cacheMemoryPercent"')
+        expect(catalog).toContain('RAM Cache Size (% of RAM)')
     })
 
     it('defaultTopP minimum boundary stays out of startup CLI', () => {
@@ -5022,8 +5036,8 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--enable-disk-cache')
     })
 
-    it('cache TTL only emitted without paged cache', () => {
-        // cacheTtlMinutes gated by !(usePagedCache)
+    it('cache TTL is never emitted by the panel any more', () => {
+        // The TTL knob left the UI; the RAM cache is bounded by its percent and evicts oldest-first.
         const withPaged = preview({
             enablePrefixCache: true,
             cacheTtlMinutes: 30,
@@ -5039,7 +5053,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
             enableBlockDiskCache: false,
             noMemoryAwareCache: false,
         })
-        expect(withoutPaged.replace(/\s*\\\n\s*/g, ' ')).toContain('--cache-ttl-minutes')
+        expect(withoutPaged.replace(/\s*\\\n\s*/g, ' ')).not.toContain('--cache-ttl-minutes')
     })
 })
 
@@ -5056,24 +5070,16 @@ describe('block-disk-only capacity label', () => {
         // block-disk-only mode mislabelled the SSD block index as in-memory RAM
         // capacity everywhere except English.
         expect(form).not.toContain("replace('Effective in-memory cache capacity'")
-        expect(form).toContain("t('sessions.config.blockDiskCapacity'")
-        expect(form).toContain('effectiveBlockDiskCapacityText')
-        expect(form).toContain('blockDiskOnly')
+        // The capacity sentence is no longer rendered at all (block size / max blocks left the UI).
+        expect(form).not.toContain("t('sessions.config.blockDiskCapacity'")
+        expect(form).not.toContain('effectiveBlockDiskCapacityText')
 
-        // Both variants must exist in every catalog, and must differ — one names
-        // RAM, the other the SSD block index.
+        // Neither capacity sentence exists any more: the knobs it described left the UI in every language.
         for (const locale of ['en', 'es', 'ja', 'ko', 'zh']) {
             const catalog = JSON.parse(
                 fs.readFileSync(`src/renderer/src/i18n/locales/${locale}.json`, 'utf-8'),
             )
-            const config = catalog.sessions.config
-            expect(typeof config.pagedCacheCapacity).toBe('string')
-            expect(typeof config.blockDiskCapacity).toBe('string')
-            expect(config.blockDiskCapacity).not.toBe(config.pagedCacheCapacity)
-            // Same interpolation contract, so the numbers render either way.
-            for (const placeholder of ['{{blockSize}}', '{{usableBlocks}}', '{{maxBlocks}}', '{{tokens}}']) {
-                expect(config.blockDiskCapacity).toContain(placeholder)
-            }
+            expect(catalog.sessions.config.pagedCacheCapacity).toBeUndefined()
         }
     })
 })

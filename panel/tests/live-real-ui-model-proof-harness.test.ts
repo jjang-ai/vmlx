@@ -6903,6 +6903,57 @@ describe("visible SSD-only cache policy", () => {
   });
 });
 
+describe("server cache controls are driven through the two-choice Prefix Cache form", () => {
+  const source = readFileSync(
+    path.resolve("scripts/live-real-ui-model-proof.mjs"),
+    "utf8",
+  );
+
+  it("reads and drives the SSD cache / RAM cache hooks, never the removed labels", () => {
+    // Both the pre-Start lane selection and the running-session capture.
+    expect(
+      source.match(/'\[data-vmlx-control="' \+ name \+ '"\] input\[type="checkbox"\]'/g),
+    ).toHaveLength(1);
+    expect(source).toContain("'[data-vmlx-control=\"' + name + '\"]'");
+    expect(source.match(/preCacheInput\('ssd-cache'\)/g)).toHaveLength(1);
+    expect(source.match(/preCacheInput\('ram-cache'\)/g)).toHaveLength(1);
+    expect(source).toContain("cacheInput('ssd-cache')");
+    expect(source).toContain("cacheInput('ram-cache')");
+    for (const removed of [
+      "preInputFor('In-Memory Paged Cache (RAM)')",
+      "preInputFor('Block Disk Cache (SSD / L2)')",
+      "inputFor('Enable Prefix Cache')",
+      "inputFor('Enable Disk Cache')",
+      "inputFor('Block Disk Cache (SSD / L2)')",
+      "inputFor('In-Memory Paged Cache (RAM)')",
+      "clickSection('In-Memory Paged Cache')",
+      "clickSection('Disk Cache')",
+      "expandSection('In-Memory Paged Cache')",
+      "'Stored Cache Quantization',",
+    ]) {
+      expect(source).not.toContain(removed);
+    }
+  });
+
+  it("reports the visible tier and its saved-key view, SSD first for the SSD-only lane", () => {
+    expect(source).toContain(
+      "tier: !ssd ? null : ssdOn ? (ramOn ? 'ram-ssd' : 'ssd') : ramOn ? 'ram' : 'off',",
+    );
+    expect(source).toContain("enablePrefixCache: ssdOn || ramOn,");
+    expect(source).toContain("usePagedCache: ssdOn && ramOn,");
+    expect(source).toContain("enableDiskCache: ssdOn && exactTypedPromptDiskLane,");
+    expect(source).toContain("enableBlockDiskCache: ssdOn && !exactTypedPromptDiskLane,");
+    expect(source).toContain("policyVisible: !!ssdInput && isVisible(ssdControl),");
+    expect(source).toContain("visibleCacheTier: initialCacheControls.tier,");
+    const ssdClick = source.indexOf("if (ssd && !ssd.checked && !ssd.disabled) {");
+    const ramClick = source.indexOf("if (ram && ram.checked && !ram.disabled) {");
+    expect(ssdClick).toBeGreaterThan(-1);
+    expect(ramClick).toBeGreaterThan(ssdClick);
+    expect(source).toContain("'SSD Cache Size (% of disk)',");
+    expect(source).toContain("'RAM Cache Size (% of RAM)',");
+  });
+});
+
 
 describe("completed reasoning rail expansion", () => {
   it("reopens a rail collapsed by the pending completion timer before taking proof", async () => {

@@ -45,16 +45,17 @@ describe('Console settings and responsive layout contract', () => {
     const form = read('renderer/src/components/sessions/SessionConfigForm.tsx')
     const groups = [...form.matchAll(/<Section [^\n]*sectionKey="([^"]+)"/g)].map(m => m[1])
     expect(groups).toEqual(['server', 'concurrent', 'prefixCache', 'power', 'performance', 'tools', 'specDecode'])
-    // The RAM copy (RAM + SSD) is the only paged control, inside the prefix-cache group with Block Disk Cache.
-    expect(form).toContain("label={t('sessions.config.ramCopyWithSsd')}")
+    // The prefix-cache group holds exactly two choices: SSD cache and RAM cache, one max-percent number each.
+    expect(form).toContain("label={t('sessions.config.ssdCache')}")
+    expect(form).toContain("label={t('sessions.config.ramCache')}")
     expect(form).not.toContain('DistributedNodeList')
     expect(form).toContain('data-vmlx-section="retired-distributed"')
     expect(form).toContain("onChange('distributedEnabled', false)")
-    for (const field of ['maxNumSeqs', 'prefillBatchSize', 'blockDiskCacheMaxPercent', 'videoFps', 'videoMaxFrames', 'videoMaxPixels', 'videoTokenBudget', 'nativeMtpMode', 'streamInterval', 'maxTokens', 'maxContextLength']) {
+    for (const field of ['maxNumSeqs', 'prefillBatchSize', 'blockDiskCacheMaxPercent', 'cacheMemoryPercent', 'videoFps', 'videoMaxFrames', 'videoMaxPixels', 'videoTokenBudget', 'nativeMtpMode', 'streamInterval', 'maxTokens', 'maxContextLength']) {
       expect(form).toContain(`settingKey="${field}"`)
     }
     expect(form).toContain('nativeMtpDetected &&')
-    expect(form).toContain('exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked')
+    expect(form).toContain('const cacheLane = { exactTypedPromptDiskCache }')
   })
   it('uses only Console, even for legacy light/system preferences', () => {
     const provider = read('renderer/src/providers/ThemeProvider.tsx')

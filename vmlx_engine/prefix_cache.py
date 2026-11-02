@@ -3403,6 +3403,7 @@ class BlockAwarePrefixCache:
         *,
         stored_prompt_boundary: bool = False,
         minimax_m3_boundary: Optional[int] = None,
+        minimax_m3_generation_end: bool = False,
     ) -> Optional[Any]:
         """Bind native M3 blocks to the prefill matrix shape that produced them.
 
@@ -3448,6 +3449,7 @@ class BlockAwarePrefixCache:
                 step=aligned_step,
                 markers=getattr(self, "_m3_turn_markers", None),
                 tokens=tokens,
+                generation_end=minimax_m3_generation_end,
             )
 
         # M3 stores the prompt-boundary cache under N-1 token IDs because the
@@ -4517,13 +4519,27 @@ class BlockAwarePrefixCache:
 
         matched = int(block_table.num_tokens)
         boundary = max(0, len(tokens) - 1)
-        reuse = prefill_geometry.reuse_limit(
+        media = prefill_geometry.is_media_request(cache_extra_keys)
+        media_covered = media and prefill_geometry.media_rows_covered(tokens, matched)
+        reuse = prefill_geometry.media_reuse(tokens, matched, boundary) if prefill_geometry.has_per_image_keys(
+            cache_extra_keys
+        ) else prefill_geometry.reuse_limit(
             matched,
             boundary,
             step,
             exact_geometry=True,
-            atomic=prefill_geometry.is_media_request(cache_extra_keys),
-            cuts=self._minimax_m3_turn_cuts(tokens, boundary),
+            atomic=media and not media_covered,
+            cuts=[
+                *self._minimax_m3_turn_cuts(tokens, boundary),
+                *(
+                    [matched]
+                    if media_covered
+                    or prefill_geometry.inside_assistant_turn(
+                        tokens, getattr(self, "_m3_turn_markers", None), matched
+                    )
+                    else []
+                ),
+            ],
         )
         self._drop_m3_transient_payloads(block_table)
         keep_tokens = (
@@ -5673,6 +5689,7 @@ class BlockAwarePrefixCache:
         defer_post_fence_gc: bool = False,
         minimax_m3_boundary: Optional[int] = None,
         minimax_m3_stream_inflight_bytes: Optional[int] = None,
+        minimax_m3_generation_end: bool = False,
     ) -> Optional[BlockTable]:
         """Store cache data and deterministically terminate any begun L2 fence.
 
@@ -5690,6 +5707,8 @@ class BlockAwarePrefixCache:
         _shape_kwargs: Dict[str, Any] = {"stored_prompt_boundary": True}
         if minimax_m3_boundary is not None:
             _shape_kwargs["minimax_m3_boundary"] = minimax_m3_boundary
+        if minimax_m3_generation_end:
+            _shape_kwargs["minimax_m3_generation_end"] = True
         cache_extra_keys = self._shape_scoped_cache_extra_keys(
             tokens,
             cache_extra_keys,

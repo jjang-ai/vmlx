@@ -70,6 +70,7 @@ import {
 import { buildToolMediaFollowupContent } from "../../shared/toolMediaFollowup";
 import { dsv4OutputBudget } from "../../shared/dsv4RequestBudget";
 import {
+  applyFinalAnswerRecoveryThinkingOff,
   applyReasoningRequestFields,
   remoteReasoningFormatForUrl,
   type RemoteReasoningFormat,
@@ -2365,14 +2366,7 @@ export function registerChatHandlers(
             // thinking-off rail. Keep their bounded follow-up answer-only by
             // removing tools, but do not coerce an empty <think> sentinel.
             if (supportsInstructMode === false) return;
-            obj.enable_thinking = false;
-            obj.thinking_mode = "instruct";
-            obj.chat_template_kwargs = {
-              ...(obj.chat_template_kwargs || {}),
-              enable_thinking: false,
-            };
-            delete obj.reasoning_effort;
-            delete obj.max_thinking_tokens;
+            applyFinalAnswerRecoveryThinkingOff(obj);
           };
           const finalizeRequestBody = (obj: Record<string, any>) => {
             applyPostToolAnswerPolicy(obj);
