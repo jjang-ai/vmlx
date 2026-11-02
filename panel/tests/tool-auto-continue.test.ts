@@ -772,7 +772,7 @@ describe('tool auto-continue policy', () => {
     expect(source).toContain('let finalAnswerRecovery = false')
     expect(source).toContain('finalAnswerRecovery = true')
     expect(source).toContain('applyPostToolRequestFields(obj')
-    expect(source).toContain('obj.enable_thinking = false')
+    expect(source).toContain('applyFinalAnswerRecoveryThinkingOff(obj)')
     expect(source).toContain(
       'const noVisibleAnswerWarning = noVisibleToolAnswerWarning({',
     )
@@ -809,7 +809,7 @@ describe('tool auto-continue policy', () => {
     expect(policy).toContain('previous: previousToolRequestFields')
     expect(policy).toContain('if (!finalAnswerRecovery) return')
     expect(policy.indexOf('if (!finalAnswerRecovery) return')).toBeLessThan(
-      policy.indexOf('obj.enable_thinking = false'),
+      policy.indexOf('applyFinalAnswerRecoveryThinkingOff(obj)'),
     )
     expect(planned).toBeGreaterThan(-1)
     expect(followUp).toBeGreaterThan(planned)

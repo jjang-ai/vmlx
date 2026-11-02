@@ -296,12 +296,13 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(enLocale).toContain('Prefix reuse defaults On')
     expect(enLocale).toContain('Block Disk Cache (SSD / L2) defaults On')
     expect(enLocale).toContain('CSA/HCA pool codec remains bundle-derived')
-    expect(source).toContain("<CheckField label={t('sessions.config.enablePrefixCache')}")
+    // DSV4 gets the same two choices as every family: SSD cache (default on) and RAM cache (default off).
+    expect(source).toContain("label={t('sessions.config.ssdCache')}")
+    expect(source).toContain("label={t('sessions.config.ramCache')}")
     expect(source).not.toContain("label={t('sessions.config.pagedKVCache')}")
-    expect(source).toContain('cacheControlUpdatesForBlockDiskToggle(v, cacheControlState)')
-    expect(source).toContain("label={t('sessions.cache.blockDiskCache')}")
-    expect(enLocale).toContain('require fixed 256-token blocks')
-    expect(source).toContain('disabled={dsv4Active}')
+    expect(source).toContain('cacheControlUpdatesForSsdToggle(v, cacheControlState, cacheLane)')
+    expect(source).toContain('cacheControlUpdatesForRamToggle(v, cacheControlState, cacheLane)')
+    expect(source).toContain('disabled={ssdCacheToggleDisabled}')
     expect(source).toContain("t('sessions.config.storedQuantNativeTyped')")
     expect(enLocale).toContain('Native typed codec (bundle-derived)')
     // copy lives in the locale catalog now that the form is translated

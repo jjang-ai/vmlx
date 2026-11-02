@@ -3,6 +3,40 @@ export const REASONING_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 export type ReasoningEffort = typeof REASONING_EFFORT_LEVELS[number]
 export type RemoteReasoningFormat = 'vmlx' | 'openai' | 'openrouter'
 
+/**
+ * MiniMax-M3.1 Flash. Its chat_template.jinja renders the kwarg verbatim as an
+ * `<effort>...</effort>` tag after the thinking instructions
+ * (`{%- if reasoning_effort is defined and reasoning_effort is not none -%}
+ *  {{- '\n\n<effort>' ~ reasoning_effort ~ '</effort>' }}`), independently of
+ * `thinking_mode` (enabled / disabled / adaptive). The bundle card documents the
+ * five values the release was trained on: low / medium / high / xhigh / max;
+ * unset = no tag (the model's own default), so there is no default level to name.
+ * The engine forwards a top-level `reasoning_effort` into chat_template_kwargs
+ * for every dialect (server.py `_forward_reasoning_effort_kwargs`).
+ */
+export const MINIMAX_M3_REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * DeepSeek-V4.1 Flash. The bundle's `encoding/encoding.py` takes a numeric
+ * budget 1..100 (`"Reasoning Effort: {budget} (range 1-100, ...)"`, rendered
+ * only in thinking mode) with the names low=50 / high=75 / max=100 and default
+ * "high". vMLX maps every public level onto that budget before rendering
+ * (`vmlx_engine/models/deepseek_v4_1/chat_encoding.py` REASONING_BUDGETS:
+ * low 50, medium 62, high 75, xhigh 88, max 100; server.py
+ * `_apply_dsv41_reasoning_policy` on every endpoint), so each level below is a
+ * distinct budget the encoder accepts. `minimal` (25) exists in the runtime but
+ * is not a vMLX chat level.
+ */
+export const DSV41_REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+export const DSV41_DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
+export const DSV41_REASONING_BUDGETS: Readonly<Record<ReasoningEffort, number>> = {
+  low: 50,
+  medium: 62,
+  high: 75,
+  xhigh: 88,
+  max: 100,
+}
+
 export function remoteReasoningFormatForUrl(url?: string): RemoteReasoningFormat {
   try {
     if (new URL(url || '').hostname === 'openrouter.ai') return 'openrouter'
@@ -72,6 +106,27 @@ export function resolveReasoningEffortForRequest(
   return input.isRemote || input.sessionHasReasoningParser || input.detectedFamily === 'deepseek-v4'
     ? effort
     : undefined
+}
+
+/**
+ * The bounded post-tool recovery pass asks for a direct answer: thinking off,
+ * instruct mode, no effort or thinking budget. It runs AFTER
+ * `applyReasoningRequestFields`, so it must also drop the adaptive template
+ * mode that call wrote; a body carrying `thinking_mode: "instruct"` next to
+ * `chat_template_kwargs.thinking_mode: "adaptive"` is rejected by the engine
+ * ("adaptive thinking_mode conflicts with the template mode"), which is how a
+ * chat saved as Adaptive produced retained requests that said instruct.
+ */
+export function applyFinalAnswerRecoveryThinkingOff(body: Record<string, any>): void {
+  body.enable_thinking = false
+  body.thinking_mode = 'instruct'
+  const templateKwargs = { ...(body.chat_template_kwargs || {}), enable_thinking: false }
+  delete templateKwargs.thinking_mode
+  delete templateKwargs.reasoning_effort
+  delete templateKwargs.thinking_budget
+  body.chat_template_kwargs = templateKwargs
+  delete body.reasoning_effort
+  delete body.max_thinking_tokens
 }
 
 /**

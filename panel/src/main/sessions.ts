@@ -5381,13 +5381,9 @@ export class SessionManager extends EventEmitter {
       usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
       enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
       enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
-      noMemoryAwareCache: !!config.noMemoryAwareCache,
-      forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active,
-      prefixCacheSize: config.prefixCacheSize,
-      prefixCacheMaxBytes: config.prefixCacheMaxBytes,
-      cacheMemoryMb: config.cacheMemoryMb,
+      // The one RAM number ("RAM cache, max % of RAM"); mb / TTL / entry-count values saved by older panels are not
+      // forwarded, so nothing hidden can bound RAM differently from the percent the setting shows.
       cacheMemoryPercent: config.cacheMemoryPercent,
-      cacheTtlMinutes: config.cacheTtlMinutes,
       effectivePagedCacheBlockSize,
       maxCacheBlocks: config.maxCacheBlocks,
       diskCacheDir: config.diskCacheDir,

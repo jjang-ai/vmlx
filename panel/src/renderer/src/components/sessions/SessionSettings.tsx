@@ -437,13 +437,7 @@ export function buildCommandPreview(
     usePagedCache: !exactTypedPromptDiskCache && config.usePagedCache === true,
     enableDiskCache: !dflash2Speculative && !dsparkSingleRequest && !!diskControls.enableDiskCache,
     enableBlockDiskCache: dflash2Speculative || dsparkSingleRequest ? config.enableBlockDiskCache !== false : exactTypedPromptDiskCache ? false : !!diskControls.enableBlockDiskCache,
-    noMemoryAwareCache: !!config.noMemoryAwareCache,
-    forceMemoryAwareCache: exactTypedPromptDiskCache || dsv4Active,
-    prefixCacheSize: config.prefixCacheSize,
-    prefixCacheMaxBytes: config.prefixCacheMaxBytes,
-    cacheMemoryMb: config.cacheMemoryMb,
     cacheMemoryPercent: config.cacheMemoryPercent,
-    cacheTtlMinutes: config.cacheTtlMinutes,
     effectivePagedCacheBlockSize: dsv4Active
       ? DSV4_PAGED_CACHE_BLOCK_SIZE
       : config.pagedCacheBlockSize,

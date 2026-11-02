@@ -7,16 +7,11 @@ import { QWEN38_27B_DFLASH2_REPO, isQwen38Dense27b } from '../../../../shared/df
 import { Modal } from '../ui/Modal'
 import { useTranslation } from '../../i18n'
 import {
-  cacheControlUpdatesForBlockDiskToggle,
-  cacheControlUpdatesForDiskToggle,
-  cacheControlUpdatesForPagedToggle,
-  resolveCacheControlPolicy,
+  cacheControlUpdatesForRamToggle,
+  cacheControlUpdatesForSsdToggle,
+  resolveSimpleCacheTier,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
-import {
-  pagedCacheControlsState,
-  resolvePagedCacheCapacity,
-} from '../../../../shared/cacheCapacityDisplay'
 import { isLagunaMixedSwaTurboQuantEffective } from '../../../../shared/lagunaCachePolicy'
 import { normalizeMcpPolicyList } from '../../../../shared/mcpPolicy'
 import { canonicalizeToolParserId, describeDetectedToolParser } from '../../../../shared/toolParserAliases'
@@ -532,7 +527,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   // Same question as mixedSwaCacheActive below; both were hand-copied
   // three-condition chains. One detector now answers it.
   const mixedSwaBlockDiskOnlySupported = mixedSwaBundle
-  const stepMixedSwaBlockDiskOnly = detectedCacheSubtype === 'step3p7_full_sliding_kv'
   const architectureBlockDiskOnlySupported =
     (detectedCacheType === 'mamba' ||
       detectedCacheType === 'hybrid' ||
@@ -569,33 +563,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     architectureRequiresPagedCache,
     architectureSupportsBlockDiskOnly: architectureBlockDiskOnlySupported,
   }
-  const cachePolicy = resolveCacheControlPolicy(cacheControlState)
-  const effectiveUsePagedCache = cachePolicy.effectiveUsePagedCache
-  const blockDiskOnly = cachePolicy.blockDiskCacheChecked && !effectiveUsePagedCache
-  const effectivePagedCacheBlockSize = dsv4Active ? DSV4_PAGED_CACHE_BLOCK_SIZE : config.pagedCacheBlockSize
-  const pagedCacheUiState = pagedCacheControlsState(effectiveUsePagedCache, blockDiskOnly)
-  // The shared module still owns the ARITHMETIC (and its English sentence, which
-  // the main process reuses in error messages); the renderer owns the wording so
-  // this sentence localizes like every other label around it. Live-caught: with
-  // the app in Korean this line and the Metal wired-limit note were the only
-  // prose left in English on the whole form.
-  const pagedCapacity = resolvePagedCacheCapacity({
-    blockSize: effectivePagedCacheBlockSize,
-    maxBlocks: config.maxCacheBlocks,
-    defaultBlockSize: DEFAULT_CONFIG.pagedCacheBlockSize,
-    defaultMaxBlocks: DEFAULT_CONFIG.maxCacheBlocks,
-  })
-  // A SEPARATE key, not string surgery on the localized sentence. The previous
-  // version took the paged text above and swapped the English phrase naming
-  // in-memory capacity for one naming the SSD block index. That is a no-op in
-  // every non-English locale, so block-disk-only mode mislabelled the SSD block
-  // index as RAM capacity everywhere except English.
-  const effectiveBlockDiskCapacityText = t('sessions.config.blockDiskCapacity', {
-    blockSize: pagedCapacity.blockSize,
-    usableBlocks: pagedCapacity.usableBlocks,
-    maxBlocks: pagedCapacity.maxBlocks,
-    tokens: pagedCapacity.capacityTokens.toLocaleString(),
-  })
+  // The two user-facing cache choices (SSD cache, RAM cache) over the saved keys. openPangu / native GLM keep their
+  // exact typed prompt store as the SSD choice; DFlash2 / DSpark single-request lanes own only an SSD store.
+  const cacheLane = { exactTypedPromptDiskCache }
+  const simpleCacheTier = resolveSimpleCacheTier(cacheControlState, cacheLane)
+  const ssdCacheToggleDisabled = batchingOff && !nativeSpeculativeCache
+  const ramCacheToggleDisabled = batchingOff || (!simpleCacheTier.ramOn && !simpleCacheTier.ramAvailable)
   // One production representation: preserve the loaded architecture's native
   // cache state and add no generic stored codec. Persisted stale values are
   // migrated by the main process; the renderer never echoes them as effective.
@@ -1057,184 +1030,21 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </div>
       </Modal>}
 
-      {/* Prefix Cache — SSD blocks and architecture-native stored representation. */}
+      {/* Prefix Cache: two choices, SSD cache and RAM cache, each with one max-percent number. */}
       <Section title={t('sessions.config.prefixCache')} sectionKey="prefixCache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.prefixCacheHint')} />}
-        {dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}
-        {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguTypedCacheNote')} />}
-        {nativeGlmSsdActive && !dflash2Speculative && <div data-vmlx-section="nativeGlmSsd"><InfoNote text={t('sessions.config.glmNativeSsdNote')} /></div>}
         {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.prefixCacheRequiresBatching')} />}
-        <CheckField label={t('sessions.config.enablePrefixCache')} tooltip={t('sessions.config.enablePrefixCacheTooltip')} checked={effectivePrefixCacheEnabled} onChange={v => onChange('enablePrefixCache', v)} disabled={nativeSpeculativeCache} />
-        {!nativeGlmSsdActive && !blockDiskOnly && !cachePolicy.legacyDiskCacheChecked && effectivePrefixCacheEnabled && (
-          <>
-            {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguMemoryAwareNote')} />}
-            {!dsv4Active && <CheckField label={t('sessions.config.legacyEntryCountCache')} tooltip={t('sessions.config.legacyEntryCountCacheTooltip')} checked={exactTypedPromptDiskCache ? false : config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} disabled={exactTypedPromptDiskCache} />}
-            {!dsv4Active && !exactTypedPromptDiskCache && config.noMemoryAwareCache ? (
-              <>
-                <InfoNote text={t('sessions.config.legacyModeActiveNote')} />
-                <SliderField settingKey="prefixCacheSize"
-                  label={t('sessions.config.maxCacheEntries')}
-                  tooltip={t('sessions.config.maxCacheEntriesTooltip')}
-                  value={config.prefixCacheSize}
-                  onChange={v => onChange('prefixCacheSize', v)}
-                  min={1}
-                  max={10000}
-                  step={10}
-                  defaultValue={DEFAULT_CONFIG.prefixCacheSize}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel={t('sessions.config.defaultWithValue', { n: 100 })}
-                />
-                <SliderField settingKey="prefixCacheMaxBytes"
-                  label={t('sessions.config.prefixCacheMaxBytes')}
-                  tooltip={t('sessions.config.prefixCacheMaxBytesTooltip')}
-                  value={Math.floor((config.prefixCacheMaxBytes || 0) / (1024 * 1024))}
-                  onChange={v => onChange('prefixCacheMaxBytes', v * 1024 * 1024)}
-                  min={0}
-                  max={32768}
-                  step={256}
-                  defaultValue={0}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel={t('sessions.cache.unlimited')}
-                />
-              </>
-            ) : (
-              <>
-                {effectiveUsePagedCache && (
-                  <IncompatWarning text={t('sessions.config.pagedCacheMemoryIgnored')} />
-                )}
-                <SliderField settingKey="cacheMemoryMb"
-                  label={t('sessions.config.cacheMemoryLimitMb')}
-                  tooltip={t('sessions.config.cacheMemoryLimitTooltip')}
-                  value={config.cacheMemoryMb}
-                  onChange={v => onChange('cacheMemoryMb', v)}
-                  min={256}
-                  max={65536}
-                  step={256}
-                  defaultValue={4096}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel={t('sessions.config.autoDetect')}
-                  disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
-                />
-                <SliderField settingKey="cacheMemoryPercent"
-                  label={t('sessions.config.cacheMemoryPercent')}
-                  tooltip={t('sessions.config.cacheMemoryPercentTooltip')}
-                  value={config.cacheMemoryPercent}
-                  onChange={v => onChange('cacheMemoryPercent', v)}
-                  min={1}
-                  max={100}
-                  step={1}
-                  defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
-                  maxInput={100}
-                  disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
-                />
-                {blockDiskOnly && <IncompatWarning text={t('sessions.config.blockDiskOnlyBudgetNote')} />}
-                <SliderField settingKey="cacheTtlMinutes"
-                  label={t('sessions.config.cacheTtlMinutes')}
-                  tooltip={t('sessions.config.cacheTtlTooltip')}
-                  value={config.cacheTtlMinutes}
-                  onChange={v => onChange('cacheTtlMinutes', v)}
-                  min={1}
-                  max={120}
-                  step={5}
-                  defaultValue={30}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel={t('sessions.config.noExpiration')}
-                  disabled={pagedCacheUiState.cacheTtlDisabled}
-                />
-              </>
-            )}
-
-
-          </>
-        )}
-        {dsv4Active && blockDiskOnly && <InfoNote text={t('sessions.config.dsv4PagedNote')} />}
         {zayaSsdReuseUnavailable && <IncompatWarning text={t('sessions.config.zayaTypedCacheNote')} />}
-        {dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={blockDiskOnly
-          ? t('sessions.config.dsv4SsdOnlyNote')
-          : t('sessions.config.dsv4RamL1Note')} />}
-        {nativeOmniStage1 && cachePolicy.blockDiskCacheChecked && <div data-vmlx-section="omni-native-ssd-note"><InfoNote text={t('sessions.config.omniNativeSsdNote')} /></div>}
-        {architectureBlockDiskOnlySupported && !nativeSpeculativeCache && !nativeGlmSsdActive && !nativeOmniStage1 && !m3Active && !dsv4Active && cachePolicy.blockDiskCacheChecked && <InfoNote text={mixedSwaBlockDiskOnlySupported
-          ? stepMixedSwaBlockDiskOnly
-            ? t('sessions.config.stepSsdOnlyNote')
-            : t('sessions.config.mixedSwaSsdOnlyNote')
-          : t('sessions.config.hybridSsdOnlyNote')} />}
-        {m3Active && <InfoNote text={blockDiskOnly
-          ? t('sessions.config.m3SsdOnlyNote')
-          : t('sessions.config.m3NativeMsaNote')} />}
-        {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguNoPagedNote')} />}
-        {!nativeGlmSsdActive && !nativeSpeculativeCache && (effectiveUsePagedCache || cachePolicy.blockDiskCacheChecked) && (
-          <>
-            <InfoNote text={effectiveBlockDiskCapacityText} />
-            <SliderField settingKey="pagedCacheBlockSize"
-              label={t('sessions.config.blockSizeTokens')}
-              tooltip={dsv4Active
-                ? t('sessions.config.blockSizeTooltipDsv4')
-                : t('sessions.config.blockSizeTooltip')}
-              value={effectivePagedCacheBlockSize}
-              onChange={v => onChange('pagedCacheBlockSize', v)}
-              min={1}
-              max={1024}
-              step={16}
-              defaultValue={dsv4Active ? DSV4_PAGED_CACHE_BLOCK_SIZE : DEFAULT_CONFIG.pagedCacheBlockSize}
-              disabled={dsv4Active}
-            />
-            <SliderField settingKey="maxCacheBlocks"
-              label={t('sessions.config.maxCacheBlocks')}
-              tooltip={t('sessions.config.maxCacheBlocksTooltip')}
-              value={config.maxCacheBlocks}
-              onChange={v => onChange('maxCacheBlocks', v)}
-              min={2}
-              max={100000}
-              step={100}
-              defaultValue={dsv4Active ? DSV4_MAX_CACHE_BLOCKS : DEFAULT_CONFIG.maxCacheBlocks}
-              maxInput={100000}
-              allowUnlimited
-              unlimitedValue={0}
-              unlimitedLabel={t('sessions.config.defaultWithValue', {
-                n: dsv4Active ? DSV4_MAX_CACHE_BLOCKS : DEFAULT_CONFIG.maxCacheBlocks,
-              })}
-            />
-          </>
-        )}
-        {!nativeGlmSsdActive && !batchingOff && !effectiveUsePagedCache && !exactTypedPromptDiskCache && <InfoNote text={t('sessions.config.blockDiskPureSsdNote')} />}
-        <div data-vmlx-control="block-disk-cache" data-vmlx-state={cachePolicy.blockDiskCacheChecked ? 'on' : 'off'}>
+        <div data-vmlx-control="ssd-cache" data-vmlx-state={simpleCacheTier.ssdOn ? 'on' : 'off'}>
           <CheckField
-            label={t('sessions.cache.blockDiskCache')}
-            tooltip={t('sessions.config.blockDiskCacheTooltip')}
-            checked={cachePolicy.blockDiskCacheChecked}
-            onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
-            disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled || (exactTypedPromptDiskCache && !dflash2Speculative)}
+            label={t('sessions.config.ssdCache')}
+            tooltip={t('sessions.config.ssdCacheTooltip')}
+            checked={simpleCacheTier.ssdOn}
+            onChange={v => applyCacheControlUpdates(cacheControlUpdatesForSsdToggle(v, cacheControlState, cacheLane))}
+            disabled={ssdCacheToggleDisabled}
           />
         </div>
-        {/* Cache tier, the user's choice: RAM only (Block Disk Cache off), SSD only (on, no RAM copy) or RAM + SSD
-            (on + this RAM copy). The RAM copy fronts the block store, so it exists only with Block Disk Cache. */}
-        {cachePolicy.blockDiskCacheChecked && !nativeSpeculativeCache && !exactTypedPromptDiskCache && !nativeGlmSsdActive && (
-          <div data-vmlx-control="ram-copy-cache" data-vmlx-state={effectiveUsePagedCache ? 'on' : 'off'}>
-            <CheckField
-              label={t('sessions.config.ramCopyWithSsd')}
-              tooltip={t('sessions.config.ramCopyWithSsdTooltip')}
-              checked={effectiveUsePagedCache}
-              onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))}
-              disabled={cachePolicy.pagedCacheDisabled}
-            />
-          </div>
-        )}
-        <InfoNote text={t(
-          nativeSpeculativeCache
-            ? cachePolicy.blockDiskCacheChecked
-              ? 'sessions.config.cacheTierNativeSsd'
-              : 'sessions.config.cacheTierNativeRam'
-            : batchingOff || prefixOff
-            ? 'sessions.config.cacheTierOff'
-            : !cachePolicy.blockDiskCacheChecked
-              ? 'sessions.config.cacheTierRamOnly'
-              : effectiveUsePagedCache ? 'sessions.config.cacheTierRamSsd' : 'sessions.config.cacheTierSsdOnly',
-        )} />
-        {cachePolicy.blockDiskCacheChecked && (
+        {simpleCacheTier.ssdOn && (
           <>
             <SliderField settingKey="blockDiskCacheMaxPercent"
               label={t('sessions.config.blockCacheMaxPercent')}
@@ -1252,7 +1062,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={1}
               allowFractional
               maxInput={90}
-              defaultValue={10}
+              defaultValue={DEFAULT_BLOCK_DISK_CACHE_PERCENT}
               allowUnlimited
               unlimitedValue={0}
               unlimitedLabel={t('sessions.cache.unlimited')}
@@ -1260,18 +1070,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             {Number.isFinite(config.blockDiskCacheMaxGb) && (config.blockDiskCacheMaxGb ?? 0) > 0 && (
               <InfoNote text={t('sessions.config.blockCacheSavedGbOverride', { gb: config.blockDiskCacheMaxGb! })} />
             )}
-            {/* The engine trims ONE cache root shared by every session, so this
-                budget is a total rather than a per-session allowance. Saying so
-                here keeps the control honest: two sessions set to different
-                percentages would otherwise look independent while contending
-                over the same pool. */}
             <InfoNote text={t('sessions.config.blockCacheSharedBudgetNote')} />
-            {/* The pool spans cache ARCHITECTURES, not just sessions: typed SSM
-                companions, DSV4 composite records, rotating-SWA state and
-                multimodal blocks are all trimmed out of the same root. Someone
-                reading only the per-session note would reasonably assume their
-                DSV4 session had its own budget. */}
-            {!(dflash2Speculative && normalizedDetectedFamily === 'glm5-next') && <InfoNote text={t('sessions.config.blockCacheArchitecturePoolNote')} />}
             <div className="flex items-center gap-2 mt-1">
               <button
                 type="button"
@@ -1288,21 +1087,35 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 <span className="text-[11px] text-muted-foreground">{ssdClearResult}</span>
               )}
             </div>
-            <div className="block" data-vmlx-setting="blockDiskCacheDir">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t('sessions.config.blockCacheDirectory')}
-                <Tooltip text={t('sessions.config.blockCacheDirectoryTooltip')} />
-              </span>
-              <input
-                type="text"
-                value={config.blockDiskCacheDir || ''}
-                onChange={e => onChange('blockDiskCacheDir', e.target.value)}
-                placeholder={t('sessions.config.blockCachePlaceholder')}
-                className="cfg-input text-xs"
-              />
-            </div>
           </>
         )}
+        {/* DFlash2 / DSpark single-request lanes keep only their SSD store: no RAM choice exists on them. */}
+        {!nativeSpeculativeCache && (
+          <div data-vmlx-control="ram-cache" data-vmlx-state={simpleCacheTier.ramOn ? 'on' : 'off'}>
+            <CheckField
+              label={t('sessions.config.ramCache')}
+              tooltip={t('sessions.config.ramCacheTooltip')}
+              checked={simpleCacheTier.ramOn}
+              onChange={v => applyCacheControlUpdates(cacheControlUpdatesForRamToggle(v, cacheControlState, cacheLane))}
+              disabled={ramCacheToggleDisabled}
+            />
+          </div>
+        )}
+        {simpleCacheTier.ramOn && (
+          <SliderField settingKey="cacheMemoryPercent"
+            label={t('sessions.config.ramCacheMaxPercent')}
+            tooltip={t('sessions.config.ramCacheMaxPercentTooltip')}
+            value={config.cacheMemoryPercent}
+            onChange={v => onChange('cacheMemoryPercent', v)}
+            min={1}
+            max={100}
+            step={1}
+            defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
+            maxInput={100}
+          />
+        )}
+        {exactTypedPromptDiskCache && simpleCacheTier.ssdOn && <InfoNote text={t('sessions.config.ssdOnlyLaneNote')} />}
+        {!batchingOff && !nativeSpeculativeCache && simpleCacheTier.tier === 'off' && <InfoNote text={t('sessions.config.cacheOffNote')} />}
         {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
         {!batchingOff && prefixOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresPrefix')} />}
         {!effectivelyNoBatching && !prefixOff && mixedSwaCacheActive && <PerformanceHint text={t('sessions.config.mixedSwaAutoHint')} />}
@@ -1364,91 +1177,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <option value="auto">{dsv4Active ? t('sessions.config.storedQuantNativeTyped') : t('sessions.config.storedQuantAuto')}</option>
           </select>
         </div>
-        {!nativeGlmSsdActive && (exactTypedPromptDiskCache || cachePolicy.legacyDiskCacheChecked) && <div data-vmlx-section="typed-disk-cache">
-        {!effectivelyNoBatching && <PerformanceHint text={t('sessions.config.diskCacheHint')} />}
-        {openPanguExactTypedCache && <InfoNote text={t('sessions.config.openPanguDiskNote')} />}
-        {batchingOff && <IncompatWarning text={t('sessions.config.diskCacheRequiresBatching')} />}
-        {!effectivelyNoBatching && cachePolicy.legacyDiskCacheUnavailableReason === 'paged-cache-active' && <IncompatWarning text={t('sessions.config.legacyDiskPagedConflict')} />}
-        {!effectivelyNoBatching && cachePolicy.legacyDiskCacheUnavailableReason === 'architecture-requires-paged-cache' && <IncompatWarning text={t('sessions.config.legacyDiskArchConflict')} />}
-        {!batchingOff && prefixOff && !cachePolicy.legacyDiskCacheDisabled && <InfoNote text={t('sessions.config.diskCacheEnablesPrefix')} />}
-        <CheckField
-          label={t('sessions.config.enableDiskCache')}
-          tooltip={t('sessions.config.enableDiskCacheTooltip')}
-          checked={cachePolicy.legacyDiskCacheChecked}
-          onChange={v => {
-            // When switching from native VL to typed text, the old native On
-            // bit represents the same disk choice. Explicit text-disk Off
-            // must clear it too, or launch normalization would re-enable it.
-            if (normalizedDetectedFamily === 'glm5-next' && !nativeGlmSsdActive) onChange('enableBlockDiskCache', false)
-            applyCacheControlUpdates(cacheControlUpdatesForDiskToggle(v, cacheControlState))
-          }}
-          disabled={dsv4Active || cachePolicy.legacyDiskCacheDisabled}
-        />
-        {cachePolicy.legacyDiskCacheChecked && (
-          <>
-            {exactTypedPromptDiskCache ? (
-              // Exact typed snapshots live in the managed SSD pool (--disk-cache-pool): same % budget as the block
-              // store, oldest-first eviction across every cache, reported by the SSD pool notice. A flat GB cap held
-              // ~3 openPangu records (~3 GB each) and evicted on almost every turn.
-              <>
-                <InfoNote text={t('sessions.config.typedPromptPoolNote')} />
-                <SliderField settingKey="blockDiskCacheMaxPercent"
-                  label={t('sessions.config.blockCacheMaxPercent')}
-                  tooltip={t('sessions.config.blockCacheMaxPercentTooltip')}
-                  value={config.blockDiskCacheMaxPercent}
-                  onChange={v => {
-                    onChange('blockDiskCacheMaxGb', undefined)
-                    onChange('blockDiskCacheMaxPercent', v)
-                  }}
-                  min={0}
-                  max={90}
-                  step={1}
-                  allowFractional
-                  maxInput={90}
-                  defaultValue={10}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel={t('sessions.cache.unlimited')}
-                />
-              </>
-            ) : (
-            <SliderField settingKey="diskCacheMaxGb"
-              label={t('sessions.config.maxCacheSizeGb')}
-              tooltip={t('sessions.config.maxCacheSizeTooltip')}
-              value={config.diskCacheMaxGb}
-              onChange={v => onChange('diskCacheMaxGb', v)}
-              min={0}
-              max={100}
-              step={1}
-              defaultValue={10}
-              allowUnlimited
-              unlimitedValue={0}
-              unlimitedLabel={t('sessions.cache.unlimited')}
-            />
-            )}
-            <div className="block">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t('sessions.config.cacheDirectory')}
-                <Tooltip text={t('sessions.config.cacheDirectoryTooltip')} />
-              </span>
-              <input
-                type="text"
-                value={config.diskCacheDir || ''}
-                onChange={e => onChange('diskCacheDir', e.target.value)}
-                placeholder={t('sessions.config.diskCachePathPlaceholder')}
-                className="cfg-input text-xs"
-              />
-            </div>
-          </>
-        )}
-        </div>}
       </Section>
-
-
-
-
-
-
 
       {/* Power Management — visible for ALL model types (text + image) */}
       <Section title={t('sessions.config.powerManagement')} sectionKey="power" expanded={expandedSections.power} onToggle={() => toggleSection('power')}>

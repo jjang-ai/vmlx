@@ -371,6 +371,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setOverrides(prev => ({ ...prev, enableThinking, reasoningEffort, thinkingMode: undefined }))
     setDirty(true)
   }
+  // An effort level is independent of the thinking switch: MiniMax-M3.1 renders its <effort> tag under Adaptive as
+  // well as On, so picking a level keeps an explicit Adaptive choice instead of silently turning it into On.
+  const selectReasoningEffort = (reasoningEffort: ChatOverrides['reasoningEffort']) => {
+    setOverrides(prev => prev.thinkingMode === 'adaptive'
+      ? { ...prev, reasoningEffort }
+      : { ...prev, enableThinking: true, reasoningEffort, thinkingMode: undefined })
+    setDirty(true)
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -739,7 +747,7 @@ function statusToneClass(status: string): string {
                   <button
                     disabled={!thinkingSupported}
                     onClick={() => {
-                      setOverrides(prev => ({ ...prev, thinkingMode: 'adaptive', enableThinking: undefined, reasoningEffort: undefined }))
+                      setOverrides(prev => ({ ...prev, thinkingMode: 'adaptive', enableThinking: undefined }))
                       setDirty(true)
                     }}
                     data-vmlx-control="chat-thinking-adaptive"
@@ -809,7 +817,7 @@ function statusToneClass(status: string): string {
                         data-reasoning-effort={effort}
                         data-vmlx-control={`chat-effort-${effort}`}
                         data-vmlx-state={displayedOverrides.reasoningEffort === effort ? 'selected' : 'unselected'}
-                        onClick={() => updateThinkingMode(true, effort)}
+                        onClick={() => selectReasoningEffort(effort)}
                         className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                           displayedOverrides.reasoningEffort === effort
                             ? 'bg-primary text-primary-foreground'
@@ -823,7 +831,11 @@ function statusToneClass(status: string): string {
                   <p className="text-xs text-muted-foreground mt-1">
                     {effectiveReasoningParser === 'mistral'
                       ? t('chat.settings.effortHelpMistral')
-                      : t('chat.settings.effortHelpGeneric')}
+                      : detectedFamily === 'deepseek-v4' && detectedArchitectureHints?.deepseekVariant === 'v4.1'
+                        ? t('chat.settings.effortHelpDsv41')
+                        : detectedFamily === 'minimax_m3'
+                          ? t('chat.settings.effortHelpMinimaxM3')
+                          : t('chat.settings.effortHelpGeneric')}
                   </p>
                 </div>
               )}

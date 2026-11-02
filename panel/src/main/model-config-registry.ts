@@ -12,6 +12,9 @@ import { basename, join } from 'path'
 import { homedir } from 'os'
 import { formatJangQuantizationLabel } from '../shared/jangQuantization'
 import {
+  DSV41_DEFAULT_REASONING_EFFORT,
+  DSV41_REASONING_EFFORTS,
+  MINIMAX_M3_REASONING_EFFORTS,
   normalizeReasoningEffort,
   normalizeReasoningEffortLevels,
   type ReasoningEffort,
@@ -2115,6 +2118,23 @@ function bundleReadsEnableThinking(modelPath: string): boolean | undefined {
   return sawTemplate ? false : undefined
 }
 
+/**
+ * Does the bundle's Jinja template render `reasoning_effort` (or its `effort`
+ * alias)? MiniMax-M3.1's template emits `<effort>{{ reasoning_effort }}</effort>`;
+ * a MiniMax-M3 template without that branch has no effort control, and offering
+ * levels there would be buttons that change nothing.
+ */
+function bundleTemplateRendersReasoningEffort(modelPath: string): boolean {
+  const file = join(modelPath, 'chat_template.jinja')
+  if (!existsSync(file)) return false
+  try {
+    const text = readFileSync(file, 'utf-8')
+    return text.includes('reasoning_effort') && text.includes('<effort>')
+  } catch {
+    return false
+  }
+}
+
 export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
   try {
     // HF repo id fallback: if `modelPath` isn't a local directory, try
@@ -2218,6 +2238,21 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
                 // chat_template is not evidence that the toggle is ignored.
                 detected.honorsEnableThinking = true
               } else if (readsIt !== undefined) detected.honorsEnableThinking = readsIt
+            }
+            // Reasoning effort levels come from the bundle's own prompt code, not
+            // from a family guess: a level the template does not render would
+            // be a button that does nothing. Neither bundle carries a jang_config
+            // reasoning stamp (a stamp below still wins when one exists).
+            if (familyName === 'minimax_m3' && bundleTemplateRendersReasoningEffort(modelPath)) {
+              // M3.1: `<effort>{{ reasoning_effort }}</effort>` in chat_template.jinja; five documented values, no
+              // default tag when unset.
+              detected.supportedReasoningEfforts = [...MINIMAX_M3_REASONING_EFFORTS]
+              delete detected.defaultReasoningEffort
+            } else if (modelType === 'deepseek_v41' && existsSync(join(modelPath, 'encoding', 'encoding.py'))) {
+              // V4.1: encoding.py renders a 1..100 budget (default "high" = 75) in thinking mode; vMLX maps every
+              // level onto that budget (models/deepseek_v4_1/chat_encoding.py).
+              detected.supportedReasoningEfforts = [...DSV41_REASONING_EFFORTS]
+              detected.defaultReasoningEffort = DSV41_DEFAULT_REASONING_EFFORT
             }
             if (configMarksTurboQuant(parsed)) {
               detected.isTurboQuant = true
