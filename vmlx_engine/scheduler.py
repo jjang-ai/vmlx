@@ -3982,7 +3982,7 @@ class Scheduler:
             offsets = {int(getattr(c, "offset", -1)) for c in snap}
             if offsets != {pos}:
                 logger.warning(
-                    "DSV4.1 extra prefix entry for %s not stored: cache at offsets %s, not its %d-token key",
+                    "Extra prefix entry for %s not stored: cache at offsets %s, not its %d-token key",
                     request_id, sorted(offsets), pos,
                 )
                 continue
@@ -4014,10 +4014,10 @@ class Scheduler:
                     # tokens shows up as the exact first differing token instead of a silent shorter hit.
                     self._dsv4_last_extended_key_tokens = list(key)
             except Exception as exc:  # noqa: BLE001 - an optional extra entry
-                logger.warning("DSV4.1 extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
+                logger.warning("Extra prefix entry %d for %s not stored: %s", pos, request_id, exc)
         if stored:
             logger.info(
-                "DSV4.1 extra prefix entries stored for %s: %s (prompt %d tokens, %s)",
+                "Extra prefix entries stored for %s: %s (prompt %d tokens, %s)",
                 request_id, ", ".join(stored), len(prompt),
                 "block" if self.block_aware_cache is not None else "memory-aware",
             )
