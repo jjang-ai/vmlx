@@ -3919,6 +3919,13 @@ class Scheduler:
 
         return prefill_geometry.generation_end_enabled()
 
+    def _stores_reply(self, request, finish_reason) -> bool:
+        """The live cache holds the reply (prompt + generated rows), and the next turn renders it back. A reply that hit
+        its token limit is in history the same as one that finished."""
+        if finish_reason not in ("stop", "length"):
+            return False
+        return bool(getattr(self, "_uses_dsv41_cache", False) or self._m3_generation_end_enabled(request))
+
     def _salvage_stopped_request(self, uid, request_id: str, request) -> bool:
         """Keep a stopped MiniMax-M3 or DeepSeek-V4.1 request's work, so the next turn does not prefill it again: its
         prompt rows, and its partial reply when the panel keeps that text in history.
@@ -10642,16 +10649,7 @@ class Scheduler:
                     # entry in cleanup (_store_dsv41_cut_checkpoints).
                     request._dsv41_cut_checkpoints = list(response.boundary_checkpoints)
                 if (
-                    getattr(self, "_uses_dsv41_cache", False)
-                    and finish_reason == "stop"
-                    and string_stop_truncate < 0
-                    and not spec_hit_stop
-                    and self._terminal_cache_capture_enabled(request, response)
-                ):
-                    request._dsv41_generation_end = self._dsv41_generation_end_entry(request, response)
-                if (
-                    self._m3_generation_end_enabled(request)
-                    and finish_reason in ("stop", "length")
+                    self._stores_reply(request, finish_reason)
                     and string_stop_truncate < 0
                     and not spec_hit_stop
                     and self._terminal_cache_capture_enabled(request, response)

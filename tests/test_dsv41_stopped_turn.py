@@ -70,3 +70,16 @@ def test_reply_rows_past_the_tokens_emitted_are_not_stored(monkeypatch):
     assert s._salvage_stopped_request(1, "r", _request(prompt, [1, 2])) is True
     assert s.stored[0][0] == "prompt"
     assert s.stored[1] == ("reply", None)
+
+
+def test_a_reply_that_hit_its_token_limit_is_stored_too(monkeypatch):
+    """Only "stop" was stored, so a capped reply on DeepSeek re-prefilled whole on the next turn: 216 of 4,416 reused."""
+    monkeypatch.delenv("VMLX_M3_GENERATION_END_CACHE", raising=False)
+    s = Scheduler.__new__(Scheduler)
+    s._m3_aligned_prefix = False
+    s._uses_dsv41_cache = True
+    req = _request([1], [2])
+    for reason, stored in (("stop", True), ("length", True), ("tool_calls", False), ("cancelled", False), (None, False)):
+        assert s._stores_reply(req, reason) is stored, reason
+    s._uses_dsv41_cache = False
+    assert s._stores_reply(req, "stop") is False, "other families are not touched"
