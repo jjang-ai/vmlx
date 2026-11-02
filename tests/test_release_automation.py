@@ -154,8 +154,16 @@ def test_website_deployer_backs_up_and_updates_both_flavors(tmp_path):
     (site / "update/latest.json").write_text(json.dumps(old_latest))
     old_html = """\
     <script>{"softwareVersion": "9.8.6", "fileSize": "123 bytes"}</script>
-    <a href="https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.6/vMLX-9.8.6-tahoe-arm64.dmg">9.8.6</a>
-    <a href="https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.6/vMLX-9.8.6-sequoia-arm64.dmg">compat</a>
+    <section id="builds"><p class="sec-lede">Old platform advice</p>
+    <div class="build-h"><span>native</span><span>1 MB</span></div>
+    <div class="n">macOS 26</div><div class="d">Old native advice</div>
+    <div class="sha"><em>sha256</em>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</div>
+    <a class="get" href="https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.6/vMLX-9.8.6-tahoe-arm64.dmg">9.8.6</a>
+    <div class="build-h"><span>compat</span><span>1 MB</span></div>
+    <div class="n">macOS 14 / 15</div><div class="d">Old compatibility advice</div>
+    <div class="sha"><em>sha256</em>BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB</div>
+    <a class="get" href="https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.6/vMLX-9.8.6-sequoia-arm64.dmg">compat</a>
+    </section>
     """
     (site / "download/index.html").write_text(old_html)
     updater = {
@@ -164,10 +172,12 @@ def test_website_deployer_backs_up_and_updates_both_flavors(tmp_path):
             "tahoe": {
                 "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.7/vMLX-9.8.7-tahoe-arm64.dmg",
                 "bytes": 999,
+                "sha256": "c" * 64,
             },
             "sequoia": {
                 "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v9.8.7/vMLX-9.8.7-sequoia-arm64.dmg",
                 "bytes": 888,
+                "sha256": "d" * 64,
             },
         },
     }
@@ -194,6 +204,10 @@ def test_website_deployer_backs_up_and_updates_both_flavors(tmp_path):
     assert "vMLX-9.8.7-tahoe-arm64.dmg" in html
     assert "vMLX-9.8.7-sequoia-arm64.dmg" in html
     assert '"fileSize": "999 bytes"' in html
+    assert "c" * 64 in html and "d" * 64 in html
+    assert "A" * 64 not in html and "B" * 64 not in html
+    assert "macOS 26.2+" in html and "macOS 14.5+" in html
+    assert "Old platform advice" not in html
     assert (backups / "vmlx-9.8.6-before-9.8.7/latest.json").is_file()
     assert json.loads((site / "update/latest.json").read_text()) == updater
 
@@ -213,6 +227,17 @@ def test_website_deployer_backs_up_and_updates_both_flavors(tmp_path):
         check=True,
     )
     assert len(list(backups.iterdir())) == 1
+
+
+    # Correct a stale checksum at the same version, then remain idempotent.
+    page = site / "download/index.html"
+    page.write_text(page.read_text().replace("c" * 64, "e" * 64))
+    command = [sys.executable, str(SITE_SCRIPT), "--site-root", str(site),
+               "--updater", str(updater_path), "--backup-root", str(backups)]
+    subprocess.run(command, check=True)
+    assert "c" * 64 in page.read_text() and "e" * 64 not in page.read_text()
+    subprocess.run(command, check=True)
+    assert len(list(backups.iterdir())) == 2
 
 
 def test_workflows_are_manual_pinned_and_keep_secret_boundaries():

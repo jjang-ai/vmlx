@@ -82,7 +82,11 @@ def artifact_record(dist: Path, version: str, flavor: str) -> dict[str, Any]:
         fail(f"missing {flavor} DMG or blockmap in {dist}")
     dmg_sha256, dmg_sha512, dmg_size = hash_file(dmg)
     blockmap_sha256, _, blockmap_size = hash_file(blockmap)
+    runtime = load_json(Path(__file__).resolve().parents[2] / "panel/scripts/mlx-runtime.json")
+    platform = "macosx_26_0_arm64" if flavor == "tahoe" else "macosx_14_0_arm64"
+    minimum = runtime["platforms"][platform]["minimum_system_version"]
     return {
+        "minimumSystemVersion": minimum,
         "filename": filename,
         "bytes": dmg_size,
         "sha256": dmg_sha256,
@@ -298,6 +302,7 @@ def write_updater(args: argparse.Namespace) -> None:
         if filename != f"vMLX-{version}-{flavor}-arm64.dmg":
             fail(f"invalid {flavor} filename in metadata")
         downloads[flavor] = {
+            "minimumSystemVersion": record["minimumSystemVersion"],
             "url": f"https://github.com/{PUBLIC_BINARY_REPOSITORY}/releases/download/v{version}/{filename}",
             "bytes": record.get("bytes"),
             "sha256": record.get("sha256"),

@@ -1,6 +1,7 @@
 export interface ReleaseAsset {
   url: string
   sha256?: string
+  minimumSystemVersion?: string
 }
 
 export interface LatestRelease {
@@ -63,7 +64,8 @@ export function selectDownloadForMacOS(
   systemVersion = currentMacOSVersion(),
 ): LatestRelease {
   const major = macOSMajorVersion(systemVersion)
-  if (major === null || major < 26) {
+  const nativeMinimum = release.downloads?.tahoe?.minimumSystemVersion || '26.2.0'
+  if (major === null || major < 26 || versionCompare(String(systemVersion || ''), nativeMinimum) < 0) {
     const sequoia = release.downloads?.sequoia
     return sequoia?.url ? { ...release, url: sequoia.url, sha256: sequoia.sha256 ?? release.sha256 } : release
   }

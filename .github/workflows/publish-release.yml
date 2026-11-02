@@ -699,10 +699,10 @@ jobs:
           # Values are validated above and intentionally expand on the client.
           # shellcheck disable=SC2029
           ssh "${opts[@]}" "$remote" "mkdir -m 700 '$remote_dir'"
-          scp "${opts[@]}" website/published-latest.json .github/scripts/deploy_website_release.py "$remote:$remote_dir/"
+          scp "${opts[@]}" website/published-latest.json .github/scripts/deploy_website_release.py panel/scripts/mlx-runtime.json "$remote:$remote_dir/"
           # shellcheck disable=SC2029
           ssh "${opts[@]}" "$remote" \
-            "python3 '$remote_dir/deploy_website_release.py' --site-root /var/www/mlx.studio --updater '$remote_dir/published-latest.json' --backup-root /var/backups/vmlx-releases"
+            "python3 '$remote_dir/deploy_website_release.py' --site-root /var/www/mlx.studio --updater '$remote_dir/published-latest.json' --runtime-spec '$remote_dir/mlx-runtime.json' --backup-root /var/backups/vmlx-releases"
           # shellcheck disable=SC2029
           ssh "${opts[@]}" "$remote" "rm -rf '$remote_dir'"
 
