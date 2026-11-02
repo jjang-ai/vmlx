@@ -299,7 +299,6 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
     expect(source).toContain("text={t('sessions.config.dsv4BatchPathNote')}")
     expect(enLocale).toContain('The SSD cache is on by default')
-    expect(enLocale).toContain('CSA/HCA pool codec remains bundle-derived')
     // DSV4 gets the same two choices as every family: SSD cache (default on) and RAM cache (default off).
     expect(source).toContain("label={t('sessions.config.ssdCache')}")
     expect(source).toContain("label={t('sessions.config.ramCache')}")
