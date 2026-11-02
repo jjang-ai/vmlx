@@ -48,6 +48,14 @@ previous assistant turn, so the previous ``K`` is a turn cut of the next prompt,
 * the block key of a text prompt carries the step and the turn markers; the partial chunk ending at ``K`` carries
   ``K`` only when ``K`` is not itself a step multiple or a turn cut (then only an exact-geometry request matches it).
 
+Replies (default on). A finished request also stores its live cache, prompt + generated rows, so the next turn does not
+prefill the reply again: at long reasoning that re-prefill was the whole TTFT (10,600 generated tokens, 8 s per turn).
+Those rows come from decode, not from a prefill chunk, so a hit that stops inside an assistant turn is not bit-identical
+to a cold prefill of the same prompt; rows of one prefix differ by floating-point rounding. Cold prefills are cut as
+before: an assistant turn's end is still not a prefill cut, only a place a hit may stop (``inside_assistant_turn``), and
+a reply that does not render back token for token ends the block chain at the first difference.
+``VMLX_M3_GENERATION_END_CACHE=0`` keeps the bit-identical rule for A/B.
+
 ``VMLX_M3_STRUCTURAL_CUTS=0`` keeps the chunk-only rule (``minimax_m3_aligned_prefill_v1``) for A/B.
 ``VMLX_M3_ALIGNED_PREFIX=0`` restores the previous behaviour (prefill chunked relative to the restored offset,
 blocks keyed by total prompt length) for comparisons.
@@ -78,6 +86,31 @@ MEDIA_KEY = "mllm_media"
 
 def aligned_prefix_enabled() -> bool:
     return os.environ.get(ENV, "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def generation_end_enabled() -> bool:
+    return os.environ.get("VMLX_M3_GENERATION_END_CACHE", "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def inside_assistant_turn(tokens: Sequence[int], markers: Optional["TurnMarkers"], matched: int) -> bool:
+    """Whether ``tokens[:matched]`` ends in an assistant turn's content or right after that turn's end-of-message.
+
+    A hit may stop there because such rows can only come from a stored reply or from a prefill that held the same
+    tokens. The generation prompt alone (``bos`` + role) does not count: those rows belong to the previous boundary."""
+    if markers is None or not generation_end_enabled():
+        return False
+    matched = min(int(matched), len(tokens))
+    if matched <= 0:
+        return False
+    bos, eos, role = int(markers.bos), int(markers.eos), tuple(int(t) for t in markers.assistant)
+    for i in range(matched - 1, -1, -1):
+        t = int(tokens[i])
+        if t == eos and i != matched - 1:
+            return False
+        if t == bos:
+            return (tuple(int(x) for x in tokens[i + 1: i + 1 + len(role)]) == role
+                    and matched > i + 1 + len(role))
+    return False
 
 
 def structural_cuts_enabled() -> bool:
@@ -240,7 +273,7 @@ def is_media_request(cache_extra_keys) -> bool:
 
 
 def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Optional[TurnMarkers] = None,
-                     tokens: Optional[Sequence[int]] = None):
+                     tokens: Optional[Sequence[int]] = None, generation_end: bool = False):
     """The request's cache extra keys plus the M3 geometry of the rows a prefill with this boundary produces.
 
     All blocks carry the step (rows from a different step were computed in different chunks), and with turn
@@ -268,7 +301,8 @@ def cache_extra_keys(cache_extra_keys, *, boundary: int, step: int, markers: Opt
     else:
         out[GEOMETRY_KEY] = {"schema": SCHEMA_TURNS, "step": step, "turns": markers.signature()}
         cuts = turn_cuts(tokens or (), markers, boundary)
-    start = trailing_chunk_start(boundary, step, cuts)
+    # A stored reply's blocks must be found by the next prompt, whose chain has no trailing key at this length.
+    start = boundary if generation_end else trailing_chunk_start(boundary, step, cuts)
     if start < boundary:
         out[TRAILING_KEY] = {"boundary": boundary}
         scopes = out.get(CACHE_EXTRA_SCOPES_KEY)
