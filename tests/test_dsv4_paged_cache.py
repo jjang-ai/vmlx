@@ -499,13 +499,9 @@ def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
     settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
     sessions = Path("panel/src/main/sessions.ts").read_text()
 
-    assert "const effectiveStoredCacheQuantization = 'auto'" in form
-    assert '<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>' in form, (
-        "the stored-codec selector must stay visibly disabled at auto for "
-        "every family; a re-enabled selector would reintroduce lossy stored "
-        "prefixes"
-    )
-    assert 'className="cfg-input" disabled' in form
+    # The stored-codec selector is gone from the form: no family can pick a lossy stored prefix there.
+    assert "effectiveStoredCacheQuantization" not in form
+    assert "storedCacheQuantization" not in form
     # Generic KV quantization emission was retired entirely: NO family gets a
     # panel-pushed --kv-cache-quantization anymore (the stored/live cache is
     # exact and architecture-native everywhere), which strictly covers the
@@ -550,12 +546,9 @@ def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
     assert "<Section title={t('sessions.config.prefixCache')} sectionKey=\"prefixCache\"" in form
     assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
     assert "const pagedCacheToggleLabel = dsv4Active" not in form
-    # The "no hidden toggle" reassurance is user-visible copy, so the i18n pass
-    # moved it into the locale catalog. The invariant is unchanged: the form
-    # must still render it for DSV4 and the English entry must still make the
-    # no-second-toggle promise.
-    assert "{dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}" in form
-    assert "there is no separate hidden DSV4 cache toggle" in en_catalog
+    # DSV4 uses the same two cache choices as every family, so the reassurance note went with the jargon.
+    assert "dsv4PrefixReuseNote" not in form
+    assert "<CheckField" in form and "sessions.config.ssdCache" in form
     # Stale DSV4-branded cache names must stay dead in the source AND in the
     # catalog — labels live in en.json now, so a resurrected key/value pair is
     # how this copy would reach users today.
@@ -614,22 +607,12 @@ def test_dsv4_ui_exposes_native_composite_reuse_without_a_second_toggle():
     assert "const prefixOff = !effectivePrefixCacheEnabled" in form
     assert "const multimodalActive = !dsv4Active" in form
     assert "checked={effectiveContinuousBatching}" in form
-    assert "checked={effectivePrefixCacheEnabled}" in form
+    assert "checked={simpleCacheTier.ssdOn}" in form
+    assert "checked={simpleCacheTier.ramOn}" in form
     assert "cacheControlUpdatesForDsv4CompositeToggle" not in form
     assert "applyDsv4CompositeCacheToggle" not in form
     assert "cacheControlUpdatesForDsv4PoolQuantToggle" not in form
     assert "applyDsv4PoolQuantToggle" not in form
-    assert (
-        "disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled"
-        " || (exactTypedPromptDiskCache && !dflash2Speculative)}"
-        in form
-    )
-    assert "cacheControlUpdatesForBlockDiskToggle(v, cacheControlState)" in form
-    # The no-second-toggle copy is rendered via the locale catalog since the
-    # i18n pass; the form must reference the key and English must still carry
-    # the promise this test is named after.
-    assert "{dsv4Active && <InfoNote text={t('sessions.config.dsv4PrefixReuseNote')} />}" in form
-    assert "there is no separate hidden DSV4 cache toggle" in en_catalog
     assert "checked={config.dsv4PrefixCache !== false}" not in form
     # Stale second-cache branding must not return in the source or as a
     # catalog entry — en.json is where a resurrected label would render from.
@@ -720,21 +703,14 @@ def test_dsv4_cache_ui_uses_shared_cache_owner_without_duplicate_labels():
 
     assert 'label="DSV4 Native Composite Prefix Cache"' not in form
     assert 'label="DSV4 CSA/HCA Pool Codec"' not in form
-    # Labels render from the locale catalog since the i18n pass. The invariant
-    # ("the SHARED tier controls exist, spelled the shared way") now means: the
-    # form references the shared keys, and en.json still spells them without a
-    # DSV4 prefix.
-    assert "label={t('sessions.cache.blockDiskCache')}" in form
-    assert '"blockDiskCache": "Block Disk Cache (SSD / L2)"' in en_catalog
+    # The shared controls exist, spelled the same for every family, with no DSV4-specific toggle.
+    assert "label={t('sessions.config.ssdCache')}" in form
+    assert "label={t('sessions.config.ramCache')}" in form
+    assert '"ssdCache": "SSD cache"' in en_catalog
+    assert '"ramCache": "RAM cache"' in en_catalog
     assert "DSV4 Block Disk Cache (SSD / L2)" not in form
     assert "DSV4 Block Disk Cache (SSD / L2)" not in en_catalog
-
-    # DSV4 uses the shared prefix/SSD controls; only the incompatible
-    # generic stored-KV codec selector stays disabled. There is no second
-    # DSV4-specific prefix toggle.
-    assert "<CheckField label={t('sessions.config.enablePrefixCache')}" in form
-    assert '"enablePrefixCache": "Enable Prefix Cache"' in en_catalog
-    assert "!dsv4Active && (\n          <CheckField label={t('sessions.config.enablePrefixCache')}" not in form
+    assert "sessions.config.enablePrefixCache" not in form
     assert "<CheckField label={t('sessions.config.pagedKVCache')}" not in form
     assert "checked={cachePolicy.blockDiskCacheChecked}" in form
     assert "sessions.config.blockDiskPureSsdNote" in form

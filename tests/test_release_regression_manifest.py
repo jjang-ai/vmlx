@@ -565,25 +565,11 @@ def _write_passing_dev_ui_proof_artifacts(root: Path) -> None:
                     },
                     "serverCacheUi": {
                         "visible": True,
-                        "labels": [
-                            "Enable Prefix Cache",
-                            "In-Memory Paged Cache (RAM) — Locked Off",
-                            "Block Disk Cache (SSD / L2)",
-                            "Enable Disk Cache",
-                            "Stored Cache Quantization",
-                        ],
-                        "afterBlockDiskToggle": {
-                            "enablePrefixCache": True,
-                            "usePagedCache": False,
-                            "enableBlockDiskCache": True,
-                            "enableDiskCache": False,
-                        },
-                        "afterDiskToggle": {
-                            "enablePrefixCache": True,
-                            "usePagedCache": False,
-                            "enableBlockDiskCache": False,
-                            "enableDiskCache": True,
-                        },
+                        "labels": ["SSD cache", "RAM cache"],
+                        "afterSsdOnly": {"ssdCache": True, "ramCache": False},
+                        "afterRamOnly": {"ssdCache": False, "ramCache": True},
+                        "afterBoth": {"ssdCache": True, "ramCache": True},
+                        "afterNone": {"ssdCache": False, "ramCache": False},
                     },
                 }
             )

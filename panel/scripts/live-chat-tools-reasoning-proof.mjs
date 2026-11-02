@@ -512,20 +512,13 @@ function assertResult(result) {
 
   const serverUi = result.serverCacheUi || {}
   if (!serverUi.visible) failures.push('server cache settings UI was not visible in renderer')
-  for (const label of ['Enable Prefix Cache', 'In-Memory Paged Cache (RAM) — Locked Off', 'Block Disk Cache (SSD / L2)', 'Enable Disk Cache', 'Stored Cache Quantization']) {
+  for (const label of ['SSD cache', 'RAM cache']) {
     if (!serverUi.labels?.includes(label)) failures.push(`server cache UI missing visible label: ${label}`)
   }
-  // Current interlock (shared/cacheControlPolicy.ts): Block Disk Cache is a standalone
-  // SSD tier — enabling it turns Prefix Cache on and keeps legacy disk off, but does
-  // NOT engage the In-Memory Paged Cache (RAM) tier (pure SSD mode is supported).
-  if (serverUi.afterBlockDiskToggle?.enablePrefixCache !== true) failures.push('block disk toggle did not enable prefix cache')
-  if (serverUi.afterBlockDiskToggle?.usePagedCache !== false) failures.push('block disk toggle unexpectedly engaged the RAM paged tier (standalone SSD tier expected)')
-  if (serverUi.afterBlockDiskToggle?.enableBlockDiskCache !== true) failures.push('block disk toggle did not enable block disk cache')
-  if (serverUi.afterBlockDiskToggle?.enableDiskCache !== false) failures.push('block disk toggle did not keep legacy disk cache off')
-  if (serverUi.afterDiskToggle?.enablePrefixCache !== true) failures.push('legacy disk toggle did not enable prefix cache')
-  if (serverUi.afterDiskToggle?.usePagedCache !== false) failures.push('legacy disk toggle did not clear paged cache')
-  if (serverUi.afterDiskToggle?.enableBlockDiskCache !== false) failures.push('legacy disk toggle did not keep block disk cache off')
-  if (serverUi.afterDiskToggle?.enableDiskCache !== true) failures.push('legacy disk toggle did not enable disk cache')
+  for (const [name, ssd, ram] of [['afterSsdOnly', true, false], ['afterRamOnly', false, true], ['afterBoth', true, true], ['afterNone', false, false]]) {
+    const state = serverUi[name] || {}
+    if (state.ssdCache !== ssd || state.ramCache !== ram) failures.push(`cache choice did not hold: ${name} ${JSON.stringify(state)}`)
+  }
 
   if (failures.length) {
     const error = new Error(`Live proof failed:\n- ${failures.join('\n- ')}`)
@@ -837,66 +830,31 @@ async function main() {
           return !!button;
         };
         clickSection('Prefix Cache');
-        clickSection('In-Memory Paged Cache (RAM)');
-        clickSection('KV Cache Quantization');
-        clickSection('Disk Cache (Persistent)');
-        const PAGED_LABEL = 'In-Memory Paged Cache (RAM) — Locked Off';
-        const BLOCK_LABEL = 'Block Disk Cache (SSD / L2)';
-        const labelFor = (text) => [...document.querySelectorAll('label')]
-          .find((label) => label.innerText.includes(text));
-        // The checkbox label must be resolved via <label> elements: the block-disk
-        // string also appears in static hint/note text, so innerText alone is ambiguous.
-        const inputFor = (text) => [...document.querySelectorAll('label')]
-          .filter((label) => label.innerText.includes(text))
-          .map((label) => label.querySelector('input[type="checkbox"]'))
-          .find(Boolean);
-        await wait(() => inputFor('Enable Prefix Cache') && inputFor(PAGED_LABEL) && inputFor(BLOCK_LABEL) && inputFor('Enable Disk Cache'));
-        const checkedState = () => ({
-          enablePrefixCache: !!inputFor('Enable Prefix Cache')?.checked,
-          usePagedCache: !!inputFor(PAGED_LABEL)?.checked,
-          enableBlockDiskCache: !!inputFor(BLOCK_LABEL)?.checked,
-          enableDiskCache: !!inputFor('Enable Disk Cache')?.checked,
-        });
-        // Normalize to all-off. Order matters: the paged/block checkboxes render
-        // unchecked whenever Prefix Cache is off even if their underlying config is
-        // still true, so clear them while Prefix Cache is still on, then clear prefix.
-        if (!inputFor('Enable Prefix Cache')?.checked) inputFor('Enable Prefix Cache')?.click();
-        await wait(() => inputFor('Enable Prefix Cache')?.checked);
-        if (inputFor(PAGED_LABEL)?.checked) inputFor(PAGED_LABEL).click();
-        await wait(() => !inputFor(PAGED_LABEL)?.checked);
-        if (inputFor(BLOCK_LABEL)?.checked) inputFor(BLOCK_LABEL).click();
-        await wait(() => !inputFor(BLOCK_LABEL)?.checked);
-        if (inputFor('Enable Prefix Cache')?.checked) inputFor('Enable Prefix Cache').click();
-        await wait(() => !inputFor('Enable Prefix Cache')?.checked);
-        const block = inputFor(BLOCK_LABEL);
-        if (!block) throw new Error('Block Disk Cache checkbox not found');
-        if (!block.checked) block.click();
-        // Current interlock: enabling block disk turns Prefix Cache on but does NOT
-        // engage the RAM paged tier (block disk is a standalone SSD tier now).
-        await wait(() => inputFor('Enable Prefix Cache')?.checked && !inputFor(PAGED_LABEL)?.checked && inputFor(BLOCK_LABEL)?.checked);
-        const afterBlockDiskToggle = checkedState();
-        if (inputFor(BLOCK_LABEL)?.checked) inputFor(BLOCK_LABEL).click();
-        await wait(() => !inputFor(BLOCK_LABEL)?.checked);
-        if (inputFor(PAGED_LABEL)?.checked) inputFor(PAGED_LABEL).click();
-        await wait(() => !inputFor(PAGED_LABEL)?.checked);
-        if (inputFor('Enable Prefix Cache')?.checked) inputFor('Enable Prefix Cache').click();
-        await wait(() => !inputFor('Enable Prefix Cache')?.checked);
-        await wait(() => inputFor('Enable Disk Cache') && !inputFor('Enable Disk Cache').disabled);
-        const legacyDisk = inputFor('Enable Disk Cache');
-        if (!legacyDisk) throw new Error('Enable Disk Cache checkbox not found');
-        if (!legacyDisk.checked) legacyDisk.click();
-        await wait(() => inputFor('Enable Prefix Cache')?.checked && !inputFor(PAGED_LABEL)?.checked && inputFor('Enable Disk Cache')?.checked);
-        const afterDiskToggle = checkedState();
+        const box = (name) => document.querySelector(`[data-vmlx-control="${name}"] input[type="checkbox"]`);
+        await wait(() => box('ssd-cache') && box('ram-cache'));
+        const state = () => ({ ssdCache: !!box('ssd-cache')?.checked, ramCache: !!box('ram-cache')?.checked });
+        const choose = async (ssd, ram) => {
+          if (box('ssd-cache').checked !== ssd) box('ssd-cache').click();
+          await wait(() => box('ssd-cache').checked === ssd);
+          if (box('ram-cache').checked !== ram) box('ram-cache').click();
+          await wait(() => box('ram-cache').checked === ram);
+          return state();
+        };
+        const afterBoth = await choose(true, true);
+        const afterRamOnly = await choose(false, true);
+        const afterNone = await choose(false, false);
+        const afterSsdOnly = await choose(true, false);
         const bodyText = document.body.innerText;
-        const labels = ['Enable Prefix Cache', PAGED_LABEL, BLOCK_LABEL, 'Enable Disk Cache', 'Stored Cache Quantization']
-          .filter((label) => bodyText.includes(label));
-        labelFor('Enable Disk Cache')?.scrollIntoView({ block: 'center' });
+        const labels = ['SSD cache', 'RAM cache'].filter((label) => bodyText.includes(label));
+        box('ssd-cache')?.scrollIntoView({ block: 'center' });
         await new Promise((resolve) => setTimeout(resolve, 150));
         return {
           visible: true,
           labels,
-          afterBlockDiskToggle,
-          afterDiskToggle,
+          afterSsdOnly,
+          afterRamOnly,
+          afterBoth,
+          afterNone,
           textHead: bodyText.slice(0, 1600),
         };
       })()

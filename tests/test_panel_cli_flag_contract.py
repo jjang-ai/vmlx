@@ -334,12 +334,9 @@ def test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags() -> Non
 
     assert "buildCacheLaunchArgs" in runtime_body
     assert "buildCacheLaunchArgs" in preview_body
+    # The panel sends only the percent limits now; the CLI keeps the other cache flags for scripts.
     for expression in (
-        "finitePositiveInteger(input.prefixCacheSize)",
-        "finitePositiveInteger(input.prefixCacheMaxBytes)",
-        "finitePositiveInteger(input.cacheMemoryMb)",
         "finitePositiveNumber(input.cacheMemoryPercent)",
-        "finitePositiveNumber(input.cacheTtlMinutes)",
         "finitePositiveInteger(input.effectivePagedCacheBlockSize)",
         "finitePositiveInteger(input.maxCacheBlocks)",
         "finiteNonNegativeNumber(input.diskCacheMaxGb)",

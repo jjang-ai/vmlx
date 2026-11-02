@@ -7138,11 +7138,8 @@ RENDERER_LOCALE_REL = Path("panel/src/renderer/src/i18n/locales/en.json")
 # pinned the old literals, so the check could never pass no matter how healthy
 # the UI was.
 SERVER_CACHE_LABEL_I18N_KEYS = (
-    "sessions.config.enablePrefixCache",
-    "sessions.config.pagedKVCache",
-    "sessions.cache.blockDiskCache",
-    "sessions.config.enableDiskCache",
-    "sessions.config.storedCacheQuantization",
+    "sessions.config.ssdCache",
+    "sessions.config.ramCache",
 )
 
 
@@ -7333,38 +7330,16 @@ def _validate_current_dev_ui_proof_artifacts(root: Path) -> dict[str, Any]:
         for label in expected_server_cache_labels(root):
             if label not in (server_ui.get("labels") or []):
                 failures.append(f"server_cache_label_missing:{label}")
-        block_toggle = (
-            server_ui.get("afterBlockDiskToggle")
-            if isinstance(server_ui.get("afterBlockDiskToggle"), dict)
-            else {}
-        )
-        disk_toggle = (
-            server_ui.get("afterDiskToggle")
-            if isinstance(server_ui.get("afterDiskToggle"), dict)
-            else {}
-        )
-        # Block Disk Cache is a STANDALONE SSD tier: enabling it turns Prefix
-        # Cache on and keeps legacy disk off, but deliberately does NOT engage
-        # the In-Memory Paged Cache (RAM) tier — pure-SSD is a supported lane
-        # (resolveCacheControlPolicy's blockDiskOnlyAlternative in
-        # shared/cacheControlPolicy.ts, and the same assertion the proof script
-        # itself makes). This gate previously demanded usePagedCache is True
-        # here, which contradicted the interlock and the SSD-only lane, so it
-        # could never pass against a correct artifact.
-        for key, expected in (
-            ("enablePrefixCache", True),
-            ("usePagedCache", False),
-            ("enableBlockDiskCache", True),
-            ("enableDiskCache", False),
+        # The two cache choices (SSD %, RAM %), read back from the real checkboxes after clicking each combination.
+        for name, expected_ssd, expected_ram in (
+            ("afterSsdOnly", True, False),
+            ("afterRamOnly", False, True),
+            ("afterBoth", True, True),
+            ("afterNone", False, False),
         ):
-            if block_toggle.get(key) is not expected:
-                failures.append(f"block_disk_toggle_mismatch:{key}")
-        if disk_toggle.get("enablePrefixCache") is not True:
-            failures.append("legacy_disk_toggle_prefix_not_enabled")
-        if disk_toggle.get("usePagedCache") is not False:
-            failures.append("legacy_disk_toggle_paged_not_disabled")
-        if disk_toggle.get("enableDiskCache") is not True:
-            failures.append("legacy_disk_toggle_disk_not_enabled")
+            state = server_ui.get(name) if isinstance(server_ui.get(name), dict) else {}
+            if state.get("ssdCache") is not expected_ssd or state.get("ramCache") is not expected_ram:
+                failures.append(f"cache_choice_mismatch:{name}")
 
     return {
         "status": "pass" if not missing and not failures else "fail",
