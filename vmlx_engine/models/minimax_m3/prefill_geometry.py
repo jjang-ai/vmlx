@@ -278,6 +278,107 @@ def is_media_request(cache_extra_keys) -> bool:
 MEDIA_TOKEN_IDS = (200025, 200026)
 
 
+PER_IMAGE = "per-image-v1"
+
+
+def media_runs(tokens: Sequence[int]) -> List[Tuple[int, int]]:
+    """``[start, end)`` of each run of image or video placeholders."""
+    media = set(MEDIA_TOKEN_IDS)
+    runs: List[Tuple[int, int]] = []
+    for i, t in enumerate(tokens):
+        if int(t) in media:
+            if runs and runs[-1][1] == i:
+                runs[-1] = (runs[-1][0], i + 1)
+            else:
+                runs.append((i, i + 1))
+    return runs
+
+
+def _image_slices(tokens, pixel_values, image_grid_thw) -> Optional[List[Tuple[Tuple[int, int], int, int]]]:
+    """For each image: its placeholder run and its ``[start, end)`` in the pixel tensor. None if they do not line up."""
+    if pixel_values is None or image_grid_thw is None:
+        return None
+    grid = [tuple(int(v) for v in row) for row in image_grid_thw.tolist()]
+    runs = media_runs(tokens)
+    if not grid or len(runs) != len(grid):
+        return None
+    patches = [t * h * w for t, h, w in grid]
+    placeholders = sum(e - s for s, e in runs)
+    if sum(patches) != int(pixel_values.shape[0]) or not placeholders or sum(patches) % placeholders:
+        return None
+    per_placeholder = sum(patches) // placeholders
+    out, at = [], 0
+    for run, n in zip(runs, patches):
+        if (run[1] - run[0]) * per_placeholder != n:
+            return None
+        out.append((run, at, at + n))
+        at += n
+    return out
+
+
+def per_image_cache_keys(tokens, pixel_values, image_grid_thw) -> Optional[dict]:
+    """One key per image, active from its first placeholder: rows before a new image keep their keys, so a new image
+    only prefills the new part of the chat. Same-size images have the same tokens, and their pixels tell them apart.
+    None when the images do not line up with the placeholders (the caller keeps one key over all of them)."""
+    import hashlib
+
+    import mlx.core as mx
+    import numpy as np
+
+    from ...cache_key import MEDIA_ITEM_PREFIX, scope_cache_extra_key
+
+    slices = _image_slices(tokens, pixel_values, image_grid_thw)
+    if slices is None:
+        return None
+    arr = pixel_values
+    if arr.dtype in (mx.bfloat16, mx.float16):
+        arr = arr.view(mx.uint16)
+    data = np.asarray(arr)
+    grid = image_grid_thw.tolist()
+    keys: dict = {MEDIA_KEY: PER_IMAGE}
+    for i, ((start, _), a, b) in enumerate(slices):
+        h = hashlib.sha256(b"vmlx-m3-image-v1")
+        h.update(repr((str(pixel_values.dtype), tuple(pixel_values.shape[1:]), grid[i])).encode())
+        h.update(data[a:b].tobytes())
+        name = f"{MEDIA_ITEM_PREFIX}{i}"
+        keys[name] = h.hexdigest()[:32]
+        keys = scope_cache_extra_key(keys, name, start)
+    return keys
+
+
+def has_per_image_keys(cache_extra_keys) -> bool:
+    return isinstance(cache_extra_keys, dict) and cache_extra_keys.get(MEDIA_KEY) == PER_IMAGE
+
+
+def media_reuse(tokens: Sequence[int], matched: int, boundary: int) -> int:
+    """Rows a per-image request may reuse: never stopping inside an image, whose placeholders must all meet the vision
+    tensor in one forward. A prompt with no placeholder found proves nothing and reuses nothing."""
+    runs = media_runs(tokens)
+    if not runs:
+        return 0
+    rows = min(int(matched), int(boundary))
+    for start, end in runs:
+        if start < rows < end:
+            return start
+    return max(0, rows)
+
+
+def tail_pixels(tokens, cached: int, pixel_values, image_grid_thw):
+    """(pixels, grid) of the images after ``cached`` restored rows. None if ``cached`` is inside an image, the images do
+    not line up, or no image is left (the caller then replays text)."""
+    import mlx.core as mx
+
+    slices = _image_slices(tokens, pixel_values, image_grid_thw)
+    cached = int(cached)
+    if slices is None or any(s < cached < e for (s, e), _, _ in slices):
+        return None
+    left = [i for i, ((s, _), _, _) in enumerate(slices) if s >= cached]
+    if not left:
+        return None
+    first = slices[left[0]][1]
+    return pixel_values[first:], mx.array(image_grid_thw.tolist()[left[0]:], dtype=image_grid_thw.dtype)
+
+
 def media_rows_covered(tokens: Sequence[int], matched: int) -> bool:
     """Do the first ``matched`` rows hold every image and video placeholder of ``tokens``? No placeholder: no."""
     media = set(MEDIA_TOKEN_IDS)

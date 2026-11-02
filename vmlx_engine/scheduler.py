@@ -7070,7 +7070,9 @@ class Scheduler:
             )
         )
         # Lanes that disagree (layers at different offsets, an index lane out of step) prove nothing: full prefill.
-        reuse = 0 if offset is None else prefill_geometry.reuse_limit(
+        reuse = 0 if offset is None else prefill_geometry.media_reuse(
+            getattr(request, "prompt_token_ids", None) or [], min(cached, offset), boundary
+        ) if prefill_geometry.has_per_image_keys(getattr(request, "_cache_extra_keys", None)) else prefill_geometry.reuse_limit(
             min(cached, offset),
             boundary,
             step,
@@ -7542,6 +7544,19 @@ class Scheduler:
                 _fetch_tokens,
                 cache_extra_keys=_cache_extra_keys,
             )
+            if not cache:
+                # This tier compares a stored entry's whole key: a turn that added an image looks its earlier turns up
+                # under the key those turns had.
+                from .cache_key import per_item_key_fallbacks
+
+                for _earlier_keys in per_item_key_fallbacks(_cache_extra_keys):
+                    cache, remaining = _call_with_optional_cache_extra(
+                        self.memory_aware_cache.fetch,
+                        _fetch_tokens,
+                        cache_extra_keys=_earlier_keys,
+                    )
+                    if cache:
+                        break
             _memory_fetch_kind = getattr(self.memory_aware_cache, "last_fetch_kind", None)
             remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
                 fetch_tokens=_fetch_tokens,
@@ -9785,7 +9800,24 @@ class Scheduler:
                 and getattr(request, "_cache_extra_keys", None)
                 and _m3_vl_cached_prefix_covers_media_tokens(self.model, request)
             )
-            if _m3vl_active and cache_to_use is not None and not _m3vl_cache_replay:
+            # Restored rows end before a new image: that image alone goes through vision, with the text around it.
+            _m3vl_tail = None
+            if (
+                _m3vl_active
+                and cache_to_use is not None
+                and not _m3vl_cache_replay
+                and _m3vl_pv_video is None
+            ):
+                from .models.minimax_m3 import prefill_geometry as _m3_geometry
+
+                if _m3_geometry.has_per_image_keys(getattr(request, "_cache_extra_keys", None)):
+                    _m3vl_tail = _m3_geometry.tail_pixels(
+                        request.prompt_token_ids,
+                        int(getattr(request, "cached_tokens", 0) or 0),
+                        _m3vl_pv,
+                        _m3vl_grid,
+                    )
+            if _m3vl_active and cache_to_use is not None and not _m3vl_cache_replay and _m3vl_tail is None:
                 logger.info(
                     "Request %s: M3 VL cache prefix ends before the final media "
                     "placeholder; releasing hit and using atomic full vision prefill",
@@ -9797,7 +9829,7 @@ class Scheduler:
                 request.cached_tokens = 0
                 request.remaining_tokens = request.prompt_token_ids
                 _cache_fallback_reason = "media_placeholders_outside_cached_prefix"
-            if _m3vl_active and not _m3vl_cache_replay:
+            if _m3vl_active and not _m3vl_cache_replay and _m3vl_tail is None:
                 tokens_to_process = list(request.prompt_token_ids)
             # DeepSeek-V4.1 VL with a media-salted prefix hit: the restored state already holds
             # every image whose span ends inside the cached prefix. If ALL images are covered the
@@ -9838,6 +9870,15 @@ class Scheduler:
                             insert_kwargs["all_tokens"] = [
                                 list(request.prompt_token_ids[:cached_prefix_len])
                             ]
+                        elif _m3vl_tail is not None:
+                            cached_prefix_len = max(
+                                0, int(getattr(request, "cached_tokens", 0) or 0)
+                            )
+                            insert_kwargs["all_tokens"] = [
+                                list(request.prompt_token_ids[:cached_prefix_len])
+                            ]
+                            insert_kwargs["pixel_values"] = [_m3vl_tail[0]]
+                            insert_kwargs["image_grid_thw"] = [_m3vl_tail[1]]
                         else:
                             if _m3vl_pv is not None:
                                 insert_kwargs["pixel_values"] = [_m3vl_pv]

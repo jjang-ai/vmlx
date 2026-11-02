@@ -1076,6 +1076,64 @@ def test_scheduler_single_batch_m3_media_hit_replays_tail_without_pixels(monkeyp
     assert "image_grid_thw" not in kwargs
 
 
+def test_scheduler_m3_hit_before_a_new_image_passes_only_that_image(monkeypatch):
+    from collections import deque
+
+    from vmlx_engine.models.minimax_m3 import prefill_geometry as G
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler
+
+    prompt = [10] + [200025] * 4 + [11, 12] + [200025] * 4 + [13, 14]
+    request = Request(request_id="m3-new-image", prompt=prompt, sampling_params=SamplingParams(max_tokens=4))
+    request.prompt_token_ids = list(prompt)
+    request.num_prompt_tokens = len(prompt)
+    request.prompt_cache = [_m3_cache(seq=7)]
+    request.cached_tokens = 7
+    request.remaining_tokens = prompt[7:]
+    request.pixel_values = mx.concatenate([mx.ones((16, 3)), mx.full((16, 3), 2.0)], axis=0)
+    request.image_grid_thw = mx.array([[1, 4, 4], [1, 4, 4]], dtype=mx.int32)
+    request._cache_extra_keys = G.per_image_cache_keys(prompt, request.pixel_values, request.image_grid_thw)
+    assert request._cache_extra_keys
+
+    inserts = []
+
+    class SingleBatchGenerator:
+        def insert(self, prompts, **kwargs):
+            inserts.append((prompts, kwargs))
+            return [123]
+
+    scheduler = object.__new__(Scheduler)
+    scheduler.model = SimpleNamespace(args=SimpleNamespace(image_token_index=200025))
+    scheduler.waiting = deque([request])
+    scheduler.running = {}
+    scheduler.config = SimpleNamespace(max_num_seqs=1)
+    scheduler.batch_generator = SingleBatchGenerator()
+    scheduler.request_id_to_uid = {}
+    scheduler.uid_to_request_id = {}
+    scheduler.stop_tokens = set()
+    scheduler.block_aware_cache = None
+    scheduler._kv_cache_bits = 0
+    scheduler._is_hybrid = False
+    scheduler._uses_dsv4_cache = False
+    scheduler._uses_zaya_cache = False
+    scheduler._long_repetition_context = False
+    scheduler._cache_reuse_budget_fraction = lambda: 0.95
+    scheduler._cache_merge_memory_multiplier = lambda _cache: 1.0
+    scheduler._record_scheduled_cache_hit = lambda _request: None
+    scheduler._release_unusable_paged_hit = lambda _request: pytest.fail("the hit is usable")
+    scheduler._validate_cache = lambda _cache: True
+    scheduler.total_prompt_tokens = 0
+    monkeypatch.setattr(Scheduler, "_ensure_batch_generator", lambda _self, _sp: False)
+
+    assert Scheduler._schedule_waiting(scheduler) == [request]
+    prompts, kwargs = inserts[0]
+    assert prompts == [prompt[7:]]
+    assert kwargs["all_tokens"] == [prompt[:7]]
+    assert kwargs["pixel_values"][0].shape == (16, 3)
+    assert mx.all(kwargs["pixel_values"][0] == 2.0).item(), "the new image's pixels, not the cached one's"
+    assert kwargs["image_grid_thw"][0].tolist() == [[1, 4, 4]]
+
+
 def test_scheduler_single_batch_m3_partial_media_hit_falls_back_to_atomic_prefill(
     monkeypatch,
 ):

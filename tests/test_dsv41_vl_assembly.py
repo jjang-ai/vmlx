@@ -102,7 +102,8 @@ def test_media_salt_tracks_pixels():
     a = Img(3, mx.ones((4, 4), mx.bfloat16), 2, 2, [1, 0, 0, 2])
     a2 = Img(9, mx.ones((4, 4), mx.bfloat16), 2, 2, [1, 0, 0, 2])
     b = Img(3, mx.zeros((4, 4), mx.bfloat16), 2, 2, [1, 0, 0, 2])
-    assert P.media_cache_extra_keys([a]) == P.media_cache_extra_keys([a2])
+    # The same pixels have the same digest wherever they sit; the key's scope follows the image's position.
+    assert P.media_cache_extra_keys([a])["media_item_0"] == P.media_cache_extra_keys([a2])["media_item_0"]
     assert P.media_cache_extra_keys([a]) != P.media_cache_extra_keys([b])
     assert P.media_cache_extra_keys([]) is None
 

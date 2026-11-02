@@ -221,11 +221,11 @@ def _attach_tools(messages: List[dict], tools: Optional[list]) -> List[dict]:
 
 
 def media_cache_extra_keys(images: List[Any]) -> Optional[dict]:
-    """Prefix-cache salt for a VL request: SHA-256 over every image's pixels + geometry, in prompt order.
+    """Prefix-cache keys for a VL request: one per image (SHA-256 of its pixels + geometry), active from its first token.
 
-    Image spans are runs of the same placeholder token id, so token ids alone cannot tell two images
-    apart; the salt keeps vision-conditioned state from being reused for different pixels while letting
-    the same conversation (same images, more turns) hit its own earlier prompt boundary."""
+    Image spans are runs of the same placeholder token id, so token ids alone cannot tell two images apart. The keys
+    keep vision state from being reused for different pixels, while rows before a new image keep their keys, so a new
+    image only prefills the new part of the chat."""
     if not images:
         return None
     import hashlib
@@ -233,8 +233,11 @@ def media_cache_extra_keys(images: List[Any]) -> Optional[dict]:
     import mlx.core as mx
     import numpy as np
 
-    h = hashlib.sha256(b"vmlx-dsv41-vl-media-v1")
-    for img in images:
+    from ...cache_key import MEDIA_ITEM_PREFIX, scope_cache_extra_key
+
+    keys: dict = {"dsv41_vl_media": "per-image-v1"}
+    for i, img in enumerate(images):
+        h = hashlib.sha256(b"vmlx-dsv41-vl-media-v2")
         patches = getattr(img, "patches", None)
         h.update(repr((int(img.n_vit_h), int(img.n_vit_w), len(img.types))).encode())
         h.update(np.asarray(img.types, np.int16).tobytes())
@@ -243,7 +246,10 @@ def media_cache_extra_keys(images: List[Any]) -> Optional[dict]:
             if arr.dtype in (mx.bfloat16, mx.float16):
                 arr = arr.view(mx.uint16)
             h.update(np.asarray(arr).tobytes())
-    return {"dsv41_vl_media": h.hexdigest()[:32]}
+        name = f"{MEDIA_ITEM_PREFIX}{i}"
+        keys[name] = h.hexdigest()[:32]
+        keys = scope_cache_extra_key(keys, name, int(img.start))
+    return keys
 
 
 def preprocess_dsv41_vl(

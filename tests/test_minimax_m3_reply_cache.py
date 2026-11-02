@@ -398,6 +398,57 @@ def test_a_hit_that_ends_before_the_image_is_not_used(model, tmp_path, monkeypat
         sched.shutdown()
 
 
+def _per_image_run(sched, trace, prompt, values, *, max_tokens):
+    """One request carrying per-image keys, the way the engine builds them (pixels themselves stay off the toy model)."""
+    import mlx.core as mx
+
+    from vmlx_engine.request import Request, SamplingParams
+
+    pv = mx.concatenate([mx.full((64, 4), float(v), dtype=mx.float32) for v in values], axis=0)
+    grid = mx.array([[1, 8, 8]] * len(values), dtype=mx.int32)
+    keys = prefill_geometry.per_image_cache_keys(prompt, pv, grid)
+    assert keys is not None
+    req = Request(request_id=f"pi-{len(trace.inserts)}", prompt=list(prompt),
+                  sampling_params=SamplingParams(max_tokens=max_tokens, temperature=0.0))
+    req.prompt_token_ids = list(prompt)
+    req.num_prompt_tokens = len(prompt)
+    req._gen_prompt_len = len(_gen("adaptive"))
+    req._cache_extra_keys = keys
+    sched.add_request(req)
+    for _ in range(max_tokens + 8):
+        if any(o.finished for o in sched.step().outputs):
+            break
+    else:
+        pytest.fail("request did not finish")
+    return {"tokens": list(req.output_token_ids), "cached": int(req.cached_tokens or 0)}
+
+
+@pytest.mark.parametrize("tier", ["ssd", "ram"])
+def test_a_new_image_only_prefills_the_new_part_of_the_chat(model, tmp_path, monkeypatch, tier):
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    img, first = _image_chat(monkeypatch)
+    trace = _Trace(monkeypatch)
+    sched = _scheduler(model, tmp_path / "ssd", STEP, tok=_TurnTok()) if tier == "ssd" else Scheduler(model, _TurnTok(), SchedulerConfig(
+        max_num_seqs=1, prefill_step_size=STEP, enable_prefix_cache=True, use_paged_cache=False,
+        use_memory_aware_cache=True, enable_block_disk_cache=False,
+    ))
+    try:
+        one = _per_image_run(sched, trace, first, [1], max_tokens=40)
+        floor = _reply_floor(first, one["tokens"])
+        body = _ids(41, 5) + [img] * 16 + _ids(23, 6)
+        second = _exact_next(first, one["tokens"], body)
+        two = _per_image_run(sched, trace, second, [1, 2], max_tokens=8)
+        assert floor - 64 < two["cached"] <= floor, (two["cached"], floor)
+        # The same place with another picture: rows up to that image are fine, rows past it are not.
+        other = _per_image_run(sched, trace, second, [1, 3], max_tokens=4)
+        assert other["cached"] <= second.index(img, len(first)), (other["cached"], second.index(img, len(first)))
+        # Changing the FIRST picture leaves nothing past that picture.
+        assert _per_image_run(sched, trace, second, [9, 2], max_tokens=4)["cached"] <= second.index(img)
+    finally:
+        sched.shutdown()
+
+
 def test_media_rows_are_covered_only_past_the_last_placeholder(monkeypatch):
     monkeypatch.setattr(prefill_geometry, "MEDIA_TOKEN_IDS", (9,))
     tokens = [1, 9, 9, 2, 9, 3, 4]

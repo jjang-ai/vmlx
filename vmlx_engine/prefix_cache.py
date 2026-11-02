@@ -4521,7 +4521,9 @@ class BlockAwarePrefixCache:
         boundary = max(0, len(tokens) - 1)
         media = prefill_geometry.is_media_request(cache_extra_keys)
         media_covered = media and prefill_geometry.media_rows_covered(tokens, matched)
-        reuse = prefill_geometry.reuse_limit(
+        reuse = prefill_geometry.media_reuse(tokens, matched, boundary) if prefill_geometry.has_per_image_keys(
+            cache_extra_keys
+        ) else prefill_geometry.reuse_limit(
             matched,
             boundary,
             step,

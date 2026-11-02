@@ -527,11 +527,9 @@ class EngineCore:
                 except Exception as exc:  # never reuse unsalted vision state
                     logger.warning("DSV4.1 VL media cache key failed (%s); bypassing prefix cache", exc)
             if _dsv41_salt:
-                merged = dict(cache_extra_keys) if isinstance(cache_extra_keys, dict) else (
-                    {"request": repr(cache_extra_keys)} if cache_extra_keys is not None else {}
-                )
-                merged.update(_dsv41_salt)
-                cache_extra_keys = merged
+                from .cache_key import merge_cache_extra_keys
+
+                cache_extra_keys = merge_cache_extra_keys(cache_extra_keys, _dsv41_salt)
             else:
                 bypass_prefix_cache = True
 
@@ -546,14 +544,21 @@ class EngineCore:
                 cache_extra_keys, dict
             ) else {"request": repr(cache_extra_keys)}
         if pixel_values is not None or pixel_values_videos is not None:
-            media_extra = _mllm_media_cache_extra_keys(request)
+            media_extra = None
+            if pixel_values_videos is None and prompt_token_ids is not None:
+                from .models.minimax_m3.prefill_geometry import per_image_cache_keys
+
+                try:
+                    media_extra = per_image_cache_keys(prompt_token_ids, pixel_values, image_grid_thw)
+                except Exception as exc:  # one key over all the media still keeps images apart
+                    logger.warning("Per-image cache keys failed (%s); using one key for the request", exc)
+            media_extra = media_extra or _mllm_media_cache_extra_keys(request)
             if media_extra:
-                if getattr(request, "_cache_extra_keys", None):
-                    merged = dict(request._cache_extra_keys)
-                    merged.update(media_extra)
-                    request._cache_extra_keys = merged
-                else:
-                    request._cache_extra_keys = media_extra
+                from .cache_key import merge_cache_extra_keys
+
+                request._cache_extra_keys = merge_cache_extra_keys(
+                    getattr(request, "_cache_extra_keys", None), media_extra
+                )
             request._m3_vl_media_cache_context = bool(
                 getattr(request, "_cache_extra_keys", None)
             )
