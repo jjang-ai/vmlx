@@ -409,8 +409,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const dsv4Active = normalizedEffectiveFamily === 'deepseek-v4'
   const glmSingleActive = isGlmSingleActiveFamily(normalizedDetectedFamily)
   const m3Active = normalizedDetectedFamily === 'minimax_m3'
-  const hy3Active = normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'
-  const openPanguExactTypedCache = normalizedDetectedFamily === 'openpangu_v2'
   const nativeGlmSsdActive = usesGlmNativeSsdPool({
     family: normalizedDetectedFamily, nativeGlmSsd: detectedNativeGlmSsd,
     isMultimodal: detectedIsMultimodal, forceTextOnly: detectedForceTextOnly,
@@ -520,12 +518,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     cacheSubtype: detectedCacheSubtype,
     architectureHints: detectedArchitectureHints,
   })
-  const isMambaCache =
-    detectedCacheType === 'mamba' ||
-    detectedCacheType === 'hybrid' ||
-    detectedCacheType === 'rotating_kv'
-  // Same question as mixedSwaCacheActive below; both were hand-copied
-  // three-condition chains. One detector now answers it.
+  // One detector answers the mixed-SWA question (it was a hand-copied
+  // three-condition chain before).
   const mixedSwaBlockDiskOnlySupported = mixedSwaBundle
   const architectureBlockDiskOnlySupported =
     (detectedCacheType === 'mamba' ||
@@ -535,19 +529,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       dsv4Active) &&
     !zayaCcaActive &&
     !exactTypedPromptDiskCache
-  const normalizedModelIdentity = (modelIdentity || '').toLowerCase()
-  const bonsaiActive = normalizedModelIdentity.includes('bonsai')
-  const qwenHybridTqActive = isMambaCache && (normalizedDetectedFamily || '').startsWith('qwen')
-  const qwenFullTqActive = !isMambaCache && (normalizedDetectedFamily || '').startsWith('qwen')
-  // step3p7_full_sliding_kv belongs here too. It is already listed as
-  // mixed-SWA in mixedSwaBlockDiskOnlySupported above and in the shared
-  // storedKvQuantPolicy subtype set, and the ENGINE classifies it as mixed-SWA
-  // (mllm_scheduler's detector returns true for it alongside mixed_swa_kv).
-  // Omitting it here alone made the cache codec badge read a generic "AUTO"
-  // with the engine-native description, for a family the rest of the app —
-  // and the engine — treats as mixed-SWA. Display-only, but display-only is
-  // exactly where a wrong label goes unnoticed.
-  const mixedSwaCacheActive = mixedSwaBundle
   // No detected family may force the retired RAM tier back on. ZAYA remains an
   // explicit SSD-reconstruction gap until its CCA companion state is restorable;
   // the UI says that directly instead of silently showing a forced RAM toggle.
@@ -569,28 +550,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const simpleCacheTier = resolveSimpleCacheTier(cacheControlState, cacheLane)
   const ssdCacheToggleDisabled = batchingOff && !nativeSpeculativeCache
   const ramCacheToggleDisabled = batchingOff || (!simpleCacheTier.ramOn && !simpleCacheTier.ramAvailable)
-  // One production representation: preserve the loaded architecture's native
-  // cache state and add no generic stored codec. Persisted stale values are
-  // migrated by the main process; the renderer never echoes them as effective.
-  const effectiveStoredCacheQuantization = 'auto'
-  const liveCacheCodecLabel = openPanguExactTypedCache
-    ? t('sessions.config.codecOpenPangu')
-    : dsv4Active
-      ? t('sessions.config.codecDsv4')
-      : m3Active
-        ? t('sessions.config.codecM3')
-        : hy3Active
-            ? t('sessions.config.codecHy3')
-            : mixedSwaCacheActive
-              ? t('sessions.config.codecMixedSwa')
-              : qwenFullTqActive
-                ? t('sessions.config.codecQwenFull')
-              : qwenHybridTqActive
-                ? bonsaiActive
-                  ? t('sessions.config.codecBonsaiHybrid')
-                  : t('sessions.config.codecQwenHybrid')
-              : t('sessions.config.codecEngineNative')
-  const liveCacheCodecBadge = 'NATIVE · GENERIC TQ OFF'
   const concurrency = resolveGlmConcurrencyControls(normalizedDetectedFamily, config)
   const effectiveMaxNumSeqs = dsv4Active ? 1 : concurrency.maxNumSeqs!
   const effectivePrefillBatchSize = dsv4Active ? 1 : concurrency.prefillBatchSize!
@@ -608,7 +567,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const nativeMtpDetected = detectedNativeMtp !== undefined
   const nativeMtpSupported = !!detectedNativeMtp?.supported
   const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && !nemotronImageOnly && multimodalActive && config.isMultimodal !== false && !effectiveSmeltActive
-  const nativeOmniStage1 = omniBackendVisible && (config.omniBackend || 'stage1') === 'stage1'
   // Legacy 'auto'/'deterministic' rows display as the mode they will launch as.
   const nativeMtpMode = resolveNativeMtpMode({
     mode: nativeMtpSessionChoice(config, detectedNativeMtp?.adapter),
@@ -1116,67 +1074,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {exactTypedPromptDiskCache && simpleCacheTier.ssdOn && <InfoNote text={t('sessions.config.ssdOnlyLaneNote')} />}
         {!batchingOff && !nativeSpeculativeCache && simpleCacheTier.tier === 'off' && <InfoNote text={t('sessions.config.cacheOffNote')} />}
-        {batchingOff && !dflash2Speculative && !dsparkSingleRequest && <IncompatWarning text={t('sessions.config.kvQuantRequiresBatching')} />}
-        {!batchingOff && prefixOff && <IncompatWarning text={t('sessions.config.kvQuantRequiresPrefix')} />}
-        {!effectivelyNoBatching && !prefixOff && mixedSwaCacheActive && <PerformanceHint text={t('sessions.config.mixedSwaAutoHint')} />}
-        {!effectivelyNoBatching && !prefixOff && hy3Active && <PerformanceHint text={t('sessions.config.hy3AutoHint')} />}
-        {!effectivelyNoBatching && !prefixOff && qwenHybridTqActive && !mixedSwaCacheActive && <PerformanceHint text={bonsaiActive ? t('sessions.config.bonsaiHybridHint') : t('sessions.config.qwenHybridHint')} />}
-        {!effectivelyNoBatching && !prefixOff && qwenFullTqActive && <PerformanceHint text={t('sessions.config.qwenFullKvHint')} />}
-        {!effectivelyNoBatching && !prefixOff && isMambaCache && !qwenHybridTqActive && !mixedSwaCacheActive && !dsv4Active && !m3Active && !nativeOmniStage1 && !openPanguExactTypedCache && <PerformanceHint text={t('sessions.config.hybridStatefulHint')} />}
-        {!effectivelyNoBatching && dsv4Active && <PerformanceHint text={t('sessions.config.dsv4KvQuantHint')} />}
-        {!effectivelyNoBatching && m3Active && <PerformanceHint text={t('sessions.config.m3KvQuantHint')} />}
-        {!effectivelyNoBatching && openPanguExactTypedCache && <PerformanceHint text={t('sessions.config.openPanguKvQuantHint')} />}
-        {/* Live/native cache representation — automatic per architecture. */}
-        <div className="block">
-          <span className="text-xs font-medium text-muted-foreground">
-            {t('sessions.config.liveCacheCodec')}
-            <Tooltip text={t('sessions.config.liveCacheCodecTooltip')} />
-          </span>
-          <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'default' }}>
-            <span>{liveCacheCodecLabel}</span>
-            <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>
-              {liveCacheCodecBadge}
-            </span>
-          </div>
-        </div>
-        {dsv4Active && (
-          <>
-            <div className="block">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t('sessions.config.nativePoolCodec')}
-                <Tooltip text={t('sessions.config.nativePoolCodecTooltip')} />
-              </span>
-              <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'default' }}>
-                <span>{t('sessions.config.dsv4PoolQuantization')}</span>
-                <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>
-                  {config.dsv4PoolQuant === true
-                    ? t('sessions.config.poolQuantOnBundle')
-                    : config.dsv4PoolQuant === false
-                      ? t('sessions.config.poolQuantOffBundle')
-                      : t('sessions.config.poolQuantEngineDefault')}
-                </span>
-              </div>
-            </div>
-            <CheckField
-              label={t('sessions.config.dsv4ActivationQat')}
-              tooltip={t('sessions.config.dsv4ActivationQatTooltip')}
-              checked={config.dsv4ActivationQat === true}
-              onChange={v => onChange('dsv4ActivationQat', v)}
-            />
-            <InfoNote text={t('sessions.config.dsv4ActivationQatNote')} />
-          </>
-        )}
-
-        {/* Stored prefix representation. Auto adds no codec. */}
-        <div className="block">
-          <span className="text-xs font-medium text-muted-foreground">
-            {t('sessions.config.storedCacheQuantization')}
-            <Tooltip text={t('sessions.config.storedCacheQuantTooltip')} />
-          </span>
-          <select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>
-            <option value="auto">{dsv4Active ? t('sessions.config.storedQuantNativeTyped') : t('sessions.config.storedQuantAuto')}</option>
-          </select>
-        </div>
       </Section>
 
       {/* Power Management — visible for ALL model types (text + image) */}
@@ -1277,6 +1174,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {dsv4Active && (
           <PerformanceHint text={t('sessions.config.dsv4CompiledDecodeHint')} />
+        )}
+        {/* DSV4 runtime fidelity knob (restart required). Default Off; a saved
+            On is forwarded to the engine as DSV4_ACTIVATION_QAT=1, so the
+            control stays visible wherever the DSV4 runtime controls live. */}
+        {dsv4Active && (
+          <div data-vmlx-control="dsv4-activation-qat" data-vmlx-state={config.dsv4ActivationQat === true ? 'on' : 'off'}>
+            <CheckField
+              label={t('sessions.config.dsv4ActivationQat')}
+              tooltip={t('sessions.config.dsv4ActivationQatTooltip')}
+              checked={config.dsv4ActivationQat === true}
+              onChange={v => onChange('dsv4ActivationQat', v)}
+            />
+            <InfoNote text={t('sessions.config.dsv4ActivationQatNote')} />
+          </div>
         )}
 
         <SliderField settingKey="streamInterval"

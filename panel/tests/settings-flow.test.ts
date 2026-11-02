@@ -952,10 +952,12 @@ describe('KV Cache Quantization', () => {
         )
 
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecEngineNative')")
-        expect(enLocale).toContain('Architecture-native cache')
-        expect(source).toContain("t('sessions.config.hybridStatefulHint')")
-        expect(enLocale).toContain('Generic TurboQuant KV is disabled unless a tested override exists')
+        // The Prefix Cache section no longer shows a live-codec row or
+        // per-architecture codec hints; it holds only SSD cache and RAM cache.
+        expect(source).not.toContain("t('sessions.config.codecEngineNative')")
+        expect(enLocale).not.toContain('Architecture-native cache')
+        expect(source).not.toContain("t('sessions.config.hybridStatefulHint')")
+        expect(enLocale).not.toContain('Generic TurboQuant KV is disabled unless a tested override exists')
         expect(source).not.toContain('ON · Default')
         expect(source).not.toContain('TurboQuant only')
     })
@@ -969,51 +971,53 @@ describe('KV Cache Quantization', () => {
 
         expect(source).toContain("isMixedSwaBundle(")
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecMixedSwa')")
-        expect(enLocale).toContain('Native full/sliding KV + rotating metadata')
-        expect(enLocale).toContain("preserves the model's native cache-slot and rotating-window metadata")
-        expect(enLocale).toContain('Generic TurboQuant is not added')
-        expect(source).toContain("'NATIVE · GENERIC TQ OFF'")
-        expect(source).toContain("const effectiveStoredCacheQuantization = 'auto'")
+        // No live-codec label, badge or stored-codec select in the Prefix Cache section.
+        expect(source).not.toContain("t('sessions.config.codecMixedSwa')")
+        expect(enLocale).not.toContain('Native full/sliding KV + rotating metadata')
+        expect(source).not.toContain("'NATIVE · GENERIC TQ OFF'")
+        expect(source).not.toContain('effectiveStoredCacheQuantization')
         expect(source).not.toContain('value="q8"')
         expect(source).not.toContain('value="q4"')
         expect(source).not.toContain("'TQ8 AUTO'")
     })
 
-    it('reports HY3 native cache and MTP copy semantics', () => {
+    it('shows no HY3 cache-codec row or hint in the Prefix Cache section', () => {
         const fs = require('fs')
         const source = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(source).toContain("normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'")
+        // The form no longer special-cases HY3 for a display-only codec label.
+        expect(source).not.toContain("normalizedDetectedFamily === 'hy_v3' || normalizedDetectedFamily === 'hy3'")
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecHy3')")
-        expect(enLocale).toContain('Native HY3 KV (no added cache codec)')
-        expect(source).toContain("'NATIVE · GENERIC TQ OFF'")
-        expect(enLocale).toContain('Native MTP D1 copies this cache independently before batch split/verify')
+        expect(source).not.toContain("t('sessions.config.codecHy3')")
+        expect(source).not.toContain("t('sessions.config.hy3AutoHint')")
+        expect(enLocale).not.toContain('Native HY3 KV (no added cache codec)')
+        expect(source).not.toContain("'NATIVE · GENERIC TQ OFF'")
     })
 
-    it('reports Qwen and Bonsai architecture-native cache layouts', () => {
+    it('shows no Qwen or Bonsai cache-layout rows in the Prefix Cache section', () => {
         const fs = require('fs')
         const source = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(source).toContain("const bonsaiActive = normalizedModelIdentity.includes('bonsai')")
-        expect(source).toContain("const qwenFullTqActive = !isMambaCache")
+        // Display-only family detectors for the codec label are gone with the row.
+        expect(source).not.toContain('bonsaiActive')
+        expect(source).not.toContain('qwenFullTqActive')
+        expect(source).not.toContain('qwenHybridTqActive')
         const enLocale = fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(source).toContain("t('sessions.config.codecQwenFull')")
-        expect(enLocale).toContain('Native Qwen full-attention KV')
+        expect(source).not.toContain("t('sessions.config.codecQwenFull')")
+        expect(enLocale).not.toContain('Native Qwen full-attention KV')
         expect(source).not.toContain('MIXED TQ4/8 AUTO')
-        expect(source).toContain("t('sessions.config.codecQwenHybrid')")
-        expect(enLocale).toContain('Native Qwen attention KV + native hybrid state')
-        expect(source).toContain("t('sessions.config.codecBonsaiHybrid')")
-        expect(enLocale).toContain('Native Bonsai attention KV + native hybrid state')
-        expect(enLocale).toContain('Qwen hybrid cache detected — Auto preserves native attention KV')
-        expect(enLocale).toContain('Bonsai hybrid cache detected — Auto preserves native attention KV')
+        expect(source).not.toContain("t('sessions.config.codecQwenHybrid')")
+        expect(enLocale).not.toContain('Native Qwen attention KV + native hybrid state')
+        expect(source).not.toContain("t('sessions.config.codecBonsaiHybrid')")
+        expect(enLocale).not.toContain('Native Bonsai attention KV + native hybrid state')
+        expect(enLocale).not.toContain('Qwen hybrid cache detected — Auto preserves native attention KV')
+        expect(enLocale).not.toContain('Bonsai hybrid cache detected — Auto preserves native attention KV')
     })
 
     it('chat reasoning Auto copy avoids force-language', () => {
@@ -2993,7 +2997,10 @@ describe('Default IP and New Settings', () => {
         }
 
         const form = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        expect(form).toContain("normalizedDetectedFamily === 'openpangu_v2'")
+        // The form reaches openPangu through the shared exact-typed lane detector, not a
+        // display-only family literal (that literal fed the removed cache-codec row).
+        expect(form).toContain('const exactTypedPromptDiskCache = usesExactTypedPromptDiskCache(normalizedDetectedFamily, nativeGlmSsdActive)')
+        expect(form).not.toContain("normalizedDetectedFamily === 'openpangu_v2'")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf8')
         expect(form).toContain("t('sessions.config.openPanguTypedCacheNote')")
         expect(enLocale).toContain('openPangu v2 uses exact typed N-1 prompt snapshots')
@@ -3697,10 +3704,11 @@ describe('JIT Toggle', () => {
         )
 
         expect(form).toContain('detectedFamily')
-        expect(form).toContain("t('sessions.config.codecDsv4')")
+        // The DSV4 live-codec label row is gone from the Prefix Cache section.
+        expect(form).not.toContain("t('sessions.config.codecDsv4')")
         expect(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
-        ).toContain('DeepSeek-V4 native composite cache')
+        ).not.toContain('DeepSeek-V4 native composite cache')
         expect(settings).toContain('detectedFamily={detectedConfig?.family}')
         expect(create).toContain('detectedFamily={detectedFamily}')
         expect(drawer).toContain('detectedFamily={detectedFamily}')
@@ -3766,10 +3774,10 @@ describe('JIT Toggle', () => {
             'utf8',
         )
 
-        expect(form).toContain("t('sessions.config.codecMixedSwa')")
+        // No live-codec row at all: neither a native label nor a TQ promise.
+        expect(form).not.toContain("t('sessions.config.codecMixedSwa')")
         const enLocale = readFileSync(resolve(__dirname, '../src/renderer/src/i18n/locales/en.json'), 'utf8')
-        expect(enLocale).toContain('Native full/sliding KV + rotating metadata')
-        expect(enLocale).toContain('Generic TurboQuant is not added')
+        expect(enLocale).not.toContain('Native full/sliding KV + rotating metadata')
         expect(form).not.toContain('TQ4 full-attention KV + native rotating SWA')
     })
 
@@ -3980,9 +3988,15 @@ describe('JIT Toggle', () => {
         expect(form).toContain("e.preventDefault()")
         expect(form).toContain('className="relative inline-flex ml-1"\n      onClick={handleClick}')
         expect(form).not.toContain('disabled={dsv4CompositeRequiresPaged}')
-        expect(form).toContain('<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>')
-        expect(form).toContain("t('sessions.config.storedQuantNativeTyped')")
-        expect(enLocale).toContain('Native typed codec (bundle-derived)')
+        // The Prefix Cache section holds only the SSD and RAM choices: no
+        // stored-codec select, no native-typed codec row.
+        const prefixSection = form.slice(form.indexOf('sectionKey="prefixCache"'), form.indexOf('sectionKey="power"'))
+        expect(prefixSection).toContain("label={t('sessions.config.ssdCache')}")
+        expect(prefixSection).toContain("label={t('sessions.config.ramCache')}")
+        expect(prefixSection).not.toContain('<select')
+        expect(form).not.toContain('effectiveStoredCacheQuantization')
+        expect(form).not.toContain("t('sessions.config.storedQuantNativeTyped')")
+        expect(enLocale).not.toContain('Native typed codec (bundle-derived)')
         expect(form).not.toContain('DSV4 Native Cache')
         expect(form).not.toContain('DSV4 Composite Prefix Cache')
         expect(form).not.toContain('DSV4 Pool Quantization')
@@ -4043,22 +4057,24 @@ describe('JIT Toggle', () => {
         expect(enLocale).toContain('0 means no limit')
     })
 
-    it('settings form disables generic stored KV codec controls for MiniMax-M3 native MSA cache', () => {
+    it('settings form shows no generic stored KV codec controls for MiniMax-M3 native MSA cache', () => {
         const form = readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(form).toContain("const effectiveStoredCacheQuantization = 'auto'")
-        expect(form).toContain("? t('sessions.config.codecOpenPangu')")
-        expect(form).toContain("? t('sessions.config.codecM3')")
-        expect(form).toContain("const liveCacheCodecBadge = 'NATIVE · GENERIC TQ OFF'")
+        // Neither a stored-codec select nor a live-codec label/badge/hint row exists any more.
+        expect(form).not.toContain('effectiveStoredCacheQuantization')
+        expect(form).not.toContain("t('sessions.config.codecOpenPangu')")
+        expect(form).not.toContain("t('sessions.config.codecM3')")
+        expect(form).not.toContain("t('sessions.config.m3KvQuantHint')")
+        expect(form).not.toContain("t('sessions.config.openPanguKvQuantHint')")
+        expect(form).not.toContain('liveCacheCodecBadge')
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        expect(enLocale).toContain('openPangu typed composite cache')
-        expect(enLocale).toContain('MiniMax-M3 native MSA cache')
-        expect(enLocale).toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
-        expect(enLocale).toContain('native MSA snapshots with keys, values, idx_keys, and absolute offsets')
-        expect(form).toContain('<select value={effectiveStoredCacheQuantization} className="cfg-input" disabled>')
+        expect(enLocale).not.toContain('openPangu typed composite cache')
+        expect(enLocale).not.toContain('"codecM3"')
+        expect(enLocale).not.toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
+        expect(form).not.toContain('<select value={effectiveStoredCacheQuantization}')
     })
 
     it('settings form exposes MiniMax-M3 typed SSD cache while keeping its native codec', () => {
@@ -4069,9 +4085,10 @@ describe('JIT Toggle', () => {
 
         expect(form).not.toContain("label={t('sessions.config.pagedKVCache')}")
         const enLocale = readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8')
-        // MiniMax-M3 gets the same two choices as every batched family; the native MSA codec stays automatic.
-        expect(form).toContain("? t('sessions.config.codecM3')")
-        expect(enLocale).toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
+        // MiniMax-M3 gets the same two choices as every batched family; the native MSA codec stays automatic
+        // and is not described by a display row.
+        expect(form).not.toContain("t('sessions.config.codecM3')")
+        expect(enLocale).not.toContain('MiniMax-M3 keeps generic KV q4/q8 disabled')
         expect(form).not.toContain('m3NativeMsaNote')
         expect(form).not.toContain('m3SsdOnlyNote')
         expect(form).not.toContain('LOCKED OFF')
