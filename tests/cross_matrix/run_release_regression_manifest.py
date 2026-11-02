@@ -449,6 +449,10 @@ SCOPED_DSV41_RECEIPTS = {
     "ARTIFACT_FORMAT", "PARSER", "REASONING", "GENERATION", "TOOL_CALL",
     "FAMILY_DETECTION", "JANG_COMPAT", "QUALITY_LIMITS",
 }
+SCOPED_CHECKPOINT_SCHEMA = "vmlx-scoped-prepackage-v6"
+SCOPED_CHECKPOINT_MODELS = {"deepseek-v41-affine", "deepseek-v41-janght", "minimax-m31-janght"}
+# This checkpoint retains every functional owner. Only the active model set changes;
+# the broad campaign reader remains available as v5.
 SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
 SCOPED_RUNTIME_MODELS = {
     "minimax-m31-janght", "deepseek-v41-affine", "deepseek-v41-janght",
@@ -472,10 +476,11 @@ SCOPED_PENDING_STAGES = [
 ]
 
 
-def _validate_runtime_scope(scope: dict, bound_file) -> None:
+def _validate_runtime_scope(scope: dict, bound_file, required_models=None) -> None:
     """Bind each active format's retained paired turns; unresolved rows fail closed."""
     models = scope.get("model_evidence")
-    if not isinstance(models, dict) or set(models) != SCOPED_RUNTIME_MODELS:
+    required_models = SCOPED_RUNTIME_MODELS if required_models is None else required_models
+    if not isinstance(models, dict) or set(models) != required_models:
         raise ValueError("runtime scope requires every active model/format")
     for name, row in models.items():
         if row.get("status") != "PASS" or row.get("active_gaps") != []:
@@ -606,10 +611,11 @@ def validate_scoped_prepackage(
         data = json.loads(raw)
         result["receipt_sha256"] = hashlib.sha256(raw).hexdigest()
         evidence_root = path.resolve().parent
-        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA}:
+        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA}:
             raise ValueError("unsupported scoped prepackage schema")
         dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
-        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA
+        checkpoint = data["schema"] == SCOPED_CHECKPOINT_SCHEMA
+        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
@@ -619,7 +625,7 @@ def validate_scoped_prepackage(
         if dsv41:
             required_models, required_receipts = SCOPED_DSV41_MODELS, SCOPED_DSV41_RECEIPTS
         if runtime:
-            required_models = SCOPED_RUNTIME_MODELS
+            required_models = SCOPED_CHECKPOINT_MODELS if checkpoint else SCOPED_RUNTIME_MODELS
             required_receipts = SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
@@ -661,7 +667,14 @@ def validate_scoped_prepackage(
             result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
             result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
         if runtime:
-            _validate_runtime_scope(scope, bound_file)
+            _validate_runtime_scope(scope, bound_file, required_models)
+        if checkpoint:
+            if scope.get("checkpoint_focus") != "deepseek-minimax-text-tools-cache-adaptive":
+                raise ValueError("checkpoint requires explicit text/tool/cache/adaptive scope")
+            if not scope.get("media_quality_authority"):
+                raise ValueError("checkpoint media limits require explicit user authority")
+            if scope.get("text_tool_gaps") != []:
+                raise ValueError("checkpoint has unresolved text/tool acceptance gaps")
         exclusions = data.get("exclusions")
         if not isinstance(exclusions, list):
             raise ValueError("historical exclusions must be explicit")
