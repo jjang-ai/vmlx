@@ -689,6 +689,37 @@ class TestResolveToLocalPath:
         result = resolve_to_local_path("org/broken-model")
         assert result == "org/broken-model"
 
+    def test_uncached_form_sees_a_snapshot_that_appeared_after_a_miss(
+        self, tmp_path, monkeypatch
+    ):
+        """The memoized form keeps a pre-download miss; the uncached form reads the disk."""
+        from types import SimpleNamespace
+
+        import huggingface_hub
+        from vmlx_engine.api.utils import resolve_to_local_path_uncached
+
+        snapshot = tmp_path / "snap"
+        snapshot.mkdir()
+        (snapshot / "config.json").write_text("{}")
+        repos = []
+        monkeypatch.setattr(
+            huggingface_hub,
+            "scan_cache_dir",
+            lambda: SimpleNamespace(repos=repos),
+        )
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        assert resolve_to_local_path("org/late-model") == "org/late-model"
+        repos.append(
+            SimpleNamespace(
+                repo_id="org/late-model",
+                revisions=[SimpleNamespace(last_modified=1.0, snapshot_path=snapshot)],
+            )
+        )
+
+        assert resolve_to_local_path("org/late-model") == "org/late-model"
+        assert resolve_to_local_path_uncached("org/late-model") == str(snapshot)
+
     def test_cache_is_used(self, tmp_path):
         """Repeated calls with the same argument hit the LRU cache."""
         resolve_to_local_path(str(tmp_path))

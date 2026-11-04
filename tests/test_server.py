@@ -290,6 +290,99 @@ class TestHelperFunctions:
         monkeypatch.setattr(server, "_cli_args", {"max_prompt_tokens": 8192})
         assert server._refresh_loaded_max_prompt_tokens("test") == 8192
 
+    @pytest.fixture
+    def repo_id_launch(self, monkeypatch, tmp_path):
+        """Launch state for a model given as a Hugging Face repo id."""
+        import functools
+        from types import SimpleNamespace
+
+        import huggingface_hub
+
+        from vmlx_engine import context_limits, server
+        from vmlx_engine.api.utils import resolve_to_local_path
+
+        hub = tmp_path / "hub"
+        hub.mkdir()
+
+        def download():
+            snapshot = hub / "models--org--name" / "snapshots" / "abc123"
+            snapshot.mkdir(parents=True)
+            (snapshot / "config.json").write_text(
+                json.dumps({"max_position_embeddings": 40960})
+            )
+
+        monkeypatch.setattr(
+            huggingface_hub,
+            "scan_cache_dir",
+            functools.partial(huggingface_hub.scan_cache_dir, cache_dir=hub),
+        )
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(context_limits, "_declared_context_tokens", 0)
+        monkeypatch.setattr(server, "_model_path", "org/name")
+        monkeypatch.setattr(server, "_cli_args", {})
+        monkeypatch.setattr(server, "_max_prompt_tokens", 0)
+        monkeypatch.setattr(server, "_memory_advisory_prompt_tokens", 0)
+        monkeypatch.setattr(server, "_estimate_max_prompt_tokens", lambda: 24459)
+        resolve_to_local_path.cache_clear()
+        yield SimpleNamespace(
+            context_limits=context_limits, server=server, download=download
+        )
+        resolve_to_local_path.cache_clear()
+
+    def test_refresh_resolves_repo_id_to_cached_snapshot_for_declared_context(
+        self, repo_id_launch, caplog
+    ):
+        """A repo-id launch reads the declared context from the cached snapshot."""
+        import logging
+
+        server = repo_id_launch.server
+        repo_id_launch.download()
+
+        with caplog.at_level(logging.INFO, logger="vmlx_engine.server"):
+            assert server._refresh_loaded_max_prompt_tokens("test") == 40960
+
+        assert server._max_prompt_tokens == 40960
+        assert repo_id_launch.context_limits.get_declared_context_tokens() == 40960
+        assert server._effective_max_prompt_tokens(None) == 40960
+        assert "Declared model context ceiling: 40960 tokens (test)" in caplog.text
+        assert (
+            "Refreshed max prompt/context length after test: 40960 tokens "
+            "(declared context)" in caplog.text
+        )
+
+    def test_refresh_after_cold_launch_download_sets_prompt_cap(self, repo_id_launch):
+        """The CLI probes the repo id before the model downloads; the refresh
+        runs after, and its cap must not come from the probe's memoized miss."""
+        from vmlx_engine.api.utils import is_mllm_model
+
+        server = repo_id_launch.server
+        assert is_mllm_model("org/name") is False
+        repo_id_launch.download()
+
+        assert server._refresh_loaded_max_prompt_tokens("test") == 40960
+        assert server._max_prompt_tokens == 40960
+        assert repo_id_launch.context_limits.get_declared_context_tokens() == 40960
+
+    def test_refresh_repo_id_explicit_cap_wins_over_declared_context(
+        self, repo_id_launch, monkeypatch
+    ):
+        server = repo_id_launch.server
+        repo_id_launch.download()
+        monkeypatch.setattr(server, "_cli_args", {"max_prompt_tokens": 8192})
+
+        assert server._refresh_loaded_max_prompt_tokens("test") == 8192
+        assert server._max_prompt_tokens == 8192
+        # the losing field still comes from the bundle
+        assert repo_id_launch.context_limits.get_declared_context_tokens() == 40960
+
+    def test_refresh_unresolvable_repo_id_enforces_nothing(self, repo_id_launch):
+        server = repo_id_launch.server
+
+        assert server._refresh_loaded_max_prompt_tokens("test") == 0
+        assert server._max_prompt_tokens == 0
+        assert repo_id_launch.context_limits.get_declared_context_tokens() == 0
+
     def test_estimate_max_prompt_tokens_uses_batched_private_model_and_context_ceiling(
         self, monkeypatch
     ):
