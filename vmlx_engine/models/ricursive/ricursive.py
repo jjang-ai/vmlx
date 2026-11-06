@@ -40,7 +40,14 @@ class RotatingKVCache(_cache.RotatingKVCache):
     def update_and_fetch(self, keys, values):
         if keys.shape[2] == 1 and self.keys is not None and self.offset >= self.max_size and self.keys.shape[2] < self.max_size:
             return self._update_concat(keys, values)
-        return super().update_and_fetch(keys, values)
+        k, v = super().update_and_fetch(keys, values)
+        if keys.shape[2] == 1 and self._idx < k.shape[2] and self.offset > self._idx:
+            # A single-row step past the window writes into the ring and the base class hands back the ring in physical
+            # order. Attend in temporal order instead (oldest first, as a multi-row verify row sees its window), so an AR
+            # step and the verify row for the same token reduce over the same keys in the same order. One window copy per
+            # layer per step.
+            return self._temporal_order(k), self._temporal_order(v)
+        return k, v
 
     def _compacted(self) -> bool:
         """Right after a multi-row forward past the window the buffer holds max_size + S - 1 rows in temporal order, but
@@ -137,6 +144,20 @@ def scale_embedding(h: mx.array, scale: Optional[float]) -> mx.array:
     return h if scale is None else (h.astype(mx.float32) * scale).astype(h.dtype)
 
 
+def _row_exact_window(rows: int) -> bool:
+    """Inside a speculative verify that asked for decode arithmetic (vmlx_engine row_exact_verify_scope) and within its
+    row coverage. Outside vMLX (no scope module) never."""
+    import os
+
+    if os.environ.get("VMLX_RICURSIVE_EXACT_ATTENTION", "1").strip().lower() in ("0", "off", "false", "no"):
+        return False                                    # A/B: the verify window as one multi-row attention call
+    try:
+        from vmlx_engine.metal.row_exact_qmv import row_exact_scope_active, row_exact_scope_rows
+    except ImportError:
+        return False
+    return row_exact_scope_active() and rows <= row_exact_scope_rows()
+
+
 class Attention(nn.Module):
     def __init__(self, args: ModelArgs, layer: int):
         super().__init__()
@@ -182,18 +203,46 @@ class Attention(nn.Module):
             mx.eval(out); parts.append(out)
         return mx.concatenate(parts, axis=2)
 
+    def _exact_rows(self, q, k, v, cache):
+        """A verify window whose every row equals its own decode step: RoPE per row at the row's offset, and each row
+        attends alone over exactly the keys its decode step sees (sliding: the newest ``window`` keys ending at itself,
+        in temporal order; full: every key up to itself, paired where MLX gives a pair the decode kernel)."""
+        from vmlx_engine.metal.row_exact_qmv import attend_rows_in_pairs
+
+        L = q.shape[2]
+        if self.sliding:
+            offset = cache.offset
+            q = mx.concatenate([self._rope(q[:, :, r:r + 1], offset + r) for r in range(L)], axis=2)
+            k = mx.concatenate([self._rope(k[:, :, r:r + 1], offset + r) for r in range(L)], axis=2)
+        keys, values = cache.update_and_fetch(k, v)
+
+        def sdpa(qq, kk, vv, m):
+            return mx.fast.scaled_dot_product_attention(qq, kk, vv, scale=self.scale, mask=m)
+
+        if not self.sliding:
+            return attend_rows_in_pairs(sdpa, q, keys, values)
+        T, rows = keys.shape[2], []
+        for r in range(L):
+            end = T - L + r + 1
+            lo = max(0, end - self.window)
+            rows.append(sdpa(q[:, :, r:r + 1], keys[:, :, lo:end], values[:, :, lo:end], None))
+        return mx.concatenate(rows, axis=2)
+
     def __call__(self, x, value_residual=None, mask=None, cache=None, chunk=None) -> mx.array:
         B, L, _ = x.shape
         q = self.q_proj(x); k = self.k_proj(x); v = self.v_proj(self.value_states(x, value_residual))
         q = self.q_norm(q.reshape(B, L, self.n_heads, self.head_dim)).transpose(0, 2, 1, 3)
         k = self.k_norm(k.reshape(B, L, self.n_kv, self.head_dim)).transpose(0, 2, 1, 3)
         v = v.reshape(B, L, self.n_kv, self.head_dim).transpose(0, 2, 1, 3)
-        if self.sliding:
-            offset = cache.offset if cache is not None else 0
-            q, k = self._rope(q, offset), self._rope(k, offset)
-        if cache is not None:
-            k, v = cache.update_and_fetch(k, v)
-        out = self.attend(q, k, v, mask, chunk).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        if cache is not None and B == 1 and 1 < L and _row_exact_window(L):
+            out = self._exact_rows(q, k, v, cache).transpose(0, 2, 1, 3).reshape(B, L, -1)
+        else:
+            if self.sliding:
+                offset = cache.offset if cache is not None else 0
+                q, k = self._rope(q, offset), self._rope(k, offset)
+            if cache is not None:
+                k, v = cache.update_and_fetch(k, v)
+            out = self.attend(q, k, v, mask, chunk).transpose(0, 2, 1, 3).reshape(B, L, -1)
         if hasattr(self, "g_proj"):
             g = self.g_proj(x)
             if self.gate_full_precision:

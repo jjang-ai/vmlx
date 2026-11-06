@@ -235,6 +235,12 @@ def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
             bits = int(m.group(1))
     except Exception:
         pass
+    # A/B tool: VMLX_DFLASH2_DRAFT_BITS=4|8|16 (16 = keep the stored bf16 weights) overrides the bundle's declaration.
+    import os
+
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_BITS", "").strip()
+    if raw in ("4", "8", "16"):
+        bits = int(raw)
     return target_type, bits
 
 
@@ -327,13 +333,15 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
-            if not stored_quant:
+            if not stored_quant and draft_bits in (4, 8):
                 nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
             if stored_quant:
                 logger.info("DFlash2 drafter loaded with stored quantization: %s (target %s)", stored_quant, target_type or "unknown")
             else:
-                logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
+                logger.info("DFlash2 drafter %s (target %s)",
+                            "kept bf16" if draft_bits not in (4, 8) else "quantized at load: affine %d-bit g64" % draft_bits,
+                            target_type or "unknown")
             if target_type != "glm5_next":
                 from .dflash2_runtime import draft_vocab_segments, install_draft_vocab_cut
 

@@ -183,6 +183,20 @@ def _rebase_drafter_cache(cache: list, offset: int) -> None:
         layer.offset = int(offset)
 
 
+def jangh_dense_lane_enabled() -> bool:
+    """VMLX_JANGH_DENSE_LANE=1: a DFlash2 target's dense JANGH projections run the sorted tile QMM for every row count
+    (jangh.dense.TQLinear.sorted_lane), AR steps included, so verify rows stay bit-equal to AR steps while verify
+    cost stops growing with the width."""
+    return os.environ.get("VMLX_JANGH_DENSE_LANE", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
+def jangh_dense_speed_first() -> bool:
+    """VMLX_DFLASH2_DENSE_SPEED_FIRST=1 (opt-in, A/B): dense JANGH projections keep their default routing inside a
+    verify (1-5 rows on the per-row kernel, 6+ on the sorted tile QMM). Wide verifies get ~flat cost, but a wide verify
+    row no longer equals the AR step bit for bit, so temperature-0 output can change at exact ties with the width."""
+    return os.environ.get("VMLX_DFLASH2_DENSE_SPEED_FIRST", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
 class _TargetAdapter:
     def __init__(self, language_model: Any):
         self._target = language_model
@@ -204,9 +218,13 @@ class _TargetAdapter:
         self.rope_delta = 0
         modules = getattr(language_model, "named_modules", None)
         if callable(modules):
+            lane = jangh_dense_lane_enabled()
+            speed_first = jangh_dense_speed_first()
             for _, module in modules():
                 if getattr(module, "is_jangtq2_dense", False):
-                    module.row_exact_verify = True
+                    module.row_exact_verify = not speed_first
+                    if lane:
+                        module.sorted_lane = True
 
     @property
     def layers(self):

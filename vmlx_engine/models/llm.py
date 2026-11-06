@@ -217,6 +217,7 @@ class MLXLanguageModel:
                     f"install failed: {_wrap_err}"
                 )
 
+            self._install_dflash2_lane_matmul()
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 
@@ -434,6 +435,40 @@ class MLXLanguageModel:
             finish_reason=finish_reason,
             stop_sequence=matched_stop,
         )
+
+    def _install_dflash2_lane_matmul(self) -> None:
+        """A text-only DFlash2 target decodes through verify forwards of 2..32 rows. Route its affine projections
+        through the lane matmul (metal/lane_qmm.py), as the multimodal DFlash2 path does: MLX's quantized_matmul changes
+        kernel with the row count, so on the row-exact verify every extra row cost about one more decode step; the lane
+        kernel costs about the same for 1..16 rows and its per-row bits do not depend on the row count, so AR steps
+        (which run it too) and verify rows still agree. Same policy and opt-out (VMLX_LANE_QMM=0) as the VLM targets;
+        dense JANGH codebook projections (TQLinear) keep their own kernels."""
+        try:
+            from ..speculative import is_dflash2_enabled
+
+            if not (is_dflash2_enabled() and hasattr(self.model, "language_model")):
+                return
+            from .mllm import _dflash_target_lane_qmm
+
+            lm_type = str(getattr(getattr(self.model, "args", None), "model_type", "") or getattr(self.model, "model_type", "") or "")
+            lane, why = _dflash_target_lane_qmm(True, lm_type, False)
+            if not lane:
+                logger.info("DFlash2 target lane matmul: not installed (%s)", why)
+                return
+            import os
+            import time
+
+            from ..metal import lane_qmm
+
+            t0 = time.perf_counter()
+            counts = lane_qmm.install(
+                self.model.language_model,
+                tile=os.environ.get("VMLX_LANE_QMM_TILED", "1").strip() not in ("0", "off", "false", "no"),
+            )
+            logger.info("DFlash2 target lane matmul: %d projections (%d tiled), kept on MLX: %s (%.1fs)",
+                        counts["lane"], counts["tiled"], counts["skipped"] or "none", time.perf_counter() - t0)
+        except Exception as exc:  # noqa: BLE001 - the MLX kernels stay in place
+            logger.warning("DFlash2 lane matmul not installed: %s", exc)
 
     def dflash2_text_lane(self, kwargs: dict | None = None) -> bool:
         """True when this request decodes on the DFlash2 text lane (a text-only target with a bundled DFlash2 drafter).

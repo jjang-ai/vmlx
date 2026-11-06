@@ -58,12 +58,22 @@ class TQLinear(nn.Module):
     # different order). Off by default: wide verify windows of other families
     # take the faster sorted path.
     row_exact_verify = False
+    # Opt-in (a DFlash2 target sets it, see dflash2_runtime.jangh_dense_lane_enabled): EVERY call, one row included,
+    # runs the sorted tile QMM. Its per-row bits do not depend on how many rows share the call (row r of a 2..16-row
+    # call is bit-equal to the 1-row call), so AR steps and verify rows still agree, while a 16-row verify costs about
+    # what 6 rows do instead of growing with every row as the per-row decode kernel does. The dense analogue of the
+    # affine lane matmul (metal/lane_qmm.py): one-row steps get slower, wide verifies get nearly free.
+    sorted_lane = False
 
     def __call__(self, x: mx.array) -> mx.array:
         lead, Kd = x.shape[:-1], x.shape[-1]
         x2 = x.reshape(-1, Kd); T = x2.shape[0]
         idx = mx.zeros((T,), dtype=mx.uint32)
         rot = self.rotation == "hadamard32"
+        if getattr(self, "sorted_lane", False) and K.nax_available():
+            xr = K.h32_rows(x2, x2.dtype) if rot else x2
+            y = K.gather_qmm_sorted(xr, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits)
+            return y.astype(x.dtype).reshape(*lead, self.output_dims)
         exact = getattr(self, "row_exact_verify", False) and _row_exact_rows(T)
         if _rows_enabled() and K.rows_kernel_supports(self.bits) and (T < ROWS_THRESHOLD or exact):
             if T == 1:

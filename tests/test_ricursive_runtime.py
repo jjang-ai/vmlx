@@ -170,3 +170,30 @@ def test_snapshot_shells_do_not_alias_a_rotating_buffer():
             live.update_and_fetch(mx.ones((1, 1, 1, 2)) * v, mx.ones((1, 1, 1, 2)) * v)
         mx.eval(live.keys)
         assert mx.array_equal(snap.keys, before).item(), cls
+
+
+@pytest.mark.parametrize("n,rows", [(5, 4), (29, 6), (45, 5), (70, 9)])
+def test_verify_rows_equal_their_decode_steps(n, rows):
+    """Inside a row-exact verify scope, row r of an L-row forward equals the decode step for the same token, bit for
+    bit, past the window and at lengths that do not divide it (so temp-0 output does not depend on verify widths)."""
+    from vmlx_engine.metal.row_exact_qmv import row_exact_verify_scope
+
+    # Ripple's attention geometry (head_dim 128, GQA 10) in bf16: small toys never reach MLX's row-count kernel
+    # switches (GEMV/GEMM, vector/full SDPA), and this test passed with the exact path disabled.
+    mx.random.seed(4)
+    model = R.Model(R.ModelArgs(hidden_size=512, intermediate_size=1024, num_hidden_layers=5, num_attention_heads=20,
+                                num_key_value_heads=2, head_dim=128, vocab_size=512, sliding_window=WINDOW * 4,
+                                embed_scale=3.7))
+    model.set_dtype(mx.bfloat16)
+    mx.eval(model.parameters())
+    ids = [(i * 13 + 7) % 512 for i in range(n)]
+    nxt = [(i * 11 + 3) % 512 for i in range(rows)]
+    a, b = model.make_cache(), model.make_cache()
+    _prefill(model, ids, a, 7)
+    _prefill(model, ids, b, 7)
+    steps = _decode(model, a, nxt)                                      # (rows, 1, vocab)
+    with row_exact_verify_scope(rows=rows, required=True):
+        verify = model(mx.array([nxt]), cache=b)[0]                     # (rows, vocab)
+    mx.eval(steps, verify)
+    for r in range(rows):
+        assert mx.array_equal(verify[r], steps[r, 0]).item(), r
