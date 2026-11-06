@@ -91,6 +91,14 @@ logger = logging.getLogger(__name__)
 SCHEMA = "dflash2_session_v4"
 LEGACY_SCHEMAS = ("dflash2_session_v1", "dflash2_session_v2", "dflash2_session_v3")
 MAX_CHAIN = 8                   # links before a full entry is written again (bounds restore reads and dependencies)
+# A turn entry may go one link deeper: the next request's admission waits for the turn's write, so the periodic whole
+# rewrite (Ripple JANGH2 at 12K: 1.2 GB, 0.13 s, every 8th entry) lands on the following boundary entry instead, which
+# is written while that request prefills and is never waited on.
+MAX_TURN_CHAIN = MAX_CHAIN + 1
+
+
+def _chain_limit(kind) -> int:
+    return MAX_TURN_CHAIN if kind == "turn" else MAX_CHAIN
 _DELTA_CLASSES = ("KVCache",)   # append-only caches whose state is (keys, values) with the token axis at dim 2
 
 
@@ -371,7 +379,7 @@ class DFlash2SessionSSD:
         if not parent or parent.get("delta_compatible") is False or not parent.get("generation"):
             return None
         n, tokens = int(parent.get("len", 0)), entry["tokens"]
-        if not 0 < n < int(entry["cache_len"]) or n > len(tokens) or int(parent.get("depth", 0)) + 1 > MAX_CHAIN:
+        if not 0 < n < int(entry["cache_len"]) or n > len(tokens) or int(parent.get("depth", 0)) + 1 > _chain_limit(entry.get("kind")):
             return None
         if _parent_key_length(parent, tokens) is None:
             return None
@@ -392,7 +400,7 @@ class DFlash2SessionSSD:
         depth, cur_sig, cur_len, leaf = 0, sig, int(cache_len) if cache_len is not None else None, None
         expected_generation = None
         try:
-            for _ in range(MAX_CHAIN + 2):
+            for _ in range(MAX_TURN_CHAIN + 2):
                 meta = self.store.load(cur_sig, _read_header_meta)
                 if meta is None or (cur_len is not None and int(meta["cache_len"]) != cur_len):
                     return None
@@ -424,7 +432,7 @@ class DFlash2SessionSSD:
         if receipt is not None and not receipt.done():
             return parent
         walked = self._chain_depth(parent["sig"], int(parent["len"]))
-        if (walked is None or walked[0] + 1 > MAX_CHAIN
+        if (walked is None or walked[0] + 1 > _chain_limit(entry.get("kind"))
                 or walked[1].get("generation") != parent["generation"]):
             self.stats["deep_parent_full_writes"] += 1
             logger.info("DFlash2 SSD: parent %d-token entry %s; writing a whole entry", int(parent["len"]),
@@ -694,7 +702,7 @@ class DFlash2SessionSSD:
         cur = meta
         while cur.get("parent"):
             parent = cur["parent"]
-            if len(links) > MAX_CHAIN + 1:
+            if len(links) > MAX_TURN_CHAIN + 1:
                 return None
             n = int(parent["len"])
             key_len = _parent_key_length(parent, prefix)
