@@ -237,3 +237,37 @@ def test_glm_disk_writer_does_not_pin_the_last_snapshot(tmp_path):
         assert ref() is None, "writer thread still references the last snapshot"
     finally:
         disk.close()
+
+
+class _SSD:
+    """Stands in for DFlash2SessionSSD.put: a durable receipt per write."""
+
+    def __init__(self):
+        self.puts = []
+
+    def put(self, entry):
+        self.puts.append(entry["kind"])
+        r = _receipt(True)
+        r.vmlx_ssd_ref = {"sig": entry["kind"], "len": entry["cache_len"], "depth": 0}
+        return r
+
+
+def test_finished_turn_stays_hot_for_an_immediate_continuation_then_releases(monkeypatch):
+    """SSD-only: the finished turn's cache (the live cache, no copy to hold) is served from RAM to a tool continuation
+    sent at once; prefill snapshots stay SSD-only; the idle release drops the hot entry once durable."""
+    monkeypatch.setenv("VMLX_SSD_ONLY_RAM_RELEASE", "1")
+    store = D._DFlash2SessionStore(4)
+    monkeypatch.setattr(D, "_SESSION_STORE", store)
+    monkeypatch.setattr(D, "_SESSION_SSD", _SSD())
+    boundary = {"model_key": "m", "kind": "boundary", "tokens": [1, 2], "cache_len": 2}
+    turn = {"model_key": "m", "kind": "turn", "tokens": [1, 2, 3, 4], "cache_len": 3}
+    rb = D._store_session(boundary)
+    rt = D._store_session(turn)
+    assert [e["kind"] for e in store._entries] == ["turn"]          # the boundary view is SSD-only
+    # the next admission still waits for the turn's write (no buffer shared with the continuation's appends)
+    assert rt.vmlx_lookup_served_from_ram is False and rb.vmlx_lookup_served_from_ram is False
+    assert store.take_matching("m", [1, 2, 3, 4, 5, 6]) is turn       # durable, but taken before the release
+    store.put(dict(turn))
+    store.attach_receipt(store._entries[-1], _receipt(True))
+    assert D.release_durable_session_ram() == (1, 0)                 # idle: back to the model's size
+    assert store._entries == []

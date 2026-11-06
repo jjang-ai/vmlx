@@ -596,8 +596,16 @@ class _DFlash2SessionStore:
     def take_matching(self, model_key: Any, prompt_tokens: list[int]) -> Optional[dict]:
         """Pop and return the entry covering the most cached positions whose
         tokens are a prefix of ``prompt_tokens`` and whose cache leaves a
-        non-empty delta to prefill. Ownership transfers to the caller."""
+        non-empty delta to prefill. Ownership transfers to the caller.
+
+        The match is taken BEFORE durable entries are released: under the SSD-only policy the finished turn's live
+        cache is kept here until it is durable and the engine goes idle (``hot``), so a tool continuation sent at once
+        continues from it instead of reading the whole conversation back from SSD."""
+        taken = self._take(model_key, prompt_tokens)
         self.release_durable()
+        return taken
+
+    def _take(self, model_key: Any, prompt_tokens: list[int]) -> Optional[dict]:
         with self._lock:
             best_i = -1
             best_cached = 0
@@ -761,7 +769,12 @@ def _store_session(entry: dict, ram_only: bool = False, parent: Optional[dict] =
     from .glm_dflash2 import ssd_only_ram_release_enabled
 
     ssd_only = _SESSION_SSD is not None and not ram_only and ssd_only_ram_release_enabled()
-    if not ssd_only:
+    # The finished turn's cache is the live cache itself (no further appends by its owner, so holding it costs no copy):
+    # under SSD-only it stays in RAM until durable AND idle (release_durable runs on the idle timer and after each
+    # lookup), so an immediate tool continuation skips the SSD read. Its receipt still fences the next admission, so
+    # the writer never shares buffers with that request's appends. Snapshot views taken mid-prefill stay SSD-only.
+    hot = ssd_only and entry.get("kind") == "turn"
+    if not ssd_only or hot:
         _SESSION_STORE.put(entry)
     if _SESSION_SSD is not None and not ram_only:
         if parent:
@@ -771,8 +784,9 @@ def _store_session(entry: dict, ram_only: bool = False, parent: Optional[dict] =
             entry.pop("ssd_parent", None)
             if ssd_only:
                 refused = receipt.done() and not (receipt.result() or {}).get("durable")
-                if refused:
+                if refused and not hot:
                     _SESSION_STORE.put(entry)
+                if refused or hot:
                     _SESSION_STORE.attach_receipt(entry, receipt)
                 receipt.vmlx_lookup_served_from_ram = bool(refused)
                 return receipt
