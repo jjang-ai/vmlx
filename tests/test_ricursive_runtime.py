@@ -245,3 +245,22 @@ def test_ssd_turn_entry_stores_sliding_rows_as_a_delta_and_restores_exactly(tmp_
         assert mx.array_equal(_decode(model, live, tail), _decode(model, restored, tail)).item()
     finally:
         ssd.store.close()
+
+
+def test_snapshot_drafter_gap_is_bounded_for_windowed_drafters():
+    """A snapshot keeps the drafter KV plus the hidden-row gap only while the gap fits the drafter's window: past it
+    (Ripple: 51 KB per token) the snapshot carries no drafter state instead of up to ~0.8 GB of hidden rows."""
+    from mlx_lm.models.cache import KVCache
+
+    from vmlx_engine.dflash2_runtime import _snapshot_draft_state
+
+    runtime = types.SimpleNamespace(make_prompt_cache=lambda d: [KVCache()])
+    cached = KVCache()
+    cached.update_and_fetch(mx.zeros((1, 1, 10, 4)), mx.zeros((1, 1, 10, 4)))
+    resume = {"draft_cache": [cached], "draft_hidden_gap": None}
+    small = [mx.zeros((1, 6, 8))]
+    big = [mx.zeros((1, 40, 8))]
+    kept = _snapshot_draft_state(runtime, None, resume, small, 16, 10, None, gap_limit=32)
+    assert kept["draft_cache"] is not None and kept["draft_hidden_gap"].shape[1] == 6
+    dropped = _snapshot_draft_state(runtime, None, resume, big, 50, 10, None, gap_limit=32)
+    assert dropped["draft_cache"] is None and dropped["draft_hidden_gap"] is None and dropped["draft_context"] is None

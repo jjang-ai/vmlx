@@ -1203,8 +1203,11 @@ def _stream_generate_resumable(
                     _pmark(f"seg->{kind}@{cut}({cut - start})")
                     _shells = _clone_cache_shells(target_cache, lambda: runtime.make_prompt_cache(adapter))
                     _pmark("clone")
+                    # A windowed drafter's gap is target hidden rows (5 taps x hidden x 2 B: 51 KB per token on Ripple,
+                    # about the target's own KV per token). Kept only up to the drafter's sliding window (~210 MB);
+                    # past it the snapshot stores no drafter state and a restore rebuilds the drafter from its rows.
                     _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, snapshot_limit,
-                                                    gap_limit=None if _all_sliding else hidden_limit)
+                                                    gap_limit=None if _all_sliding else draft.config.sliding_window - 1)
                     _pmark("draft_state")
                     start = cut
                     if kind != "chunk":
