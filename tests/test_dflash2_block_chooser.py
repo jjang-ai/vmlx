@@ -162,6 +162,7 @@ def test_ar_wins_as_soon_as_it_is_predicted_faster(monkeypatch):
     _ar_burst(c)
     spec_rate = c.expected_tokens(c._best_width()) / c._cost_of(c._best_width())
     _ar_burst(c, per_token=1.0 / (spec_rate * 1.03))        # AR only 3 % faster
+    c.ar_since_probe = 0                                     # a probe this close costs almost nothing: not what is tested
     assert c.next_action()[0] == "ar"
     monkeypatch.setenv("VMLX_DFLASH2_CHOOSER_LEGACY", "1")   # the old 5 % hysteresis is the A/B control
     legacy = _BlockChooser((5, 8, 16), cost={5: 0.092, 8: 0.098, 16: 0.104, "ar": 1.0 / (spec_rate * 1.03), "warm": {5, 8, 16, "ar"}})
@@ -210,26 +211,71 @@ def test_retiming_stays_inside_the_time_budget():
     assert 0 < spent[32] + spent[16] and (spent[32] + spent[16]) / total < 0.02
 
 
-def test_probe_gap_doubles_while_verify_loses_and_resets_when_it_wins():
-    shared = {5: 0.150, 8: 0.200, 16: 0.300, "ar": 0.060, "warm": {5, 8, 16, "ar"}}
-    c = _BlockChooser((5, 8, 16), cost=shared)
-    c.observe(5, 1, 0.150)                                   # the request's first cycle: nothing accepted
-    c._request_ar_pending = False
-    gaps, since = [], 0
-    while len(gaps) < 5:
+def _ar_until_probe(c, per_token):
+    """AR tokens run before the chooser probes verify again."""
+    since = 0
+    while True:
         mode, n = c.next_action()
-        if mode == "ar":
-            c.observe_ar(n * 0.060, n)
-            since += n
+        if mode != "ar":
+            return since
+        c.observe_ar(n * per_token, n)
+        since += n
+
+
+def test_probes_stay_inside_their_time_budget_on_text_verify_cannot_win():
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    ar_s = lost_s = 0.0
+    for _ in range(200):
+        since = _ar_until_probe(c, 0.100)
+        ar_s += since * 0.100
+        lost_s += 0.170 - 1.0 * 0.100                        # the probe accepts nothing
+        assert c.width == 5
+        c.observe(c.width, 1, 0.170, after_ar=True)
+    assert lost_s / ar_s <= c.ar_probe_budget * 1.25          # the first probes' estimate still holds the prior
+
+
+def test_a_bad_start_does_not_lock_a_reply_into_ar():
+    """Three failed cycles put AR ahead; the same text then turns draftable, and verify is back within a few bursts."""
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.120, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    for _ in range(3):
+        c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    assert c.next_action()[0] == "ar"
+    tokens = 0
+    for _ in range(40):
+        mode, n = c.next_action()
+        if mode == "spec":
+            c.observe(c.width, 3, 0.170, after_ar=True)      # two drafts accepted
+            tokens += 3
         else:
-            gaps.append(since)
-            since = 0
-            c.observe(5, 1, 0.150, after_ar=True)
-    assert gaps == [24, 48, 96, 96, 96]
-    assert c._ar_gap == 96
-    for _ in range(30):
-        c.observe(c.width, c.width, 0.020)                   # text turned easy: verify is predicted to win
-    assert c.next_action()[0] == "spec" and c._ar_gap == 24
+            c.observe_ar(n * 0.120, n)
+            tokens += n
+        if c.expected_tokens(c.width) / c.cost[c.width] >= 1.0 / c.cost["ar"]:
+            break
+    assert tokens <= 32
+
+
+def test_a_probe_runs_the_best_width_not_a_pending_retime():
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    c.width = 32
+    _ar_until_probe(c, 0.100)
+    assert c.width == 5
+
+
+def test_legacy_keeps_the_fixed_probe_gap(monkeypatch):
+    monkeypatch.setenv("VMLX_DFLASH2_CHOOSER_LEGACY", "1")
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    assert _ar_until_probe(c, 0.100) >= c.ar_probe_every
 
 
 def test_easy_text_skips_the_requests_ar_measurement():

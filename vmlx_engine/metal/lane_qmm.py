@@ -234,6 +234,70 @@ _MATMUL_BODY = """
 """
 
 
+# One row without the matrix unit (an AR step): the unit's smallest tile is 16 rows, so a one-row call pays for all 16 and
+# a row-sum dispatch. Same weight and pair layouts, no extra memory, K slices as the tile. Not bit-identical to the tile
+# (another summation order), so a one-row step need not equal a verify row at the last bit; families in ONE_ROW_FAMILIES.
+_ONE_ROW_BODY = """
+  constexpr int GROUPS = K / G;
+  constexpr int SRC_WORDS = G * BITS / 32;
+  constexpr uint MASK = (1u << BITS) - 1u;
+  const uint lane = thread_index_in_simdgroup;
+  const uint slice = simdgroup_index_in_threadgroup;
+  const int tile = threadgroup_position_in_grid.x;
+  const int col = tile * COLS + int(lane);
+  const int g_first = (int(slice) * GROUPS) / SK;
+  const int g_stop = ((int(slice) + 1) * GROUPS) / SK;
+  const device uint* words = (const device uint*)Wq;
+  const device ushort* pairs = (const device ushort*)SBt;
+  float acc = 0.0f;
+  if (N % COLS == 0 || col < N) {
+    for (int g = g_first; g < g_stop; g++) {
+      const device uint* from = TILED ? words + ((int64_t(tile) * GROUPS + g) * COLS + lane) * SRC_WORDS
+                                      : words + int64_t(col) * (K * BITS / 32) + g * SRC_WORDS;
+      uint src[SRC_WORDS];
+      _Pragma("clang loop unroll(full)")
+      for (int i = 0; i < SRC_WORDS; i++) {
+        src[i] = from[i];
+      }
+      const device bfloat* xg = (const device bfloat*)X + g * G;
+      float product = 0.0f;
+      float rowsum = 0.0f;
+      _Pragma("clang loop unroll(full)")
+      for (int i = 0; i < G; i++) {
+        const int bit = i * BITS;
+        const int w = bit / 32;
+        const int shift = bit % 32;
+        uint code = src[w] >> shift;
+        if (shift + BITS > 32) {
+          code |= src[w + 1] << (32 - shift);
+        }
+        const float xi = float(xg[i]);
+        rowsum += xi;
+        product += xi * float(code & MASK);
+      }
+      const int64_t at = (int64_t(g) * N + col) * 2;
+      acc = fma(float(as_type<bfloat>(pairs[at])), product, fma(float(as_type<bfloat>(pairs[at + 1])), rowsum, acc));
+    }
+  }
+  // Add the K slices in slice order and store.
+  threadgroup float spill[(SK > 1 ? SK - 1 : 1) * COLS];
+  if constexpr (SK > 1) {
+    if (slice > 0) {
+      spill[(slice - 1) * COLS + lane] = acc;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (slice == 0) {
+      _Pragma("clang loop unroll(full)")
+      for (int s = 0; s < SK - 1; s++) {
+        acc += spill[s * COLS + lane];
+      }
+    }
+  }
+  if (slice == 0 && col < N) {
+    Y[col] = static_cast<bfloat>(acc);
+  }
+"""
+
 def _spread_masks(bits: int) -> list[int]:
     """Masks of the code-spreading steps in the matmul kernel for ``bits``-bit codes widened to nibbles (2, 3 bits)
     or bytes (5, 6, 8): at level l, blocks of 2 * span codes (span = codes per word >> (l + 1)) sit at a stride of
@@ -273,6 +337,9 @@ def _compiled(kind: str, consts: dict):
                 if kind == "rowsum":
                     kern = mx.fast.metal_kernel(name=f"vmlx_lane_rowsum_{tag}", input_names=["X", "rows"],
                                                 output_names=["rowsum"], source=_source(_ROWSUM_BODY, consts))
+                elif kind == "one_row":
+                    kern = mx.fast.metal_kernel(name=f"vmlx_lane_one_row_{tag}", input_names=["X", "Wq", "SBt"],
+                                                output_names=["Y"], source=_source(_ONE_ROW_BODY, consts))
                 else:
                     kern = mx.fast.metal_kernel(name=f"vmlx_lane_matmul_{tag}",
                                                 input_names=["X", "rowsum", "Wq", "SBt", "rows"],
@@ -405,6 +472,22 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int, grou
     return y.reshape(*lead, N)
 
 
+def one_row_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int, group: int = 64,
+                   tiled: bool = False) -> mx.array:
+    """One bf16 row (..., K) times the packed ``weight``, with no matrix unit and no row-sum dispatch."""
+    K = int(x.shape[-1])
+    N = int(weight.shape[0])
+    key = ("one_row", N, K, bits, group, bool(tiled))
+    launch = _LAUNCHES.get(key)
+    if launch is None:
+        sk = split_k(N, K)
+        kernel = _compiled("one_row", {"N": N, "K": K, "G": group, "BITS": bits, "COLS": COLS, "SK": sk, "TILED": int(tiled)})
+        launch = _LAUNCHES[key] = (kernel, dict(grid=(-(-N // COLS) * COLS * sk, 1, 1), threadgroup=(COLS * sk, 1, 1),
+                                                output_shapes=[(N,)], output_dtypes=[mx.bfloat16]))
+    y = launch[0](inputs=[x.reshape(K), weight, sbt], **launch[1])[0]
+    return y.reshape(*x.shape[:-1], N)
+
+
 # -- routing a model's projections -------------------------------------------------------------------------------
 #
 # Installed per module by class swap, never by patching nn.QuantizedLinear.__call__: drafters and every other model
@@ -419,7 +502,9 @@ class LaneQuantizedLinear(nn.QuantizedLinear):
         for d in x.shape[:-1]:
             rows *= int(d)
         tiled = getattr(self, "_lane_tiled", False)
-        if rows <= MAX_ROWS and x.dtype == mx.bfloat16:
+        if rows == 1 and x.dtype == mx.bfloat16 and getattr(self, "_lane_one_row", False):
+            y = one_row_matmul(x, self["weight"], self._lane_sbt, bits=self.bits, group=self.group_size, tiled=tiled)
+        elif rows <= MAX_ROWS and x.dtype == mx.bfloat16:
             y = lane_matmul(x, self["weight"], self._lane_sbt, bits=self.bits, group=self.group_size, tiled=tiled)
         else:
             weight = untile_weight(self["weight"], bits=self.bits, group=self.group_size) if tiled else self["weight"]
@@ -448,6 +533,19 @@ def _count(table: dict, key: str) -> None:
     table[key] = table.get(key, 0) + 1
 
 
+# Target families whose AR steps take the one-row kernel; VMLX_LANE_ONE_ROW=1|0 overrides the default both ways.
+ONE_ROW_FAMILIES = frozenset({"ricursive"})
+
+
+def _one_row_enabled(model) -> bool:
+    raw = os.environ.get("VMLX_LANE_ONE_ROW", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return getattr(model, "model_type", None) in ONE_ROW_FAMILIES
+
+
 def install(model, *, tile: bool = True) -> dict:
     """Route ``model``'s plain affine QuantizedLinear layers through the lane matmul.
 
@@ -458,6 +556,7 @@ def install(model, *, tile: bool = True) -> dict:
     counts = {"lane": 0, "tiled": 0, "skipped": {}}
     keep_vocab = os.environ.get("VMLX_LANE_VOCAB_HEAD", "0") == "1"
     keep_scales = os.environ.get("VMLX_LANE_KEEP_SCALES", "0") == "1"
+    one_row = _one_row_enabled(model)
     pending, pending_bytes = [], 0
     for _name, module in model.named_modules():
         if not isinstance(module, nn.QuantizedLinear) or isinstance(module, LaneQuantizedLinear):
@@ -490,6 +589,8 @@ def install(model, *, tile: bool = True) -> dict:
             pending.append(module["weight"])
             pending_bytes += 2 * w.nbytes  # the old layout lives until this batch is evaluated
             counts["tiled"] += 1
+        if one_row:
+            object.__setattr__(module, "_lane_one_row", True)
         module.__class__ = LaneQuantizedLinear
         counts["lane"] += 1
         if pending_bytes >= 2 * 1024**3:

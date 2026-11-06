@@ -1798,8 +1798,9 @@ class _BlockChooser:
         every width ran each one twice on the first reply after every load (~4 s on hard text).
       * The other widths are re-timed from a budget of decode time (``retime_budget``), not every ``probe_every`` cycles.
       * AR wins as soon as it is predicted faster (``ar_margin`` used to favour verify by 5 %).
-      * A probe cycle out of AR also makes the drafter ingest every row of the burst, so the probe gap doubles
-        (``ar_probe_every`` .. ``ar_probe_max``) while probes keep losing and resets when verify wins.
+      * A probe out of AR runs once what it is expected to lose fits ``ar_probe_budget`` of the AR time since the last one:
+        cheap while verify is nearly level with AR, so a few bad cycles at the start of a reply cannot lock it into AR for
+        the rest of it, and rare while verify is far behind.
       * A request measures AR only when the comparison is close (``ar_skip_ratio``): the burst cost easy text ~0.3 s.
     VMLX_DFLASH2_CHOOSER_LEGACY=1 restores all five (A/B control).
     """
@@ -1810,7 +1811,7 @@ class _BlockChooser:
     prior_p = 0.7
     ar_margin = 0.0
     ar_probe_every = 24
-    ar_probe_max = 96
+    ar_probe_budget = 0.03
     ar_burst = 8
     ar_alpha = 0.3
     ar_skip_ratio = 1.5
@@ -1834,11 +1835,15 @@ class _BlockChooser:
         # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
         self.legacy = os.environ.get("VMLX_DFLASH2_CHOOSER_LEGACY", "0").strip().lower() in ("1", "on", "true", "yes")
         if self.legacy:
-            self.ar_margin, self.ar_probe_max, self.ar_skip_ratio, self.retime_budget = 0.05, self.ar_probe_every, 0.0, 0.0
+            self.ar_margin, self.ar_probe_budget, self.ar_skip_ratio, self.retime_budget = 0.05, 0.0, 0.0, 0.0
+        else:
+            try:
+                self.ar_probe_budget = float(os.environ.get("VMLX_DFLASH2_AR_PROBE_BUDGET", self.ar_probe_budget))
+            except ValueError:
+                pass
         # Nothing measured yet (first request after a load): the width below the widest still observes the positions that
         # matter and costs half as much on a row-growing verify.
         self.width = (widths[-2] if len(widths) > 2 and not self.legacy else widths[-1]) if first_widest else widths[0]
-        self._ar_gap = self.ar_probe_every
         try:
             # A/B lever: VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO=0 restores the unconditional widest start.
             self.first_widest_cost_ratio = float(os.environ.get("VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO", self.first_widest_cost_ratio))
@@ -1944,11 +1949,15 @@ class _BlockChooser:
             return ("ar", self.ar_burst)   # re-measure a possibly stale AR cost
         if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar:
             self.ar_since_probe = 0
-            self._ar_gap = self.ar_probe_every
             return ("spec", self.width)
-        if self.ar_since_probe >= self._ar_gap:
+        if self.ar_probe_budget > 0:
+            expected_loss = self._cost_of(best) - self.expected_tokens(best) * t_ar
+            if self.ar_since_probe * t_ar * self.ar_probe_budget >= expected_loss:
+                self.ar_since_probe = 0
+                self.width = best          # a re-timing of another width waits for a cycle that is winning anyway
+                return ("spec", self.width)
+        elif self.ar_since_probe >= self.ar_probe_every:
             self.ar_since_probe = 0
-            self._ar_gap = min(self._ar_gap * 2, self.ar_probe_max)
             return ("spec", self.width)
         return ("ar", self.ar_burst)
 
