@@ -666,3 +666,33 @@ def test_same_token_key_with_pending_final_token_keeps_parent_and_descendant(ssd
     assert got is not None and got["cache_len"] == 8
     assert ssd.stats["chain_misses"] == 0
     assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+def test_chain_continues_while_deltas_stay_below_a_whole_entry_then_rebases(ssd):
+    """Amortized rebase: past MAX_CHAIN a delta is still written while the chain's delta bytes are below one whole
+    entry, up to MAX_CHAIN_HARD links (a fixed depth rewrote a 129K-token conversation every 8 entries). A deep chain
+    restores bit-identical, and the hard limit still forces a whole entry."""
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN, MAX_CHAIN_HARD
+
+    kv = KVCache()
+    kv.update_and_fetch(mx.random.normal((1, 2, 512, 64)), mx.random.normal((1, 2, 512, 64)))   # big base, small deltas
+    tokens = [IM_START] + [10 + i for i in range(512 + 4 * (MAX_CHAIN_HARD + 2))]
+    receipts, prev, n = [], None, 512
+    for i in range(MAX_CHAIN_HARD + 2):
+        entry = {"kind": "chunk", "tokens": tokens[:n], "cache_len": n, "target_cache": [kv]}
+        if prev is not None:
+            entry["ssd_parent"] = dict(prev.vmlx_ssd_ref, receipt=prev)
+        prev = ssd.put(entry)
+        assert ssd.flush() and prev.result()["durable"]
+        receipts.append(prev)
+        kv.update_and_fetch(mx.random.normal((1, 2, 4, 64)), mx.random.normal((1, 2, 4, 64)))
+        n += 4
+    depths = [r.vmlx_ssd_ref["depth"] for r in receipts]
+    assert depths[MAX_CHAIN + 1] == MAX_CHAIN + 1                    # past the old fixed depth: still a delta
+    assert max(depths) == MAX_CHAIN_HARD and depths[MAX_CHAIN_HARD + 1] == 0   # the hard limit rebases
+    deep = receipts[MAX_CHAIN_HARD]
+    got = ssd.take_matching(tokens[:deep.vmlx_ssd_ref["len"]] + [IM_START, 3], im_start_id=IM_START, eos_ids=[IM_END],
+                            make_target=lambda: [KVCache()], make_draft=lambda: [])
+    assert got is not None and got["cache_len"] == deep.vmlx_ssd_ref["len"] and ssd.stats["chain_misses"] == 0
+    rows = got["cache_len"]
+    assert mx.array_equal(got["target_cache"][0].state[0], kv.state[0][:, :, :rows]).item()
