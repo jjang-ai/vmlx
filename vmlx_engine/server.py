@@ -1767,6 +1767,64 @@ def _template_keeps_prior_reasoning(request_thinking: bool) -> bool:
     return keeps
 
 
+_REASONING_SEPARATOR_PROBE: dict = {}
+
+
+def _template_owns_reasoning_separators() -> bool:
+    """Whether the loaded template wraps an earlier turn's reasoning as ``<think>\n`` + reasoning + ``\n</think>``
+    WITHOUT trimming it (Ripple's vendor template). Read-only render probe, cached per template.
+
+    Streamed reasoning keeps the separator newlines the model generated (the non-streamed parser strips them). A client
+    that sends streamed reasoning back then rendered ``<think>\n\n...\n\n</think>``: the prior turn no longer matched
+    the tokens the model generated, so the turn-end session-cache entry could never be reused and every follow-up
+    re-prefilled the previous assistant turn. Templates that trim reasoning themselves (Qwen3.5/3.8, GLM) or render
+    it differently answer False and are left alone."""
+    tok = getattr(_engine, "tokenizer", None) if _engine is not None else None
+    template = getattr(tok, "chat_template", None)
+    if tok is None or not isinstance(template, str) or "reasoning_content" not in template:
+        return False
+    key = (id(tok), hash(template))
+    cached = _REASONING_SEPARATOR_PROBE.get(key)
+    if cached is not None:
+        return cached
+    marker = "vmlxreasoningseparatorprobe"
+
+    def render(rc: str) -> str:
+        probe = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b", "reasoning_content": rc},
+                 {"role": "user", "content": "c"}]
+        out = tok.apply_chat_template(probe, tokenize=False, add_generation_prompt=True)
+        return out if isinstance(out, str) else ""
+
+    owns = False
+    try:
+        owns = (f"<think>\n{marker}\n</think>" in render(marker)
+                and f"<think>\n\n{marker}\n\n</think>" in render(f"\n{marker}\n"))
+    except Exception as exc:  # noqa: BLE001 - read-only probe; a failure changes nothing
+        logger.debug("reasoning-separator template probe failed: %s", exc)
+    _REASONING_SEPARATOR_PROBE[key] = owns
+    if owns:
+        logger.info("Chat template owns the reasoning separators: history reasoning drops one leading/trailing newline")
+    return owns
+
+
+def _normalize_template_reasoning_separators(messages: list) -> list:
+    """Drop exactly one leading and one trailing newline from prior reasoning when the template adds them itself
+    (_template_owns_reasoning_separators), so streamed and non-streamed histories render the generated tokens."""
+    if not messages or not _template_owns_reasoning_separators():
+        return messages
+    out = []
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            for field in ("reasoning_content", "reasoning"):
+                rc = m.get(field)
+                if isinstance(rc, str) and (rc.startswith("\n") or rc.endswith("\n")):
+                    m = dict(m)
+                    m[field] = rc[1:] if rc.startswith("\n") else rc
+                    m[field] = m[field][:-1] if m[field].endswith("\n") else m[field]
+        out.append(m)
+    return out
+
+
 def _strip_prior_reasoning_for_thinking_off(
     messages: list[dict],
 ) -> list[dict]:
@@ -18355,6 +18413,8 @@ async def create_anthropic_message(
     )
     if _explicit_thinking_off and messages_dump:
         messages_dump = _strip_prior_reasoning_for_thinking_off(messages_dump)
+    else:
+        messages_dump = _normalize_template_reasoning_separators(messages_dump)
 
     # Anthropic builds its own message dump; without this drop a replayed
     # thinking-only assistant turn 500s on strict templates while the same
@@ -19355,6 +19415,8 @@ async def ollama_chat(fastapi_request: Request):
     )
     if _explicit_thinking_off and messages:
         messages = _strip_prior_reasoning_for_thinking_off(messages)
+    else:
+        messages = _normalize_template_reasoning_separators(messages)
 
     # Streaming Ollama builds its own message list; content:null becomes ""
     # downstream and 500s on strict templates while stream:false (which
@@ -21587,6 +21649,8 @@ async def create_chat_completion(
     )
     if _explicit_thinking_off and messages:
         messages = _strip_prior_reasoning_for_thinking_off(messages)
+    else:
+        messages = _normalize_template_reasoning_separators(messages)
 
     # Prepare kwargs. Preserve explicit zero for validation/error paths:
     # request.max_tokens if request.max_tokens is not None else None
@@ -25147,6 +25211,8 @@ async def create_response(
     )
     if _explicit_thinking_off and messages:
         messages = _strip_prior_reasoning_for_thinking_off(messages)
+    else:
+        messages = _normalize_template_reasoning_separators(messages)
 
     # Build kwargs
     chat_kwargs = {

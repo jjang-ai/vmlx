@@ -76,6 +76,27 @@ def test_multi_token_chunks_count_tokens_and_carry_the_prefill_receipt(monkeypat
     asyncio.run(run())
 
 
+def test_max_tokens_is_the_lanes_to_enforce(monkeypatch):
+    """A chunk that reaches max_tokens mid-stream must not end it: the lane's terminal chunk (finish reason, write
+    receipt) follows. Cutting early returned finish_reason None (HTTP 502) and dropped the session write."""
+    monkeypatch.setattr(simple_mod, "_dflash2_enabled", lambda: True)
+
+    async def run():
+        receipt = Future()
+        receipt.set_result({"outcome": "stored", "durable": True})
+        chunks = [
+            SimpleNamespace(text="a b c d", finished=False, finish_reason=None, completion_tokens=4, prompt_tokens=9),
+            SimpleNamespace(text="", finished=True, finish_reason="length", completion_tokens=4, prompt_tokens=9,
+                            tokens=[1, 2, 3, 4], persistence_future=receipt),
+        ]
+        engine = _engine(_TextLaneModel([chunks]))
+        outs = [o async for o in engine.stream_generate("p", max_tokens=4)]
+        assert len(outs) == 2 and not outs[0].finished
+        assert outs[-1].finished and outs[-1].finish_reason == "length" and outs[-1].completion_tokens == 4
+
+    asyncio.run(run())
+
+
 def test_terminal_publishes_before_the_session_write_and_the_next_request_waits(monkeypatch):
     monkeypatch.setattr(simple_mod, "_dflash2_enabled", lambda: True)
     monkeypatch.delenv("VMLX_TERMINAL_PUBLISH", raising=False)

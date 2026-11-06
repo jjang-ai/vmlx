@@ -978,20 +978,22 @@ class SimpleEngine(BaseEngine):
                         break
 
                     prompt_tokens = int(getattr(chunk, "prompt_tokens", 0) or 0) or prompt_tokens
-                    # The DFlash2 text lane reports a cumulative count (several tokens per chunk); AR chunks are one each.
-                    completion_tokens = max(
-                        completion_tokens + (0 if getattr(chunk, "completion_tokens", 0) else 1),
-                        int(getattr(chunk, "completion_tokens", 0) or 0),
-                    )
+                    # The DFlash2 text lane reports a cumulative count (several tokens per chunk) and enforces
+                    # max_tokens itself: its own terminal chunk (finish reason, session-cache write) must be the one
+                    # that ends the stream. AR chunks are one token each and are cut here.
+                    lane_count = int(getattr(chunk, "completion_tokens", 0) or 0)
+                    completion_tokens = max(completion_tokens + (0 if lane_count else 1), lane_count)
                     new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
                     accumulated_text += new_text
 
-                    finished = (
-                        getattr(chunk, "finished", False) or completion_tokens >= max_tokens
+                    finished = getattr(chunk, "finished", False) or (
+                        not lane_count and completion_tokens >= max_tokens
                     )
                     finish_reason = None
                     if finished:
-                        finish_reason = getattr(chunk, "finish_reason", "stop")
+                        finish_reason = getattr(chunk, "finish_reason", None) or (
+                            "length" if completion_tokens >= max_tokens else "stop"
+                        )
                         if prompt_tokens == 0:
                             prompt_tokens = _count_llm_prompt_tokens(
                                 getattr(self._model, "tokenizer", None),
