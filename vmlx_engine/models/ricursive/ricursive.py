@@ -49,24 +49,31 @@ class RotatingKVCache(_cache.RotatingKVCache):
             return self._temporal_order(k), self._temporal_order(v)
         return k, v
 
-    def _compacted(self) -> bool:
-        """Right after a multi-row forward past the window the buffer holds max_size + S - 1 rows in temporal order, but
-        no later forward reads more than the newest max_size of them: a single row trims to max_size and rotates, a
-        multi-row append keeps max_size - 1. State, snapshots and the SSD tier then carry exactly max_size rows with
-        _idx = max_size, which every continuation treats exactly like the live buffer (same rows, same physical order
-        after the next write, so restores stay bit-exact). A 2048-row prefill chunk otherwise stored 3x the window."""
-        k = self.keys
-        return (k is not None and self.offset >= self.max_size and k.shape[2] > self.max_size
-                and self._idx == k.shape[2])
+    # The SSD session tier may store this layer as a delta (only the rows added since its parent entry) because state
+    # is always the window in temporal order ending at ``offset`` (dflash2_session_disk reads this flag).
+    _vmlx_temporal_state = True
+
+    def _window(self):
+        """(keys, values, rows) of the state: views, never the buffer objects (a single-row update rewrites those by
+        slice assignment for every holder, so a snapshot would change under its owner), in temporal order, and at most
+        max_size rows. After a multi-row forward the buffer holds max_size + S - 1 rows, but no later forward reads
+        more than the newest max_size; a ring past its window is unrolled (one window copy per snapshot). A restored
+        window with _idx = max_size continues exactly like the live ring: the next single row overwrites the oldest row
+        and attends in temporal order (update_and_fetch), a multi-row append keeps the newest max_size - 1."""
+        k, v = self.keys, self.values
+        if self.offset < k.shape[2]:
+            return k[..., : self.offset, :], v[..., : self.offset, :], self.offset
+        if self._idx != k.shape[2]:
+            k, v = self._temporal_order(k), self._temporal_order(v)
+        n = min(k.shape[2], self.max_size)
+        return k[..., -n:, :], v[..., -n:, :], n
 
     @property
     def state(self):
-        keys, values = _cache.RotatingKVCache.state.fget(self)
-        # Always fresh views, never the buffer object itself: past the window the base class returns self.keys, and a
-        # single-row update writes it by slice assignment, which rewrites that array object for every holder. A
-        # snapshot (RAM session entry, or an SSD entry still queued for its writer) then changed under its owner.
-        n = self.max_size if self._compacted() else keys.shape[2]
-        return keys[..., -n:, :], values[..., -n:, :]
+        if self.keys is None:
+            return _cache.RotatingKVCache.state.fget(self)
+        k, v, _ = self._window()
+        return k, v
 
     @state.setter
     def state(self, v):
@@ -75,8 +82,8 @@ class RotatingKVCache(_cache.RotatingKVCache):
     @property
     def meta_state(self):
         meta = tuple(_cache.RotatingKVCache.meta_state.fget(self))
-        if self._compacted():
-            meta = meta[:3] + (str(self.max_size),) + meta[4:]
+        if self.keys is not None and self.offset >= self.keys.shape[2]:
+            meta = meta[:3] + (str(min(self.keys.shape[2], self.max_size)),) + meta[4:]
         return meta
 
     @meta_state.setter

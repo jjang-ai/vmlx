@@ -167,15 +167,38 @@ def _delta_layer(c, state, base: int) -> bool:
             and int(getattr(c, "offset", -1)) == int(state[0].shape[2]))
 
 
+def _rot_span(c, state):
+    """(start, end) absolute token positions of a temporal sliding-window state (a cache that sets
+    ``_vmlx_temporal_state``: its state is the window in temporal order ending at ``offset``), else None."""
+    if not getattr(c, "_vmlx_temporal_state", False) or not isinstance(state, (list, tuple)) or len(state) != 2:
+        return None
+    if any(a is None or a.ndim != 4 for a in state):
+        return None
+    end = int(getattr(c, "offset", -1))
+    rows = int(state[0].shape[2])
+    return (end - rows, end) if end >= rows else None
+
+
 def _pack(prefix: str, caches: list, arrays: dict, layers: list, base: int = 0) -> None:
-    """base > 0: KV layers keep only rows [base, offset) (copied, see DELTA ENTRIES); other layers whole."""
+    """base > 0: KV layers keep only rows [base, offset) (copied, see DELTA ENTRIES); other layers whole.
+
+    Temporal sliding windows (Ripple's rotating layers) record their absolute span and, when the parent's end lies
+    inside the window, keep only rows [base, offset): a turn entry then writes the reply's rows instead of every
+    layer's whole 1024-row window (64 layers x 4 KB per row = 268 MB per entry on Ripple)."""
     for i, c in enumerate(caches):
         state = list(c.state) if isinstance(c.state, (list, tuple)) else [c.state]
         nones = []
         delta = _delta_layer(c, state, base)
+        span = _rot_span(c, state)
+        cut = 0
+        if span is not None and base > 0 and span[0] < base < span[1]:
+            cut = base - span[0]
+            span = (base, span[1])
         for j, a in enumerate(state):
             if a is None:
                 nones.append(j)
+            elif cut:
+                arrays[f"{prefix}{i}.{j}"] = _detached(a[:, :, cut:, :])
             else:
                 arrays[f"{prefix}{i}.{j}"] = _detached(a[:, :, base:, :]) if delta else a
         meta = None
@@ -186,6 +209,10 @@ def _pack(prefix: str, caches: list, arrays: dict, layers: list, base: int = 0) 
                 "tuple": isinstance(c.state, (list, tuple)), "meta": meta}
         if delta:
             info["delta"] = int(base)
+        if span is not None:
+            info["rot"] = [int(span[0]), int(span[1])]
+            if cut:
+                info["rot_delta"] = True
         layers.append(info)
 
 
@@ -222,6 +249,14 @@ def _assemble_kv(pieces: list, step: int):
     return out, n
 
 
+def mx_concat(pieces: list):
+    import mlx.core as mx
+
+    out = pieces[0] if len(pieces) == 1 else mx.concatenate(pieces, axis=2)
+    mx.eval(out)
+    return out
+
+
 def _unpack_chain(prefix: str, key: str, factory: Callable[[], list], links: list) -> Optional[list]:
     """Rebuild a cache list from a root-first chain of (arrays, meta) links: append-only KV layers concatenate the
     root's rows and every delta; every other layer comes whole from the leaf. Layout mismatches are misses."""
@@ -254,6 +289,32 @@ def _unpack_chain(prefix: str, key: str, factory: Callable[[], list], links: lis
             continue
         if "delta" in info:
             return None
+        if info.get("rot_delta"):
+            # A temporal sliding window stored as the rows since its parent: walk back through the chain, newest link
+            # first, until the window the leaf held (its meta row count) is covered; spans must meet exactly.
+            meta_vals = list(info["meta"]) if info["meta"] is not None else []
+            rows = int(meta_vals[3]) if len(meta_vals) > 3 else 0
+            end = int(info["rot"][1])
+            need = end - rows
+            pk, pv, cur = [], [], end
+            for arrays, meta in reversed(links):
+                linfo = meta[key][i]
+                span = linfo.get("rot")
+                if linfo["cls"] != info["cls"] or span is None or int(span[1]) != cur:
+                    return None
+                s0 = int(span[0])
+                k, v = arrays[f"{prefix}{i}.0"], arrays[f"{prefix}{i}.1"]
+                skip = max(0, need - s0)
+                pk.insert(0, k[:, :, skip:, :]); pv.insert(0, v[:, :, skip:, :])
+                cur = s0
+                if s0 <= need:
+                    break
+            if cur > need:
+                return None
+            dst.state = [mx_concat(pk), mx_concat(pv)]
+            if info["meta"] is not None:
+                dst.meta_state = tuple(info["meta"])
+            continue
         state = [None if j in info["none"] else leaf_arrays[f"{prefix}{i}.{j}"] for j in range(info["n"])]
         dst.state = state if info["tuple"] else state[0]
         if info["meta"] is not None:
@@ -434,7 +495,7 @@ class DFlash2SessionSSD:
         # by a WHOLE entry: entries naming it as their parent then walk a shorter chain, never a longer one.
         parent = None if self._stored(sig) else self._usable_parent(entry)
         _pack("t", entry["target_cache"], arrays, target_layers, int(parent["len"]) if parent else 0)
-        if parent is not None and not any("delta" in info for info in target_layers):
+        if parent is not None and not any("delta" in info or info.get("rot_delta") for info in target_layers):
             parent = None                       # no append-only layer used it: a whole entry, no dependency
         draft_layers = None
         if entry.get("draft_cache") is not None:

@@ -197,3 +197,51 @@ def test_verify_rows_equal_their_decode_steps(n, rows):
     mx.eval(steps, verify)
     for r in range(rows):
         assert mx.array_equal(verify[r], steps[r, 0]).item(), r
+
+
+@pytest.mark.parametrize("prefix_len,new_rows", [(30, 5), (19, 3), (30, 12)])
+def test_ssd_turn_entry_stores_sliding_rows_as_a_delta_and_restores_exactly(tmp_path, prefix_len, new_rows):
+    """Boundary entry, then a turn entry on it: the sliding windows go to SSD as only the rows added since the boundary
+    (when the boundary's end is inside the window), and the restored cache decodes bit-equal to the live one."""
+    from vmlx_engine.dflash2_runtime import _clone_cache_shells
+    from vmlx_engine.dflash2_session_disk import DFlash2SessionSSD
+
+    im_start, im_end = 90, 91
+    model = _model(5)
+    ssd = DFlash2SessionSSD(root=tmp_path, max_size_bytes=1 << 30, model_key="ricursive-unit")
+    try:
+        ids = [(i * 7 + 2) % 89 for i in range(prefix_len)]
+        live = model.make_cache()
+        _prefill(model, ids, live, 7)
+        shells = _clone_cache_shells(live, model.make_cache)
+        rc = ssd.put({"kind": "boundary", "tokens": ids, "cache_len": len(ids), "target_cache": shells})
+        assert ssd.flush() and rc.result()["durable"]
+        parent = dict(rc.vmlx_ssd_ref, receipt=rc)
+        more = [(i * 5 + 1) % 89 for i in range(new_rows)]
+        _decode(model, live, more)
+        tokens = ids + more
+        rc2 = ssd.put({"kind": "turn", "tokens": tokens, "cache_len": len(tokens), "target_cache": live,
+                       "ssd_parent": parent})
+        assert ssd.flush() and rc2.result()["durable"]
+        import json
+
+        from vmlx_engine.dflash2_session_disk import signature_for
+
+        _arrays, meta = ssd.store.load(signature_for(tokens), lambda p: mx.load(str(p), return_metadata=True))
+        layers = json.loads(meta["dflash2"])["target"]
+        sliding = [layer for layer in layers if layer["cls"] == "RotatingKVCache"]
+        # Rows inside the window go as a delta (only the new rows on disk); past it the window is stored whole.
+        assert all(bool(layer.get("rot_delta")) == (new_rows < WINDOW) for layer in sliding)
+        if new_rows < WINDOW:
+            assert all(_arrays[f"t{i}.0"].shape[2] == new_rows for i, layer in enumerate(layers) if layer.get("rot_delta"))
+        got = ssd.take_matching(tokens + [im_start, 3], im_start_id=im_start, eos_ids=[im_end],
+                                make_target=model.make_cache, make_draft=lambda: [])
+        assert got is not None and got["cache_len"] == len(tokens)
+        restored = got["target_cache"]
+        for a, b in zip(live, restored):
+            assert a.offset == b.offset
+            assert all(mx.array_equal(x, y).item() for x, y in zip(a.state, b.state))
+        tail = [(i * 3 + 4) % 89 for i in range(5)]
+        assert mx.array_equal(_decode(model, live, tail), _decode(model, restored, tail)).item()
+    finally:
+        ssd.store.close()

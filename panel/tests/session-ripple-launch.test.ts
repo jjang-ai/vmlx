@@ -57,6 +57,9 @@ describe('Ripple (ricursive) detection and launch', () => {
     expect(detected.isMultimodal).toBeFalsy()
     // The template never reads enable_thinking: the model decides per turn, so no thinking switch is offered.
     expect(detected.honorsEnableThinking).toBe(false)
+    expect(detected.supportsInstructMode).toBe(false)
+    // No effort buttons: the template renders no reasoning_effort and the bundle declares no levels.
+    expect(detected.supportedReasoningEfforts ?? []).toEqual([])
   })
 
   it('the bundled DFlash2 drafter runs by default on the non-batched lane', async () => {
@@ -77,7 +80,10 @@ describe('Ripple (ricursive) detection and launch', () => {
     const row = await manager.createSession(real, { port: 8232 })
     const command = args(manager, row)
     expect(command).toContain('--no-continuous-batching')
-    expect(detectModelConfigFromDir(real).family).toBe('ricursive')
+    const realDetected = detectModelConfigFromDir(real)
+    expect(realDetected.family).toBe('ricursive')
+    expect(realDetected.honorsEnableThinking).toBe(false)
+    expect(realDetected.supportedReasoningEfforts ?? []).toEqual([])
     console.log('RIPPLE_REAL_ARGV ' + JSON.stringify(command))
   })
 })

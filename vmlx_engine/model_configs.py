@@ -1152,6 +1152,10 @@ def register_all(registry=None):
             reasoning_parser="qwen3",
             think_in_template=False,
             supports_thinking=True,
+            # The model decides per turn whether to reason and the template renders no effort level: none advertised.
+            # supports_instruct_mode stays unset on purpose: False would turn a client's enable_thinking=false (which
+            # the template simply ignores) into an HTTP 400.
+            supported_reasoning_efforts=[],
             supports_native_tools=True,
             preserve_native_tool_format=True,
             is_mllm=False,
