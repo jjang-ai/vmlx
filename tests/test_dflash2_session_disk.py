@@ -696,3 +696,14 @@ def test_chain_continues_while_deltas_stay_below_a_whole_entry_then_rebases(ssd)
     assert got is not None and got["cache_len"] == deep.vmlx_ssd_ref["len"] and ssd.stats["chain_misses"] == 0
     rows = got["cache_len"]
     assert mx.array_equal(got["target_cache"][0].state[0], kv.state[0][:, :, :rows]).item()
+
+
+def test_turn_stays_a_delta_past_the_byte_budget_and_the_boundary_rebases():
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN, MAX_CHAIN_HARD, _delta_allowed
+
+    deep = MAX_CHAIN + 5
+    assert _delta_allowed("chunk", deep, 10, 100) and not _delta_allowed("chunk", deep, 100, 100)
+    assert _delta_allowed("boundary", deep, 10, 100) and not _delta_allowed("boundary", deep, 500, 100)
+    assert _delta_allowed("turn", deep, 500, 100)                         # fenced by the next admission: never a whole write
+    assert not _delta_allowed("turn", MAX_CHAIN_HARD + 2, 0, 100)         # ... within the loader's depth
+    assert not _delta_allowed("chunk", deep, None, 100)                   # unknown bytes keep the depth rule

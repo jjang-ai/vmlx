@@ -128,6 +128,10 @@ def _delta_allowed(kind, depth_next: int, chain_bytes, whole_bytes: int) -> bool
         return True
     if depth_next > _hard_limit(kind) or chain_bytes is None:
         return False
+    if kind == "turn":
+        # The next admission waits for a turn's write: a whole rewrite here is a wait of ~0.7 s per 5 GB (Ripple JANGH2 at
+        # 65K and 128K). It stays a delta; the following boundary entry, which nothing waits on, sees the spent budget.
+        return True
     return int(chain_bytes) < int(whole_bytes)
 _DELTA_CLASSES = ("KVCache",)   # append-only caches whose state is (keys, values) with the token axis at dim 2
 
