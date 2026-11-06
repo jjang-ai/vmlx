@@ -213,12 +213,17 @@ def external_speculative_incompatibility_reason(
     return None
 
 
+# Drafter bits the engine declares at load for a target family, over the bundle's own declaration.
+DFLASH2_DRAFT_BITS_BY_TARGET = {"ricursive": 8}
+
+
 def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
     """(target model_type, drafter bits at load) for a drafter shipped inside a bundle (<bundle>/dflash2).
 
     The bundle's jang_config.json may declare ``drafter.runtime_quantization`` (e.g. "affine 8-bit g64 at load": the
     GLM-5.3-Flash JANGT bundle ships the CC BY-NC-ND drafter unmodified and asks for 8-bit). Default 4-bit: the
-    measured Qwen3.8 setting (R2-21 section 4, no acceptance change vs bf16 codebooks).
+    measured Qwen3.8 setting (R2-21 section 4, no acceptance change vs bf16 codebooks). A family listed in
+    DFLASH2_DRAFT_BITS_BY_TARGET is declared by the engine, so the bundle's files stay untouched.
     """
     import re
 
@@ -235,7 +240,8 @@ def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
             bits = int(m.group(1))
     except Exception:
         pass
-    # A/B tool: VMLX_DFLASH2_DRAFT_BITS=4|8|16 (16 = keep the stored bf16 weights) overrides the bundle's declaration.
+    bits = DFLASH2_DRAFT_BITS_BY_TARGET.get(target_type, bits)
+    # A/B tool: VMLX_DFLASH2_DRAFT_BITS=4|8|16 (16 = keep the stored bf16 weights) overrides every declaration.
     import os
 
     raw = os.environ.get("VMLX_DFLASH2_DRAFT_BITS", "").strip()

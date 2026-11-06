@@ -663,11 +663,20 @@ class MLXLanguageModel:
             if finished:
                 finish_reason = "stop" if should_stop else "length"
 
+            # The footer's pp/s chips read this receipt on every lane; mlx_lm reports the prompt pass on each response.
+            prefill_usage = None
+            if token_count == 1:
+                _prompt_n = int(getattr(response, "prompt_tokens", 0) or 0)
+                _prompt_tps = float(getattr(response, "prompt_tps", 0.0) or 0.0)
+                if _prompt_n > 0 and _prompt_tps > 0:
+                    prefill_usage = {"tokens": _prompt_n, "seconds": _prompt_n / _prompt_tps, "scope": "model_prefill_and_prompt_state", "path": "llm_ar"}
+
             yield StreamingOutput(
                 text=new_text,
                 token=response.token if hasattr(response, "token") else 0,
                 finished=finished,
                 finish_reason=finish_reason,
+                prefill_usage=prefill_usage,
             )
 
             if finished:

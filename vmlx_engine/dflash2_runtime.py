@@ -190,11 +190,21 @@ def jangh_dense_lane_enabled() -> bool:
     return os.environ.get("VMLX_JANGH_DENSE_LANE", "0").strip().lower() in ("1", "on", "true", "yes")
 
 
-def jangh_dense_speed_first() -> bool:
-    """VMLX_DFLASH2_DENSE_SPEED_FIRST=1 (opt-in, A/B): dense JANGH projections keep their default routing inside a
-    verify (1-5 rows on the per-row kernel, 6+ on the sorted tile QMM). Wide verifies get ~flat cost, but a wide verify
-    row no longer equals the AR step bit for bit, so temperature-0 output can change at exact ties with the width."""
-    return os.environ.get("VMLX_DFLASH2_DENSE_SPEED_FIRST", "0").strip().lower() in ("1", "on", "true", "yes")
+# Model families whose dense JANGH verify takes the fast routing without any env var.
+DENSE_SPEED_FIRST_FAMILIES = frozenset({"ricursive"})
+
+
+def jangh_dense_speed_first(model_type: str | None = None) -> bool:
+    """Dense JANGH projections keep their default routing inside a verify (1-5 rows on the per-row kernel, 6+ on the
+    sorted tile QMM). Wide verifies get ~flat cost, but a wide verify row no longer equals the AR step bit for bit, so
+    temperature-0 output can change at exact ties with the width. On for DENSE_SPEED_FIRST_FAMILIES;
+    VMLX_DFLASH2_DENSE_SPEED_FIRST=1|0 overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_DENSE_SPEED_FIRST", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type in DENSE_SPEED_FIRST_FAMILIES
 
 
 class _TargetAdapter:
@@ -219,12 +229,18 @@ class _TargetAdapter:
         modules = getattr(language_model, "named_modules", None)
         if callable(modules):
             lane = jangh_dense_lane_enabled()
-            speed_first = jangh_dense_speed_first()
+            model_type = getattr(language_model, "model_type", None)
+            speed_first = jangh_dense_speed_first(model_type)
+            dense = 0
             for _, module in modules():
                 if getattr(module, "is_jangtq2_dense", False):
+                    dense += 1
                     module.row_exact_verify = not speed_first
                     if lane:
                         module.sorted_lane = True
+            if dense:
+                logger.info("DFlash2 dense verify routing: %s (%d projections, target %s)",
+                            "speed-first" if speed_first else "row-exact", dense, model_type or "unknown")
 
     @property
     def layers(self):
@@ -1480,8 +1496,13 @@ def _stream_generate_resumable(
                     nxt = mx.argmax(last, axis=-1)
             return nxt, h
 
+        # While AR continues, a step stays launched across the chunk boundary (the chunk only exists to stream its
+        # tokens): restarting the pipeline at every burst cost ~4 % of AR speed, the floor of hard text.
+        ar_pipe = None
+        next_action = None
         while n < max_tokens:
-            mode, burst = chooser.next_action()
+            mode, burst = next_action if next_action is not None else chooser.next_action()
+            next_action = None
             if mode == "ar":
                 # AR burst (see _BlockChooser.next_action): plain target steps,
                 # pipelined like the AR lane when no history-dependent sampling
@@ -1489,14 +1510,18 @@ def _stream_generate_resumable(
                 # token is sampled from the target's own distribution, so the
                 # output law is the AR lane's; greedy emits the target argmax.
                 k = min(int(burst), max_tokens - n)
-                _ar_t0 = time.perf_counter()
                 pipelined = sampling_controls is None
                 emitted: list = []
                 rows: list = []
                 launched_past = False
                 terminal = False
-                nx, h = _ar_step(mx.array([[tokens[-1]]]), prompt_list + tokens)
-                mx.async_eval(nx, h)
+                if ar_pipe is not None:
+                    nx, h, _ar_t0 = ar_pipe
+                    ar_pipe = None
+                else:
+                    _ar_t0 = time.perf_counter()
+                    nx, h = _ar_step(mx.array([[tokens[-1]]]), prompt_list + tokens)
+                    mx.async_eval(nx, h)
                 for j in range(k):
                     launched = None
                     if pipelined and j + 1 < k:
@@ -1520,8 +1545,16 @@ def _stream_generate_resumable(
                         mx.async_eval(nx, h)
                     else:
                         nx, h = launched
-                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted))
+                _ar_t1 = time.perf_counter()
+                chooser.observe_ar(_ar_t1 - _ar_t0, len(emitted))
                 after_ar = True
+                if pipelined and not chooser.legacy and not terminal and n + len(emitted) < max_tokens:
+                    next_action = chooser.next_action()
+                    if next_action[0] == "ar":
+                        nx2, h2 = _ar_step(nx.reshape(1, 1), None)
+                        mx.async_eval(nx2, h2)
+                        ar_pipe = (nx2, h2, _ar_t1)
+                        launched_past = True
                 hidden = mx.concatenate([hidden] + rows, axis=1)
                 if stop_matcher is None:
                     for t in emitted:
@@ -1758,16 +1791,30 @@ class _BlockChooser:
     ``ar_probe_every`` AR tokens one verify cycle runs so the acceptance
     estimate keeps tracking the text. The first decode action of every request
     is a verify cycle (exit checkpoints rely on the drafter having run).
+
+    Floor against AR (2026-11-06, Ripple-65B: turning the drafter on must not cost speed). What exploration may cost is
+    bounded in time instead of cycles, because one row-exact 32-row verify costs ~15 AR steps:
+      * A width without a measured cost is a candidate at an estimated cost and runs only when predicted to win; seeding
+        every width ran each one twice on the first reply after every load (~4 s on hard text).
+      * The other widths are re-timed from a budget of decode time (``retime_budget``), not every ``probe_every`` cycles.
+      * AR wins as soon as it is predicted faster (``ar_margin`` used to favour verify by 5 %).
+      * A probe cycle out of AR also makes the drafter ingest every row of the burst, so the probe gap doubles
+        (``ar_probe_every`` .. ``ar_probe_max``) while probes keep losing and resets when verify wins.
+      * A request measures AR only when the comparison is close (``ar_skip_ratio``): the burst cost easy text ~0.3 s.
+    VMLX_DFLASH2_CHOOSER_LEGACY=1 restores all five (A/B control).
     """
 
     decay = 0.85
     cost_alpha = 0.25
     probe_every = 32
     prior_p = 0.7
-    ar_margin = 0.05
+    ar_margin = 0.0
     ar_probe_every = 24
+    ar_probe_max = 96
     ar_burst = 8
     ar_alpha = 0.3
+    ar_skip_ratio = 1.5
+    retime_budget = 0.03
     first_widest_cost_ratio = 2.0
 
     def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None, first_widest: bool = False):
@@ -1785,7 +1832,13 @@ class _BlockChooser:
         # (83.7 tok/s). One wide cycle costs ~110 ms once per request (~0.1 ms per token of a 384-token reply).
         # Dense codebook-MLP targets only (``first_widest``, measured on JANGH2): Qwen3.8-27B JANG_4D, whose verify
         # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
-        self.width = widths[-1] if first_widest else widths[0]
+        self.legacy = os.environ.get("VMLX_DFLASH2_CHOOSER_LEGACY", "0").strip().lower() in ("1", "on", "true", "yes")
+        if self.legacy:
+            self.ar_margin, self.ar_probe_max, self.ar_skip_ratio, self.retime_budget = 0.05, self.ar_probe_every, 0.0, 0.0
+        # Nothing measured yet (first request after a load): the width below the widest still observes the positions that
+        # matter and costs half as much on a row-growing verify.
+        self.width = (widths[-2] if len(widths) > 2 and not self.legacy else widths[-1]) if first_widest else widths[0]
+        self._ar_gap = self.ar_probe_every
         try:
             # A/B lever: VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO=0 restores the unconditional widest start.
             self.first_widest_cost_ratio = float(os.environ.get("VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO", self.first_widest_cost_ratio))
@@ -1822,6 +1875,7 @@ class _BlockChooser:
         )
         self.ar_since_probe = 0
         self.ar_tokens = 0
+        self.catchup_ms: list = []         # first cycle after each AR burst, ms over the width's cost (log line only)
         # AR-cost hygiene, as glm_dflash2.AdaptiveSpec (d6d64762 / 3dec394f, found on the MiMo lane 2026-10-16: one
         # stalled burst moved the shared AR cost 22 -> 88 ms and spec then won for the life of the process, because
         # nothing re-measured AR once spec won): after ar_reprobe_cycles verify cycles an AR burst re-measures it (and
@@ -1855,23 +1909,46 @@ class _BlockChooser:
             e += run
         return e
 
+    def _cost_of(self, w: int) -> Optional[float]:
+        """Measured cost, else scaled from the nearest measured width: (w + 4) rows fits both the row-growing verify and,
+        pessimistically, the flat one, and a width that runs once is measured from then on. None while nothing is measured."""
+        c = self.cost.get(w)
+        if c is not None:
+            return c
+        known = [k for k in self.widths if k in self.cost]
+        if not known:
+            return None
+        near = min(known, key=lambda k: abs(k - w))
+        return self.cost[near] * (w + 4) / (near + 4)
+
+    def _best_width(self) -> Optional[int]:
+        priced = [w for w in self.widths if self._cost_of(w) is not None]
+        return max(priced, key=lambda w: self.expected_tokens(w) / self._cost_of(w)) if priced else None
+
     def next_action(self) -> tuple:
         """("spec", width) for a verify cycle at ``self.width``, or ("ar", n)."""
         if not self.allow_ar or self.cycles == 0:
             return ("spec", self.width)
-        if any(w not in self.cost for w in self.widths):
+        if self.legacy and any(w not in self.cost for w in self.widths):
             return ("spec", self.width)    # still seeding width costs
+        best = self._best_width()
+        if best is None:
+            return ("spec", self.width)    # the width that just warmed up runs once more to get a measured cost
+        spec_rate = self.expected_tokens(best) / self._cost_of(best)
         t_ar = self.cost.get("ar")
-        if t_ar is None or self._request_ar_pending:
+        if t_ar is None or (self._request_ar_pending and (not self.ar_skip_ratio or spec_rate * t_ar < self.ar_skip_ratio)):
             return ("ar", self.ar_burst)   # one AR measurement before comparing
         if self.ar_reprobe_cycles > 0 and self.spec_since_ar >= self.ar_reprobe_cycles:
             self.spec_since_ar = 0
             self._reprobe_pending = True
             return ("ar", self.ar_burst)   # re-measure a possibly stale AR cost
-        best = max(self.widths, key=lambda w: self.expected_tokens(w) / self.cost[w])
-        spec_rate = self.expected_tokens(best) / self.cost[best]
-        if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar or self.ar_since_probe >= self.ar_probe_every:
+        if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar:
             self.ar_since_probe = 0
+            self._ar_gap = self.ar_probe_every
+            return ("spec", self.width)
+        if self.ar_since_probe >= self._ar_gap:
+            self.ar_since_probe = 0
+            self._ar_gap = min(self._ar_gap * 2, self.ar_probe_max)
             return ("spec", self.width)
         return ("ar", self.ar_burst)
 
@@ -1881,7 +1958,7 @@ class _BlockChooser:
         timed = [w for w in self.widths if w in self.cost]
         return (
             "ar_ms_per_token=%s ar_rate=%s width_ms=%s expected_tokens=%s width_rate=%s ar_tokens=%d cycles=%d "
-            "ar_outliers_skipped=%d"
+            "ar_outliers_skipped=%d catchup_ms=%s"
             % (
                 "-" if ar is None else "%.1f" % (ar * 1000.0),
                 "-" if ar is None else "%.1f" % (1.0 / ar),
@@ -1891,6 +1968,7 @@ class _BlockChooser:
                 self.ar_tokens,
                 self.cycles,
                 self.ar_outliers_skipped,
+                self.catchup_ms,
             )
         )
 
@@ -1901,6 +1979,7 @@ class _BlockChooser:
         self.ar_tokens += tokens
         self.ar_since_probe += tokens
         self.spec_since_ar = 0
+        self.cost["decode_s"] = self.cost.get("decode_s", 0.0) + seconds
         reprobe, self._reprobe_pending = self._reprobe_pending, False
         if tokens < self.ar_min_sample_tokens:
             return                         # EOS / max_tokens-cut burst: launch overhead, not the AR cost
@@ -1942,7 +2021,9 @@ class _BlockChooser:
         if width not in warm:
             warm.add(width)                # first cycle at a width in this process: compile/warm-up
         elif after_ar:
-            pass                           # this cycle's drafter also ingested the AR burst's rows
+            # this cycle's drafter also ingested the AR burst's rows
+            if width in self.cost and len(self.catchup_ms) < 8:
+                self.catchup_ms.append(round((seconds - self.cost[width]) * 1000.0))
         else:
             c = self.cost.get(width)
             self.cost[width] = seconds if c is None else c + self.cost_alpha * (seconds - c)
@@ -1950,15 +2031,47 @@ class _BlockChooser:
         self._last_timed[width] = self.cycles
         if len(self.widths) == 1:
             return
+        self.cost["decode_s"] = self.cost.get("decode_s", 0.0) + seconds
         unseen = [w for w in self.widths if w not in self.cost]
-        if unseen:
+        if self.legacy and unseen:
             self.width = unseen[0]
-        elif self.cycles % self.probe_every == 0:
+        elif self.legacy and self.cycles % self.probe_every == 0:
             # re-time the other width measured longest ago
             others = [w for w in self.widths if w != width]
             self.width = min(others, key=lambda w: self._last_timed.get(w, -1))
         else:
-            self.width = max(self.widths, key=lambda w: self.expected_tokens(w) / self.cost[w])
+            best = self._best_width()
+            self.width = width if best is None else best
+            due = self._retime_due(width) if best is not None else None
+            if due is not None:
+                self.width = due
+
+    def _retime_due(self, width: int) -> Optional[int]:
+        """A measured width other than the one that just ran whose re-timing fits ``retime_budget`` of decode time since it
+        was last timed; a width that cannot currently win (under half the best rate) waits four times as long. Shared
+        across requests like the costs, so a long conversation of short replies still tracks context and clock drift."""
+        if self.retime_budget <= 0:
+            return None
+        decode_s = self.cost["decode_s"]
+        last = self.cost.setdefault("retimed", {})
+        last.setdefault(width, decode_s)
+        best = self._best_width()
+        top = self.expected_tokens(best) / self._cost_of(best)
+        due = []
+        for w in self.widths:
+            if w == best or w not in self.cost:
+                continue
+            waited = decode_s - last.setdefault(w, decode_s)
+            need = self.cost[w] / self.retime_budget
+            if self.expected_tokens(w) / self.cost[w] < 0.5 * top:
+                need *= 4.0
+            if waited >= need:
+                due.append((last[w], w))
+        if not due:
+            return None
+        w = min(due)[1]
+        last[w] = decode_s
+        return w
 
 
 _WIDTH_COSTS: dict = {}
