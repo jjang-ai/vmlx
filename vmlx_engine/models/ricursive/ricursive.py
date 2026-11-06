@@ -42,6 +42,40 @@ class RotatingKVCache(_cache.RotatingKVCache):
             return self._update_concat(keys, values)
         return super().update_and_fetch(keys, values)
 
+    def _compacted(self) -> bool:
+        """Right after a multi-row forward past the window the buffer holds max_size + S - 1 rows in temporal order, but
+        no later forward reads more than the newest max_size of them: a single row trims to max_size and rotates, a
+        multi-row append keeps max_size - 1. State, snapshots and the SSD tier then carry exactly max_size rows with
+        _idx = max_size, which every continuation treats exactly like the live buffer (same rows, same physical order
+        after the next write, so restores stay bit-exact). A 2048-row prefill chunk otherwise stored 3x the window."""
+        k = self.keys
+        return (k is not None and self.offset >= self.max_size and k.shape[2] > self.max_size
+                and self._idx == k.shape[2])
+
+    @property
+    def state(self):
+        keys, values = _cache.RotatingKVCache.state.fget(self)
+        # Always fresh views, never the buffer object itself: past the window the base class returns self.keys, and a
+        # single-row update writes it by slice assignment, which rewrites that array object for every holder. A
+        # snapshot (RAM session entry, or an SSD entry still queued for its writer) then changed under its owner.
+        n = self.max_size if self._compacted() else keys.shape[2]
+        return keys[..., -n:, :], values[..., -n:, :]
+
+    @state.setter
+    def state(self, v):
+        _cache.RotatingKVCache.state.fset(self, v)
+
+    @property
+    def meta_state(self):
+        meta = tuple(_cache.RotatingKVCache.meta_state.fget(self))
+        if self._compacted():
+            meta = meta[:3] + (str(self.max_size),) + meta[4:]
+        return meta
+
+    @meta_state.setter
+    def meta_state(self, v):
+        _cache.RotatingKVCache.meta_state.fset(self, v)
+
     def rollback_recent(self, n: int) -> None:
         if n <= 0 or self.keys is None:
             return

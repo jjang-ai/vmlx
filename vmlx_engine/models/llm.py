@@ -8,7 +8,7 @@ integrating with vLLM's model execution system.
 
 import logging
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 from ..utils.multi_eos import collect_multi_eos_ids
 
@@ -23,6 +23,8 @@ class GenerationOutput:
     tokens: list[int]
     logprobs: list[dict] | None = None
     finish_reason: str | None = None
+    # The user stop string that ended the generation (generate() always passes it; Anthropic `stop_sequence`).
+    stop_sequence: str | None = None
 
 
 @dataclass
@@ -35,6 +37,35 @@ class StreamingOutput:
     finish_reason: str | None = None
     cached_tokens: int = 0
     cache_detail: str = ""
+    # DFlash2 text lane only (one chunk can carry several accepted tokens): the cumulative generated-token count
+    # (0 = one token per chunk, the AR lanes), the prompt size, every generated id on the terminal chunk, the
+    # engine-measured prefill receipt (usage.vmlx_prefill / pp/s), the request's background session-cache write
+    # (SimpleEngine publishes the terminal and fences the next admission on it) and the speculative stats.
+    completion_tokens: int = 0
+    prompt_tokens: int = 0
+    tokens: list[int] | None = None
+    prefill_usage: dict | None = None
+    persistence_future: Any = None
+    spec_stats: dict | None = None
+
+
+def _dflash2_spec_stats(widths: dict[int, int], emitted: list[int], ar_tokens: int, generation_tps: float) -> dict:
+    """The same keys the multimodal DFlash2 lanes report (/health.last_request.speculative, the Perf panel)."""
+    drafted = sum((w - 1) * n for w, n in widths.items())
+    accepted = sum(max(0, e - 1) for e in emitted)
+    cycles = len(emitted)
+    return {
+        "kind": "dflash2",
+        "lane": "text",
+        "cycles": cycles,
+        "emitted_per_cycle": round(sum(emitted) / max(1, cycles), 3),
+        "drafted": drafted,
+        "accepted": accepted,
+        "acceptance": round(accepted / drafted, 4) if drafted else None,
+        "widths": {str(k): v for k, v in sorted(widths.items())},
+        "ar_tokens": ar_tokens,
+        "generation_tps": round(float(generation_tps or 0.0), 2),
+    }
 
 
 class MLXLanguageModel:
@@ -251,20 +282,15 @@ class MLXLanguageModel:
         if not self._loaded:
             self.load()
 
-        if self._dflash2_text_lane():
-            from ..dflash2_runtime import stream_dflash2_generate
-            from ..speculative import get_draft_model
-
-            text, finish, last = "", None, None
-            for r in stream_dflash2_generate(self.model, self.tokenizer, get_draft_model(), prompt, max_tokens=max_tokens, temperature=temperature,
-                                             top_p=float(top_p), top_k=int(top_k), stop=stop, use_cache=kwargs.get("use_cache", True)):
-                text += r.text; finish = r.finish_reason or finish; last = r
-            out = GenerationOutput(text=text, tokens=[], finish_reason=finish or "stop")
-            out.prompt_tokens = getattr(last, "prompt_tokens", 0)
-            out.completion_tokens = getattr(last, "generation_tokens", 0)
-            out.cached_tokens = getattr(last, "cached_tokens", 0)
-            out.cache_detail = getattr(last, "cache_detail", "")
-            out.spec_stats = getattr(last, "spec_stats", None)
+        if self.dflash2_text_lane(kwargs):
+            text, last, finish = "", None, None
+            for r in self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs):
+                text += r.text
+                finish = r.finish_reason or finish
+                last = r
+            out = GenerationOutput(text=text, tokens=list(getattr(last, "tokens", None) or []), finish_reason=finish or "stop")
+            for name in ("prompt_tokens", "completion_tokens", "cached_tokens", "cache_detail", "prefill_usage", "persistence_future", "spec_stats"):
+                setattr(out, name, getattr(last, name, None))
             return out
 
         want_logprobs = bool(kwargs.pop("logprobs", False))
@@ -409,20 +435,67 @@ class MLXLanguageModel:
             stop_sequence=matched_stop,
         )
 
-    def _dflash2_text_lane(self) -> bool:
+    def dflash2_text_lane(self, kwargs: dict | None = None) -> bool:
+        """True when this request decodes on the DFlash2 text lane (a text-only target with a bundled DFlash2 drafter).
+
+        Per-token logprobs and guided JSON need the token-at-a-time AR loop, so those requests take it (without the
+        drafter: the generic speculative path cannot drive a DFlash2 drafter)."""
         from ..speculative import is_dflash2_enabled
 
-        return is_dflash2_enabled() and hasattr(self.model, "language_model")
+        if not (is_dflash2_enabled() and self.model is not None and hasattr(self.model, "language_model")):
+            return False
+        kw = kwargs or {}
+        return not (kw.get("logprobs") or kw.get("_vmlx_response_format"))
 
-    def _stream_dflash2(self, prompt, max_tokens, temperature, top_p, top_k, stop, use_cache) -> Iterator[StreamingOutput]:
+    def _stream_dflash2(self, prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs) -> Iterator[StreamingOutput]:
         from ..dflash2_runtime import stream_dflash2_generate
         from ..speculative import get_draft_model
 
-        for r in stream_dflash2_generate(self.model, self.tokenizer, get_draft_model(), prompt, max_tokens=max_tokens, temperature=temperature,
-                                         top_p=float(top_p), top_k=int(top_k), stop=stop, use_cache=use_cache):
-            yield StreamingOutput(text=r.text, token=(r.tokens[-1] if getattr(r, "tokens", None) else 0),
-                                  finished=r.finish_reason is not None, finish_reason=r.finish_reason,
-                                  cached_tokens=int(getattr(r, "cached_tokens", 0) or 0), cache_detail=str(getattr(r, "cache_detail", "") or ""))
+        produced: list[int] = []
+        widths: dict[int, int] = {}
+        emitted: list[int] = []
+        ar_tokens = 0
+        for r in stream_dflash2_generate(
+            self.model,
+            self.tokenizer,
+            get_draft_model(),
+            prompt,
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+            top_p=float(top_p),
+            top_k=int(top_k or 0),
+            min_p=float(min_p or 0.0),
+            logit_bias=kwargs.get("logit_bias"),
+            repetition_penalty=float(1.0 if repetition_penalty is None else repetition_penalty),
+            frequency_penalty=float(kwargs.get("frequency_penalty", 0.0) or 0.0),
+            presence_penalty=float(kwargs.get("presence_penalty", 0.0) or 0.0),
+            stop=stop,
+            use_cache=kwargs.get("use_cache", True),
+        ):
+            new = [int(t) for t in (getattr(r, "tokens", None) or [])]
+            produced.extend(new)
+            drafted = getattr(r, "drafted", None)
+            if getattr(r, "accepted", None) is not None and drafted is not None:
+                if int(drafted) > 0:
+                    emitted.append(len(new))
+                    widths[int(drafted) + 1] = widths.get(int(drafted) + 1, 0) + 1
+                else:
+                    ar_tokens += len(new)
+            finished = r.finish_reason is not None
+            yield StreamingOutput(
+                text=r.text,
+                token=new[-1] if new else 0,
+                finished=finished,
+                finish_reason=r.finish_reason,
+                cached_tokens=int(getattr(r, "cached_tokens", 0) or 0),
+                cache_detail=str(getattr(r, "cache_detail", "") or ""),
+                completion_tokens=len(produced),
+                prompt_tokens=int(getattr(r, "prompt_tokens", 0) or 0),
+                tokens=list(produced) if finished else None,
+                prefill_usage=getattr(r, "prefill_usage", None),
+                persistence_future=getattr(r, "persistence_future", None) if finished else None,
+                spec_stats=_dflash2_spec_stats(widths, emitted, ar_tokens, getattr(r, "generation_tps", 0.0)) if finished else None,
+            )
 
     def stream_generate(
         self,
@@ -452,13 +525,13 @@ class MLXLanguageModel:
         Yields:
             StreamingOutput for each generated token
         """
-        # A text-only target with a DFlash2 drafter runs the same lane the VLM wrapper uses; the generic adaptive path cannot drive this drafter.
-        if self._dflash2_text_lane():
-            yield from self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, stop, kwargs.get("use_cache", True))
-            return
-
         if not self._loaded:
             self.load()
+
+        # A text-only target with a DFlash2 drafter runs the same lane the VLM wrapper uses; the generic adaptive path cannot drive this drafter.
+        if self.dflash2_text_lane(kwargs):
+            yield from self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs)
+            return
 
         from mlx_lm import stream_generate
         response_format = kwargs.pop("_vmlx_response_format", None)

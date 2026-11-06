@@ -319,6 +319,11 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             _nope = apply_no_rope_layers(draft_model, stored_config)
             if _nope:
                 logger.info("DFlash2 drafter NoPE layers: %s", _nope)
+            from .dflash2_loader import apply_draft_context_window
+
+            _window = apply_draft_context_window(draft_model, target_type)
+            if _window:
+                logger.info("DFlash2 drafter context window: %d tokens (full-attention layers rotate past it)", _window)
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
@@ -432,6 +437,11 @@ def should_use_speculative(
         return False
     if is_mllm:
         logger.debug("Speculative decoding disabled: incompatible with multimodal models")
+        return False
+    if _spec_kind == "dflash2":
+        # A DFlash2 drafter conditions on target hidden states; only the DFlash2 lanes can drive it. A request that
+        # reaches the generic loop (per-token logprobs, guided JSON) decodes autoregressively.
+        logger.debug("Generic speculative decoding skipped: the loaded drafter is DFlash2")
         return False
     reason = external_speculative_incompatibility_reason(target_model_name)
     if reason:

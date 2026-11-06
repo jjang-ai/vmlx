@@ -390,12 +390,15 @@ def _prefill_last_logits(runtime: Any, adapter: Any, prompt, cache, hidden_limit
         adapter.last_row_logits = previous
 
 
-def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limit):
+def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limit, gap_limit=None):
     """Retain the drafter's prefix without another target or draft forward.
 
     A target-only boundary hit otherwise feeds only the new suffix to the
     drafter. Keep either its existing KV plus the unprocessed gap, or the
     bounded target-hidden window needed to rebuild that KV.
+
+    ``gap_limit`` (drafters with a context window): a gap longer than the window is not kept -- the drafter would
+    rotate most of it away, and every snapshot would carry all of it.
     """
     import mlx.core as mx
 
@@ -408,6 +411,7 @@ def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limi
         cached is not None
         and int(cached[0].offset) + gap_len == start
         and sum(int(p.shape[1]) for p in parts) == cut - start
+        and (gap_limit is None or gap_len + (cut - start) <= int(gap_limit))
     ):
         cloned = _clone_cache_shells(cached, lambda: runtime.make_prompt_cache(draft))
         if cloned is not None:
@@ -807,6 +811,11 @@ def _clone_cache_shells(cache: list, factory) -> Optional[list]:
             # suffix tokens to the recurrence twice and changed the answer
             # (audit 2026-10-07: 27B 4D "weekdays x10" -> 12 from SSD, 10 cold).
             state = src.state
+            if type(src).__name__ == "RotatingKVCache" and isinstance(state, (list, tuple)):
+                # Past its window a rotating cache returns its live buffer OBJECTS; the next single-row update (an
+                # AR step, a drafter cycle that accepted nothing) writes them by slice assignment, which rewrites the
+                # array object every holder shares. Views keep the snapshot frozen at no copy cost.
+                state = [a[...] if a is not None else a for a in state]
             dst.state = list(state) if isinstance(state, list) else state
             src_meta = getattr(type(src), "meta_state", None)
             if isinstance(src_meta, property) and src_meta.fset is not None:
@@ -1126,11 +1135,17 @@ def _stream_generate_resumable(
                 _ptrace.append((name, round(1000 * (_now - _pt0[0]), 1)))
                 _pt0[0] = _now
         with mx.stream(runtime.generation_stream):
+            _all_sliding = all(t == "sliding_attention" for t in draft.config.layer_types)
+            _draft_window = getattr(draft, "_vmlx_context_window", None)
             hidden_limit = (
                 draft.config.sliding_window - 1
-                if all(t == "sliding_attention" for t in draft.config.layer_types)
-                else None
+                if _all_sliding
+                else (int(_draft_window) - 1 if _draft_window else None)
             )
+            # Session snapshots carry a drafter hidden context only for all-sliding drafters (a 2K-row window). A
+            # windowed full-attention drafter's 16K-row context would add ~0.8 GB to every snapshot; its entries keep
+            # the drafter KV (turn entries) or rebuild it from the prefilled rows.
+            snapshot_limit = hidden_limit if _all_sliding else None
             # Prefill in segments ending at each snapshot cut (system end,
             # assistant tag); a cut costs one extra chunk boundary.
             cuts = [(c, k) for c, k in ((system_cut, "system"), (boundary_cut, "boundary")) if c is not None]
@@ -1156,7 +1171,8 @@ def _stream_generate_resumable(
                     _pmark(f"seg->{kind}@{cut}({cut - start})")
                     _shells = _clone_cache_shells(target_cache, lambda: runtime.make_prompt_cache(adapter))
                     _pmark("clone")
-                    _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, hidden_limit)
+                    _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, snapshot_limit,
+                                                    gap_limit=None if _all_sliding else hidden_limit)
                     _pmark("draft_state")
                     start = cut
                     if kind != "chunk":
@@ -1357,7 +1373,8 @@ def _stream_generate_resumable(
                     "target_cache": target_cache,
                     "draft_cache": store_draft,
                     "draft_hidden_gap": gap_arr if store_draft is not None else None,
-                    "draft_context": hidden if n == 1 else None,
+                    # A windowed full-attention drafter's context is up to 16K rows (~0.8 GB): rebuilt, not stored.
+                    "draft_context": hidden if n == 1 and _all_sliding else None,
                 },
                 ram_only=media is not None and not per_item_media,
                 parent=_parent_below(_stored_refs, len(confirmed) - 1, _ssd_parent),

@@ -460,6 +460,10 @@ registerFamily('nemotron-h', { cacheType: 'hybrid', cacheSubtype: 'nemotron_h_ss
 // Poolside / Laguna
 registerFamily('laguna', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, enableAutoToolChoice: true, description: 'Laguna / Poolside coding model', priority: 10 })
 
+// Ripple (ricursive): mixed sliding/full KV, hermes JSON tool calls, and model-decided reasoning (the template ends at
+// the assistant header and never reads enable_thinking; the model opens <think> itself). Mirrors engine model_configs.py.
+registerFamily('ricursive', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: true, enableAutoToolChoice: true, description: 'Ripple (ricursive) mixed sliding/full attention', priority: 4 })
+
 // Jamba
 registerFamily('jamba', { cacheType: 'hybrid', usePagedCache: false, description: 'Jamba (Hybrid)', priority: 10 })
 
@@ -605,6 +609,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'mimo_v2': 'mimo_v2',
   'naive_n05_flash': 'naive_n05_flash',
   'nanbeige': 'nanbeige',
+  'ricursive': 'ricursive',
   // ── Llama family ──
   'llama': 'llama3',
   'llama4': 'llama4',

@@ -25,6 +25,59 @@ def apply_no_rope_layers(draft, cfg) -> list:
     return ids
 
 
+# Context window a target family's DFlash2 drafter was trained and is served with, for drafters that have a
+# full-attention layer (an all-sliding drafter is bounded by its own sliding window). Ripple-65B: the vendor's server
+# runs the draft with --speculative-draft-window-size 16384 and refuses a smaller window (the draft was trained on
+# 16K-token rows), so the window may be larger here but never smaller.
+DRAFT_CONTEXT_WINDOWS = {"ricursive": 16384}
+
+
+def draft_context_window(draft, target_type) -> int | None:
+    """The draft context window for a drafter with a full-attention layer, or None (unbounded / all-sliding).
+
+    ``VMLX_DFLASH2_DRAFT_WINDOW`` overrides the family value (0 = unbounded, the previous behaviour)."""
+    import os
+
+    layer_types = tuple(getattr(draft.config, "layer_types", ()) or ())
+    if not layer_types or all(t == "sliding_attention" for t in layer_types):
+        return None
+    window = DRAFT_CONTEXT_WINDOWS.get(str(target_type or ""))
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_WINDOW", "").strip()
+    if raw:
+        try:
+            window = int(raw)
+        except ValueError:
+            pass
+    if not window or window <= 0:
+        return None
+    sliding = int(getattr(draft.config, "sliding_window", 0) or 0)
+    return max(int(window), sliding)
+
+
+def apply_draft_context_window(draft, target_type) -> int | None:
+    """Bound the drafter's full-attention layers to its context window: their KV becomes a rotating cache of
+    ``window - 1`` rows (as the sliding layers keep ``sliding_window - 1``), and the DFlash2 lane feeds at most that
+    many prompt hidden rows to a fresh drafter (dflash2_runtime reads ``_vmlx_context_window``). Without it a 128K
+    prompt kept every row of five target taps (5 x hidden x 2 bytes per token) until the first draft cycle."""
+    window = draft_context_window(draft, target_type)
+    if window is None:
+        return None
+    from mlx_lm.models.cache import RotatingKVCache
+
+    sliding = getattr(draft.config, "sliding_window", None)
+    layer_types = tuple(draft.config.layer_types)
+
+    def make_cache():
+        return [
+            RotatingKVCache(max_size=(sliding if t == "sliding_attention" else window) - 1, keep=0)
+            for t in layer_types
+        ]
+
+    draft.make_cache = make_cache
+    draft._vmlx_context_window = int(window)
+    return int(window)
+
+
 def load_quantized_dflash2(path):
     import dflash.model_mlx as runtime
     import mlx.core as mx

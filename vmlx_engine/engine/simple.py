@@ -743,6 +743,35 @@ class SimpleEngine(BaseEngine):
                 source=source,
             )
 
+    def _llm_dflash2_lane(self, kwargs: dict) -> bool:
+        """A text-only model decoding on the DFlash2 text lane (MLXLanguageModel.dflash2_text_lane)."""
+        if self._is_mllm or self._model is None or not _dflash2_enabled():
+            return False
+        lane = getattr(self._model, "dflash2_text_lane", None)
+        return bool(lane(kwargs)) if callable(lane) else False
+
+    async def _drain(self, stream) -> GenerationOutput:
+        """Non-stream result of a streamed DFlash2 generation: it publishes the terminal and fences the session-cache
+        write exactly as the streamed request does."""
+        final = None
+        async for out in stream:
+            final = out
+        if final is None:
+            return GenerationOutput(text="", finish_reason="stop")
+        raw_text = final.text
+        return GenerationOutput(
+            text=clean_output_text(raw_text),
+            raw_text=raw_text,
+            prompt_tokens=final.prompt_tokens,
+            tokens=getattr(final, "tokens", None) or [],
+            completion_tokens=final.completion_tokens,
+            finish_reason=final.finish_reason,
+            cached_tokens=final.cached_tokens,
+            cache_detail=final.cache_detail,
+            prefill_usage=final.prefill_usage,
+            spec_stats=getattr(final, "spec_stats", None),
+        )
+
     async def generate(
         self,
         prompt: str,
@@ -769,6 +798,11 @@ class SimpleEngine(BaseEngine):
         _gpu_keepalive_touch()  # GPU idle wake penalty after >=1.5 s (utils/gpu_keepalive.py)
         if not self._loaded:
             await self.start()
+        if self._llm_dflash2_lane(kwargs):
+            # Same route as streaming: DFlash2 decode, session cache, published terminal.
+            return await self._drain(self.stream_generate(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p, stop=stop, **kwargs,
+            ))
         # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
         # Translate the server's request-local bypass to its cache contract;
         # ordinary LLM wrappers must not receive the internal routing kwarg.
@@ -865,7 +899,8 @@ class SimpleEngine(BaseEngine):
         )
 
         async with self._generation_lock:
-            _admission_wait = await self._await_prior_terminal_persistence(None)
+            request_id = kwargs.pop("request_id", None)
+            _admission_wait = await self._await_prior_terminal_persistence(request_id)
             if request_seed is not None:
                 import mlx.core as mx
 
@@ -875,106 +910,159 @@ class SimpleEngine(BaseEngine):
             completion_tokens = 0
             finished = False
             self._abort_requested = False  # Reset at start of generation
-            self._current_request_id = kwargs.pop("request_id", None)
+            self._current_request_id = request_id
+            # A prompt prefill on the DFlash2 text lane checks this between chunks (cooperative cancel).
+            cancel_event = threading.Event()
+            if request_id:
+                self._cancel_events[request_id] = cancel_event
+            stream_iter = None
 
             try:
-                stream_iter = await self._run_model_call(
-                    lambda: iter(
-                        self._model.stream_generate(
-                            prompt=prompt,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            top_p=top_p,
-                            stop=stop,
-                            **kwargs,
+                try:
+                    stream_iter = await self._run_model_call(
+                        lambda: iter(
+                            self._model.stream_generate(
+                                prompt=prompt,
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                stop=stop,
+                                **kwargs,
+                            )
                         )
                     )
-                )
-            except Exception as gen_err:
-                logger.error(f"stream_generate failed to start: {gen_err}", exc_info=True)
-                raise
+                except Exception as gen_err:
+                    logger.error(f"stream_generate failed to start: {gen_err}", exc_info=True)
+                    raise
 
-            # Offload each next() call to thread pool so the event loop
-            # stays responsive for health checks during long prefills
-            _sentinel = object()
-            def _next():
-                try:
-                    return next(stream_iter)
-                except StopIteration:
-                    return _sentinel
+                # Offload each next() call to thread pool so the event loop
+                # stays responsive for health checks during long prefills
+                _sentinel = object()
+                def _next():
+                    try:
+                        with generation_cancellation_scope(cancel_event.is_set):
+                            return next(stream_iter)
+                    except StopIteration:
+                        return _sentinel
 
-            while True:
-                chunk = await self._run_model_call(_next)
-                if chunk is _sentinel:
-                    break
+                while True:
+                    try:
+                        chunk = await self._run_model_call(_next)
+                    except GenerationCancelled:
+                        self._abort_requested = False
+                        logger.info("SimpleEngine: prefill aborted by request")
+                        yield GenerationOutput(
+                            text=accumulated_text,
+                            new_text="",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            finished=True,
+                            finish_reason="abort",
+                        )
+                        return
+                    if chunk is _sentinel:
+                        break
 
-                # Check abort flag between tokens
-                if self._abort_requested:
-                    self._abort_requested = False
-                    logger.info("SimpleEngine: generation aborted by request")
+                    # Check abort flag between tokens
+                    if self._abort_requested or cancel_event.is_set():
+                        self._abort_requested = False
+                        logger.info("SimpleEngine: generation aborted by request")
+                        yield GenerationOutput(
+                            text=accumulated_text,
+                            new_text="",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            finished=True,
+                            finish_reason="abort",
+                        )
+                        break
+
+                    prompt_tokens = int(getattr(chunk, "prompt_tokens", 0) or 0) or prompt_tokens
+                    # The DFlash2 text lane reports a cumulative count (several tokens per chunk); AR chunks are one each.
+                    completion_tokens = max(
+                        completion_tokens + (0 if getattr(chunk, "completion_tokens", 0) else 1),
+                        int(getattr(chunk, "completion_tokens", 0) or 0),
+                    )
+                    new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
+                    accumulated_text += new_text
+
+                    finished = (
+                        getattr(chunk, "finished", False) or completion_tokens >= max_tokens
+                    )
+                    finish_reason = None
+                    if finished:
+                        finish_reason = getattr(chunk, "finish_reason", "stop")
+                        if prompt_tokens == 0:
+                            prompt_tokens = _count_llm_prompt_tokens(
+                                getattr(self._model, "tokenizer", None),
+                                prompt,
+                            )
+
+                    output = GenerationOutput(
+                        text=accumulated_text,
+                        new_text=new_text,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        tokens=list(getattr(chunk, "tokens", None) or []) if finished else [],
+                        cached_tokens=int(getattr(chunk, "cached_tokens", 0) or 0),
+                        cache_detail=str(getattr(chunk, "cache_detail", "") or ""),
+                        finished=finished,
+                        finish_reason=finish_reason,
+                        prefill_usage=(
+                            with_admission_wait(getattr(chunk, "prefill_usage", None), _admission_wait)
+                            if getattr(chunk, "prefill_usage", None) else None
+                        ),
+                        spec_stats=getattr(chunk, "spec_stats", None) if finished else None,
+                    )
+                    receipt = getattr(chunk, "persistence_future", None) if finished else None
+                    if receipt is not None and not strict_terminal_publish():
+                        # Publish now; the next generation's admission awaits the session-cache write.
+                        self._publish_terminal_early(receipt, request_id)
+                        yield output
+                    elif receipt is not None:
+                        self._pending_terminal_request_id = request_id
+                        try:
+                            async for terminal_output in terminal_persistence_outputs(
+                                output, receipt, request_id,
+                                lambda record: setattr(self, "_last_durability", record),
+                            ):
+                                yield terminal_output
+                        finally:
+                            self._pending_terminal_request_id = None
+                    else:
+                        yield output
+
+                    if finished:
+                        break
+
+                if not finished:
+                    if completion_tokens == 0:
+                        logger.warning("stream_generate yielded zero tokens — model may have failed silently")
+                    if prompt_tokens == 0:
+                        prompt_tokens = _count_llm_prompt_tokens(
+                            getattr(self._model, "tokenizer", None),
+                            prompt,
+                        )
                     yield GenerationOutput(
                         text=accumulated_text,
                         new_text="",
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         finished=True,
-                        finish_reason="abort",
+                        finish_reason="stop" if completion_tokens > 0 else None,
                     )
-                    break
-
-                prompt_tokens = (
-                    chunk.prompt_tokens
-                    if hasattr(chunk, "prompt_tokens")
-                    else prompt_tokens
-                )
-                completion_tokens += 1
-                new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
-                accumulated_text += new_text
-
-                finished = (
-                    getattr(chunk, "finished", False) or completion_tokens >= max_tokens
-                )
-                finish_reason = None
-                if finished:
-                    finish_reason = getattr(chunk, "finish_reason", "stop")
-                    if prompt_tokens == 0:
-                        prompt_tokens = _count_llm_prompt_tokens(
-                            getattr(self._model, "tokenizer", None),
-                            prompt,
-                        )
-
-                yield GenerationOutput(
-                    text=accumulated_text,
-                    new_text=new_text,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cached_tokens=int(getattr(chunk, "cached_tokens", 0) or 0),
-                    cache_detail=str(getattr(chunk, "cache_detail", "") or ""),
-                    finished=finished,
-                    finish_reason=finish_reason,
-                )
-
-                if finished:
-                    break
-
-            if not finished:
-                if completion_tokens == 0:
-                    logger.warning("stream_generate yielded zero tokens — model may have failed silently")
-                if prompt_tokens == 0:
-                    prompt_tokens = _count_llm_prompt_tokens(
-                        getattr(self._model, "tokenizer", None),
-                        prompt,
-                    )
-                yield GenerationOutput(
-                    text=accumulated_text,
-                    new_text="",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    finished=True,
-                    finish_reason="stop" if completion_tokens > 0 else None,
-                )
-
-            self._current_request_id = None
+            finally:
+                # The consumer is gone or the stream ended: a prefill still running stops at its next chunk boundary,
+                # and the generator's own cleanup runs on the model worker before the lock is released.
+                cancel_event.set()
+                try:
+                    close = getattr(stream_iter, "close", None)
+                    if close is not None:
+                        await self._run_model_call(close)
+                finally:
+                    self._current_request_id = None
+                    if request_id and self._cancel_events.get(request_id) is cancel_event:
+                        del self._cancel_events[request_id]
 
     async def chat(
         self,
@@ -1013,6 +1101,11 @@ class SimpleEngine(BaseEngine):
         # re-prefill every turn). Drain stream_chat() instead, so streamed
         # and non-streamed requests take the same route (MLLM.stream_chat
         # still sends audio and unsupported media to the native VLM path).
+        if self._llm_dflash2_lane(kwargs):
+            return await self._drain(self.stream_chat(
+                messages=messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p, tools=tools,
+                images=images, videos=videos, **kwargs,
+            ))
         if self._is_mllm and _dflash2_enabled():
             final = None
             async for out in self.stream_chat(
