@@ -772,7 +772,7 @@ class SimpleEngine(BaseEngine):
         # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
         # Translate the server's request-local bypass to its cache contract;
         # ordinary LLM wrappers must not receive the internal routing kwarg.
-        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+        if kwargs.pop("_bypass_prefix_cache", False) and (self._is_mllm or _dflash2_enabled()):
             kwargs["use_cache"] = False
         request_seed = kwargs.pop("seed", None)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
@@ -820,6 +820,8 @@ class SimpleEngine(BaseEngine):
                 completion_tokens=getattr(
                     output, "completion_tokens", len(getattr(output, "tokens", []))
                 ),
+                cached_tokens=int(getattr(output, "cached_tokens", 0) or 0),
+                cache_detail=str(getattr(output, "cache_detail", "") or ""),
                 finish_reason=output.finish_reason,
             )
 
@@ -852,7 +854,7 @@ class SimpleEngine(BaseEngine):
         # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
         # Translate the server's request-local bypass to its cache contract;
         # ordinary LLM wrappers must not receive the internal routing kwarg.
-        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+        if kwargs.pop("_bypass_prefix_cache", False) and (self._is_mllm or _dflash2_enabled()):
             kwargs["use_cache"] = False
         request_seed = kwargs.pop("seed", None)
         max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
@@ -946,6 +948,8 @@ class SimpleEngine(BaseEngine):
                     new_text=new_text,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    cached_tokens=int(getattr(chunk, "cached_tokens", 0) or 0),
+                    cache_detail=str(getattr(chunk, "cache_detail", "") or ""),
                     finished=finished,
                     finish_reason=finish_reason,
                 )
@@ -1039,7 +1043,7 @@ class SimpleEngine(BaseEngine):
         # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
         # Translate the server's request-local bypass to its cache contract;
         # ordinary LLM wrappers must not receive the internal routing kwarg.
-        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+        if kwargs.pop("_bypass_prefix_cache", False) and (self._is_mllm or _dflash2_enabled()):
             kwargs["use_cache"] = False
 
         # Convert tools for template if provided
@@ -1231,6 +1235,8 @@ class SimpleEngine(BaseEngine):
                     completion_tokens=getattr(
                         output, "completion_tokens", len(getattr(output, "tokens", []))
                     ),
+                    cached_tokens=int(getattr(output, "cached_tokens", 0) or 0),
+                    cache_detail=str(getattr(output, "cache_detail", "") or ""),
                     finish_reason=output.finish_reason,
                 )
 
@@ -1272,7 +1278,7 @@ class SimpleEngine(BaseEngine):
         # The MLLM wrapper owns media and speculative RAM/SSD prefix caches.
         # Translate the server's request-local bypass to its cache contract;
         # ordinary LLM wrappers must not receive the internal routing kwarg.
-        if kwargs.pop("_bypass_prefix_cache", False) and self._is_mllm:
+        if kwargs.pop("_bypass_prefix_cache", False) and (self._is_mllm or _dflash2_enabled()):
             kwargs["use_cache"] = False
 
         # Convert tools for template

@@ -10,6 +10,21 @@ from dataclasses import fields
 from pathlib import Path
 
 
+def apply_no_rope_layers(draft, cfg) -> list:
+    """Honour config ``no_rope_layers``: the upstream drafter rotates every layer, and a NoPE layer trained without rotation must not be."""
+    import dflash.model_mlx as runtime
+
+    ids = [int(i) for i in cfg.get("no_rope_layers") or []]
+
+    class _NoRopeAttention(runtime.DFlashAttention):
+        def __call__(self, x, x_ctx, rope, cache):
+            return super().__call__(x, x_ctx, lambda v, offset=0: v, cache)
+
+    for i in ids:
+        draft.layers[i].self_attn.__class__ = _NoRopeAttention
+    return ids
+
+
 def load_quantized_dflash2(path):
     import dflash.model_mlx as runtime
     import mlx.core as mx

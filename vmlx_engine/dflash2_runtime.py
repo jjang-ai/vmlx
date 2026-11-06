@@ -169,12 +169,17 @@ def _rebase_drafter_cache(cache: list, offset: int) -> None:
     offset (no shipped drafter has one: every bundled dflash2 is all-sliding;
     ISSUES I-38 notes the KVCache case).
     """
-    from mlx_lm.models.cache import RotatingKVCache
+    from mlx_lm.models.cache import KVCache, RotatingKVCache
 
     _patch_rotating_cache_resume_math()
     for layer in cache:
         if isinstance(layer, RotatingKVCache) and layer.keys is None:
             layer._vmlx_base = int(offset)
+        elif isinstance(layer, KVCache) and layer.keys is None:
+            # An empty KVCache allocates its buffer from the row count, so a forced offset leaves it too short for the write
+            # (broadcast error once offset % step + rows passes the step). Only RoPE reads this offset; the shipped full-attention
+            # drafter layer (Ripple) is NoPE, so it starts at 0 and holds the rows since the resume point.
+            continue
         layer.offset = int(offset)
 
 
@@ -292,6 +297,10 @@ class _VLMGDNStateCapture:
         for layer_cache in cache:
             if layer_cache.is_trimmable():
                 layer_cache.trim(int(trim))
+                continue
+            # A sliding-window target past its size (Ripple) cuts its own newest rows; only recurrent caches below need a replay.
+            if hasattr(layer_cache, "rollback_recent"):
+                layer_cache.rollback_recent(int(trim))
                 continue
             (
                 q,

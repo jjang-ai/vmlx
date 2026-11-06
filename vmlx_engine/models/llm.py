@@ -33,6 +33,8 @@ class StreamingOutput:
     token: int
     finished: bool = False
     finish_reason: str | None = None
+    cached_tokens: int = 0
+    cache_detail: str = ""
 
 
 class MLXLanguageModel:
@@ -249,6 +251,22 @@ class MLXLanguageModel:
         if not self._loaded:
             self.load()
 
+        if self._dflash2_text_lane():
+            from ..dflash2_runtime import stream_dflash2_generate
+            from ..speculative import get_draft_model
+
+            text, finish, last = "", None, None
+            for r in stream_dflash2_generate(self.model, self.tokenizer, get_draft_model(), prompt, max_tokens=max_tokens, temperature=temperature,
+                                             top_p=float(top_p), top_k=int(top_k), stop=stop, use_cache=kwargs.get("use_cache", True)):
+                text += r.text; finish = r.finish_reason or finish; last = r
+            out = GenerationOutput(text=text, tokens=[], finish_reason=finish or "stop")
+            out.prompt_tokens = getattr(last, "prompt_tokens", 0)
+            out.completion_tokens = getattr(last, "generation_tokens", 0)
+            out.cached_tokens = getattr(last, "cached_tokens", 0)
+            out.cache_detail = getattr(last, "cache_detail", "")
+            out.spec_stats = getattr(last, "spec_stats", None)
+            return out
+
         want_logprobs = bool(kwargs.pop("logprobs", False))
         top_logprobs = int(kwargs.pop("top_logprobs", 0) or 0)
         response_format = kwargs.pop("_vmlx_response_format", None)
@@ -391,6 +409,21 @@ class MLXLanguageModel:
             stop_sequence=matched_stop,
         )
 
+    def _dflash2_text_lane(self) -> bool:
+        from ..speculative import is_dflash2_enabled
+
+        return is_dflash2_enabled() and hasattr(self.model, "language_model")
+
+    def _stream_dflash2(self, prompt, max_tokens, temperature, top_p, top_k, stop, use_cache) -> Iterator[StreamingOutput]:
+        from ..dflash2_runtime import stream_dflash2_generate
+        from ..speculative import get_draft_model
+
+        for r in stream_dflash2_generate(self.model, self.tokenizer, get_draft_model(), prompt, max_tokens=max_tokens, temperature=temperature,
+                                         top_p=float(top_p), top_k=int(top_k), stop=stop, use_cache=use_cache):
+            yield StreamingOutput(text=r.text, token=(r.tokens[-1] if getattr(r, "tokens", None) else 0),
+                                  finished=r.finish_reason is not None, finish_reason=r.finish_reason,
+                                  cached_tokens=int(getattr(r, "cached_tokens", 0) or 0), cache_detail=str(getattr(r, "cache_detail", "") or ""))
+
     def stream_generate(
         self,
         prompt: str,
@@ -419,6 +452,11 @@ class MLXLanguageModel:
         Yields:
             StreamingOutput for each generated token
         """
+        # A text-only target with a DFlash2 drafter runs the same lane the VLM wrapper uses; the generic adaptive path cannot drive this drafter.
+        if self._dflash2_text_lane():
+            yield from self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, stop, kwargs.get("use_cache", True))
+            return
+
         if not self._loaded:
             self.load()
 

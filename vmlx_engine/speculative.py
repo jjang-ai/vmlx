@@ -314,6 +314,11 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
                     draft_model = dflash_runtime.load_draft(resolved_draft)
                 finally:
                     dflash_runtime.snapshot_download = original_download
+            from .dflash2_loader import apply_no_rope_layers
+
+            _nope = apply_no_rope_layers(draft_model, stored_config)
+            if _nope:
+                logger.info("DFlash2 drafter NoPE layers: %s", _nope)
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
