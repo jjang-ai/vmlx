@@ -1765,6 +1765,7 @@ class _BlockChooser:
     ar_probe_every = 24
     ar_burst = 8
     ar_alpha = 0.3
+    first_widest_cost_ratio = 2.0
 
     def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None, first_widest: bool = False):
         # ``low`` may be the whole tuple of candidate widths (from
@@ -1782,6 +1783,21 @@ class _BlockChooser:
         # Dense codebook-MLP targets only (``first_widest``, measured on JANGH2): Qwen3.8-27B JANG_4D, whose verify
         # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
         self.width = widths[-1] if first_widest else widths[0]
+        try:
+            # A/B lever: VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO=0 restores the unconditional widest start.
+            self.first_widest_cost_ratio = float(os.environ.get("VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO", self.first_widest_cost_ratio))
+        except ValueError:
+            pass
+        if first_widest and cost and self.first_widest_cost_ratio > 0:
+            # Once the widths have measured costs (process-wide table), the observation cycle is the widest width that
+            # costs at most first_widest_cost_ratio x the cheapest: the 27B JANGH2 window above costs ~1.9x its narrow
+            # width, but Ripple JANGH2's row-exact verify costs ~1.1 s at 32 rows vs ~0.11 s at 3, so every request (every
+            # tool result) waited ~1 s for its second token. Only the starting width changes; nothing caps the ladder.
+            base = cost.get(widths[0])
+            if base:
+                cheap = [w for w in widths if cost.get(w) is not None and cost[w] <= self.first_widest_cost_ratio * base]
+                if cheap:
+                    self.width = max(cheap)
         self._last_timed: dict = {}
         top = max(self.widths)
         self.trials = [0.0] * top          # index k = draft position k (1-based)
@@ -1795,7 +1811,6 @@ class _BlockChooser:
         # kept the chooser off width 8 (served JANGH2 code 59.5 vs 63 fixed-8).
         self.cost: dict = cost if cost is not None else {}
         self.cycles = 0
-        import os
         # Off for a pinned width (VMLX_DFLASH2_BLOCK=<n> is an A/B tool) and by
         # VMLX_DFLASH2_AR_FALLBACK=0 (A/B control for this policy).
         self.allow_ar = (

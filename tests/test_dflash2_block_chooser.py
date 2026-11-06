@@ -74,6 +74,18 @@ def test_first_cycle_at_a_width_is_warmup_and_costs_persist_across_requests():
     assert c2.width == 8                                   # 5/5 accepted -> 8 predicted to pay at 1.2x cost
 
 
+def test_first_widest_cycle_uses_measured_costs():
+    """Codebook targets start wide to observe every draft position, but not at a width that costs many cycles:
+    27B JANGH2-like costs (widest ~1.9x the narrowest) keep the widest start; Ripple JANGH2's row-exact verify (32 rows
+    ~10x 3 rows) starts at the widest width within 2x, instead of ~1 s before every request's second token."""
+    qwen = {3: 0.059, 5: 0.077, 8: 0.088, 16: 0.110}
+    assert _BlockChooser((3, 5, 8, 16), cost=dict(qwen), first_widest=True).width == 16
+    ripple = {3: 0.115, 5: 0.170, 16: 0.580, 32: 1.130}
+    assert _BlockChooser((3, 5, 16, 32), cost=dict(ripple), first_widest=True).width == 5
+    assert _BlockChooser((3, 5, 16, 32), cost={}, first_widest=True).width == 32      # nothing measured yet: widest
+    assert _BlockChooser((3, 5, 16, 32), cost=dict(ripple)).width == 3               # non-codebook: narrow start
+
+
 def test_three_widths_pick_sixteen_when_cheap_and_accepted():
     rng, c = random.Random(3), _BlockChooser((5, 8, 16))
     seq = []
