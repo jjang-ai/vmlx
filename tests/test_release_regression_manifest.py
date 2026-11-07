@@ -6,6 +6,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.cross_matrix import release_regression_manifest
 from tests.cross_matrix.run_release_regression_manifest import build_manifest_artifact
 from tests.cross_matrix.release_regression_manifest import (
@@ -16397,10 +16399,15 @@ def _scoped_prepackage_fixture(tmp_path, monkeypatch):
     return runner, root, path, data, provenance
 
 
-def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ripple", [False, True])
+def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp_path, monkeypatch, ripple):
     runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
     required = runner.SCOPED_REQUIRED_RECEIPTS | runner.SCOPED_DFLASH_RECEIPTS | runner.SCOPED_DSPARK_RECEIPTS
     data.update(schema=runner.SCOPED_RUNTIME_SCHEMA, models=sorted(runner.SCOPED_RUNTIME_MODELS))
+    if ripple:
+        required = runner.SCOPED_RIPPLE_RECEIPTS
+        data.update(schema=runner.SCOPED_RIPPLE_SCHEMA, models=sorted(runner.SCOPED_RIPPLE_MODELS))
+        data['receipts'] = {k: v for k, v in data['receipts'].items() if k in required}
 
     def write(name, value):
         p = path.parent / name
