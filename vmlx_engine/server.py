@@ -137,6 +137,7 @@ from .api.utils import (
     strip_marker_tokens_delta,
     extract_multimodal_content,
     is_mllm_model,  # noqa: F401
+    resolve_to_local_path_uncached,
 )
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
 from .errors import (
@@ -901,8 +902,12 @@ def _refresh_loaded_max_prompt_tokens(reason: str) -> int:
 
         _bundle = _model_path or ""
         if _bundle:
+            # Uncached: the CLI's pre-download probes memoize a repo id as
+            # unresolved, and this refresh runs after the download.
             _declared = _declared_context_limit_from_config(
-                _read_bundle_json(_bundle, "config.json")
+                _read_bundle_json(
+                    resolve_to_local_path_uncached(_bundle), "config.json"
+                )
             )
         set_declared_context_tokens(_declared)
         if _declared > 0:
