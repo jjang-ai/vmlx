@@ -103,6 +103,8 @@ import {
   calculatePrefillTps,
   estimateColdPrefillTps,
   summarizePrefillPasses,
+  buildExchangePass,
+  type ExchangePassMetrics,
   ExchangeFirstTokenClock,
   parseServerDecodeUsage,
   selectFinalDecodeTps,
@@ -2040,6 +2042,7 @@ export function registerChatHandlers(
         };
       };
       let cacheDetail = "";
+      let passCacheDetail = "";
       const recordCacheUsage = (details: any) => {
         const nextCachedTokens = Number(details?.cached_tokens);
         if (Number.isFinite(nextCachedTokens) && nextCachedTokens > 0) {
@@ -2047,9 +2050,29 @@ export function registerChatHandlers(
         }
         if (typeof details?.cache_detail === "string") {
           cacheDetail = mergeCacheDetails(cacheDetail, details.cache_detail);
+          passCacheDetail = mergeCacheDetails(passCacheDetail, details.cache_detail);
         }
       };
       const exchangeFirstTokenClock = new ExchangeFirstTokenClock();
+      // One footer row per model request once a tool loop runs: the chips above
+      // carry exchange totals, these rows carry each request's own warm and cold
+      // prefill, cache tier and TTFT.
+      const completedExchangePasses: ExchangePassMetrics[] = [];
+      let passToolNames: string[] = [];
+      let executedToolNames: string[] = [];
+      const currentExchangePass = () => buildExchangePass({
+        pass: completedExchangePasses.length + 1,
+        tools: passToolNames,
+        promptTokens,
+        cachedTokens,
+        cacheDetail: passCacheDetail,
+        ttftSeconds: exchangeFirstTokenClock.passSeconds(),
+        prefillUsage: currentPrefillUsage,
+      });
+      const exchangePassFields = (): { exchangePasses?: ExchangePassMetrics[] } =>
+        completedExchangePasses.length > 0
+          ? { exchangePasses: [...completedExchangePasses, currentExchangePass()] }
+          : {};
       let firstTokenTime: number | null = null;
       // Track actual generation time (excludes PP and tool execution pauses)
       let generationMs = 0;
@@ -3073,6 +3096,7 @@ export function registerChatHandlers(
                   ttft: ttft.toFixed(2),
                   elapsed: elapsed.toFixed(1),
                   ...remoteMetricFields(),
+                  ...exchangePassFields(),
                 },
               });
               rendererStreamNeedsFlush = true;
@@ -3561,6 +3585,7 @@ export function registerChatHandlers(
                         ttft: ttft.toFixed(2),
                         elapsed: Math.max(0, (now - startTime) / 1000).toFixed(1),
                         ...remoteMetricFields(),
+                        ...exchangePassFields(),
                       },
                     });
                   }
@@ -3835,6 +3860,10 @@ export function registerChatHandlers(
         // ─── Helper: send follow-up request and stream response ────────────
         const sendFollowUp = async (): Promise<boolean> => {
           finishServerDecodePass();
+          completedExchangePasses.push(currentExchangePass());
+          passToolNames = executedToolNames;
+          executedToolNames = [];
+          passCacheDetail = "";
           completedPrefillPasses.push(currentPrefillUsage);
           currentPrefillUsage = undefined;
           firstPass ??= { promptTokens, cachedTokens };
@@ -3947,6 +3976,7 @@ export function registerChatHandlers(
 
           const pendingImageDataUrls: string[] = [];
           const pendingVideoDataUrls: string[] = [];
+          executedToolNames = receivedToolCalls.map((tc) => tc.function.name);
           for (const tc of receivedToolCalls) {
             // Check abort between each tool — don't make user wait for all tools to finish
             if (abortController.signal.aborted)
@@ -4441,6 +4471,7 @@ export function registerChatHandlers(
                     ttft: exchangeFirstTokenClock.seconds().toFixed(2),
                     elapsed: Math.max(0, (Date.now() - startTime) / 1000).toFixed(1),
                     ...remoteMetricFields(),
+                    ...exchangePassFields(),
                   },
                 });
               }
@@ -4751,6 +4782,8 @@ export function registerChatHandlers(
         );
         const finalPrefillRates = footerPrefillRates(ttft);
         const finalPassPpSpeed = calculatePrefillTps({ prefillUsage: currentPrefillUsage });
+        // Before the exchange totals overwrite this request's own counts below.
+        const finalExchangePasses = exchangePassFields();
 
         // Release any withheld tail before the final content is assembled.
         flushToolTagHoldback();
@@ -4894,6 +4927,7 @@ export function registerChatHandlers(
           ttft: ttft.toFixed(2),
           totalTime: totalTime.toFixed(1),
           ...remoteMetricFields(),
+          ...finalExchangePasses,
         });
         if (collectedToolStatuses.length > 0) {
           assistantMessage.toolCallsJson = JSON.stringify(
@@ -5102,6 +5136,7 @@ export function registerChatHandlers(
                 ttft: ttft.toFixed(2),
                 totalTime: totalTime.toFixed(1),
                 ...remoteMetricFields(),
+                ...finalExchangePasses,
               },
             });
           }
@@ -5267,6 +5302,7 @@ export function registerChatHandlers(
             ttft: abortTtft.toFixed(2),
             totalTime: abortTotalTime.toFixed(1),
             ...remoteMetricFields(),
+            ...exchangePassFields(),
           };
 
           // Persist metricsJson to DB so reloading the chat shows real stats

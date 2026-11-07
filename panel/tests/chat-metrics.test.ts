@@ -6,6 +6,7 @@ import {
   estimateColdPrefillTps,
   summarizePrefillPasses,
   ExchangeFirstTokenClock,
+  buildExchangePass,
   parseServerDecodeUsage,
   selectFinalDecodeTps,
   summarizeServerDecodePasses,
@@ -202,5 +203,60 @@ describe('whole tool-turn latency and prefill', () => {
     expect(summarizePrefillPasses([receipt(0, 0)])).toBeUndefined()
     expect(summarizePrefillPasses([receipt(100, 0)])).toBeUndefined()
     expect(summarizePrefillPasses([receipt(100, 2)])).toBe('50.0')
+  })
+})
+
+describe('per-request rows of a tool exchange', () => {
+  const receipt = (tokens: number, seconds: number) => ({ tokens, seconds, scope: 'model_prefill_and_prompt_state' })
+
+  it('times each request from its own start while the exchange keeps its first token', () => {
+    const clock = new ExchangeFirstTokenClock()
+    clock.beginPass(1000)
+    clock.recordToken(1500)
+    expect(clock.passSeconds()).toBe(0.5)
+    clock.beginPass(9000)
+    expect(clock.passSeconds()).toBeUndefined()
+    clock.recordToken(9250)
+    clock.recordToken(9900)
+    expect(clock.passSeconds()).toBe(0.25)
+    expect(clock.seconds()).toBe(0.5)
+  })
+
+  it('reports the warm and cold rate of that request alone', () => {
+    expect(buildExchangePass({
+      pass: 2, tools: ['run_command'], promptTokens: 38786, cachedTokens: 38680, cacheDetail: 'dflash2-ssd',
+      ttftSeconds: 0.78, prefillUsage: receipt(106, 0.75),
+    })).toEqual({
+      pass: 2, tools: ['run_command'], promptTokens: 38786, cachedTokens: 38680, cacheDetail: 'dflash2-ssd',
+      ttft: '0.78', ppSpeed: '141.3', cachedPpSpeed: '49725.6',
+    })
+  })
+
+  it('shows no warm rate or tier on a cold request and caps cached at prompt', () => {
+    const cold = buildExchangePass({ pass: 1, promptTokens: 4167, cachedTokens: 0, cacheDetail: 'x', ttftSeconds: 14, prefillUsage: receipt(4167, 13.7) })
+    expect(cold.cachedPpSpeed).toBeUndefined()
+    expect(cold.cacheDetail).toBeUndefined()
+    expect(cold.ppSpeed).toBe('304.2')
+    expect(buildExchangePass({ pass: 1, promptTokens: 10, cachedTokens: 99, ttftSeconds: 1 }).cachedTokens).toBe(10)
+  })
+
+  it('keeps a row with nothing measured instead of inventing numbers', () => {
+    expect(buildExchangePass({ pass: 3 })).toEqual({
+      pass: 3, tools: undefined, promptTokens: undefined, cachedTokens: undefined, cacheDetail: undefined,
+      ttft: undefined, ppSpeed: undefined, cachedPpSpeed: undefined,
+    })
+  })
+
+  it('snapshots the final request before the exchange totals overwrite its counts, on every surface', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const snapshot = source.indexOf('const finalExchangePasses = exchangePassFields();')
+    const fold = source.indexOf('promptTokens = exchangePromptTokens + finalStreamPromptTokens;')
+    expect(snapshot).toBeGreaterThan(0)
+    expect(snapshot).toBeLessThan(fold)
+    expect(source.split('...finalExchangePasses,')).toHaveLength(3)
+    expect(source.split('...exchangePassFields(),')).toHaveLength(5)
+    const followUp = source.slice(source.indexOf('const sendFollowUp = async'))
+    expect(followUp.indexOf('completedExchangePasses.push(currentExchangePass());')).toBeLessThan(followUp.indexOf('promptTokens = 0;'))
+    expect(followUp.indexOf('completedExchangePasses.push(currentExchangePass());')).toBeLessThan(followUp.indexOf('currentPrefillUsage = undefined;'))
   })
 })

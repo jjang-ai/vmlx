@@ -656,6 +656,9 @@
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "약 {speed} 토큰/초",
       "estimatedRateTitle": "스트리밍 출력의 도착 시간을 기준으로 추정합니다. 하나 이상의 생성 단계에서 엔진 디코딩 시간을 제공하지 않았습니다.",
+      "passLabel": "요청 {n}",
+      "passAfterToolsLabel": "{tools} 후 요청 {n}",
+      "passTitle": "이 도구 교환의 모델 요청 하나: 해당 요청의 TTFT, 프리필 속도, 캐시 재사용.",
       "cachedPpsLabel": "{speed} pp/s (캐시 포함)",
       "cachedPpsTitle": "접두사 캐시 재사용 속도: 캐시에서 복원된 토큰을 포함한 전체 프롬프트를 첫 토큰까지의 시간(이번 턴의 첫 요청)으로 나눈 값입니다. pp/s와 비교하면 캐시가 절약한 시간을 알 수 있습니다."
     },

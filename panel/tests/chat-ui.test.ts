@@ -26,7 +26,7 @@ import { orderComposerContentParts } from '../src/shared/composerContentOrder'
 // ones (which now take `t`) — so every assertion here was proving a property of
 // the test file. `t` is backed by the real en.json catalog so the English
 // assertions below still mean what they say.
-import { formatTimestamp, getMetricsItems } from '../src/renderer/src/components/chat/chat-utils'
+import { formatTimestamp, getMetricsItems, getExchangePassRows } from '../src/renderer/src/components/chat/chat-utils'
 import { translateFromCatalog } from '../src/renderer/src/i18n/translate'
 import en from '../src/renderer/src/i18n/locales/en.json'
 
@@ -1526,5 +1526,33 @@ describe('Regenerate prompt integrity', () => {
     )
     expect(regenerate).toContain('await handleSend(content, attachments)')
     expect(regenerate).not.toContain('deleteMessage(lastAssistant.id)')
+  })
+})
+
+describe('Footer rows per model request', () => {
+  const base: MessageMetrics = { tokenCount: 10, tokensPerSecond: '30.0', ttft: '0.50' }
+
+  it('adds nothing to a turn with one request', () => {
+    expect(getExchangePassRows(base, t)).toEqual([])
+    expect(getExchangePassRows({ ...base, exchangePasses: [{ pass: 1, promptTokens: 9 }] }, t)).toEqual([])
+  })
+
+  it('gives each request its own warm, cold, tier and TTFT, naming the tools it follows', () => {
+    const rows = getExchangePassRows({
+      ...base,
+      exchangePasses: [
+        { pass: 1, promptTokens: 4167, ttft: '13.95', ppSpeed: '304.6' },
+        { pass: 2, tools: ['run_command', 'run_command'], promptTokens: 38786, cachedTokens: 38680, cacheDetail: 'dflash2-ssd', ttft: '0.78', ppSpeed: '141.5', cachedPpSpeed: '24888.0' },
+        { pass: 3, tools: ['a', 'b', 'c', 'd', 'e'] },
+      ],
+    }, t)
+    expect(rows.map(r => r.key)).toEqual([1, 2, 3])
+    const second = rows[1].parts.join(' | ')
+    expect(second).toContain('0.78s TTFT')
+    expect(second).toContain('141.5')
+    expect(second).toContain('24888.0')
+    expect(second).toContain('38680 dflash2-ssd')
+    expect(rows[0].parts.join(' | ')).not.toContain('dflash2')
+    expect(rows[2].parts).toEqual([])
   })
 })

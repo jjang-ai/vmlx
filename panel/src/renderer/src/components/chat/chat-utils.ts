@@ -1,3 +1,4 @@
+import type { ExchangePassMetrics } from '../../../../shared/chatMetrics'
 /** Pure utility functions for chat UI — extracted for testability */
 
 /** Format a timestamp into a human-readable relative string.
@@ -126,6 +127,48 @@ export interface MessageMetrics {
   ttft: string;
   totalTime?: string;
   elapsed?: string;
+  exchangePasses?: ExchangePassMetrics[];
+}
+
+export interface ExchangePassRow {
+  key: number;
+  title: string;
+  label: string;
+  parts: string[];
+}
+
+const PASS_TOOL_NAMES_SHOWN = 3;
+
+/** One line per model request of a tool exchange. Empty for a turn with a single request. */
+export function getExchangePassRows(
+  metrics: MessageMetrics,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): ExchangePassRow[] {
+  const passes = metrics.exchangePasses;
+  if (!passes || passes.length < 2) return [];
+  return passes.map((pass) => {
+    const names = [...new Set(pass.tools ?? [])];
+    const shown = names.slice(0, PASS_TOOL_NAMES_SHOWN).join(', ');
+    const more = names.length - PASS_TOOL_NAMES_SHOWN;
+    const tools = more > 0 ? `${shown} +${more}` : shown;
+    const parts: string[] = [];
+    if (pass.ttft) parts.push(`${pass.ttft}s TTFT`);
+    if (pass.ppSpeed) parts.push(t('chat.metrics.measuredPrefillLabel', { speed: pass.ppSpeed }));
+    if (pass.cachedPpSpeed) parts.push(t('chat.metrics.cachedPpsLabel', { speed: pass.cachedPpSpeed }));
+    if (pass.promptTokens) {
+      const detail = pass.cacheDetail ? ` ${pass.cacheDetail}` : '';
+      const cached = pass.cachedTokens ? t('chat.metrics.cachedSuffix', { cached: `${pass.cachedTokens}${detail}` }) : '';
+      parts.push(`${t('chat.metrics.promptLabel', { n: pass.promptTokens })}${cached}`);
+    }
+    return {
+      key: pass.pass,
+      title: t('chat.metrics.passTitle'),
+      label: tools
+        ? t('chat.metrics.passAfterToolsLabel', { n: pass.pass, tools })
+        : t('chat.metrics.passLabel', { n: pass.pass }),
+      parts,
+    };
+  });
 }
 
 export function getMetricsItems(

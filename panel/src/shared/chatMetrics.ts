@@ -158,18 +158,68 @@ export function selectFinalDecodeTps({
 export class ExchangeFirstTokenClock {
   private fetchStartedAt: number | undefined
   private firstTokenAt: number | undefined
+  private passStartedAt: number | undefined
+  private passFirstTokenAt: number | undefined
 
   beginPass(now: number): void {
     this.fetchStartedAt ??= now
+    this.passStartedAt = now
+    this.passFirstTokenAt = undefined
   }
 
   recordToken(now: number): void {
     this.firstTokenAt ??= now
+    this.passFirstTokenAt ??= now
+  }
+
+  /** Time to first token of the current request alone; undefined before its first token. */
+  passSeconds(): number | undefined {
+    return this.passStartedAt !== undefined && this.passFirstTokenAt !== undefined
+      ? Math.max(0, (this.passFirstTokenAt - this.passStartedAt) / 1000) : undefined
   }
 
   seconds(): number {
     return this.fetchStartedAt !== undefined && this.firstTokenAt !== undefined
       ? Math.max(0, (this.firstTokenAt - this.fetchStartedAt) / 1000) : 0
+  }
+}
+
+/** One model request of a tool exchange: its own prefill and cache reuse, not the exchange totals. */
+export interface ExchangePassMetrics {
+  pass: number
+  /** Tools whose results this request carried. Empty on the first request. */
+  tools?: string[]
+  promptTokens?: number
+  cachedTokens?: number
+  cacheDetail?: string
+  ttft?: string
+  ppSpeed?: string
+  cachedPpSpeed?: string
+}
+
+export interface ExchangePassInput {
+  pass: number
+  tools?: string[]
+  promptTokens?: number
+  cachedTokens?: number
+  cacheDetail?: string
+  ttftSeconds?: number
+  prefillUsage?: unknown
+}
+
+export function buildExchangePass(input: ExchangePassInput): ExchangePassMetrics {
+  const promptTokens = input.promptTokens && input.promptTokens > 0 ? input.promptTokens : undefined
+  const cachedTokens = promptTokens && input.cachedTokens && input.cachedTokens > 0
+    ? Math.min(input.cachedTokens, promptTokens) : undefined
+  return {
+    pass: input.pass,
+    tools: input.tools?.length ? input.tools : undefined,
+    promptTokens,
+    cachedTokens,
+    cacheDetail: cachedTokens ? input.cacheDetail || undefined : undefined,
+    ttft: input.ttftSeconds === undefined ? undefined : input.ttftSeconds.toFixed(2),
+    ppSpeed: calculatePrefillTps({ prefillUsage: input.prefillUsage }),
+    cachedPpSpeed: calculateCachedPromptTps({ promptTokens, cachedTokens, ttftSeconds: input.ttftSeconds }),
   }
 }
 

@@ -1,3 +1,4 @@
+import type { ExchangePassMetrics } from '../../../../shared/chatMetrics'
 import { useState, useEffect, useRef } from 'react'
 import { Sparkles, Loader2 } from 'lucide-react'
 import { MessageList } from './MessageList'
@@ -23,6 +24,7 @@ interface MessageMetrics {
   ttft: string
   totalTime?: string
   elapsed?: string
+  exchangePasses?: ExchangePassMetrics[]
 }
 
 interface Message {

@@ -656,6 +656,9 @@
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "~{speed} tokens/s",
       "estimatedRateTitle": "Estimación basada en los tiempos de llegada de la salida en streaming; el tiempo de decodificación del motor no estaba disponible para una o más etapas de generación.",
+      "passLabel": "Solicitud {n}",
+      "passAfterToolsLabel": "Solicitud {n} tras {tools}",
+      "passTitle": "Una solicitud al modelo de este intercambio de herramientas: su propio TTFT, velocidad de prellenado y reutilización de caché.",
       "cachedPpsLabel": "{speed} pp/s con caché",
       "cachedPpsTitle": "Velocidad de reutilización de la caché de prefijos: el prompt completo, incluidos los tokens restaurados de la caché, dividido por el tiempo hasta el primer token (primera solicitud del turno). Compárala con pp/s para ver lo que ahorró la caché."
     },

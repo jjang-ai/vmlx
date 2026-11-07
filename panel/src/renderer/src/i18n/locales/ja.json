@@ -656,6 +656,9 @@
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "約{speed} トークン/秒",
       "estimatedRateTitle": "ストリーミング出力の到着時刻から推定しています。一部の生成処理でエンジンのデコード時間を取得できませんでした。",
+      "passLabel": "リクエスト {n}",
+      "passAfterToolsLabel": "{tools} の後のリクエスト {n}",
+      "passTitle": "このツール交換のモデルリクエスト 1 件: そのリクエスト自体の TTFT、プリフィル速度、キャッシュ再利用。",
       "cachedPpsLabel": "{speed} pp/s（キャッシュ込み）",
       "cachedPpsTitle": "プレフィックスキャッシュの再利用速度：キャッシュから復元したトークンを含むプロンプト全体を、最初のトークンまでの時間（このターンの最初のリクエスト）で割った値です。pp/s と比べるとキャッシュの効果がわかります。"
     },

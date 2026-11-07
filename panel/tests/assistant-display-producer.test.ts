@@ -38,7 +38,7 @@ function streamSnapshot(record: AssistantDisplayTimelineRecorder, content: strin
     displayTimeline: record, displayContent: content, reasoningSegments: segments, isReasoningDelta,
     chatId: 'chat', assistantMessage: { id: 'reply' }, cumulativeTokenOffset: 0, iterationTokenCount: 1,
     promptTokens: 5, cachedTokens: 0, cacheDetail: '', streamTps: 1, prefillRates: {},
-    ttft: 0.1, elapsed: 1, remoteMetricFields: () => ({}),
+    ttft: 0.1, elapsed: 1, remoteMetricFields: () => ({}), exchangePassFields: () => ({}),
   })
 }
 
