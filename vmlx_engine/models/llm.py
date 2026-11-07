@@ -8,7 +8,7 @@ integrating with vLLM's model execution system.
 
 import logging
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 from ..utils.multi_eos import collect_multi_eos_ids
 
@@ -23,6 +23,8 @@ class GenerationOutput:
     tokens: list[int]
     logprobs: list[dict] | None = None
     finish_reason: str | None = None
+    # The user stop string that ended the generation (generate() always passes it; Anthropic `stop_sequence`).
+    stop_sequence: str | None = None
 
 
 @dataclass
@@ -33,6 +35,37 @@ class StreamingOutput:
     token: int
     finished: bool = False
     finish_reason: str | None = None
+    cached_tokens: int = 0
+    cache_detail: str = ""
+    # DFlash2 text lane only (one chunk can carry several accepted tokens): the cumulative generated-token count
+    # (0 = one token per chunk, the AR lanes), the prompt size, every generated id on the terminal chunk, the
+    # engine-measured prefill receipt (usage.vmlx_prefill / pp/s), the request's background session-cache write
+    # (SimpleEngine publishes the terminal and fences the next admission on it) and the speculative stats.
+    completion_tokens: int = 0
+    prompt_tokens: int = 0
+    tokens: list[int] | None = None
+    prefill_usage: dict | None = None
+    persistence_future: Any = None
+    spec_stats: dict | None = None
+
+
+def _dflash2_spec_stats(widths: dict[int, int], emitted: list[int], ar_tokens: int, generation_tps: float) -> dict:
+    """The same keys the multimodal DFlash2 lanes report (/health.last_request.speculative, the Perf panel)."""
+    drafted = sum((w - 1) * n for w, n in widths.items())
+    accepted = sum(max(0, e - 1) for e in emitted)
+    cycles = len(emitted)
+    return {
+        "kind": "dflash2",
+        "lane": "text",
+        "cycles": cycles,
+        "emitted_per_cycle": round(sum(emitted) / max(1, cycles), 3),
+        "drafted": drafted,
+        "accepted": accepted,
+        "acceptance": round(accepted / drafted, 4) if drafted else None,
+        "widths": {str(k): v for k, v in sorted(widths.items())},
+        "ar_tokens": ar_tokens,
+        "generation_tps": round(float(generation_tps or 0.0), 2),
+    }
 
 
 class MLXLanguageModel:
@@ -184,6 +217,8 @@ class MLXLanguageModel:
                     f"install failed: {_wrap_err}"
                 )
 
+            self._install_dflash2_lane_matmul()
+            self._prewarm_dflash2()
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 
@@ -248,6 +283,17 @@ class MLXLanguageModel:
         """
         if not self._loaded:
             self.load()
+
+        if self.dflash2_text_lane(kwargs):
+            text, last, finish = "", None, None
+            for r in self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs):
+                text += r.text
+                finish = r.finish_reason or finish
+                last = r
+            out = GenerationOutput(text=text, tokens=list(getattr(last, "tokens", None) or []), finish_reason=finish or "stop")
+            for name in ("prompt_tokens", "completion_tokens", "cached_tokens", "cache_detail", "prefill_usage", "persistence_future", "spec_stats"):
+                setattr(out, name, getattr(last, name, None))
+            return out
 
         want_logprobs = bool(kwargs.pop("logprobs", False))
         top_logprobs = int(kwargs.pop("top_logprobs", 0) or 0)
@@ -391,6 +437,117 @@ class MLXLanguageModel:
             stop_sequence=matched_stop,
         )
 
+    def _install_dflash2_lane_matmul(self) -> None:
+        """A text-only DFlash2 target decodes through verify forwards of 2..32 rows. Route its affine projections
+        through the lane matmul (metal/lane_qmm.py), as the multimodal DFlash2 path does: MLX's quantized_matmul changes
+        kernel with the row count, so on the row-exact verify every extra row cost about one more decode step; the lane
+        kernel costs about the same for 1..16 rows and its per-row bits do not depend on the row count, so AR steps
+        (which run it too) and verify rows still agree. Same policy and opt-out (VMLX_LANE_QMM=0) as the VLM targets;
+        dense JANGH codebook projections (TQLinear) keep their own kernels."""
+        try:
+            from ..speculative import is_dflash2_enabled
+
+            if not (is_dflash2_enabled() and hasattr(self.model, "language_model")):
+                return
+            from .mllm import _dflash_target_lane_qmm
+
+            lm_type = str(getattr(getattr(self.model, "args", None), "model_type", "") or getattr(self.model, "model_type", "") or "")
+            lane, why = _dflash_target_lane_qmm(True, lm_type, False)
+            if not lane:
+                logger.info("DFlash2 target lane matmul: not installed (%s)", why)
+                return
+            import os
+            import time
+
+            from ..metal import lane_qmm
+
+            t0 = time.perf_counter()
+            counts = lane_qmm.install(
+                self.model.language_model,
+                tile=os.environ.get("VMLX_LANE_QMM_TILED", "1").strip() not in ("0", "off", "false", "no"),
+            )
+            logger.info("DFlash2 target lane matmul: %d projections (%d tiled), kept on MLX: %s (%.1fs)",
+                        counts["lane"], counts["tiled"], counts["skipped"] or "none", time.perf_counter() - t0)
+        except Exception as exc:  # noqa: BLE001 - the MLX kernels stay in place
+            logger.warning("DFlash2 lane matmul not installed: %s", exc)
+
+    def _prewarm_dflash2(self) -> None:
+        """Compile the lane's kernels and measure its widths before the first request (dflash2_runtime.prewarm_dflash2_target)."""
+        try:
+            from ..dflash2_runtime import prewarm_dflash2_target, prewarm_enabled
+            from ..speculative import get_draft_model, is_dflash2_enabled
+
+            lm = getattr(self.model, "language_model", None)
+            if lm is None or not is_dflash2_enabled() or not prewarm_enabled(getattr(lm, "model_type", None)):
+                return
+            draft = get_draft_model()
+            if draft is not None and not isinstance(draft, tuple):
+                prewarm_dflash2_target(self.model, draft)
+        except Exception as exc:  # noqa: BLE001 - advisory, the first request does the same work
+            logger.warning("DFlash2 prewarm skipped: %s", exc)
+
+    def dflash2_text_lane(self, kwargs: dict | None = None) -> bool:
+        """True when this request decodes on the DFlash2 text lane (a text-only target with a bundled DFlash2 drafter).
+
+        Per-token logprobs and guided JSON need the token-at-a-time AR loop, so those requests take it (without the
+        drafter: the generic speculative path cannot drive a DFlash2 drafter)."""
+        from ..speculative import is_dflash2_enabled
+
+        if not (is_dflash2_enabled() and self.model is not None and hasattr(self.model, "language_model")):
+            return False
+        kw = kwargs or {}
+        return not (kw.get("logprobs") or kw.get("_vmlx_response_format"))
+
+    def _stream_dflash2(self, prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs) -> Iterator[StreamingOutput]:
+        from ..dflash2_runtime import stream_dflash2_generate
+        from ..speculative import get_draft_model
+
+        produced: list[int] = []
+        widths: dict[int, int] = {}
+        emitted: list[int] = []
+        ar_tokens = 0
+        for r in stream_dflash2_generate(
+            self.model,
+            self.tokenizer,
+            get_draft_model(),
+            prompt,
+            max_tokens=int(max_tokens),
+            temperature=float(temperature),
+            top_p=float(top_p),
+            top_k=int(top_k or 0),
+            min_p=float(min_p or 0.0),
+            logit_bias=kwargs.get("logit_bias"),
+            repetition_penalty=float(1.0 if repetition_penalty is None else repetition_penalty),
+            frequency_penalty=float(kwargs.get("frequency_penalty", 0.0) or 0.0),
+            presence_penalty=float(kwargs.get("presence_penalty", 0.0) or 0.0),
+            stop=stop,
+            use_cache=kwargs.get("use_cache", True),
+        ):
+            new = [int(t) for t in (getattr(r, "tokens", None) or [])]
+            produced.extend(new)
+            drafted = getattr(r, "drafted", None)
+            if getattr(r, "accepted", None) is not None and drafted is not None:
+                if int(drafted) > 0:
+                    emitted.append(len(new))
+                    widths[int(drafted) + 1] = widths.get(int(drafted) + 1, 0) + 1
+                else:
+                    ar_tokens += len(new)
+            finished = r.finish_reason is not None
+            yield StreamingOutput(
+                text=r.text,
+                token=new[-1] if new else 0,
+                finished=finished,
+                finish_reason=r.finish_reason,
+                cached_tokens=int(getattr(r, "cached_tokens", 0) or 0),
+                cache_detail=str(getattr(r, "cache_detail", "") or ""),
+                completion_tokens=len(produced),
+                prompt_tokens=int(getattr(r, "prompt_tokens", 0) or 0),
+                tokens=list(produced) if finished else None,
+                prefill_usage=getattr(r, "prefill_usage", None),
+                persistence_future=getattr(r, "persistence_future", None) if finished else None,
+                spec_stats=_dflash2_spec_stats(widths, emitted, ar_tokens, getattr(r, "generation_tps", 0.0)) if finished else None,
+            )
+
     def stream_generate(
         self,
         prompt: str,
@@ -421,6 +578,11 @@ class MLXLanguageModel:
         """
         if not self._loaded:
             self.load()
+
+        # A text-only target with a DFlash2 drafter runs the same lane the VLM wrapper uses; the generic adaptive path cannot drive this drafter.
+        if self.dflash2_text_lane(kwargs):
+            yield from self._stream_dflash2(prompt, max_tokens, temperature, top_p, top_k, min_p, repetition_penalty, stop, kwargs)
+            return
 
         from mlx_lm import stream_generate
         response_format = kwargs.pop("_vmlx_response_format", None)
@@ -517,11 +679,20 @@ class MLXLanguageModel:
             if finished:
                 finish_reason = "stop" if should_stop else "length"
 
+            # The footer's pp/s chips read this receipt on every lane; mlx_lm reports the prompt pass on each response.
+            prefill_usage = None
+            if token_count == 1:
+                _prompt_n = int(getattr(response, "prompt_tokens", 0) or 0)
+                _prompt_tps = float(getattr(response, "prompt_tps", 0.0) or 0.0)
+                if _prompt_n > 0 and _prompt_tps > 0:
+                    prefill_usage = {"tokens": _prompt_n, "seconds": _prompt_n / _prompt_tps, "scope": "model_prefill_and_prompt_state", "path": "llm_ar"}
+
             yield StreamingOutput(
                 text=new_text,
                 token=response.token if hasattr(response, "token") else 0,
                 finished=finished,
                 finish_reason=finish_reason,
+                prefill_usage=prefill_usage,
             )
 
             if finished:

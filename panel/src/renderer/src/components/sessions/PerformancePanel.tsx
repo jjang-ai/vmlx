@@ -187,6 +187,7 @@ interface HealthData {
     prefix?: boolean
     paged?: boolean
     block_disk_l2?: boolean
+    native_checkpoint_ssd?: boolean
     ssm_entries?: number | null
     kv_layer_indices?: number[]
     generic_turboquant_kv?: {
@@ -577,7 +578,7 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             {health.native_cache && (health.native_cache.paged != null || health.native_cache.block_disk_l2 != null) && (
               <InfoCard
                 label={t('sessions.performance.cacheStack')}
-                value={`${health.native_cache.paged ? t('sessions.performance.cacheStackRamPaged') : health.native_cache.prefix ? t('sessions.performance.cacheStackPrefix') : t('sessions.performance.cacheStackNoPrefix')}${health.native_cache.block_disk_l2 ? ' + SSD L2' : ''}`}
+                value={`${health.native_cache.paged ? t('sessions.performance.cacheStackRamPaged') : health.native_cache.prefix ? t('sessions.performance.cacheStackPrefix') : t('sessions.performance.cacheStackNoPrefix')}${health.native_cache.block_disk_l2 ? ' + SSD L2' : health.native_cache.native_checkpoint_ssd ? ' + SSD' : ''}`}
               />
             )}
             {health.native_cache?.components?.length ? (

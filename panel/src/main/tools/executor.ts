@@ -463,10 +463,17 @@ function searchFiles(
 function findFiles(pattern: string, path: string, workingDir: string): ToolResult {
   if (!pattern) return { content: 'Missing required parameter: pattern', is_error: true }
   const searchDir = resolvePath(workingDir, path)
+  // `fd --glob` and `find -name` both match the basename only, so the path-style globs models commonly send
+  // (`**/LICENSE*`) matched nothing: a leading `**/` is what they already do, and a pattern that still names
+  // directories is matched against the whole path.
+  const namePattern = pattern.replace(/^(?:\*\*\/)+/, '')
+  const matchesPath = namePattern.includes('/')
 
   // Use fd if available, fallback to find
   try {
-    const fdArgs = ['--color=never', '--type', 'f', '--glob', pattern, searchDir]
+    const fdArgs = matchesPath
+      ? ['--color=never', '--type', 'f', '--full-path', '--glob', `**/${namePattern}`, searchDir]
+      : ['--color=never', '--type', 'f', '--glob', namePattern, searchDir]
     const output = execFileSync('fd', fdArgs, {
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
@@ -481,7 +488,7 @@ function findFiles(pattern: string, path: string, workingDir: string): ToolResul
     }
     // Fallback to find command
     try {
-      const findArgs = [searchDir, '-name', pattern, '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*']
+      const findArgs = [searchDir, ...(matchesPath ? ['-path', `*/${namePattern}`] : ['-name', namePattern]), '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*']
       const output = execFileSync('find', findArgs, {
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,

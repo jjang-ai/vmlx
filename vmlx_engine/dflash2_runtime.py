@@ -169,13 +169,56 @@ def _rebase_drafter_cache(cache: list, offset: int) -> None:
     offset (no shipped drafter has one: every bundled dflash2 is all-sliding;
     ISSUES I-38 notes the KVCache case).
     """
-    from mlx_lm.models.cache import RotatingKVCache
+    from mlx_lm.models.cache import KVCache, RotatingKVCache
 
     _patch_rotating_cache_resume_math()
     for layer in cache:
         if isinstance(layer, RotatingKVCache) and layer.keys is None:
             layer._vmlx_base = int(offset)
+        elif isinstance(layer, KVCache) and layer.keys is None:
+            # An empty KVCache allocates its buffer from the row count, so a forced offset leaves it too short for the write
+            # (broadcast error once offset % step + rows passes the step). Only RoPE reads this offset; the shipped full-attention
+            # drafter layer (Ripple) is NoPE, so it starts at 0 and holds the rows since the resume point.
+            continue
         layer.offset = int(offset)
+
+
+def jangh_dense_lane_enabled() -> bool:
+    """VMLX_JANGH_DENSE_LANE=1: a DFlash2 target's dense JANGH projections run the sorted tile QMM for every row count
+    (jangh.dense.TQLinear.sorted_lane), AR steps included, so verify rows stay bit-equal to AR steps while verify
+    cost stops growing with the width."""
+    return os.environ.get("VMLX_JANGH_DENSE_LANE", "0").strip().lower() in ("1", "on", "true", "yes")
+
+
+# Model families whose dense JANGH verify takes the fast routing without any env var.
+DENSE_SPEED_FIRST_FAMILIES = frozenset({"ricursive"})
+
+
+def verify_scope_enabled(model_type: str | None = None) -> bool:
+    """Whether a verify forward runs inside row_exact_verify_scope (one-row decode arithmetic: per-row attention on the
+    target, row-exact vocabulary head). Off for DENSE_SPEED_FIRST_FAMILIES, where it costs a wide verify far more than it
+    buys: Ripple JANGH2, 1,500 tokens, 16 rows 152 vs 187 ms, 32 rows 196 vs 284 ms, 1-5 rows unchanged. Temperature-0 text
+    can then differ from AR at near ties, as it already does for the dense projections. VMLX_DFLASH2_VERIFY_SCOPE=1|0
+    overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_VERIFY_SCOPE", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type not in DENSE_SPEED_FIRST_FAMILIES
+
+
+def jangh_dense_speed_first(model_type: str | None = None) -> bool:
+    """Dense JANGH projections keep their default routing inside a verify (1-5 rows on the per-row kernel, 6+ on the
+    sorted tile QMM). Wide verifies get ~flat cost, but a wide verify row no longer equals the AR step bit for bit, so
+    temperature-0 output can change at exact ties with the width. On for DENSE_SPEED_FIRST_FAMILIES;
+    VMLX_DFLASH2_DENSE_SPEED_FIRST=1|0 overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_DENSE_SPEED_FIRST", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type in DENSE_SPEED_FIRST_FAMILIES
 
 
 class _TargetAdapter:
@@ -197,11 +240,22 @@ class _TargetAdapter:
         self.media_embeds = None
         self.media_positions = None
         self.rope_delta = 0
+        self._verify_scope = verify_scope_enabled(getattr(language_model, "model_type", None))
         modules = getattr(language_model, "named_modules", None)
         if callable(modules):
+            lane = jangh_dense_lane_enabled()
+            model_type = getattr(language_model, "model_type", None)
+            speed_first = jangh_dense_speed_first(model_type)
+            dense = 0
             for _, module in modules():
                 if getattr(module, "is_jangtq2_dense", False):
-                    module.row_exact_verify = True
+                    dense += 1
+                    module.row_exact_verify = not speed_first
+                    if lane:
+                        module.sorted_lane = True
+            if dense:
+                logger.info("DFlash2 dense verify routing: %s (%d projections, target %s)",
+                            "speed-first" if speed_first else "row-exact", dense, model_type or "unknown")
 
     @property
     def layers(self):
@@ -223,7 +277,7 @@ class _TargetAdapter:
         return {"position_ids": (mx.arange(start, start + rows) + int(self.rope_delta))[None]}
 
     def __call__(self, inputs, cache=None):
-        if not self.last_row_logits and inputs.shape[1] > 1:
+        if self._verify_scope and not self.last_row_logits and inputs.shape[1] > 1:
             from .metal.row_exact_qmv import row_exact_verify_scope
 
             # Wide sorted MLP/SDPA reductions can change a near-tied target
@@ -292,6 +346,10 @@ class _VLMGDNStateCapture:
         for layer_cache in cache:
             if layer_cache.is_trimmable():
                 layer_cache.trim(int(trim))
+                continue
+            # A sliding-window target past its size (Ripple) cuts its own newest rows; only recurrent caches below need a replay.
+            if hasattr(layer_cache, "rollback_recent"):
+                layer_cache.rollback_recent(int(trim))
                 continue
             (
                 q,
@@ -381,12 +439,15 @@ def _prefill_last_logits(runtime: Any, adapter: Any, prompt, cache, hidden_limit
         adapter.last_row_logits = previous
 
 
-def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limit):
+def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limit, gap_limit=None):
     """Retain the drafter's prefix without another target or draft forward.
 
     A target-only boundary hit otherwise feeds only the new suffix to the
     drafter. Keep either its existing KV plus the unprocessed gap, or the
     bounded target-hidden window needed to rebuild that KV.
+
+    ``gap_limit`` (drafters with a context window): a gap longer than the window is not kept -- the drafter would
+    rotate most of it away, and every snapshot would carry all of it.
     """
     import mlx.core as mx
 
@@ -399,6 +460,7 @@ def _snapshot_draft_state(runtime, draft, resume, parts, cut, start, hidden_limi
         cached is not None
         and int(cached[0].offset) + gap_len == start
         and sum(int(p.shape[1]) for p in parts) == cut - start
+        and (gap_limit is None or gap_len + (cut - start) <= int(gap_limit))
     ):
         cloned = _clone_cache_shells(cached, lambda: runtime.make_prompt_cache(draft))
         if cloned is not None:
@@ -565,8 +627,16 @@ class _DFlash2SessionStore:
     def take_matching(self, model_key: Any, prompt_tokens: list[int]) -> Optional[dict]:
         """Pop and return the entry covering the most cached positions whose
         tokens are a prefix of ``prompt_tokens`` and whose cache leaves a
-        non-empty delta to prefill. Ownership transfers to the caller."""
+        non-empty delta to prefill. Ownership transfers to the caller.
+
+        The match is taken BEFORE durable entries are released: under the SSD-only policy the finished turn's live
+        cache is kept here until it is durable and the engine goes idle (``hot``), so a tool continuation sent at once
+        continues from it instead of reading the whole conversation back from SSD."""
+        taken = self._take(model_key, prompt_tokens)
         self.release_durable()
+        return taken
+
+    def _take(self, model_key: Any, prompt_tokens: list[int]) -> Optional[dict]:
         with self._lock:
             best_i = -1
             best_cached = 0
@@ -730,7 +800,12 @@ def _store_session(entry: dict, ram_only: bool = False, parent: Optional[dict] =
     from .glm_dflash2 import ssd_only_ram_release_enabled
 
     ssd_only = _SESSION_SSD is not None and not ram_only and ssd_only_ram_release_enabled()
-    if not ssd_only:
+    # The finished turn's cache is the live cache itself (no further appends by its owner, so holding it costs no copy):
+    # under SSD-only it stays in RAM until durable AND idle (release_durable runs on the idle timer and after each
+    # lookup), so an immediate tool continuation skips the SSD read. Its receipt still fences the next admission, so
+    # the writer never shares buffers with that request's appends. Snapshot views taken mid-prefill stay SSD-only.
+    hot = ssd_only and entry.get("kind") == "turn"
+    if not ssd_only or hot:
         _SESSION_STORE.put(entry)
     if _SESSION_SSD is not None and not ram_only:
         if parent:
@@ -740,8 +815,9 @@ def _store_session(entry: dict, ram_only: bool = False, parent: Optional[dict] =
             entry.pop("ssd_parent", None)
             if ssd_only:
                 refused = receipt.done() and not (receipt.result() or {}).get("durable")
-                if refused:
+                if refused and not hot:
                     _SESSION_STORE.put(entry)
+                if refused or hot:
                     _SESSION_STORE.attach_receipt(entry, receipt)
                 receipt.vmlx_lookup_served_from_ram = bool(refused)
                 return receipt
@@ -798,6 +874,11 @@ def _clone_cache_shells(cache: list, factory) -> Optional[list]:
             # suffix tokens to the recurrence twice and changed the answer
             # (audit 2026-10-07: 27B 4D "weekdays x10" -> 12 from SSD, 10 cold).
             state = src.state
+            if type(src).__name__ == "RotatingKVCache" and isinstance(state, (list, tuple)):
+                # Past its window a rotating cache returns its live buffer OBJECTS; the next single-row update (an
+                # AR step, a drafter cycle that accepted nothing) writes them by slice assignment, which rewrites the
+                # array object every holder shares. Views keep the snapshot frozen at no copy cost.
+                state = [a[...] if a is not None else a for a in state]
             dst.state = list(state) if isinstance(state, list) else state
             src_meta = getattr(type(src), "meta_state", None)
             if isinstance(src_meta, property) and src_meta.fset is not None:
@@ -1117,11 +1198,17 @@ def _stream_generate_resumable(
                 _ptrace.append((name, round(1000 * (_now - _pt0[0]), 1)))
                 _pt0[0] = _now
         with mx.stream(runtime.generation_stream):
+            _all_sliding = all(t == "sliding_attention" for t in draft.config.layer_types)
+            _draft_window = getattr(draft, "_vmlx_context_window", None)
             hidden_limit = (
                 draft.config.sliding_window - 1
-                if all(t == "sliding_attention" for t in draft.config.layer_types)
-                else None
+                if _all_sliding
+                else (int(_draft_window) - 1 if _draft_window else None)
             )
+            # Session snapshots carry a drafter hidden context only for all-sliding drafters (a 2K-row window). A
+            # windowed full-attention drafter's 16K-row context would add ~0.8 GB to every snapshot; its entries keep
+            # the drafter KV (turn entries) or rebuild it from the prefilled rows.
+            snapshot_limit = hidden_limit if _all_sliding else None
             # Prefill in segments ending at each snapshot cut (system end,
             # assistant tag); a cut costs one extra chunk boundary.
             cuts = [(c, k) for c, k in ((system_cut, "system"), (boundary_cut, "boundary")) if c is not None]
@@ -1147,7 +1234,11 @@ def _stream_generate_resumable(
                     _pmark(f"seg->{kind}@{cut}({cut - start})")
                     _shells = _clone_cache_shells(target_cache, lambda: runtime.make_prompt_cache(adapter))
                     _pmark("clone")
-                    _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, hidden_limit)
+                    # A windowed drafter's gap is target hidden rows (5 taps x hidden x 2 B: 51 KB per token on Ripple,
+                    # about the target's own KV per token). Kept only up to the drafter's sliding window (~210 MB);
+                    # past it the snapshot stores no drafter state and a restore rebuilds the drafter from its rows.
+                    _dstate = _snapshot_draft_state(runtime, draft, resume, parts, cut, cache_len, snapshot_limit,
+                                                    gap_limit=None if _all_sliding else draft.config.sliding_window - 1)
                     _pmark("draft_state")
                     start = cut
                     if kind != "chunk":
@@ -1348,7 +1439,8 @@ def _stream_generate_resumable(
                     "target_cache": target_cache,
                     "draft_cache": store_draft,
                     "draft_hidden_gap": gap_arr if store_draft is not None else None,
-                    "draft_context": hidden if n == 1 else None,
+                    # A windowed full-attention drafter's context is up to 16K rows (~0.8 GB): rebuilt, not stored.
+                    "draft_context": hidden if n == 1 and _all_sliding else None,
                 },
                 ram_only=media is not None and not per_item_media,
                 parent=_parent_below(_stored_refs, len(confirmed) - 1, _ssd_parent),
@@ -1419,8 +1511,13 @@ def _stream_generate_resumable(
                     nxt = mx.argmax(last, axis=-1)
             return nxt, h
 
+        # While AR continues, a step stays launched across the chunk boundary (the chunk only exists to stream its
+        # tokens): restarting the pipeline at every burst cost ~4 % of AR speed, the floor of hard text.
+        ar_pipe = None
+        next_action = None
         while n < max_tokens:
-            mode, burst = chooser.next_action()
+            mode, burst = next_action if next_action is not None else chooser.next_action()
+            next_action = None
             if mode == "ar":
                 # AR burst (see _BlockChooser.next_action): plain target steps,
                 # pipelined like the AR lane when no history-dependent sampling
@@ -1428,14 +1525,18 @@ def _stream_generate_resumable(
                 # token is sampled from the target's own distribution, so the
                 # output law is the AR lane's; greedy emits the target argmax.
                 k = min(int(burst), max_tokens - n)
-                _ar_t0 = time.perf_counter()
                 pipelined = sampling_controls is None
                 emitted: list = []
                 rows: list = []
                 launched_past = False
                 terminal = False
-                nx, h = _ar_step(mx.array([[tokens[-1]]]), prompt_list + tokens)
-                mx.async_eval(nx, h)
+                if ar_pipe is not None:
+                    nx, h, _ar_t0 = ar_pipe
+                    ar_pipe = None
+                else:
+                    _ar_t0 = time.perf_counter()
+                    nx, h = _ar_step(mx.array([[tokens[-1]]]), prompt_list + tokens)
+                    mx.async_eval(nx, h)
                 for j in range(k):
                     launched = None
                     if pipelined and j + 1 < k:
@@ -1459,8 +1560,16 @@ def _stream_generate_resumable(
                         mx.async_eval(nx, h)
                     else:
                         nx, h = launched
-                chooser.observe_ar(time.perf_counter() - _ar_t0, len(emitted))
+                _ar_t1 = time.perf_counter()
+                chooser.observe_ar(_ar_t1 - _ar_t0, len(emitted))
                 after_ar = True
+                if pipelined and not chooser.legacy and not terminal and n + len(emitted) < max_tokens:
+                    next_action = chooser.next_action()
+                    if next_action[0] == "ar":
+                        nx2, h2 = _ar_step(nx.reshape(1, 1), None)
+                        mx.async_eval(nx2, h2)
+                        ar_pipe = (nx2, h2, _ar_t1)
+                        launched_past = True
                 hidden = mx.concatenate([hidden] + rows, axis=1)
                 if stop_matcher is None:
                     for t in emitted:
@@ -1697,16 +1806,32 @@ class _BlockChooser:
     ``ar_probe_every`` AR tokens one verify cycle runs so the acceptance
     estimate keeps tracking the text. The first decode action of every request
     is a verify cycle (exit checkpoints rely on the drafter having run).
+
+    Floor against AR (2026-11-06, Ripple-65B: turning the drafter on must not cost speed). What exploration may cost is
+    bounded in time instead of cycles, because one row-exact 32-row verify costs ~15 AR steps:
+      * A width without a measured cost is a candidate at an estimated cost and runs only when predicted to win; seeding
+        every width ran each one twice on the first reply after every load (~4 s on hard text).
+      * The other widths are re-timed from a budget of decode time (``retime_budget``), not every ``probe_every`` cycles.
+      * AR wins as soon as it is predicted faster (``ar_margin`` used to favour verify by 5 %).
+      * A probe out of AR runs once what it is expected to lose fits ``ar_probe_budget`` of the AR time since the last one:
+        cheap while verify is nearly level with AR, so a few bad cycles at the start of a reply cannot lock it into AR for
+        the rest of it, and rare while verify is far behind.
+      * A request measures AR only when the comparison is close (``ar_skip_ratio``): the burst cost easy text ~0.3 s.
+    VMLX_DFLASH2_CHOOSER_LEGACY=1 restores all five (A/B control).
     """
 
     decay = 0.85
     cost_alpha = 0.25
     probe_every = 32
     prior_p = 0.7
-    ar_margin = 0.05
+    ar_margin = 0.0
     ar_probe_every = 24
+    ar_probe_budget = 0.03
     ar_burst = 8
     ar_alpha = 0.3
+    ar_skip_ratio = 1.5
+    retime_budget = 0.03
+    first_widest_cost_ratio = 2.0
 
     def __init__(self, low, high: Optional[int] = None, cost: Optional[dict] = None, first_widest: bool = False):
         # ``low`` may be the whole tuple of candidate widths (from
@@ -1723,7 +1848,32 @@ class _BlockChooser:
         # (83.7 tok/s). One wide cycle costs ~110 ms once per request (~0.1 ms per token of a 384-token reply).
         # Dense codebook-MLP targets only (``first_widest``, measured on JANGH2): Qwen3.8-27B JANG_4D, whose verify
         # costs 62-70 ms at 5 rows vs 71-78 at 8, keeps the narrow start (A/B 2026-10-19, see _dflash2_block_plan).
-        self.width = widths[-1] if first_widest else widths[0]
+        self.legacy = os.environ.get("VMLX_DFLASH2_CHOOSER_LEGACY", "0").strip().lower() in ("1", "on", "true", "yes")
+        if self.legacy:
+            self.ar_margin, self.ar_probe_budget, self.ar_skip_ratio, self.retime_budget = 0.05, 0.0, 0.0, 0.0
+        else:
+            try:
+                self.ar_probe_budget = float(os.environ.get("VMLX_DFLASH2_AR_PROBE_BUDGET", self.ar_probe_budget))
+            except ValueError:
+                pass
+        # Nothing measured yet (first request after a load): the width below the widest still observes the positions that
+        # matter and costs half as much on a row-growing verify.
+        self.width = (widths[-2] if len(widths) > 2 and not self.legacy else widths[-1]) if first_widest else widths[0]
+        try:
+            # A/B lever: VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO=0 restores the unconditional widest start.
+            self.first_widest_cost_ratio = float(os.environ.get("VMLX_DFLASH2_FIRST_WIDEST_COST_RATIO", self.first_widest_cost_ratio))
+        except ValueError:
+            pass
+        if first_widest and cost and self.first_widest_cost_ratio > 0:
+            # Once the widths have measured costs (process-wide table), the observation cycle is the widest width that
+            # costs at most first_widest_cost_ratio x the cheapest: the 27B JANGH2 window above costs ~1.9x its narrow
+            # width, but Ripple JANGH2's row-exact verify costs ~1.1 s at 32 rows vs ~0.11 s at 3, so every request (every
+            # tool result) waited ~1 s for its second token. Only the starting width changes; nothing caps the ladder.
+            base = cost.get(widths[0])
+            if base:
+                cheap = [w for w in widths if cost.get(w) is not None and cost[w] <= self.first_widest_cost_ratio * base]
+                if cheap:
+                    self.width = max(cheap)
         self._last_timed: dict = {}
         top = max(self.widths)
         self.trials = [0.0] * top          # index k = draft position k (1-based)
@@ -1737,7 +1887,6 @@ class _BlockChooser:
         # kept the chooser off width 8 (served JANGH2 code 59.5 vs 63 fixed-8).
         self.cost: dict = cost if cost is not None else {}
         self.cycles = 0
-        import os
         # Off for a pinned width (VMLX_DFLASH2_BLOCK=<n> is an A/B tool) and by
         # VMLX_DFLASH2_AR_FALLBACK=0 (A/B control for this policy).
         self.allow_ar = (
@@ -1746,6 +1895,7 @@ class _BlockChooser:
         )
         self.ar_since_probe = 0
         self.ar_tokens = 0
+        self.catchup_ms: list = []         # first cycle after each AR burst, ms over the width's cost (log line only)
         # AR-cost hygiene, as glm_dflash2.AdaptiveSpec (d6d64762 / 3dec394f, found on the MiMo lane 2026-10-16: one
         # stalled burst moved the shared AR cost 22 -> 88 ms and spec then won for the life of the process, because
         # nothing re-measured AR once spec won): after ar_reprobe_cycles verify cycles an AR burst re-measures it (and
@@ -1779,22 +1929,49 @@ class _BlockChooser:
             e += run
         return e
 
+    def _cost_of(self, w: int) -> Optional[float]:
+        """Measured cost, else scaled from the nearest measured width: (w + 4) rows fits both the row-growing verify and,
+        pessimistically, the flat one, and a width that runs once is measured from then on. None while nothing is measured."""
+        c = self.cost.get(w)
+        if c is not None:
+            return c
+        known = [k for k in self.widths if k in self.cost]
+        if not known:
+            return None
+        near = min(known, key=lambda k: abs(k - w))
+        return self.cost[near] * (w + 4) / (near + 4)
+
+    def _best_width(self) -> Optional[int]:
+        priced = [w for w in self.widths if self._cost_of(w) is not None]
+        return max(priced, key=lambda w: self.expected_tokens(w) / self._cost_of(w)) if priced else None
+
     def next_action(self) -> tuple:
         """("spec", width) for a verify cycle at ``self.width``, or ("ar", n)."""
         if not self.allow_ar or self.cycles == 0:
             return ("spec", self.width)
-        if any(w not in self.cost for w in self.widths):
+        if self.legacy and any(w not in self.cost for w in self.widths):
             return ("spec", self.width)    # still seeding width costs
+        best = self._best_width()
+        if best is None:
+            return ("spec", self.width)    # the width that just warmed up runs once more to get a measured cost
+        spec_rate = self.expected_tokens(best) / self._cost_of(best)
         t_ar = self.cost.get("ar")
-        if t_ar is None or self._request_ar_pending:
+        if t_ar is None or (self._request_ar_pending and (not self.ar_skip_ratio or spec_rate * t_ar < self.ar_skip_ratio)):
             return ("ar", self.ar_burst)   # one AR measurement before comparing
         if self.ar_reprobe_cycles > 0 and self.spec_since_ar >= self.ar_reprobe_cycles:
             self.spec_since_ar = 0
             self._reprobe_pending = True
             return ("ar", self.ar_burst)   # re-measure a possibly stale AR cost
-        best = max(self.widths, key=lambda w: self.expected_tokens(w) / self.cost[w])
-        spec_rate = self.expected_tokens(best) / self.cost[best]
-        if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar or self.ar_since_probe >= self.ar_probe_every:
+        if spec_rate * (1.0 + self.ar_margin) >= 1.0 / t_ar:
+            self.ar_since_probe = 0
+            return ("spec", self.width)
+        if self.ar_probe_budget > 0:
+            expected_loss = self._cost_of(best) - self.expected_tokens(best) * t_ar
+            if self.ar_since_probe * t_ar * self.ar_probe_budget >= expected_loss:
+                self.ar_since_probe = 0
+                self.width = best          # a re-timing of another width waits for a cycle that is winning anyway
+                return ("spec", self.width)
+        elif self.ar_since_probe >= self.ar_probe_every:
             self.ar_since_probe = 0
             return ("spec", self.width)
         return ("ar", self.ar_burst)
@@ -1805,7 +1982,7 @@ class _BlockChooser:
         timed = [w for w in self.widths if w in self.cost]
         return (
             "ar_ms_per_token=%s ar_rate=%s width_ms=%s expected_tokens=%s width_rate=%s ar_tokens=%d cycles=%d "
-            "ar_outliers_skipped=%d"
+            "ar_outliers_skipped=%d catchup_ms=%s"
             % (
                 "-" if ar is None else "%.1f" % (ar * 1000.0),
                 "-" if ar is None else "%.1f" % (1.0 / ar),
@@ -1815,6 +1992,7 @@ class _BlockChooser:
                 self.ar_tokens,
                 self.cycles,
                 self.ar_outliers_skipped,
+                self.catchup_ms,
             )
         )
 
@@ -1825,6 +2003,7 @@ class _BlockChooser:
         self.ar_tokens += tokens
         self.ar_since_probe += tokens
         self.spec_since_ar = 0
+        self.cost["decode_s"] = self.cost.get("decode_s", 0.0) + seconds
         reprobe, self._reprobe_pending = self._reprobe_pending, False
         if tokens < self.ar_min_sample_tokens:
             return                         # EOS / max_tokens-cut burst: launch overhead, not the AR cost
@@ -1866,7 +2045,9 @@ class _BlockChooser:
         if width not in warm:
             warm.add(width)                # first cycle at a width in this process: compile/warm-up
         elif after_ar:
-            pass                           # this cycle's drafter also ingested the AR burst's rows
+            # this cycle's drafter also ingested the AR burst's rows
+            if width in self.cost and len(self.catchup_ms) < 8:
+                self.catchup_ms.append(round((seconds - self.cost[width]) * 1000.0))
         else:
             c = self.cost.get(width)
             self.cost[width] = seconds if c is None else c + self.cost_alpha * (seconds - c)
@@ -1874,15 +2055,47 @@ class _BlockChooser:
         self._last_timed[width] = self.cycles
         if len(self.widths) == 1:
             return
+        self.cost["decode_s"] = self.cost.get("decode_s", 0.0) + seconds
         unseen = [w for w in self.widths if w not in self.cost]
-        if unseen:
+        if self.legacy and unseen:
             self.width = unseen[0]
-        elif self.cycles % self.probe_every == 0:
+        elif self.legacy and self.cycles % self.probe_every == 0:
             # re-time the other width measured longest ago
             others = [w for w in self.widths if w != width]
             self.width = min(others, key=lambda w: self._last_timed.get(w, -1))
         else:
-            self.width = max(self.widths, key=lambda w: self.expected_tokens(w) / self.cost[w])
+            best = self._best_width()
+            self.width = width if best is None else best
+            due = self._retime_due(width) if best is not None else None
+            if due is not None:
+                self.width = due
+
+    def _retime_due(self, width: int) -> Optional[int]:
+        """A measured width other than the one that just ran whose re-timing fits ``retime_budget`` of decode time since it
+        was last timed; a width that cannot currently win (under half the best rate) waits four times as long. Shared
+        across requests like the costs, so a long conversation of short replies still tracks context and clock drift."""
+        if self.retime_budget <= 0:
+            return None
+        decode_s = self.cost["decode_s"]
+        last = self.cost.setdefault("retimed", {})
+        last.setdefault(width, decode_s)
+        best = self._best_width()
+        top = self.expected_tokens(best) / self._cost_of(best)
+        due = []
+        for w in self.widths:
+            if w == best or w not in self.cost:
+                continue
+            waited = decode_s - last.setdefault(w, decode_s)
+            need = self.cost[w] / self.retime_budget
+            if self.expected_tokens(w) / self.cost[w] < 0.5 * top:
+                need *= 4.0
+            if waited >= need:
+                due.append((last[w], w))
+        if not due:
+            return None
+        w = min(due)[1]
+        last[w] = decode_s
+        return w
 
 
 _WIDTH_COSTS: dict = {}
@@ -1994,6 +2207,92 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False, codebook: boo
     # measured worse with width 3 (story 37.1 -> 35.7-36.1, 3 reps) and worse still with (8, 16) (32.7-33.0): its verify
     # costs 62-70 ms at 5 rows vs 71-78 at 8 (A/B 2026-10-19 at matched 1,302-1,387 MHz).
     return tuple(sorted({min(5, trained), trained, 2 * trained}))
+
+
+def prewarm_enabled(model_type: Optional[str] = None) -> bool:
+    """VMLX_DFLASH2_PREWARM=1|0 overrides the default (on for DENSE_SPEED_FIRST_FAMILIES) both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_PREWARM", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type in DENSE_SPEED_FIRST_FAMILIES
+
+
+def prewarm_dflash2_target(model: Any, draft: Any, *, rounds: int = 3) -> Optional[dict]:
+    """Run every candidate width once at load: the Metal kernels compile before the first reply instead of during it, and
+    the chooser starts from measured costs instead of an estimate. The estimate prices an untimed width by (w + 4) rows,
+    which on a flat verify called width 32 1.8x width 16 when it costs 1.3x, so it was never tried. Costs are shared with
+    the requests and keep moving with what they measure (context length, clock). Advisory: a failure only logs."""
+    import mlx.core as mx
+    import dflash.model_mlx as runtime
+
+    adapter = _adapter_for(model)
+    widths: tuple = ()
+    try:
+        runtime._patch_model(adapter, draft.config.target_layer_ids)
+        draft.bind(adapter)
+        widths = _dflash2_block_plan(int(draft.config.block_size), _lane_flat(adapter), codebook=_codebook_mlp(adapter))
+        if len(widths) < 2:
+            return None                    # a pinned width has nothing to choose
+        mask_id = int(draft.config.mask_token_id)
+        t_start = time.perf_counter()
+        target_cache, draft_cache = runtime.make_prompt_cache(adapter), draft.make_cache()
+        ids = [(17 * i + 3) % 1000 + 100 for i in range(64)]
+        with mx.stream(runtime.generation_stream):
+            adapter.last_row_logits = True
+            try:
+                logits = adapter(mx.array([ids]), target_cache)
+            finally:
+                adapter.last_row_logits = False
+            hidden = mx.concatenate(adapter._hidden_states, axis=-1)
+        mx.eval(logits, hidden, [c.state for c in target_cache])
+        with mx.stream(runtime.generation_stream):
+            first = draft.propose(mx.array([[ids[-1], mask_id]]), hidden, draft_cache, 0, logits_start=1)[0]
+        mx.eval(first)
+        draft_base = draft_cache[0].offset
+
+        def cycle(w: int) -> float:
+            t0 = time.perf_counter()
+            with mx.stream(runtime.generation_stream):
+                drafted = None
+                if w > 1:
+                    block = mx.array([[ids[-1]] + [mask_id] * (w - 1)])
+                    drafted = draft.propose(block, hidden[:, -1:], draft_cache, 0, logits_start=1)[0]
+                rows = mx.array([[ids[-1]]]) if drafted is None else mx.concatenate([mx.array([[ids[-1]]]), drafted], axis=1)
+                out = mx.argmax(adapter(rows, target_cache), axis=-1)
+                tapped = mx.concatenate(adapter._hidden_states, axis=-1)
+            mx.eval(out, tapped)
+            seconds = time.perf_counter() - t0
+            for c in target_cache:
+                c.trim(w) if c.is_trimmable() else c.rollback_recent(w)
+            if w > 1 and (excess := draft_cache[0].offset - draft_base) > 0:
+                runtime._trim_recent_cache(draft_cache, excess)
+            return seconds
+
+        seen: dict = {}
+        for _ in range(rounds):
+            for w in (1, *widths):
+                seen.setdefault(w, []).append(cycle(w))
+        cost = _width_costs(adapter, widths)
+        warm = cost.setdefault("warm", set())
+        for w, times in seen.items():
+            best = min(times[1:] or times)   # the first run of each width compiles its kernels
+            if w == 1:
+                cost["ar"] = best
+                warm.add("ar")
+            else:
+                cost[w] = best
+                warm.add(w)
+        adapter.gdn_states.clear()
+        del target_cache, draft_cache, logits, hidden, first
+        mx.clear_cache()
+        measured = {w: round(min(t[1:] or t) * 1000.0, 1) for w, t in seen.items()}
+        logger.info("DFlash2 prewarm: %s ms per width (1 = AR) in %.1f s", measured, time.perf_counter() - t_start)
+        return measured
+    except Exception as exc:  # noqa: BLE001 - requests still measure their own costs and compile on first use
+        logger.warning("DFlash2 prewarm skipped: %s", exc)
+        return None
 
 
 def stream_dflash2_generate(

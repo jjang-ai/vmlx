@@ -1140,6 +1140,29 @@ def register_all(registry=None):
         )
     )
 
+    # Ripple (ricursive): mixed sliding/full KV, JSON tool calls inside <tool_call>, model-decided reasoning (the template
+    # ends at the assistant header and the model opens <think> itself when it reasons).
+    _register(
+        ModelConfig(
+            family_name="ricursive",
+            model_types=["ricursive"],
+            cache_type="kv",
+            eos_tokens=["<|im_end|>", "<|endoftext|>"],
+            tool_parser="hermes",
+            reasoning_parser="qwen3",
+            think_in_template=False,
+            supports_thinking=True,
+            # The model decides per turn whether to reason and the template renders no effort level: none advertised.
+            # supports_instruct_mode stays unset on purpose: False would turn a client's enable_thinking=false (which
+            # the template simply ignores) into an HTTP 400.
+            supported_reasoning_efforts=[],
+            supports_native_tools=True,
+            preserve_native_tool_format=True,
+            is_mllm=False,
+            priority=4,
+        )
+    )
+
     # ── Gemma family ──
 
     _register(

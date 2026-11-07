@@ -4,6 +4,15 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [1.6.84] - 2026-11-06
+
+- Add Ripple-65B serving with adaptive DFlash2 for compatible JANGH2 and JANG affine bundles, including mixed sliding/full attention and native RAM/SSD session reuse.
+- Prewarm candidate verification widths and seed measured costs at load. Draft widths remain adaptive; performance depends on output, context, sampling and hardware, and short or low-acceptance requests can decode below ordinary decoding speed.
+- Improve asynchronous SSD checkpoint persistence and restore across tool calls and idle waits, including compact rotating-attention state.
+- Show per-request prefill, cached prompt throughput, TTFT and cache counts within tool exchanges, preserving them after reload and validating imported metrics.
+- Report the native DFlash2 cache accurately in health and the Performance panel, and preserve reasoning/history boundaries across the supported chat protocols.
+- Ripple's fast verification defaults can produce different text from ordinary decoding at numerical near ties. Exact verification remains available through the diagnostic verification-scope option; no token-identical default parity is claimed.
+
 ## [1.6.82] - 2026-10-27
 
 - Add DeepSeek-V4.1-Flash-1017 serving for compatible JANG affine and JANGHT bundles, with native Engram, image inputs, DSML tool calls and model-derived sampling defaults.

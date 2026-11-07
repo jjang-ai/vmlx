@@ -480,12 +480,34 @@ def test_parent_whose_recorded_depth_understates_its_chain_gets_a_whole_child(ss
     _grow(target, 4)
     n = lengths[-1] + 4
     # a restored parent whose ref claims depth 0 although its file walks MAX_CHAIN parents (a replaced ancestor)
-    child = ssd.put({"kind": "turn", "tokens": tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END], "cache_len": n,
+    child = ssd.put({"kind": "boundary", "tokens": tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END], "cache_len": n,
                      "target_cache": target, "ssd_parent": dict(deepest, depth=0)})
     assert ssd.flush() and child.result()["durable"]
     assert child.vmlx_ssd_ref["depth"] == 0 and ssd.stats["deep_parent_full_writes"] == 1   # written whole
     got = _take(ssd, tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END, IM_START, 5])
     assert got is not None and got["cache_len"] == n
+
+
+def test_turn_entry_chains_one_link_deeper_and_the_next_boundary_rebases(ssd):
+    """The next admission waits for a turn's write, so the periodic whole rewrite moves to the following boundary
+    entry (written during the next prefill): a turn on a MAX_CHAIN-deep parent stays a delta and still restores."""
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN
+    lengths = [4 * (i + 1) for i in range(MAX_CHAIN + 1)]
+    tokens, receipts, target = _chain(ssd, lengths)
+    _grow(target, 4)
+    n = lengths[-1] + 4
+    turn_tokens = tokens[:lengths[-1]] + [IM_START, 1, 2, IM_END]
+    turn = ssd.put({"kind": "turn", "tokens": turn_tokens, "cache_len": n, "target_cache": target,
+                    "ssd_parent": dict(receipts[-1].vmlx_ssd_ref, receipt=receipts[-1])})
+    assert ssd.flush() and turn.result()["durable"]
+    assert turn.vmlx_ssd_ref["depth"] == MAX_CHAIN + 1 and ssd.stats["deep_parent_full_writes"] == 0
+    got = _take(ssd, turn_tokens + [IM_START, 5])
+    assert got is not None and got["cache_len"] == n and ssd.stats["chain_misses"] == 0
+    assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+    _grow(target, 2)
+    nb = ssd.put({"kind": "boundary", "tokens": turn_tokens + [IM_START, 5], "cache_len": n + 2, "target_cache": target,
+                  "ssd_parent": dict(turn.vmlx_ssd_ref, receipt=turn)})
+    assert ssd.flush() and nb.result()["durable"] and nb.vmlx_ssd_ref["depth"] == 0     # rebased: whole entry
 
 
 def test_less_complete_stored_entry_is_replaced_by_a_whole_entry(ssd):
@@ -644,3 +666,44 @@ def test_same_token_key_with_pending_final_token_keeps_parent_and_descendant(ssd
     assert got is not None and got["cache_len"] == 8
     assert ssd.stats["chain_misses"] == 0
     assert all(mx.array_equal(a, b) for a, b in zip(target[0].state, got["target_cache"][0].state))
+
+
+def test_chain_continues_while_deltas_stay_below_a_whole_entry_then_rebases(ssd):
+    """Amortized rebase: past MAX_CHAIN a delta is still written while the chain's delta bytes are below one whole
+    entry, up to MAX_CHAIN_HARD links (a fixed depth rewrote a 129K-token conversation every 8 entries). A deep chain
+    restores bit-identical, and the hard limit still forces a whole entry."""
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN, MAX_CHAIN_HARD
+
+    kv = KVCache()
+    kv.update_and_fetch(mx.random.normal((1, 2, 512, 64)), mx.random.normal((1, 2, 512, 64)))   # big base, small deltas
+    tokens = [IM_START] + [10 + i for i in range(512 + 4 * (MAX_CHAIN_HARD + 2))]
+    receipts, prev, n = [], None, 512
+    for i in range(MAX_CHAIN_HARD + 2):
+        entry = {"kind": "chunk", "tokens": tokens[:n], "cache_len": n, "target_cache": [kv]}
+        if prev is not None:
+            entry["ssd_parent"] = dict(prev.vmlx_ssd_ref, receipt=prev)
+        prev = ssd.put(entry)
+        assert ssd.flush() and prev.result()["durable"]
+        receipts.append(prev)
+        kv.update_and_fetch(mx.random.normal((1, 2, 4, 64)), mx.random.normal((1, 2, 4, 64)))
+        n += 4
+    depths = [r.vmlx_ssd_ref["depth"] for r in receipts]
+    assert depths[MAX_CHAIN + 1] == MAX_CHAIN + 1                    # past the old fixed depth: still a delta
+    assert max(depths) == MAX_CHAIN_HARD and depths[MAX_CHAIN_HARD + 1] == 0   # the hard limit rebases
+    deep = receipts[MAX_CHAIN_HARD]
+    got = ssd.take_matching(tokens[:deep.vmlx_ssd_ref["len"]] + [IM_START, 3], im_start_id=IM_START, eos_ids=[IM_END],
+                            make_target=lambda: [KVCache()], make_draft=lambda: [])
+    assert got is not None and got["cache_len"] == deep.vmlx_ssd_ref["len"] and ssd.stats["chain_misses"] == 0
+    rows = got["cache_len"]
+    assert mx.array_equal(got["target_cache"][0].state[0], kv.state[0][:, :, :rows]).item()
+
+
+def test_turn_stays_a_delta_past_the_byte_budget_and_the_boundary_rebases():
+    from vmlx_engine.dflash2_session_disk import MAX_CHAIN, MAX_CHAIN_HARD, _delta_allowed
+
+    deep = MAX_CHAIN + 5
+    assert _delta_allowed("chunk", deep, 10, 100) and not _delta_allowed("chunk", deep, 100, 100)
+    assert _delta_allowed("boundary", deep, 10, 100) and not _delta_allowed("boundary", deep, 500, 100)
+    assert _delta_allowed("turn", deep, 500, 100)                         # fenced by the next admission: never a whole write
+    assert not _delta_allowed("turn", MAX_CHAIN_HARD + 2, 0, 100)         # ... within the loader's depth
+    assert not _delta_allowed("chunk", deep, None, 100)                   # unknown bytes keep the depth rule

@@ -63,6 +63,7 @@ export interface MessageMetrics {
   cachedPpSpeed?: string;
   ttft: string;
   totalTime?: string;
+  exchangePasses?: import('../shared/chatMetrics').ExchangePassMetrics[];
 }
 
 export interface Message {

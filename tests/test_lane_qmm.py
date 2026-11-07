@@ -160,3 +160,43 @@ def test_installed_model_output_is_identical_with_and_without_xsum_sharing(monke
     off = m(x)
     monkeypatch.setattr(L, "_SHARE_XSUM", True)
     assert mx.array_equal(m(x), off)
+
+
+@pytest.mark.parametrize("bits", L.BITS)
+@pytest.mark.parametrize("tiled", [False, True])
+def test_one_row_kernel_matches_the_tile_on_either_layout(bits, tiled):
+    n, k = 128, 256
+    mx.random.seed(bits)
+    q, s, b = mx.quantize((mx.random.normal((n, k)) * 0.05).astype(mx.float32), group_size=64, bits=bits)
+    sbt = L.pack_scales(s.astype(mx.bfloat16), b.astype(mx.bfloat16))
+    weight = L.tile_weight(q, bits=bits, group=64) if tiled else q
+    x = mx.random.normal((1, 1, k)).astype(mx.bfloat16)
+    tile = L.lane_matmul(x, weight, sbt, bits=bits, group=64, tiled=tiled)
+    one = L.one_row_matmul(x, weight, sbt, bits=bits, group=64, tiled=tiled)
+    assert one.shape == tile.shape and one.dtype == mx.bfloat16
+    assert mx.max(mx.abs(one.astype(mx.float32) - tile.astype(mx.float32))).item() <= 2e-3 * mx.max(mx.abs(tile.astype(mx.float32))).item()
+
+
+@pytest.mark.parametrize("flag,model_type,taken", [
+    (None, "ricursive", True), (None, "qwen3_5_text", False), (None, None, False),
+    ("0", "ricursive", False), ("1", "qwen3_5_text", True),
+])
+def test_one_row_routing_defaults_by_family_and_covers_only_single_rows(monkeypatch, flag, model_type, taken):
+    calls = []
+    real = L.one_row_matmul
+    monkeypatch.setattr(L, "one_row_matmul", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
+    expected = [(1, 1, 64)] if taken else []
+    if flag is None:
+        monkeypatch.delenv("VMLX_LANE_ONE_ROW", raising=False)
+    else:
+        monkeypatch.setenv("VMLX_LANE_ONE_ROW", flag)
+    if True:
+        layer = nn.QuantizedLinear.from_linear(nn.Linear(64, 128, bias=False), group_size=64, bits=4)
+        layer.scales, layer.biases = layer.scales.astype(mx.bfloat16), layer.biases.astype(mx.bfloat16)
+        holder = nn.Module()
+        holder.proj = layer
+        holder.model_type = model_type
+        L.install(holder)
+        layer(mx.zeros((1, 1, 64), dtype=mx.bfloat16))
+        layer(mx.zeros((1, 3, 64), dtype=mx.bfloat16))
+        assert calls == expected

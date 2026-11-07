@@ -455,6 +455,9 @@ SCOPED_CHECKPOINT_RECEIPTS = SCOPED_DSV41_RECEIPTS | {
     "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
     "API_SURFACE", "PANEL_SETTINGS", "CACHE_ARCHITECTURE", "OUTPUT_CONTEXT", "QUOTA",
 }
+SCOPED_RIPPLE_SCHEMA = "vmlx-scoped-prepackage-v7"
+SCOPED_RIPPLE_MODELS = {"ripple65b-jangh2", "ripple65b-jang4d"}
+SCOPED_RIPPLE_RECEIPTS = SCOPED_DSV41_RECEIPTS | SCOPED_DFLASH_RECEIPTS
 # Keep the checkpoint's native runtime, transport, UI and resource owners explicit.
 # The wider DFlash/MTP campaign remains available as v5.
 SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
@@ -615,11 +618,12 @@ def validate_scoped_prepackage(
         data = json.loads(raw)
         result["receipt_sha256"] = hashlib.sha256(raw).hexdigest()
         evidence_root = path.resolve().parent
-        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA}:
+        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA, SCOPED_RIPPLE_SCHEMA}:
             raise ValueError("unsupported scoped prepackage schema")
         dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
         checkpoint = data["schema"] == SCOPED_CHECKPOINT_SCHEMA
-        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint
+        ripple = data["schema"] == SCOPED_RIPPLE_SCHEMA
+        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint or ripple
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
@@ -632,6 +636,8 @@ def validate_scoped_prepackage(
             required_models = SCOPED_CHECKPOINT_MODELS if checkpoint else SCOPED_RUNTIME_MODELS
             required_receipts = (SCOPED_CHECKPOINT_RECEIPTS if checkpoint else
                                  SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS)
+        if ripple:
+            required_models, required_receipts = SCOPED_RIPPLE_MODELS, SCOPED_RIPPLE_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:

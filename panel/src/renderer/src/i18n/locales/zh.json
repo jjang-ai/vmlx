@@ -656,6 +656,9 @@
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "~{speed} 词元/秒",
       "estimatedRateTitle": "根据流式输出的到达时间估算；一个或多个生成轮次未提供引擎解码耗时。",
+      "passLabel": "请求 {n}",
+      "passAfterToolsLabel": "{tools} 后的请求 {n}",
+      "passTitle": "此工具交换中的一次模型请求:该请求自身的 TTFT、预填充速度和缓存复用。",
       "cachedPpsLabel": "{speed} pp/s（含缓存）",
       "cachedPpsTitle": "前缀缓存复用速度：整个提示（包括从缓存恢复的令牌）除以到首个令牌的时间（本轮第一个请求）。与 pp/s 对比即可看出缓存节省了多少。"
     },

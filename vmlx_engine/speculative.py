@@ -20,6 +20,7 @@ Usage:
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -213,12 +214,31 @@ def external_speculative_incompatibility_reason(
     return None
 
 
+# Drafter bits the engine declares at load for a target family, over the bundle's own declaration.
+DFLASH2_DRAFT_BITS_BY_TARGET = {"ricursive": 8}
+
+
+DFLASH2_DRAFT_LANE_TARGETS = frozenset({"ricursive"})
+
+
+def draft_lane_enabled(target_type: str | None) -> bool:
+    """The drafter's blocks run on the lane matmul: same tokens, and on Ripple 16 rows cost 24 -> 16 ms, 32 rows 26 -> 17 ms
+    (3 rows 12 -> 13 ms). VMLX_DFLASH2_DRAFT_LANE=1|0 overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_LANE", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return target_type in DFLASH2_DRAFT_LANE_TARGETS
+
+
 def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
     """(target model_type, drafter bits at load) for a drafter shipped inside a bundle (<bundle>/dflash2).
 
     The bundle's jang_config.json may declare ``drafter.runtime_quantization`` (e.g. "affine 8-bit g64 at load": the
     GLM-5.3-Flash JANGT bundle ships the CC BY-NC-ND drafter unmodified and asks for 8-bit). Default 4-bit: the
-    measured Qwen3.8 setting (R2-21 section 4, no acceptance change vs bf16 codebooks).
+    measured Qwen3.8 setting (R2-21 section 4, no acceptance change vs bf16 codebooks). A family listed in
+    DFLASH2_DRAFT_BITS_BY_TARGET is declared by the engine, so the bundle's files stay untouched.
     """
     import re
 
@@ -235,6 +255,13 @@ def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
             bits = int(m.group(1))
     except Exception:
         pass
+    bits = DFLASH2_DRAFT_BITS_BY_TARGET.get(target_type, bits)
+    # A/B tool: VMLX_DFLASH2_DRAFT_BITS=4|8|16 (16 = keep the stored bf16 weights) overrides every declaration.
+    import os
+
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_BITS", "").strip()
+    if raw in ("4", "8", "16"):
+        bits = int(raw)
     return target_type, bits
 
 
@@ -314,16 +341,34 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
                     draft_model = dflash_runtime.load_draft(resolved_draft)
                 finally:
                     dflash_runtime.snapshot_download = original_download
+            from .dflash2_loader import apply_no_rope_layers
+
+            _nope = apply_no_rope_layers(draft_model, stored_config)
+            if _nope:
+                logger.info("DFlash2 drafter NoPE layers: %s", _nope)
+            from .dflash2_loader import apply_draft_context_window
+
+            _window = apply_draft_context_window(draft_model, target_type)
+            if _window:
+                logger.info("DFlash2 drafter context window: %d tokens (full-attention layers rotate past it)", _window)
             # All drafter weights 4-bit, selector codebooks included: keeping
             # the two 248,320 x 256 codebooks bf16 (+190 MB) was measured with
             # no acceptance change (R2-21 §4), so it is not done.
-            if not stored_quant:
+            if not stored_quant and draft_bits in (4, 8):
                 nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
+            if draft_lane_enabled(target_type):
+                from .metal import lane_qmm
+
+                _counts = lane_qmm.install(draft_model, tile=True)
+                logger.info("DFlash2 drafter lane matmul: %d projections (%d tiled), kept on MLX: %s",
+                            _counts["lane"], _counts["tiled"], _counts["skipped"] or "none")
             if stored_quant:
                 logger.info("DFlash2 drafter loaded with stored quantization: %s (target %s)", stored_quant, target_type or "unknown")
             else:
-                logger.info("DFlash2 drafter quantized at load: affine %d-bit g64 (target %s)", draft_bits, target_type or "unknown")
+                logger.info("DFlash2 drafter %s (target %s)",
+                            "kept bf16" if draft_bits not in (4, 8) else "quantized at load: affine %d-bit g64" % draft_bits,
+                            target_type or "unknown")
             if target_type != "glm5_next":
                 from .dflash2_runtime import draft_vocab_segments, install_draft_vocab_cut
 
@@ -427,6 +472,11 @@ def should_use_speculative(
         return False
     if is_mllm:
         logger.debug("Speculative decoding disabled: incompatible with multimodal models")
+        return False
+    if _spec_kind == "dflash2":
+        # A DFlash2 drafter conditions on target hidden states; only the DFlash2 lanes can drive it. A request that
+        # reaches the generic loop (per-token logprobs, guided JSON) decodes autoregressively.
+        logger.debug("Generic speculative decoding skipped: the loaded drafter is DFlash2")
         return False
     reason = external_speculative_incompatibility_reason(target_model_name)
     if reason:

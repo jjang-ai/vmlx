@@ -656,6 +656,9 @@
       "totalLabel": "{v}s total",
       "totalTitle": "Total request time",
       "ppsLabel": "~{speed} pp/s",
+      "passLabel": "Request {n}",
+      "passAfterToolsLabel": "Request {n} after {tools}",
+      "passTitle": "One model request of this tool exchange: its own TTFT, prefill speed and cache reuse.",
       "cachedPpsLabel": "{speed} cached pp/s",
       "cachedPpsTitle": "Prefix-cache reuse speed: the whole prompt, including the tokens restored from cache, divided by time to first token (first request of the turn). Compare it with pp/s to see what the cache saved."
     },

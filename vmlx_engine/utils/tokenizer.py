@@ -1243,6 +1243,9 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     from ..models.spark2_5 import ensure_spark2_5_runtime_registered
 
     ensure_spark2_5_runtime_registered(local_model_path)
+    from ..models.ricursive import ensure_ricursive_runtime_registered
+
+    ensure_ricursive_runtime_registered(local_model_path)
 
     if _get_model_type_from_config(local_model_path) == "naive_n05_flash":
         from ..models.naive_n05_flash.register import register_naive_n05_flash_runtime

@@ -2021,6 +2021,9 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
     from ..models.spark2_5 import ensure_spark2_5_runtime_registered
 
     ensure_spark2_5_runtime_registered(path, config=config)
+    from ..models.ricursive import ensure_ricursive_runtime_registered
+
+    ensure_ricursive_runtime_registered(path, config=config)
 
     if "minimax_m3_vl" in model_types:
         # vMLX-owned runtime installed as mlx_lm.models.minimax_m3_vl (the CLI registers it at startup too; this covers

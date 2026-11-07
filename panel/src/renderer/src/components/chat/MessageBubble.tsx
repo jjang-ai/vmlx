@@ -10,7 +10,7 @@ import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
 import { useElapsedSeconds } from './useElapsedSeconds'
 import { isTypewriterAppend } from './typewriter'
 import { TTSPlayer } from './VoiceChat'
-import { formatTimestamp, parseContentArray, getMetricsItems, type MessageMetrics } from './chat-utils'
+import { formatTimestamp, parseContentArray, getMetricsItems, getExchangePassRows, type MessageMetrics } from './chat-utils'
 import { useRelativeTime } from '../ui/use-relative-time'
 import { renderChatMarkdownHtml } from './mathMarkdown'
 import { reasoningSegmentsForDisplay as getReasoningSegmentsForDisplay } from '../../../../shared/interleavedReasoning'
@@ -452,17 +452,32 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
 
     if (metrics) {
       const items = getMetricsItems(metrics, !!isStreaming, t)
+      const passRows = getExchangePassRows(metrics, t)
       return (
-        <div className="mt-3 pt-2 border-t border-border/30 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground/70">
-          {isStreaming && (
-            <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+        <>
+          <div className="mt-3 pt-2 border-t border-border/30 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground/70">
+            {isStreaming && (
+              <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+            )}
+            {items.map((item, i) => (
+              <span key={i} title={item.title} className={item.dimmed ? 'opacity-60' : ''}>
+                {item.label}
+              </span>
+            ))}
+          </div>
+          {passRows.length > 0 && (
+            <div className="mt-1 flex flex-col gap-0.5 text-[11px] text-muted-foreground/60">
+              {passRows.map((row) => (
+                <div key={row.key} title={row.title} data-vmlx-control="chat-tool-pass" className="flex flex-wrap gap-x-3">
+                  <span className="font-medium">{row.label}</span>
+                  {row.parts.map((part, i) => (
+                    <span key={i}>{part}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
           )}
-          {items.map((item, i) => (
-            <span key={i} title={item.title} className={item.dimmed ? 'opacity-60' : ''}>
-              {item.label}
-            </span>
-          ))}
-        </div>
+        </>
       )
     }
 

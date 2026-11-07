@@ -18,7 +18,7 @@ def _run(p, cost5, cost8, cycles=200, seed=0):
 
 def test_expensive_wide_verify_on_prose_stays_at_five():   # JANG_4D: 8 rows cost 1.49x
     seq = _run(0.55, 0.053, 0.079)
-    assert seq.count(5) > 180 and 8 in seq                 # still re-times 8
+    assert seq.count(5) > 180                              # 8 runs only when predicted to win
 
 
 def test_cheap_wide_verify_on_easy_text_goes_to_eight():   # JANGH2: 8 rows cost 1.13x
@@ -60,18 +60,30 @@ def test_first_cycle_at_a_width_is_warmup_and_costs_persist_across_requests():
         w = c.width
         widths.append(w)
         c.observe(w, w, 2.0 if w not in shared.get("warm", set()) else (0.05 if w == 5 else 0.06))
-    assert widths == [5, 5, 8, 8]
+    assert widths[:2] == [5, 5] and shared[5] == 0.05 and 2.0 not in shared.values()   # 2.0 s warm-up discarded
     cb_shared, cb_widths = {}, []
-    cb = _BlockChooser(5, 8, cb_shared, first_widest=True)  # codebook targets: widest first (warm 8), then warm 5, time 5, time 8
-    for _ in range(4):
+    cb = _BlockChooser(5, 8, cb_shared, first_widest=True)  # codebook targets: widest first, warm, then timed
+    for _ in range(2):
         w = cb.width
         cb_widths.append(w)
         cb.observe(w, w, 2.0 if w not in cb_shared.get("warm", set()) else (0.05 if w == 5 else 0.06))
-    assert cb_widths == [8, 5, 5, 8]
-    assert shared[5] == 0.05 and shared[8] == 0.06        # the 2.0 s warm-up cycles were discarded
+    assert cb_widths == [8, 8] and cb_shared[8] == 0.06
+    shared[8] = 0.06
     c2 = _BlockChooser(5, 8, shared)                       # the next request starts with measured costs
     c2.observe(5, 5, 0.05)
     assert c2.width == 8                                   # 5/5 accepted -> 8 predicted to pay at 1.2x cost
+
+
+def test_first_widest_cycle_uses_measured_costs():
+    """Codebook targets start wide to observe every draft position, but not at a width that costs many cycles:
+    27B JANGH2-like costs (widest ~1.9x the narrowest) keep the widest start; Ripple JANGH2's row-exact verify (32 rows
+    ~10x 3 rows) starts at the widest width within 2x, instead of ~1 s before every request's second token."""
+    qwen = {3: 0.059, 5: 0.077, 8: 0.088, 16: 0.110}
+    assert _BlockChooser((3, 5, 8, 16), cost=dict(qwen), first_widest=True).width == 16
+    ripple = {3: 0.115, 5: 0.170, 16: 0.580, 32: 1.130}
+    assert _BlockChooser((3, 5, 16, 32), cost=dict(ripple), first_widest=True).width == 5
+    assert _BlockChooser((3, 5, 16, 32), cost={}, first_widest=True).width == 16      # nothing measured yet: below the widest
+    assert _BlockChooser((3, 5, 16, 32), cost=dict(ripple)).width == 3               # non-codebook: narrow start
 
 
 def test_three_widths_pick_sixteen_when_cheap_and_accepted():
@@ -143,13 +155,133 @@ def test_high_acceptance_greedy_text_stays_speculative():
     assert all(c.next_action()[0] == "spec" for _ in range(20))
 
 
-def test_near_tie_stays_speculative_by_the_margin():
+def test_ar_wins_as_soon_as_it_is_predicted_faster(monkeypatch):
+    """Turning the drafter on must not cost speed: verify keeps no margin over a faster AR."""
     shared = {}
     c = _seeded(shared, 0.25)
     _ar_burst(c)
-    best = max(c.widths, key=lambda w: c.expected_tokens(w) / c.cost[w])
-    spec_rate = c.expected_tokens(best) / c.cost[best]
-    _ar_burst(c, per_token=1.0 / (spec_rate * 1.03))        # AR only 3 % faster: inside the 5 % hysteresis
+    spec_rate = c.expected_tokens(c._best_width()) / c._cost_of(c._best_width())
+    _ar_burst(c, per_token=1.0 / (spec_rate * 1.03))        # AR only 3 % faster
+    c.ar_since_probe = 0                                     # a probe this close costs almost nothing: not what is tested
+    assert c.next_action()[0] == "ar"
+    monkeypatch.setenv("VMLX_DFLASH2_CHOOSER_LEGACY", "1")   # the old 5 % hysteresis is the A/B control
+    legacy = _BlockChooser((5, 8, 16), cost={5: 0.092, 8: 0.098, 16: 0.104, "ar": 1.0 / (spec_rate * 1.03), "warm": {5, 8, 16, "ar"}})
+    legacy._request_ar_pending = False
+    legacy.hits, legacy.trials, legacy.cycles = list(c.hits), list(c.trials), 1
+    assert legacy.next_action()[0] == "spec"
+
+
+def test_a_width_without_a_cost_runs_only_when_predicted_to_win():
+    """Seeding ran every width twice on the first reply after a load: ~4 s of row-exact verify on hard text."""
+    cost = {3: 0.110, 5: 0.150, 16: 0.550, 32: 1.100}
+    shared, rng = {}, random.Random(5)
+    c = _BlockChooser((3, 5, 16, 32), cost=shared)
+    seen = set()
+    for _ in range(100):
+        w = c.width
+        seen.add(w)
+        accepted = 0
+        while accepted < w - 1 and rng.random() < 0.3:
+            accepted += 1
+        c.observe(w, accepted + 1, cost[w])
+    assert 16 not in seen and 32 not in seen
+    assert c._cost_of(16) is not None and 3 in shared        # still priced, so easy text can reach them
+    easy = _BlockChooser((3, 5, 16, 32), cost=shared)
+    for _ in range(12):
+        w = easy.width
+        easy.observe(w, w, cost[w] / 5)                      # every draft accepted and now cheap
+    assert easy.width >= 16
+
+
+def test_retiming_stays_inside_the_time_budget():
+    """One row-exact 32-row verify costs ~15 AR steps; every 32 cycles was up to a third of the decode time."""
+    cost = {3: 0.110, 5: 0.150, 16: 0.550, 32: 1.100}
+    shared = {w: v for w, v in cost.items()} | {"warm": {3, 5, 16, 32}}
+    c = _BlockChooser((3, 5, 16, 32), cost=shared)
+    spent = {w: 0.0 for w in cost}
+    rng = random.Random(9)
+    for _ in range(1000):
+        w = c.width
+        spent[w] += cost[w]
+        accepted = 0
+        while accepted < w - 1 and rng.random() < 0.5:
+            accepted += 1
+        c.observe(w, accepted + 1, cost[w])
+    total = sum(spent.values())
+    assert 0 < spent[32] + spent[16] and (spent[32] + spent[16]) / total < 0.02
+
+
+def _ar_until_probe(c, per_token):
+    """AR tokens run before the chooser probes verify again."""
+    since = 0
+    while True:
+        mode, n = c.next_action()
+        if mode != "ar":
+            return since
+        c.observe_ar(n * per_token, n)
+        since += n
+
+
+def test_probes_stay_inside_their_time_budget_on_text_verify_cannot_win():
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    ar_s = lost_s = 0.0
+    for _ in range(200):
+        since = _ar_until_probe(c, 0.100)
+        ar_s += since * 0.100
+        lost_s += 0.170 - 1.0 * 0.100                        # the probe accepts nothing
+        assert c.width == 5
+        c.observe(c.width, 1, 0.170, after_ar=True)
+    assert lost_s / ar_s <= c.ar_probe_budget * 1.25          # the first probes' estimate still holds the prior
+
+
+def test_a_bad_start_does_not_lock_a_reply_into_ar():
+    """Three failed cycles put AR ahead; the same text then turns draftable, and verify is back within a few bursts."""
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.120, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    for _ in range(3):
+        c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    assert c.next_action()[0] == "ar"
+    tokens = 0
+    for _ in range(40):
+        mode, n = c.next_action()
+        if mode == "spec":
+            c.observe(c.width, 3, 0.170, after_ar=True)      # two drafts accepted
+            tokens += 3
+        else:
+            c.observe_ar(n * 0.120, n)
+            tokens += n
+        if c.expected_tokens(c.width) / c.cost[c.width] >= 1.0 / c.cost["ar"]:
+            break
+    assert tokens <= 32
+
+
+def test_a_probe_runs_the_best_width_not_a_pending_retime():
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    c.width = 32
+    _ar_until_probe(c, 0.100)
+    assert c.width == 5
+
+
+def test_legacy_keeps_the_fixed_probe_gap(monkeypatch):
+    monkeypatch.setenv("VMLX_DFLASH2_CHOOSER_LEGACY", "1")
+    shared = {5: 0.170, 16: 0.230, 32: 0.300, "ar": 0.100, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 1, 0.170)
+    c._request_ar_pending = False
+    assert _ar_until_probe(c, 0.100) >= c.ar_probe_every
+
+
+def test_easy_text_skips_the_requests_ar_measurement():
+    shared = {5: 0.150, 16: 0.240, 32: 0.270, "ar": 0.070, "warm": {5, 16, 32, "ar"}}
+    c = _BlockChooser((5, 16, 32), cost=shared)
+    c.observe(5, 5, 0.150)
     assert c.next_action()[0] == "spec"
 
 
@@ -158,8 +290,10 @@ def test_cycle_after_an_ar_burst_counts_acceptance_not_time():
     c = _seeded(shared, 0.5)
     before = dict(shared)
     trials = list(c.trials)
-    c.observe(c.width, 3, 5.0, after_ar=True)               # slow: the drafter also ingested the burst's rows
-    assert all(shared[w] == before[w] for w in (5, 8, 16))
+    w = c.width
+    assert w in shared
+    c.observe(w, 3, 5.0, after_ar=True)                     # slow: the drafter also ingested the burst's rows
+    assert shared[w] == before[w] and c.catchup_ms
     assert c.trials != trials
 
 
@@ -233,7 +367,8 @@ def test_new_request_remeasures_ar_after_transient_scheduling_slowdown():
               "warm": {5, 16, 32, "ar"}}
     c = _BlockChooser((5, 16, 32), cost=shared)
     assert c.next_action() == ("spec", 5)  # preserve the initial draft/checkpoint
-    c.observe(5, 2, 0.0484)
+    for _ in range(4):
+        c.observe(5, 2, 0.0484)                              # soon no longer clearly ahead of the old AR rate: measure it
     assert c.next_action() == ("ar", 8)
     c.observe_ar(8 * 0.0185, 8)
     assert abs(shared["ar"] - 0.0185) < 1e-9
