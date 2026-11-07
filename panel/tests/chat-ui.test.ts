@@ -1546,7 +1546,7 @@ describe('Footer rows per model request', () => {
         { pass: 3, tools: ['a', 'b', 'c', 'd', 'e'] },
       ],
     }, t)
-    expect(rows.map(r => r.key)).toEqual([1, 2, 3])
+    expect(rows.map(r => r.label)).toEqual(['Request 1', 'Request 2 after run_command', 'Request 3 after a, b, c +2'])
     const second = rows[1].parts.join(' | ')
     expect(second).toContain('0.78s TTFT')
     expect(second).toContain('141.5')
@@ -1554,5 +1554,23 @@ describe('Footer rows per model request', () => {
     expect(second).toContain('38680 dflash2-ssd')
     expect(rows[0].parts.join(' | ')).not.toContain('dflash2')
     expect(rows[2].parts).toEqual([])
+  })
+
+  it('never throws on a malformed record from an imported session', () => {
+    for (const bad of ['xx', 12, {}, null, [null, 1], ['a', 'b']] as unknown[]) {
+      expect(getExchangePassRows({ ...base, exchangePasses: bad } as never, t)).toEqual([])
+    }
+    const rows = getExchangePassRows({
+      ...base,
+      exchangePasses: [
+        null,
+        { pass: { x: 1 }, tools: 'run_command', ttft: {}, ppSpeed: 5, cachedPpSpeed: [], promptTokens: '9', cachedTokens: {}, cacheDetail: 3 },
+        { pass: 2, tools: [1, null, 'ok'], ttft: '0.40', promptTokens: 10, cachedTokens: 8, cacheDetail: { a: 1 } },
+      ],
+    } as never, t)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ label: 'Request 1', parts: [] })
+    expect(rows[1].label).toBe('Request 2 after ok')
+    expect(rows[1].parts).toEqual(['0.40s TTFT', '10 prompt (8 cached)'])
   })
 })

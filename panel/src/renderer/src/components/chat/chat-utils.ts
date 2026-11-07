@@ -139,33 +139,55 @@ export interface ExchangePassRow {
 
 const PASS_TOOL_NAMES_SHOWN = 3;
 
-/** One line per model request of a tool exchange. Empty for a turn with a single request. */
+const passText = (value: unknown): string | undefined =>
+  typeof value === 'string' && value ? value : undefined;
+const passCount = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+
+/**
+ * One line per model request of a tool exchange. Empty for a turn with a single
+ * request. Rows can come from an imported session's metricsJson, so a malformed
+ * field is dropped: a bad record must not throw during render and blank the chat.
+ */
 export function getExchangePassRows(
   metrics: MessageMetrics,
   t: (key: string, params?: Record<string, string | number>) => string,
 ): ExchangePassRow[] {
-  const passes = metrics.exchangePasses;
-  if (!passes || passes.length < 2) return [];
-  return passes.map((pass) => {
-    const names = [...new Set(pass.tools ?? [])];
+  const raw: unknown = metrics.exchangePasses;
+  if (!Array.isArray(raw)) return [];
+  const passes = raw.filter((pass): pass is Record<string, unknown> =>
+    pass !== null && typeof pass === 'object' && !Array.isArray(pass));
+  if (passes.length < 2) return [];
+  return passes.map((pass, index) => {
+    const n = passCount(pass.pass) ?? index + 1;
+    const toolNames = Array.isArray(pass.tools)
+      ? pass.tools.filter((name): name is string => typeof name === 'string' && name.length > 0)
+      : [];
+    const names = [...new Set(toolNames)];
     const shown = names.slice(0, PASS_TOOL_NAMES_SHOWN).join(', ');
     const more = names.length - PASS_TOOL_NAMES_SHOWN;
     const tools = more > 0 ? `${shown} +${more}` : shown;
+    const ttft = passText(pass.ttft);
+    const ppSpeed = passText(pass.ppSpeed);
+    const cachedPpSpeed = passText(pass.cachedPpSpeed);
+    const promptTokens = passCount(pass.promptTokens);
+    const cachedTokens = passCount(pass.cachedTokens);
+    const cacheDetail = passText(pass.cacheDetail);
     const parts: string[] = [];
-    if (pass.ttft) parts.push(`${pass.ttft}s TTFT`);
-    if (pass.ppSpeed) parts.push(t('chat.metrics.measuredPrefillLabel', { speed: pass.ppSpeed }));
-    if (pass.cachedPpSpeed) parts.push(t('chat.metrics.cachedPpsLabel', { speed: pass.cachedPpSpeed }));
-    if (pass.promptTokens) {
-      const detail = pass.cacheDetail ? ` ${pass.cacheDetail}` : '';
-      const cached = pass.cachedTokens ? t('chat.metrics.cachedSuffix', { cached: `${pass.cachedTokens}${detail}` }) : '';
-      parts.push(`${t('chat.metrics.promptLabel', { n: pass.promptTokens })}${cached}`);
+    if (ttft) parts.push(`${ttft}s TTFT`);
+    if (ppSpeed) parts.push(t('chat.metrics.measuredPrefillLabel', { speed: ppSpeed }));
+    if (cachedPpSpeed) parts.push(t('chat.metrics.cachedPpsLabel', { speed: cachedPpSpeed }));
+    if (promptTokens) {
+      const detail = cacheDetail ? ` ${cacheDetail}` : '';
+      const cached = cachedTokens ? t('chat.metrics.cachedSuffix', { cached: `${cachedTokens}${detail}` }) : '';
+      parts.push(`${t('chat.metrics.promptLabel', { n: promptTokens })}${cached}`);
     }
     return {
-      key: pass.pass,
+      key: index,
       title: t('chat.metrics.passTitle'),
       label: tools
-        ? t('chat.metrics.passAfterToolsLabel', { n: pass.pass, tools })
-        : t('chat.metrics.passLabel', { n: pass.pass }),
+        ? t('chat.metrics.passAfterToolsLabel', { n, tools })
+        : t('chat.metrics.passLabel', { n }),
       parts,
     };
   });
