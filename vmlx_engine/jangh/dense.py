@@ -18,6 +18,8 @@ from .format import codebook
 #                                the per-row gather QMV (tests/test_jangh_dense_rows.py); 1 row rotates in-kernel,
 #                                2+ rows read h32_rows(x, float32) once per activation.
 #   rows >= ROWS_THRESHOLD     : one-pass sorted QMM (~38 ms fixed on the 27B JANGH2 MLP, then nearly flat).
+#   rows SPLITK_MIN_ROWS .. SPLITK_MAX_ROWS on a 64-aligned shape: kernels.gather_qmm_dense, the split-K tile (Ripple
+#                                MLP 2.23 -> 1.35 ms per layer at 16 rows); VMLX_JANGH_SPLITK=0 restores the routing above.
 # Before (SORT_THRESHOLD 4, per-row gather QMV below it) the 27B JANGH2 forward cost 37/53/83/97/150/264 ms at
 # 1/2/4/5/8/16 rows per-row vs 36/75/77/78/88/101 sorted; the rows kernel measured (M5 Max, 32 distinct weights per
 # shape) 0.057 / 0.065 / 0.09 / 0.12-0.15 / 0.15-0.19 ms per 2-bit MLP projection at 1/2/3/4/5 rows against
@@ -75,7 +77,8 @@ class TQLinear(nn.Module):
             y = K.gather_qmm_sorted(xr, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits)
             return y.astype(x.dtype).reshape(*lead, self.output_dims)
         exact = getattr(self, "row_exact_verify", False) and _row_exact_rows(T)
-        if _rows_enabled() and K.rows_kernel_supports(self.bits) and (T < ROWS_THRESHOLD or exact):
+        threshold = K.SPLITK_MIN_ROWS if K.splitk_eligible(T, Kd, self.output_dims, x.dtype) else ROWS_THRESHOLD
+        if _rows_enabled() and K.rows_kernel_supports(self.bits) and (T < threshold or exact):
             if T == 1:
                 y = K.gather_qmv_rows(x2, self.tq2_packed, self.tq2_scales, idx[:1], self.bits, rotate=rot)
             else:
@@ -84,8 +87,8 @@ class TQLinear(nn.Module):
         elif T < SORT_THRESHOLD or exact:
             y = K.gather_qmv(x2, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits, x_per_dispatch=True, rotate=rot)
         else:
-            xr = K.h32_rows(x2, x2.dtype) if rot else x2
-            y = K.gather_qmm_sorted(xr, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits)
+            xr = K.h32_rows_cached(x, x2.dtype) if rot else x2
+            y = K.gather_qmm_dense(xr, self.tq2_packed, self.tq2_scales, self._cb, idx, self.bits)
         return y.astype(x.dtype).reshape(*lead, self.output_dims)
 
 

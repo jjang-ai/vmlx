@@ -498,6 +498,118 @@ def gather_qmm_sorted(x, packed, scales, cb_unused, idx_sorted, bits, *, packed_
              output_shapes=[(M, N)], output_dtypes=[x.dtype])[0]
 
 
+# ------------------------------------------------------------------ dense verify tile (split K)
+# A dense projection in a verify window has few rows, one bank and sometimes a very long K: Ripple's down_proj is 80
+# threadgroups each walking 640 barrier-separated steps, with the GPU mostly waiting at the barriers. Grid z slices K, so
+# each threadgroup covers one 64-column tile x one K slice and writes FP32 partials [S, M, N] that are then summed. Same
+# codebook tile loader and MMA sequence as the sorted tile, on a 16-row tile for up to 16 rows, 64-row above. The
+# summation order differs from the sorted tile, so its bits do too: speed-first paths only (see TQLinear).
+_SPLITK_IMPL = r"""
+template <typename T, int bits, int BM_>
+METAL_FUNC void tq_dense_qmm_nax_splitk(
+    const device T* x, const device uint32_t* wg, const device half* sg, device float* yp,
+    const int M, const int N, const int K, const int SPLITK,
+    threadgroup T* Wg, uint3 tid, uint simd_group_id, uint simd_lane_id) {
+  constexpr int BM = BM_, BK = 64, BN = 64, WM = BM_ == 64 ? 2 : 1, WN = 2;
+  constexpr int pack_factor = get_pack_factor<bits, 8>();
+  constexpr int bytes_per_pack = get_bytes_per_pack<bits>();
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+  using loader_w_t = TQBlockLoader<T, BN, BK, BK_padded, WM * WN * SIMD_SIZE, bits>;
+  const int K_w = K * bytes_per_pack / pack_factor;
+  const int K_it = K / BK;
+  const int per = (K_it + SPLITK - 1) / SPLITK;
+  const int it0 = min(K_it, int(tid.z) * per);
+  const int it1 = min(K_it, it0 + per);
+  const int y_row = tid.y * BM; const int y_col = tid.x * BN;
+  auto wgl = (const device uint8_t*)wg;
+  wgl += size_t(y_col) * K_w + size_t(it0) * (BK * bytes_per_pack / pack_factor);
+  device float* y = yp + size_t(tid.z) * size_t(M) * size_t(N) + size_t(y_row) * N + y_col;
+  constexpr short SM = BM / WM, SN = BN / WN, SK = 32;
+  constexpr short TM = SM / 16, TN = SN / 16, TK = SK / 16;
+  const short tm = SM * (simd_group_id / WN); const short tn = SN * (simd_group_id % WN);
+  const short sgp_sm = short(min(int(SM), max(0, M - (y_row + tm))));
+  NAXTile<float, TM, TN> Gt; Gt.clear();
+  const device T* xn = x + size_t(y_row + tm) * K + size_t(it0) * BK;
+  thread loader_w_t lg(wgl, sg + y_col, K, Wg, simd_group_id, simd_lane_id);
+  const bool sg_active = sgp_sm > 0;
+  dispatch_bool(sgp_sm == SM, [&](auto kAlignedM) {
+    for (int k = it0; k < it1; k++) {
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      lg.load_unsafe();
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+      if (sg_active) {
+        STEEL_PRAGMA_NO_UNROLL
+        for (int kk1 = 0; kk1 < BK; kk1 += SK) {
+          NAXTile<T, TM, TK> Atile; NAXTile<T, TN, TK> Bg;
+          volatile int compiler_barrier;
+          if constexpr (kAlignedM.value) Atile.load(xn + kk1, K); else Atile.load_safe(xn + kk1, K, short2(SK, sgp_sm));
+          Bg.template load<T, BK_padded, 1>(Wg + tn * BK_padded + kk1);
+          tile_matmad_nax(Gt, Atile, metal::bool_constant<false>{}, Bg, metal::bool_constant<true>{});
+          (void)compiler_barrier;
+        }
+      }
+      xn += BK; lg.next();
+    }
+  });
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg_active) {
+    if (sgp_sm == SM) Gt.store(y + tm * N + tn, N);
+    else Gt.store_slice(y + tm * N + tn, N, short2(0, 0), short2(SN, sgp_sm));
+  }
+}
+"""
+SPLITK_MAX_ROWS = 32
+SPLITK_MIN_ROWS = 4     # below this the per-row decode kernel is cheaper (Ripple shapes: 3 rows 0.33 vs 0.38 ms, 5 rows 0.45 vs 0.39)
+
+
+@functools.lru_cache(maxsize=None)
+def _splitk_kernel(bits: int, tname: str, bm: int):
+    src = f"""
+  constexpr int PAD = 64 + 16 / sizeof({tname});
+  threadgroup {tname} Wg[64 * PAD];
+  tq_dense_qmm_nax_splitk<{tname}, {bits}, {bm}>(
+      x, wg, sg, yp, meta[0], meta[1], meta[2], meta[3], Wg,
+      threadgroup_position_in_grid, simdgroup_index_in_threadgroup, thread_index_in_simdgroup);
+"""
+    return mx.fast.metal_kernel(
+        name=f"jangh_dense_splitk_b{bits}_{tname}_m{bm}", input_names=["x", "wg", "sg", "meta"], output_names=["yp"],
+        header=_nax_header() + _SPLITK_IMPL, source=src, ensure_row_contiguous=False)
+
+
+def splitk_slices(k: int, n: int) -> int:
+    """K slices per 64-column tile: more threadgroups per step until a dispatch has about 1024 of them or a slice gets
+    too short to be worth its barriers."""
+    tiles, steps, split = n // BN, k // BK, 1
+    while split < 16 and tiles * split < 1024 and steps // (split * 2) >= 8:
+        split *= 2
+    return split
+
+
+def splitk_enabled() -> bool:
+    return os.environ.get("VMLX_JANGH_SPLITK", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def splitk_eligible(rows: int, k: int, n: int, dtype) -> bool:
+    return (SPLITK_MIN_ROWS <= rows <= SPLITK_MAX_ROWS and k % BK == 0 and n % BN == 0
+            and dtype in (mx.bfloat16, mx.float16) and splitk_enabled() and nax_available())
+
+
+def gather_qmm_dense(x, packed, scales, cb_unused, idx, bits):
+    """One-bank projection of a small row window: the split-K tile when the shape allows it, else gather_qmm_sorted."""
+    M, K = x.shape
+    N = packed.shape[1]
+    if packed.shape[0] == 1 and splitk_eligible(M, K, N, x.dtype):
+        bm = 16 if M <= 16 else 64
+        split = splitk_slices(K, N)
+        threads = (1 if bm == 16 else 2) * WN * 32
+        partial = _splitk_kernel(bits, _TNAME[x.dtype], bm)(
+            inputs=[x, packed, scales, mx.array([M, N, K, split], dtype=mx.int32)],
+            grid=(N // BN * threads, (M + bm - 1) // bm, split), threadgroup=(threads, 1, 1),
+            output_shapes=[(split, M, N)], output_dtypes=[mx.float32])[0]
+        return (partial[0] if split == 1 else partial.sum(axis=0)).astype(x.dtype)
+    return gather_qmm_sorted(x, packed, scales, cb_unused, idx, bits)
+
+
 # ------------------------------------------------------------------ activation rotation (one pass)
 @functools.lru_cache(maxsize=None)
 def _h32_kernel(xname: str, oname: str):
@@ -881,16 +993,16 @@ def gather_qmv_rows(x, packed, scales, idx, bits, *, rotate: bool = False, rows_
 _H32_LAST = threading.local()
 
 
-def h32_rows_cached(x):
-    """h32_rows(x, float32) as (rows, K), reused while the caller passes the SAME array object: a layer's gate and up
+def h32_rows_cached(x, dtype=mx.float32):
+    """h32_rows(x, dtype) as (rows, K), reused while the caller passes the SAME array object: a layer's gate and up
     projections are called with one activation object, so the key is the caller's input itself (never a reshape of
     it, which is a new object per call).  Holding x keeps its id from being recycled, so `is` cannot match another
     array."""
     slot = getattr(_H32_LAST, "slot", None)
-    if slot is not None and slot[0] is x:
+    if slot is not None and slot[0] is x and slot[2] == dtype:
         return slot[1]
-    r = h32_rows(x, mx.float32).reshape(-1, int(x.shape[-1]))
-    _H32_LAST.slot = (x, r)
+    r = h32_rows(x, dtype).reshape(-1, int(x.shape[-1]))
+    _H32_LAST.slot = (x, r, dtype)
     return r
 
 

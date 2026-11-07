@@ -194,6 +194,20 @@ def jangh_dense_lane_enabled() -> bool:
 DENSE_SPEED_FIRST_FAMILIES = frozenset({"ricursive"})
 
 
+def verify_scope_enabled(model_type: str | None = None) -> bool:
+    """Whether a verify forward runs inside row_exact_verify_scope (one-row decode arithmetic: per-row attention on the
+    target, row-exact vocabulary head). Off for DENSE_SPEED_FIRST_FAMILIES, where it costs a wide verify far more than it
+    buys: Ripple JANGH2, 1,500 tokens, 16 rows 152 vs 187 ms, 32 rows 196 vs 284 ms, 1-5 rows unchanged. Temperature-0 text
+    can then differ from AR at near ties, as it already does for the dense projections. VMLX_DFLASH2_VERIFY_SCOPE=1|0
+    overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_VERIFY_SCOPE", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type not in DENSE_SPEED_FIRST_FAMILIES
+
+
 def jangh_dense_speed_first(model_type: str | None = None) -> bool:
     """Dense JANGH projections keep their default routing inside a verify (1-5 rows on the per-row kernel, 6+ on the
     sorted tile QMM). Wide verifies get ~flat cost, but a wide verify row no longer equals the AR step bit for bit, so
@@ -226,6 +240,7 @@ class _TargetAdapter:
         self.media_embeds = None
         self.media_positions = None
         self.rope_delta = 0
+        self._verify_scope = verify_scope_enabled(getattr(language_model, "model_type", None))
         modules = getattr(language_model, "named_modules", None)
         if callable(modules):
             lane = jangh_dense_lane_enabled()
@@ -262,7 +277,7 @@ class _TargetAdapter:
         return {"position_ids": (mx.arange(start, start + rows) + int(self.rope_delta))[None]}
 
     def __call__(self, inputs, cache=None):
-        if not self.last_row_logits and inputs.shape[1] > 1:
+        if self._verify_scope and not self.last_row_logits and inputs.shape[1] > 1:
             from .metal.row_exact_qmv import row_exact_verify_scope
 
             # Wide sorted MLP/SDPA reductions can change a near-tied target
@@ -2192,6 +2207,92 @@ def _dflash2_block_plan(trained_max: int, lane_flat: bool = False, codebook: boo
     # measured worse with width 3 (story 37.1 -> 35.7-36.1, 3 reps) and worse still with (8, 16) (32.7-33.0): its verify
     # costs 62-70 ms at 5 rows vs 71-78 at 8 (A/B 2026-10-19 at matched 1,302-1,387 MHz).
     return tuple(sorted({min(5, trained), trained, 2 * trained}))
+
+
+def prewarm_enabled(model_type: Optional[str] = None) -> bool:
+    """VMLX_DFLASH2_PREWARM=1|0 overrides the default (on for DENSE_SPEED_FIRST_FAMILIES) both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_PREWARM", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return model_type in DENSE_SPEED_FIRST_FAMILIES
+
+
+def prewarm_dflash2_target(model: Any, draft: Any, *, rounds: int = 3) -> Optional[dict]:
+    """Run every candidate width once at load: the Metal kernels compile before the first reply instead of during it, and
+    the chooser starts from measured costs instead of an estimate. The estimate prices an untimed width by (w + 4) rows,
+    which on a flat verify called width 32 1.8x width 16 when it costs 1.3x, so it was never tried. Costs are shared with
+    the requests and keep moving with what they measure (context length, clock). Advisory: a failure only logs."""
+    import mlx.core as mx
+    import dflash.model_mlx as runtime
+
+    adapter = _adapter_for(model)
+    widths: tuple = ()
+    try:
+        runtime._patch_model(adapter, draft.config.target_layer_ids)
+        draft.bind(adapter)
+        widths = _dflash2_block_plan(int(draft.config.block_size), _lane_flat(adapter), codebook=_codebook_mlp(adapter))
+        if len(widths) < 2:
+            return None                    # a pinned width has nothing to choose
+        mask_id = int(draft.config.mask_token_id)
+        t_start = time.perf_counter()
+        target_cache, draft_cache = runtime.make_prompt_cache(adapter), draft.make_cache()
+        ids = [(17 * i + 3) % 1000 + 100 for i in range(64)]
+        with mx.stream(runtime.generation_stream):
+            adapter.last_row_logits = True
+            try:
+                logits = adapter(mx.array([ids]), target_cache)
+            finally:
+                adapter.last_row_logits = False
+            hidden = mx.concatenate(adapter._hidden_states, axis=-1)
+        mx.eval(logits, hidden, [c.state for c in target_cache])
+        with mx.stream(runtime.generation_stream):
+            first = draft.propose(mx.array([[ids[-1], mask_id]]), hidden, draft_cache, 0, logits_start=1)[0]
+        mx.eval(first)
+        draft_base = draft_cache[0].offset
+
+        def cycle(w: int) -> float:
+            t0 = time.perf_counter()
+            with mx.stream(runtime.generation_stream):
+                drafted = None
+                if w > 1:
+                    block = mx.array([[ids[-1]] + [mask_id] * (w - 1)])
+                    drafted = draft.propose(block, hidden[:, -1:], draft_cache, 0, logits_start=1)[0]
+                rows = mx.array([[ids[-1]]]) if drafted is None else mx.concatenate([mx.array([[ids[-1]]]), drafted], axis=1)
+                out = mx.argmax(adapter(rows, target_cache), axis=-1)
+                tapped = mx.concatenate(adapter._hidden_states, axis=-1)
+            mx.eval(out, tapped)
+            seconds = time.perf_counter() - t0
+            for c in target_cache:
+                c.trim(w) if c.is_trimmable() else c.rollback_recent(w)
+            if w > 1 and (excess := draft_cache[0].offset - draft_base) > 0:
+                runtime._trim_recent_cache(draft_cache, excess)
+            return seconds
+
+        seen: dict = {}
+        for _ in range(rounds):
+            for w in (1, *widths):
+                seen.setdefault(w, []).append(cycle(w))
+        cost = _width_costs(adapter, widths)
+        warm = cost.setdefault("warm", set())
+        for w, times in seen.items():
+            best = min(times[1:] or times)   # the first run of each width compiles its kernels
+            if w == 1:
+                cost["ar"] = best
+                warm.add("ar")
+            else:
+                cost[w] = best
+                warm.add(w)
+        adapter.gdn_states.clear()
+        del target_cache, draft_cache, logits, hidden, first
+        mx.clear_cache()
+        measured = {w: round(min(t[1:] or t) * 1000.0, 1) for w, t in seen.items()}
+        logger.info("DFlash2 prewarm: %s ms per width (1 = AR) in %.1f s", measured, time.perf_counter() - t_start)
+        return measured
+    except Exception as exc:  # noqa: BLE001 - requests still measure their own costs and compile on first use
+        logger.warning("DFlash2 prewarm skipped: %s", exc)
+        return None
 
 
 def stream_dflash2_generate(

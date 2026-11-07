@@ -218,6 +218,7 @@ class MLXLanguageModel:
                 )
 
             self._install_dflash2_lane_matmul()
+            self._prewarm_dflash2()
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 
@@ -469,6 +470,21 @@ class MLXLanguageModel:
                         counts["lane"], counts["tiled"], counts["skipped"] or "none", time.perf_counter() - t0)
         except Exception as exc:  # noqa: BLE001 - the MLX kernels stay in place
             logger.warning("DFlash2 lane matmul not installed: %s", exc)
+
+    def _prewarm_dflash2(self) -> None:
+        """Compile the lane's kernels and measure its widths before the first request (dflash2_runtime.prewarm_dflash2_target)."""
+        try:
+            from ..dflash2_runtime import prewarm_dflash2_target, prewarm_enabled
+            from ..speculative import get_draft_model, is_dflash2_enabled
+
+            lm = getattr(self.model, "language_model", None)
+            if lm is None or not is_dflash2_enabled() or not prewarm_enabled(getattr(lm, "model_type", None)):
+                return
+            draft = get_draft_model()
+            if draft is not None and not isinstance(draft, tuple):
+                prewarm_dflash2_target(self.model, draft)
+        except Exception as exc:  # noqa: BLE001 - advisory, the first request does the same work
+            logger.warning("DFlash2 prewarm skipped: %s", exc)
 
     def dflash2_text_lane(self, kwargs: dict | None = None) -> bool:
         """True when this request decodes on the DFlash2 text lane (a text-only target with a bundled DFlash2 drafter).

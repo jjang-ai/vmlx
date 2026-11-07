@@ -20,6 +20,7 @@ Usage:
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,6 +218,20 @@ def external_speculative_incompatibility_reason(
 DFLASH2_DRAFT_BITS_BY_TARGET = {"ricursive": 8}
 
 
+DFLASH2_DRAFT_LANE_TARGETS = frozenset({"ricursive"})
+
+
+def draft_lane_enabled(target_type: str | None) -> bool:
+    """The drafter's blocks run on the lane matmul: same tokens, and on Ripple 16 rows cost 24 -> 16 ms, 32 rows 26 -> 17 ms
+    (3 rows 12 -> 13 ms). VMLX_DFLASH2_DRAFT_LANE=1|0 overrides the default both ways."""
+    raw = os.environ.get("VMLX_DFLASH2_DRAFT_LANE", "").strip().lower()
+    if raw in ("1", "on", "true", "yes"):
+        return True
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return target_type in DFLASH2_DRAFT_LANE_TARGETS
+
+
 def _bundled_dflash2_target(draft_path) -> tuple[str | None, int]:
     """(target model_type, drafter bits at load) for a drafter shipped inside a bundle (<bundle>/dflash2).
 
@@ -342,6 +357,12 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             if not stored_quant and draft_bits in (4, 8):
                 nn.quantize(draft_model, group_size=64, bits=draft_bits)
             mx.eval(draft_model.parameters())
+            if draft_lane_enabled(target_type):
+                from .metal import lane_qmm
+
+                _counts = lane_qmm.install(draft_model, tile=True)
+                logger.info("DFlash2 drafter lane matmul: %d projections (%d tiled), kept on MLX: %s",
+                            _counts["lane"], _counts["tiled"], _counts["skipped"] or "none")
             if stored_quant:
                 logger.info("DFlash2 drafter loaded with stored quantization: %s (target %s)", stored_quant, target_type or "unknown")
             else:
