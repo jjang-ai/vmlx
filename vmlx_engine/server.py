@@ -12949,6 +12949,33 @@ def _native_cache_status(
         status.update(layout)
         return _with_runtime_layout(status)
 
+    if family_name == "ricursive" and scheduler is None:
+        lane = getattr(_engine, "_llm_dflash2_lane", None)
+        if callable(lane) and lane({}):
+            # The text lane owns RAM/SSD sessions outside the scheduler. Read
+            # configuration only; health must not restore tensors or scan SSD.
+            from . import dflash2_runtime
+            from .dflash2_session_disk import SCHEMA
+
+            ram_enabled = dflash2_runtime._SESSION_STORE.max_entries > 0
+            ssd_enabled = dflash2_runtime._SESSION_SSD is not None
+            return {
+                "family": family_name,
+                "schema": SCHEMA,
+                "schema_implemented": True,
+                "cache_type": "dflash2_native_session",
+                "cache_backend": "dflash2-text",
+                "components": ["attention_kv", "rotating_attention_kv", "drafter_state"],
+                "prefix": ram_enabled or ssd_enabled,
+                "paged": False,
+                "block_disk_l2": False,
+                "native_checkpoint_ssd": ssd_enabled,
+                "cache_store_policy": {
+                    "every_request_recomputes_full_prefix": not (ram_enabled or ssd_enabled),
+                    "recompute_when_no_compatible_checkpoint": True,
+                },
+            }
+
     if (
         family_name in {"glm5_next", "glm5_next_text"}
         or scheduler_family in {"glm5_next", "glm5_next_text"}
