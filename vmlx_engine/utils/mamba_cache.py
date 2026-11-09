@@ -662,7 +662,7 @@ def patch_mlx_lm_for_mamba():
         from mlx_lm.models.cache import MambaCache as OrigMambaCache
     except ImportError:
         OrigMambaCache = ArraysCache  # Fallback
-    from mlx_lm.generate import BatchKVCache, BatchRotatingKVCache
+    from mlx_lm.models.cache import BatchKVCache, BatchRotatingKVCache
 
     # Patch ArraysCache.make_mask to accept **kwargs.
     # mlx-lm's base.py calls make_mask(N, return_array=..., window_size=...)
@@ -674,9 +674,6 @@ def patch_mlx_lm_for_mamba():
             return _orig_ac_make_mask(self, N)
         ArraysCache.make_mask = _ac_make_mask_compat
         logger.debug("Patched ArraysCache.make_mask to accept **kwargs")
-
-    # Store original function
-    _original_make_cache = gen_module._make_cache
 
     def _patched_make_cache(model, left_padding, max_kv_size=None):
         """
