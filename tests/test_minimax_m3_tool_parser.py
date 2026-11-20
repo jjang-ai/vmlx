@@ -3,6 +3,8 @@
 
 import json
 
+import pytest
+
 from vmlx_engine.tool_parsers.minimax_m3_tool_parser import (
     NS_TOKEN,
     MiniMaxM3ToolParser,
@@ -81,7 +83,8 @@ def test_native_stop_requires_advertised_schema_valid_call():
     parser = MiniMaxM3ToolParser()
     parser._stream_stop_request = {"tools": [{"type": "function", "function": {
         "name": "run_command", "parameters": {"type": "object",
-        "properties": {"command": {"type": "string"}}, "required": ["command"]}
+        "properties": {"command": {"type": "string", "minLength": 3}},
+        "required": ["command"]}
     }}]}
     raw = '<tool_call><invoke name="run_command"><command>echo alpha</command></invoke></tool_call>'
     assert parser.stream_tool_calls_complete(raw)
@@ -89,6 +92,43 @@ def test_native_stop_requires_advertised_schema_valid_call():
     assert not parser.stream_tool_calls_complete(raw.replace('echo alpha', '42'))
     assert not parser.stream_tool_calls_complete(raw + '<tool_ca')
     assert not parser.stream_tool_calls_complete(raw + NS_TOKEN[:5])
+
+
+@pytest.mark.parametrize("responses_schema", [False, True])
+@pytest.mark.parametrize(
+    "body",
+    ["  before <ul><li>甲</li><li>乙</li></ul> after\n", "42", "true", '{"x": 1}', ""],
+)
+def test_native_xml_preserves_declared_string_values(body, responses_schema):
+    function = {
+        "name": "write",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {"$ref": "#/$defs/literal"},
+                "counts": {"type": "array", "items": {"type": "integer"}},
+            },
+            "$defs": {"literal": {"type": ["string", "null"]}},
+            "required": ["content", "counts"],
+        },
+    }
+    tool = {"type": "function"}
+    tool.update(function if responses_schema else {"function": function})
+    request = {"tools": [tool]}
+    raw = (
+        f'<tool_call><invoke name="write"><content>{body}</content>'
+        "<counts><item>1</item><item>2</item></counts></invoke></tool_call>"
+    )
+
+    parser = MiniMaxM3ToolParser()
+    result = parser.extract_tool_calls(raw, request)
+    assert result.tools_called
+    assert json.loads(result.tool_calls[0]["arguments"]) == {
+        "content": body,
+        "counts": [1, 2],
+    }
+    parser._stream_stop_request = request
+    assert parser.stream_tool_calls_complete(raw)
 
 
 def test_native_stop_preserves_multiple_complete_calls():
