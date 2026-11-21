@@ -870,7 +870,8 @@ describe('tool auto-continue policy', () => {
     expect(source).toContain('const finalTps =')
     expect(source).toContain('serverDecodeSummary?.tokensPerSecond ??')
     expect(source).toContain('selectFinalDecodeTps({')
-    expect(source).toContain('cumulativeTps: cumulativeDecodeTps')
+    expect(source).toContain('tokenCount: totalTokenCount')
+    expect(source).toContain('generationMs,')
     expect(source).toContain('rollingTps: liveTpsHistory')
   })
 

@@ -218,7 +218,8 @@ export function getMetricsItems(
     title: metrics.decodeMetricSource === 'remote-request'
       ? t('chat.metrics.remoteRateTitle')
       : metrics.decodeMetricSource === 'unavailable'
-        ? t('chat.metrics.remoteUsageUnavailable')
+        ? t(metrics.tokenCountKnown === false
+          ? 'chat.metrics.remoteUsageUnavailable' : 'chat.metrics.decodeTimingUnavailable')
         : metrics.decodeMetricSource === 'client'
           ? t('chat.metrics.estimatedRateTitle') : t('chat.metrics.tpsTitle'),
   });
