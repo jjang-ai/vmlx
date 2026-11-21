@@ -125,13 +125,6 @@ def _parse_value(inner: str) -> Any:
     return obj
 
 
-def _args_from_invoke(body: str) -> dict[str, Any]:
-    args: dict[str, Any] = {}
-    for tag, inner in _children(body):
-        args[tag] = _parse_value(inner)
-    return args
-
-
 @ToolParserManager.register_module(["minimax_m3"])
 class MiniMaxM3ToolParser(ToolParser):
     """Tool call parser for MiniMax-M3 (tag-named-parameter XML)."""
@@ -155,13 +148,21 @@ class MiniMaxM3ToolParser(ToolParser):
         text = _MM_THINK_RE.sub("", text)
         return text
 
-    def _invokes_to_calls(self, search_space: str) -> list[dict[str, Any]]:
+    def _invokes_to_calls(
+        self, search_space: str, request: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
         calls: list[dict[str, Any]] = []
         for m in _INVOKE_RE.finditer(search_space):
             name = (m.group(1) or m.group(2) or m.group(3) or "").strip()
             if not name:
                 continue
-            args = _args_from_invoke(m.group(4))
+            properties = self._argument_properties(request, name)
+            args = {
+                tag: inner
+                if self._schema_is_string_or_null(properties.get(tag))
+                else _parse_value(inner)
+                for tag, inner in _children(m.group(4))
+            }
             calls.append(
                 {
                     "id": generate_tool_id(),
@@ -190,7 +191,7 @@ class MiniMaxM3ToolParser(ToolParser):
             open_blocks = _TOOLCALL_OPEN_RE.findall(cleaned)
             search_space = "\n".join(open_blocks) if open_blocks else cleaned
 
-        tool_calls = self._invokes_to_calls(search_space)
+        tool_calls = self._invokes_to_calls(search_space, request)
         if not tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[],
@@ -227,8 +228,8 @@ class MiniMaxM3ToolParser(ToolParser):
         invokes = list(_INVOKE_RE.finditer(candidate))
         if not invokes or candidate.count("<invoke") != len(invokes):
             return None
-        calls = self._invokes_to_calls(candidate)
         request = getattr(self, "_stream_stop_request", None)
+        calls = self._invokes_to_calls(candidate, request)
         if request is not None:
             from vmlx_engine.api.tool_calling import validate_json_schema
 
