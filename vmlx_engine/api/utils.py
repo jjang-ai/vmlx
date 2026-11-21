@@ -102,8 +102,7 @@ def clean_output_text(text: str, *, preserve_whitespace: bool = False) -> str:
 # =============================================================================
 
 
-@functools.lru_cache(maxsize=32)
-def resolve_to_local_path(model_name: str) -> str:
+def resolve_to_local_path_uncached(model_name: str) -> str:
     """Resolve a HuggingFace repo ID or local path to a local directory.
 
     Returns the original ``model_name`` unchanged if it already points to an
@@ -116,7 +115,8 @@ def resolve_to_local_path(model_name: str) -> str:
     Returns ``model_name`` as-is if resolution fails (callers will fall
     through gracefully).
 
-    Results are cached for the lifetime of the process via ``@lru_cache``.
+    Reads the disk on every call. A caller that runs after the model has
+    downloaded uses this; ``resolve_to_local_path`` memoizes the answer.
     """
     from pathlib import Path
 
@@ -154,6 +154,16 @@ def resolve_to_local_path(model_name: str) -> str:
         pass
 
     return model_name
+
+
+@functools.lru_cache(maxsize=32)
+def resolve_to_local_path(model_name: str) -> str:
+    """Memoized ``resolve_to_local_path_uncached`` for the lifetime of the process.
+
+    A repo id that is not downloaded yet is memoized unresolved, so a caller
+    that runs after the download must use the uncached form.
+    """
+    return resolve_to_local_path_uncached(model_name)
 
 
 # Q2 (audit-2026-04-07): result cache for is_mllm_model() to stop repeated
