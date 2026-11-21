@@ -20,10 +20,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence, Union
 
 import mlx.core as mx
-from mlx_lm.generate import SequenceStateMachine
 from mlx_lm.models import cache as mlx_cache
 from mlx_lm.models.cache import TokenBuffer
 
+from ..state_machine import SequenceStateMachine
 from .mamba_cache import _should_capture_generation_logprobs
 from .memory_limits import get_effective_metal_working_set_bytes
 from .prefill_admission import (
