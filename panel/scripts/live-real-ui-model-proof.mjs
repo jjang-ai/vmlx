@@ -9539,9 +9539,15 @@ async function main() {
             visible: isVisible(card),
             text: (card.textContent || '').replace(/\\s+/g, ' ').trim(),
           }));
+          // The ordered timeline interleaves reasoning and tool cards with
+          // the answer. Keep their independently captured evidence separate.
+          const proseAnswer = answer?.cloneNode(true);
+          proseAnswer?.querySelectorAll(
+            '[data-vmlx-proof-reasoning-rail], [data-vmlx-proof-tool-card], [data-vmlx-proof-tool-container], .code-header'
+          ).forEach((element) => element.remove());
           const currencyOccurrences = [];
-          if (answer) {
-            const walker = document.createTreeWalker(answer, NodeFilter.SHOW_TEXT);
+          if (proseAnswer) {
+            const walker = document.createTreeWalker(proseAnswer, NodeFilter.SHOW_TEXT);
             let node;
             while ((node = walker.nextNode())) {
               const text = node.nodeValue || '';
@@ -9555,10 +9561,6 @@ async function main() {
               }
             }
           }
-          const proseAnswer = answer?.cloneNode(true);
-          proseAnswer?.querySelectorAll(
-            '[data-vmlx-proof-tool-card], [data-vmlx-proof-tool-container], .code-header'
-          ).forEach((element) => element.remove());
           // The code-block language/copy header is renderer chrome, not model
           // output.  Keep the rendered <code> body in the persisted-content
           // linkage check while excluding that UI-owned label and button.
@@ -9599,10 +9601,10 @@ async function main() {
             reasoningKatexErrorCounts: reasoningEvidence.map(
               (segment) => segment.katexErrorCount
             ),
-            html: answer?.innerHTML || '',
-            katexCount: answer?.querySelectorAll('.katex').length || 0,
-            katexErrorCount: answer?.querySelectorAll('.katex-error').length || 0,
-            katexAnnotations: [...(answer?.querySelectorAll(
+            html: proseAnswer?.innerHTML || '',
+            katexCount: proseAnswer?.querySelectorAll('.katex').length || 0,
+            katexErrorCount: proseAnswer?.querySelectorAll('.katex-error').length || 0,
+            katexAnnotations: [...(proseAnswer?.querySelectorAll(
               '.katex annotation[encoding="application/x-tex"]'
             ) || [])].map((annotation) => annotation.textContent || ''),
             currencyOccurrences,
