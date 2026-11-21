@@ -655,6 +655,7 @@
       "totalTitle": "Tiempo total de la solicitud",
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "~{speed} tokens/s",
+      "decodeTimingUnavailable": "Velocidad de decodificación no disponible. No se pudo medir el intervalo entre tokens.",
       "estimatedRateTitle": "Estimación basada en los tiempos de llegada de la salida en streaming; el tiempo de decodificación del motor no estaba disponible para una o más etapas de generación.",
       "passLabel": "Solicitud {n}",
       "passAfterToolsLabel": "Solicitud {n} tras {tools}",

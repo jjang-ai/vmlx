@@ -127,7 +127,8 @@ describe('final chat decode TPS', () => {
   it('keeps cumulative multi-iteration throughput when only the final tail is slow', () => {
     expect(
       selectFinalDecodeTps({
-        cumulativeTps: 49.6,
+        tokenCount: 496,
+        generationMs: 10_000,
         rollingTps: [48.8, 49.1, 50.3, 49.4, 8.3],
         lastRollingTps: 8.3,
       }),
@@ -137,7 +138,8 @@ describe('final chat decode TPS', () => {
   it('rejects an impossible cumulative burst from buffered output', () => {
     expect(
       selectFinalDecodeTps({
-        cumulativeTps: 261,
+        tokenCount: 261,
+        generationMs: 1000,
         rollingTps: [42.7, 42.9, 43.1],
         lastRollingTps: 43.1,
       }),
@@ -147,17 +149,27 @@ describe('final chat decode TPS', () => {
   it('falls back cleanly when only one timing source is available', () => {
     expect(
       selectFinalDecodeTps({
-        cumulativeTps: 0,
+        tokenCount: 0,
+        generationMs: 0,
         rollingTps: [],
         lastRollingTps: 37.5,
       }),
     ).toBe(37.5)
     expect(
       selectFinalDecodeTps({
-        cumulativeTps: 31.25,
+        tokenCount: 125,
+        generationMs: 4000,
         rollingTps: [],
       }),
     ).toBe(31.25)
+  })
+
+  it('omits rates for a delivery burst without an observable decode interval', () => {
+    expect(selectFinalDecodeTps({
+      tokenCount: 2,
+      generationMs: 1,
+      rollingTps: [],
+    })).toBe(0)
   })
 })
 

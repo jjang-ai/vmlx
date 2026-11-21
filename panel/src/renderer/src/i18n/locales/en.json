@@ -637,6 +637,7 @@
       "tokensTitleStreaming": "Tokens generated so far",
       "tokensTitleDone": "Completion tokens",
       "estimatedRateLabel": "~{speed} t/s",
+      "decodeTimingUnavailable": "Decode rate unavailable. The stream had no measurable interval between tokens.",
       "estimatedRateTitle": "Estimated from streamed output arrival times; engine decode timing was unavailable for one or more passes.",
       "remoteRateLabel": "{speed} t/s observed",
       "remoteRateTitle": "Provider output tokens divided by total HTTP-request time. Includes prefill, network and buffered output; excludes time executing tools. Not isolated model decode speed.",

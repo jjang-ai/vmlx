@@ -655,6 +655,7 @@
       "totalTitle": "총 요청 시간",
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "약 {speed} 토큰/초",
+      "decodeTimingUnavailable": "토큰 사이의 시간을 측정할 수 없어 디코딩 속도를 표시할 수 없습니다.",
       "estimatedRateTitle": "스트리밍 출력의 도착 시간을 기준으로 추정합니다. 하나 이상의 생성 단계에서 엔진 디코딩 시간을 제공하지 않았습니다.",
       "passLabel": "요청 {n}",
       "passAfterToolsLabel": "{tools} 후 요청 {n}",

@@ -410,6 +410,16 @@ class Reranker:
             # Extract relevance score
             if hasattr(output, "logits"):
                 logits = output.logits
+            elif hasattr(output, "pooler_output"):
+                config = getattr(self._model, "config", None)
+                architectures = getattr(config, "architectures", None)
+                if architectures != ["ModernBertForSequenceClassification"]:
+                    raise ValueError(
+                        "mlx-embeddings provides classification scores only for "
+                        "ModernBertForSequenceClassification; "
+                        f"got {architectures!r}."
+                    )
+                logits = output.pooler_output
             elif isinstance(output, dict):
                 logits = output.get("logits", output.get("scores"))
             elif isinstance(output, (list, tuple)):
