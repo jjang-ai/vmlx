@@ -1097,8 +1097,13 @@ export function captureBundleGenerationContract(bundlePath) {
     || (includeStub && templateText.trim())
     || templateText.trim()
   )
-  const modelType = files['config.json']?.value?.model_type
+  const modelConfig = files['config.json']?.value
+  const modelType = modelConfig?.model_type
   const chatContract = files['jang_config.json']?.value?.chat
+  const samplingModes = objectRecord(
+    (files['jang_config.json']?.value ?? modelConfig?.jang_config ?? modelConfig?.jang)
+      ?.chat?.sampling_modes,
+  )
   const nativeEncoder = {
     encoder: chatContract?.encoder,
     encoder_fn: chatContract?.encoder_fn,
@@ -1156,8 +1161,9 @@ export function captureBundleGenerationContract(bundlePath) {
     defaults: resolveIndependentBundleGenerationDefaults(
       files['generation_config.json']?.value,
       files['jang_config.json']?.value,
-      files['config.json']?.value,
+      modelConfig,
     ),
+    sampling_modes: samplingModes ?? null,
     template: {
       tokenizer_chat_template_present:
         typeof tokenizerTemplate === 'string' && Boolean(tokenizerTemplate.trim()),
@@ -4166,6 +4172,19 @@ export function upsertBoundedDomSample(samples, state, sample, maxSamples, force
   return true
 }
 
+function persistedThinkingFlip(result) {
+  const initial = result?.requestedEnableThinking
+  const flip = result?.midConvReasoningFlip
+  if (
+    typeof initial === 'boolean'
+    && flip?.requested === true
+    && flip.buttonFound === true
+    && flip.saved === true
+    && flip.persistedEnableThinkingAfterSave === !initial
+  ) return !initial
+  return null
+}
+
 export function validateReasoningEvidence(result, expectation = 'optional') {
   const failures = []
   // Recorded on the result so a run that leaned on never-empty notices is
@@ -4188,7 +4207,7 @@ export function validateReasoningEvidence(result, expectation = 'optional') {
   const domSamples = Array.isArray(result?.renderedDom?.samples)
     ? result.renderedDom.samples
     : []
-  let reasoningMessageCount = 0
+  const reasoningMessageIds = new Set()
   if (assistantIds.size !== expectedTurns || traces.length !== expectedTurns) {
     failures.push(
       `expected reasoning/content traces for exactly ${expectedTurns} primary assistant turns, got ${traces.length}`,
@@ -4391,11 +4410,11 @@ export function validateReasoningEvidence(result, expectation = 'optional') {
         .join('')
         .trim()
       if (persistedNonDelta && String(renderedNonDelta?.reasoningText || '').trim()) {
-        reasoningMessageCount += 1
+        reasoningMessageIds.add(String(row.messageId))
       }
       continue
     }
-    reasoningMessageCount += 1
+    reasoningMessageIds.add(String(row.messageId))
     const progressiveReasoningDeltaCount = reasoningEvents
       .filter((event) => String(event?.delta || '').length > 0)
       .length
@@ -4569,15 +4588,30 @@ export function validateReasoningEvidence(result, expectation = 'optional') {
       )
     }
   }
-  if (expectation === 'required' && reasoningMessageCount !== assistantIds.size) {
+  const thinkingAfterFlip = persistedThinkingFlip(result)
+  if (thinkingAfterFlip !== null) {
+    for (const [index, id] of [...assistantIds].entries()) {
+      const thinking = index === 0 ? result.requestedEnableThinking : thinkingAfterFlip
+      const dom = domMessages.find((message) => String(message?.messageId || '') === id)
+      const persisted = (result?.persistedReasoningByMessage?.[index] || [])
+        .some((segment) => typeof segment === 'string' && segment.trim())
+      const rendered = Boolean(String(dom?.reasoningText || '').trim())
+      if (thinking && expectation !== 'optional' && !reasoningMessageIds.has(id)) {
+        failures.push(`turn ${index + 1} required separate reasoning for Thinking On`)
+      }
+      if (!thinking && (reasoningMessageIds.has(id) || persisted || rendered)) {
+        failures.push(`turn ${index + 1} contained reasoning with Thinking Off`)
+      }
+    }
+  } else if (expectation === 'required' && reasoningMessageIds.size !== assistantIds.size) {
     failures.push(
-      `reasoning was required on all ${expectedTurns} turns but separate reasoning appeared on ${reasoningMessageCount}`,
+      `reasoning was required on all ${expectedTurns} turns but separate reasoning appeared on ${reasoningMessageIds.size}`,
     )
   }
-  if (expectation === 'none' && reasoningMessageCount > 0) {
+  if (thinkingAfterFlip === null && expectation === 'none' && reasoningMessageIds.size > 0) {
     failures.push('reasoning was disabled but reasoning deltas were observed')
   }
-  if (expectation === 'none' && domMessages.some((message) => String(message?.reasoningText || '').trim())) {
+  if (thinkingAfterFlip === null && expectation === 'none' && domMessages.some((message) => String(message?.reasoningText || '').trim())) {
     failures.push('reasoning was disabled but a visible reasoning rail was rendered')
   }
   if (result && typeof result === 'object') {
@@ -4930,6 +4964,19 @@ export function validateGenerationDefaultsEvidence(result) {
     ? result.resolvedSamplingRecords
     : [])
     .filter((record) => record?.values && typeof record.values === 'object')
+  const thinkingAfterFlip = persistedThinkingFlip(result)
+  const samplingModes = result?.bundleGenerationContract?.sampling_modes
+  const modeFor = (thinking) => thinking
+    ? samplingModes?.thinking
+    : (samplingModes?.instruct_nothinking ?? samplingModes?.instruct)
+  const requestMode = (messageId) => {
+    if (thinkingAfterFlip === null) return null
+    const index = (result?.assistantMessageIds || [])
+      .map(String)
+      .indexOf(String(messageId || ''))
+    if (index < 0) return null
+    return index === 0 ? result.requestedEnableThinking : thinkingAfterFlip
+  }
   const explicit = result?.requestContract?.samplingOverrides || {}
   // Adaptive MTP never pins the sampler: an active runtime must report the
   // compatible-only request policy and the bundle/explicit sampler must be
@@ -5099,6 +5146,10 @@ export function validateGenerationDefaultsEvidence(result) {
         ) {
           failures.push(`UI turn ${turn} resolved log lacks exact server-emitted request/message correlation`)
         }
+        const thinking = requestMode(record.message_id)
+        if (thinking !== null && record.values.enable_thinking !== thinking) {
+          failures.push(`UI turn ${turn} resolved request did not use the persisted thinking mode`)
+        }
       }
     }
   }
@@ -5115,12 +5166,7 @@ export function validateGenerationDefaultsEvidence(result) {
   const explicitTemperatureEntry = explicitFields.find(
     ([key]) => key === 'temperature',
   )
-  const effectiveTemperature = explicitTemperatureEntry
-    ? explicitTemperatureEntry[1]
-    : nativeMtpGreedy
-      ? 0
-      : defaults.temperature
-  const greedyRequest = Number(effectiveTemperature) === 0
+  const initialMode = thinkingAfterFlip === null ? null : modeFor(result.requestedEnableThinking)
   for (const [bundleKey, engineKey, uiKey, resolvedKey] of mapping) {
     const expected = defaults[bundleKey]
     if (expected == null) continue
@@ -5138,7 +5184,10 @@ export function validateGenerationDefaultsEvidence(result) {
       ? result?.requestContract?.requestMaxTokens
       : undefined
     const requestOverride = maxTokensOverride ?? (overrideEntry ? overrideEntry[1] : undefined)
-    const uiExpected = requestOverride ?? effectiveExpected
+    const modeValue = (mode) => bundleKey === 'maxNewTokens'
+      ? undefined
+      : numericField(mode, resolvedKey)
+    const uiExpected = requestOverride ?? modeValue(initialMode) ?? effectiveExpected
     const rendererValue = rendererDefaults?.[bundleKey]
     if (!approximatelyEqual(Number(rendererValue), Number(expected))) {
       failures.push(`renderer default ${bundleKey}=${rendererValue} does not match bundle ${expected}`)
@@ -5165,51 +5214,37 @@ export function validateGenerationDefaultsEvidence(result) {
       failures.push(`health effective ${engineKey}=${healthValue} does not match effective startup default ${effectiveExpected}`)
     }
     if (requestCorrelationVerified) {
-      // Greedy neutralization applies only to values the request did NOT set.
-      const greedyNeutralized = greedyRequest && requestOverride == null
-      const resolvedExpected = greedyNeutralized && engineKey === 'top_p'
-        ? 1
-        : requestOverride ?? effectiveExpected
-      const greedyOmitted = greedyNeutralized && engineKey === 'top_k'
-      const resolvedValue = numericField(resolved, resolvedKey, engineKey, bundleKey, uiKey)
-      const resolvedSentinelOmitted = (
-        (engineKey === 'top_k' || engineKey === 'min_p')
-        && Number(resolvedExpected) === 0
-        && (resolvedValue === undefined || resolvedValue === null)
-      )
-      const resolvedGreedyOmitted = greedyOmitted
-        && (resolvedValue === undefined || resolvedValue === null)
-      if (
-        !resolvedSentinelOmitted
-        && !resolvedGreedyOmitted
-        && !approximatelyEqual(Number(resolvedValue), Number(resolvedExpected))
-      ) {
-        failures.push(`resolved request ${engineKey}=${resolvedValue} does not match ${resolvedExpected}`)
-      }
-      resolvedRecords.forEach((record, index) => {
-        const turnValue = numericField(
-          record.values,
-          resolvedKey,
-          engineKey,
-          bundleKey,
-          uiKey,
+      const checkResolved = (values, messageId, label) => {
+        const thinking = requestMode(messageId)
+        const mode = thinking === null ? null : modeFor(thinking)
+        const effectiveTemperature = explicitTemperatureEntry?.[1] ?? (
+          nativeMtpGreedy ? 0 : numericField(mode, 'temperature') ?? defaults.temperature
         )
-        const turnSentinelOmitted = (
+        // Greedy neutralization only applies to values the request omitted.
+        const greedyNeutralized = Number(effectiveTemperature) === 0 && requestOverride == null
+        const resolvedExpected = greedyNeutralized && engineKey === 'top_p'
+          ? 1
+          : requestOverride ?? modeValue(mode) ?? effectiveExpected
+        const turnValue = numericField(values, resolvedKey, engineKey, bundleKey, uiKey)
+        const sentinelOmitted = (
           (engineKey === 'top_k' || engineKey === 'min_p')
           && Number(resolvedExpected) === 0
-          && (turnValue === undefined || turnValue === null)
+          && turnValue == null
         )
-        const turnGreedyOmitted = greedyOmitted
-          && (turnValue === undefined || turnValue === null)
+        const greedyOmitted = greedyNeutralized && engineKey === 'top_k' && turnValue == null
         if (
-          !turnSentinelOmitted
-          && !turnGreedyOmitted
+          !sentinelOmitted
+          && !greedyOmitted
           && !approximatelyEqual(Number(turnValue), Number(resolvedExpected))
         ) {
           failures.push(
-            `resolved request record ${index + 1} ${engineKey}=${turnValue} does not match ${resolvedExpected}`,
+            `${label} ${engineKey}=${turnValue} does not match ${resolvedExpected}`,
           )
         }
+      }
+      checkResolved(resolved, resolvedRecords.at(-1)?.message_id, 'resolved request')
+      resolvedRecords.forEach((record, index) => {
+        checkResolved(record.values, record.message_id, `resolved request record ${index + 1}`)
       })
     }
   }
@@ -5246,6 +5281,12 @@ export function validateGenerationDefaultsEvidence(result) {
     ) {
       failures.push('mid-conversation reasoning effort was not visibly changed and persisted')
     }
+  } else if (
+    result?.midConvReasoningFlip?.requested === true
+    && typeof result?.requestedEnableThinking === 'boolean'
+    && thinkingAfterFlip === null
+  ) {
+    failures.push('mid-conversation thinking mode was not visibly changed and persisted')
   }
   if (result?.requestedBuiltinTools === true) {
     const storedToolExpectations = [

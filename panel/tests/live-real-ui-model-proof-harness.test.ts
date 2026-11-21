@@ -3855,6 +3855,53 @@ describe("real UI model proof harness", () => {
     );
   });
 
+  it("checks a visible Thinking to Off change on the exact subsequent turns", () => {
+    const result = goodResult();
+    result.requestedEnableThinking = true;
+    result.chatOverrides.enableThinking = true;
+    result.chatSettingsDom.reasoningMode = "On";
+    result.midConvReasoningFlip = {
+      requested: true,
+      buttonFound: true,
+      saved: true,
+      persistedEnableThinkingAfterSave: false,
+    };
+    result.bundleGenerationContract.sampling_modes = {
+      instruct: { temperature: 0.7, top_p: 0.8 },
+    };
+    const first = result.assistantMessageIds[0];
+    for (const record of result.resolvedSamplingRecords) {
+      const thinking = record.message_id === first;
+      record.values.enable_thinking = thinking;
+      if (!thinking) {
+        Object.assign(record.values, { temperature: 0.7, top_p: 0.8 });
+      }
+    }
+    Object.assign(result.resolvedSamplingKwargs, { temperature: 0.7, top_p: 0.8 });
+    expect(validateGenerationDefaultsEvidence(result)).toEqual([]);
+
+    const leaked = structuredClone(result);
+    for (const [index, id] of result.assistantMessageIds.entries()) {
+      if (index === 0) continue;
+      const trace = result.messageEventTrace.find((row: Record<string, any>) => row.messageId === id);
+      trace.events = trace.events.filter((event: Record<string, any>) => event.channel !== "reasoning");
+      result.persistedReasoningByMessage[index] = [];
+      result.renderedDom.messages.find((row: Record<string, any>) => row.messageId === id).reasoningText = "";
+    }
+    expect(validateReasoningEvidence(result, "required")).toEqual([]);
+    expect(validateReasoningEvidence(leaked, "required")).toContain(
+      "turn 2 contained reasoning with Thinking Off",
+    );
+
+    const last = result.resolvedSamplingRecords.at(-1);
+    last.values.enable_thinking = true;
+    last.values.top_p = 0.95;
+    expect(validateGenerationDefaultsEvidence(result)).toContain(
+      "UI turn 3 resolved request did not use the persisted thinking mode",
+    );
+    expect(validateGenerationDefaultsEvidence(result).join("\n")).toMatch(/resolved request record \d+ top_p=0.95 does not match 0.8/);
+  });
+
   it("rejects missing visible cache state, contradictory argv, and capacity-only telemetry", () => {
     const result = structuredClone(goodResult());
     result.serverCacheControls.controlScope = "app-mode-navigation";
