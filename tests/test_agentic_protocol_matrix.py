@@ -35,6 +35,39 @@ def test_python_canonical_json_preserves_integral_float_bytes():
     )
 
 
+def test_wait_for_idle_reads_engine_owned_lifecycle_without_scheduler(monkeypatch):
+    idle = {
+        "schema": "vmlx-request-lifecycle-v1",
+        "available": True,
+        "active_request_count": 0,
+        "engine_collector_count": 0,
+        "scheduler_waiting_count": 0,
+        "scheduler_running_count": 0,
+        "terminal_cleanup_pending": False,
+    }
+    states = iter(
+        [
+            {**idle, "active_request_count": 1, "engine_collector_count": 1},
+            {**idle, "terminal_cleanup_pending": True},
+            idle,
+        ]
+    )
+    monkeypatch.setattr(
+        matrix.requests,
+        "get",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"status": "healthy", "request_lifecycle": next(states)},
+        ),
+    )
+    result = matrix.wait_for_idle("http://127.0.0.1:1/health", timeout=2)
+
+    assert result["idle"] is True
+    assert len(result["samples"]) == 3
+    assert result["samples"][-1]["num_running"] is None
+    assert result["samples"][-1]["request_lifecycle"] == idle
+
+
 def _identity_repo(tmp_path: Path) -> tuple[Path, dict]:
     repo_root = tmp_path / "repo"
     package_json = repo_root / matrix.FILE_INFO_PATH

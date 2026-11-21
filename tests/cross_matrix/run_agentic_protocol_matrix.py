@@ -4640,8 +4640,25 @@ def wait_for_idle(health_url: str, timeout: float = 20.0) -> dict[str, Any]:
                 "num_running": running,
                 "active_requests": active,
             }
+            lifecycle = health.get("request_lifecycle")
+            if isinstance(lifecycle, dict):
+                sample["request_lifecycle"] = lifecycle
+                counts = (
+                    lifecycle.get("active_request_count"),
+                    lifecycle.get("engine_collector_count"),
+                    lifecycle.get("scheduler_waiting_count"),
+                    lifecycle.get("scheduler_running_count"),
+                )
+                idle = (
+                    lifecycle.get("schema") == "vmlx-request-lifecycle-v1"
+                    and lifecycle.get("available") is True
+                    and all(type(count) is int and count == 0 for count in counts)
+                    and lifecycle.get("terminal_cleanup_pending") is False
+                )
+            else:
+                idle = lifecycle is None and running == 0 and active in (0, None)
             samples.append(sample)
-            if running == 0 and active in (0, None):
+            if response.status_code == 200 and idle:
                 return {"idle": True, "elapsed_ms": sample["at_ms"], "samples": samples}
         except Exception as exc:
             samples.append(
