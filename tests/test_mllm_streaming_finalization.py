@@ -111,6 +111,24 @@ def test_coalesced_terminal_flush_is_appended_to_burst_delta():
     assert outputs[0].output_text == "A]"
 
 
+def test_uncoalesced_responses_from_one_generator_step_share_producer_timestamp():
+    request_id = "uncoalesced-burst-clock"
+    scheduler = _scheduler(request_id)
+    # Stop strings prevent coalescing, even though the tokens were produced
+    # together. The scheduler must not report CPU detokenization as decode.
+    scheduler.running[request_id].sampling_params.stop = ["unmatched stop"]
+
+    outputs, finished = scheduler._process_batch_responses(
+        [_response(request_id, 0), _response(request_id, 99, "stop")]
+    )
+
+    assert finished == {request_id}
+    first, terminal = outputs
+    assert first.completion_tokens == 1
+    assert terminal.completion_tokens == 2
+    assert first.generated_at == terminal.generated_at
+
+
 @pytest.mark.parametrize("coalesced", [False, True])
 def test_prefill_receipt_survives_single_and_coalesced_outputs(coalesced):
     scheduler = _scheduler("prefill-receipt")

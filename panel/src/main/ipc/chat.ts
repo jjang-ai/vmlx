@@ -4728,16 +4728,8 @@ export function registerChatHandlers(
           } catch (_) {}
         }
 
-        // Calculate final metrics — use generation-only time for t/s, fallback to wall clock
+        // The exchange wall clock includes work outside token generation.
         const totalTime = (Date.now() - startTime) / 1000;
-        const genTimeSec = generationMs > 0 ? generationMs / 1000 : 0;
-        const wallTimeSec =
-          firstTokenTime && lastTokenTime && lastTokenTime > firstTokenTime
-            ? (lastTokenTime - firstTokenTime) / 1000
-            : firstTokenTime
-              ? (Date.now() - firstTokenTime) / 1000
-              : totalTime;
-        const finalGenSec = genTimeSec > 0.05 ? genTimeSec : wallTimeSec;
         // Use cumulative total across all tool iterations (server restarts completion_tokens per request)
         const serverDecodeSummary = summarizeServerDecodePasses([
           ...completedServerDecodePasses,
@@ -4748,8 +4740,6 @@ export function registerChatHandlers(
           remoteSummary ? (remoteSummary.outputTokens ?? 0) :
           serverDecodeSummary?.outputTokens ??
           (cumulativeTokenOffset + iterationTokenCount);
-        const cumulativeDecodeTps =
-          finalGenSec > 0 ? totalTokenCount / finalGenSec : 0;
         // Progressive streams have credible cumulative delta timing even when
         // the last rolling window covers only a short post-tool answer tail.
         // Buffered answer passes are the opposite: their cumulative rate is an
@@ -4759,15 +4749,15 @@ export function registerChatHandlers(
           remoteSummary ? (remoteSummary.tokensPerSecond ?? 0) :
           serverDecodeSummary?.tokensPerSecond ??
           selectFinalDecodeTps({
-            cumulativeTps: cumulativeDecodeTps,
+            tokenCount: totalTokenCount,
+            generationMs,
             rollingTps: liveTpsHistory,
             lastRollingTps: liveTps,
           });
         const decodeMetricSource = remoteSummary
           ? remoteSummary.outputTokens === undefined ? "unavailable" : "remote-request"
-          : serverDecodeSummary ? "server" : "client";
-        const finalTpsLabel = remoteSummary?.outputTokens === undefined && isRemote
-          ? "—" : finalTps.toFixed(1);
+          : serverDecodeSummary ? "server" : finalTps > 0 ? "client" : "unavailable";
+        const finalTpsLabel = decodeMetricSource === "unavailable" ? "—" : finalTps.toFixed(1);
         // First exchange token, excluding initial health/message preparation.
         const ttft = Math.max(
           0,

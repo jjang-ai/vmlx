@@ -1,5 +1,6 @@
 export interface FinalDecodeTpsInput {
-  cumulativeTps: number
+  tokenCount: number
+  generationMs: number
   rollingTps: number[]
   lastRollingTps?: number
   maxCumulativeToRollingRatio?: number
@@ -126,7 +127,8 @@ export function calculatePrefillTps({ prefillUsage }: PrefillTpsInput): string |
  * reject the buffered burst.
  */
 export function selectFinalDecodeTps({
-  cumulativeTps,
+  tokenCount,
+  generationMs,
   rollingTps,
   lastRollingTps = 0,
   maxCumulativeToRollingRatio = 1.5,
@@ -143,8 +145,11 @@ export function selectFinalDecodeTps({
       ? lastRollingTps
       : 0
 
-  const validCumulative = Number.isFinite(cumulativeTps) && cumulativeTps > 0
-    ? cumulativeTps
+  // A delivery burst must clear the same observation window as rolling TPS.
+  // Time after the last emitted token can include terminal parsing or SSD work.
+  const validCumulative = Number.isFinite(tokenCount) && tokenCount > 0
+    && Number.isFinite(generationMs) && generationMs > 10
+    ? tokenCount * 1000 / generationMs
     : 0
   if (representativeRolling <= 0) return validCumulative
   if (validCumulative <= 0) return representativeRolling

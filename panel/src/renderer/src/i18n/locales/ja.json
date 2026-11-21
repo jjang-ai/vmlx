@@ -655,6 +655,7 @@
       "totalTitle": "リクエストの合計時間",
       "ppsLabel": "~{speed} pp/s",
       "estimatedRateLabel": "約{speed} トークン/秒",
+      "decodeTimingUnavailable": "トークン間の経過時間を測定できなかったため、デコード速度を表示できません。",
       "estimatedRateTitle": "ストリーミング出力の到着時刻から推定しています。一部の生成処理でエンジンのデコード時間を取得できませんでした。",
       "passLabel": "リクエスト {n}",
       "passAfterToolsLabel": "{tools} の後のリクエスト {n}",

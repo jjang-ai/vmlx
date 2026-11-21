@@ -3408,6 +3408,9 @@ class MLLMScheduler:
         Returns:
             Tuple of (outputs, finished_request_ids)
         """
+        # All responses are already available from one generator step.
+        # Detokenizing them separately must not create fake decode intervals.
+        produced_at = time.perf_counter()
         outputs = []
         finished_ids = set()
 
@@ -3487,6 +3490,7 @@ class MLLMScheduler:
             output = RequestOutput(
                 request_id=request_id,
                 new_token_ids=tokens,
+                generated_at=produced_at,
                 new_text=new_text,
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
@@ -3742,6 +3746,7 @@ class MLLMScheduler:
             output = RequestOutput(
                 request_id=request_id,
                 new_token_ids=[] if is_error else [response.token],
+                generated_at=produced_at,
                 new_text=new_text,
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
