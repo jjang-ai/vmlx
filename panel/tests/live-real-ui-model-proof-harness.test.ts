@@ -4408,15 +4408,17 @@ describe("real UI model proof harness", () => {
     );
   });
 
-  it("attests answer prose without folding renderer chrome into it", () => {
+  it("attests answer prose and math without folding in reasoning or renderer chrome", () => {
     const source = readFileSync(
       path.resolve("scripts/live-real-ui-model-proof.mjs"),
       "utf8",
     );
     expect(source).toContain("const proseAnswer = answer?.cloneNode(true);");
     expect(source).toContain(
-      "'[data-vmlx-proof-tool-card], [data-vmlx-proof-tool-container], .code-header'",
+      "'[data-vmlx-proof-reasoning-rail], [data-vmlx-proof-tool-card], [data-vmlx-proof-tool-container], .code-header'",
     );
+    expect(source).toContain("document.createTreeWalker(proseAnswer, NodeFilter.SHOW_TEXT)");
+    expect(source).toContain("katexCount: proseAnswer?.querySelectorAll('.katex').length");
     expect(source).toContain("const readMountedInnerText = (element) =>");
     expect(source).toContain("probe.appendChild(element);");
     expect(source).toContain("document.body.appendChild(probe);");
