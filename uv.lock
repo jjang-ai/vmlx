@@ -8964,7 +8964,7 @@ wheels = [
 
 [[package]]
 name = "vmlx"
-version = "1.6.83"
+version = "1.6.84"
 source = { editable = "." }
 dependencies = [
     { name = "dflash", marker = "sys_platform == 'darwin'" },
@@ -9082,7 +9082,7 @@ requires-dist = [
     { name = "mlx", marker = "sys_platform == 'darwin'", specifier = ">=0.32.3" },
     { name = "mlx-audio", marker = "extra == 'audio'", specifier = ">=0.2.9" },
     { name = "mlx-embeddings", specifier = ">=0.0.5" },
-    { name = "mlx-lm", specifier = ">=0.31.3" },
+    { name = "mlx-lm", specifier = ">=0.31.3,<0.32" },
     { name = "mlx-vlm", marker = "sys_platform != 'darwin'", specifier = ">=0.4.3" },
     { name = "mlx-vlm", marker = "sys_platform == 'darwin'", specifier = ">=0.5.0,<0.6" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },

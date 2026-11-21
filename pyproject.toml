@@ -33,12 +33,10 @@ dependencies = [
     # cannot run there.
     "mlx>=0.32.3; sys_platform == 'darwin'",
     "mlx>=0.29.0; sys_platform != 'darwin'",
-    "mlx-lm>=0.31.3",  # 0.31.3 is the release-bundle floor for current JANG
-                       # families: ArraysCache.lengths/advance, SequenceStateMachine,
-                       # LRUPromptCache, native Gemma 4 text MoE, and the baseline
-                       # model registry that vMLX patches with bailing_hybrid for
-                       # Ling. The release app separately pins a compatible
-                       # MLX-Audio build in panel/scripts/bundle-python.sh.
+    # Prefix cache persistence uses the split state/meta_state cache contract.
+    # mlx-lm 0.32 replaced it with a different state and restoration format.
+    # Keep pip installs on the compatible series until the cache codec migrates.
+    "mlx-lm>=0.31.3,<0.32",
     # Native-MTP target verification can opt into dflash-mlx's Apache-2.0
     # four-row affine q4 Metal kernel on M5/G17 with DFLASH_VERIFY_QMM=1.
     # Stock MLX remains the default; all other shapes/hardware retain it too.
