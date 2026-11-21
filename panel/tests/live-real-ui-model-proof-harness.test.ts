@@ -6415,6 +6415,28 @@ describe("real UI model proof harness", () => {
     }
   });
 
+  it("reports a media-only receipt as a matrix failure without throwing", () => {
+    const result = goodResult();
+    result.surfaceStatus = "dual_surface_attested";
+    const fixture = createValidPairedArtifact(result);
+    try {
+      result.pairedApiArtifact = writePairedArtifactValue(
+        fixture.directory,
+        "video-only.json",
+        {
+          status: "PASS",
+          run_id: result.run_id,
+          results: { direct: { answer: "Blue" }, gateway: { answer: "Blue" } },
+        },
+      );
+      expect(validatePairedApiEvidence(result)).toEqual([
+        "paired API artifact is not the exact passing vmlx-agentic-protocol-matrix-v2 run",
+      ]);
+    } finally {
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps time-window logs and global cache deltas PARTIAL without server-emitted request IDs", () => {
     const result = goodResult();
     result.requestCorrelation = {

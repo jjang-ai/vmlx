@@ -7785,6 +7785,13 @@ export function validatePairedApiEvidence(result) {
     failures.push('paired raw API metadata does not match its safely reopened artifact bytes')
   }
   const value = reopened.value || {}
+  if (
+    value.schema !== 'vmlx-agentic-protocol-matrix-v2'
+    || Number(value.schema_version) !== 2
+  ) {
+    failures.push('paired API artifact is not the exact passing vmlx-agentic-protocol-matrix-v2 run')
+    return failures
+  }
   const contract = expectedPairedApiContract(result)
   if (!contract.valid) {
     failures.push(
@@ -7792,9 +7799,7 @@ export function validatePairedApiEvidence(result) {
     )
   }
   if (
-    value.schema !== 'vmlx-agentic-protocol-matrix-v2'
-    || Number(value.schema_version) !== 2
-    || value.pass !== true
+    value.pass !== true
     || value.run_id !== result?.run_id
     || value.requested_model !== result?.servedModel
     || path.resolve(value.repo_root || '') !== realpathSync(repoDir)
