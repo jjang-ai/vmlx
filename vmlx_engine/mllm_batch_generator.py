@@ -16788,6 +16788,13 @@ class MLLMBatchGenerator:
                             self.model, head, cached_tokens,
                             pick=pick, ratio_temperature=ratio_temp,
                             trace_logits=_mimo_v2_token_trace_enabled(),
+                            greedy_confidence=(
+                                req.temperature == 0
+                                and getattr(self.model, "_inkling_native_dspark_source", None) == "indexed"
+                                and getattr(self.language_model.model.layers[0].mlp.switch_mlp, "is_jangh", False)
+                                and mx.__version__ == "0.32.5.dev20261101+360078a8"
+                                and mx.device_info().get("device_name") == "Apple M5 Max"
+                            ),
                         )
                         draft_store = self._inkling_draft_context_store
                         prompt_tokens = getattr(req, "_original_token_ids", None) or input_ids_list[i]

@@ -91,13 +91,15 @@ def _ratio_verification(logits, proposal_logprobs, proposals):
 
 class InklingServingRun:
     def __init__(self, model, head, cached_tokens, *, pick,
-                 ratio_temperature=None, trace_logits=False):
+                 ratio_temperature=None, trace_logits=False, greedy_confidence=False):
         self.target = InklingDSparkTarget(model)
         self.drafter = InklingDSparkDrafter(head, self.target)
         self.drafter.reset(base=cached_tokens)
         self.pick = pick
         self.ratio_temperature = ratio_temperature
         self.trace_logits = trace_logits
+        self.greedy_confidence = greedy_confidence
+        self.confidence_declines = 0
         self.policy = InklingServingPolicy()
         self.horizon = max(1, head.config.block_size - 1)
         self.ready = deque()
@@ -219,6 +221,7 @@ class InklingServingRun:
             "draft_context_restored_tokens": self.restored_draft_tokens,
             "draft_context_checkpoint_tokens": self.draft_checkpoint_tokens,
             "cost": self.policy.cost_snapshot(),
+            "confidence_declines": self.confidence_declines,
         }
 
     def _ar_step(self, ar_forward):
@@ -241,7 +244,28 @@ class InklingServingRun:
                 proposal_logprobs.append(_normalized_logprobs(scaled))
                 return mx.random.categorical(scaled)
 
+        ar_seconds = self.policy.ar_seconds
+        cost = self.policy.round_seconds(width + 1)
+        confidence = []
+        if self.greedy_confidence and ar_seconds is not None and cost is not None:
+            def observe_greedy(logits):
+                scores = logits.astype(mx.float32)
+                confidence.append(mx.exp(mx.max(scores, axis=-1) - mx.logsumexp(scores, axis=-1)))
+                return mx.argmax(logits, axis=-1)
+            draft_pick = observe_greedy
         proposal = self.drafter.draft_from_anchor(batch.y, width, None, draft_pick=draft_pick)
+        if confidence and ar_seconds is not None and cost is not None:
+            mx.eval(proposal, confidence)
+            expected, reach = 1.0, 1.0
+            for mass in confidence:
+                probability = float(mass.item())
+                # Penalize uncertain proposals before pricing the accepted prefix.
+                reach *= probability * probability
+                expected += reach
+            if expected * ar_seconds < cost * (1 + self.policy.margin):
+                self.confidence_declines += 1
+                self.policy.ar_left = max(self.policy.ar_left, self.policy.burst)
+                return False
         mx.async_eval(proposal)
         ids = mx.concatenate([batch.y, proposal]).reshape(1, -1)
         logits, self.features, self.transaction = self.target.verify(
@@ -277,6 +301,7 @@ class InklingServingRun:
             and seconds < (accepted + 1) * self.policy.ar_seconds
         ):
             self.horizon += 1
+        return True
 
     def step(self, batch, remaining, *, ar_forward, terminal=False):
         if self.ready:
@@ -300,11 +325,13 @@ class InklingServingRun:
                 width = self.policy.planned_width(
                     min(self.horizon, remaining - 1), self.policy.prior_per_row
                 )
-                self._verify(batch, width)
-                self.emitted = 1
-                if not self.ready:
-                    self._complete_round()
-                    batch.y, batch.logprobs = self.next_result
+                if self._verify(batch, width):
+                    self.emitted = 1
+                    if not self.ready:
+                        self._complete_round()
+                        batch.y, batch.logprobs = self.next_result
+                else:
+                    self._ar_step(ar_forward)
         # Match the normal scheduler: build and enqueue the next forward
         # before reading the current token back to the CPU.
         return int(prior_token.item()), prior_logprobs
