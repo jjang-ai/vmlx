@@ -5,7 +5,6 @@ from collections import defaultdict
 from pathlib import Path
 
 import mlx.core as mx
-from safetensors import safe_open
 
 from .dspark_config import DSparkConfig
 from .dspark_head import InklingDraft
@@ -35,17 +34,15 @@ def load_inkling_dspark(bundle: Path, target) -> tuple[InklingDraft, str]:
     if sidecar.is_file() and shards:
         raise ValueError("The Inkling bundle specifies both sidecar and indexed DSpark weights")
     if sidecar.is_file():
-        with safe_open(str(sidecar), framework="mlx") as reader:
-            weights = [(key, reader.get_tensor(key)) for key in reader.keys()]
+        weights = list(mx.load(sidecar).items())
         source = "sidecar"
     elif shards:
         weights = []
         for shard, keys in shards.items():
-            with safe_open(str(shard), framework="mlx") as reader:
-                weights.extend(
-                    (key.removeprefix(_DRAFT_PREFIX), reader.get_tensor(key))
-                    for key in keys
-                )
+            tensors = mx.load(shard)
+            weights.extend(
+                (key.removeprefix(_DRAFT_PREFIX), tensors[key]) for key in keys
+            )
         source = "indexed"
     else:
         raise FileNotFoundError("The Inkling bundle has no native DSpark weights")
