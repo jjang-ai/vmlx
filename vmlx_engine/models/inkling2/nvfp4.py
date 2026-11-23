@@ -1,4 +1,15 @@
-"""NVFP4 linears with global weight scales and optional AWQ input scales."""
+"""NVFP4 linears with global weight scales and optional AWQ input scales.
+
+Three spellings of the per-tensor (per-expert) outer scale, by tensor name:
+  weight_scale_2       w = e2m1 * e4m3 * scale            (ModelOpt / the native Inkling checkpoint: amax / 2688)
+  weight_global_scale  w = e2m1 * e4m3 / scale
+  global_scale         w = e2m1 * e4m3 * scale / 2688     (MLX's own gather_qmm(global_scale=...) convention; the
+                                                           native units of Inkling JANGHT bundles store this value)
+"""
+
+# MLX's fixed NVFP4 global-scale divisor: F8E4M3_MAX * F4E2M1_MAX
+MLX_NVFP4_DENOMINATOR = 2688.0
+SCALE_NAMES = ("weight_scale_2", "weight_global_scale", "global_scale")
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -38,7 +49,18 @@ class ScaledQuantizedLinear(nn.Module):
     def apply_scale(self, output, scale):
         if self._scale_name == "weight_global_scale":
             return output / scale
+        if self._scale_name == "global_scale":
+            return output * (scale / MLX_NVFP4_DENOMINATOR)
         return output * scale
+
+    def mlx_global_scale(self):
+        """The outer scale in MLX's gather_qmm / quantized_matmul ``global_scale`` convention (float32)."""
+        scale = self.global_scale.astype(mx.float32)
+        if self._scale_name == "weight_global_scale":
+            return MLX_NVFP4_DENOMINATOR / scale
+        if self._scale_name == "global_scale":
+            return scale
+        return MLX_NVFP4_DENOMINATOR * scale
 
     def __call__(self, x):
         dtype = x.dtype
@@ -97,13 +119,9 @@ class ScaledQuantizedSwitchLinear(ScaledQuantizedLinear):
         ):
             # The GPU kernel accepts one tensor absmax per expert. Keep its
             # scaling inside the projection before rounding to the input dtype.
-            scale = scale.astype(mx.float32)
-            factor = (
-                2688.0 / scale
-                if self._scale_name == "weight_global_scale"
-                else 2688.0 * scale
+            factor = mx.broadcast_to(
+                self.mlx_global_scale().reshape(-1), (self.num_experts,)
             )
-            factor = mx.broadcast_to(factor.reshape(-1), (self.num_experts,))
             output = mx.gather_qmm(
                 x,
                 self.weight,
@@ -147,11 +165,7 @@ class ScaledQuantizedSwitchLinear(ScaledQuantizedLinear):
 
 def replace_scaled_quantized_linears(model: nn.Module, weights: dict) -> None:
     def replace(path, module):
-        scale_names = [
-            name
-            for name in ("weight_scale_2", "weight_global_scale")
-            if f"{path}.{name}" in weights
-        ]
+        scale_names = [name for name in SCALE_NAMES if f"{path}.{name}" in weights]
         if not scale_names:
             return module
         if len(scale_names) != 1:

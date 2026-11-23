@@ -75,13 +75,7 @@ def supports_masked_qmv(linear, *, input_alignment=512):
 def _global_scale(linear):
     e = linear.num_experts
     if hasattr(linear, "global_scale"):
-        scale = linear.global_scale.astype(mx.float32)
-        factor = (
-            2688.0 / scale
-            if linear._scale_name == "weight_global_scale"
-            else 2688.0 * scale
-        )
-        factor = mx.broadcast_to(factor.reshape(-1), (e,))
+        factor = mx.broadcast_to(linear.mlx_global_scale().reshape(-1), (e,))
     else:
         factor = mx.full((e,), 2688.0, mx.float32)
     if e < 64:

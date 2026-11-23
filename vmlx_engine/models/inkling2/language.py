@@ -663,6 +663,13 @@ class SparseMoE(nn.Module):
             from .fused_nvfp4_experts import fused_nvfp4_experts
 
             return fused_nvfp4_experts(self.switch_mlp, x, indices, weights, fused_constants)
+        if getattr(self.switch_mlp, "is_jangt", False):
+            # JANGHT bundle layer (janght.py): gate/up and down groups are each JANGT, JANGH or native; the unit
+            # applies the soft-capped activation and the fp32 route-weighted sum itself. Decode and verify rows
+            # (<= 8 tokens x top-8) take its per-(row, slot) kernels, so a verified row equals its decode row.
+            if self.sharding_group is not None:
+                raise ValueError("Inkling JANGHT expert sharding is unsupported")
+            return self.switch_mlp.routed(x, indices, weights)
         if getattr(self.switch_mlp, "is_jangh", False):
             if self.sharding_group is not None:
                 raise ValueError("Inkling Mini JANGH expert sharding is unsupported")
@@ -1052,7 +1059,7 @@ class LanguageModel(nn.Module):
         if size == 1:
             return
         start, end = count * rank // size, count * (rank + 1) // size
-        scalar_scales = {"weight_scale_2", "weight_global_scale"}
+        scalar_scales = {"weight_scale_2", "weight_global_scale", "global_scale"}
         # Check every layer before changing any weights, including native
         # packed weights, group scales, and per-expert FP32 outer scales.
         for layer in self.layers:
