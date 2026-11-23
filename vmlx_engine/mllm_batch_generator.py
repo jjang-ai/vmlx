@@ -16760,8 +16760,29 @@ class MLLMBatchGenerator:
                     req._prefill_usage = None
                     self._prepare_native_mtp_prompt_priming(req)
                     head = getattr(self.model, "_inkling_native_dspark", None)
+                    # Ratio verification uses the unfiltered temperature-scaled
+                    # categorical distribution.
+                    ratio_temp = (
+                        req.temperature
+                        if head is not None and req.temperature > 0
+                        and req.top_p in (0.0, 1.0) and not req.top_k and not req.min_p
+                        else None
+                    )
+                    cached_tokens = int(getattr(req, "_cached_tokens", 0) or 0)
+                    # Stable MLX 0.32.4 on M5 Max lost to served AR on both
+                    # orders of the no-cache official NVFP4 sampled control.
+                    # Keep SSD-backed and other runtime lanes eligible.
+                    uncached_stable_nvfp4_ratio = (
+                        ratio_temp is not None
+                        and not cached_tokens
+                        and self._inkling_draft_context_store is None
+                        and mx.__version__ == "0.32.4"
+                        and "nvfp4" in getattr(self.model, "_inkling_loaded_expert_modes", ())
+                        and mx.device_info().get("device_name") == "Apple M5 Max"
+                    )
                     if (
                         head is not None and len(requests) == 1 and not force_batch_cache
+                        and not uncached_stable_nvfp4_ratio
                         and (req.temperature == 0 or req.seed is None)
                         and req.repetition_penalty in (None, 1.0)
                         and not (req.frequency_penalty or req.presence_penalty or req.logit_bias)
@@ -16775,15 +16796,6 @@ class MLLMBatchGenerator:
                         def pick(logits, sampler=sampler):
                             return _sample_mllm_prefill_logits(logits, sampler)[0].reshape(-1)
 
-                        # Ratio verification below uses the unfiltered
-                        # temperature-scaled categorical distribution.
-                        ratio_temp = (
-                            req.temperature
-                            if req.temperature > 0 and req.top_p in (0.0, 1.0)
-                            and not req.top_k and not req.min_p
-                            else None
-                        )
-                        cached_tokens = int(getattr(req, "_cached_tokens", 0) or 0)
                         state = InklingServingRun(
                             self.model, head, cached_tokens,
                             pick=pick, ratio_temperature=ratio_temp,
@@ -16824,6 +16836,11 @@ class MLLMBatchGenerator:
                                     )
                                     state.stage_draft_context(key, boundary)
                     else:
+                        if uncached_stable_nvfp4_ratio:
+                            logger.info(
+                                "Inkling native DSpark request=%s uses AR for uncached sampled NVFP4 on stable MLX 0.32.4",
+                                req.request_id,
+                            )
                         logits = self._run_vision_encoding(req, cache=req_cache)
                     _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                     from .utils.turboquant_config import turboquant_cache_telemetry
