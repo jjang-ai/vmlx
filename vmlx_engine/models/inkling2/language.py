@@ -617,7 +617,11 @@ class SparseMoE(nn.Module):
                 and 1 < x.shape[1] <= 8
                 and getattr(self.switch_mlp.down_proj, "mode", None) == "nvfp4"
             ):
-                out = self.switch_mlp.masked(x, indices.astype(mx.int32))
+                routes = indices.astype(mx.int32)
+                if _VERIFY_WITH_DECODE_GEMV.get():
+                    out = self.switch_mlp.verify_nvfp4(x, routes)
+                else:
+                    out = self.switch_mlp.masked(x, routes)
             else:
                 out = self.switch_mlp(x, indices)
         else:

@@ -4,6 +4,7 @@ import mlx.core as mx
 from mlx_lm.models.switch_layers import SwitchGLU as _SwitchGLU
 
 from .masked_quantized import DECODE_BLOCK_SIZE
+from .nvfp4 import ScaledQuantizedSwitchLinear
 
 
 class SwitchGLU(_SwitchGLU):
@@ -15,6 +16,27 @@ class SwitchGLU(_SwitchGLU):
             ]
             return mx.concatenate(rows, axis=1)
         return super().__call__(x, indices)
+
+    def verify_nvfp4(self, x, indices):
+        projections = (self.up_proj, self.gate_proj, self.down_proj)
+        if (
+            x.shape[0] == 1
+            and x.dtype == mx.bfloat16
+            and mx.default_device() == mx.gpu
+            and all(
+                type(layer) is ScaledQuantizedSwitchLinear and layer.mode == "nvfp4"
+                for layer in projections
+            )
+        ):
+            # Every expert still receives one activation row per indexed
+            # product. Launch the independent rows together to preserve the
+            # decode reduction without repeating the projection launches.
+            vector = x[..., None, None, :]
+            up = self.up_proj(vector, indices, sorted_indices=False)
+            gate = self.gate_proj(vector, indices, sorted_indices=False)
+            middle = mx.contiguous(self.activation(up, gate))
+            return self.down_proj(middle, indices, sorted_indices=False).squeeze(-2)
+        return self.masked(x, indices)
 
     def masked(self, x, indices):
         """Skip unowned quantized routes when verifying a short decode block.
