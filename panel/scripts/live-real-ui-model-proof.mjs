@@ -9984,28 +9984,35 @@ async function main() {
           if (created.session?.type !== 'local') {
             throw new Error('real UI proof requires an Electron-managed local session');
           }
-          window.dispatchEvent(new CustomEvent('vmlx:navigate', {
+          const selectProofSession = () => window.dispatchEvent(new CustomEvent('vmlx:navigate', {
             detail: {
               mode: 'server',
               panel: 'session',
               sessionId: created.session.id,
             },
           }));
-          // The session/panel event stages the exact target, but a Sessions
-          // context refresh can restore Chat mode before React commits it. Use
-          // the same visible top-bar Server button a user clicks, then wait for
-          // the session-bound settings control. The previous event-only path
-          // timed out on the Chat quick-start screen without ever loading the
-          // model, even though the session itself had been created correctly.
+          selectProofSession();
+          // A fresh Chat screen only has the Servers & API sidebar entry.
           const serverModeButton = await waitFor(() => {
-            return [...document.querySelectorAll('button')].find((button) => (
-              button instanceof HTMLButtonElement
-              && isVisible(button)
-              && (button.textContent || '').replace(/\\s+/g, ' ').trim() === 'Server'
-            )) || null;
-          }, 'visible top-bar Server mode control');
+            const buttons = [...document.querySelectorAll('button')].filter((button) => (
+              button instanceof HTMLButtonElement && isVisible(button)
+            ));
+            return buttons.find((button) => (
+              (button.textContent || '').replace(/\\s+/g, ' ').trim() === 'Server'
+            )) || buttons.find((button) => button.getAttribute('aria-label') === 'Servers & API')
+              || null;
+          }, 'visible Server mode or Servers & API control');
+          const openedFromSidebar = serverModeButton.getAttribute('aria-label') === 'Servers & API';
           serverModeButton.scrollIntoView({ block: 'center' });
           serverModeButton.click();
+          if (openedFromSidebar) {
+            const cardSelector = '[data-vmlx-control="session-card-configure"][data-vmlx-session-id="'
+              + CSS.escape(created.session.id) + '"]';
+            await waitFor(() => [...document.querySelectorAll(
+              cardSelector + ',[data-vmlx-control="server-settings"]',
+            )].find((candidate) => isVisible(candidate)) || null, 'visible prepared server session');
+            selectProofSession();
+          }
           let sessionBeforeStart = await window.api.sessions.get(created.session.id);
           let sessionConfigBeforeProof = {};
           try {
