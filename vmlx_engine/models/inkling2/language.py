@@ -15,6 +15,7 @@
 
 
 import math
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 import mlx.core as mx
@@ -38,6 +39,17 @@ from .config import TextConfig, validate_sharding
 
 
 _VERIFY_WITH_DECODE_GEMV = ContextVar("inkling_verify_with_decode_gemv", default=False)
+
+_DSPARK_FEATURE_SCOPE = ContextVar("inkling_dspark_feature_scope", default=None)
+
+
+@contextmanager
+def capture_dspark_features(model, taps, sink):
+    active = _DSPARK_FEATURE_SCOPE.set((model, taps, sink))
+    try:
+        yield
+    finally:
+        _DSPARK_FEATURE_SCOPE.reset(active)
 
 
 def _decode_gemv_rows(x, weight):
@@ -845,6 +857,13 @@ class LanguageModel(nn.Module):
 
         transaction = None
         verify_geometry = None
+        feature_scope = _DSPARK_FEATURE_SCOPE.get()
+        capture_for_dspark = (
+            feature_scope is not None and self is feature_scope[0]
+            and capture_layer_ids is None and not speculative_verify
+        )
+        if capture_for_dspark:
+            capture_layer_ids = feature_scope[1]
         if speculative_verify:
             length = inputs.shape[1] if inputs is not None else inputs_embeds.shape[1]
             cache, transaction = inkling_verification_cache(cache, length)
@@ -861,6 +880,8 @@ class LanguageModel(nn.Module):
             pre_norm, captured = (
                 result if capture_layer_ids is not None else (result, None)
             )
+            if capture_for_dspark:
+                feature_scope[2](mx.concatenate(captured, axis=-1))
             return LanguageModelOutput(
                 logits=(
                     None

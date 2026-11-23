@@ -48,10 +48,13 @@ class InklingServingRun:
         self.features = None
         self.next_result = None
         self.emitted = 0
+        self.ar_started = None
+        self.prefill_tokens = 0
         self.ar_tokens = self.draft_rounds = self.accepted = 0
         self.widths = {}
 
     def add_prefill_features(self, features):
+        self.prefill_tokens += features.shape[1]
         self.drafter.add_context(features)
 
     def _complete_round(self):
@@ -82,18 +85,15 @@ class InklingServingRun:
             "cost": self.policy.cost_snapshot(),
         }
 
-    def _ar_step(self, batch, prior):
-        started = time.perf_counter()
-        logits, features = self.target.ar_step(
-            batch.y, batch.cache, self.drafter.target_layer_ids
-        )
-        pick = mx.argmax(logits).reshape(1).astype(mx.uint32)
-        logprobs = logits - mx.logsumexp(logits)
-        mx.eval(pick, logprobs, features)
-        self.drafter.add_context(features)
-        batch.y, batch.logprobs = pick, [logprobs]
+    def _ar_step(self, prior, ar_forward):
+        from ..models.inkling2.language import capture_dspark_features
+
+        self.ar_started = time.perf_counter()
+        with capture_dspark_features(
+            self.target.model, self.drafter.target_layer_ids, self.drafter.add_context
+        ):
+            ar_forward()
         self.ar_tokens += 1
-        self.policy.record_ar(time.perf_counter() - started)
         return prior
 
     def _verify(self, batch, width):
@@ -116,7 +116,6 @@ class InklingServingRun:
         seconds = time.perf_counter() - started
         rows = width + 1
         self.draft_rounds += 1
-        self.accepted += accepted
         self.widths[rows] = self.widths.get(rows, 0) + 1
         self.policy.record_acceptance(width, accepted)
         if rows in self.policy.warmed_rows:
@@ -130,21 +129,25 @@ class InklingServingRun:
         ):
             self.horizon += 1
 
-    def step(self, batch, remaining, *, terminal=False):
+    def step(self, batch, remaining, *, ar_forward, terminal=False):
         if self.ready:
             emitted = self.ready.popleft()
             if not terminal:
                 self.emitted += 1
+                self.accepted += 1
             if not self.ready or terminal:
                 self._complete_round()
                 batch.y, batch.logprobs = self.next_result
             return emitted
 
         prior = (int(batch.y[0].item()), batch.logprobs[0])
-        if terminal or remaining <= 1:
+        if self.ar_started is not None:
+            self.policy.record_ar(time.perf_counter() - self.ar_started)
+            self.ar_started = None
+        if terminal:
             return prior
-        if self.policy.next_is_ar():
-            return self._ar_step(batch, prior)
+        if remaining <= 1 or self.policy.next_is_ar():
+            return self._ar_step(prior, ar_forward)
 
         width = self.policy.planned_width(
             min(self.horizon, remaining - 1), self.policy.prior_per_row

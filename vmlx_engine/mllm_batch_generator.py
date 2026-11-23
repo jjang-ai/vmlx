@@ -9392,6 +9392,9 @@ class MLLMBatchGenerator:
                 drop_parked_context(
                     getattr(self, "language_model", None), request.request_id
                 )
+                inkling_state = getattr(request, "_inkling_dspark_state", None)
+                if inkling_state is not None:
+                    inkling_state.abort()
                 mtp_state = getattr(request, "_native_mtp_state", None)
                 if mtp_state is None:
                     continue
@@ -16734,7 +16737,28 @@ class MLLMBatchGenerator:
                     _prefill_token_count = _mllm_input_ids_token_count(req.input_ids)
                     req._prefill_usage = None
                     self._prepare_native_mtp_prompt_priming(req)
-                    logits = self._run_vision_encoding(req, cache=req_cache)
+                    head = getattr(self.model, "_inkling_native_dspark", None)
+                    if (
+                        head is not None and len(requests) == 1 and not force_batch_cache
+                        and req.temperature == 0 and req.repetition_penalty in (None, 1.0)
+                        and not (req.frequency_penalty or req.presence_penalty or req.logit_bias)
+                        and not (req.images or req.videos or req.audio)
+                    ):
+                        from .dspark.inkling_serving import InklingServingRun
+                        from .models.inkling2.language import capture_dspark_features
+
+                        state = InklingServingRun(
+                            self.model, head, int(getattr(req, "_cached_tokens", 0) or 0)
+                        )
+                        with capture_dspark_features(
+                            self.language_model, state.drafter.target_layer_ids,
+                            state.add_prefill_features,
+                        ):
+                            logits = self._run_vision_encoding(req, cache=req_cache)
+                        if state.prefill_tokens == _prefill_token_count:
+                            req._inkling_dspark_state = state
+                    else:
+                        logits = self._run_vision_encoding(req, cache=req_cache)
                     _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
                     from .utils.turboquant_config import turboquant_cache_telemetry
 
@@ -19885,6 +19909,7 @@ class MLLMBatchGenerator:
             batch is not None
             and any(
                 getattr(req, "_native_mtp_state", None) is not None
+                or getattr(req, "_inkling_dspark_state", None) is not None
                 for req in batch.requests
             )
         ):
@@ -19952,14 +19977,41 @@ class MLLMBatchGenerator:
                     # pending, unexposed next token advances recurrent state.
                     self._store_glm_native_terminal(request, batch.extract_cache(index))
 
-        mtp_state = None
+        mtp_state = inkling_state = None
         if len(batch.requests) == 1:
             mtp_state = getattr(batch.requests[0], "_native_mtp_state", None)
-        _next_trace = bool(getattr(self, "_decode_trace", False) and mtp_state is None)
+            inkling_state = getattr(batch.requests[0], "_inkling_dspark_state", None)
+        _next_trace = bool(
+            getattr(self, "_decode_trace", False)
+            and mtp_state is None and inkling_state is None
+        )
         _step_s = 0.0
         _async_s = 0.0
         _materialize_t0 = time.perf_counter() if _next_trace else 0.0
-        if mtp_state is not None:
+        if inkling_state is not None:
+            request = batch.requests[0]
+
+            def forward_stock_ar():
+                batch.y, batch.logprobs = self._step(batch.y[:, None], batch.cache)
+                _submit_decode_token_eval(batch.y, batch.cache)
+
+            try:
+                token, lp = inkling_state.step(
+                    batch, batch.max_tokens[0] - batch.num_tokens[0],
+                    ar_forward=forward_stock_ar,
+                    terminal=bool(getattr(request, "_vmlx_graceful_stop_requested", False)),
+                )
+                y, logprobs = [token], [lp]
+            except Exception as exc:
+                inkling_state.abort()
+                self.active_batch = None
+                logger.exception("Inkling native DSpark failed for %s", request.request_id)
+                return prefill_errors + [MLLMBatchResponse(
+                    uid=batch.uids[0], request_id=request.request_id, token=0,
+                    logprobs=mx.zeros((1,)), finish_reason="error",
+                    error=f"InklingDSparkError: {exc}",
+                )]
+        elif mtp_state is not None:
             try:
                 token, lp = self._next_native_mtp_token(
                     batch.requests[0],
@@ -20204,6 +20256,12 @@ class MLLMBatchGenerator:
             )
 
             if finish_reason is not None:
+                if inkling_state is not None:
+                    inkling_state.finish()
+                    logger.info(
+                        "Inkling native DSpark summary request=%s %s",
+                        request_id, inkling_state.report(),
+                    )
                 from .native_mtp_prompt_priming import drop_parked_context
 
                 drop_parked_context(
