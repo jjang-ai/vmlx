@@ -17565,6 +17565,24 @@ async def clear_cache(
                 cleared.append("ssm_companion")
             if ssm_l2_cleared:
                 cleared.append("ssm_companion_disk")
+            draft_context = getattr(generator, "_inkling_draft_context_store", None)
+            if clear_prefix_l2 and draft_context is not None:
+                lifecycle = _request_lifecycle_health_snapshot(
+                    _engine.get_stats(), scheduler.get_stats()
+                )
+                if (
+                    lifecycle.get("available") is not True
+                    or lifecycle.get("active_request_count") != 0
+                    or lifecycle.get("terminal_cleanup_pending") is not False
+                ):
+                    skipped.append("inkling_draft_context_disk:requests_in_use")
+                else:
+                    try:
+                        draft_context.clear()
+                        cleared.append("inkling_draft_context_disk")
+                    except OSError:
+                        logger.exception("Inkling draft context clear did not finish")
+                        skipped.append("inkling_draft_context_disk:clear_failed")
             try:
                 import gc as _gc
 
