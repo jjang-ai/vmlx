@@ -2283,6 +2283,12 @@ class MLLMScheduler:
         the config has at least two distinct attention modes. For everything
         else we return False and the normal prefix-cache pipeline runs.
         """
+        if getattr(lang_model, "model_type", None) in {
+            "inkling2_text", "inkling2_loop_text"
+        }:
+            kinds = {type(slot).__name__ for slot in lang_model.make_cache()}
+            return {"KVCache", "RotatingKVCache"}.issubset(kinds)
+
         if getattr(getattr(self, "model", None), "_mimo_v26_runtime", False):
             # The fresh language wrapper exposes source args, whose schema has
             # hybrid_layer_pattern rather than the legacy cache_subtype field.
@@ -4700,11 +4706,15 @@ class MLLMScheduler:
                                             if (
                                                 self._is_hybrid
                                                 and not self._uses_zaya_cache
-                                                and not _uses_mixed_attention_cache
+                                                and (
+                                                    not _uses_mixed_attention_cache
+                                                    or getattr(self.batch_generator, "_model_type", "")
+                                                    in {"inkling2", "inkling2_loop"}
+                                                )
                                             ):
-                                                _paged_store_kwargs[
-                                                    "store_cumulative_state"
-                                                ] = False
+                                                # Inkling's convolution checkpoint is
+                                                # owned by the exact-boundary companion.
+                                                _paged_store_kwargs["store_cumulative_state"] = False
                                             if _defer_post_fence_gc:
                                                 _paged_store_kwargs["defer_post_fence_gc"] = True
                                             stored_table = (

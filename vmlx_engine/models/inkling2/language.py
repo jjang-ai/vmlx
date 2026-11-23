@@ -23,7 +23,6 @@ from mlx_vlm.models.base import LanguageModelOutput
 from mlx_lm.models.cache import (
     ArraysCache,
     BatchRotatingKVCache,
-    CacheList,
     KVCache,
     RotatingKVCache,
 )
@@ -687,9 +686,9 @@ class TextModel(nn.Module):
         x = self.embed(inputs) if input_embeddings is None else input_embeddings
         blocks = []
         bank = None
-        if cache and len(cache) != len(self.layer_indices):
+        if cache is not None and len(cache) != 2 * len(self.layer_indices):
             raise ValueError(
-                "Inkling 2 requires a separate cache for every layer visit"
+                "Inkling 2 requires attention and convolution caches for every layer visit"
             )
         for visit, index in enumerate(self.layer_indices):
             if self.loop is not None and index == self.loop.core_start:
@@ -709,7 +708,10 @@ class TextModel(nn.Module):
             # DSpark taps the partial block entering the layer, not its output.
             if visit in requested:
                 captures[visit] = x
-            x = self.layers[index](x, blocks, cache[visit] if cache else None, messages)
+            visit_cache = (
+                None if cache is None else (cache[2 * visit], cache[2 * visit + 1])
+            )
+            x = self.layers[index](x, blocks, visit_cache, messages)
             if speculative_verify and (visit + 1) % 4 == 0:
                 mx.async_eval(x)
         h = self.final_input(blocks, x)[..., 0, :]
@@ -884,17 +886,17 @@ class LanguageModel(nn.Module):
         return logits[..., : self.config.unpadded_vocab_size]
 
     def make_cache(self):
-        return [
-            CacheList(
-                (
-                    RotatingKVCache(max_size=self.config.sliding_window_size, keep=0)
-                    if self.model.layers[i].is_sliding
-                    else KVCache()
-                ),
-                ArraysCache(4),
+        # Expose both native lanes. The prefix cache pages attention windows and
+        # checkpoints the convolution state at the same absolute token boundary.
+        caches = []
+        for index in self.model.layer_indices:
+            attention = (
+                RotatingKVCache(max_size=self.config.sliding_window_size, keep=0)
+                if self.model.layers[index].is_sliding
+                else KVCache()
             )
-            for i in self.model.layer_indices
-        ]
+            caches.extend((attention, ArraysCache(4)))
+        return caches
 
     def speculative_logits_from_hidden(self, hidden):
         return self._logits_from_norm(self.model.norm(hidden))

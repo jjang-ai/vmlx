@@ -10048,6 +10048,11 @@ class MLLMBatchGenerator:
             if _inline_materialize:
                 mx.eval(*_inline_materialize)
             checkpoint_tokens = list(all_tokens[:key_boundary])
+            if (
+                getattr(self, "_model_type", "") in {"inkling2", "inkling2_loop"}
+                and key_boundary == len(all_tokens) - 1
+            ):
+                self._maybe_capture_mixed_swa_boundary(request, cache)
             if key_boundary in (getattr(request, "_periodic_ssm_boundaries", None) or ()):
                 # A periodic checkpoint serves later requests only: store it
                 # now (the SSD writer takes it off the queue in the background)
