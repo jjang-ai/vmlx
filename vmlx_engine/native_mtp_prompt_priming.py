@@ -42,6 +42,44 @@ def priming_enabled() -> bool:
     }
 
 
+def text_prompt_priming_enabled(model: Any) -> bool:
+    """Select text models with a measured prompt-history contract."""
+    inner = getattr(model, "language_model", model)
+    model_type = getattr(inner, "model_type", None)
+    if model_type is None:
+        config = getattr(inner, "config", None)
+        if isinstance(config, dict):
+            model_type = config.get("model_type")
+    if model_type == "glm5_next":
+        env_key, default = "GLM5_MTP_PROMPT_PRIMING", "0"
+    elif model_type == "ernie4_5_moe":
+        env_key, default = "ERNIE45_MTP_PROMPT_PRIMING", "1"
+    else:
+        return False
+    value = os.environ.get(f"VMLINUX_{env_key}", os.environ.get(f"VMLX_{env_key}", default))
+    return value.strip().lower() not in {"", "0", "false", "off", "no"}
+
+
+class PromptHiddenTap:
+    """Model stand-in that forwards prompt hiddens to the priming capture."""
+
+    def __init__(self, model):
+        self._model = model
+
+    def __getattr__(self, name):
+        return getattr(self._model, name)
+
+    def __call__(self, inputs, *args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["return_hidden"] = True
+        result = self._model(inputs, *args, **kwargs)
+        if not isinstance(result, tuple) or len(result) != 2:
+            raise RuntimeError("armed text MTP prompt priming requires (logits, hidden)")
+        logits, hidden = result
+        capture_prefill(self._model, inputs, hidden, kwargs.get("cache"))
+        return logits
+
+
 def tail_priming_enabled() -> bool:
     """Fold the uncached prompt tail into a fresh head when no exact sidecar exists.
 

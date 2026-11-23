@@ -76,6 +76,7 @@ _FAMILY_ALIAS = {
     "qwen3_6_text": "qwen3_5",
     "qwen3_5_moe_text": "qwen3_5_moe",
     "qwen4_exp_text": "qwen4_exp",
+    "ernie4_5_moe": "ernie4_5",
 }
 
 # Keep this narrow. vmlx_engine/text_mtp wires these families through mlx-lm's
@@ -89,6 +90,7 @@ _RUNTIME_SUPPORTED_FAMILIES = {
     "qwen3_5_moe",
     "qwen4_exp",
     "hy_v3",
+    "ernie4_5",
     # glm5_next: the vendored model owns the layer-45 draft head, pre-output
     # hidden handoff, KDA accepted-prefix snapshots, and trimmable MLA cache.
     # It runs through the same GenerationBatch verifier as Qwen.
@@ -637,6 +639,7 @@ def _mtp_keys_from_weight_keys(weight_keys: list[str]) -> list[str]:
         str(key)
         for key in weight_keys
         if re.search(r"(^|\.)mtp(\.|$)", str(key))
+        or re.search(r"(^|\.)mtp_(block|emb_norm|hidden_norm|linear_proj)(\.|$)", str(key))
     ]
 
 
@@ -645,6 +648,7 @@ _MTP_LAYER_PATTERNS = (
     re.compile(r"^mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp_layers\.(\d+)(?:\.|$)"),
+    re.compile(r"(?:^|\.)mtp_block\.(\d+)(?:\.|$)"),
 )
 
 
@@ -771,7 +775,7 @@ def _runtime_validation_block_reason(
 
     ``jang_config["runtime"]["native_mtp_blocked"] = "<measured reason>"``.
 
-    or, for Hy3's affine multi-row verifier, a missing/failed exact-output
+    or, for Hy3 and ERNIE-4.5 MoE, a missing/failed exact-output
     attestation in ``vmlx_mtp_tuning.json``. Hy3's standard greedy decode runs
     one token at a time, while the native-MTP verifier runs two tokens through
     the affine backbone. MLX affine matmul is not bit-identical across those
@@ -800,7 +804,13 @@ def _runtime_validation_block_reason(
             "(set VMLX_NATIVE_MTP_FORCE=1 to force the experimental path)"
         )
 
-    if _normalize_family(family) == "hy_v3":
+    exact_output_models = {
+        "hy_v3": ("Hy3 affine", "the two-token affine verifier"),
+        "ernie4_5": ("ERNIE-4.5 MoE", "the multi-row verifier"),
+    }
+    identity_model = exact_output_models.get(_normalize_family(family))
+    if identity_model is not None:
+        display, verifier = identity_model
         tuning = _read_json(bundle_path, "vmlx_mtp_tuning.json")
         native_mtp = (
             tuning.get("native_mtp")
@@ -815,9 +825,9 @@ def _runtime_validation_block_reason(
                 else "is missing"
             )
             return (
-                "Hy3 affine native MTP is validation-blocked because "
+                f"{display} native MTP is validation-blocked because "
                 f"vmlx_mtp_tuning.json native_mtp.output_equivalent {detail}; "
-                "the two-token affine verifier must prove token-identical "
+                f"{verifier} must prove token-identical "
                 "greedy output against one-token autoregressive decode "
                 "(set VMLX_NATIVE_MTP_FORCE=1 only for measurement)"
             )
@@ -932,8 +942,10 @@ def native_mtp_effective_depth(
         )
     except Exception:
         family = None
-    if family == "hy_v3":
-        return 1, "family_default:hy_v3"
+    if family in ("hy_v3", "ernie4_5"):
+        # ERNIE uses its one trained head as the starting rung. The adaptive
+        # verifier can increase depth when the request benefits.
+        return 1, f"family_default:{family}"
     return max(1, min(native_mtp_max_depth(), depth)), source
 
 

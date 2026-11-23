@@ -44,6 +44,7 @@ from ..metal.affine_moe_pair_decode import affine_moe_ar_scope
 from ..native_mtp_adaptive import NativeMTPAdaptiveValueState
 from ..native_mtp_ar_safety import ArSafetyState
 from ..native_mtp_recovery import NativeMTPRecovery
+from ..native_mtp_prompt_priming import text_prompt_priming_enabled
 from . import glm_seam, lane_policy, lane_stats
 from .lane_stats import LaneStats
 
@@ -308,7 +309,7 @@ def logical_context_extent(batch: Any) -> Tuple[int, str]:
 def _head_cache_for(batch: Any, lane: LaneState, first_token: Any) -> None:
     primed = None
     before = None
-    if glm_seam.prompt_priming_enabled(batch.model):
+    if text_prompt_priming_enabled(batch.model):
         from ..native_mtp_prompt_priming import prime_stats, take_primed
 
         before = prime_stats(batch.model)

@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """GLM-5.3 (``glm5_next``) pieces of the text MTP lane.
 
-* Prompt priming (opt-in, ``*_GLM5_MTP_PROMPT_PRIMING``): the prompt's backbone
-  hiddens are folded into the head's history so the first drafts see the whole
-  prompt. ``PromptHiddenTap`` stands in for the model during mlx-lm's prompt
-  forwards and hands each hidden to ``native_mtp_prompt_priming``.
 * Exact N-1 prompt boundary: KDA state cannot be reversed, so the reusable
   boundary is the cache right before mlx-lm feeds the final prompt token. It
   is cloned (or handed to the scheduler's SSD writer) at that point.
@@ -41,34 +37,8 @@ def _glm_switch(model: Any, suffix: str) -> bool:
     return raw.strip().lower() not in _OFF
 
 
-def prompt_priming_enabled(model: Any) -> bool:
-    return _glm_switch(model, "GLM5_MTP_PROMPT_PRIMING")
-
-
 def aligned_head_history_enabled(batch: Any) -> bool:
     return _glm_switch(getattr(batch, "model", None), "GLM5_ALIGNED_MTP_HEAD_CACHE")
-
-
-class PromptHiddenTap:
-    """Model stand-in that forwards prompt hiddens to the priming capture."""
-
-    def __init__(self, model):
-        self._model = model
-
-    def __getattr__(self, name):
-        return getattr(self._model, name)
-
-    def __call__(self, inputs, *args, **kwargs):
-        from ..native_mtp_prompt_priming import capture_prefill
-
-        kwargs = dict(kwargs)
-        kwargs["return_hidden"] = True
-        result = self._model(inputs, *args, **kwargs)
-        if not isinstance(result, tuple) or len(result) != 2:
-            raise RuntimeError("armed GLM prompt priming requires (logits, hidden)")
-        logits, hidden = result
-        capture_prefill(self._model, inputs, hidden, kwargs.get("cache"))
-        return logits
 
 
 def drop_unverified_head_pairs(lane: Any) -> bool:
