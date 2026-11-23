@@ -5585,6 +5585,18 @@ export function validateNativeMtpSurfaceParity(result) {
     failures.push('/health mtp.index_has_mtp_tensors is not a boolean, so UI/engine MTP parity is unverifiable')
     return failures
   }
+  const externalLiLiCorr = mtp.runtime_adapter === 'nemotron_lilicorr'
+  const visibleLiLiCorr = surface.adapter === 'nemotron_lilicorr'
+  if (visibleLiLiCorr && requestedMode === 'adaptive'
+      && (!externalLiLiCorr || mtp.runtime_active !== true)) {
+    failures.push('Adaptive LiLiCorr was selected but /health does not attest an active LiLiCorr adapter')
+  }
+  if (externalLiLiCorr && !visibleLiLiCorr) {
+    failures.push('/health reports LiLiCorr but the visible selector was not labelled LiLiCorr')
+  }
+  if (visibleLiLiCorr && requestedMode != null && selection?.persistedKey !== 'lilicorrMode') {
+    failures.push('LiLiCorr mode did not persist in its own session setting')
+  }
   const runtimeUnwired = mtp.status === 'weights_present_runtime_unwired'
     && mtp.runtime_supported === false
     && mtp.runtime_available === false
@@ -5600,7 +5612,7 @@ export function validateNativeMtpSurfaceParity(result) {
     if (surface.labelVisible === true || surface.modeSelectPresent === true) {
       failures.push(`engine reports native MTP ${inconsistentArtifact ? 'artifact inconsistent' : 'runtime unwired'} but the UI rendered a Native MTP control`)
     }
-  } else if (mtp.index_has_mtp_tensors === true) {
+  } else if (mtp.index_has_mtp_tensors === true || externalLiLiCorr || (visibleLiLiCorr && requestedMode === 'off')) {
     if (surface.labelVisible !== true) {
       failures.push('engine reports MTP weights in the bundle but the UI rendered no Native MTP control')
     }
@@ -10125,25 +10137,27 @@ async function main() {
               ) || null,
               'visible Speculative Decoding section before Start',
             );
-            const labelFor = (text) => [...(preDrawer?.querySelectorAll('label') || [])]
-              .find((label) => (
-                (label.innerText || '').replace(/\\s+/g, ' ').trim().startsWith(text)
-              ));
-            if (!labelFor('Native MTP')) {
+            const control = () => (
+              preDrawer?.querySelector('select[data-vmlx-control="setting-nativeMtpMode"]') || null
+            );
+            if (!isVisible(control())) {
               if (!(nativeSectionButton instanceof HTMLButtonElement)) {
-                throw new Error('Visible Native MTP section was not available before Start');
+                throw new Error('Visible speculative decoding section was not available before Start');
               }
               nativeSectionButton.scrollIntoView({ block: 'center' });
               nativeSectionButton.click();
               await waitFor(
-                () => labelFor('Native MTP') || null,
-                'visible Native MTP controls before Start',
+                () => isVisible(control()) ? control() : null,
+                'visible Native MTP or LiLiCorr mode before Start',
               );
             }
-            const setSelect = async (labelText, requestedValue) => {
-              const select = labelFor(labelText)?.querySelector('select');
+            const initialControl = control();
+            const controlLabel = initialControl?.closest('label')?.innerText || '';
+            const persistedKey = /lilicorr/i.test(controlLabel) ? 'lilicorrMode' : 'nativeMtpMode';
+            const setMode = async (requestedValue) => {
+              const select = control();
               if (!(select instanceof HTMLSelectElement) || select.disabled) {
-                throw new Error('Visible ' + labelText + ' control was not editable');
+                throw new Error('Visible speculative decoding mode was not editable');
               }
               const setter = Object.getOwnPropertyDescriptor(
                 HTMLSelectElement.prototype,
@@ -10154,7 +10168,7 @@ async function main() {
               select.dispatchEvent(new Event('change', { bubbles: true }));
               await waitFor(
                 () => select.value === requestedValue ? select : null,
-                'visible ' + labelText + ' to update',
+                'visible speculative decoding mode to update',
               );
               await new Promise((resolve) => setTimeout(resolve, 150));
               return select;
@@ -10162,7 +10176,7 @@ async function main() {
             const requestedMode = ${JSON.stringify(nativeMtpModeOverride)};
             const requestedDepth = ${JSON.stringify(nativeMtpDepthOverride)};
             if (requestedMode != null) {
-              await setSelect('Native MTP Mode', requestedMode);
+              await setMode(requestedMode);
             }
             const saveCandidates = [...(preDrawer?.querySelectorAll('button') || [])]
               .filter((button) => /^(save|save & restart|save and restart)$/i.test(
@@ -10181,19 +10195,20 @@ async function main() {
             const persisted = JSON.parse(reread?.config || '{}');
             if (
               requestedMode != null
-              && persisted.nativeMtpMode !== requestedMode
+              && persisted[persistedKey] !== requestedMode
             ) {
               throw new Error(
-                'Native MTP mode did not persist: ' + (persisted.nativeMtpMode || 'missing')
+                'Speculative decoding mode did not persist: ' + (persisted[persistedKey] || 'missing')
               );
             }
             nativeMtpSelection = {
               requested: true,
               requestedMode,
               requestedDepth,
-              selectedMode: labelFor('Native MTP')?.querySelector('select')?.value || null,
+              selectedMode: control()?.value || null,
               savedVia: (plainSave.innerText || '').trim(),
-              persistedMode: persisted.nativeMtpMode ?? null,
+              persistedKey,
+              persistedMode: persisted[persistedKey] ?? null,
             };
             sessionBeforeStart = reread;
           }
@@ -12283,14 +12298,12 @@ async function main() {
             // selected, and whether the blocked-fallback notice is up
             // (weights detected but the runtime compatibility gate not passed).
             nativeMtpControl: (() => {
-              const label = [...(drawer?.querySelectorAll('label') || [])]
-                .find((l) => /native mtp/i.test(l.innerText || ''));
-              const select = [...(drawer?.querySelectorAll('select') || [])]
-                .find((sel) => [...sel.options].some(
-                  (o) => /auto|deterministic|off/i.test(o.value || o.textContent || ''),
-                ) && /mtp/i.test((sel.closest('label,div')?.innerText || '')));
+              const select = drawer?.querySelector('select[data-vmlx-control="setting-nativeMtpMode"]');
+              const label = select?.closest('label') || [...(drawer?.querySelectorAll('label') || [])]
+                .find((l) => /native mtp|lilicorr/i.test(l.innerText || ''));
               return {
-                labelVisible: !!label,
+                labelVisible: !!label && isVisible(label),
+                adapter: /lilicorr/i.test(label?.innerText || '') ? 'nemotron_lilicorr' : null,
                 // \\s, not \s: this string is inside the outer evaluate()
                 // template literal, so a single backslash collapses and the
                 // page runs /s+/g — which replaces every letter "s" with a
@@ -12302,7 +12315,7 @@ async function main() {
                 selectedMode: select ? String(select.value || '') : null,
                 modeOptions: select ? [...select.options].map((o) => String(o.value)) : null,
                 blockedFallbackNoticeShown: /native mtp weights were detected/i.test(bodyText),
-                mentionedInDrawer: /native mtp/i.test(bodyText),
+                mentionedInDrawer: /native mtp|lilicorr/i.test(bodyText),
               };
             })(),
             // MCP had ZERO coverage in this harness — every MCP claim so far

@@ -6595,6 +6595,40 @@ describe("native MTP surface / engine parity", () => {
     expect(validateNativeMtpSurfaceParity(mtpBundleResult())).toEqual([]);
   });
 
+  it("checks the visible external LiLiCorr mode and its own persisted setting", () => {
+    const result: any = nonMtpBundleResult();
+    result.requestContract = { nativeMtpMode: "adaptive" };
+    result.nativeMtpSelection = {
+      requested: true,
+      selectedMode: "adaptive",
+      persistedMode: "adaptive",
+      persistedKey: "lilicorrMode",
+    };
+    Object.assign(result.serverCacheControls.nativeMtpControl, {
+      adapter: "nemotron_lilicorr",
+      labelVisible: true,
+      modeSelectPresent: true,
+      modeOptions: ["adaptive", "off"],
+      selectedMode: "adaptive",
+    });
+    Object.assign(result.server.health.mtp, {
+      runtime_adapter: "nemotron_lilicorr",
+      runtime_active: true,
+    });
+    expect(validateNativeMtpSurfaceParity(result)).toEqual([]);
+
+    result.server.health.mtp.runtime_active = false;
+    expect(validateNativeMtpSurfaceParity(result)).toContain(
+      "Adaptive LiLiCorr was selected but /health does not attest an active LiLiCorr adapter",
+    );
+
+    result.server.health.mtp.runtime_active = true;
+    result.nativeMtpSelection.persistedKey = "nativeMtpMode";
+    expect(validateNativeMtpSurfaceParity(result)).toContain(
+      "LiLiCorr mode did not persist in its own session setting",
+    );
+  });
+
   it("accepts hidden controls for witnessed weights-present runtime-unwired capability", () => {
     const result: any = nonMtpBundleResult();
     Object.assign(result.server.health.mtp, {
