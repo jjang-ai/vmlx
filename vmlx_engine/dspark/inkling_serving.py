@@ -127,9 +127,17 @@ class InklingServingRun:
         self.ready.clear()
 
     def report(self):
+        drafted = sum((rows - 1) * count for rows, count in self.widths.items())
         return {
             "method": "dspark",
             "native_family": "inkling2",
+            "kind": "dspark",
+            "lane": "inkling2",
+            "cycles": self.draft_rounds,
+            "drafted": drafted,
+            "accepted": self.accepted,
+            "acceptance": self.accepted / drafted if drafted else None,
+            "widths": dict(self.widths),
             "ar_tokens": self.ar_tokens,
             "draft_rounds": self.draft_rounds,
             "verification": "ratio" if self.ratio_temperature is not None else "match",

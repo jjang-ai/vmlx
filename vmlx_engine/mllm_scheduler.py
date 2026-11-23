@@ -3501,6 +3501,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                spec_stats=getattr(finish_response, "spec_stats", None),
                 prefill_usage=next((getattr(resp, "prefill_usage", None)
                     for resp in reversed(burst) if getattr(resp, "prefill_usage", None)), None),
                 cached_tokens=max(
@@ -3523,7 +3524,10 @@ class MLLMScheduler:
                 # A terminal verified-token burst needs the same request-owned
                 # phase receipt as the single-response path below.
                 _mtp = getattr(getattr(self.batch_generator, "_stats", None), "last_native_mtp", None)
-                if isinstance(_mtp, dict) and str(_mtp.get("request_id")) == str(request_id):
+                if (
+                    output.spec_stats is None and isinstance(_mtp, dict)
+                    and str(_mtp.get("request_id")) == str(request_id)
+                ):
                     from .request_telemetry import mtp_spec_stats
                     output.spec_stats = mtp_spec_stats(_mtp)
                 if getattr(finish_response, "prompt_cache", None) is not None:
@@ -3757,6 +3761,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                spec_stats=getattr(response, "spec_stats", None),
                 prefill_usage=getattr(response, 'prefill_usage', None),
                 cached_tokens=getattr(response, 'cached_tokens', 0),
                 cache_detail=getattr(response, 'cache_detail', "") or "",
@@ -3765,7 +3770,10 @@ class MLLMScheduler:
                 # This request's native-MTP record (written by the batch generator
                 # while it built this final response) -> last_request.speculative.
                 _mtp = getattr(getattr(self.batch_generator, "_stats", None), "last_native_mtp", None)
-                if isinstance(_mtp, dict) and str(_mtp.get("request_id")) == str(request_id):
+                if (
+                    output.spec_stats is None and isinstance(_mtp, dict)
+                    and str(_mtp.get("request_id")) == str(request_id)
+                ):
                     from .request_telemetry import mtp_spec_stats
                     output.spec_stats = mtp_spec_stats(_mtp)
 

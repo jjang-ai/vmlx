@@ -14557,6 +14557,27 @@ def _native_dsv41_dspark_health_status(engine) -> dict | None:
     }
 
 
+def _native_inkling_dspark_health_status(engine) -> dict | None:
+    if engine is None or getattr(engine, "_loaded", False) is not True:
+        return None
+    model = getattr(engine, "_model", None)
+    if getattr(model, "model_type", None) not in {"inkling2", "inkling2_loop"}:
+        return None
+    head = getattr(model, "_inkling_native_dspark", None)
+    if head is None:
+        return None
+    return {
+        "enabled": True,
+        "method": "dspark",
+        "lane": "inkling2",
+        "draft_model_loaded": True,
+        "draft_source": getattr(model, "_inkling_native_dspark_source", None),
+        "initial_draft_tokens": max(1, head.config.block_size - 1),
+        "adaptive_width": True,
+        "request_dependent": True,
+    }
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -14771,7 +14792,10 @@ async def health():
         if _text_dspark_info is not None:
             spec_info = {"speculative_decoding": _text_dspark_info}
         else:
-            _native_dspark_info = _native_dsv41_dspark_health_status(_engine)
+            _native_dspark_info = (
+                _native_dsv41_dspark_health_status(_engine)
+                or _native_inkling_dspark_health_status(_engine)
+            )
             if _native_dspark_info is not None:
                 spec_info = {"speculative_decoding": _native_dspark_info}
 

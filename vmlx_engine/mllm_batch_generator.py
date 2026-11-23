@@ -8167,6 +8167,7 @@ class MLLMBatchResponse:
     error_source: Optional[str] = None
 
     prefill_usage: Optional[Dict[str, Any]] = None
+    spec_stats: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -20271,12 +20272,14 @@ class MLLMBatchGenerator:
                 logprobs=logprobs[i],
             )
 
+            spec_stats = None
             if finish_reason is not None:
                 if inkling_state is not None:
                     inkling_state.finish()
+                    spec_stats = inkling_state.report()
                     logger.info(
                         "Inkling native DSpark summary request=%s %s",
-                        request_id, inkling_state.report(),
+                        request_id, spec_stats,
                     )
                 from .native_mtp_prompt_priming import drop_parked_context
 
@@ -20458,6 +20461,7 @@ class MLLMBatchGenerator:
                     cache_extra_keys=getattr(req, '_cache_extra_keys', None),
                     gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None),
                     clean_store_token_ids=_clean_store_tokens,
+                    spec_stats=spec_stats,
                 )
             )
 
