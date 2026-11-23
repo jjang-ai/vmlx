@@ -494,7 +494,7 @@ SCOPED_PENDING_STAGES = [
 ]
 
 
-def _validate_runtime_scope(scope: dict, bound_file, required_models=None) -> None:
+def _validate_runtime_scope(scope: dict, bound_file, required_models=None, *, allow_chat_sse=False) -> None:
     """Bind each active format's retained paired turns; unresolved rows fail closed."""
     models = scope.get("model_evidence")
     required_models = SCOPED_RUNTIME_MODELS if required_models is None else required_models
@@ -518,7 +518,11 @@ def _validate_runtime_scope(scope: dict, bound_file, required_models=None) -> No
             if not visual.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")):
                 raise ValueError(f"{name}: turn requires visual image bytes")
             api = bound_file(turn.get("api")).read_bytes()
-            if not (_is_completed_responses_stream(api) or _is_captured_chat_event_stream(api)):
+            if not (
+                _is_completed_responses_stream(api)
+                or _is_captured_chat_event_stream(api)
+                or (allow_chat_sse and _is_completed_chat_stream(api))
+            ):
                 raise ValueError(f"{name}: turn requires completed raw API stream")
             bound_file(turn.get("review"))
 
@@ -546,6 +550,35 @@ def _is_captured_chat_event_stream(raw: bytes) -> bool:
             terminal |= any(choice.get("finish_reason") is not None for choice in choices)
         return terminal
     except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def _is_completed_chat_stream(raw: bytes) -> bool:
+    """Recognize the complete original Chat SSE wire body."""
+    data = [line[6:].strip() for line in raw.splitlines() if line.startswith(b"data: ")]
+    if len(data) < 3 or data[-1] != b"[DONE]":
+        return False
+    try:
+        events = [json.loads(line) for line in data[:-1]]
+        response_id = events[0].get("id")
+        if not response_id or any(
+            item.get("id") != response_id or item.get("object") != "chat.completion.chunk"
+            or not isinstance(item.get("choices"), list)
+            for item in events
+        ):
+            return False
+        choices = [choice for item in events for choice in item["choices"]]
+        return (
+            sum(choice.get("finish_reason") is not None for choice in choices) == 1
+            and choices[-1].get("finish_reason") is not None
+            and any(
+                any(choice.get("delta", {}).get(field) for field in (
+                    "content", "reasoning_content", "tool_calls",
+                ))
+                for choice in choices
+            )
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return False
 
 
@@ -696,7 +729,7 @@ def validate_scoped_prepackage(
             result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
             result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
         if runtime:
-            _validate_runtime_scope(scope, bound_file, required_models)
+            _validate_runtime_scope(scope, bound_file, required_models, allow_chat_sse=inkling)
         if checkpoint:
             if scope.get("checkpoint_focus") != "deepseek-minimax-text-tools-cache-adaptive":
                 raise ValueError("checkpoint requires explicit text/tool/cache/adaptive scope")

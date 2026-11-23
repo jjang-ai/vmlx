@@ -16399,6 +16399,22 @@ def _scoped_prepackage_fixture(tmp_path, monkeypatch):
     return runner, root, path, data, provenance
 
 
+def test_scoped_prepackage_accepts_complete_chat_wire_and_rejects_partial(tmp_path, monkeypatch):
+    runner, *_ = _scoped_prepackage_fixture(tmp_path, monkeypatch)
+
+    def chunk(response_id, delta, finish=None):
+        event = {"id": response_id, "object": "chat.completion.chunk",
+                 "choices": [{"delta": delta, "finish_reason": finish}]}
+        return b"data: " + json.dumps(event).encode() + b"\n\n"
+
+    text = chunk("chatcmpl-real", {"content": "complete"})
+    done = chunk("chatcmpl-real", {}, "stop") + b"data: [DONE]\n\n"
+    assert runner._is_completed_chat_stream(text + done)
+    assert not runner._is_completed_chat_stream(text)
+    assert not runner._is_completed_chat_stream(done)
+    assert not runner._is_completed_chat_stream(chunk("another", {"content": "complete"}) + done)
+
+
 @pytest.mark.parametrize("campaign", ["runtime", "ripple", "inkling"])
 def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp_path, monkeypatch, campaign):
     runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
