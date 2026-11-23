@@ -5350,6 +5350,21 @@ export function validateGenerationDefaultsEvidence(result) {
   return failures
 }
 
+function dflash2SessionCacheFromHealth(health) {
+  const draft = health?.speculative_decoding
+  const cache = health?.cache?.dflash2_cache
+  return health?.engine_type === 'simple'
+    && draft?.enabled === true
+    && draft.draft_model_loaded === true
+    && cache && typeof cache === 'object'
+    ? cache
+    : null
+}
+
+function hasDflash2SessionSsd(cache) {
+  return Boolean(cache?.ssd && typeof cache.ssd === 'object')
+}
+
 export function validateServerCacheEvidence(result) {
   const failures = []
   if (result?.requestedServerCacheControls !== true) return failures
@@ -5359,6 +5374,7 @@ export function validateServerCacheEvidence(result) {
   const argv = Array.isArray(evidence.argv) ? evidence.argv.map(String) : []
   const visible = evidence.initialCacheControls || {}
   const nativeCache = health?.native_cache || {}
+  const dflash2Cache = dflash2SessionCacheFromHealth(health)
   const promptDiskOnly = nativeCache.prompt_disk_l2_configured === true
     && nativeCache.block_disk_l2_configured !== true
   const requestedBlockDiskPercent = result?.requestedBlockDiskCacheMaxPercent
@@ -5415,7 +5431,13 @@ export function validateServerCacheEvidence(result) {
     }
     if (config.enableBlockDiskCache !== true) failures.push('persisted session config did not enable block disk cache')
     if (!argv.includes('--enable-block-disk-cache')) failures.push('engine argv omitted --enable-block-disk-cache')
-    if (nativeCache.block_disk_l2 !== true) failures.push('/health did not report native_cache.block_disk_l2=true')
+    if (dflash2Cache) {
+      if (!hasDflash2SessionSsd(dflash2Cache)) {
+        failures.push('/health did not report the DFlash2 session SSD cache')
+      }
+    } else if (nativeCache.block_disk_l2 !== true) {
+      failures.push('/health did not report native_cache.block_disk_l2=true')
+    }
   }
   if (requestedBlockDiskPercent != null) {
     if (promptDiskOnly) {
@@ -5458,9 +5480,9 @@ export function validateServerCacheEvidence(result) {
     if (argv.includes('--block-disk-cache-max-gb')) {
       failures.push('engine argv emitted a flat GB cap that overrides the requested SSD percentage')
     }
-    const blockDiskStats = health?.cache?.block_disk_cache
-      || health?.block_disk_cache
-      || {}
+    const blockDiskStats = (dflash2Cache
+      ? dflash2Cache.ssd
+      : health?.cache?.block_disk_cache || health?.block_disk_cache) || {}
     const finiteBudgetRecorded = Number(blockDiskStats.max_size_gb) > 0
       || Number(blockDiskStats.max_size_bytes) > 0
       || Number(blockDiskStats.global_budget?.max_size_bytes) > 0
@@ -5470,6 +5492,12 @@ export function validateServerCacheEvidence(result) {
   }
   if (typeof config.enablePrefixCache !== 'boolean') {
     failures.push('persisted session config omitted enablePrefixCache')
+  } else if (dflash2Cache) {
+    if (!argv.includes('--disable-prefix-cache')
+      || nativeCache.prefix !== false
+      || nativeCache.block_disk_l2 === true) {
+      failures.push('DFlash2 session cache did not exclude generic prefix and block caches')
+    }
   } else {
     if (config.enablePrefixCache) {
       if (argv.includes('--disable-prefix-cache')) {
@@ -5492,7 +5520,9 @@ export function validateServerCacheEvidence(result) {
     if (Boolean(nativeCache.paged) !== config.usePagedCache) {
       failures.push('/health native paged state does not match persisted session config')
     }
-    if (!promptDiskOnly && Boolean(nativeCache.block_disk_only) !== !config.usePagedCache) {
+    if (dflash2Cache && config.usePagedCache) {
+      failures.push('DFlash2 session SSD cannot be verified as a generic paged cache')
+    } else if (!dflash2Cache && !promptDiskOnly && Boolean(nativeCache.block_disk_only) !== !config.usePagedCache) {
       failures.push('/health block-disk-only state does not match persisted paged-cache state')
     }
   }
@@ -12496,6 +12526,7 @@ async function main() {
         serverCacheControls.initialCacheControls?.usePagedCache === true
       )
       const nativeCacheAfter = healthAfter?.native_cache || {}
+      const dflash2Cache = dflash2SessionCacheFromHealth(healthAfter)
       const promptDiskOnly = nativeCacheAfter.prompt_disk_l2_configured === true
         && nativeCacheAfter.block_disk_l2_configured !== true
       const diskLaneVerified = promptDiskOnly
@@ -12507,10 +12538,13 @@ async function main() {
           && nativeCacheAfter.block_disk_l2 !== true
         : rendererResult.effectiveSessionConfig?.enableBlockDiskCache === true
           && argv.includes('--enable-block-disk-cache')
-          && nativeCacheAfter.block_disk_l2 === true
+          && (dflash2Cache
+            ? hasDflash2SessionSsd(dflash2Cache)
+            : nativeCacheAfter.block_disk_l2 === true)
       serverCacheControls = {
         ...serverCacheControls,
         promptDiskOnly,
+        dflash2SessionSsd: hasDflash2SessionSsd(dflash2Cache),
         diskLaneVerified,
         pagedCacheExpected,
         pagedCacheExpectationSource: expectPagedCacheExplicit
@@ -12532,6 +12566,11 @@ async function main() {
       || ''
     const cacheHitTokens = (rendererResult.cacheRequestEvidence || [])
       .reduce((total, evidence) => {
+        const record = evidence?.serverObservation
+        if (evidence?.correlationStatus === 'verified'
+          && record?.correlation_source === 'chat_complete_response_id_to_simple_dflash2_last_request') {
+          return total + Number(record.cached_tokens || 0)
+        }
         const before = explicitCacheCounters(evidence?.before)
         const after = explicitCacheCounters(evidence?.after)
         return total + Math.max(0, after.hitTokens - before.hitTokens)

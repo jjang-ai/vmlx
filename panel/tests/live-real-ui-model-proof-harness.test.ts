@@ -3961,6 +3961,31 @@ describe("real UI model proof harness", () => {
     );
   });
 
+  it("verifies a loaded DFlash2 session SSD's own tier and excludes the generic cache", () => {
+    const result = goodResult();
+    result.session.effective_config.usePagedCache = false;
+    result.serverCacheControls.initialCacheControls.usePagedCache = false;
+    result.serverCacheControls.argv = [
+      "--disable-prefix-cache", "--no-paged-cache", "--enable-block-disk-cache",
+    ];
+    Object.assign(result.server.health, {
+      engine_type: "simple",
+      native_cache: { prefix: false, paged: false, block_disk_l2: false, block_disk_only: false },
+      speculative_decoding: { enabled: true, draft_model_loaded: true },
+      cache: { dflash2_cache: { ssd: { global_budget: { max_size_bytes: 1024 } } } },
+    });
+    expect(validateServerCacheEvidence(result)).toEqual([]);
+
+    result.server.health.cache.dflash2_cache.ssd = null;
+    expect(validateServerCacheEvidence(result)).toContain(
+      "/health did not report the DFlash2 session SSD cache",
+    );
+    result.server.health.native_cache.prefix = true;
+    expect(validateServerCacheEvidence(result)).toContain(
+      "DFlash2 session cache did not exclude generic prefix and block caches",
+    );
+  });
+
   it("keeps cache-positive evidence mandatory for non-DSV4 sessions", () => {
     const result = goodResult();
     expect(validateServerCacheEvidence(result)).toEqual([]);
