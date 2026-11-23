@@ -1458,6 +1458,7 @@ class BatchedEngine(BaseEngine):
             if loaded is not None:
                 self._model._inkling_native_dspark, head_source = loaded
                 self._model._inkling_native_dspark_source = head_source
+                self._model._inkling_native_dspark_bundle = str(Path(self._model_name).resolve())
                 logger.info("Inkling native DSpark head loaded from %s weights", head_source)
 
         # Create MLLM scheduler config with batch generator support

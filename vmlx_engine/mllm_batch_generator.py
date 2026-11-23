@@ -9008,7 +9008,7 @@ class MLLMBatchGenerator:
 
             try:
                 self._inkling_draft_context_store = open_inkling_draft_context_ssd(
-                    self.model.model_name, self._ssm_state_cache.model_key
+                    self.model._inkling_native_dspark_bundle, self._ssm_state_cache.model_key
                 )
             except (AttributeError, OSError, RuntimeError, ValueError):
                 logger.warning("Inkling draft context SSD unavailable", exc_info=True)
