@@ -4,9 +4,16 @@ vmlx_engine.jangt.moe_kernels) or JANGH (jangtq2, vmlx_engine.jangh). Bundle con
   "jangt": {"version": 1, "code": "v2_halfbits", "state_bits": 12, "rotation": "hadamard128-signs"}
   quantization["model.layers.N.mlp.switch_mlp.<proj>"] = {"mode": "jangt", "kbits": K}            (JANGT)
                                                      = {"mode": "jangtq2", "bits": b, "rotation": "hadamard32"} (JANGH)
+                                                     = {"mode": "nvfp4", "group_size": 16, "bits": 4} |
+                                                       {"mode": "mxfp8", "group_size": 32, "bits": 8}  (native, e.g. the
+                                                       source checkpoint's own bytes; Inkling-2 JANGHT)
   gate_proj and up_proj share one format and width (fused kernel); down may differ.
+A native group is an MLX quantized switch projection (the loader's nn.quantize turns the placeholder SwitchLinear into a
+QuantizedSwitchLinear of that mode; a family loader may wrap it with its own global scale) and is called as one:
+proj(x, indices, sorted_indices=...).
 The activation is the model's SwiGLU variant (moe_kernels.act_value_metal), given by the model, never by the bundle:
-  "silu" (default; clamped at swiglu_limit when > 0: GLM-5.3 / DSV4.1) or "oai" (MiniMax-M3: alpha 1.702, limit 7).
+  "silu" (default; clamped at swiglu_limit when > 0: GLM-5.3 / DSV4.1), "oai" (MiniMax-M3: alpha 1.702, limit 7) or
+  "inkling" (Inkling-2: soft caps from the model config, moe_kernels.act_param).
 JANGT tensors per projection (all are module parameters, names = bundle names):
   jt_packed uint32 (E, N, W)   trellis rows, W = words_per_row(K_in, 12, K)
   jt_scale  float32 (E, N)     row scales (unit-gain refit included)
@@ -28,6 +35,26 @@ from vmlx_engine.jangt import v2l as VL
 
 SORT_THRESHOLD = 72      # > 64 so an 8-token speculative verify block (8 x top-8 = 64 slots) stays on the decode kernels
 PREFILL_EXPERT_GROUP = 64
+# native projection groups: mode -> (group_size, bits), the MLX quantization modes a routed group may keep as stored
+NATIVE_MODES = {"nvfp4": (16, 4), "mxfp8": (32, 8)}
+
+
+def group_format(entry: dict) -> str:
+    """Routed-group format of a per-module quantization entry: "jangt", "jangtq2" or "native" (fail closed)."""
+    mode = entry.get("mode") if isinstance(entry, dict) else None
+    if mode in ("jangt", "jangtq2"):
+        return mode
+    if mode in NATIVE_MODES:
+        if (entry.get("group_size"), entry.get("bits")) != NATIVE_MODES[mode]:
+            raise ValueError(f"jangt: unsupported native {mode} entry {entry}")
+        return "native"
+    raise ValueError(f"jangt: unsupported routed quantization entry {entry}")
+
+
+def _native_placeholder(input_dims: int, output_dims: int, num_experts: int):
+    """Unquantized stand-in the loader's nn.quantize replaces with the entry's QuantizedSwitchLinear (lazy zeros)."""
+    from mlx_lm.models.switch_layers import SwitchLinear
+    return SwitchLinear(input_dims, output_dims, num_experts, bias=False)
 
 
 def nax_prefill() -> bool:
@@ -100,20 +127,40 @@ class JTMixedSwitchGLU(nn.Module):
         from vmlx_engine.jangh.switch import TQSwitchLinear
         self.D, self.I, self.E = D, I, E
         self.limit = float(limit)          # clamped SwiGLU (GLM-5.3: 10); 0 = plain SwiGLU (N0.5)
-        self.act = MK.check_act(act)       # "silu" | "oai" (SwiGLU-OAI, MiniMax-M3: alpha 1.702, limit 7)
-        self.alpha = float(alpha) if self.act == "oai" else 0.0
-        self.gu_fmt, self.dn_fmt = gu["mode"], dn["mode"]
-        if gu["mode"] == "jangt":
+        self.act = MK.check_act(act)       # "silu" | "oai" (SwiGLU-OAI, MiniMax-M3: alpha 1.702, limit 7) | "inkling"
+        self.alpha = MK.act_param(self.act, alpha)    # oai: alpha; inkling: (gate_softcap, up_softcap)
+        self.gu_fmt, self.dn_fmt = group_format(gu), group_format(dn)
+        if self.gu_fmt == "jangt":
             self.gate_proj = JTSwitchLinear(D, I, E, gu["kbits"], n_out_gu, False)
             self.up_proj = JTSwitchLinear(D, I, E, gu["kbits"], n_out_gu, False)
+        elif self.gu_fmt == "native":
+            self.gate_proj = _native_placeholder(D, I, E)
+            self.up_proj = _native_placeholder(D, I, E)
         else:
             self.gate_proj = TQSwitchLinear(D, I, E, gu["bits"], gu.get("rotation", "hadamard32"))
             self.up_proj = TQSwitchLinear(D, I, E, gu["bits"], gu.get("rotation", "hadamard32"))
-        if dn["mode"] == "jangt":
+        if self.dn_fmt == "jangt":
             self.down_proj = JTSwitchLinear(I, D, E, dn["kbits"], n_out_dn, True)
+        elif self.dn_fmt == "native":
+            self.down_proj = _native_placeholder(I, D, E)
         else:
             self.down_proj = TQSwitchLinear(I, D, E, dn["bits"], dn.get("rotation", "hadamard32"))
         self._U = None
+
+    # native groups (MLX quantized switch projections): the per-(row, slot) GEMV route for decode / verify rows (each
+    # product is its own M = 1 gather, so a row's result never depends on the other rows), sorted for prefill
+    def _native_gate_up(self, x2, idx2):
+        """Unsorted rows: (T*k, I) fp32 activations of every (token, slot)."""
+        xs = x2[:, None, None, :]
+        g = self.gate_proj(xs, idx2, sorted_indices=False)
+        u = self.up_proj(xs, idx2, sorted_indices=False)
+        h = MK.act_mlx(g.astype(mx.float32), u.astype(mx.float32), self.act, self.limit, self.alpha)
+        return h.reshape(-1, self.I)
+
+    def _native_down_weighted(self, h, idx2, w2, out_dtype):
+        T, k = idx2.shape
+        y = self.down_proj(h.astype(out_dtype).reshape(T, k, 1, self.I), idx2, sorted_indices=False)
+        return (y.reshape(T, k, self.D).astype(mx.float32) * w2[..., None]).sum(axis=1).astype(out_dtype)
 
     # derived kernel inputs, built once after weights are bound (never parameters)
     def _unit(self):
@@ -138,6 +185,8 @@ class JTMixedSwitchGLU(nn.Module):
         return self._U
 
     def _decode_h(self, x2, idx2, rot_out: bool = False):
+        if self.gu_fmt == "native":
+            return self._native_gate_up(x2, idx2)
         if self.gu_fmt == "jangt":
             U = self._unit()
             return MK.gather_gate_up_swiglu_v3(MK.rotate_rows(x2, U["su_gu"]), x2, idx2, U, out_dtype=mx.float32, limit=self.limit,
@@ -146,16 +195,23 @@ class JTMixedSwitchGLU(nn.Module):
         g, u = self.gate_proj, self.up_proj
         xh, ids = K.h32_rows(x2, mx.float32), idx2.reshape(-1).astype(mx.uint32)
         if self.act != "silu":
-            # the JANGH kernels' fused epilogue is SiLU only: gate and up as two single-weight passes (fp32 out), then
-            # the variant in fp32
-            hg, hu = (K.gather_qmv(xh, p.tq2_packed, p.tq2_scales, p._cb, ids, p.bits, x_per_dispatch=False,
-                                   slot_fastest=x2.shape[0] > 1) for p in (g, u))
+            # the JANGH kernels' fused epilogue is SiLU only: gate and up unactivated (fp32 out; one paired dispatch
+            # when their shapes match, else two single-weight passes), then the variant in fp32
+            if g.tq2_packed.shape == u.tq2_packed.shape and g.tq2_scales.shape == u.tq2_scales.shape and g.bits == u.bits:
+                hg, hu = K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids, g.bits, x_per_dispatch=False,
+                                      packed_u=u.tq2_packed, scales_u=u.tq2_scales, slot_fastest=x2.shape[0] > 1,
+                                      return_pair=True)
+            else:
+                hg, hu = (K.gather_qmv(xh, p.tq2_packed, p.tq2_scales, p._cb, ids, p.bits, x_per_dispatch=False,
+                                       slot_fastest=x2.shape[0] > 1) for p in (g, u))
             return MK.act_mlx(hg, hu, self.act, self.limit, self.alpha)
         return K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids,
                             g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit,
                             slot_fastest=x2.shape[0] > 1)
 
     def _decode_down(self, h, idx2, w2, out_dtype, h_rotated: bool = False):
+        if self.dn_fmt == "native":
+            return self._native_down_weighted(h, idx2, w2, out_dtype)
         if self.dn_fmt == "jangt":
             U = self._unit()
             return MK.gather_down_weighted_v3(MK.rotate_rows(h, U["sv_dn"], idx2.reshape(-1)), h, idx2, w2, U,
@@ -194,9 +250,14 @@ class JTMixedSwitchGLU(nn.Module):
         # JANGT gate/up feeding a JANGH down: the fused pass stores the activations Hadamard-32 rotated (H32 epilogue),
         # removing the separate h32_rows dispatch; same rounding (bf16 store, fp32 transform, bf16 store)
         h_rot = False
-        if self.gu_fmt == "jangt":
+        if self.gu_fmt == "native":
+            xs = x2[tok][:, None, :]
+            g = self.gate_proj(xs, idx_s, sorted_indices=True)[:, 0, :].astype(mx.float32)
+            u = self.up_proj(xs, idx_s, sorted_indices=True)[:, 0, :].astype(mx.float32)
+            h_s = MK.act_mlx(g, u, self.act, self.limit, self.alpha)
+        elif self.gu_fmt == "jangt":
             U = self._unit(); xr = MK.rotate_rows(x2, U["su_gu"])
-            ro = (plan is not None and self.dn_fmt != "jangt" and self.I % 64 == 0 and H32_EPILOGUE
+            ro = (plan is not None and self.dn_fmt == "jangtq2" and self.I % 64 == 0 and H32_EPILOGUE
                   and os.environ.get("JANGT_H32_EPILOGUE", "1") != "0")
             if FUSED_GU_PREFILL and U["gate"]["n_out"] > 0 and U.get("gu_cols") is not None:
                 # one NAX pass: both weight tiles + outlier columns in the epilogue (jangt/prefill.py)
@@ -228,7 +289,9 @@ class JTMixedSwitchGLU(nn.Module):
             else:
                 h_s = K.gather_qmm_sorted(xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
                                           packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit).astype(mx.float32)
-        if self.dn_fmt == "jangt":
+        if self.dn_fmt == "native":
+            y_s = self.down_proj(h_s.astype(x2.dtype)[:, None, :], idx_s, sorted_indices=True)[:, 0, :]
+        elif self.dn_fmt == "jangt":
             U = self._unit()
             y_s = self._jt_mm(MK.rotate_rows(h_s, U["sv_dn"], idx_s), h_s, idx_s, U["down"], plan)
         else:
@@ -283,7 +346,7 @@ class JTMixedSwitchGLU(nn.Module):
                     y = GD.down_weighted_grouped(MK.rotate_rows(h, U["sv_dn"], idx2.reshape(-1)), h, idx2, w2, U)
                     return y.astype(x.dtype).reshape(*lead, self.D)
             # JANGT gate/up feeding a JANGH down: rotate the activations in the gate/up epilogue (one dispatch less)
-            ro = (self.gu_fmt == "jangt" and self.dn_fmt != "jangt" and self.I % 32 == 0
+            ro = (self.gu_fmt == "jangt" and self.dn_fmt == "jangtq2" and self.I % 32 == 0
                   and os.environ.get("JANGT_ROT_OUT_DECODE", "0") == "1")   # measured neutral (-0.6%), off
             y = self._decode_down(self._decode_h(x2, idx2, rot_out=ro), idx2, w2, x.dtype, h_rotated=ro)
         else:
