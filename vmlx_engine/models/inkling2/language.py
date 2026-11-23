@@ -918,7 +918,16 @@ class LanguageModel(nn.Module):
         self.sharding_group = group
 
     def _logits_from_norm(self, h):
-        if _VERIFY_WITH_DECODE_GEMV.get() and h.shape[1] > 1:
+        verify_rows = _VERIFY_WITH_DECODE_GEMV.get() and h.shape[1] > 1
+        dense_decode_head = (
+            not self.training
+            and type(self.lm_head) is nn.Linear
+            and "bias" not in self.lm_head
+            and h.ndim == 3
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        )
+        if verify_rows and not (dense_decode_head and self.sharding_group is None):
             return mx.concatenate(
                 [self._logits_from_norm(h[:, row:row + 1]) for row in range(h.shape[1])],
                 axis=1,
@@ -927,15 +936,7 @@ class LanguageModel(nn.Module):
         # fwd_output_dtype=float32. Promote the product before multiplication;
         # casting BF16 scores afterwards loses the accumulator's low bits.
         h = h.astype(self.model.embed_norm.weight.dtype).astype(mx.float32)
-        if (
-            not self.training
-            and type(self.lm_head) is nn.Linear
-            and "bias" not in self.lm_head
-            and h.ndim == 3
-            and h.shape[0] * h.shape[1] <= 15
-            and mx.metal.is_available()
-            and mx.default_device() == mx.gpu
-        ):
+        if dense_decode_head and (verify_rows or h.shape[0] * h.shape[1] <= 15):
             # Retain the exact conversion instead of reading and promoting the
             # entire vocabulary matrix again on every decode step. Whole output
             # rows can be shared across the two expert ranks without splitting
@@ -954,7 +955,7 @@ class LanguageModel(nn.Module):
                 projected = weight[rank * width : (rank + 1) * width].astype(mx.float32)
                 self._head_projection_cache = (weight, size, rank, projected)
             projected = self._head_projection_cache[-1]
-            logits = h @ projected.T
+            logits = _decode_gemv_rows(h, projected) if verify_rows else h @ projected.T
             if partition:
                 width = projected.shape[0]
                 logits = (
