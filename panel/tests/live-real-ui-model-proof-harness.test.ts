@@ -4877,6 +4877,14 @@ describe("real UI model proof harness", () => {
     )).toEqual([]);
   });
 
+  it("keeps native final reasoning before progressive content and a terminal suffix", () => {
+    const bound = { orderedChannels: ["reasoning", "content", "content", "terminal:stop"] };
+    expect(validateRawChannelOrder(bound, 2, "final", true, true)).toEqual([]);
+    expect(validateRawChannelOrder(bound, 2, "final", true)).not.toEqual([]);
+    const mixed = { orderedChannels: ["content", "reasoning", "content", "terminal:stop"] };
+    expect(validateRawChannelOrder(mixed, 2, "final", true, true)).not.toEqual([]);
+  });
+
   it("does not promote a phase-0 store profile to cache-hit or tool-loop proof", () => {
     const result = goodResult();
     result.requestContract.uiActionProfile = "primary-reasoning-render-store";
