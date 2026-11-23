@@ -682,27 +682,57 @@ class MessageController(nn.Module):
         self.gain_weight = mx.zeros((width, rank))
         self.eps = config.rms_norm_eps
 
+    def prepare_fused_decode(self):
+        if (
+            self.down_weight.shape != (64, 4608)
+            or self.forget_weight.shape != (2304, 64)
+            or self.gain_weight.shape != self.forget_weight.shape
+            or any(
+                weight.dtype != mx.bfloat16
+                for weight in (self.down_weight, self.forget_weight, self.gain_weight)
+            )
+        ):
+            return False
+        packed = mx.concatenate([self.forget_weight, self.gain_weight], axis=0)
+        eps = mx.array([self.eps], mx.float32)
+        mx.eval(packed, eps)
+        self._fused_decode_pair = packed, eps
+        self.forget_weight, self.gain_weight = mx.split(packed, 2, axis=0)
+        return True
+
     def __call__(self, x, message):
-        verify = _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1
+        width = x.shape[1]
+        verify = _VERIFY_WITH_DECODE_GEMV.get() and width > 1
+        fused = self.get("_fused_decode_pair")
+        use_fused = (
+            fused is not None and not self.training and x.shape[0] == 1
+            and x.shape[-1] == 2304 and message.shape == x.shape
+            and (width == 1 or (verify and width <= 8))
+            and x.dtype in (mx.bfloat16, mx.float32)
+            and message.dtype in (mx.bfloat16, mx.float32)
+            and mx.default_device() == mx.gpu
+        )
         packed = getattr(self, "_verify_gate_weights", None)
-        if verify and (packed is None or x.shape[0] != 1):
+        if use_fused:
+            from .kernels import loop_controller_pair
+
+            packed, eps = fused
+            pair = loop_controller_pair(x, message, eps, self.down_weight.dtype)
+        elif verify and (packed is None or x.shape[0] != 1):
             # The low-rank reductions are sensitive to the decode dispatch.
             return mx.concatenate([
                 self(x[:, row:row + 1], message[:, row:row + 1])
-                for row in range(x.shape[1])
+                for row in range(width)
             ], axis=1)
-        pair = mx.concatenate(
-            [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
-        )
-        pair = pair.astype(self.down_weight.dtype)
-        if verify:
+        else:
+            pair = mx.concatenate(
+                [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
+            ).astype(self.down_weight.dtype)
+        if verify or use_fused:
             hidden = _decode_gemv_rows(pair, self.down_weight).astype(mx.float32)
-            # Indexed batched GEMV uses a different reduction for 64-wide
-            # gates. Use one serial-shaped product per position, reading both
-            # gates together, then blend every position in one compiled call.
-            gates = mx.concatenate([
-                hidden[:, row:row + 1] @ packed.T
-                for row in range(hidden.shape[1])
+            # Keep serial reductions for the 64-wide gate projection.
+            gates = hidden @ packed.T if width == 1 else mx.concatenate([
+                hidden[:, row:row + 1] @ packed.T for row in range(width)
             ], axis=1)
             return _blend_message_gates(x, message, gates)
         hidden = (pair @ self.down_weight.T).astype(mx.float32)

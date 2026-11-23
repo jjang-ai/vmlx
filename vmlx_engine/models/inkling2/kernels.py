@@ -111,3 +111,61 @@ def bf16_vocabulary_gemv(x, weight):
         output_shapes=[(1, x.shape[1], vocab)],
         output_dtypes=[mx.float32],
     )[0]
+
+
+
+@lru_cache(maxsize=1)
+def _loop_controller_pair():
+    # Match the native RMS kernel's four elements per lane and two SIMD reductions.
+    return mx.fast.metal_kernel(
+        name="inkling_controller_normalize_pair",
+        input_names=["x", "message", "eps"],
+        output_names=["pair"],
+        ensure_row_contiguous=False,
+        compile_options={"math_mode": "safe"},
+        source=r"""
+        const uint slot = threadgroup_position_in_grid.y;
+        const uint position = threadgroup_position_in_grid.z;
+        const uint lane = thread_index_in_simdgroup;
+        const uint simdgroup = simdgroup_index_in_threadgroup;
+        const uint index = 4 * thread_position_in_threadgroup.x;
+
+        float values[4];
+        float squares = 0.0f;
+        for (uint i = 0; i < 4; ++i) {
+            const uint column = index + i;
+            values[i] = slot == 0
+                ? float(x[position * x_strides[1] + column * x_strides[2]])
+                : float(message[position * message_strides[1] + column * message_strides[2]]);
+            squares = fma(values[i], values[i], squares);
+        }
+        const float partial = simd_sum(squares);
+        threadgroup float totals[32];
+        threadgroup float scale;
+        if (lane == 0) totals[simdgroup] = partial;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (simdgroup == 0) {
+            const float total = simd_sum(lane < 18 ? totals[lane] : 0.0f);
+            if (lane == 0) scale = metal::precise::rsqrt(total / 2304.0f + eps[0]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const uint offset = (position * 2 + slot) * 2304 + index;
+        for (uint i = 0; i < 4; ++i) {
+            const float normalized = values[i] * scale;
+            pair[offset + i] = slot == 0 ? P(X(normalized)) : P(M(normalized));
+        }
+        """,
+    )
+
+
+def loop_controller_pair(x, message, eps, dtype):
+    """Write both native RMS-normalized inputs directly to the projection row."""
+    length = x.shape[1]
+    return _loop_controller_pair()(
+        inputs=[x, message, eps],
+        template=[("X", x.dtype), ("M", message.dtype), ("P", dtype)],
+        grid=(576, 2, length),
+        threadgroup=(576, 1, 1),
+        output_shapes=[(1, length, 4608)],
+        output_dtypes=[dtype],
+    )[0]

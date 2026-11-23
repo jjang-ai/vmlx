@@ -71,4 +71,11 @@ def load_native_inkling2(path: Path, config: dict):
     fused_layers = prepare_fused_nvfp4_experts(model.language_model)
     if fused_layers:
         logger.info("Inkling NVFP4 fused expert decode enabled for %d layers", fused_layers)
+        controllers = sum(
+            controller.prepare_fused_decode()
+            for layer in model.language_model.model.layers
+            for controller in getattr(layer, "controllers", {}).values()
+        )
+        if controllers:
+            logger.info("Inkling fused loop decode enabled for %d controllers", controllers)
     return model, Inkling2Processor.from_pretrained(path)
