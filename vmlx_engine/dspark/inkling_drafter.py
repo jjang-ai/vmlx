@@ -23,7 +23,7 @@ class InklingDSparkDrafter:
         self._pending.append(features)
 
     def context_arrays(self):
-        return [self._pending, [layer.state for layer in self.cache]]
+        return [self._pending, [layer.state for layer in self.cache if layer.keys is not None]]
 
     def draft_from_anchor(self, anchor, width, sampler):
         context = (
