@@ -53,3 +53,61 @@ def short_convolution(state, weight, x, mask, width):
         output_shapes=[x.shape],
         output_dtypes=[x.dtype],
     )[0]
+
+
+
+@lru_cache(maxsize=1)
+def _bf16_vocabulary_gemv():
+    return mx.fast.metal_kernel(
+        name="inkling_head_bf16_read_fp32_dot",
+        input_names=["matrix16", "inputs32"],
+        output_names=["result"],
+        compile_options={"math_mode": "safe"},
+        source=r"""        const uint lane = thread_index_in_simdgroup;
+        const uint row = (threadgroup_position_in_grid.x * 8 + simdgroup_index_in_threadgroup) * 4;
+        float accum[Vectors][4] = {};
+        for (uint offset = lane * 4; offset < Hidden; offset += 128) {
+            float inputs[Vectors][4];
+            #pragma unroll
+            for (uint v=0; v<Vectors; ++v)
+                for (uint i=0; i<4; ++i)
+                    inputs[v][i] = inputs32[v * Hidden + offset + i];
+            #pragma unroll
+            for (uint r=0; r<4; ++r) {
+                const auto values = matrix16 + (row + r) * Hidden + offset;
+                #pragma unroll
+                for (uint i=0; i<4; ++i) {
+                    const float entry = float(values[i]);
+                    #pragma unroll
+                    for (uint v=0; v<Vectors; ++v) {
+                        accum[v][r] = fma(entry, inputs[v][i], accum[v][r]);
+                    }
+                }
+            }
+        }
+        #pragma unroll
+        for (uint v=0; v<Vectors; ++v) {
+            #pragma unroll
+            for (uint r=0; r<4; ++r) {
+                float total = accum[v][r];
+                #pragma unroll
+                for (uint step=16; step>0; step/=2)
+                    total += simd_shuffle_down(total, step);
+                if (lane == 0) result[v * Vocab + row + r] = total;
+            }
+        }
+        """,
+    )
+
+
+def bf16_vocabulary_gemv(x, weight):
+    """Read each BF16 weight once across the rows, with the serial FP32 dot order."""
+    vocab, hidden = weight.shape
+    return _bf16_vocabulary_gemv()(
+        inputs=[weight, x],
+        template=[("Hidden", hidden), ("Vocab", vocab), ("Vectors", x.shape[1])],
+        grid=(vocab // 32 * 256, 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(1, x.shape[1], vocab)],
+        output_dtypes=[mx.float32],
+    )[0]

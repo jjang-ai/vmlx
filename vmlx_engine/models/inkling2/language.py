@@ -1001,7 +1001,17 @@ class LanguageModel(nn.Module):
         # fwd_output_dtype=float32. Promote the product before multiplication;
         # casting BF16 scores afterwards loses the accumulator's low bits.
         h = h.astype(self.model.embed_norm.weight.dtype).astype(mx.float32)
-        if dense_decode_head and (verify_rows or h.shape[0] * h.shape[1] <= 15):
+        if (
+            dense_decode_head and self.sharding_group is None
+            and h.shape[0] == 1 and (h.shape[1] == 1 or (verify_rows and h.shape[1] <= 5))
+            and self.model.embed_norm.weight.dtype == mx.bfloat16
+            and self.lm_head.weight.dtype == mx.bfloat16
+            and self.lm_head.weight.shape == (201024, 2304)
+        ):
+            from .kernels import bf16_vocabulary_gemv
+
+            logits = bf16_vocabulary_gemv(h, self.lm_head.weight)
+        elif dense_decode_head and (verify_rows or h.shape[0] * h.shape[1] <= 15):
             # Retain the exact conversion instead of reading and promoting the
             # entire vocabulary matrix again on every decode step. Whole output
             # rows can be shared across the two expert ranks without splitting
