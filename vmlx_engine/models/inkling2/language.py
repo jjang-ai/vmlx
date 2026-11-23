@@ -412,6 +412,26 @@ class Attention(nn.Module):
         weight = mx.pad(projection.weight, ((start, width - start), (0, 0)))
         return (x @ weight.T)[..., start : start + width]
 
+    def _attention_with_sink(self, q, k, v, relative, sinks, padding, rel_proj):
+        size = k.shape[2]
+        mask = banded_additive_mask(
+            relative,
+            rel_proj,
+            size - q.shape[2],
+            size,
+            self.sliding,
+            self.rel_extent,
+            left_padding=padding,
+            shape_ref=k,
+        )
+        mask = mx.concatenate([mask, sinks], axis=-1)
+        # A query-dependent sink adds a logit without any value payload.
+        k = mx.concatenate([k, mx.zeros((*k.shape[:2], 1, k.shape[-1]), k.dtype)], axis=2)
+        v = mx.concatenate([v, mx.zeros((*v.shape[:2], 1, v.shape[-1]), v.dtype)], axis=2)
+        return mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=self.head_dim**-0.5, mask=mask
+        )
+
     def __call__(self, x, key_input=None, value_input=None, cache=None, conv_mask=None):
         b, length, _ = x.shape
         cfg = self.config
@@ -463,35 +483,30 @@ class Attention(nn.Module):
                 k, v = kv._temporal_order(k), kv._temporal_order(v)
             elif isinstance(kv, BatchRotatingKVCache) and kv.rotated:
                 k, v = mx.roll(k, -kv._idx, axis=2), mx.roll(v, -kv._idx, axis=2)
-        size = k.shape[2]
         padding = getattr(kv, "left_padding", None)
-        mask = banded_additive_mask(
-            r,
-            self.rel_proj.astype(x.dtype),
-            size - length,
-            size,
-            self.sliding,
-            self.rel_extent,
-            left_padding=padding,
-            shape_ref=k,
-        )
-        # A query-dependent sink is represented by a zero K/V and its own logit.
-        # Keep this tiny projection's original width: splitting its 48 output
-        # rows changes the prefill GEMM reduction and hence BF16 rounding.
+        rel_proj = self.rel_proj.astype(x.dtype)
+        # Keep the sink projection's complete output width on each rank.
         sinks = _decode_linear(self.sink_proj, x)
         if self.sharding_group is not None:
             sinks = sinks[..., self.head_start : self.head_start + self.n_heads]
         sinks = sinks.transpose(0, 2, 1)[..., None]
-        mask = mx.concatenate([mask, sinks], axis=-1)
-        k = mx.concatenate(
-            [k, mx.zeros((b, self.n_kv, 1, self.head_dim), k.dtype)], axis=2
-        )
-        v = mx.concatenate(
-            [v, mx.zeros((b, self.n_kv, 1, self.head_dim), v.dtype)], axis=2
-        )
-        out = mx.fast.scaled_dot_product_attention(
-            q, k, v, scale=self.head_dim**-0.5, mask=mask
-        )
+        if _VERIFY_WITH_DECODE_GEMV.get() and length > 1:
+            # A multi-row SDPA uses different reduction geometry and rounds
+            # some BF16 coordinates differently from the serving decoder.
+            # Preserve the true chronological window of each query.
+            outputs = []
+            prefix = k.shape[2] - length
+            for row in range(length):
+                end = prefix + row + 1
+                start = max(0, end - self.sliding) if self.sliding else 0
+                outputs.append(self._attention_with_sink(
+                    q[:, :, row:row + 1], k[:, :, start:end], v[:, :, start:end],
+                    r[:, row:row + 1], sinks[:, :, row:row + 1],
+                    padding - start if padding is not None else None, rel_proj,
+                ))
+            out = mx.concatenate(outputs, axis=2)
+        else:
+            out = self._attention_with_sink(q, k, v, r, sinks, padding, rel_proj)
         out = out.transpose(0, 2, 1, 3).reshape(b, length, -1)
         out = (
             out.astype(mx.float32)
