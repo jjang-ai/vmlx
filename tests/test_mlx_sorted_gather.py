@@ -86,3 +86,30 @@ def test_install_is_idempotent_and_does_not_probe(monkeypatch):
     before = mx.gather_qmm
     assert guard.install() is False
     assert mx.gather_qmm is before
+
+
+@pytest.mark.parametrize("rows,expected_calls", [(8, 1), (32769, 2)])
+def test_nvfp4_expert_scales_survive_row_guard(monkeypatch, rows, expected_calls):
+    calls = []
+
+    def native(x, w, scales, biases, *, global_scale, rhs_indices, **kwargs):
+        calls.append((global_scale, rhs_indices))
+        return x
+
+    monkeypatch.setattr(guard, "_ORIGINAL", native)
+    monkeypatch.setattr(guard, "_on_gpu", lambda _: True)
+    monkeypatch.setattr(guard, "_ROW_DEFECT", True)
+    x = mx.zeros((rows, 1, 64))
+    idx = mx.arange(rows, dtype=mx.uint32) % 2
+    expert_scales = mx.array([1.25, 0.75])
+    w, scales = mx.zeros((1,)), mx.ones((1,))
+
+    actual = guard._gather(
+        x, w, scales, rhs_indices=idx, mode="nvfp4",
+        global_scale=expert_scales, sorted_indices=True,
+    )
+
+    assert actual.shape == x.shape
+    assert len(calls) == expected_calls
+    assert all(scale is expert_scales for scale, _ in calls)
+    assert bool(mx.array_equal(mx.concatenate([part for _, part in calls]), idx))

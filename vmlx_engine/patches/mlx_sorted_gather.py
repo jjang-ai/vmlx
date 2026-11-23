@@ -83,11 +83,16 @@ def _bounds(rows: int):
 
 
 def _gather(x, w, /, scales, biases=None, lhs_indices=None, rhs_indices=None,
-            transpose=True, group_size=None, bits=None, mode="affine", *,
-            sorted_indices=False, stream=None):
+            transpose=True, group_size=None, bits=None, mode="affine",
+            global_scale=None, *, sorted_indices=False, stream=None):
     kwargs = dict(lhs_indices=lhs_indices, rhs_indices=rhs_indices,
                   transpose=transpose, group_size=group_size, bits=bits, mode=mode,
                   sorted_indices=sorted_indices, stream=stream)
+    # MLX accepts one NVFP4 scale per expert. Row tiling changes only the
+    # inputs and routing indices, so every tile uses the full scale array.
+    # Omit the default for MLX builds predating native scale support.
+    if global_scale is not None:
+        kwargs["global_scale"] = global_scale
     if (not sorted_indices or lhs_indices is not None or rhs_indices is None
             or not transpose or x.ndim < 2
             or rhs_indices.size * x.shape[-2] <= _MAX_ROWS
