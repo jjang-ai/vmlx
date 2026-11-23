@@ -4,7 +4,96 @@ from typing import Any, Iterable, Optional
 
 import mlx.core as mx
 
-from mlx_lm.models.cache import BatchRotatingKVCache, CacheList, RotatingKVCache
+from mlx_lm.models.cache import ArraysCache, BatchRotatingKVCache, CacheList, RotatingKVCache
+
+
+class _ConvolutionCacheTransaction:
+    """A temporary verification view of the standard serving ArraysCache."""
+
+    def __init__(self, cache):
+        self.cache = cache
+        self.batch_size = cache.batch_size
+        self.is_speculating = False
+
+    def __getattr__(self, name):
+        return getattr(self.cache, name)
+
+    def __getitem__(self, index):
+        return self.cache[index]
+
+    def __setitem__(self, index, value):
+        self.cache[index] = value
+
+    def start_speculation(self, length):
+        self.length = length
+        self.initial = list(self.cache.state)
+        self.padding = {
+            name: mx.array(value) if value is not None else None
+            for name in ("left_padding", "lengths")
+            if hasattr(self.cache, name)
+            for value in (getattr(self.cache, name),)
+        }
+        self.checkpoints = {}
+        self.is_speculating = True
+        return self
+
+    def record_speculative_window(self, index, combined, state_width):
+        self.checkpoints[index] = (combined, state_width)
+
+    def record_speculative_states(self, index, intermediate, final):
+        before = self.initial[index]
+        if before is None:
+            before = mx.zeros_like(final)
+        states = [before[:, None], final[:, None]]
+        if intermediate is not None:
+            states.insert(1, intermediate)
+        self.checkpoints[index] = (mx.concatenate(states, axis=1), None)
+
+    def validate_speculation(self, lengths, generation):
+        if generation is not self or not self.is_speculating:
+            raise RuntimeError("Invalid Inkling convolution checkpoint")
+        if len(lengths) != self.batch_size:
+            raise ValueError("Inkling convolution commit must cover every batch row")
+
+    def commit_speculation(self, lengths, generation):
+        self.validate_speculation(lengths, generation)
+        if not any(lengths):
+            self.abort_speculation(generation)
+            return
+        if not all(length == self.length for length in lengths):
+            accepted = mx.array(lengths, dtype=mx.int32)
+            for index, (array, state_width) in self.checkpoints.items():
+                if state_width is None:
+                    self.cache[index] = array[mx.arange(len(lengths)), accepted]
+                else:
+                    positions = accepted[:, None] + mx.arange(state_width)[None, :]
+                    self.cache[index] = mx.take_along_axis(
+                        array, positions[..., None], axis=1
+                    )
+            for name, value in self.padding.items():
+                setattr(self.cache, name, value - accepted if value is not None else None)
+        self.is_speculating = False
+        self.checkpoints.clear()
+
+    def abort_speculation(self, generation):
+        if generation is not self or not self.is_speculating:
+            return
+        self.cache.state = self.initial
+        for name, value in self.padding.items():
+            setattr(self.cache, name, value)
+        self.checkpoints.clear()
+        self.is_speculating = False
+
+
+def inkling_verification_cache(caches, length):
+    views = [
+        _ConvolutionCacheTransaction(cache)
+        if isinstance(cache, ArraysCache)
+        and not callable(getattr(cache, "start_speculation", None))
+        else cache
+        for cache in caches
+    ]
+    return views, start_speculative_cache(views, length)
 
 
 class _RotatingCacheTransaction:

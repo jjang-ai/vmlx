@@ -750,12 +750,12 @@ class LanguageModel(nn.Module):
         speculative_verify=False,
         **kwargs,
     ):
-        from .cache_state import start_speculative_cache
+        from .cache_state import inkling_verification_cache
 
         transaction = None
         if speculative_verify:
             length = inputs.shape[1] if inputs is not None else inputs_embeds.shape[1]
-            transaction = start_speculative_cache(cache, length)
+            cache, transaction = inkling_verification_cache(cache, length)
         try:
             result = self.model(
                 inputs,
