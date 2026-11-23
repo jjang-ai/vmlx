@@ -8,7 +8,7 @@ import time
 import mlx.core as mx
 
 from .generate import ARFallback
-from .inkling_drafter import InklingDSparkDrafter
+from .inkling_drafter import InklingDSparkDrafter, checkpoint_cache
 from .inkling_target import InklingDSparkTarget
 
 logger = logging.getLogger(__name__)
@@ -127,8 +127,16 @@ class InklingServingRun:
             )
             if cache is None or len(cache) != len(self.drafter.head.layers):
                 return
+            cache = checkpoint_cache(cache)
+            if cache is None:
+                return
             for entry, layer in zip(cache, self.drafter.head.layers):
                 attention = layer.self_attn
+                if attention.window and (
+                    entry.max_size != attention.window or entry.keep != 0
+                    or not 0 < entry._idx <= min(cached_tokens, attention.window)
+                ):
+                    return
                 length = min(cached_tokens, attention.window or cached_tokens)
                 expected = (1, attention.kv_heads, length, attention.head_dim)
                 if (

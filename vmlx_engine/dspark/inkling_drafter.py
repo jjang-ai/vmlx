@@ -1,6 +1,35 @@
 """Bind an Inkling DSpark head to request-local causal context."""
 
 import mlx.core as mx
+from mlx_lm.models.cache import RotatingKVCache
+
+
+def checkpoint_cache(cache):
+    # Return portable local windows without changing the live cache objects.
+    snapshot = []
+    for entry in cache:
+        if isinstance(entry, RotatingKVCache) and entry.keys is not None:
+            keys, values = entry.state
+            length = keys.shape[2]
+            if length > entry.max_size:
+                # A multi-token append keeps max_size + append_length - 1
+                # chronological rows so every earlier query can see its own
+                # window. A checkpoint resumes after the last appended row.
+                if (
+                    entry.keep != 0
+                    or not 0 < entry.max_size < length <= entry.offset
+                    or entry._idx != length
+                    or values is None
+                    or values.shape != keys.shape
+                ):
+                    return None
+                window = entry.max_size
+                entry = type(entry).from_state(
+                    (keys[..., -window:, :], values[..., -window:, :]),
+                    ("0", str(window), str(entry.offset), str(window)),
+                )
+        snapshot.append(entry)
+    return snapshot
 
 
 class InklingDSparkDrafter:
@@ -45,11 +74,13 @@ class InklingDSparkDrafter:
                 from ..dflash2_session_disk import _detached, _pack
 
                 self.head.append_context(context[:, :length], self.cache)
-                arrays, layers = {}, []
-                _pack("d", self.cache, arrays, layers)
-                frozen = {key: _detached(array) for key, array in arrays.items()}
-                mx.eval(list(frozen.values()))
-                self.checkpoint = frozen, layers
+                snapshot = checkpoint_cache(self.cache)
+                if snapshot is not None:
+                    arrays, layers = {}, []
+                    _pack("d", snapshot, arrays, layers)
+                    frozen = {key: _detached(array) for key, array in arrays.items()}
+                    mx.eval(list(frozen.values()))
+                    self.checkpoint = frozen, layers
                 context = context[:, length:]
         # Match verification may propose a deterministic token. Ratio
         # verification supplies the actual sampling distribution for each step.
