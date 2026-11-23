@@ -15,6 +15,7 @@
 
 
 import math
+from contextvars import ContextVar
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -34,6 +35,43 @@ from .primitives import (
 )
 from .switch_layers import SwitchGLU
 from .config import TextConfig, validate_sharding
+
+
+_VERIFY_WITH_DECODE_GEMV = ContextVar("inkling_verify_with_decode_gemv", default=False)
+
+
+def _decode_gemv_rows(x, weight):
+    """Run independent decode-shaped products through one indexed dispatch."""
+    width = x.shape[-1]
+    rows = x.size // width
+    outputs = weight.shape[0]
+    if rows == 1:
+        return x @ weight.T
+    matrix = x.reshape(rows, width)
+    if width >= 16 * outputs or not mx.metal.is_available() or mx.default_device() != mx.gpu:
+        # MLX dispatches a different reduction for very asymmetric GEMV.
+        result = mx.concatenate(
+            [matrix[row:row + 1] @ weight.T for row in range(rows)], axis=0
+        )
+    else:
+        result = mx.gather_mm(
+            matrix[:, None, :], weight.T[None],
+            rhs_indices=mx.zeros((rows,), dtype=mx.uint32),
+        )
+    return result.reshape(*x.shape[:-1], outputs)
+
+
+def _decode_linear(module, x):
+    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1 and type(module) is nn.Linear:
+        result = _decode_gemv_rows(x, module.weight)
+        return result + module.bias if "bias" in module else result
+    return module(x)
+
+
+def _controller_projection(x, weight):
+    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
+        return _decode_gemv_rows(x, weight)
+    return x @ weight.T
 
 
 @mx.compile
@@ -60,8 +98,10 @@ def _softcapped_swiglu(up, gate, gate_cap, up_cap):
 
 
 @mx.compile
-def _route(x, weight, bias, top_k, route_scale):
-    scores = mx.sigmoid(x.astype(mx.float32) @ weight.astype(mx.float32).T)
+def _route(x, weight, bias, top_k, route_scale, exact_rows=False):
+    x, weight = x.astype(mx.float32), weight.astype(mx.float32)
+    projection = _decode_gemv_rows(x, weight) if exact_rows else x @ weight.T
+    scores = mx.sigmoid(projection)
     indices = mx.argpartition(-(scores + bias), top_k - 1, axis=-1)[..., :top_k]
     indices = mx.stop_gradient(indices)
     weights = mx.take_along_axis(scores, indices, axis=-1)
@@ -225,7 +265,7 @@ class DynamicShortConvolution(nn.Module):
         context = mx.concatenate([state, inputs], axis=1)
         _update_conv_cache(cache, self.conv_idx, state, inputs, mask)
         dynamic = (
-            self.weight_proj(dynamic_input)
+            _decode_linear(self.weight_proj, dynamic_input)
             .astype(mx.float32)
             .reshape(b, length, self.num_heads, 1, k)
         )
@@ -363,7 +403,7 @@ class Attention(nn.Module):
 
     def _project(self, projection, x):
         if self.sharding_group is None:
-            return projection(x)
+            return _decode_linear(projection, x)
         # Both GEMV and GEMM dispatch can depend on N, including short batches
         # on older GPUs. Preserve the original N with zero rows for the other
         # rank, then select our complete rows. No remote weights are retained.
@@ -438,7 +478,7 @@ class Attention(nn.Module):
         # A query-dependent sink is represented by a zero K/V and its own logit.
         # Keep this tiny projection's original width: splitting its 48 output
         # rows changes the prefill GEMM reduction and hence BF16 rounding.
-        sinks = self.sink_proj(x)
+        sinks = _decode_linear(self.sink_proj, x)
         if self.sharding_group is not None:
             sinks = sinks[..., self.head_start : self.head_start + self.n_heads]
         sinks = sinks.transpose(0, 2, 1)[..., None]
@@ -499,6 +539,7 @@ class SparseMoE(nn.Module):
             self.e_score_correction_bias,
             self.top_k,
             self.route_scale,
+            _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1,
         )
         if getattr(self.switch_mlp, "is_jangh", False):
             if self.sharding_group is not None:
@@ -557,11 +598,11 @@ class MessageController(nn.Module):
         pair = mx.concatenate(
             [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
         )
-        hidden = (pair.astype(self.down_weight.dtype) @ self.down_weight.T).astype(
-            mx.float32
-        )
-        forget = mx.tanh(hidden @ self.forget_weight.T)
-        gain = mx.tanh(hidden @ self.gain_weight.T)
+        hidden = _controller_projection(
+            pair.astype(self.down_weight.dtype), self.down_weight
+        ).astype(mx.float32)
+        forget = mx.tanh(_controller_projection(hidden, self.forget_weight))
+        gain = mx.tanh(_controller_projection(hidden, self.gain_weight))
         return (1 - forget) * x + gain * message
 
 
@@ -753,9 +794,11 @@ class LanguageModel(nn.Module):
         from .cache_state import inkling_verification_cache
 
         transaction = None
+        verify_geometry = None
         if speculative_verify:
             length = inputs.shape[1] if inputs is not None else inputs_embeds.shape[1]
             cache, transaction = inkling_verification_cache(cache, length)
+            verify_geometry = _VERIFY_WITH_DECODE_GEMV.set(True)
         try:
             result = self.model(
                 inputs,
@@ -786,6 +829,9 @@ class LanguageModel(nn.Module):
             if transaction is not None:
                 transaction.abort()
             raise
+        finally:
+            if verify_geometry is not None:
+                _VERIFY_WITH_DECODE_GEMV.reset(verify_geometry)
 
     def shard(self, group=None):
         group = group or mx.distributed.init()
@@ -839,6 +885,11 @@ class LanguageModel(nn.Module):
         self.sharding_group = group
 
     def _logits_from_norm(self, h):
+        if _VERIFY_WITH_DECODE_GEMV.get() and h.shape[1] > 1:
+            return mx.concatenate(
+                [self._logits_from_norm(h[:, row:row + 1]) for row in range(h.shape[1])],
+                axis=1,
+            )
         # hf_quant_config.json stores BF16 unembedding weights but requires
         # fwd_output_dtype=float32. Promote the product before multiplication;
         # casting BF16 scores afterwards loses the accumulator's low bits.
