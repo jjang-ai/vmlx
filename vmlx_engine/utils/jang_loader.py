@@ -1866,6 +1866,16 @@ def _read_hf_config(path: Path) -> dict:
     return {}
 
 
+def _apply_minicpm_config_defaults(config: dict, jang_cfg: dict) -> None:
+    """Supply defaults omitted by authoritative MiniCPM configs in memory."""
+    capabilities = jang_cfg.get("capabilities") or {}
+    stamped_family = str(capabilities.get("family", "")).lower()
+    model_type = str(config.get("model_type", "")).lower()
+    if model_type == "minicpm" or (not model_type and stamped_family == "minicpm"):
+        config.setdefault("model_type", "minicpm")
+        config.setdefault("rope_theta", 10_000.0)
+
+
 def _is_zaya_bundle(path: Path, jang_cfg: dict | None = None) -> bool:
     """Return True for Zyphra/ZAYA bundles without loading weights."""
     cfg = _read_hf_config(path)
@@ -3052,6 +3062,7 @@ def _load_jang_v2(
 
     start = time.perf_counter()
     config = load_config(path)
+    _apply_minicpm_config_defaults(config, jang_cfg)
     _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
     _normalize_step3p7_model_type(config)
@@ -5723,6 +5734,7 @@ def load_jang_model(
     jang_cfg = json.loads(config_path.read_text())
     _ensure_zaya_runtime_supported(path, jang_cfg)
     hf_config = _read_hf_config(path)
+    _apply_minicpm_config_defaults(hf_config, jang_cfg)
     _ensure_jang_family_runtime_supported(path, hf_config)
     # MiMo-V2.6 JANGHT (mixed JANGT/JANGH routed experts): its own loader, also on the text-only route.
     if str(hf_config.get("model_type", "")).lower() == "mimo_v2":
@@ -5850,6 +5862,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     )
 
     config = load_config(path)
+    _apply_minicpm_config_defaults(config, jang_cfg)
     _normalize_gemma4_config_scalar_types(config)
     default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)
