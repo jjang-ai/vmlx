@@ -74,9 +74,15 @@ def _decode_gemv_rows(x, weight):
 
 
 def _decode_linear(module, x):
-    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1 and type(module) is nn.Linear:
-        result = _decode_gemv_rows(x, module.weight)
-        return result + module.bias if "bias" in module else result
+    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
+        if type(module) is nn.Linear:
+            result = _decode_gemv_rows(x, module.weight)
+            return result + module.bias if "bias" in module else result
+        if type(module) is nn.QuantizedLinear and x.shape[0] == 1:
+            from .jangh import affine_decode_rows, is_affine_decode_projection
+
+            if is_affine_decode_projection(module):
+                return affine_decode_rows(x, module.weight, module.scales, module.biases)
     return module(x)
 
 

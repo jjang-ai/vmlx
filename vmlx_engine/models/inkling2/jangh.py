@@ -8,6 +8,32 @@ from ...jangh.switch import rotate_rows
 
 
 
+def is_affine_decode_projection(module):
+    return (
+        type(module) is nn.QuantizedLinear
+        and module.mode == "affine"
+        and module.bits == 8
+        and module.group_size == 64
+        and module.get("biases") is not None
+        and "bias" not in module
+    )
+
+
+def affine_decode_rows(x, weight, scales, biases):
+    """Indexed one-row GEMV preserves the affine reduction at every position."""
+    options = {"transpose": True, "group_size": 64, "bits": 8, "mode": "affine"}
+    length = x.shape[1]
+    if length == 1:
+        return mx.quantized_matmul(x, weight, scales, biases, **options)
+    positions = mx.arange(length, dtype=mx.uint32)
+    return mx.gather_qmm(
+        x.reshape(length, 1, x.shape[-1]),
+        weight[None], scales[None], biases[None],
+        lhs_indices=positions, rhs_indices=mx.zeros((length,), dtype=mx.uint32),
+        **options,
+    ).reshape(1, length, weight.shape[0])
+
+
 class _AffineAttentionPack:
     def __init__(self, modules):
         self.sizes = tuple(module.scales.shape[0] for module in modules)
@@ -29,20 +55,7 @@ class _AffineAttentionPack:
         sizes = self.sizes if include_kv else self.sizes[:3]
         width = sum(sizes)
         weight, scales, biases = (value[:width] for value in self.weights)
-        options = {"transpose": True, "group_size": 64, "bits": 8, "mode": "affine"}
-        length = x.shape[1]
-        if length == 1:
-            output = mx.quantized_matmul(x, weight, scales, biases, **options)
-        else:
-            # Keep one logical GEMV per verifier row. Wide qmm can differ
-            # from the stock per-token affine reduction.
-            positions = mx.arange(length, dtype=mx.uint32)
-            output = mx.gather_qmm(
-                x.reshape(length, 1, x.shape[-1]),
-                weight[None], scales[None], biases[None],
-                lhs_indices=positions, rhs_indices=mx.zeros((length,), dtype=mx.uint32),
-                **options,
-            ).reshape(1, length, width)
+        output = affine_decode_rows(x, weight, scales, biases)
         cuts = [sum(sizes[:index]) for index in range(1, len(sizes))]
         return mx.split(output, cuts, axis=-1)
 
@@ -54,15 +67,7 @@ def prepare_affine_attention(model):
             attention.q_proj, attention.r_proj, attention.gate_proj,
             attention.k_proj, attention.v_proj,
         )
-        if all(
-            type(module) is nn.QuantizedLinear
-            and module.mode == "affine"
-            and module.bits == 8
-            and module.group_size == 64
-            and module.get("biases") is not None
-            and "bias" not in module
-            for module in modules
-        ):
+        if all(is_affine_decode_projection(module) for module in modules):
             attention._affine_decode_pack = _AffineAttentionPack(modules)
 
 def softcapped_experts(switch, x, indices, activation):
