@@ -771,9 +771,9 @@ def _k_loop(mode: str, rotate: bool, body_al: str, body_gd: str, advance: str) -
 
 
 @functools.lru_cache(maxsize=None)
-def _qmv_kernel(bits: int, fused: bool, xname: str, aligned, rotate: bool = False, yz: bool = False):
+def _qmv_kernel(bits: int, fused: bool, xname: str, aligned, rotate: bool = False, yz: bool = False, pair: bool = False):
     mode = aligned if isinstance(aligned, str) else ("al" if aligned else "gd")
-    return _qmv_kernel_mode(bits, fused, xname, mode, rotate, yz)
+    return _qmv_kernel_mode(bits, fused, xname, mode, rotate, yz, pair)
 
 
 def _qmv_rows(bits: int, fused: bool, guard: str) -> str:
@@ -792,7 +792,7 @@ def _qmv_rows(bits: int, fused: bool, guard: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool = False, yz: bool = False):
+def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool = False, yz: bool = False, pair: bool = False):
     aligned = mode == "al"
     guard_rows = "if (!active) continue;" if mode == "tl" else "if (row0 + r >= N || !active) continue;"
     loop = _k_loop(mode, rotate, _qmv_rows(bits, fused, ""), _qmv_rows(bits, fused, guard_rows),
@@ -810,7 +810,18 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
         {_qdot(bits, "ur", "b2")}
         accu[r] += b2;'''
     rows += "\n      }"
-    if fused:
+    if pair:
+        store = f'''
+    {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
+      float g = simd_sum(accg[r]); float u = simd_sum(accu[r]);
+      if (lane == 0 && row0 + r < N) {{
+        size_t output = (size_t)disp * N + row0 + r;
+        size_t scale = (size_t)e * N + row0 + r;
+        out[output] = g * float(sg[scale]);
+        out_up[output] = u * float(su[scale]);
+      }}
+    }}'''
+    elif fused:
         store = f'''
     float L = lim[0];
     {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
@@ -841,15 +852,15 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
     {store}
 '''
     return mx.fast.metal_kernel(
-        name=f"jangtq2t_qmv_b{bits}_{'fused' if fused else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}",
+        name=f"jangtq2t_qmv_b{bits}_{'pair' if pair else 'fused' if fused else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}",
         input_names=["x", "wg", "sg", "wu", "su", "idx", "meta", "lim"],
-        output_names=["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
+        output_names=["out", "out_up"] if pair else ["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
 
 
 def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool, packed_u=None, scales_u=None, limit=0.0,
-               rotate: bool = False, slot_fastest: bool = False):
+               rotate: bool = False, slot_fastest: bool = False, return_pair: bool = False):
     """Decode: x (n_x, K) any float dtype. idx (ndisp,) expert per dispatch.
-    x row for dispatch d = d if x_per_dispatch else d // (ndisp // n_x).  Returns float32 (ndisp, N).
+    x row for dispatch d = d if x_per_dispatch else d // (ndisp // n_x).  Returns float32 (ndisp, N). With return_pair, return both unactivated projections.
     Single: W_e x.  Fused (packed_u given): act(Wg x, Wu x) with clamped SwiGLU."""
     ndisp = idx.size
     nx, K = x.shape
@@ -859,13 +870,20 @@ def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool,
     xdiv = 1 if x_per_dispatch else ndisp // nx
     fused = packed_u is not None
     yz = bool(slot_fastest) and slot_fastest_enabled()      # callers pass it only for multi-row calls
-    k = _qmv_kernel(bits, fused, _TNAME[x.dtype], _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0), rotate, yz)
+    if return_pair and (
+        not fused or scales_u is None
+        or packed_u.shape != packed.shape or scales_u.shape != scales.shape
+    ):
+        raise ValueError("Paired JANGH projections require matching packed and scale shapes")
+    k = _qmv_kernel(bits, fused, _TNAME[x.dtype], _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0), rotate, yz, return_pair)
     tiles = (N + NSG * RPS - 1) // (NSG * RPS)
-    return k(inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,
+    count = 2 if return_pair else 1
+    outputs = k(inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,
                      idx.astype(mx.uint32).reshape(-1), _consts(K, N, xdiv, dtype=mx.uint32),
                      _consts(float(limit), dtype=mx.float32)],
              grid=(NSG * 32, ndisp, tiles) if yz else (NSG * 32, tiles, ndisp), threadgroup=(NSG * 32, 1, 1),
-             output_shapes=[(ndisp, N)], output_dtypes=[mx.float32])[0]
+             output_shapes=[(ndisp, N)] * count, output_dtypes=[mx.float32] * count)
+    return tuple(outputs) if return_pair else outputs[0]
 
 
 # ------------------------------------------------------------------ dense multi-row decode (verify windows)

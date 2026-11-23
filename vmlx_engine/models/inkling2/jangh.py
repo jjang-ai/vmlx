@@ -34,14 +34,25 @@ def softcapped_experts(switch, x, indices, activation):
         rotate = gate.rotated and switch._rot_in_kernel()
         inputs = rows if rotate else rotate_rows(rows, gate)
         slot_fastest = rows.shape[0] > 1
-        gate_values = kernels.gather_qmv(
-            inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, routes, gate.bits,
-            x_per_dispatch=False, rotate=rotate, slot_fastest=slot_fastest,
-        )
-        up_values = kernels.gather_qmv(
-            inputs, up.tq2_packed, up.tq2_scales, up._cb, routes, up.bits,
-            x_per_dispatch=False, rotate=rotate, slot_fastest=slot_fastest,
-        )
+        if (
+            gate.bits == up.bits
+            and gate.tq2_packed.shape == up.tq2_packed.shape
+            and gate.tq2_scales.shape == up.tq2_scales.shape
+        ):
+            gate_values, up_values = kernels.gather_qmv(
+                inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, routes, gate.bits,
+                x_per_dispatch=False, packed_u=up.tq2_packed, scales_u=up.tq2_scales,
+                rotate=rotate, slot_fastest=slot_fastest, return_pair=True,
+            )
+        else:
+            gate_values = kernels.gather_qmv(
+                inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, routes, gate.bits,
+                x_per_dispatch=False, rotate=rotate, slot_fastest=slot_fastest,
+            )
+            up_values = kernels.gather_qmv(
+                inputs, up.tq2_packed, up.tq2_scales, up._cb, routes, up.bits,
+                x_per_dispatch=False, rotate=rotate, slot_fastest=slot_fastest,
+            )
         middle = activation(up_values.astype(x.dtype), gate_values.astype(x.dtype))
         middle, rotate_down = switch._down_in(middle)
         output = kernels.gather_qmv(
