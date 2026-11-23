@@ -74,6 +74,23 @@ class TestRegistration:
         assert args.num_nextn_predict_layers == 1
         assert args.moe_k == 2 and args.moe_num_experts == 8
 
+    def test_armed_prompt_tap_folds_the_actual_hidden_output(self, tiny_model, monkeypatch):
+        from vmlx_engine import native_mtp_prompt_priming as priming
+
+        observations = []
+        monkeypatch.setattr(priming, "capture_prefill", lambda *args: observations.append(args))
+        tokens = mx.array([[3, 17, 42]])
+        cache = tiny_model.make_cache()
+        expected, hidden = tiny_model(tokens, cache=tiny_model.make_cache(), return_hidden=True)
+
+        logits = priming.PromptHiddenTap(tiny_model)(tokens, cache=cache)
+
+        assert mx.array_equal(logits, expected).item()
+        assert len(observations) == 1
+        host, captured_tokens, captured_hidden, captured_cache = observations[0]
+        assert host is tiny_model and captured_tokens is tokens and captured_cache is cache
+        assert mx.array_equal(captured_hidden, hidden).item()
+
     def test_model_configs_registry_row(self):
         import vmlx_engine.model_configs  # noqa: F401  (registers families)
         from vmlx_engine.model_config_registry import get_model_config_registry

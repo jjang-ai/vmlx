@@ -70,8 +70,6 @@ class PromptHiddenTap:
         return getattr(self._model, name)
 
     def __call__(self, inputs, *args, **kwargs):
-        from ..native_mtp_prompt_priming import capture_prefill
-
         kwargs = dict(kwargs)
         kwargs["return_hidden"] = True
         result = self._model(inputs, *args, **kwargs)
