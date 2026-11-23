@@ -68,6 +68,18 @@ def load_native_inkling2(path: Path, config: dict):
     model.load_weights(list(weights.items()))
     mx.eval(model.parameters())
     model.eval()
+    expert_modes = {
+        getattr(projection, "mode", None)
+        for layer in model.language_model.model.layers
+        for projection in (
+            layer.mlp.switch_mlp.gate_proj,
+            layer.mlp.switch_mlp.up_proj,
+            layer.mlp.switch_mlp.down_proj,
+        )
+    }
+    model._inkling_loaded_expert_modes = tuple(
+        mode for mode in ("nvfp4", "mxfp8") if mode in expert_modes
+    )
     fused_layers = prepare_fused_nvfp4_experts(model.language_model)
     if fused_layers:
         logger.info("Inkling NVFP4 fused expert decode enabled for %d layers", fused_layers)

@@ -10833,6 +10833,13 @@ def _weight_matmul_dispatch_status(codec: str) -> dict:
             "metal_na_eligible": False,
             "reason": "turboquant_codebook_uses_custom_tq_kernels",
         }
+    if codec == "floating_point_quantized_matmul":
+        return {
+            "primary": "mlx_floating_point_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": False,
+            "reason": "native_and_custom_metal_paths",
+        }
     if codec == "affine_quantized_matmul":
         return {
             "primary": "mlx_affine_quantized_matmul",
@@ -11930,8 +11937,30 @@ def _family_acceleration_contract(bundle_path: str | None) -> dict[str, Any]:
     return contract
 
 
-def _model_acceleration_status(bundle_path: str | None = None) -> dict:
-    quantization = _model_quantization_status(bundle_path or _model_path)
+def _loaded_inkling_weight_quantization(engine) -> dict:
+    if engine is None or getattr(engine, "_loaded", False) is not True:
+        return {}
+    model = getattr(engine, "_model", None)
+    modes = getattr(model, "_inkling_loaded_expert_modes", ())
+    if not modes:
+        return {}
+    codec = "floating_point_quantized_matmul"
+    return {
+        "codec": codec,
+        "backend": "mlx",
+        "weight_format": "/".join(modes),
+        "module_quantization_modes": list(modes),
+        "mixed_precision": len(modes) > 1,
+        "quantization_metadata_source": "loaded_expert_projections",
+        "weight_matmul_dispatch": _weight_matmul_dispatch_status(codec),
+    }
+
+
+def _model_acceleration_status(
+    bundle_path: str | None = None, *, quantization: dict | None = None
+) -> dict:
+    if quantization is None:
+        quantization = _model_quantization_status(bundle_path or _model_path)
     codec = quantization.get("codec")
     na_status = _mlx_metal_na_status()
     host = _host_supports_metal_na()
@@ -11961,6 +11990,11 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         metal_na_capable = bool(
             mpp_nax.get("requested") and host.get("supported") and mpp_nax.get("available")
         )
+    elif codec == "floating_point_quantized_matmul":
+        kernel_type = codec
+        active = False
+        reason = "native_and_custom_metal_paths"
+        metal_na_capable = False
     elif codec == "affine_quantized_matmul":
         kernel_type = "affine_quantized_matmul"
         active = bool(na_status.get("available") and host.get("supported"))
@@ -14952,8 +14986,12 @@ async def health():
     # defaults/codec heuristics cannot infer diffusion precision or KV reuse.
     if _model_type != "image" and (_model_path or _model_name):
         bundle_key = _model_path or _model_name
-        result["quantization"] = _model_quantization_status(bundle_key)
-        result["acceleration"] = _model_acceleration_status(bundle_key)
+        quantization = _model_quantization_status(bundle_key)
+        quantization.update(_loaded_inkling_weight_quantization(_engine))
+        result["quantization"] = quantization
+        result["acceleration"] = _model_acceleration_status(
+            bundle_key, quantization=quantization
+        )
         result["mtp"] = _model_mtp_status_with_loaded_runtime(bundle_key)
         generation_status = _model_effective_defaults_status(bundle_key)
         result["sampling_defaults"] = generation_status["sampling_defaults"]
