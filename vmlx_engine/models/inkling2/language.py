@@ -68,10 +68,23 @@ def _decode_linear(module, x):
     return module(x)
 
 
-def _controller_projection(x, weight):
-    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
-        return _decode_gemv_rows(x, weight)
-    return x @ weight.T
+def _normalize_message_bank(states):
+    if _VERIFY_WITH_DECODE_GEMV.get() and states.shape[1] > 1:
+        return mx.concatenate([
+            _normalize_message_bank(states[:, row:row + 1])
+            for row in range(states.shape[1])
+        ], axis=1)
+    return mx.fast.rms_norm(states.astype(mx.float32), None, 1e-6)
+
+
+def _message_attention(query, bank, width):
+    if _VERIFY_WITH_DECODE_GEMV.get() and bank.shape[1] > 1:
+        return mx.concatenate([
+            _message_attention(query, bank[:, row:row + 1], width)
+            for row in range(bank.shape[1])
+        ], axis=1)
+    scores = (query @ bank.swapaxes(-1, -2)) * width ** -0.5
+    return mx.softmax(scores, axis=-1) @ bank
 
 
 @mx.compile
@@ -610,14 +623,20 @@ class MessageController(nn.Module):
         self.eps = config.rms_norm_eps
 
     def __call__(self, x, message):
+        if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
+            # The low-rank reductions are sensitive to the decode dispatch.
+            return mx.concatenate([
+                self(x[:, row:row + 1], message[:, row:row + 1])
+                for row in range(x.shape[1])
+            ], axis=1)
         pair = mx.concatenate(
             [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
         )
-        hidden = _controller_projection(
-            pair.astype(self.down_weight.dtype), self.down_weight
-        ).astype(mx.float32)
-        forget = mx.tanh(_controller_projection(hidden, self.forget_weight))
-        gain = mx.tanh(_controller_projection(hidden, self.gain_weight))
+        hidden = (pair.astype(self.down_weight.dtype) @ self.down_weight.T).astype(
+            mx.float32
+        )
+        forget = mx.tanh(hidden @ self.forget_weight.T)
+        gain = mx.tanh(hidden @ self.gain_weight.T)
         return (1 - forget) * x + gain * message
 
 
@@ -754,13 +773,12 @@ class TextModel(nn.Module):
                     # The first block appended in the core is the prelude partial.
                     # Only completed core blocks and the last partial supply messages.
                     states = mx.stack([*blocks[len(prelude_blocks) + 1 :], x], axis=-2)
-                    bank = mx.fast.rms_norm(states.astype(mx.float32), None, 1e-6)
+                    bank = _normalize_message_bank(states)
                     x, blocks = prelude, prelude_blocks.copy()
             messages = None
             if bank is not None and index < self.loop.core_end:
                 query = self.message_queries[index - self.loop.core_start]
-                scores = (query @ bank.swapaxes(-1, -2)) * x.shape[-1] ** -0.5
-                messages = mx.softmax(scores, axis=-1) @ bank
+                messages = _message_attention(query, bank, x.shape[-1])
             # DSpark taps the partial block entering the layer, not its output.
             if visit in requested:
                 captures[visit] = x
