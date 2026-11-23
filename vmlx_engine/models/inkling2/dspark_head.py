@@ -47,10 +47,6 @@ class DraftAttention(nn.Module):
     def __call__(self, x, context, cache):
         # Every query sees the whole block and the same window BEFORE its anchor.
         # Only target context goes into persistent KV; proposals never do.
-        if self.window and context.shape[1] > self.window:
-            skip = context.shape[1] - self.window
-            context = context[:, skip:]
-            cache.offset += skip
         offset = cache.offset
         k = self.k_norm_ctx(self._heads(self.k_proj_ctx(context), self.kv_heads))
         v = self._heads(self.v_proj_ctx(context), self.kv_heads)
@@ -213,8 +209,32 @@ class InklingDraft(nn.Module):
         target = getattr(target_model, "language_model", target_model)
         if self._target is not target:
             self.markov_head.fold(target.lm_head)
+            self._prepare_feature_mix()
             self._target = target
         return self
+
+    def _prepare_feature_mix(self):
+        if (
+            self.config.hidden_size != 2304
+            or self.fuse_weight.shape[1] != 4
+            or self.fuse_weight.dtype != mx.bfloat16
+            or not mx.metal.is_available()
+            or mx.default_device() != mx.gpu
+            or mx.device_info().get("device_name") != "Apple M5 Max"
+            or mx.__version__ not in ("0.32.4", "0.32.5.dev20261101+360078a8")
+        ):
+            return
+
+        from .kernels import draft_feature_mix
+
+        coefficients = mx.softmax(self.fuse_weight.astype(mx.float32), axis=-1).astype(mx.bfloat16)
+        eps = mx.array([self.config.rms_norm_eps], mx.float32)
+        # Compile the context-length-independent shader once before serving.
+        probe = mx.zeros((1, 1, 4 * self.config.hidden_size), mx.bfloat16)
+        mx.eval(
+            draft_feature_mix(probe, coefficients[0], self.layers[0].dflare_norm.weight, eps)
+        )
+        self._fused_feature_mix = coefficients, eps
 
     def make_cache(self):
         return [
@@ -231,6 +251,18 @@ class InklingDraft(nn.Module):
         return self.make_cache()
 
     def mix(self, hidden, row, norm):
+        fused = self.get("_fused_feature_mix")
+        if (
+            fused is not None and not self.training
+            and hidden.shape[0] == 1 and hidden.shape[-1] == 4 * 2304
+            and hidden.dtype == mx.bfloat16
+            and norm.weight.dtype == mx.bfloat16
+            and mx.default_device() == mx.gpu
+        ):
+            from .kernels import draft_feature_mix
+
+            coefficients, eps = fused
+            return draft_feature_mix(hidden, coefficients[row], norm.weight, eps)
         features = hidden.reshape(
             *hidden.shape[:2], -1, self.config.hidden_size
         ).astype(mx.float32)
@@ -267,8 +299,15 @@ class InklingDraft(nn.Module):
         )
         x, residual = mx.concatenate([embed, masks], axis=1), None
         for i, (layer, entry) in enumerate(zip(self.layers, cache)):
+            context = hidden
+            window = layer.self_attn.window
+            if window and hidden.shape[1] > window:
+                # Old rows are never read by this layer. Keep its absolute RoPE offset.
+                skipped = hidden.shape[1] - window
+                context = hidden[:, skipped:]
+                entry.offset += skipped
             x, residual = layer(
-                x, residual, self.mix(hidden, i, layer.dflare_norm), entry
+                x, residual, self.mix(context, i, layer.dflare_norm), entry
             )
         x = self.norm(x.astype(mx.float32) + residual.astype(mx.float32)).astype(
             embed.dtype

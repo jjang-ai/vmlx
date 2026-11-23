@@ -169,3 +169,59 @@ def loop_controller_pair(x, message, eps, dtype):
         output_shapes=[(1, length, 4608)],
         output_dtypes=[dtype],
     )[0]
+
+
+@lru_cache(maxsize=1)
+def _draft_feature_mix():
+    return mx.fast.metal_kernel(
+        name="inkling_draft_feature_mix_rms",
+        input_names=["taps", "alpha", "gamma", "eps"],
+        output_names=["out"],
+        ensure_row_contiguous=False,
+        compile_options={"math_mode": "safe"},
+        source=r"""
+        const uint position = threadgroup_position_in_grid.x;
+        const uint lane = thread_index_in_simdgroup;
+        const uint group = simdgroup_index_in_threadgroup;
+        const uint index = 4 * thread_position_in_threadgroup.x;
+
+        float values[4];
+        float squares = 0.0f;
+        for (uint i = 0; i < 4; ++i) {
+            const uint column = index + i;
+            float value = 0.0f;
+            for (uint tap = 0; tap < 4; ++tap) {
+                const auto address = position*taps_strides[1] + (tap*2304+column)*taps_strides[2];
+                value += float(taps[address]) * float(alpha[tap*alpha_strides[0]]);
+            }
+            values[i] = value;
+            squares = fma(value, value, squares);
+        }
+        const float partial = simd_sum(squares);
+        threadgroup float sums[32];
+        threadgroup float scale;
+        if (lane == 0) sums[group] = partial;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (group == 0) {
+            const float total = simd_sum(lane < 18 ? sums[lane] : 0.0f);
+            if (lane == 0) scale = metal::precise::rsqrt(total / 2304.0f + eps[0]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = 0; i < 4; ++i) {
+            const uint column = index + i;
+            out[position*2304+column] = bfloat16_t(float(gamma[column*gamma_strides[0]]) * (values[i] * scale));
+        }
+        """,
+    )
+
+
+def draft_feature_mix(taps, coefficients, norm_weight, eps):
+    """Retain the draft head's FP32 mix and RMS reduction in one dispatch."""
+    positions = taps.shape[1]
+    return _draft_feature_mix()(
+        inputs=[taps, coefficients, norm_weight, eps],
+        grid=(576 * positions, 1, 1),
+        threadgroup=(576, 1, 1),
+        output_shapes=[(1, positions, 2304)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
