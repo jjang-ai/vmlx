@@ -106,6 +106,17 @@ def _message_attention(query, bank, width):
     return mx.softmax(scores, axis=-1) @ bank
 
 
+def _group_loop_messages(queries, bank):
+    """Group controller queries while keeping each token's decode reduction."""
+    queries = queries[:, None, None]
+    messages = []
+    for position in range(bank.shape[1]):
+        row = bank[:, position:position + 1][None]
+        scores = (queries @ row.swapaxes(-1, -2)) * bank.shape[-1] ** -0.5
+        messages.append(mx.softmax(scores, axis=-1) @ row)
+    return mx.concatenate(messages, axis=2)
+
+
 @mx.compile
 def l2_clip(x, threshold, scale=None):
     dtype = x.dtype
@@ -895,6 +906,19 @@ class TextModel(nn.Module):
         x = self.embed(inputs) if input_embeddings is None else input_embeddings
         blocks = []
         bank = None
+        loop_messages = None
+        group_loop_messages = (
+            speculative_verify
+            and not self.training
+            and self.loop is not None
+            and x.shape[0] == 1
+            and x.dtype == mx.bfloat16
+            and self.message_queries.shape == (12, 4, 2304)
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+            and mx.device_info().get("device_name") == "Apple M5 Max"
+            and mx.__version__ in ("0.32.4", "0.32.5.dev20261101+360078a8")
+        )
         if cache is not None and len(cache) != 2 * len(self.layer_indices):
             raise ValueError(
                 "Inkling 2 requires attention and convolution caches for every layer visit"
@@ -908,11 +932,18 @@ class TextModel(nn.Module):
                     # Only completed core blocks and the last partial supply messages.
                     states = mx.stack([*blocks[len(prelude_blocks) + 1 :], x], axis=-2)
                     bank = _normalize_message_bank(states)
+                    if group_loop_messages:
+                        loop_messages = _group_loop_messages(self.message_queries, bank)
                     x, blocks = prelude, prelude_blocks.copy()
             messages = None
             if bank is not None and index < self.loop.core_end:
-                query = self.message_queries[index - self.loop.core_start]
-                messages = _message_attention(query, bank, x.shape[-1])
+                core_index = index - self.loop.core_start
+                if loop_messages is None:
+                    messages = _message_attention(
+                        self.message_queries[core_index], bank, x.shape[-1]
+                    )
+                else:
+                    messages = loop_messages[core_index]
             # DSpark taps the partial block entering the layer, not its output.
             if visit in requested:
                 captures[visit] = x
