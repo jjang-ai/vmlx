@@ -70,7 +70,7 @@ def test_dflash_bridge_preserves_request_cache_policy(monkeypatch, glm, use_cach
     from vmlx_engine import dflash2_runtime as df, glm_dflash2 as gd
     monkeypatch.setattr(gd, "is_glm5_next", lambda model: glm)
     monkeypatch.setattr(upstream, "wired_limit", lambda *args: nullcontext())
-    monkeypatch.setattr(df, "_adapter_for", lambda model: model)
+    monkeypatch.setattr(df, "_adapter_for", lambda model: SimpleNamespace(release_request_state=lambda: None))
     route = Mock(return_value=iter([]))
     if glm:
         monkeypatch.setattr(gd, "stream_glm_dflash2", route)
