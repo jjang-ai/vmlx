@@ -5658,6 +5658,29 @@ class MLLMScheduler:
         """Remove a finished request from tracking."""
         return self.requests.pop(request_id, None)
 
+    def clear_inkling_draft_context(self) -> bool:
+        bundle = getattr(self.model, "_inkling_native_dspark_bundle", None)
+        if bundle is None or self._ssm_companion_disk_store is None:
+            return False
+        generator = self.batch_generator
+        store = getattr(generator, "_inkling_draft_context_store", None)
+        if store is not None:
+            store.clear()
+            return True
+
+        from .dspark.session import open_inkling_draft_context_ssd
+
+        # A stopped or DSpark-disabled session may never start a batch
+        # generator. The user's clear still applies to previously saved state.
+        store = open_inkling_draft_context_ssd(bundle, clearing=True)
+        if store is None:
+            return False
+        try:
+            store.clear()
+            return True
+        finally:
+            store.close()
+
     def _cleanup_failed_block_cache_initialization(
         self,
         *,

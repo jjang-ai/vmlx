@@ -50,7 +50,7 @@ def configure_defaults(*, root: Optional[str], max_size_bytes: int, enabled: boo
     _DEFAULTS.update(root=root, max_size_bytes=int(max_size_bytes or 0), enabled=bool(enabled))
 
 
-def open_inkling_draft_context_ssd(bundle: str, model_key: str, *, clearing=False):
+def open_inkling_draft_context_ssd(bundle: str, *, clearing=False):
     """Open the managed Inkling draft cache for serving or explicit deletion."""
     if not _DEFAULTS["enabled"] or not _DEFAULTS["root"]:
         return None
@@ -63,8 +63,10 @@ def open_inkling_draft_context_ssd(bundle: str, model_key: str, *, clearing=Fals
 
     return OmniSessionDiskStore(
         root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"],
-        model_key=f"{model_key}|{model_identity(bundle, bundle)}",
-        schema="inkling_projected_draft_context_v1",
+        # One manageable namespace per loaded bundle/runtime. Individual
+        # checkpoint keys still include the target cache's request identity.
+        model_key=model_identity(bundle, bundle),
+        schema="inkling_projected_draft_context_v2",
     )
 
 

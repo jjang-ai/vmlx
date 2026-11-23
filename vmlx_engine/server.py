@@ -17565,8 +17565,9 @@ async def clear_cache(
                 cleared.append("ssm_companion")
             if ssm_l2_cleared:
                 cleared.append("ssm_companion_disk")
-            draft_bundle = getattr(generator, "_inkling_draft_context_bundle", None)
-            if clear_prefix_l2 and draft_bundle is not None:
+            clear_inkling_draft = getattr(scheduler, "clear_inkling_draft_context", None)
+            draft_bundle = getattr(getattr(scheduler, "model", None), "_inkling_native_dspark_bundle", None)
+            if clear_prefix_l2 and draft_bundle is not None and callable(clear_inkling_draft):
                 lifecycle = _request_lifecycle_health_snapshot(
                     _engine.get_stats(), scheduler.get_stats()
                 )
@@ -17578,7 +17579,7 @@ async def clear_cache(
                     skipped.append("inkling_draft_context_disk:requests_in_use")
                 else:
                     try:
-                        if generator.clear_inkling_draft_context():
+                        if clear_inkling_draft():
                             cleared.append("inkling_draft_context_disk")
                     except OSError:
                         logger.exception("Inkling draft context clear did not finish")
