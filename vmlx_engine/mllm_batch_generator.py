@@ -10598,6 +10598,14 @@ class MLLMBatchGenerator:
             "1", "true", "True", "yes", "on"
         ):
             return 0
+        if getattr(self, "_model_type", "") in {"inkling2", "inkling2_loop"}:
+            # The cache key excludes the final prompt token, even when the
+            # template supplies no generation suffix. A post-forward snapshot
+            # would already include that token in the convolution history.
+            original = getattr(request, "_original_token_ids", None) or []
+            cached = int(getattr(request, "_cached_tokens", 0) or 0)
+            local_boundary = len(original) - 1 - cached
+            return local_boundary if 0 < local_boundary < seq_len else 0
         gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
         if gpl <= 0:
             return 0
@@ -10661,7 +10669,13 @@ class MLLMBatchGenerator:
             boundaries.append(required_local)
 
         if clean_boundary > 0:
-            block_boundary = self._ssm_block_aligned_boundary(clean_boundary)
+            if getattr(self, "_model_type", "") in {"inkling2", "inkling2_loop"}:
+                block_boundary = (
+                    self._ssm_block_aligned_boundary(base_len + clean_boundary)
+                    - base_len
+                )
+            else:
+                block_boundary = self._ssm_block_aligned_boundary(clean_boundary)
             if 0 < block_boundary < seq_len:
                 boundaries.append(block_boundary)
             if clean_boundary < seq_len:
@@ -17294,6 +17308,10 @@ class MLLMBatchGenerator:
                             "checkpoint for %s; skipping text-only re-derive",
                             req.request_id,
                         )
+                        continue
+                    if getattr(self, "_model_type", "") in {"inkling2", "inkling2_loop"}:
+                        # A forward over the remaining tail must never overwrite
+                        # an exact restored checkpoint with an advanced state.
                         continue
                     try:
                         kv_set = set(self._hybrid_kv_positions)
