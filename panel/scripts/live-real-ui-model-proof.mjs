@@ -10631,7 +10631,7 @@ async function main() {
               )
             ) || null;
           const thinkingNoticeShown = () =>
-            /does not read a thinking toggle/i.test(chatSettingsDrawer?.innerText || '');
+            /does not (?:read|support) a thinking toggle/i.test(chatSettingsDrawer?.innerText || '');
           const thinkingControl = await waitFor(
             () => findThinkingButton() || (thinkingNoticeShown() ? 'notice' : null),
             'visible reasoning control (' + thinkingLabel + ' button or not-configurable notice)',
@@ -10916,7 +10916,7 @@ async function main() {
             // Notice families (LFM2.5, MiniMax) render the honesty notice
             // instead of mode buttons — record the shape so the reopen
             // validator can accept a legitimately absent mode control.
-            thinkingNotice: /does not read a thinking toggle/i.test(
+            thinkingNotice: /does not (?:read|support) a thinking toggle/i.test(
               reopenedDrawer?.innerText || '',
             ),
             builtinToolsEnabled: reopenedCheckboxValueFor('Enable Built-in Coding Tools'),

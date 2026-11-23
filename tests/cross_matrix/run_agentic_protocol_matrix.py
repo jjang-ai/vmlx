@@ -4162,6 +4162,7 @@ def build_request(
     enable_thinking: bool = True,
     second_tool_choice: str = "auto",
     first_tool_choice: str = "current",
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     stream = mode == "stream"
     common = _request_common(model, max_tokens, enable_thinking)
@@ -4178,6 +4179,8 @@ def build_request(
                 protocol, mode, stage, second_tool_choice, first_tool_choice
             ),
         }
+        if reasoning_effort is not None:
+            body["reasoning_effort"] = reasoning_effort
         if stream:
             body["stream_options"] = {"include_usage": True}
         return body
@@ -4194,6 +4197,8 @@ def build_request(
                 protocol, mode, stage, second_tool_choice, first_tool_choice
             ),
         }
+        if reasoning_effort is not None:
+            body["reasoning"] = {"effort": reasoning_effort}
         if previous_response_id:
             body["previous_response_id"] = previous_response_id
         return body
@@ -4309,6 +4314,7 @@ def run_flow(
     second_tool_choice: str = "explicit",
     first_tool_choice: str = "current",
     stable_responses_instructions: bool = False,
+    native_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     first_prompt = first_tool_instruction(protocol, mode)
     second_prompt = (
@@ -4337,6 +4343,7 @@ def run_flow(
         enable_thinking=enable_thinking,
         second_tool_choice=second_tool_choice,
         first_tool_choice=first_tool_choice,
+        reasoning_effort=native_reasoning_effort,
     )
     request_records = [_request_public(1, request1, protocol=protocol)]
     round1 = client.send(
@@ -4381,6 +4388,7 @@ def run_flow(
         enable_thinking=enable_thinking,
         second_tool_choice=second_tool_choice,
         first_tool_choice=first_tool_choice,
+        reasoning_effort=native_reasoning_effort,
     )
     request_records.append(_request_public(2, request2, protocol=protocol))
     round2 = client.send(
@@ -4427,14 +4435,12 @@ def run_flow(
         ),
         previous_response_id=str(round2.get("response_id") or ""),
         max_tokens=max_tokens,
-        # The final synthesis turn is intentionally direct. Besides proving
-        # the API can transition from reasoning/tool use back to a clean
-        # visible answer, this keeps private reasoning out of the final-only
-        # raw-channel contract. The paired-replay validator requires this
-        # exact On -> Off transition, so send the body it grades.
-        enable_thinking=False,
+        # Turn off optional reasoning for the final-only contract. A native
+        # effort-only model continues to use its declared reasoning control.
+        enable_thinking=native_reasoning_effort is not None,
         second_tool_choice=second_tool_choice,
         first_tool_choice=first_tool_choice,
+        reasoning_effort=native_reasoning_effort,
     )
     request_records.append(_request_public(3, request3, protocol=protocol))
     round3 = client.send(
@@ -4868,6 +4874,8 @@ def build_recovery_request(
     mode: str,
     marker: str,
     max_tokens: int,
+    *,
+    native_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     prompt = f"Call no tools. Reply exactly {marker} and nothing else."
     history: list[dict[str, Any]] | str = (
@@ -4881,7 +4889,8 @@ def build_recovery_request(
         history=history,
         instructions=prompt,
         max_tokens=max_tokens,
-        enable_thinking=False,
+        enable_thinking=native_reasoning_effort is not None,
+        reasoning_effort=native_reasoning_effort,
     )
 
 
@@ -4892,8 +4901,13 @@ def run_recovery(
     model: str,
     marker: str,
     max_tokens: int,
+    *,
+    native_reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
-    payload = build_recovery_request(protocol, model, mode, marker, max_tokens)
+    payload = build_recovery_request(
+        protocol, model, mode, marker, max_tokens,
+        native_reasoning_effort=native_reasoning_effort,
+    )
     result = client.send(
         protocol,
         payload,
@@ -5577,7 +5591,19 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         if installed_release_manifest is not None
         else observe_runner_environment(repo_root)
     )
-    bundle_before = observe_bundle_configuration(Path(args.bundle_root))
+    bundle_root = Path(args.bundle_root)
+    native_reasoning_effort = getattr(args, "native_reasoning_effort", None)
+    if native_reasoning_effort is not None:
+        config = json.loads((bundle_root / "config.json").read_text())
+        template = (bundle_root / "chat_template.jinja").read_text()
+        if (
+            config.get("model_type") not in {"inkling2", "inkling2_loop"}
+            or "reasoning_effort" not in template
+            or "enable_thinking" in template
+            or not args.enable_thinking
+        ):
+            raise ValueError("--native-reasoning-effort requires an Inkling effort-only template")
+    bundle_before = observe_bundle_configuration(bundle_root)
     identity_failures = _source_identity_failures(
         source_before,
         args.source_head,
@@ -5630,6 +5656,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "modes": modes,
         "first_tool_choice": args.first_tool_choice,
         "second_tool_choice": args.second_tool_choice,
+        "native_reasoning_effort": native_reasoning_effort,
         "stable_responses_instructions": args.stable_responses_instructions,
         "backend_identity_fingerprint_sha256": None,
         "identity": {
@@ -5728,6 +5755,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                         enable_thinking=args.enable_thinking,
                         second_tool_choice=args.second_tool_choice,
                         first_tool_choice=args.first_tool_choice,
+                        native_reasoning_effort=native_reasoning_effort,
                         stable_responses_instructions=(
                             args.stable_responses_instructions
                         ),
@@ -5787,6 +5815,7 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                             args.model,
                             recovery_marker,
                             args.recovery_max_tokens,
+                            native_reasoning_effort=native_reasoning_effort,
                         )
                         output["abort_recovery"][base_label][protocol][mode] = {
                             "abort": aborted,
@@ -6078,6 +6107,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("explicit", "required", "auto"),
         default="explicit",
         help="Tool-choice policy for the second tool turn; run a separate auto row for release proof",
+    )
+    parser.add_argument(
+        "--native-reasoning-effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        help="Use the exact Inkling bundle's effort selector throughout the flow and recovery.",
     )
     parser.add_argument("--skip-cancellation", action="store_true")
     parser.add_argument(

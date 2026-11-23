@@ -1537,6 +1537,29 @@ def test_first_tool_prompt_is_base_independent():
     assert "agentic/" not in prompt.lower()
 
 
+def test_native_effort_recovery_preserves_provider_request_shapes():
+    chat = matrix.build_recovery_request(
+        "chat", "served-model", "stream", "marker", 768,
+        native_reasoning_effort="low",
+    )
+    responses = matrix.build_recovery_request(
+        "responses", "served-model", "nonstream", "marker", 768,
+        native_reasoning_effort="medium",
+    )
+    ollama = matrix.build_recovery_request(
+        "ollama", "served-model", "stream", "marker", 768,
+        native_reasoning_effort="low",
+    )
+    legacy = matrix.build_recovery_request(
+        "chat", "served-model", "stream", "marker", 128
+    )
+
+    assert chat["enable_thinking"] is True and chat["reasoning_effort"] == "low"
+    assert responses["enable_thinking"] is True and responses["reasoning"] == {"effort": "medium"}
+    assert ollama["think"] is True and "reasoning_effort" not in ollama
+    assert legacy["enable_thinking"] is False and "reasoning_effort" not in legacy
+
+
 def test_build_request_uses_native_tool_choice_shapes_without_hosts():
     chat = matrix.build_request(
         "chat",
