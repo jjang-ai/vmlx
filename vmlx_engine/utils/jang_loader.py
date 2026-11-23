@@ -4220,21 +4220,29 @@ def _load_jang_v2(
 
 
 def _fix_minicpm_tied_output(model) -> None:
-    from mlx.nn import QuantizedEmbedding
+    from mlx.nn import Linear, QuantizedEmbedding
     from mlx_lm.models.minicpm import Model
 
-    if (
-        type(model) is not Model
-        or not model.args.tie_word_embeddings
-        or not isinstance(model.model.embed_tokens, QuantizedEmbedding)
-    ):
+    if type(model) is not Model:
+        return
+    embedding = model.model.embed_tokens
+    if not isinstance(embedding, QuantizedEmbedding):
         return
 
-    # MLX-LM's original tied branch reads the serialized embedding weight as
-    # a dense matrix. The quantized embedding already owns its tied projection.
+    hidden_scale = None
+    if not model.args.tie_word_embeddings:
+        head = model.get("lm_head")
+        # MiniCPM.sanitize aliases the embedding into a missing lm_head. Do
+        # not replace an independently stored projection.
+        if type(head) is not Linear or head.weight is not embedding.weight:
+            return
+        hidden_scale = model.args.hidden_size / model.args.dim_model_base
+
     class MiniCPMWithQuantizedTiedOutput(Model):
         def __call__(self, inputs, cache=None):
             hidden = self.model(inputs, cache)
+            if hidden_scale is not None:
+                hidden = hidden / hidden_scale
             return self.model.embed_tokens.as_linear(hidden)
 
     model.__class__ = MiniCPMWithQuantizedTiedOutput
