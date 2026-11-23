@@ -451,8 +451,25 @@ class Attention(nn.Module):
         kv, conv = cache if cache is not None else (None, None)
         key_input = x if key_input is None else key_input
         value_input = x if value_input is None else value_input
-        k = self._project(self.k_proj, key_input)
-        v = self._project(self.v_proj, value_input)
+        pack = getattr(self, "_affine_decode_pack", None)
+        if (
+            pack is not None and self.sharding_group is None and b == 1
+            and (length == 1 or _VERIFY_WITH_DECODE_GEMV.get())
+            and x.dtype == mx.bfloat16
+            and mx.metal.is_available() and mx.default_device() == mx.gpu
+        ):
+            include_kv = key_input is x and value_input is x
+            query, relative, gate, *kv_projections = pack.project(x, include_kv=include_kv)
+        else:
+            query = self._project(self.q_proj, x)
+            relative = self._project(self.r_proj, x)
+            gate = self._project(self.gate_proj, x)
+            kv_projections = ()
+        if kv_projections:
+            k, v = kv_projections
+        else:
+            k = self._project(self.k_proj, key_input)
+            v = self._project(self.v_proj, value_input)
         if self.is_sliding:
             k = self.k_sconv(k, conv, conv_mask)
             v = self.v_sconv(v, conv, conv_mask)
@@ -460,7 +477,7 @@ class Attention(nn.Module):
             k = self.k_sconv(k, key_input, conv, conv_mask)
             v = self.v_sconv(v, value_input, conv, conv_mask)
         q = l2_clip(
-            self._project(self.q_proj, x).reshape(
+            query.reshape(
                 b, length, self.n_heads, self.head_dim
             ),
             cfg.qk_l2_clip_threshold,
@@ -475,7 +492,7 @@ class Attention(nn.Module):
                 x.dtype
             )
         r = l2_clip(
-            self._project(self.r_proj, x).reshape(b, length, self.n_heads, cfg.d_rel),
+            relative.reshape(b, length, self.n_heads, cfg.d_rel),
             cfg.rel_l2_clip_threshold,
             self.rel_scale,
         )
@@ -523,7 +540,7 @@ class Attention(nn.Module):
         out = out.transpose(0, 2, 1, 3).reshape(b, length, -1)
         out = (
             out.astype(mx.float32)
-            * mx.sigmoid(self._project(self.gate_proj, x).astype(mx.float32))
+            * mx.sigmoid(gate.astype(mx.float32))
         ).astype(x.dtype)
         # Every output dot still consumes all heads on one rank. Gather the
         # heads first, project complete output rows, then restore hidden order.

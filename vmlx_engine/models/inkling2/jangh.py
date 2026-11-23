@@ -1,10 +1,69 @@
 """Apply Inkling's two soft caps between packed JANGH expert projections."""
 
 import mlx.core as mx
+import mlx.nn as nn
 
 from ...jangh import kernels
 from ...jangh.switch import rotate_rows
 
+
+
+class _AffineAttentionPack:
+    def __init__(self, modules):
+        self.sizes = tuple(module.scales.shape[0] for module in modules)
+        names = ("weight", "scales", "biases")
+        self.weights = tuple(
+            mx.concatenate([getattr(module, name) for module in modules], axis=0)
+            for name in names
+        )
+        mx.eval(*self.weights)
+        offset = 0
+        # The individual modules remain valid for prefill or distinct K/V
+        # inputs. Each uses a view of the packed storage.
+        for module, size in zip(modules, self.sizes):
+            for name, weight in zip(names, self.weights):
+                setattr(module, name, weight[offset:offset + size])
+            offset += size
+
+    def project(self, x, *, include_kv):
+        sizes = self.sizes if include_kv else self.sizes[:3]
+        width = sum(sizes)
+        weight, scales, biases = (value[:width] for value in self.weights)
+        options = {"transpose": True, "group_size": 64, "bits": 8, "mode": "affine"}
+        length = x.shape[1]
+        if length == 1:
+            output = mx.quantized_matmul(x, weight, scales, biases, **options)
+        else:
+            # Keep one logical GEMV per verifier row. Wide qmm can differ
+            # from the stock per-token affine reduction.
+            positions = mx.arange(length, dtype=mx.uint32)
+            output = mx.gather_qmm(
+                x.reshape(length, 1, x.shape[-1]),
+                weight[None], scales[None], biases[None],
+                lhs_indices=positions, rhs_indices=mx.zeros((length,), dtype=mx.uint32),
+                **options,
+            ).reshape(1, length, width)
+        cuts = [sum(sizes[:index]) for index in range(1, len(sizes))]
+        return mx.split(output, cuts, axis=-1)
+
+
+def prepare_affine_attention(model):
+    for layer in model.language_model.model.layers:
+        attention = layer.self_attn
+        modules = (
+            attention.q_proj, attention.r_proj, attention.gate_proj,
+            attention.k_proj, attention.v_proj,
+        )
+        if all(
+            type(module) is nn.QuantizedLinear
+            and module.mode == "affine"
+            and module.bits == 8
+            and module.group_size == 64
+            and module.get("biases") is not None
+            and "bias" not in module
+            for module in modules
+        ):
+            attention._affine_decode_pack = _AffineAttentionPack(modules)
 
 def softcapped_experts(switch, x, indices, activation):
     leading_shape = x.shape[:-1]
