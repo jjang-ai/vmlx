@@ -529,9 +529,13 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
         'model.mtp_linear_proj.0.weight': 'model.safetensors',
       },
     }))
-    // Sidecar shape written 2026-09-05 from the measured depth sweep.
+    expect(detectModelConfigFromDir(dir).nativeMtp).toMatchObject({
+      supported: false,
+      depthSource: 'validation-blocked',
+      blockedReason: expect.stringContaining('ERNIE-4.5 MoE'),
+    })
     writeFileSync(join(dir, 'vmlx_mtp_tuning.json'), JSON.stringify({
-      native_mtp: { best_depth: 1, validated: true },
+      native_mtp: { best_depth: 1, validated: true, output_equivalent: true },
     }))
 
     const detected = detectModelConfigFromDir(dir)

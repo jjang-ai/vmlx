@@ -69,3 +69,19 @@ def ensure_ernie4_5_runtime_registered(path: str | Path, *, config: dict | None 
         return
     if not register_ernie4_5_runtime():
         raise RuntimeError(f"ERNIE-4.5 MoE runtime unavailable for {path}")
+
+
+
+def finalize_ernie4_5_runtime(model, path: str | Path) -> None:
+    """Validate loaded weights and leave unqualified verify geometry on AR."""
+    finalize = getattr(model, "finalize_ernie_weight_loading", None)
+    if not callable(finalize):
+        return
+    finalize()
+    if getattr(model, "mtp", None) is not None:
+        from vmlx_engine.native_mtp import inspect_native_mtp_bundle
+
+        status = inspect_native_mtp_bundle(path)
+        if status.get("status") == "runtime_validation_blocked":
+            delattr(model, "mtp")
+            logger.info("%s", status["runtime_reason"])

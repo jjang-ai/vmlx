@@ -1452,13 +1452,11 @@ function detectNativeMtpCapability(
   const glm5Next = modelTypes.includes('glm5_next') || modelTypes.includes('glm5_next_text')
   const ernie45 = modelTypes.includes('ernie4_5_moe')
   const tuningDepth = readNativeMtpTuningDepth(modelPath)
-  const hy3OutputEquivalent = hy3
-    ? nativeMtpOutputEquivalent(modelPath)
-    : undefined
-  const hy3IdentityBlocked = hy3 && hy3OutputEquivalent !== true
+  const identityFamily = hy3 ? 'HY3 affine' : ernie45 ? 'ERNIE-4.5 MoE' : undefined
+  const identityBlocked = identityFamily && nativeMtpOutputEquivalent(modelPath) !== true
   if (
-    (!hy3 && nativeMtpBlockedByTuning(modelPath)) ||
-    (!hy3 && nativeMtpBlockedByProfile(jangCfg) && !tuningDepth)
+    (!identityFamily && nativeMtpBlockedByTuning(modelPath)) ||
+    (!identityFamily && nativeMtpBlockedByProfile(jangCfg) && !tuningDepth)
   ) return undefined
 
   const declaredDrafts = declaredNativeMtpDrafts(jangCfg)
@@ -1515,7 +1513,7 @@ function detectNativeMtpCapability(
     const hasVisionWeights = keys.some(key =>
       /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
     )
-    if (hy3IdentityBlocked) {
+    if (identityBlocked) {
       return {
         supported: false,
         depth: 1,
@@ -1524,7 +1522,7 @@ function detectNativeMtpCapability(
         nativeCacheType: 'plain_kv_v1',
         requiresDeterministicSampling: true,
         blockedReason:
-          'Native MTP weights were detected, but this HY3 affine bundle has not proven token-identical greedy output for its two-token verifier. Autoregressive decode remains active.',
+          `Native MTP weights were detected, but this ${identityFamily} bundle has not proven token-identical greedy output for its ${hy3 ? 'two-token ' : ''}verifier. Autoregressive decode remains active.`,
       }
     }
     return {

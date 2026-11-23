@@ -775,7 +775,7 @@ def _runtime_validation_block_reason(
 
     ``jang_config["runtime"]["native_mtp_blocked"] = "<measured reason>"``.
 
-    or, for Hy3's affine multi-row verifier, a missing/failed exact-output
+    or, for Hy3 and ERNIE-4.5 MoE, a missing/failed exact-output
     attestation in ``vmlx_mtp_tuning.json``. Hy3's standard greedy decode runs
     one token at a time, while the native-MTP verifier runs two tokens through
     the affine backbone. MLX affine matmul is not bit-identical across those
@@ -804,7 +804,13 @@ def _runtime_validation_block_reason(
             "(set VMLX_NATIVE_MTP_FORCE=1 to force the experimental path)"
         )
 
-    if _normalize_family(family) == "hy_v3":
+    exact_output_models = {
+        "hy_v3": ("Hy3 affine", "the two-token affine verifier"),
+        "ernie4_5": ("ERNIE-4.5 MoE", "the multi-row verifier"),
+    }
+    identity_model = exact_output_models.get(_normalize_family(family))
+    if identity_model is not None:
+        display, verifier = identity_model
         tuning = _read_json(bundle_path, "vmlx_mtp_tuning.json")
         native_mtp = (
             tuning.get("native_mtp")
@@ -819,9 +825,9 @@ def _runtime_validation_block_reason(
                 else "is missing"
             )
             return (
-                "Hy3 affine native MTP is validation-blocked because "
+                f"{display} native MTP is validation-blocked because "
                 f"vmlx_mtp_tuning.json native_mtp.output_equivalent {detail}; "
-                "the two-token affine verifier must prove token-identical "
+                f"{verifier} must prove token-identical "
                 "greedy output against one-token autoregressive decode "
                 "(set VMLX_NATIVE_MTP_FORCE=1 only for measurement)"
             )

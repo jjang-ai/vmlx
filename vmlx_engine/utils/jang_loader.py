@@ -5788,13 +5788,11 @@ def load_jang_model(
             return load_mimo_v26_janght_text(path)
 
     def _finalize_loaded_jang(result):
+        from ..models.ernie4_5.register import finalize_ernie4_5_runtime
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract
 
-
         model, tokenizer = result
-        finalize_ernie = getattr(model, "finalize_ernie_weight_loading", None)
-        if callable(finalize_ernie):
-            finalize_ernie()
+        finalize_ernie4_5_runtime(model, path)
         validate_nanbeige_loop_cache_contract(
             model,
             path,

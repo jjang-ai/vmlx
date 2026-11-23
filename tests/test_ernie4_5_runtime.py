@@ -266,6 +266,33 @@ class TestWeightLoading:
         from mlx.utils import tree_flatten
         return dict(tree_flatten(model.parameters()))
 
+    def test_unqualified_ernie_head_stays_on_ar_without_explicit_force(
+        self, ernie, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models.ernie4_5.register import finalize_ernie4_5_runtime
+        from vmlx_engine.native_mtp import inspect_native_mtp_bundle
+
+        (tmp_path / "config.json").write_text(json.dumps(TINY_CFG))
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {
+                "model.mtp_block.0.self_attn.q_proj.weight": "model.safetensors",
+            }})
+        )
+        for name in ("VMLX_NATIVE_MTP_FORCE", "VMLINUX_NATIVE_MTP_FORCE"):
+            monkeypatch.delenv(name, raising=False)
+        model = self._model(ernie)
+        weights = self._weights(model)
+        model.load_weights(list(weights.items()))
+        assert inspect_native_mtp_bundle(tmp_path)["status"] == "runtime_validation_blocked"
+        finalize_ernie4_5_runtime(model, tmp_path)
+        assert not hasattr(model, "mtp")
+
+        monkeypatch.setenv("VMLX_NATIVE_MTP_FORCE", "1")
+        diagnostic = self._model(ernie)
+        diagnostic.load_weights(list(weights.items()))
+        finalize_ernie4_5_runtime(diagnostic, tmp_path)
+        assert hasattr(diagnostic, "mtp")
+
     @pytest.mark.parametrize("disabled_alias", ["VMLX_NATIVE_MTP", "VMLINUX_NATIVE_MTP"])
     @pytest.mark.parametrize("sharded", [False, True])
     @pytest.mark.parametrize("quantized", [False, True])
