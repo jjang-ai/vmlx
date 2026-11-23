@@ -9118,7 +9118,12 @@ class MLLMBatchGenerator:
         self._is_hybrid: bool = _uses_ssm_companion_cache(
             self._hybrid_kv_positions,
             self._hybrid_num_layers,
-            mixed_attention=self._mixed_attention_cache_model,
+            # This model has true convolution state in addition to its
+            # mixed attention. Attention-only mixed-SWA needs no companion.
+            mixed_attention=(
+                self._mixed_attention_cache_model
+                and self._model_type not in {"inkling2", "inkling2_loop"}
+            ),
         )
         _warn_if_hybrid_detection_disabled(
             model=model,
