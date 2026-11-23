@@ -129,6 +129,20 @@ def test_each_lane_record_matches_the_shared_panel_fixture(lane, monkeypatch):
     assert record == expected, f"{lane}: update {path} AND the panel test if this change is intended"
 
 
+def test_completed_dflash2_stream_records_its_server_request_id():
+    RT.reset()
+    engine = RT.instrument(SimpleEngine(_lane_outputs("simple-dflash2-qwen")))
+
+    async def run():
+        return [output async for output in engine.stream_chat(request_id="chatcmpl-dflash2")]
+
+    assert len(asyncio.run(run())) == 2
+    record = RT.last()
+    assert record["request_id"] == "chatcmpl-dflash2"
+    assert record["cache_detail"] == "dflash2-session"
+    assert (record["prompt_tokens"], record["cached_tokens"], record["prefill"]["tokens"]) == (4485, 4436, 49)
+
+
 def test_batched_hit_record_has_every_panel_figure(monkeypatch):
     r = _record("batched-llm", monkeypatch)
     assert r["ttft_s"] == 0.5 and r["decode"] == {"tokens": 100, "seconds": 2.0, "tps": 50.0}
