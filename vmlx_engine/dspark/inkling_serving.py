@@ -19,8 +19,36 @@ class InklingServingPolicy(ARFallback):
 
     def __init__(self):
         super().__init__()
-        self.ar_left = 2
+        self.ar_left = 4
+        self._ar_warmed = False
         self.warmed_rows = set()
+
+    def record_ar(self, seconds):
+        if not self._ar_warmed:
+            # First decode can compile even after the prompt has run.
+            self._ar_warmed = True
+            self.ar_left -= 1
+            return
+        super().record_ar(seconds)
+
+    def next_is_ar(self):
+        if (
+            not self.probe and self.draft_rate is not None and self.ar_seconds is not None
+            and self.draft_rate * self.ar_seconds < 1.0 + self.margin
+        ):
+            self.ar_left = max(self.burst, self.ar_left)
+        return super().next_is_ar()
+
+    def observe_round(self, rows, emitted, seconds):
+        # Draft throughput pays cold compilation and unsuccessful work too.
+        # Per-width forecasts use warmed costs so another width can re-enter.
+        self.record_draft(emitted, seconds, rows=rows if rows in self.warmed_rows else None)
+        self.warmed_rows.add(rows)
+        loses_to_ar = self.ar_seconds is not None and seconds > emitted * self.ar_seconds
+        if loses_to_ar:
+            self.probe_every = min(max(self.probe_every * 2, 64), 512)
+        else:
+            self.probe_every = ARFallback.probe_every
 
     def choose_width(self, conf, max_draft, cost_per_row):
         best_rate, best_width = 0.0, 1
@@ -123,10 +151,7 @@ class InklingServingRun:
         self.draft_rounds += 1
         self.widths[rows] = self.widths.get(rows, 0) + 1
         self.policy.record_acceptance(width, accepted)
-        if rows in self.policy.warmed_rows:
-            self.policy.record_draft(accepted + 1, seconds, rows=rows)
-        else:
-            self.policy.warmed_rows.add(rows)
+        self.policy.observe_round(rows, accepted + 1, seconds)
         if (
             width == self.horizon and accepted == width
             and self.policy.ar_seconds is not None
