@@ -123,7 +123,7 @@ def commit_rotating_prefix(cache, original, updates, lengths, length):
     Return False for empty/growing caches, replayed updates, and in-place writes.
     The transaction adapter handles those through its existing replay path.
     """
-    from ..models.cache import BatchRotatingKVCache
+    from mlx_lm.models.cache import BatchRotatingKVCache
 
     keep = max(lengths)
     ragged = len(set(lengths)) > 1
