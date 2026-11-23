@@ -75,9 +75,18 @@ class GroupedConv(nn.Module):
         self.base_kernel = w[f"{name}.base_kernel"]                     # (2, taps, D)
         self.kernel_projection = _linear(w, f"{name}.kernel_projection")
         self.block, self.taps, self.gs = int(block_size), int(taps), int(group_size)
+        self.fused_metal = False
 
     def _convolve(self, x, delta, side):
         # x (N, D) flattened block rows; delta (N, taps, G)
+        if (
+            self.fused_metal and self.taps == 2 and self.gs == 16 and self.block == 8
+            and x.dtype == delta.dtype == self.base_kernel.dtype == mx.bfloat16
+            and mx.default_device() == mx.gpu
+        ):
+            from .nemotron_bolt_metal import draft_grouped_conv
+
+            return draft_grouped_conv(x, delta, self.base_kernel[side], self.block, self.gs)
         N, D = x.shape
         G = D // self.gs
         blocks = x.reshape(N, G, self.gs)
