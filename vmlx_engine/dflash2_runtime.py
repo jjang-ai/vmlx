@@ -226,6 +226,7 @@ class _TargetAdapter:
         self._target = language_model
         self.model = language_model.model
         self.gdn_states: list[Any] = []
+        self.capture_gdn_states = False
         # Set only around prompt prefill (_prefill_last_logits): the prefill
         # helper keeps just logits[:, -1:], so projecting every prompt row
         # through the 248k-vocab head is wasted work on the final chunk.
@@ -298,21 +299,32 @@ class _TargetAdapter:
             if self.media_embeds is not None or self.rope_delta
             else {}
         )
+        sink = self.gdn_states if self.capture_gdn_states and not self.last_row_logits else None
+        if sink is not None:
+            sink.clear()
         hidden = self.model(
             inputs,
             cache=cache,
             **media,
-            # The GDN sink records per-row q/k/v/a/b + state for verify
-            # rollback.  Prompt prefill never rolls back, and the list is only
-            # cleared at the first decode cycle, so during prefill it just
-            # pinned every chunk's qkv projection and recurrent state.
-            gdn_sink=None if self.last_row_logits else self.gdn_states,
+            gdn_sink=sink,
             return_unnormed=True,
         )
         hidden = self.model.norm(hidden)
         if self.last_row_logits and hidden.shape[1] > 1:
             hidden = hidden[:, -1:]
         return self._target.lm_head(hidden)
+
+    def release_request_state(self) -> None:
+        self.capture_gdn_states = False
+        self.gdn_states.clear()
+        self.last_row_logits = False
+        self.media_embeds = None
+        self.media_positions = None
+        self.rope_delta = 0
+        # The tap hooks retain this list, so clear its slots in place.
+        hidden_states = self.__dict__.get("_hidden_states")
+        if hidden_states is not None:
+            hidden_states[:] = [None] * len(hidden_states)
 
     def __getattr__(self, name: str):
         return getattr(self._target, name)
@@ -321,12 +333,11 @@ class _TargetAdapter:
 class _VLMGDNStateCapture:
     def __init__(self, adapter: _TargetAdapter):
         self.adapter = adapter
-
-    def clear(self) -> None:
-        self.adapter.gdn_states.clear()
+        self.adapter.capture_gdn_states = True
 
     def close(self) -> None:
-        return None
+        self.adapter.capture_gdn_states = False
+        self.adapter.gdn_states.clear()
 
     def rollback(self, cache, accepted, trim) -> None:
         block_size = int(trim) + int(accepted) + 1
@@ -1492,8 +1503,6 @@ def _stream_generate_resumable(
             # verify row, so the drafter's tap rows (hidden) stay available.
             # The GDN sink then holds only this forward, which is what an exit
             # rollback of a step launched past the last emitted token needs.
-            if _capture is not None:
-                _capture.clear()
             with mx.stream(runtime.generation_stream):
                 logits = adapter(tok_arr, target_cache)
                 h = mx.concatenate(adapter._hidden_states, axis=-1)
@@ -1625,8 +1634,6 @@ def _stream_generate_resumable(
                     runtime._trim_recent_cache(draft_cache, trim_n)
             mx.async_eval(draft_tokens)
 
-            if _capture is not None:
-                _capture.clear()
             with mx.stream(runtime.generation_stream):
                 verify_input = mx.concatenate(
                     [mx.array([[tokens[-1]]]), draft_tokens], axis=1
@@ -1757,10 +1764,6 @@ def _stream_generate_resumable(
         _chooser = locals().get("chooser")
         if _chooser is not None:
             logger.info("DFlash2 chooser: %s", _chooser.summary())
-        # The adapter is shared by every request on this model.
-        adapter.media_embeds = None
-        adapter.media_positions = None
-        adapter.rope_delta = 0
 
 
 class _BlockChooser:
@@ -2284,15 +2287,16 @@ def prewarm_dflash2_target(model: Any, draft: Any, *, rounds: int = 3) -> Option
             else:
                 cost[w] = best
                 warm.add(w)
-        adapter.gdn_states.clear()
         del target_cache, draft_cache, logits, hidden, first
-        mx.clear_cache()
         measured = {w: round(min(t[1:] or t) * 1000.0, 1) for w, t in seen.items()}
-        logger.info("DFlash2 prewarm: %s ms per width (1 = AR) in %.1f s", measured, time.perf_counter() - t_start)
-        return measured
     except Exception as exc:  # noqa: BLE001 - requests still measure their own costs and compile on first use
         logger.warning("DFlash2 prewarm skipped: %s", exc)
         return None
+    finally:
+        adapter.release_request_state()
+    mx.clear_cache()
+    logger.info("DFlash2 prewarm: %s ms per width (1 = AR) in %.1f s", measured, time.perf_counter() - t_start)
+    return measured
 
 
 def stream_dflash2_generate(
@@ -2367,25 +2371,29 @@ def stream_dflash2_generate(
             min_p=min_p, logit_bias=logit_bias, repetition_penalty=repetition_penalty,
             frequency_penalty=frequency_penalty, presence_penalty=presence_penalty,
         )
-    with runtime.wired_limit(adapter, [runtime.generation_stream]):
-        yield from _stream_generate_resumable(
-            model,
-            adapter,
-            draft,
-            tokenizer,
-            prompt,
-            # The drafter's trained block: input to _dflash2_block_plan, whose
-            # _BlockChooser picks the verify width per cycle from measured
-            # costs (e.g. 3/5/8/16). Not a fixed serving width.
-            block_size=int(draft.config.block_size),
-            max_tokens=int(max_tokens),
-            temperature=float(temperature),
-            top_p=float(top_p),
-            top_k=int(top_k),
-            sampling_controls=sampling_controls,
-            prompt_tokens=prompt_tokens,
-            media=media,
-            stop=stop,
-            use_cache=use_cache,
-            prefill_step_size=prefill_step_size(),
-        )
+    adapter.release_request_state()
+    try:
+        with runtime.wired_limit(adapter, [runtime.generation_stream]):
+            yield from _stream_generate_resumable(
+                model,
+                adapter,
+                draft,
+                tokenizer,
+                prompt,
+                # The drafter's trained block: input to _dflash2_block_plan, whose
+                # _BlockChooser picks the verify width per cycle from measured
+                # costs (e.g. 3/5/8/16). Not a fixed serving width.
+                block_size=int(draft.config.block_size),
+                max_tokens=int(max_tokens),
+                temperature=float(temperature),
+                top_p=float(top_p),
+                top_k=int(top_k),
+                sampling_controls=sampling_controls,
+                prompt_tokens=prompt_tokens,
+                media=media,
+                stop=stop,
+                use_cache=use_cache,
+                prefill_step_size=prefill_step_size(),
+            )
+    finally:
+        adapter.release_request_state()

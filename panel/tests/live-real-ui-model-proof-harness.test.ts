@@ -3318,6 +3318,29 @@ describe("real UI model proof harness", () => {
     expect(validatePairedApiEvidence(result)).toEqual([]);
   });
 
+  it("correlates a terminal DFlash2 chat with the finished SimpleEngine timing record", () => {
+    const terminal = { responseId: "chatcmpl-real", messageId: "assistant-real" };
+    const last = {
+      request_id: "chatcmpl-real", engine_type: "simple", method: "stream_chat",
+      finish_reason: "stop", aborted: false, speculative: { kind: "dflash2" },
+      prefill: { tokens: 64, path: "dflash2" }, prompt_tokens: 256, cached_tokens: 192,
+    };
+    const correlate = (last_request: Record<string, unknown>) =>
+      correlateTerminalResponseToCacheExecution({
+        terminal, cacheSnapshot: { last_request }, turn: 1, proofRequestId: "proof-real",
+        userMessageId: "user-real", assistantMessageId: "assistant-real",
+      });
+    expect(correlate(last)).toMatchObject({
+      correlationStatus: "verified", executionRequestId: "chatcmpl-real",
+      serverObservation: { prefill_tokens: 64, cached_tokens: 192,
+        correlation_source: "chat_complete_response_id_to_simple_dflash2_last_request" },
+    });
+    expect(correlate({ ...last, request_id: "another" }).correlationStatus)
+      .toBe("partial_request_identity_mismatch");
+    expect(correlate({ ...last, aborted: true }).correlationStatus)
+      .toBe("partial_product_support_missing");
+  });
+
   it("binds the terminal response ID to the exact health cache execution", () => {
     const correlated = correlateTerminalResponseToCacheExecution({
       terminal: {
@@ -3935,6 +3958,31 @@ describe("real UI model proof harness", () => {
     );
     expect(validateServerCacheEvidence(result).join("\n")).toMatch(
       /running-session toolbar|visible cache control|contradicted enabled prefix cache|contradictory --no-paged-cache|no UI turn had request-correlated/,
+    );
+  });
+
+  it("verifies a loaded DFlash2 session SSD's own tier and excludes the generic cache", () => {
+    const result = goodResult();
+    result.session.effective_config.usePagedCache = false;
+    result.serverCacheControls.initialCacheControls.usePagedCache = false;
+    result.serverCacheControls.argv = [
+      "--disable-prefix-cache", "--no-paged-cache", "--enable-block-disk-cache",
+    ];
+    Object.assign(result.server.health, {
+      engine_type: "simple",
+      native_cache: { prefix: false, paged: false, block_disk_l2: false, block_disk_only: false },
+      speculative_decoding: { enabled: true, draft_model_loaded: true },
+      cache: { dflash2_cache: { ssd: { global_budget: { max_size_bytes: 1024 } } } },
+    });
+    expect(validateServerCacheEvidence(result)).toEqual([]);
+
+    result.server.health.cache.dflash2_cache.ssd = null;
+    expect(validateServerCacheEvidence(result)).toContain(
+      "/health did not report the DFlash2 session SSD cache",
+    );
+    result.server.health.native_cache.prefix = true;
+    expect(validateServerCacheEvidence(result)).toContain(
+      "DFlash2 session cache did not exclude generic prefix and block caches",
     );
   });
 
