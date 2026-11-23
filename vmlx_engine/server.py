@@ -18882,6 +18882,8 @@ async def create_rerank(request: Request):
         # Capture local ref inside lock to prevent concurrent unload during rerank
         local_reranker = _reranker
 
+    from .reranker import UnsupportedRerankerError
+
     try:
         results = local_reranker.rerank(
             query=query,
@@ -18889,6 +18891,9 @@ async def create_rerank(request: Request):
             top_n=top_n,
             return_documents=return_documents,
         )
+    except UnsupportedRerankerError as e:
+        # Caller-fixable: name the unsupported architecture (issue #398).
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Rerank failed: {e}")
         # Distinguish bad-model errors (→ 400) from genuine runtime
