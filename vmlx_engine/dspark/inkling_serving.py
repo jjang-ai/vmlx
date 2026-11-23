@@ -115,7 +115,7 @@ class InklingServingRun:
             "cost": self.policy.cost_snapshot(),
         }
 
-    def _ar_step(self, prior, ar_forward):
+    def _ar_step(self, ar_forward):
         from ..models.inkling2.language import capture_dspark_features
 
         self.ar_started = time.perf_counter()
@@ -124,7 +124,6 @@ class InklingServingRun:
         ):
             ar_forward()
         self.ar_tokens += 1
-        return prior
 
     def _verify(self, batch, width):
         started = time.perf_counter()
@@ -170,21 +169,22 @@ class InklingServingRun:
                 batch.y, batch.logprobs = self.next_result
             return emitted
 
-        prior = (int(batch.y[0].item()), batch.logprobs[0])
+        prior_token, prior_logprobs = batch.y, batch.logprobs[0]
         if self.ar_started is not None:
             self.policy.record_ar(time.perf_counter() - self.ar_started)
             self.ar_started = None
-        if terminal:
-            return prior
-        if remaining <= 1 or self.policy.next_is_ar():
-            return self._ar_step(prior, ar_forward)
-
-        width = self.policy.planned_width(
-            min(self.horizon, remaining - 1), self.policy.prior_per_row
-        )
-        self._verify(batch, width)
-        self.emitted = 1
-        if not self.ready:
-            self._complete_round()
-            batch.y, batch.logprobs = self.next_result
-        return prior
+        if not terminal:
+            if remaining <= 1 or self.policy.next_is_ar():
+                self._ar_step(ar_forward)
+            else:
+                width = self.policy.planned_width(
+                    min(self.horizon, remaining - 1), self.policy.prior_per_row
+                )
+                self._verify(batch, width)
+                self.emitted = 1
+                if not self.ready:
+                    self._complete_round()
+                    batch.y, batch.logprobs = self.next_result
+        # Match the normal scheduler: build and enqueue the next forward
+        # before reading the current token back to the CPU.
+        return int(prior_token.item()), prior_logprobs
