@@ -16753,9 +16753,18 @@ class MLLMBatchGenerator:
                         def pick(logits, sampler=sampler):
                             return _sample_mllm_prefill_logits(logits, sampler)[0].reshape(-1)
 
+                        # Ratio verification below uses the unfiltered
+                        # temperature-scaled categorical distribution.
+                        ratio_temp = (
+                            req.temperature
+                            if req.temperature > 0 and req.top_p in (0.0, 1.0)
+                            and not req.top_k and not req.min_p
+                            else None
+                        )
                         state = InklingServingRun(
                             self.model, head, int(getattr(req, "_cached_tokens", 0) or 0),
-                            pick=pick, trace_logits=_mimo_v2_token_trace_enabled(),
+                            pick=pick, ratio_temperature=ratio_temp,
+                            trace_logits=_mimo_v2_token_trace_enabled(),
                         )
                         with capture_dspark_features(
                             self.language_model, state.drafter.target_layer_ids,

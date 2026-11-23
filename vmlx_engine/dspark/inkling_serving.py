@@ -64,12 +64,35 @@ class InklingServingPolicy(ARFallback):
         return best_width
 
 
+def _normalized_logprobs(logits):
+    return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+
+
+def _ratio_verification(logits, proposal_logprobs, proposals):
+    # Each verified row is sampled independently, conditional on that row's
+    # proposed history. The caller uses only the first rejection or the bonus.
+    target = _normalized_logprobs(logits[:-1])
+    draft = mx.concatenate(proposal_logprobs, axis=0)
+    positions = proposals[:, None]
+    target_mass = mx.take_along_axis(target, positions, axis=-1)
+    draft_mass = mx.take_along_axis(draft, positions, axis=-1)
+    draws = mx.log(mx.random.uniform(shape=(proposals.size,)))
+    accepted = draws <= (target_mass - draft_mass).reshape(-1)
+    target_probs = mx.exp(target)
+    residual = mx.maximum(target_probs - mx.exp(draft), 0)
+    residual = mx.where(residual.sum(axis=-1, keepdims=True) > 0, residual, target_probs)
+    next_logits = mx.concatenate([mx.log(residual), logits[-1:]], axis=0)
+    return accepted, mx.random.categorical(next_logits).astype(mx.uint32)
+
+
 class InklingServingRun:
-    def __init__(self, model, head, cached_tokens, *, pick, trace_logits=False):
+    def __init__(self, model, head, cached_tokens, *, pick,
+                 ratio_temperature=None, trace_logits=False):
         self.target = InklingDSparkTarget(model)
         self.drafter = InklingDSparkDrafter(head, self.target)
         self.drafter.reset(base=cached_tokens)
         self.pick = pick
+        self.ratio_temperature = ratio_temperature
         self.trace_logits = trace_logits
         self.policy = InklingServingPolicy()
         self.horizon = max(1, head.config.block_size - 1)
@@ -109,6 +132,7 @@ class InklingServingRun:
             "native_family": "inkling2",
             "ar_tokens": self.ar_tokens,
             "draft_rounds": self.draft_rounds,
+            "verification": "ratio" if self.ratio_temperature is not None else "match",
             "accepted_draft_tokens": self.accepted,
             "verify_rows": dict(self.widths),
             "horizon": self.horizon,
@@ -127,23 +151,37 @@ class InklingServingRun:
 
     def _verify(self, batch, width):
         started = time.perf_counter()
-        proposal = self.drafter.draft_from_anchor(batch.y, width, None)
+        proposal_logprobs = []
+        draft_pick = None
+        if self.ratio_temperature is not None:
+            def draft_pick(logits):
+                scaled = logits.astype(mx.float32) / self.ratio_temperature
+                proposal_logprobs.append(_normalized_logprobs(scaled))
+                return mx.random.categorical(scaled)
+
+        proposal = self.drafter.draft_from_anchor(batch.y, width, None, draft_pick=draft_pick)
         mx.async_eval(proposal)
         ids = mx.concatenate([batch.y, proposal]).reshape(1, -1)
         logits, self.features, self.transaction = self.target.verify(
             ids, batch.cache, self.drafter.target_layer_ids
         )
-        # Sample each target row with the normal request sampler. Only the
-        # draws through the first mismatch can be committed; later rows assume
-        # the draft context and are discarded. This retains the target distribution.
-        picks = self.pick(logits)
-        mx.eval(picks, self.features)
-        drafted, picked = proposal.tolist(), picks.tolist()
-        accepted = 0
-        while accepted < width and drafted[accepted] == picked[accepted]:
-            accepted += 1
+        if proposal_logprobs:
+            accepted_mask, picks = _ratio_verification(
+                logits.astype(mx.float32) / self.ratio_temperature, proposal_logprobs, proposal
+            )
+            mx.eval(picks, accepted_mask, self.features)
+            drafted = proposal.tolist()
+            accepted = next((i for i, allowed in enumerate(accepted_mask.tolist()) if not allowed), width)
+        else:
+            # The ordinary request sampler decides every row for match verification.
+            picks = self.pick(logits)
+            mx.eval(picks, self.features)
+            drafted, picked = proposal.tolist(), picks.tolist()
+            accepted = 0
+            while accepted < width and drafted[accepted] == picked[accepted]:
+                accepted += 1
         verified_logits = [logits[i] if self.trace_logits else None for i in range(accepted + 1)]
-        self.ready.extend(zip(picked[:accepted], verified_logits[:accepted]))
+        self.ready.extend(zip(drafted[:accepted], verified_logits[:accepted]))
         self.next_result = (picks[accepted:accepted + 1], [verified_logits[accepted]])
         seconds = time.perf_counter() - started
         rows = width + 1

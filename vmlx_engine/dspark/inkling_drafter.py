@@ -25,17 +25,18 @@ class InklingDSparkDrafter:
     def context_arrays(self):
         return [self._pending, [layer.state for layer in self.cache if layer.keys is not None]]
 
-    def draft_from_anchor(self, anchor, width, sampler):
+    def draft_from_anchor(self, anchor, width, sampler, *, draft_pick=None):
         context = (
             self._pending[0]
             if len(self._pending) == 1
             else mx.concatenate(self._pending, axis=1)
         )
-        # Sampling the draft is unnecessary for exact target verification.
-        # Select the most likely proposals and let the target pick each token.
+        # Match verification may propose a deterministic token. Ratio
+        # verification supplies the actual sampling distribution for each step.
+        if draft_pick is None:
+            draft_pick = lambda logits: mx.argmax(logits, axis=-1)
         tokens = self.head.draft_block(
-            anchor, context, self.cache, width + 1,
-            lambda logits: mx.argmax(logits, axis=-1),
+            anchor, context, self.cache, width + 1, draft_pick,
             token_dtype=anchor.dtype,
         )
         self._pending.clear()
