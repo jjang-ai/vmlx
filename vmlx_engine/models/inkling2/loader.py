@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -10,9 +11,13 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .config import ModelConfig
+from .fused_nvfp4_experts import prepare_fused_nvfp4_experts
 from .inkling2 import Model
 from .nvfp4 import replace_scaled_quantized_linears
 from .processing_inkling2 import Inkling2Processor
+
+
+logger = logging.getLogger(__name__)
 
 
 def register_inkling2_runtime() -> None:
@@ -63,4 +68,7 @@ def load_native_inkling2(path: Path, config: dict):
     model.load_weights(list(weights.items()))
     mx.eval(model.parameters())
     model.eval()
+    fused_layers = prepare_fused_nvfp4_experts(model.language_model)
+    if fused_layers:
+        logger.info("Inkling NVFP4 fused expert decode enabled for %d layers", fused_layers)
     return model, Inkling2Processor.from_pretrained(path)

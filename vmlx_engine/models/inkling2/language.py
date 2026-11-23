@@ -34,6 +34,7 @@ from .primitives import (
     _next_conv_state,
     banded_additive_mask,
 )
+from .masked_quantized import DECODE_BLOCK_SIZE
 from .switch_layers import SwitchGLU
 from .config import TextConfig, validate_sharding
 
@@ -596,14 +597,28 @@ class SparseMoE(nn.Module):
         )
 
     def __call__(self, x):
+        verifying = _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1
         indices, weights = _route(
             x,
             self.gate_weight,
             self.e_score_correction_bias,
             self.top_k,
             self.route_scale,
-            _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1,
+            verifying,
         )
+        fused_constants = self.get("_fused_nvfp4_constants")
+        if (
+            fused_constants is not None
+            and self.sharding_group is None
+            and not self.training
+            and x.shape[0] == 1
+            and x.dtype == mx.bfloat16
+            and (x.shape[1] == 1 or (verifying and x.shape[1] <= DECODE_BLOCK_SIZE))
+            and mx.default_device() == mx.gpu
+        ):
+            from .fused_nvfp4_experts import fused_nvfp4_experts
+
+            return fused_nvfp4_experts(self.switch_mlp, x, indices, weights, fused_constants)
         if getattr(self.switch_mlp, "is_jangh", False):
             if self.sharding_group is not None:
                 raise ValueError("Inkling Mini JANGH expert sharding is unsupported")
