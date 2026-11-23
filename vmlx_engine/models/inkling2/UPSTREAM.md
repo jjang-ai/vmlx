@@ -5,3 +5,4 @@ The model, processor, and native packed weight support originate from
 The MLX-VLM license and original source notices apply. The language model uses
 the vMLX-pinned MLX-LM cache ABI and switch layers. The bundled Inkling
 short-block and cache kernels are scoped to this family.
+The BF16 DSpark drafter and its configuration come from the same revision.
