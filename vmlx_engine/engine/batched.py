@@ -1432,11 +1432,12 @@ class BatchedEngine(BaseEngine):
         self._processor = self._mllm_instance.processor
 
         dspark_mode = os.environ.get("VMLX_DSPARK", "").strip().lower()
-        if (
-            getattr(self._model, "model_type", None) in {"inkling2", "inkling2_loop"}
-            and dspark_mode not in {"0", "false", "off"}
-        ):
+        is_inkling = getattr(self._model, "model_type", None) in {"inkling2", "inkling2_loop"}
+        if is_inkling:
             from pathlib import Path
+
+            self._model._inkling_native_dspark_bundle = str(Path(self._model_name).resolve())
+        if is_inkling and dspark_mode not in {"0", "false", "off"}:
             from ..models.inkling2.dspark_loader import load_inkling_dspark
 
             def load_native_inkling_head():
@@ -1458,7 +1459,6 @@ class BatchedEngine(BaseEngine):
             if loaded is not None:
                 self._model._inkling_native_dspark, head_source = loaded
                 self._model._inkling_native_dspark_source = head_source
-                self._model._inkling_native_dspark_bundle = str(Path(self._model_name).resolve())
                 logger.info("Inkling native DSpark head loaded from %s weights", head_source)
 
         # Create MLLM scheduler config with batch generator support

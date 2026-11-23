@@ -8999,8 +8999,10 @@ class MLLMBatchGenerator:
         )
 
         self._inkling_draft_context_store = None
+        self._inkling_draft_context_bundle = getattr(self.model, "_inkling_native_dspark_bundle", None)
         if (
-            getattr(self.model, "_inkling_native_dspark", None) is not None
+            self._inkling_draft_context_bundle is not None
+            and getattr(self.model, "_inkling_native_dspark", None) is not None
             and self._ssm_state_cache is not None
             and self._ssm_state_cache.disk_enabled
         ):
@@ -9008,7 +9010,7 @@ class MLLMBatchGenerator:
 
             try:
                 self._inkling_draft_context_store = open_inkling_draft_context_ssd(
-                    self.model._inkling_native_dspark_bundle, self._ssm_state_cache.model_key
+                    self._inkling_draft_context_bundle, self._ssm_state_cache.model_key
                 )
             except (AttributeError, OSError, RuntimeError, ValueError):
                 logger.warning("Inkling draft context SSD unavailable", exc_info=True)
@@ -9295,6 +9297,27 @@ class MLLMBatchGenerator:
                 method or "none",
             )
         return method
+
+    def clear_inkling_draft_context(self) -> bool:
+        store = self._inkling_draft_context_store
+        if store is not None:
+            store.clear()
+            return True
+
+        bundle = self._inkling_draft_context_bundle
+        companion = self._ssm_state_cache
+        if bundle is None or companion is None or not companion.disk_enabled:
+            return False
+        from .dspark.session import open_inkling_draft_context_ssd
+
+        store = open_inkling_draft_context_ssd(bundle, companion.model_key, clearing=True)
+        if store is None:
+            return False
+        try:
+            store.clear()
+            return True
+        finally:
+            store.close()
 
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""

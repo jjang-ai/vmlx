@@ -50,11 +50,12 @@ def configure_defaults(*, root: Optional[str], max_size_bytes: int, enabled: boo
     _DEFAULTS.update(root=root, max_size_bytes=int(max_size_bytes or 0), enabled=bool(enabled))
 
 
-def open_inkling_draft_context_ssd(bundle: str, model_key: str):
-    """Use the target's managed SSD pool for Inkling's exact prompt taps."""
-    if (
-        not reuse_enabled() or not _DEFAULTS["enabled"] or not _DEFAULTS["root"]
-        or os.environ.get("VMLX_DSPARK_SSD", "1").strip().lower() in _OFF
+def open_inkling_draft_context_ssd(bundle: str, model_key: str, *, clearing=False):
+    """Open the managed Inkling draft cache for serving or explicit deletion."""
+    if not _DEFAULTS["enabled"] or not _DEFAULTS["root"]:
+        return None
+    if not clearing and (
+        not reuse_enabled() or os.environ.get("VMLX_DSPARK_SSD", "1").strip().lower() in _OFF
     ):
         return None
     from ..dflash2_session_disk import model_identity
