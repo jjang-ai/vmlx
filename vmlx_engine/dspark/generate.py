@@ -401,7 +401,11 @@ def iter_dspark(
     yield [first]
     if first in eos or max_new <= 1:
         return
-    mask_embed = target.embed_tokens(mx.array([[drafter.mask_token_id]]))
+    draft_from_anchor = getattr(drafter, "draft_from_anchor", None)
+    mask_embed = (
+        target.embed_tokens(mx.array([[drafter.mask_token_id]]))
+        if draft_from_anchor is None else None
+    )
     # Pipelined rounds (default; VMLX_DSPARK_PIPELINE=0 = two syncs per round): planned width, drafter overlapped with
     # verify graph building. Sustained multi-turn A/Bs 2026-10-13: 1B x0.922 / x0.954 vs x0.902 / x0.909 static,
     # 35B neutral to positive (best config x1.044 greedy). Exact either way.
@@ -501,33 +505,50 @@ def iter_dspark(
                 if width_probe is not None:
                     k = width_probe[0]
                 k = max(1, min(int(k), n))
-            # The trained block, or a longer one when this round drafts past it.
-            span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
-            block = mx.concatenate(
-                [target.embed_tokens(anchor.reshape(1, 1)),
-                 mx.broadcast_to(mask_embed, (1, span - 1, mask_embed.shape[-1]))], axis=1)
-            hidden = drafter(block)
-            if n >= 1 and pipelined:
-                # One sync per round: the width comes from the acceptance history, the drafter is queued (async_eval) and
-                # the verify graph is built on the CPU while the GPU drafts. Same values; only the schedule differs.
-                proposal, conf = drafter.draft(hidden, anchor, target.lm_head, k, sampler=sampler)
-                mx.async_eval(proposal)
-            elif n >= 1:
-                drafts, conf = drafter.draft(hidden, anchor, target.lm_head, max_draft,
-                                             sampler=sampler)
-                mx.eval(drafts, conf)
-                if fixed_width is not None:
-                    k = fixed_width
-                elif ar_fallback is not None and hasattr(ar_fallback, "choose_width"):
-                    k = ar_fallback.choose_width(conf.tolist(), max_draft, cost_per_row)
+            if draft_from_anchor is not None:
+                if n >= 1:
+                    if not pipelined:
+                        if fixed_width is not None:
+                            k = fixed_width
+                        elif ar_fallback is not None:
+                            k = ar_fallback.planned_width(max_draft, cost_per_row)
+                        else:
+                            k = n
+                        k = width_probe[0] if width_probe is not None else k
+                        k = max(1, min(int(k), n))
+                    proposal = draft_from_anchor(anchor, k, sampler)
+                    if pipelined:
+                        mx.async_eval(proposal)
                 else:
-                    k = choose_width(conf.tolist(), max_draft, cost_per_row)
-                if width_probe is not None:
-                    k = width_probe[0]
-                k = max(1, min(int(k), n))
-                proposal = drafts[:k]
+                    k, proposal = 0, mx.array([], dtype=anchor.dtype)
             else:
-                k, proposal = 0, mx.array([], dtype=anchor.dtype)
+                # The trained block, or a longer one when this round drafts past it.
+                span = max(drafter.block, k if pipelined else (max_draft if n >= 1 else 0))
+                block = mx.concatenate(
+                    [target.embed_tokens(anchor.reshape(1, 1)),
+                     mx.broadcast_to(mask_embed, (1, span - 1, mask_embed.shape[-1]))], axis=1)
+                hidden = drafter(block)
+                if n >= 1 and pipelined:
+                    # One sync per round: the width comes from the acceptance history, the drafter is queued (async_eval) and
+                    # the verify graph is built on the CPU while the GPU drafts. Same values; only the schedule differs.
+                    proposal, conf = drafter.draft(hidden, anchor, target.lm_head, k, sampler=sampler)
+                    mx.async_eval(proposal)
+                elif n >= 1:
+                    drafts, conf = drafter.draft(hidden, anchor, target.lm_head, max_draft,
+                                                 sampler=sampler)
+                    mx.eval(drafts, conf)
+                    if fixed_width is not None:
+                        k = fixed_width
+                    elif ar_fallback is not None and hasattr(ar_fallback, "choose_width"):
+                        k = ar_fallback.choose_width(conf.tolist(), max_draft, cost_per_row)
+                    else:
+                        k = choose_width(conf.tolist(), max_draft, cost_per_row)
+                    if width_probe is not None:
+                        k = width_probe[0]
+                    k = max(1, min(int(k), n))
+                    proposal = drafts[:k]
+                else:
+                    k, proposal = 0, mx.array([], dtype=anchor.dtype)
             rows = mx.concatenate([anchor, proposal]).reshape(1, k + 1)
             logits, feats, sink = target.verify(rows, cache, taps)
             picks = choose(logits)
