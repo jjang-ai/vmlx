@@ -8,6 +8,34 @@ from .language import LanguageModel
 from .vision import VisionModel
 
 
+_MLX_EXPORT_LAYER_KEYS = {
+    "mlp.gate.weight": "mlp.gate_weight",
+    "mlp.gate.e_score_correction_bias": "mlp.e_score_correction_bias",
+    "post_attention_convolution.weight": "attn_sconv.conv.weight",
+    "post_mlp_convolution.weight": "mlp_sconv.conv.weight",
+    "self_attn.k_sconv.weight": "self_attn.k_sconv.conv.weight",
+    "self_attn.v_sconv.weight": "self_attn.v_sconv.conv.weight",
+    "self_attn.q_l2_clip.scale": "self_attn.q_scale",
+    "self_attn.rel_l2_clip.scale": "self_attn.rel_scale",
+    "self_attn.rel_logits_proj.proj": "self_attn.rel_proj",
+}
+for _source, _target in (("q", "attn"), ("k", "k"), ("v", "v"), ("mlp", "mlp")):
+    for _projection, _weight in (
+        ("down_proj", "down_weight"),
+        ("forget_gate_proj", "forget_weight"),
+        ("message_gate_proj", "gain_weight"),
+    ):
+        _MLX_EXPORT_LAYER_KEYS[f"{_source}_message_gate.{_projection}.weight"] = (
+            f"controllers.{_target}.{_weight}"
+        )
+
+_MLX_EXPORT_VISION_KEYS = {
+    "vision_tower.embeddings.position_embedding.weight": "vision_tower.embeddings.position_embedding",
+    "vision_tower.merger.linear_1.weight": "vision_tower.proj_in.weight",
+    "vision_tower.merger.linear_2.weight": "vision_tower.proj_out.weight",
+}
+
+
 class Model(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
@@ -181,6 +209,13 @@ class Model(nn.Module):
             elif key.startswith(("model.mtp.", "mtp.", "mtp_drafter.")):
                 continue
             else:
+                if key.startswith(("model.", "lm_head.")):
+                    key = "language_model." + key
+                prefix = "language_model.model.layers."
+                if key.startswith(prefix):
+                    layer, _, suffix = key[len(prefix):].partition(".")
+                    key = f"{prefix}{layer}.{_MLX_EXPORT_LAYER_KEYS.get(suffix, suffix)}"
+                key = _MLX_EXPORT_VISION_KEYS.get(key, key)
                 out[key] = value
         for layer, tensors in experts.items():
             base = f"language_model.model.layers.{layer}.mlp.switch_mlp."
@@ -207,6 +242,10 @@ class Model(nn.Module):
                     for projection, part in zip(projections, parts):
                         out[base + projection + "." + suffix] = part
         base = "language_model.model."
+        if base + "message_input.query" in out:
+            if base + "message_queries" in out:
+                raise ValueError("Conflicting Inkling loop message query tensors")
+            out[base + "message_queries"] = out.pop(base + "message_input.query")
         if base + "middle_cycle_cross_pass_queries" in out:
             width = self.config.text_config.hidden_size
             attn_mlp = out.pop(base + "middle_cycle_cross_pass_queries").reshape(

@@ -485,11 +485,12 @@ class SparseMoE(nn.Module):
         self.expert_end = config.n_routed_experts
         self.gate_weight = mx.zeros((config.n_routed_experts, config.hidden_size))
         self.e_score_correction_bias = mx.zeros((config.n_routed_experts,))
+        self.activation = SoftcappedSwiGLU(config)
         self.switch_mlp = SwitchGLU(
             config.hidden_size,
             config.intermediate_size,
             config.n_routed_experts,
-            activation=SoftcappedSwiGLU(config),
+            activation=self.activation,
         )
 
     def __call__(self, x):
@@ -500,7 +501,13 @@ class SparseMoE(nn.Module):
             self.top_k,
             self.route_scale,
         )
-        if self.sharding_group is None:
+        if getattr(self.switch_mlp, "is_jangh", False):
+            if self.sharding_group is not None:
+                raise ValueError("Inkling Mini JANGH expert sharding is unsupported")
+            from .jangh import softcapped_experts
+
+            out = softcapped_experts(self.switch_mlp, x, indices, self.activation)
+        elif self.sharding_group is None:
             if (
                 not self.training
                 and x.shape[0] <= 4
