@@ -164,3 +164,13 @@ def test_reset_state_clears_counters_between_requests(parser):
     )
     assert reasoning == "second"
     assert content == "two"
+
+
+def test_inkling_mini_visible_message_after_reasoning_message(parser):
+    text = (
+        '<|message_model|><|content_thinking|>Final should be "19".'
+        '<|end_message|><|message_model|><|content_text|>19<|end_message|>'
+        '<|content_model_end_sampling|><|content_text|>ignored'
+    )
+    assert parser.extract_reasoning(text) == ('Final should be "19".', "19")
+    assert _stream(parser, text) == ('Final should be "19".', "19")
