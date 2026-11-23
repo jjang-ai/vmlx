@@ -89,9 +89,38 @@ def apply() -> bool:
                 cache.advance(seq)
                 return self.out_proj(self.norm(y, gate))
 
-            y_conf = segment(cache, 0, n_conf)
-            conv_c, ssm_c = cache[0], cache[1]
-            y_draft = segment(cache, n_conf, seq)
+            if (
+                exact and n_conf == 1 and hidden_states.shape[0] == 1
+                and getattr(self, "_vmlx_bolt_fused_verify", False)
+                and self.num_heads == 128 and self.head_dim == 64
+                and self.n_groups == 8 and self.ssm_state_size == 128
+                and cache[1] is not None and cache[1].dtype == mx.float32
+                and mx.default_device() == mx.gpu
+            ):
+                from .nemotron_bolt_metal import ssm_verify
+
+                # The row-exact depthwise convolution retains its stock order.
+                # Only the recurrent state is carried across rows in registers.
+                initial_ssm = cache[1]
+                first = self._conv(conv_input[:, :1], cache, mask[:, :1] if mask is not None else None)
+                conv_c = cache[0]
+                conv_rows = [first]
+                for row in range(1, seq):
+                    row_mask = mask[:, row:row + 1] if mask is not None else None
+                    conv_rows.append(self._conv(conv_input[:, row:row + 1], cache, row_mask))
+                hs, B, C = mx.split(mx.concatenate(conv_rows, axis=1), splits, axis=-1)
+                y, ssm_c, cache[1] = ssm_verify(
+                    hs.reshape(1, seq, self.num_heads, self.head_dim),
+                    self.A_log, B.reshape(1, seq, self.n_groups, self.ssm_state_size),
+                    C.reshape(1, seq, self.n_groups, self.ssm_state_size),
+                    self.D.astype(hs.dtype), dt, self.dt_bias, initial_ssm, self.time_step_limit,
+                )
+                y = y.reshape(1, seq, self.intermediate_size)
+            else:
+                y_conf = segment(cache, 0, n_conf)
+                conv_c, ssm_c = cache[0], cache[1]
+                y_draft = segment(cache, n_conf, seq)
+                y = mx.concatenate([y_conf, y_draft], axis=1)
             cache.rollback_state = (conv_c, ssm_c)
 
             def rollback_to(accepted, _lo=n_conf):
@@ -105,7 +134,7 @@ def apply() -> bool:
 
             cache.rollback_to = rollback_to
             cache.advance(seq)
-            y = self.norm(mx.concatenate([y_conf, y_draft], axis=1), gate)
+            y = self.norm(y, gate)
             return self.out_proj(y)
 
         Mixer.__call__ = __call__

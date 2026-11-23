@@ -537,6 +537,17 @@ def load_nemotron_bolt_vl(bundle):
         drafter = LiLiCorrDrafter(lilicorr_dir)
         nemotron_mamba_rollback.apply()
         language_model = LiLiCorrLanguageModel(text, drafter)
+        from .nemotron_bolt_metal import available
+
+        if available():
+            for layer in text.backbone.layers:
+                if layer.block_type == "M":
+                    layer.mixer._vmlx_bolt_fused_verify = True
+            for layer in drafter.layers:
+                for conv in (layer.attention_conv, layer.mlp_conv):
+                    if conv is not None:
+                        conv.fused_metal = True
+            logger.info("Enabled Bolt LiLiCorr Metal draft convolution and recurrent verification")
         # One drafter pass proposes block - 1 path tokens, verified byte-exact at D7 (ledger B13): Adaptive's ladder
         # may climb there instead of stopping at the recursive-head default D3.
         set_native_mtp_drafter_max_depth(int(drafter.block) - 1)
