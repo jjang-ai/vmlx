@@ -5703,7 +5703,18 @@ def load_jang_vlm_model(
         config_source = "config.json['jang_config']"
         embedded_config = True
     _ensure_zaya_runtime_supported(path, jang_cfg)
-    _ensure_jang_family_runtime_supported(path, _read_hf_config(path))
+    _vlm_hf_config = _read_hf_config(path)
+    _ensure_jang_family_runtime_supported(path, _vlm_hf_config)
+    # Inkling-2 JANGHT (routed banks each JANGT / JANGH / native NVFP4-MXFP8): its own loader. The all-JANGH bundle
+    # (no "jangt" block) keeps the generic route below.
+    if str(_vlm_hf_config.get("model_type", "")) == "inkling2_loop":
+        from ..models.inkling2.janght import is_janght_config, load_janght_inkling2
+
+        if is_janght_config(_vlm_hf_config):
+            from mlx_vlm.utils import load_config
+
+            logger.info("Inkling JANGHT bundle: per-unit routed formats")
+            return load_janght_inkling2(path, load_config(path))
     # Modern JANG writers emit {"version": 2, "weight_format": "...", ...} and
     # omit the legacy `format` field entirely. Accept native JANG weight formats
     # in addition to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
