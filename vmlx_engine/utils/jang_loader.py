@@ -4207,6 +4207,7 @@ def _load_jang_v2(
     if _jang_effective_model_type(config) == "minicpm":
         from transformers import PreTrainedConfig
 
+        _fix_minicpm_tied_output(model)
         # The tokenizer carries its own local Llama class and template.
         # Transformers cannot instantiate MiniCPM's LongRoPE model config
         # here without remote code. The language model already used MLX-LM.
@@ -4216,6 +4217,27 @@ def _load_jang_v2(
         }
     tokenizer = load_tokenizer(path, **tokenizer_options)
     return model, tokenizer
+
+
+def _fix_minicpm_tied_output(model) -> None:
+    from mlx.nn import QuantizedEmbedding
+    from mlx_lm.models.minicpm import Model
+
+    if (
+        type(model) is not Model
+        or not model.args.tie_word_embeddings
+        or not isinstance(model.model.embed_tokens, QuantizedEmbedding)
+    ):
+        return
+
+    # MLX-LM's original tied branch reads the serialized embedding weight as
+    # a dense matrix. The quantized embedding already owns its tied projection.
+    class MiniCPMWithQuantizedTiedOutput(Model):
+        def __call__(self, inputs, cache=None):
+            hidden = self.model(inputs, cache)
+            return self.model.embed_tokens.as_linear(hidden)
+
+    model.__class__ = MiniCPMWithQuantizedTiedOutput
 
 
 def _load_jang_v2_vlm(

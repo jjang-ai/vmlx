@@ -113,6 +113,33 @@ class TestJangDetection:
         assert config["text_config"]["final_logit_softcapping"] == 30.0
         assert type(config["text_config"]["final_logit_softcapping"]) is float
 
+    def test_minicpm_tied_output_uses_its_packed_embedding(self):
+        import mlx.core as mx
+        from mlx.nn import QuantizedEmbedding
+        from mlx_lm.models.minicpm import Model, ModelArgs
+
+        from vmlx_engine.utils.jang_loader import _fix_minicpm_tied_output
+
+        args = ModelArgs(
+            model_type="minicpm", hidden_size=128, dim_model_base=64,
+            num_hidden_layers=1, intermediate_size=128, num_attention_heads=2,
+            rms_norm_eps=1e-5, vocab_size=32, num_key_value_heads=2,
+            scale_depth=1.0, scale_emb=1.0, tie_word_embeddings=True,
+        )
+        model = Model(args)
+        tokens = mx.array([[1, 2, 3]])
+        _fix_minicpm_tied_output(model)
+        assert type(model) is Model
+        embedding = QuantizedEmbedding.from_embedding(
+            model.model.embed_tokens, group_size=64, bits=6,
+        )
+        model.model.embed_tokens = embedding
+        with pytest.raises(ValueError, match="matmul"):
+            model(tokens)
+        _fix_minicpm_tied_output(model)
+        assert model.model.embed_tokens is embedding
+        assert bool(mx.array_equal(model(tokens), embedding.as_linear(model.model(tokens))))
+
     def test_minicpm_defaults_follow_authoritative_jang_family(self):
         from vmlx_engine.utils.jang_loader import _apply_minicpm_config_defaults
 
