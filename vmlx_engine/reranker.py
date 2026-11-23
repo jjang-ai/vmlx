@@ -5,8 +5,8 @@ Reranker engine for /v1/rerank endpoint.
 Supports three scoring backends:
 1. Late-interaction models (jina-reranker-v3) — listwise reranking via
    special token embeddings + MLP projector + cosine similarity.
-2. Encoder models (ModernBERT, XLM-RoBERTa, BGE) — sequence classification
-   scores via forward pass through cross-encoder architecture.
+2. Encoder models (ModernBERT) — sequence classification scores via
+   forward pass through cross-encoder architecture.
 3. CausalLM models (Qwen3-Reranker) — yes/no logit scoring via generate.
 
 Usage:
@@ -16,6 +16,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -32,6 +33,10 @@ class RerankResult:
     index: int
     relevance_score: float
     document: Optional[str] = None
+
+
+class UnsupportedRerankerError(RuntimeError):
+    """The checkpoint's architecture cannot produce relevance scores."""
 
 
 class Reranker:
@@ -83,6 +88,28 @@ class Reranker:
 
         return None
 
+    @staticmethod
+    def _unsupported_classification_architecture(model_path: str) -> str | None:
+        """Return a sequence-classification architecture that cannot be scored."""
+        try:
+            with open(os.path.join(model_path, "config.json")) as f:
+                config = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(config, dict):
+            return None
+        architectures = config.get("architectures") or []
+        if isinstance(architectures, str):
+            architectures = [architectures]
+        for architecture in architectures:
+            if (
+                isinstance(architecture, str)
+                and architecture.endswith("ForSequenceClassification")
+                and architecture != "ModernBertForSequenceClassification"
+            ):
+                return architecture
+        return None
+
     def _load(self):
         """Lazy-load model and detect backend type."""
         if self._model is not None:
@@ -102,7 +129,21 @@ class Reranker:
             self._load_late_interaction()
             return
 
-        # 2. Try encoder model (cross-encoder / sequence classification)
+        # 2. Refuse classification encoders that cannot be scored, before the
+        # strict weight load reports their whole checkpoint as unexpected
+        # parameters (issue #398).
+        unsupported = self._unsupported_classification_architecture(self.model_path)
+        if unsupported is not None:
+            raise UnsupportedRerankerError(
+                f"Unsupported reranker architecture '{unsupported}' for model "
+                f"'{self.model_path}': vMLX scores encoder rerankers only for "
+                "ModernBertForSequenceClassification. mlx-embeddings provides "
+                f"no classification head for '{unsupported}'. Use a ModernBERT "
+                "reranker (e.g. Alibaba-NLP/gte-reranker-modernbert-base) or a "
+                "late-interaction reranker (e.g. jinaai/jina-reranker-v3-mlx)."
+            )
+
+        # 3. Try encoder model (cross-encoder / sequence classification)
         try:
             from mlx_embeddings import load as load_embeddings
             self._model, self._tokenizer = load_embeddings(self.model_path)
@@ -112,7 +153,7 @@ class Reranker:
         except ImportError:
             pass
 
-        # 3. Fall back to CausalLM (e.g., Qwen3-Reranker)
+        # 4. Fall back to CausalLM (e.g., Qwen3-Reranker)
         try:
             from mlx_lm import load as load_lm
             self._model, self._tokenizer = load_lm(self.model_path)
