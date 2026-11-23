@@ -113,6 +113,60 @@ class TestJangDetection:
         assert config["text_config"]["final_logit_softcapping"] == 30.0
         assert type(config["text_config"]["final_logit_softcapping"]) is float
 
+    @pytest.mark.parametrize("declared_tied", [True, False])
+    def test_minicpm_tied_output_uses_its_packed_embedding(self, declared_tied):
+        import mlx.core as mx
+        from mlx.nn import QuantizedEmbedding
+        from mlx_lm.models.minicpm import Model, ModelArgs
+
+        from vmlx_engine.utils.jang_loader import _fix_minicpm_tied_output
+
+        args = ModelArgs(
+            model_type="minicpm", hidden_size=128, dim_model_base=64,
+            num_hidden_layers=1, intermediate_size=128, num_attention_heads=2,
+            rms_norm_eps=1e-5, vocab_size=32, num_key_value_heads=2,
+            scale_depth=1.0, scale_emb=1.0, tie_word_embeddings=declared_tied,
+        )
+        model = Model(args)
+        tokens = mx.array([[1, 2, 3]])
+        _fix_minicpm_tied_output(model)
+        assert type(model) is Model
+        embedding = QuantizedEmbedding.from_embedding(
+            model.model.embed_tokens, group_size=64, bits=6,
+        )
+        model.model.embed_tokens = embedding
+        if not declared_tied:
+            _fix_minicpm_tied_output(model)
+            assert type(model) is Model
+            model.lm_head.weight = embedding.weight
+        with pytest.raises(ValueError, match="matmul"):
+            model(tokens)
+        _fix_minicpm_tied_output(model)
+        assert model.model.embed_tokens is embedding
+        hidden = model.model(tokens)
+        if not declared_tied:
+            hidden /= args.hidden_size / args.dim_model_base
+        assert bool(mx.array_equal(model(tokens), embedding.as_linear(hidden)))
+
+    def test_minicpm_defaults_follow_authoritative_jang_family(self):
+        from vmlx_engine.utils.jang_loader import _apply_minicpm_config_defaults
+
+        config = {"architectures": ["MiniCPMForCausalLM"]}
+        _apply_minicpm_config_defaults(
+            config,
+            {"capabilities": {"family": "minicpm"}},
+        )
+
+        assert config["model_type"] == "minicpm"
+        assert config["rope_theta"] == 10_000.0
+
+        unrelated = {"model_type": "llama"}
+        _apply_minicpm_config_defaults(
+            unrelated,
+            {"capabilities": {"family": "minicpm"}},
+        )
+        assert unrelated == {"model_type": "llama"}
+
     def test_gemma4_processor_path_uses_temporary_normalized_config(self, tmp_path):
         from vmlx_engine.utils.jang_loader import _prepare_gemma4_processor_model_path
 
