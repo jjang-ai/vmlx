@@ -12,13 +12,18 @@ from .dspark_head import InklingDraft
 _DRAFT_PREFIX = "mtp_drafter."
 
 
-def load_inkling_dspark(bundle: Path, target) -> tuple[InklingDraft, str]:
-    """Return the trained head and the source of its weights."""
+def load_inkling_dspark(
+    bundle: Path, target, *, required: bool = True
+) -> tuple[InklingDraft, str] | None:
+    """Discover and load the trained native head when the bundle provides one."""
     raw_config = json.loads((bundle / "config.json").read_text())
     text_config = dict(raw_config["text_config"])
-    text_config["mtp_config"] = raw_config.get("mtp_config") or text_config.get("mtp_config")
-    drafter = InklingDraft(DSparkConfig(text_config=text_config))
-    drafter.validate_target_compatibility(target)
+    mtp_config = raw_config.get("mtp_config") or text_config.get("mtp_config")
+    if not isinstance(mtp_config, dict) or mtp_config.get("markov_head_type") != "rnn_hidden":
+        if required:
+            raise ValueError("The Inkling bundle does not declare an RNN DSpark head")
+        return None
+    text_config["mtp_config"] = mtp_config
 
     sidecar = bundle / "mtp.safetensors"
     index_path = bundle / "model.safetensors.index.json"
@@ -45,7 +50,11 @@ def load_inkling_dspark(bundle: Path, target) -> tuple[InklingDraft, str]:
             )
         source = "indexed"
     else:
-        raise FileNotFoundError("The Inkling bundle has no native DSpark weights")
+        if required:
+            raise FileNotFoundError("The Inkling bundle has no native DSpark weights")
+        return None
+    drafter = InklingDraft(DSparkConfig(text_config=text_config))
+    drafter.validate_target_compatibility(target)
     if not weights or any(weight.dtype != mx.bfloat16 for _, weight in weights):
         raise ValueError("Inkling DSpark requires its complete native BF16 weight set")
     drafter.load_weights(weights, strict=True)

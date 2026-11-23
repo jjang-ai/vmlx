@@ -3,7 +3,7 @@ import { basename, join } from 'path'
 
 // Header-only admission; the Python loader still strictly checks every tensor.
 // Never read multi-GB weight payloads into Electron to discover a draft.
-function tensorsIn(file: string): Record<string, any> {
+export function readSafetensorsHeader(file: string): Record<string, any> {
   const fd = openSync(file, 'r')
   try {
     const size = fstatSync(fd).size
@@ -117,7 +117,7 @@ export function bundledDraftFits(draft: string, target: string): boolean {
     const tensors: Record<string, any> = {}
     const owners: Record<string, string> = {}
     for (const file of shards) {
-      const header = tensorsIn(join(draft, file))
+      const header = readSafetensorsHeader(join(draft, file))
       const names = Object.keys(header).map(rename)
       if (new Set(names).size !== names.length || names.some(key => key in tensors)) return false
       Object.keys(header).forEach((key, i) => { tensors[names[i]] = header[key]; owners[key] = file })

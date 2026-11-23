@@ -16740,15 +16740,22 @@ class MLLMBatchGenerator:
                     head = getattr(self.model, "_inkling_native_dspark", None)
                     if (
                         head is not None and len(requests) == 1 and not force_batch_cache
-                        and req.temperature == 0 and req.repetition_penalty in (None, 1.0)
+                        and (req.temperature == 0 or req.seed is None)
+                        and req.repetition_penalty in (None, 1.0)
                         and not (req.frequency_penalty or req.presence_penalty or req.logit_bias)
                         and not (req.images or req.videos or req.audio)
                     ):
                         from .dspark.inkling_serving import InklingServingRun
                         from .models.inkling2.language import capture_dspark_features
 
+                        sampler = self._make_request_sampler(req)
+
+                        def pick(logits, sampler=sampler):
+                            return _sample_mllm_prefill_logits(logits, sampler)[0].reshape(-1)
+
                         state = InklingServingRun(
-                            self.model, head, int(getattr(req, "_cached_tokens", 0) or 0)
+                            self.model, head, int(getattr(req, "_cached_tokens", 0) or 0),
+                            pick=pick, trace_logits=_mimo_v2_token_trace_enabled(),
                         )
                         with capture_dspark_features(
                             self.language_model, state.drafter.target_layer_ids,

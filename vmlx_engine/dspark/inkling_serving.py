@@ -37,10 +37,12 @@ class InklingServingPolicy(ARFallback):
 
 
 class InklingServingRun:
-    def __init__(self, model, head, cached_tokens):
+    def __init__(self, model, head, cached_tokens, *, pick, trace_logits=False):
         self.target = InklingDSparkTarget(model)
         self.drafter = InklingDSparkDrafter(head, self.target)
         self.drafter.reset(base=cached_tokens)
+        self.pick = pick
+        self.trace_logits = trace_logits
         self.policy = InklingServingPolicy()
         self.horizon = max(1, head.config.block_size - 1)
         self.ready = deque()
@@ -104,15 +106,18 @@ class InklingServingRun:
         logits, self.features, self.transaction = self.target.verify(
             ids, batch.cache, self.drafter.target_layer_ids
         )
-        picks = mx.argmax(logits, axis=-1).astype(mx.uint32)
-        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        mx.eval(picks, logprobs, self.features)
+        # Sample each target row with the normal request sampler. Only the
+        # draws through the first mismatch can be committed; later rows assume
+        # the draft context and are discarded. This retains the target distribution.
+        picks = self.pick(logits)
+        mx.eval(picks, self.features)
         drafted, picked = proposal.tolist(), picks.tolist()
         accepted = 0
         while accepted < width and drafted[accepted] == picked[accepted]:
             accepted += 1
-        self.ready.extend((picked[i], logprobs[i]) for i in range(accepted))
-        self.next_result = (picks[accepted:accepted + 1], [logprobs[accepted]])
+        verified_logits = [logits[i] if self.trace_logits else None for i in range(accepted + 1)]
+        self.ready.extend(zip(picked[:accepted], verified_logits[:accepted]))
+        self.next_result = (picks[accepted:accepted + 1], [verified_logits[accepted]])
         seconds = time.perf_counter() - started
         rows = width + 1
         self.draft_rounds += 1

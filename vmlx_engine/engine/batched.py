@@ -1421,25 +1421,33 @@ class BatchedEngine(BaseEngine):
         self._model = self._mllm_instance.model
         self._processor = self._mllm_instance.processor
 
+        dspark_mode = os.environ.get("VMLX_DSPARK", "").strip().lower()
         if (
             getattr(self._model, "model_type", None) in {"inkling2", "inkling2_loop"}
-            and os.environ.get("VMLX_DSPARK", "").lower() in {"1", "true", "on"}
+            and dspark_mode not in {"0", "false", "off"}
         ):
             from pathlib import Path
             from ..models.inkling2.dspark_loader import load_inkling_dspark
 
             def load_native_inkling_head():
-                head, source = load_inkling_dspark(
-                    Path(self._model_name), self._model.language_model
-                )
-                head.bind(self._model)
-                return head, source
+                required = dspark_mode in {"1", "true", "on"}
+                try:
+                    loaded = load_inkling_dspark(
+                        Path(self._model_name), self._model.language_model, required=required
+                    )
+                except (OSError, ValueError, KeyError) as exc:
+                    if required:
+                        raise
+                    logger.warning("Inkling native DSpark asset skipped: %s", exc)
+                    return None
+                if loaded is not None:
+                    loaded[0].bind(self._model)
+                return loaded
 
-            head, head_source = await loop.run_in_executor(
-                loader_executor, load_native_inkling_head
-            )
-            self._model._inkling_native_dspark = head
-            logger.info("Inkling native DSpark head loaded from %s weights", head_source)
+            loaded = await loop.run_in_executor(loader_executor, load_native_inkling_head)
+            if loaded is not None:
+                self._model._inkling_native_dspark, head_source = loaded
+                logger.info("Inkling native DSpark head loaded from %s weights", head_source)
 
         # Create MLLM scheduler config with batch generator support
         default_scheduler = SchedulerConfig()
