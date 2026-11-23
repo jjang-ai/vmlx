@@ -269,7 +269,7 @@ def gate_up_swiglu_grouped(xr, x, idx, U, out_dtype=mx.float32, limit: float = 0
     ins = [xr, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"], U["up"]["packed"],
            U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     kern = _gu_grouped(kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit), MK._fp16_guard(),
-                       MK.check_act(act), float(alpha) if act == "oai" else 0.0, RP, O)
+                       MK.check_act(act), MK.act_param(act, alpha), RP, O)
     tpg = 32 * (8 // O)
     return kern(inputs=ins, template=[("NS", T * k), ("KS", k)], grid=(tpg, N // 8, T * k), threadgroup=(tpg, 1, 1),
                 output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
@@ -412,6 +412,6 @@ def gate_up_swiglu_tiles(xr, x, idx, U, out_dtype=mx.float32, limit: float = 0.0
     ins = [xr, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"], U["up"]["packed"],
            U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     kern = _gu_tiles(kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit), MK._fp16_guard(),
-                     MK.check_act(act), float(alpha) if act == "oai" else 0.0, int(ns))
+                     MK.check_act(act), MK.act_param(act, alpha), int(ns))
     return kern(inputs=ins, template=[("NS", T * k), ("KS", k)], grid=(32 * ns, N // 8, T * k),
                 threadgroup=(32 * ns, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]

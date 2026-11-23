@@ -68,14 +68,16 @@ struct JTBlockLoader_K{_tag(K)} {{
 _ACT_SILU = "  return (g / (1.0f + metal::fast::exp(-g))) * u;\n}"
 
 
-def _act_suffix(act: str, alpha: float) -> str:
-    """Symbol / kernel-name suffix of the activation: '' for the SiLU source (unchanged), '_oai<alpha>' otherwise."""
+def _act_suffix(act: str, alpha) -> str:
+    """Symbol / kernel-name suffix of the activation: '' for the SiLU source (unchanged), '_oai<alpha>' /
+    '_ink<caps>' otherwise (moe_kernels.act_tag)."""
     return "" if MK.check_act(act) == "silu" else MK.act_tag(act, 0.0, alpha)
 
 
-def _impl(K, W: int, act: str = "silu", alpha: float = 0.0) -> str:
-    """act "oai": the fused epilogue computes SwiGLU-OAI (moe_kernels.act_value_metal) after the same clamp (limit from
-    the runtime `lim` input); alpha is compiled in."""
+def _impl(K, W: int, act: str = "silu", alpha=0.0) -> str:
+    """act "oai" / "inkling": the fused epilogue computes that variant (moe_kernels.act_value_metal) after the same clamp
+    (limit from the runtime `lim` input; Inkling passes 0, no clamp); its parameter (alpha / the soft caps) is compiled
+    in."""
     s = JK._NAX_IMPL
     reps = [("tq_gather_qmm_nax(", f"jt_gather_qmm_nax_K{_tag(K)}("),
             ("const device uint32_t* wg, const device half* sg, const device uint32_t* wu, const device half* su,",
@@ -87,9 +89,9 @@ def _impl(K, W: int, act: str = "silu", alpha: float = 0.0) -> str:
     for a, b in reps:
         assert s.count(a) >= 1, a
         s = s.replace(a, b, 1)
-    if MK.check_act(act) == "oai":
+    if MK.check_act(act) != "silu":
         assert s.count(_ACT_SILU) == 1, "tq_act anchor"
-        s = s.replace(_ACT_SILU, f"  return {MK.act_value_metal('oai', alpha)};\n}}")
+        s = s.replace(_ACT_SILU, f"  return {MK.act_value_metal(act, alpha)};\n}}")
     # keep only the gather function (the radix helper + act are reused under new names to avoid symbol clashes)
     a = _act_suffix(act, alpha)
     s = s.replace("jangh_h32_radix", f"jt_h32_radix_K{_tag(K)}{a}").replace("tq_act(", f"jt_act_K{_tag(K)}{a}(")
@@ -112,7 +114,7 @@ def _variant(fused: bool, expert: bool, h32: bool) -> str:
 
 @functools.lru_cache(maxsize=None)
 def _kernel(K, W: int, fused: bool, tname: str, expert: bool = False, h32: bool = False, act: str = "silu",
-            alpha: float = 0.0):
+            alpha=0.0):
     a = _act_suffix(act, alpha)
     header = JK._mlx_headers(["steel/gemm/gemm.h", "steel/gemm/nax.h", "steel/gemm/loader.h", "quantized_nax.h"]) + \
         _loader(K, 12, W) + _impl(K, W, act, alpha)
@@ -148,7 +150,7 @@ def _launch(M: int, N: int, E: int, plan, rotate_output: bool):
 
 
 def gather_qmm_sorted_jt(x, P: dict, idx_sorted, Pu: dict | None = None, limit: float = 0.0, plan=None,
-                         rotate_output: bool = False, act: str = "silu", alpha: float = 0.0):
+                         rotate_output: bool = False, act: str = "silu", alpha=0.0):
     """x (M, K_in) bf16 rows sorted by expert, ROTATED basis; P = unit projection dict (packed (E,N,W), scale (E,N)).
     Returns (M, N) x.dtype. Outlier columns are NOT included (caller adds them). plan = JK.expert_tile_plan(idx, E):
     tiles never span two experts (the JANGH prefill schedule). rotate_output (fused bf16 + plan): the activations come
@@ -158,9 +160,9 @@ def gather_qmm_sorted_jt(x, P: dict, idx_sorted, Pu: dict | None = None, limit: 
     idx = _pad_idx(idx_sorted)
     fused = Pu is not None
     meta_x, gy, extra = _launch(M, N, E, plan, rotate_output)
-    oai = fused and MK.check_act(act) == "oai"
+    variant = MK.check_act(act) if fused else "silu"         # a single-weight pass has no activation
     k = _kernel(P["K"], W, fused, JK._TNAME[x.dtype], plan is not None, bool(rotate_output),
-                "oai" if oai else "silu", float(alpha) if oai else 0.0)
+                variant, MK.act_param(variant, alpha))
     return k(inputs=[x, P["packed"], P["scale"], Pu["packed"] if fused else P["packed"], Pu["scale"] if fused else P["scale"], idx,
                      mx.array([M, N, Kin] + meta_x, dtype=mx.int32), mx.array([float(limit)], dtype=mx.float32)] + extra,
              grid=(((N + 63) // 64) * 128, gy, 1), threadgroup=(128, 1, 1),
@@ -192,7 +194,7 @@ _EPI = """
 """
 
 
-def _impl_out(K, W: int, NO: int, wtname: str = "half", act: str = "silu", alpha: float = 0.0) -> str:
+def _impl_out(K, W: int, NO: int, wtname: str = "half", act: str = "silu", alpha=0.0) -> str:
     a = _act_suffix(act, alpha)
     s = _impl(K, W, act, alpha).replace(f"jt_gather_qmm_nax_K{_tag(K)}{a}(", f"jt_gather_qmm_nax_out_K{_tag(K)}_n{NO}{a}(", 1)
     s = s.replace(f"jt_h32_radix_K{_tag(K)}{a}", f"jt_h32_radix_K{_tag(K)}_o{NO}{a}").replace(
@@ -208,7 +210,7 @@ def _impl_out(K, W: int, NO: int, wtname: str = "half", act: str = "silu", alpha
 
 @functools.lru_cache(maxsize=None)
 def _kernel_out(K, W: int, NO: int, tname: str, expert: bool = False, h32: bool = False, wtname: str = "half",
-                act: str = "silu", alpha: float = 0.0):
+                act: str = "silu", alpha=0.0):
     a = _act_suffix(act, alpha)
     header = JK._mlx_headers(["steel/gemm/gemm.h", "steel/gemm/nax.h", "steel/gemm/loader.h", "quantized_nax.h"]) + \
         _loader(K, 12, W) + _impl_out(K, W, NO, wtname, act, alpha)
@@ -230,9 +232,9 @@ _WOUT_TNAME = {mx.float16: "half", mx.bfloat16: "bfloat16_t", mx.float32: "float
 
 
 def gather_gate_up_sorted_jt(x, xo, Pg: dict, Pu: dict, idx_sorted, limit: float = 0.0, plan=None,
-                             rotate_output: bool = False, act: str = "silu", alpha: float = 0.0):
+                             rotate_output: bool = False, act: str = "silu", alpha=0.0):
     """h = act(g, u) for expert-sorted rows in ONE NAX pass (act = SwiGLU, clamped at `limit` when > 0 like JANGH tq_act;
-    act "oai" = SwiGLU-OAI with alpha, moe_kernels.act_value_metal). x (M, D) bf16 ROTATED rows; xo (M, NO) fp32 raw-basis
+    act "oai" = SwiGLU-OAI with alpha, "inkling" = soft-capped with alpha = the caps; moe_kernels.act_value_metal). x (M, D) bf16 ROTATED rows; xo (M, NO) fp32 raw-basis
     outlier activations (NO = Pg n_out; gate and up share the layer-wide columns). Returns (M, I) bf16. plan /
     rotate_output: as gather_qmm_sorted_jt."""
     M, Kin = x.shape; E, N, W = Pg["packed"].shape; NO = int(Pg["n_out"])
@@ -241,9 +243,8 @@ def gather_gate_up_sorted_jt(x, xo, Pg: dict, Pu: dict, idx_sorted, limit: float
     wog, wou = Pg["wout"], Pu["wout"]
     if wou.dtype != wog.dtype:
         wou = wou.astype(wog.dtype)
-    oai = MK.check_act(act) == "oai"
     k = _kernel_out(Pg["K"], W, NO, JK._TNAME[x.dtype], plan is not None, bool(rotate_output), _WOUT_TNAME[wog.dtype],
-                    "oai" if oai else "silu", float(alpha) if oai else 0.0)
+                    MK.check_act(act), MK.act_param(act, alpha))
     return k(inputs=[x, Pg["packed"], Pg["scale"], Pu["packed"], Pu["scale"], idx, mx.array([M, N, Kin] + meta_x, dtype=mx.int32),
                      mx.array([float(limit)], dtype=mx.float32), xo.astype(mx.float32), wog, wou] + extra,
              grid=(((N + 63) // 64) * 128, gy, 1), threadgroup=(128, 1, 1),
