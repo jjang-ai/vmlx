@@ -309,6 +309,27 @@ class DynamicShortConvolution(nn.Module):
         return ((out.reshape(x.shape) + xf) / math.sqrt(2 * k + 1)).astype(x.dtype)
 
 
+def _joint_dynamic_kv(k_conv, v_conv, keys, values, key_input, value_input, cache, mask):
+    from .kernels import joint_dynamic_convolution
+
+    b, length, channels = keys.shape
+    states, dynamic = [], []
+    for module, x, conditioning in ((k_conv, keys, key_input), (v_conv, values, value_input)):
+        state = cache[module.conv_idx] if cache is not None else None
+        if state is None:
+            state = mx.zeros((b, 3, channels), mx.float32)
+        states.append(state)
+        xf = x.astype(mx.float32)
+        inputs = xf if mask is None else mx.where(mask[..., None], xf, 0)
+        _update_conv_cache(cache, module.conv_idx, state, inputs, mask)
+        projected = _decode_linear(module.weight_proj, conditioning)
+        dynamic.append(projected.astype(mx.float32).reshape(b, length, module.num_heads, 4))
+    return joint_dynamic_convolution(
+        keys, values, states, (k_conv.static_weight, v_conv.static_weight),
+        dynamic, mask, k_conv.num_heads,
+    )
+
+
 class Attention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
@@ -492,6 +513,18 @@ class Attention(nn.Module):
         if self.is_sliding:
             k = self.k_sconv(k, conv, conv_mask)
             v = self.v_sconv(v, conv, conv_mask)
+        elif (
+            _VERIFY_WITH_DECODE_GEMV.get() and self.sharding_group is None
+            and b == 1 and length >= 4 and k.dtype == v.dtype == mx.bfloat16
+            and k.shape == v.shape and self.k_sconv.kernel_size == self.v_sconv.kernel_size == 4
+            and self.k_sconv.num_heads == self.v_sconv.num_heads
+            and mx.metal.is_available() and mx.default_device() == mx.gpu
+            and mx.device_info().get("device_name") == "Apple M5 Max"
+            and mx.__version__ in ("0.32.4", "0.32.5.dev20261101+360078a8")
+        ):
+            k, v = _joint_dynamic_kv(
+                self.k_sconv, self.v_sconv, k, v, key_input, value_input, conv, conv_mask
+            )
         else:
             k = self.k_sconv(k, key_input, conv, conv_mask)
             v = self.v_sconv(v, value_input, conv, conv_mask)

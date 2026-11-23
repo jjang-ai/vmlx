@@ -57,6 +57,66 @@ def short_convolution(state, weight, x, mask, width):
 
 
 @lru_cache(maxsize=1)
+def _joint_dynamic_convolution():
+    return mx.fast.metal_kernel(
+        name="inkling2_joint_dynamic_convolution",
+        input_names=[
+            "k", "v", "kcache", "vcache", "kstatic", "vstatic", "kdyn", "vdyn", "valid",
+        ],
+        output_names=["ko", "vo"],
+        ensure_row_contiguous=False,
+        compile_options={"math_mode": "safe"},
+        source=r"""
+    uint i = thread_position_in_grid.x;
+    const int C = k_shape[2], L = k_shape[1];
+    if (i >= k_shape[0] * C * L) return;
+    const int c = i % C, t = (i / C) % L, b = i / (C * L);
+    const int head = c / (C / Heads);
+    const int kbase = b * k_strides[0] + c * k_strides[2];
+    const int vbase = b * v_strides[0] + c * v_strides[2];
+    const int kb = b * kdyn_strides[0] + t * kdyn_strides[1] + head * kdyn_strides[2];
+    const int vb = b * vdyn_strides[0] + t * vdyn_strides[1] + head * vdyn_strides[2];
+    float kc = 0.0f, vc = 0.0f;
+    #pragma unroll
+    for (int lag = 0; lag < 4; ++lag) {
+        const int p = t - lag;
+        const bool active = p >= 0 &&
+            (!Masked || valid[b * valid_strides[0] + p * valid_strides[1]]);
+        const float a = p < 0
+            ? float(kcache[b * kcache_strides[0] + (p + 3) * kcache_strides[1] + c * kcache_strides[2]])
+            : (active ? float(k[kbase + p * k_strides[1]]) : 0.0f);
+        const float z = p < 0
+            ? float(vcache[b * vcache_strides[0] + (p + 3) * vcache_strides[1] + c * vcache_strides[2]])
+            : (active ? float(v[vbase + p * v_strides[1]]) : 0.0f);
+        const float ks = float(kstatic[lag * kstatic_strides[0] + c * kstatic_strides[1]]) +
+                         kdyn[kb + lag * kdyn_strides[3]];
+        const float vs = float(vstatic[lag * vstatic_strides[0] + c * vstatic_strides[1]]) +
+                         vdyn[vb + lag * vdyn_strides[3]];
+        kc = kc + a * ks;
+        vc = vc + z * vs;
+    }
+    ko[i] = T((kc + float(k[kbase + t * k_strides[1]])) / 3.0f);
+    vo[i] = T((vc + float(v[vbase + t * v_strides[1]])) / 3.0f);
+    """,
+    )
+
+
+def joint_dynamic_convolution(keys, values, states, static, dynamic, mask, heads):
+    """Fuse equal-shaped K/V dynamic taps while retaining FP32 lag order."""
+    return _joint_dynamic_convolution()(
+        inputs=[
+            keys, values, *states, *static, *dynamic,
+            mask if mask is not None else mx.array([[True]]),
+        ],
+        template=[("T", keys.dtype), ("Heads", heads), ("Masked", mask is not None)],
+        grid=(keys.size, 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[keys.shape, values.shape],
+        output_dtypes=[keys.dtype, values.dtype],
+    )
+
+
+@lru_cache(maxsize=1)
 def _bf16_vocabulary_gemv():
     return mx.fast.metal_kernel(
         name="inkling_head_bf16_read_fp32_dot",
