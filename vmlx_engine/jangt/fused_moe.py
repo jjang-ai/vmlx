@@ -149,7 +149,7 @@ def _gu_kernel(D: int, F: int, K, L: int, n_out: int, W: int, topk: int, limit: 
     """
     ins = ["xr", "x", "idx", "wg", "sg", "wu", "su_", "w1", "s1", "w3", "s3"] + (["ocol", "woutg", "woutu"] if n_out else [])
     lim = MK.act_tag(act, limit, alpha)
-    if (s_act, s_limit) != (act, limit) or (s_act == "oai" and s_alpha != alpha):
+    if (s_act, s_limit, s_alpha) != (act, limit, alpha):
         lim += "_s" + (MK.act_tag(s_act, s_limit, s_alpha) or "_plain")
     return mx.fast.metal_kernel(name=f"jtf_gu_d{D}_f{F}_K{MK._kname(K)}_o{n_out}_w{W}_k{topk}{lim}{'' if guard else '_ng'}",
                                 input_names=ins, output_names=["hr_out", "hs_out"], source=src, header=_HEADER)
@@ -224,7 +224,7 @@ def _eligible(x, idx, experts, shared) -> bool:
 def _routed_act(experts) -> tuple:
     """(act, alpha, limit) of the routed experts: the variant experts.routed applies (JTMixedSwitchGLU)."""
     act = getattr(experts, "act", "silu")
-    return act, float(getattr(experts, "alpha", 0.0)) if act == "oai" else 0.0, float(getattr(experts, "limit", 0.0))
+    return act, MK.act_param(act, getattr(experts, "alpha", 0.0)), float(getattr(experts, "limit", 0.0))
 
 
 def _run(x, idx, w, experts, shared, limit: float, act: str = "silu", alpha: float = 0.0):
@@ -239,7 +239,7 @@ def _run(x, idx, w, experts, shared, limit: float, act: str = "silu", alpha: flo
     xr = MK.rotate_rows(x, U["su_gu"])
     r_act, r_alpha, r_limit = _routed_act(experts)
     gu = _gu_kernel(D, F, U["K"], U["L"], g["n_out"], int(g["packed"].shape[-1]), k, r_limit, guard, r_act, r_alpha,
-                    MK.check_act(act), float(alpha) if act == "oai" else 0.0, float(limit))
+                    MK.check_act(act), MK.act_param(act, alpha), float(limit))
     ins = [xr, x, idx_u, g["packed"], g["scale"], u["packed"], u["scale"],
            shared.w1.weight, shared.w1.scales, shared.w3.weight, shared.w3.scales]
     if g["n_out"]:
@@ -280,7 +280,9 @@ def jt_moe_decode(x, idx, w, experts, shared, limit: float, act: str = "silu", a
     their own); None when not eligible / disabled / the self-check failed."""
     if _STATE["disabled"] or not requested() or not _eligible(x, idx, experts, shared):
         return None
-    alpha = float(alpha) if MK.check_act(act) == "oai" else 0.0
+    if MK.check_act(act) not in ("silu", "oai"):
+        return None                     # the fused shared-expert epilogue implements SiLU / SwiGLU-OAI only
+    alpha = MK.act_param(act, alpha)
     y = _run(x, idx, w, experts, shared, float(limit), act, alpha)
     # Rows are part of the shape: each row count is checked against the stock path on its first use.
     key = (x.shape[0], x.shape[1], experts.I, idx.shape[1], float(limit), experts._unit()["K"], experts._unit()["K_dn"],

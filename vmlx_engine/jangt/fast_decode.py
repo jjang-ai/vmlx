@@ -454,7 +454,7 @@ def gate_up(packed, x, idx, U, out_dtype=mx.float32, limit: float = 0.0, act: st
     W = int(U["gate"]["packed"].shape[-1])
     O, NSG = opts.get("O", 4), opts.get("NSG", 2)
     kern = gen_gate_up(kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit), MK.check_act(act),
-                       float(alpha) if act == "oai" else 0.0, **opts)
+                       MK.act_param(act, alpha), **opts)
     ins = [xq, xinv, st, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     return kern(inputs=ins, template=[("KS", k)], grid=(32 * NSG, T * k, N // (NSG * O)), threadgroup=(32 * NSG, 1, 1),
@@ -725,7 +725,7 @@ def gate_up4(packed, x, idx, U, out_dtype=mx.float32, limit: float = 0.0, act: s
     n_out = U["gate"]["n_out"]
     W = int(U["gate"]["packed"].shape[-1])
     kern = gen_gu4(kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit), MK.check_act(act),
-                   float(alpha) if act == "oai" else 0.0, O, NOG, KSPLIT, wload)
+                   MK.act_param(act, alpha), O, NOG, KSPLIT, wload)
     ins = [xq, xinv, st, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     tpg = 32 * NOG * KSPLIT
@@ -1085,7 +1085,7 @@ def gate_up4g(packed, x, idx, U, out_dtype=mx.float32, limit: float = 0.0, act: 
     n_out = U["gate"]["n_out"]
     W = int(U["gate"]["packed"].shape[-1])
     kern = gen_grouped4("gu", kin, N, U["K"], U["L"], n_out, W, MK._dt(x), _ODT[out_dtype], float(limit),
-                        MK.check_act(act), float(alpha) if act == "oai" else 0.0, O, NOG, RP, wload)
+                        MK.check_act(act), MK.act_param(act, alpha), O, NOG, RP, wload)
     ins = [xq, xinv, st, x, idx.reshape(-1).astype(mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     return kern(inputs=ins, template=[("KS", k), ("NS", T * k)], grid=(32 * NOG, T * k, N // (NOG * O)),

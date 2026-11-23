@@ -471,12 +471,17 @@ def pad_rows(U: dict, align_words: int) -> dict:
 
 # ------------------------------------------------------------------------------------------- SwiGLU variants
 # Every gate/up epilogue of the JTMixedSwitchGLU paths (decode v3, fused decode, sorted prefill, unfused fallbacks)
-# turns the gate pre-activation g and the up pre-activation u into h with one of two activations:
+# turns the gate pre-activation g and the up pre-activation u into h with one of three activations:
 #   "silu" (default): h = silu(g') * u'                        GLM-5.3 / DSV4.1 (limit L > 0), N0.5 / MiMo (L = 0)
 #   "oai":            h = g' * sigmoid(alpha * g') * (u' + 1)  MiniMax-M3 / M3.1 (alpha 1.702, L 7)
+#   "inkling":        h = softcap(g', cg) * sigmoid(g') * softcap(u', cu),  softcap(x, c) = tanh(x / c) * c
+#                     Inkling-2 (inkling2 / inkling2_loop): caps (cg, cu) = the model config's mlp_gate_softcap /
+#                     mlp_up_softcap (Inkling-2-Mini: 4, 25); the sigmoid sees the raw gate; no limit.
 # where, when L > 0, g' = min(g, L) (the gate is clipped from above only) and u' = clip(u, -L, L); else g' = g, u' = u.
-# "silu" generates exactly the source (and kernel names) these kernels had before the variants existed.
-ACTS = ("silu", "oai")
+# The variant's compile-time parameter ("alpha" in every signature) is act_param(act, alpha): 0.0 for "silu", the float
+# alpha for "oai", the float pair (cg, cu) for "inkling". "silu" generates exactly the source (and kernel names) these
+# kernels had before the variants existed.
+ACTS = ("silu", "oai", "inkling")
 
 
 def check_act(act: str) -> str:
@@ -485,10 +490,30 @@ def check_act(act: str) -> str:
     return act
 
 
+def act_param(act: str, alpha=0.0):
+    """The normalized (hashable) compile-time parameter of a variant: 0.0 (silu), float alpha (oai), (cg, cu) (inkling).
+    Fails closed on an inkling parameter that is not two finite positive caps."""
+    if check_act(act) == "oai":
+        return float(alpha)
+    if act == "inkling":
+        try:
+            gc, uc = (float(v) for v in alpha)
+        except (TypeError, ValueError):
+            raise ValueError(f"jangt: inkling activation needs (gate_softcap, up_softcap), got {alpha!r}") from None
+        if not (np.isfinite(gc) and np.isfinite(uc) and gc > 0 and uc > 0):
+            raise ValueError(f"jangt: inkling soft caps must be finite and positive, got {alpha!r}")
+        return (gc, uc)
+    return 0.0
+
+
 def f32_literal(v: float) -> str:
     """Metal expression for the float32 nearest to v, bit-exact: the value MLX uses when it multiplies a float32 array
     by the Python float."""
     return f"as_type<float>({int(np.array(v, np.float32).view(np.uint32))}u)"
+
+
+def _f32_hex(v: float) -> str:
+    return format(int(np.array(v, np.float32).view(np.uint32)), "x")
 
 
 def act_clamp_metal(limit: float, g: str = "g", u: str = "u") -> str:
@@ -498,29 +523,41 @@ def act_clamp_metal(limit: float, g: str = "g", u: str = "u") -> str:
     return f" {g} = metal::min({g}, {float(limit)}f); {u} = metal::clamp({u}, {-float(limit)}f, {float(limit)}f);"
 
 
-def act_value_metal(act: str, alpha: float = 0.0, g: str = "g", u: str = "u") -> str:
+def act_value_metal(act: str, alpha=0.0, g: str = "g", u: str = "u") -> str:
     """Metal float expression h(g, u) of the (already clamped) pre-activations."""
     if check_act(act) == "oai":
         return f"({g} / (1.0f + metal::fast::exp(-({f32_literal(alpha)} * {g})))) * ({u} + 1.0f)"
+    if act == "inkling":
+        # precise tanh / exp, caps by their float32 bit patterns (vmlx-swift JANGTActivation.inkling, the same source)
+        gc, uc = (f32_literal(c) for c in act_param(act, alpha))
+        return (f"((metal::precise::tanh({g} / {gc}) * {gc}) * (1.0f / (1.0f + metal::precise::exp(-{g})))"
+                f" * (metal::precise::tanh({u} / {uc}) * {uc}))")
     return f"({g} / (1.0f + metal::fast::exp(-{g}))) * {u}"
 
 
-def act_tag(act: str, limit: float, alpha: float = 0.0) -> str:
-    """Kernel-name suffix of an activation: '' (plain SiLU) and '_lim10p0' (clamped SiLU) as before; '_oai1p702_lim7p0'.
-    Every generated source variant needs its own name: MLX caches compiled kernels by name."""
+def act_tag(act: str, limit: float, alpha=0.0) -> str:
+    """Kernel-name suffix of an activation: '' (plain SiLU) and '_lim10p0' (clamped SiLU) as before; '_oai1p702_lim7p0';
+    '_ink<cg bits>_<cu bits>' (hex float32 bit patterns). Every generated source variant needs its own name: MLX caches
+    compiled kernels by name."""
     lim = "" if not limit > 0 else f"_lim{str(float(limit)).replace('.', 'p')}"
     if check_act(act) == "oai":
         return f"_oai{str(float(alpha)).replace('.', 'p').replace('-', 'm')}{lim}"
+    if act == "inkling":
+        gc, uc = act_param(act, alpha)
+        return f"_ink{_f32_hex(gc)}_{_f32_hex(uc)}{lim}"
     return lim
 
 
-def act_mlx(g: mx.array, u: mx.array, act: str = "silu", limit: float = 0.0, alpha: float = 0.0) -> mx.array:
+def act_mlx(g: mx.array, u: mx.array, act: str = "silu", limit: float = 0.0, alpha=0.0) -> mx.array:
     """The same activation in MLX ops (unfused fallbacks and references); computes in the inputs' dtype."""
     if limit > 0:
         g = mx.minimum(g, limit)
         u = mx.clip(u, -limit, limit)
     if check_act(act) == "oai":
         return g * mx.sigmoid(alpha * g) * (u + 1)
+    if act == "inkling":
+        gc, uc = act_param(act, alpha)
+        return mx.tanh(g / gc) * gc * mx.sigmoid(g) * (mx.tanh(u / uc) * uc)
     return g * mx.sigmoid(g) * u
 
 
@@ -722,7 +759,7 @@ def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float 
     ins = [xr, x, idx.reshape(-1).astype(mx.uint32), mx.array([k], dtype=mx.uint32), U["gate"]["packed"], U["gate"]["scale"],
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     kern = _gu_v3(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype], float(limit), rot_out,
-                   _fp16_guard(), yz, check_act(act), float(alpha) if act == "oai" else 0.0)
+                   _fp16_guard(), yz, check_act(act), act_param(act, alpha))
     tiles = N // 32 if rot_out else N // 8
     grid = (256 if rot_out else 64, T * k, tiles) if yz else (256 if rot_out else 64, tiles, T * k)
     return kern(inputs=ins, grid=grid, threadgroup=(256 if rot_out else 64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
