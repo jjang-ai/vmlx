@@ -1431,6 +1431,36 @@ class BatchedEngine(BaseEngine):
         self._model = self._mllm_instance.model
         self._processor = self._mllm_instance.processor
 
+        dspark_mode = os.environ.get("VMLX_DSPARK", "").strip().lower()
+        is_inkling = getattr(self._model, "model_type", None) in {"inkling2", "inkling2_loop"}
+        if is_inkling:
+            from pathlib import Path
+
+            self._model._inkling_native_dspark_bundle = str(Path(self._model_name).resolve())
+        if is_inkling and dspark_mode not in {"0", "false", "off"}:
+            from ..models.inkling2.dspark_loader import load_inkling_dspark
+
+            def load_native_inkling_head():
+                required = dspark_mode in {"1", "true", "on"}
+                try:
+                    loaded = load_inkling_dspark(
+                        Path(self._model_name), self._model.language_model, required=required
+                    )
+                except (OSError, ValueError, KeyError) as exc:
+                    if required:
+                        raise
+                    logger.warning("Inkling native DSpark asset skipped: %s", exc)
+                    return None
+                if loaded is not None:
+                    loaded[0].bind(self._model)
+                return loaded
+
+            loaded = await loop.run_in_executor(loader_executor, load_native_inkling_head)
+            if loaded is not None:
+                self._model._inkling_native_dspark, head_source = loaded
+                self._model._inkling_native_dspark_source = head_source
+                logger.info("Inkling native DSpark head loaded from %s weights", head_source)
+
         # Create MLLM scheduler config with batch generator support
         default_scheduler = SchedulerConfig()
         if self._scheduler_config and hasattr(self._scheduler_config, "max_num_seqs"):

@@ -50,6 +50,26 @@ def configure_defaults(*, root: Optional[str], max_size_bytes: int, enabled: boo
     _DEFAULTS.update(root=root, max_size_bytes=int(max_size_bytes or 0), enabled=bool(enabled))
 
 
+def open_inkling_draft_context_ssd(bundle: str, *, clearing=False):
+    """Open the managed Inkling draft cache for serving or explicit deletion."""
+    if not _DEFAULTS["enabled"] or not _DEFAULTS["root"]:
+        return None
+    if not clearing and (
+        not reuse_enabled() or os.environ.get("VMLX_DSPARK_SSD", "1").strip().lower() in _OFF
+    ):
+        return None
+    from ..dflash2_session_disk import model_identity
+    from ..utils.omni_session_disk_store import OmniSessionDiskStore
+
+    return OmniSessionDiskStore(
+        root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"],
+        # One manageable namespace per loaded bundle/runtime. Individual
+        # checkpoint keys still include the target cache's request identity.
+        model_key=model_identity(bundle, bundle),
+        schema="inkling_projected_draft_context_v2",
+    )
+
+
 def attach_ssd(target_path: str, drafter_path: str) -> None:
     global SSD
     if not _DEFAULTS["enabled"] or not _DEFAULTS["root"]:

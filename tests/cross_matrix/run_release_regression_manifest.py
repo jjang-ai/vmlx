@@ -458,6 +458,13 @@ SCOPED_CHECKPOINT_RECEIPTS = SCOPED_DSV41_RECEIPTS | {
 SCOPED_RIPPLE_SCHEMA = "vmlx-scoped-prepackage-v7"
 SCOPED_RIPPLE_MODELS = {"ripple65b-jangh2", "ripple65b-jang4d"}
 SCOPED_RIPPLE_RECEIPTS = SCOPED_DSV41_RECEIPTS | SCOPED_DFLASH_RECEIPTS
+
+SCOPED_INKLING_SCHEMA = "vmlx-scoped-prepackage-v8"
+SCOPED_INKLING_MODELS = {
+    "inkling2-mini-nvfp4", "inkling2-mini-jangh2",
+    "flash-next-native-mtp", "qwen27b-dflash2-jangh2",
+    "minimax-m31-janght", "minicpm4-05b-bf16", "minicpm4-05b-jang6m",
+}
 # Keep the checkpoint's native runtime, transport, UI and resource owners explicit.
 # The wider DFlash/MTP campaign remains available as v5.
 SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
@@ -473,6 +480,10 @@ SCOPED_REQUIRED_RECEIPTS = {
     "PANEL_SETTINGS", "ARTIFACT_FORMAT", "PARSER", "CACHE_ARCHITECTURE",
     "FAMILY_DETECTION", "VL_MEDIA",
 }
+SCOPED_INKLING_RECEIPTS = SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | {
+    "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
+    "QUALITY_LIMITS",
+}
 SCOPED_HISTORICAL_EXCLUSIONS = {
     "historical-qwen36-physical-artifacts", "historical-zaya-physical-artifacts",
     "historical-other-family-physical-artifacts", "dflash2-27b-implementation",
@@ -483,7 +494,7 @@ SCOPED_PENDING_STAGES = [
 ]
 
 
-def _validate_runtime_scope(scope: dict, bound_file, required_models=None) -> None:
+def _validate_runtime_scope(scope: dict, bound_file, required_models=None, *, allow_chat_sse=False) -> None:
     """Bind each active format's retained paired turns; unresolved rows fail closed."""
     models = scope.get("model_evidence")
     required_models = SCOPED_RUNTIME_MODELS if required_models is None else required_models
@@ -507,7 +518,11 @@ def _validate_runtime_scope(scope: dict, bound_file, required_models=None) -> No
             if not visual.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")):
                 raise ValueError(f"{name}: turn requires visual image bytes")
             api = bound_file(turn.get("api")).read_bytes()
-            if not (_is_completed_responses_stream(api) or _is_captured_chat_event_stream(api)):
+            if not (
+                _is_completed_responses_stream(api)
+                or _is_captured_chat_event_stream(api)
+                or (allow_chat_sse and _is_completed_chat_stream(api))
+            ):
                 raise ValueError(f"{name}: turn requires completed raw API stream")
             bound_file(turn.get("review"))
 
@@ -535,6 +550,35 @@ def _is_captured_chat_event_stream(raw: bytes) -> bool:
             terminal |= any(choice.get("finish_reason") is not None for choice in choices)
         return terminal
     except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def _is_completed_chat_stream(raw: bytes) -> bool:
+    """Recognize the complete original Chat SSE wire body."""
+    data = [line[6:].strip() for line in raw.splitlines() if line.startswith(b"data: ")]
+    if len(data) < 3 or data[-1] != b"[DONE]":
+        return False
+    try:
+        events = [json.loads(line) for line in data[:-1]]
+        response_id = events[0].get("id")
+        if not response_id or any(
+            item.get("id") != response_id or item.get("object") != "chat.completion.chunk"
+            or not isinstance(item.get("choices"), list)
+            for item in events
+        ):
+            return False
+        choices = [choice for item in events for choice in item["choices"]]
+        return (
+            sum(choice.get("finish_reason") is not None for choice in choices) == 1
+            and choices[-1].get("finish_reason") is not None
+            and any(
+                any(choice.get("delta", {}).get(field) for field in (
+                    "content", "reasoning_content", "tool_calls",
+                ))
+                for choice in choices
+            )
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return False
 
 
@@ -618,12 +662,17 @@ def validate_scoped_prepackage(
         data = json.loads(raw)
         result["receipt_sha256"] = hashlib.sha256(raw).hexdigest()
         evidence_root = path.resolve().parent
-        if not isinstance(data, dict) or data.get("schema") not in {SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA, SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA, SCOPED_RIPPLE_SCHEMA}:
+        if not isinstance(data, dict) or data.get("schema") not in {
+            SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA,
+            SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA,
+            SCOPED_RIPPLE_SCHEMA, SCOPED_INKLING_SCHEMA,
+        }:
             raise ValueError("unsupported scoped prepackage schema")
         dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
         checkpoint = data["schema"] == SCOPED_CHECKPOINT_SCHEMA
         ripple = data["schema"] == SCOPED_RIPPLE_SCHEMA
-        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint or ripple
+        inkling = data["schema"] == SCOPED_INKLING_SCHEMA
+        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint or ripple or inkling
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
@@ -638,6 +687,8 @@ def validate_scoped_prepackage(
                                  SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | SCOPED_DSPARK_RECEIPTS)
         if ripple:
             required_models, required_receipts = SCOPED_RIPPLE_MODELS, SCOPED_RIPPLE_RECEIPTS
+        if inkling:
+            required_models, required_receipts = SCOPED_INKLING_MODELS, SCOPED_INKLING_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:
@@ -678,7 +729,7 @@ def validate_scoped_prepackage(
             result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
             result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
         if runtime:
-            _validate_runtime_scope(scope, bound_file, required_models)
+            _validate_runtime_scope(scope, bound_file, required_models, allow_chat_sse=inkling)
         if checkpoint:
             if scope.get("checkpoint_focus") != "deepseek-minimax-text-tools-cache-adaptive":
                 raise ValueError("checkpoint requires explicit text/tool/cache/adaptive scope")

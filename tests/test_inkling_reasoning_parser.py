@@ -164,3 +164,38 @@ def test_reset_state_clears_counters_between_requests(parser):
     )
     assert reasoning == "second"
     assert content == "two"
+
+
+def test_inkling_mini_visible_message_after_reasoning_message(parser):
+    text = (
+        '<|message_model|><|content_thinking|>Final should be "19".'
+        '<|end_message|><|message_model|><|content_text|>19<|end_message|>'
+        '<|content_model_end_sampling|><|content_text|>ignored'
+    )
+    assert parser.extract_reasoning(text) == ('Final should be "19".', "19")
+    assert _stream(parser, text) == ('Final should be "19".', "19")
+
+
+def test_inkling_preserves_native_tool_payload_and_following_prose(parser):
+    from vmlx_engine.tool_parsers.inkling_tool_parser import InklingToolParser
+
+    text = (
+        '<|message_model|><|content_thinking|>use a tool<|end_message|>'
+        '<|message_model|>lookup_color<|content_invoke_tool_json|>'
+        '{"name":"lookup_color","args":{"item":"a <|end_message|> string"}}'
+        '<|end_message|><|message_model|><|content_text|>Done.<|end_message|>'
+    )
+    reasoning, content = _stream(parser, text)
+    assert reasoning == "use a tool"
+    parsed = InklingToolParser().extract_tool_calls(content)
+    assert parsed.tools_called and parsed.content == "Done."
+    assert parsed.tool_calls[0]["name"] == "lookup_color"
+    assert '<|end_message|>' in parsed.tool_calls[0]["arguments"]
+
+
+def test_inkling_does_not_accept_incomplete_tool_message():
+    from vmlx_engine.tool_parsers.inkling_tool_parser import InklingToolParser
+
+    text = '<|content_invoke_tool_json|>{"name":"lookup_color","args":{"item":"sky"}}'
+    parsed = InklingToolParser().extract_tool_calls(text)
+    assert not parsed.tools_called

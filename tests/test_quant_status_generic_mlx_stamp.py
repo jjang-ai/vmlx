@@ -60,3 +60,24 @@ def test_mixed_jang_does_not_report_fallback_config_as_global_target(tmp_path):
     assert status["config_bits"] == 8
     assert "target_bits" not in status
     assert "actual_bits" not in status  # Never invent an average from a tier name.
+
+
+def test_loaded_inkling_reports_actual_mixed_expert_modes():
+    from types import SimpleNamespace
+
+    from vmlx_engine.server import _loaded_inkling_weight_quantization
+
+    model = SimpleNamespace(_inkling_loaded_expert_modes=("nvfp4", "mxfp8"))
+    engine = SimpleNamespace(_model=model, _loaded=False)
+    assert _loaded_inkling_weight_quantization(engine) == {}
+
+    engine._loaded = True
+    quantization = _loaded_inkling_weight_quantization(engine)
+    assert quantization["weight_format"] == "nvfp4/mxfp8"
+    assert quantization["codec"] == "floating_point_quantized_matmul"
+    assert quantization["mixed_precision"] is True
+    assert quantization["quantization_metadata_source"] == "loaded_expert_projections"
+    assert "actual_bits" not in quantization and "target_bits" not in quantization
+
+    model._inkling_loaded_expert_modes = ()
+    assert _loaded_inkling_weight_quantization(engine) == {}

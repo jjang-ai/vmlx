@@ -44,7 +44,7 @@ _VLM_STREAM = None
 _VLM_STREAM_OWNER: int | None = None
 
 
-def _register_local_mlx_vlm_runtime_if_needed(model_path: str | Path) -> None:
+def _register_local_mlx_vlm_runtime_if_needed(model_path: str | Path) -> str | None:
     """Register vMLX-owned mlx-vlm model classes before stock mlx-vlm import.
 
     Some locally converted bundles use architectures that are not yet shipped
@@ -91,6 +91,11 @@ def _register_local_mlx_vlm_runtime_if_needed(model_path: str | Path) -> None:
         from .minicpmv4_7.register import register_minicpmv4_7_runtime
 
         register_minicpmv4_7_runtime()
+    if model_type == "inkling2_loop":
+        from .inkling2.loader import register_inkling2_runtime
+
+        register_inkling2_runtime()
+    return model_type
 
 
 def _register_step3p7_mlx_vlm_runtime() -> None:
@@ -4858,7 +4863,7 @@ class MLXMultimodalLM:
             self.model_name,
             allow_download=True,
         )
-        _register_local_mlx_vlm_runtime_if_needed(resolved_name)
+        resolved_model_type = _register_local_mlx_vlm_runtime_if_needed(resolved_name)
 
         def _finalize_loaded_model() -> None:
             """Finish loading on this same MLX-owning worker thread."""
@@ -5085,6 +5090,17 @@ class MLXMultimodalLM:
             from mlx_vlm.utils import load_config
 
             logger.info(f"Loading MLLM: {self.model_name}")
+            if resolved_model_type == "inkling2_loop":
+                from .inkling2.loader import load_native_inkling2
+
+                config = load_config(resolved_name)
+                self.model, self.processor = load_native_inkling2(
+                    Path(resolved_name), config
+                )
+                self.config = config
+                _finalize_loaded_model()
+                logger.info("Inkling Mini native packed target loaded: %s", self.model_name)
+                return
 
             # Bundled Python doesn't include torch/torchvision (~2GB). Preemptively
             # patch video processor loading and suppress warnings so models with

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs'
-import { dirname, join, resolve } from 'path'
-import { bundledDraftFits } from './bundledDraft'
+import { basename, dirname, join, resolve } from 'path'
+import { bundledDraftFits, readSafetensorsHeader } from './bundledDraft'
 
 /**
  * True when a drafter config.json declares DSpark: openbmb's MiniCPM-V-4.7 drafters (`Qwen3DSparkModel`,
@@ -32,6 +32,7 @@ export function bundledDsparkDefault(modelPath: string | undefined | null): bool
 // --dspark.
 const DSPARK_SINGLE_REQUEST_MODEL_TYPES = new Set(['minicpmv4_7'])
 const DSPARK_TEXT_LANE_MODEL_TYPES = new Set(['minimax_m3', 'minimax_m3_vl'])
+const DSPARK_INKLING_MODEL_TYPES = new Set(['inkling2', 'inkling2_loop'])
 const DSPARK_DSV41_MODEL_TYPES = new Set(['deepseek_v41'])
 
 function bundleConfig(root: string): any | null {
@@ -72,6 +73,38 @@ function findDsv41Draft(root: string, cfg: any): string | null {
   }
 }
 
+function findInklingDraft(root: string, cfg: any): string | null {
+  const mtp = cfg.mtp_config ?? cfg.text_config?.mtp_config
+  if (mtp?.markov_head_type !== 'rnn_hidden') return null
+  try {
+    const sidecar = join(root, 'mtp.safetensors')
+    const map = JSON.parse(readFileSync(join(root, 'model.safetensors.index.json'), 'utf8')).weight_map
+    const prefix = 'mtp_drafter.'
+    const indexed = Object.entries(map).filter(([key]) => key.startsWith(prefix))
+    const hasSidecar = existsSync(sidecar)
+    if (hasSidecar && indexed.length) return null
+    const names = new Set<string>()
+    if (hasSidecar) {
+      for (const [name, tensor] of Object.entries(readSafetensorsHeader(sidecar))) {
+        if (tensor.dtype !== 'BF16') return null
+        names.add(name)
+      }
+    } else {
+      const headers = new Map<string, ReturnType<typeof readSafetensorsHeader>>()
+      for (const [key, file] of indexed) {
+        if (typeof file !== 'string' || basename(file) !== file || !file.endsWith('.safetensors')) return null
+        if (!headers.has(file)) headers.set(file, readSafetensorsHeader(join(root, file)))
+        if (headers.get(file)?.[key]?.dtype !== 'BF16') return null
+        names.add(key.slice(prefix.length))
+      }
+    }
+    const required = ['mask_embed', 'fuse_weight', 'markov_head.markov_w1.weight']
+    return required.every(name => names.has(name)) ? resolve(root) : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * True when the bundle's DSpark drafter runs on the engine's text lane (MiniMax-M3 / M3.1) or DeepSeek-V4.1's
  * single-sequence lane: the session keeps its batching and cache settings and only `--dspark on|off|auto` follows
@@ -80,7 +113,8 @@ function findDsv41Draft(root: string, cfg: any): string | null {
 export function dsparkUsesTextLane(modelPath: string | undefined | null): boolean {
   const root = String(modelPath || '').trim()
   const modelType = root ? bundleModelType(root) || '' : ''
-  return DSPARK_TEXT_LANE_MODEL_TYPES.has(modelType) || DSPARK_DSV41_MODEL_TYPES.has(modelType)
+  return DSPARK_TEXT_LANE_MODEL_TYPES.has(modelType) || DSPARK_DSV41_MODEL_TYPES.has(modelType) ||
+    DSPARK_INKLING_MODEL_TYPES.has(modelType)
 }
 
 /**
@@ -93,6 +127,7 @@ export function findBundledDsparkDrafter(modelPath: string | undefined | null): 
   if (!root) return null
   const cfg = bundleConfig(root)
   const modelType = cfg ? String(cfg.model_type || '').toLowerCase() : null
+  if (modelType && DSPARK_INKLING_MODEL_TYPES.has(modelType)) return findInklingDraft(root, cfg)
   if (modelType && DSPARK_DSV41_MODEL_TYPES.has(modelType)) return findDsv41Draft(root, cfg)
   if (!modelType || !(DSPARK_SINGLE_REQUEST_MODEL_TYPES.has(modelType) || DSPARK_TEXT_LANE_MODEL_TYPES.has(modelType))) return null
   let spec: any = {}

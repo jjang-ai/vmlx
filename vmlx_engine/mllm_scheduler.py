@@ -2283,6 +2283,12 @@ class MLLMScheduler:
         the config has at least two distinct attention modes. For everything
         else we return False and the normal prefix-cache pipeline runs.
         """
+        if getattr(lang_model, "model_type", None) in {
+            "inkling2_text", "inkling2_loop_text"
+        }:
+            kinds = {type(slot).__name__ for slot in lang_model.make_cache()}
+            return {"KVCache", "RotatingKVCache"}.issubset(kinds)
+
         if getattr(getattr(self, "model", None), "_mimo_v26_runtime", False):
             # The fresh language wrapper exposes source args, whose schema has
             # hybrid_layer_pattern rather than the legacy cache_subtype field.
@@ -3495,6 +3501,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                spec_stats=getattr(finish_response, "spec_stats", None),
                 prefill_usage=next((getattr(resp, "prefill_usage", None)
                     for resp in reversed(burst) if getattr(resp, "prefill_usage", None)), None),
                 cached_tokens=max(
@@ -3517,7 +3524,10 @@ class MLLMScheduler:
                 # A terminal verified-token burst needs the same request-owned
                 # phase receipt as the single-response path below.
                 _mtp = getattr(getattr(self.batch_generator, "_stats", None), "last_native_mtp", None)
-                if isinstance(_mtp, dict) and str(_mtp.get("request_id")) == str(request_id):
+                if (
+                    output.spec_stats is None and isinstance(_mtp, dict)
+                    and str(_mtp.get("request_id")) == str(request_id)
+                ):
                     from .request_telemetry import mtp_spec_stats
                     output.spec_stats = mtp_spec_stats(_mtp)
                 if getattr(finish_response, "prompt_cache", None) is not None:
@@ -3751,6 +3761,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                spec_stats=getattr(response, "spec_stats", None),
                 prefill_usage=getattr(response, 'prefill_usage', None),
                 cached_tokens=getattr(response, 'cached_tokens', 0),
                 cache_detail=getattr(response, 'cache_detail', "") or "",
@@ -3759,7 +3770,10 @@ class MLLMScheduler:
                 # This request's native-MTP record (written by the batch generator
                 # while it built this final response) -> last_request.speculative.
                 _mtp = getattr(getattr(self.batch_generator, "_stats", None), "last_native_mtp", None)
-                if isinstance(_mtp, dict) and str(_mtp.get("request_id")) == str(request_id):
+                if (
+                    output.spec_stats is None and isinstance(_mtp, dict)
+                    and str(_mtp.get("request_id")) == str(request_id)
+                ):
                     from .request_telemetry import mtp_spec_stats
                     output.spec_stats = mtp_spec_stats(_mtp)
 
@@ -4700,11 +4714,15 @@ class MLLMScheduler:
                                             if (
                                                 self._is_hybrid
                                                 and not self._uses_zaya_cache
-                                                and not _uses_mixed_attention_cache
+                                                and (
+                                                    not _uses_mixed_attention_cache
+                                                    or getattr(self.batch_generator, "_model_type", "")
+                                                    in {"inkling2", "inkling2_loop"}
+                                                )
                                             ):
-                                                _paged_store_kwargs[
-                                                    "store_cumulative_state"
-                                                ] = False
+                                                # Inkling's convolution checkpoint is
+                                                # owned by the exact-boundary companion.
+                                                _paged_store_kwargs["store_cumulative_state"] = False
                                             if _defer_post_fence_gc:
                                                 _paged_store_kwargs["defer_post_fence_gc"] = True
                                             stored_table = (
@@ -5639,6 +5657,29 @@ class MLLMScheduler:
     def remove_finished_request(self, request_id: str) -> Optional[MLLMRequest]:
         """Remove a finished request from tracking."""
         return self.requests.pop(request_id, None)
+
+    def clear_inkling_draft_context(self) -> bool:
+        bundle = getattr(self.model, "_inkling_native_dspark_bundle", None)
+        if bundle is None or self._ssm_companion_disk_store is None:
+            return False
+        generator = self.batch_generator
+        store = getattr(generator, "_inkling_draft_context_store", None)
+        if store is not None:
+            store.clear()
+            return True
+
+        from .dspark.session import open_inkling_draft_context_ssd
+
+        # A stopped or DSpark-disabled session may never start a batch
+        # generator. The user's clear still applies to previously saved state.
+        store = open_inkling_draft_context_ssd(bundle, clearing=True)
+        if store is None:
+            return False
+        try:
+            store.clear()
+            return True
+        finally:
+            store.close()
 
     def _cleanup_failed_block_cache_initialization(
         self,

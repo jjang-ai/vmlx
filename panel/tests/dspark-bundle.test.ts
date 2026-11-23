@@ -75,6 +75,33 @@ describe('bundled DSpark drafter detection', () => {
   })
 })
 
+describe('Inkling Mini native DSpark drafter', () => {
+  it.each(['sidecar', 'indexed'])('keeps batching and recognizes complete %s weight headers', layout => {
+    const root = mkdtempSync(join(tmpdir(), 'dspark-inkling-'))
+    const config = { model_type: 'inkling2_loop', mtp_config: { markov_head_type: 'rnn_hidden' } }
+    const named = layout === 'indexed' ? 'mtp_drafter.' : ''
+    const names = ['mask_embed', 'fuse_weight', 'markov_head.markov_w1.weight'].map(key => named + key)
+    const filename = layout === 'sidecar' ? 'mtp.safetensors' : 'model-00003-of-00003.safetensors'
+    const map = layout === 'indexed' ? Object.fromEntries(names.map(name => [name, filename])) : {}
+    const index = join(root, 'model.safetensors.index.json')
+    writeFileSync(join(root, 'config.json'), JSON.stringify(config))
+    writeFileSync(index, JSON.stringify({ weight_map: map }))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+    const header = Buffer.from(JSON.stringify(Object.fromEntries(names.map((name, i) =>
+      [name, { dtype: 'BF16', shape: [1], data_offsets: [2 * i, 2 * i + 2] }]
+    ))))
+    const prefix = Buffer.alloc(8)
+    prefix.writeBigUInt64LE(BigInt(header.length))
+    const weights = join(root, filename)
+    writeFileSync(weights, Buffer.concat([prefix, header, Buffer.alloc(6)]))
+    expect(findBundledDsparkDrafter(root)).toBe(root)
+    expect(bundledDsparkDefault(root)).toBe(true)
+    expect(dsparkUsesTextLane(root)).toBe(true)
+    writeFileSync(weights, Buffer.concat([prefix, header]))
+    expect(findBundledDsparkDrafter(root)).toBeNull()
+  })
+})
+
 function minimaxBundle(modelType = 'minimax_m3_vl'): string {
   const root = mkdtempSync(join(tmpdir(), 'dspark-m31-'))
   writeMinimaxDsparkBundle(root, 'dspark', modelType)

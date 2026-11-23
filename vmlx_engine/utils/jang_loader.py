@@ -850,11 +850,12 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
     if module_path.endswith("lm_head") or "language_model.lm_head" in module_path:
         candidates.add("lm_head")
 
-    if str(model_type or "").lower() == "glm5_next":
+    if str(model_type or "").lower() in {"glm5_next", "inkling2_loop"}:
         if module_path.startswith("language_model.model."):
             candidates.add(
                 module_path.replace("language_model.model.", "model.", 1)
             )
+    if str(model_type or "").lower() == "glm5_next":
         if module_path.startswith("language_model.mtp."):
             candidates.add(
                 module_path.replace("language_model.mtp.", "model.layers.45.", 1)
@@ -5279,6 +5280,22 @@ def _load_jang_v2_vlm(
         from vmlx_engine.jangh.payload import validate_complete_payload
 
         validate_complete_payload(model, _jangtq2_loaded_keys)
+
+    if config.get("model_type") == "inkling2_loop":
+        from mlx.utils import tree_flatten
+
+        expected = {key for key, _ in tree_flatten(model.parameters())}
+        missing = sorted(expected - _vlm_loaded_keys)
+        unexpected = sorted(_vlm_loaded_keys - expected)
+        if missing or unexpected:
+            raise ValueError(
+                f"Inkling Mini JANGH target weights differ from the runtime: "
+                f"missing={missing[:8]} ({len(missing)} total), "
+                f"unexpected={unexpected[:8]} ({len(unexpected)} total)"
+            )
+        from vmlx_engine.models.inkling2.jangh import prepare_jangh_decode
+
+        prepare_jangh_decode(model)
 
     if _ternary_packed_modules:
         if _ternary_packed_expanded_count != len(_ternary_packed_modules):

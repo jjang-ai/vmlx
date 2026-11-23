@@ -58,6 +58,7 @@ from .dsml_v41_tool_parser import DSMLV41ToolParser  # DeepSeek V4.1 DSML (leadi
 from .functionary_tool_parser import FunctionaryToolParser
 from .granite_tool_parser import GraniteToolParser
 from .hermes_tool_parser import HermesToolParser
+from .inkling_tool_parser import InklingToolParser
 from .kimi_tool_parser import KimiToolParser
 from .lfm2_tool_parser import Lfm2ToolParser
 from .minicpm5_tool_parser import MiniCPM5ToolParser

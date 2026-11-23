@@ -6854,6 +6854,7 @@ export function validateRawChannelOrder(
   roundIndex,
   label,
   reasoningRequested = false,
+  finalReasoningAllowed = false,
 ) {
   const failures = []
   const channels = Array.isArray(parsed?.orderedChannels)
@@ -6898,13 +6899,23 @@ export function validateRawChannelOrder(
         `${label} raw stream does not preserve progressive reasoning before tool output`,
       )
     }
-  } else if (
-    nonterminal.length < 2
-    || nonterminal.some((channel) => channel !== 'content')
-  ) {
-    failures.push(
-      `${label} raw final answer is not a progressive content-only stream`,
-    )
+  } else {
+    const firstContent = nonterminal.indexOf('content')
+    const prefix = nonterminal.slice(0, firstContent)
+    const visible = nonterminal.slice(firstContent)
+    if (
+      firstContent === -1 || visible.length < 2
+      || visible.some((channel) => channel !== 'content')
+      || (prefix.length > 0 && (
+        !finalReasoningAllowed || prefix.some((channel) => channel !== 'reasoning')
+      ))
+    ) {
+      failures.push(
+        finalReasoningAllowed
+          ? `${label} raw final answer does not stream visible content after its optional reasoning prefix`
+          : `${label} raw final answer is not a progressive content-only stream`,
+      )
+    }
   }
   return failures
 }
@@ -7570,8 +7581,28 @@ function captureHeadersAreSanitized(headers) {
   })
 }
 
+function hasBoundNativeFinalReasoning(value, result) {
+  if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(value?.native_reasoning_effort)) return false
+  try {
+    const recorded = value.identity.bundle.before.files
+    const config = readFileSync(path.join(result.modelPath, 'config.json'), 'utf8')
+    const template = readFileSync(path.join(result.modelPath, 'chat_template.jinja'), 'utf8')
+    return ['inkling2', 'inkling2_loop'].includes(JSON.parse(config).model_type)
+      && sha256Text(config) === recorded['config.json']?.sha256
+      && sha256Text(template) === recorded['chat_template.jinja']?.sha256
+      && template.includes('reasoning_effort')
+      && !template.includes('enable_thinking')
+  } catch {
+    return false
+  }
+}
+
 function validateRawMatrixCapture(value, result, contract) {
   const failures = []
+  const finalReasoningAllowed = hasBoundNativeFinalReasoning(value, result)
+  if (value?.native_reasoning_effort != null && !finalReasoningAllowed) {
+    failures.push('paired matrix native effort is not bound to the loaded Inkling template')
+  }
   const rawCapture = value?.raw_capture || {}
   if (
     rawCapture.enabled !== true
@@ -7736,6 +7767,7 @@ function validateRawMatrixCapture(value, result, contract) {
         roundIndex,
         label,
         request?.enable_thinking === true,
+        finalReasoningAllowed && request?.enable_thinking === true,
       ))
     }
     if (
@@ -9952,28 +9984,35 @@ async function main() {
           if (created.session?.type !== 'local') {
             throw new Error('real UI proof requires an Electron-managed local session');
           }
-          window.dispatchEvent(new CustomEvent('vmlx:navigate', {
+          const selectProofSession = () => window.dispatchEvent(new CustomEvent('vmlx:navigate', {
             detail: {
               mode: 'server',
               panel: 'session',
               sessionId: created.session.id,
             },
           }));
-          // The session/panel event stages the exact target, but a Sessions
-          // context refresh can restore Chat mode before React commits it. Use
-          // the same visible top-bar Server button a user clicks, then wait for
-          // the session-bound settings control. The previous event-only path
-          // timed out on the Chat quick-start screen without ever loading the
-          // model, even though the session itself had been created correctly.
+          selectProofSession();
+          // A fresh Chat screen only has the Servers & API sidebar entry.
           const serverModeButton = await waitFor(() => {
-            return [...document.querySelectorAll('button')].find((button) => (
-              button instanceof HTMLButtonElement
-              && isVisible(button)
-              && (button.textContent || '').replace(/\\s+/g, ' ').trim() === 'Server'
-            )) || null;
-          }, 'visible top-bar Server mode control');
+            const buttons = [...document.querySelectorAll('button')].filter((button) => (
+              button instanceof HTMLButtonElement && isVisible(button)
+            ));
+            return buttons.find((button) => (
+              (button.textContent || '').replace(/\\s+/g, ' ').trim() === 'Server'
+            )) || buttons.find((button) => button.getAttribute('aria-label') === 'Servers & API')
+              || null;
+          }, 'visible Server mode or Servers & API control');
+          const openedFromSidebar = serverModeButton.getAttribute('aria-label') === 'Servers & API';
           serverModeButton.scrollIntoView({ block: 'center' });
           serverModeButton.click();
+          if (openedFromSidebar) {
+            const cardSelector = '[data-vmlx-control="session-card-configure"][data-vmlx-session-id="'
+              + CSS.escape(created.session.id) + '"]';
+            await waitFor(() => [...document.querySelectorAll(
+              cardSelector + ',[data-vmlx-control="server-settings"]',
+            )].find((candidate) => isVisible(candidate)) || null, 'visible prepared server session');
+            selectProofSession();
+          }
           let sessionBeforeStart = await window.api.sessions.get(created.session.id);
           let sessionConfigBeforeProof = {};
           try {
@@ -10697,7 +10736,7 @@ async function main() {
               )
             ) || null;
           const thinkingNoticeShown = () =>
-            /does not read a thinking toggle/i.test(chatSettingsDrawer?.innerText || '');
+            /does not (?:read|support) a thinking toggle/i.test(chatSettingsDrawer?.innerText || '');
           const thinkingControl = await waitFor(
             () => findThinkingButton() || (thinkingNoticeShown() ? 'notice' : null),
             'visible reasoning control (' + thinkingLabel + ' button or not-configurable notice)',
@@ -10982,7 +11021,7 @@ async function main() {
             // Notice families (LFM2.5, MiniMax) render the honesty notice
             // instead of mode buttons — record the shape so the reopen
             // validator can accept a legitimately absent mode control.
-            thinkingNotice: /does not read a thinking toggle/i.test(
+            thinkingNotice: /does not (?:read|support) a thinking toggle/i.test(
               reopenedDrawer?.innerText || '',
             ),
             builtinToolsEnabled: reopenedCheckboxValueFor('Enable Built-in Coding Tools'),

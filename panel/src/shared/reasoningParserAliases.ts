@@ -12,6 +12,7 @@ export const REASONING_PARSERS_FOR_CLI = new Set([
   // the session form emitted NO --reasoning-parser flag at all and the choice
   // silently fell back to Auto.
   'muse_glimmer',
+  'inkling',
   // dots3_note plain <think> rail; the engine registers 'dots3' on the qwen3
   // think-tag contract.
   'dots3',

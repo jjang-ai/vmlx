@@ -143,6 +143,73 @@ def test_completed_dflash2_stream_records_its_server_request_id():
     assert (record["prompt_tokens"], record["cached_tokens"], record["prefill"]["tokens"]) == (4485, 4436, 49)
 
 
+
+def test_native_inkling_health_depends_on_the_attached_head():
+    from types import SimpleNamespace
+
+    from vmlx_engine.server import _native_inkling_dspark_health_status
+
+    model = SimpleNamespace(model_type="inkling2_loop")
+    engine = SimpleNamespace(_loaded=True, _model=model)
+    assert _native_inkling_dspark_health_status(engine) is None
+
+    model._inkling_native_dspark = SimpleNamespace(config=SimpleNamespace(block_size=8))
+    model._inkling_native_dspark_source = "sidecar"
+    health = _native_inkling_dspark_health_status(engine)
+    assert health == {
+        "enabled": True,
+        "method": "dspark",
+        "lane": "inkling2",
+        "draft_model_loaded": True,
+        "draft_source": "sidecar",
+        "initial_draft_tokens": 7,
+        "adaptive_width": True,
+        "request_dependent": True,
+    }
+    engine._loaded = False
+    assert _native_inkling_dspark_health_status(engine) is None
+
+
+def test_native_inkling_request_stats_do_not_leak_into_plain_ar():
+    from types import SimpleNamespace
+
+    from vmlx_engine.dspark.inkling_serving import InklingServingRun
+
+    RT.reset()
+    state = SimpleNamespace(
+        ar_tokens=17,
+        draft_rounds=3,
+        accepted=5,
+        widths={2: 2, 5: 1},
+        horizon=7,
+        ratio_temperature=None,
+        policy=SimpleNamespace(cost_snapshot=lambda: {}),
+    )
+    report = InklingServingRun.report(state)
+    engine = RT.instrument(BatchedEngine([
+        _out(1.0, 1),
+        _out(2.0, 26, finished=True, spec_stats=report),
+    ]))
+    engine.is_mllm = True
+
+    async def consume(request_id):
+        return [output async for output in engine.stream_chat(request_id=request_id)]
+
+    asyncio.run(consume("inkling-dspark"))
+    record = RT.last()
+    assert record["request_id"] == "inkling-dspark"
+    spec = record["speculative"]
+    assert (spec["kind"], spec["lane"], spec["cycles"]) == ("dspark", "inkling2", 3)
+    assert (spec["drafted"], spec["accepted"], spec["acceptance"]) == (6, 5, 5 / 6)
+    assert spec["widths"] == {2: 2, 5: 1}
+    assert spec["ar_tokens"] == 17
+
+    engine.outputs = [_out(3.0, 5, finished=True)]
+    asyncio.run(consume("inkling-ar"))
+    assert RT.last()["request_id"] == "inkling-ar"
+    assert RT.last()["speculative"] is None
+
+
 def test_batched_hit_record_has_every_panel_figure(monkeypatch):
     r = _record("batched-llm", monkeypatch)
     assert r["ttft_s"] == 0.5 and r["decode"] == {"tokens": 100, "seconds": 2.0, "tps": 50.0}
