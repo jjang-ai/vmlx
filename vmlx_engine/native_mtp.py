@@ -76,6 +76,7 @@ _FAMILY_ALIAS = {
     "qwen3_6_text": "qwen3_5",
     "qwen3_5_moe_text": "qwen3_5_moe",
     "qwen4_exp_text": "qwen4_exp",
+    "ernie4_5_moe": "ernie4_5",
 }
 
 # Keep this narrow. vmlx_engine/text_mtp wires these families through mlx-lm's
@@ -89,6 +90,7 @@ _RUNTIME_SUPPORTED_FAMILIES = {
     "qwen3_5_moe",
     "qwen4_exp",
     "hy_v3",
+    "ernie4_5",
     # glm5_next: the vendored model owns the layer-45 draft head, pre-output
     # hidden handoff, KDA accepted-prefix snapshots, and trimmable MLA cache.
     # It runs through the same GenerationBatch verifier as Qwen.
@@ -637,6 +639,7 @@ def _mtp_keys_from_weight_keys(weight_keys: list[str]) -> list[str]:
         str(key)
         for key in weight_keys
         if re.search(r"(^|\.)mtp(\.|$)", str(key))
+        or re.search(r"(^|\.)mtp_(block|emb_norm|hidden_norm|linear_proj)(\.|$)", str(key))
     ]
 
 
@@ -645,6 +648,7 @@ _MTP_LAYER_PATTERNS = (
     re.compile(r"^mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp\.layers\.(\d+)(?:\.|$)"),
     re.compile(r"(?:^|\.)mtp_layers\.(\d+)(?:\.|$)"),
+    re.compile(r"(?:^|\.)mtp_block\.(\d+)(?:\.|$)"),
 )
 
 
@@ -932,8 +936,10 @@ def native_mtp_effective_depth(
         )
     except Exception:
         family = None
-    if family == "hy_v3":
-        return 1, "family_default:hy_v3"
+    if family in ("hy_v3", "ernie4_5"):
+        # ERNIE uses its one trained head as the starting rung. The adaptive
+        # verifier can increase depth when the request benefits.
+        return 1, f"family_default:{family}"
     return max(1, min(native_mtp_max_depth(), depth)), source
 
 

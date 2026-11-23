@@ -2034,6 +2034,9 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
     from ..models.ricursive import ensure_ricursive_runtime_registered
 
     ensure_ricursive_runtime_registered(path, config=config)
+    from ..models.ernie4_5.register import ensure_ernie4_5_runtime_registered
+
+    ensure_ernie4_5_runtime_registered(path, config=config)
 
     if "minimax_m3_vl" in model_types:
         # vMLX-owned runtime installed as mlx_lm.models.minimax_m3_vl (the CLI registers it at startup too; this covers
@@ -5787,7 +5790,11 @@ def load_jang_model(
     def _finalize_loaded_jang(result):
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract
 
+
         model, tokenizer = result
+        finalize_ernie = getattr(model, "finalize_ernie_weight_loading", None)
+        if callable(finalize_ernie):
+            finalize_ernie()
         validate_nanbeige_loop_cache_contract(
             model,
             path,

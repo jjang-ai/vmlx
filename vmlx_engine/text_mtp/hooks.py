@@ -15,7 +15,7 @@ Wrapped methods (originals kept and always called):
     a batch that empties publishes and drops its lane.
 ``BatchGenerator._next`` / ``_make_batch`` / ``remove`` and
 ``PromptProcessingBatch.prompt``
-    GLM-5.3 prompt priming and exact N-1 prompt-boundary snapshots, and the
+    Text MTP prompt priming, GLM-5.3 exact N-1 prompt-boundary snapshots, and the
     hybrid prefill boundary capture used by the scheduler's SSD companion.
 """
 
@@ -27,6 +27,7 @@ import time
 from typing import Any
 
 from ..metal.affine_moe_pair_decode import affine_moe_ar_scope
+from ..native_mtp_prompt_priming import PromptHiddenTap, text_prompt_priming_enabled
 from . import glm_seam, lane, lane_policy, lane_stats
 from ._marks import is_marked, mark
 
@@ -98,29 +99,29 @@ def install_generation_hooks() -> bool:
         from ..native_mtp_prompt_priming import capture_requested
 
         model = getattr(self, "model", None)
-        if not glm_seam.prompt_priming_enabled(model) or not capture_requested(model):
+        if not text_prompt_priming_enabled(model) or not capture_requested(model):
             from ..utils.hybrid_prefill_capture import prompt_with_hybrid_capture
 
             return prompt_with_hybrid_capture(self, tokens, stock["prompt"])
-        self.model = glm_seam.PromptHiddenTap(model)
+        self.model = PromptHiddenTap(model)
         try:
             return stock["prompt"](self, tokens)
         finally:
             self.model = model
 
     def batch_init(self, *args, **kwargs):
-        # mlx-lm's constructor step consumes the final prompt token; with GLM
+        # mlx-lm's constructor step consumes the final prompt token; with
         # priming armed, that forward must also reach the head history, or the
         # primed history stops one token short and is rightly refused later.
         args = list(args)
         model = kwargs.get("model") if "model" in kwargs else (args[0] if args else None)
         tap_final_prompt = False
-        if model is not None and glm_seam.prompt_priming_enabled(model):
+        if model is not None and text_prompt_priming_enabled(model):
             from ..native_mtp_prompt_priming import capture_requested
 
             tap_final_prompt = capture_requested(model)
         if tap_final_prompt:
-            tap = glm_seam.PromptHiddenTap(model)
+            tap = PromptHiddenTap(model)
             if "model" in kwargs:
                 kwargs["model"] = tap
             else:
@@ -258,7 +259,7 @@ def install_generation_hooks() -> bool:
 
     def generator_make_batch(self, n, *args, **kwargs):
         batch = stock["gen_make_batch"](self, n, *args, **kwargs)
-        if n != 1 or not glm_seam.prompt_priming_enabled(batch.model):
+        if n != 1 or not text_prompt_priming_enabled(batch.model):
             return batch
         processing = getattr(self, "_currently_processing", None) or []
         if not processing or not getattr(batch, "uids", None):

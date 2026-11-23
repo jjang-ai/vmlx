@@ -276,6 +276,17 @@ registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', suppor
 // relies on config.json vision_config, not the family's isMultimodal flag.
 registerFamily('qwen3.5', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 (dense)', priority: 4 })
 registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 MoE', priority: 4 })
+registerFamily('ernie4.5', {
+  cacheType: 'kv',
+  supportsThinking: false,
+  thinkInTemplate: false,
+  defaultEnableThinking: false,
+  usePagedCache: false,
+  enableAutoToolChoice: false,
+  isMultimodal: false,
+  description: 'ERNIE-4.5 MoE',
+  priority: 20,
+})
 // Qwen3.8 Flash Next is a Qwen4Exp VL wrapper around the hybrid QSA/Gated
 // DeltaNet decoder.  Base MLX bundles do not require a jang_config sidecar, so
 // every user-visible capability that is invariant for this model_type must be
@@ -591,6 +602,8 @@ registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: false, description: 
  * Users can always override via manual parser selection in Server Settings.
  */
 const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
+  'ernie4_5_moe': 'ernie4.5',
+  'ernie4_5': 'ernie4.5', // Engine capability family for the MoE runtime.
   // ── Qwen family ──
   'zaya': 'zaya',
   'zaya1_vl': 'zaya1-vl',
@@ -1426,6 +1439,7 @@ function detectNativeMtpCapability(
     'dots3_note',
     'glm5_next',
     'glm5_next_text',
+    'ernie4_5_moe',
   ])
   const modelTypes = [
     parsedConfig.model_type,
@@ -1436,6 +1450,7 @@ function detectNativeMtpCapability(
   if (!nemotronImageOnly && !modelTypes.some(value => supportedFamilies.has(value))) return undefined
   const hy3 = modelTypes.includes('hy_v3')
   const glm5Next = modelTypes.includes('glm5_next') || modelTypes.includes('glm5_next_text')
+  const ernie45 = modelTypes.includes('ernie4_5_moe')
   const tuningDepth = readNativeMtpTuningDepth(modelPath)
   const hy3OutputEquivalent = hy3
     ? nativeMtpOutputEquivalent(modelPath)
@@ -1492,7 +1507,10 @@ function detectNativeMtpCapability(
       && Number.isInteger(baseLayerCount)
       && baseLayerCount > 0
       && keys.some(key => key.startsWith(`model.layers.${baseLayerCount}.`))
-    const hasMtp = keys.some(key => /(^|\.)mtp(\.|$)/.test(key)) || hasAppendedGlmMtp
+    const hasMtp = hasAppendedGlmMtp || keys.some(key =>
+      /(^|\.)mtp(\.|$)/.test(key) ||
+      (ernie45 && /(^|\.)mtp_(block|emb_norm|hidden_norm|linear_proj)(\.|$)/.test(key)),
+    )
     if (!hasMtp) return undefined
     const hasVisionWeights = keys.some(key =>
       /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
@@ -1534,7 +1552,7 @@ function detectNativeMtpCapability(
       // (cache.native.schema): hy3 is plain attention (plain_kv_v1); the
       // qwen3.6 hybrid SSM+attention bundle reports hybrid_ssm_v1 (NOT
       // hybrid_ssm_attention_kv_v1, which matched nothing the engine emits).
-      nativeCacheType: hy3
+      nativeCacheType: hy3 || ernie45
         ? 'plain_kv_v1'
         : glm5Next
           ? 'glm5_next_native_v2'

@@ -237,6 +237,20 @@ class TestIsMllmModel:
         assert is_mllm_model(str(tmp_path)) is False
         assert is_mllm_model(str(tmp_path), force_mllm=True) is False
 
+    def test_ernie4_5_routes_text_runtime_even_when_force_mllm(self, tmp_path):
+        """ERNIE-4.5 is text-only; mlx_vlm has no ernie4_5_moe loader/drafter."""
+        import json
+
+        _IS_MLLM_CACHE.clear()
+        config = {
+            "model_type": "ernie4_5_moe",
+            "architectures": ["Ernie4_5_MoeForCausalLM"],
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+
+        assert is_mllm_model(str(tmp_path)) is False
+        assert is_mllm_model(str(tmp_path), force_mllm=True) is False
+
     def test_remote_model_name_returns_false(self):
         """Remote HF names without local config.json default to non-VLM.
         Users must force VLM mode via session settings."""
