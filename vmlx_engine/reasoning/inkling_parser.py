@@ -36,6 +36,7 @@ mapping is a separate concern from parsing and is deliberately not done here.
 Created by Jinho Jang (eric@jangq.ai).
 """
 
+from ..tool_parsers.inkling_tool_parser import TOOL_CHANNEL, read_tool_message
 from .base import DeltaMessage, ReasoningParser, marker_prefix_hold_length
 
 THINKING_CHANNEL = "<|content_thinking|>"
@@ -45,8 +46,12 @@ SAMPLING_END = "<|content_model_end_sampling|>"
 
 # A turn may contain multiple channel messages. Only SAMPLING_END closes
 # generation. Hold incomplete markers across streaming chunks.
-_CHANNEL_MARKERS = (THINKING_CHANNEL, VISIBLE_CHANNEL, MESSAGE_END, SAMPLING_END)
-_MARKERS = (*_CHANNEL_MARKERS, "<|message_model|>")
+_MESSAGE_MODEL = "<|message_model|>"
+_CHANNEL_MARKERS = (
+    THINKING_CHANNEL, VISIBLE_CHANNEL, MESSAGE_END, SAMPLING_END,
+    TOOL_CHANNEL, _MESSAGE_MODEL,
+)
+_MARKERS = _CHANNEL_MARKERS
 
 
 def _strip_markers(text: str) -> str:
@@ -74,13 +79,22 @@ def _split_channels(text: str) -> tuple[str, str]:
         if next_marker is None or next_marker == SAMPLING_END:
             break
         cursor = next_at + len(next_marker)
-        if next_marker == MESSAGE_END:
+        if next_marker == TOOL_CHANNEL:
+            visible_parts.append(TOOL_CHANNEL)
+            message = read_tool_message(text, cursor)
+            if message is None:
+                break
+            _, end = message
+            visible_parts.append(text[cursor:end])
+            cursor = end
+            channel = None
+        elif next_marker in (MESSAGE_END, _MESSAGE_MODEL):
             channel = None
         elif next_marker == THINKING_CHANNEL:
             channel = reasoning_parts
         else:
             channel = visible_parts
-    return _strip_markers("".join(reasoning_parts)), _strip_markers("".join(visible_parts))
+    return "".join(reasoning_parts), "".join(visible_parts)
 
 
 class InklingReasoningParser(ReasoningParser):
@@ -117,7 +131,9 @@ class InklingReasoningParser(ReasoningParser):
         self,
         model_output: str,
     ) -> tuple[str | None, str | None]:
-        if THINKING_CHANNEL not in model_output and VISIBLE_CHANNEL not in model_output:
+        if not any(marker in model_output for marker in (
+            THINKING_CHANNEL, VISIBLE_CHANNEL, TOOL_CHANNEL
+        )):
             # No channel markers at all: the whole thing is visible content.
             cleaned = _strip_markers(model_output)
             return None, cleaned or None

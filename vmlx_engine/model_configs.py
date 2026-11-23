@@ -1239,6 +1239,24 @@ def register_all(registry=None):
         )
     )
 
+    _register(
+        ModelConfig(
+            family_name="inkling2_loop",
+            model_types=["inkling2_loop", "inkling2_loop_text"],
+            cache_type="hybrid",
+            tool_parser="inkling",
+            supports_native_tools=True,
+            preserve_native_tool_format=True,
+            reasoning_parser="inkling",
+            supports_thinking=True,
+            supports_instruct_mode=False,
+            supported_reasoning_efforts=["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            eos_tokens=["<|content_model_end_sampling|>"],
+            is_mllm=True,
+            priority=5,
+        )
+    )
+
     # Gemma 3 / Gemma 3n — Google's documented function-calling format is
     # a `tool_code` Python-code-block, NOT hermes JSON. Was previously
     # misconfigured with tool_parser="hermes" which silently failed to

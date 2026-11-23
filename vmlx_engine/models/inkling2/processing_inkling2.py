@@ -51,6 +51,11 @@ class Inkling2ImageProcessor(BaseImageProcessor):
         patches, grids = [], []
         ph, pw = self.size["height"], self.size["width"]
         for image in images:
+            if isinstance(image, (str, Path)):
+                with Image.open(image) as opened:
+                    image = np.asarray(
+                        opened.convert("RGBA" if opened.has_transparency_data else "RGB")
+                    )
             if isinstance(image, Image.Image):
                 image = np.asarray(
                     image.convert("RGBA" if image.has_transparency_data else "RGB")
@@ -65,6 +70,8 @@ class Inkling2ImageProcessor(BaseImageProcessor):
                     image = image.transpose(1, 2, 0)
             if image.ndim == 2:
                 image = np.repeat(image[..., None], 3, axis=-1)
+            if image.ndim != 3:
+                raise ValueError("Inkling Mini expects an image with height and width")
             if image.shape[-1] == 1:
                 image = np.repeat(image, 3, axis=-1)
             height, width, channels = image.shape

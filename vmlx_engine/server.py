@@ -5994,6 +5994,7 @@ _TOOL_CALL_MARKERS = [
     "<atem:invoke",
     "[Calling tool:",
     "<|recipient|>",
+    "<|content_invoke_tool_json|>",
     "<|tool_calls_section_begin|>",
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)

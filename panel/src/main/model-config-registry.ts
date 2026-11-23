@@ -436,6 +436,8 @@ registerFamily('spark2_5', { cacheType: 'kv', toolParser: 'spark25', reasoningPa
 // and translated to `reasoning_strength` in the request builder, so the knob
 // the user sees is the knob the model actually has.
 registerFamily('muse-glimmer', { cacheType: 'kv', toolParser: 'atem', reasoningParser: 'muse_glimmer', supportsThinking: true, supportsInstructMode: false, honorsEnableThinking: false, supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'], enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'Muse Glimmer (vision + video)', priority: 5 })
+registerFamily('inkling2-loop', { cacheType: 'hybrid', toolParser: 'inkling', reasoningParser: 'inkling', supportsThinking: true, supportsInstructMode: false, honorsEnableThinking: false, supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], enableAutoToolChoice: true, isMultimodal: true, description: 'Inkling Mini (text and vision)', priority: 5 })
+
 registerFamily('gemma3', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 })
 registerFamily('gemma3-text', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 })
 registerFamily('gemma3n', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3n (multimodal)', priority: 10 })
@@ -680,6 +682,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma4_unified': 'gemma4',
   'gemma4_unified_text': 'gemma4-text',
   'muse_glimmer': 'muse-glimmer',
+  'inkling2_loop': 'inkling2-loop',
+  'inkling2_loop_text': 'inkling2-loop',
   // ── Phi family ──
   'phi3': 'phi3',
   'phi3v': 'phi3-vision',
