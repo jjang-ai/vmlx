@@ -4203,7 +4203,18 @@ def _load_jang_v2(
         f"JANG v2 loaded in {elapsed:.1f}s: {source_model} ({actual_bits:.1f}-bit avg)"
     )
 
-    tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
+    tokenizer_options = {"eos_token_ids": config.get("eos_token_id")}
+    if _jang_effective_model_type(config) == "minicpm":
+        from transformers import PreTrainedConfig
+
+        # The tokenizer carries its own local Llama class and template.
+        # Transformers cannot instantiate MiniCPM's LongRoPE model config
+        # here without remote code. The language model already used MLX-LM.
+        tokenizer_options["tokenizer_config_extra"] = {
+            "config": PreTrainedConfig(),
+            "trust_remote_code": False,
+        }
+    tokenizer = load_tokenizer(path, **tokenizer_options)
     return model, tokenizer
 
 
