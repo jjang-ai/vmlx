@@ -44,13 +44,17 @@ class DraftAttention(nn.Module):
     def _heads(self, x, heads):
         return x.reshape(*x.shape[:2], heads, self.head_dim).transpose(0, 2, 1, 3)
 
+    def append_context(self, context, cache):
+        offset = cache.offset
+        k = self.k_norm_ctx(self._heads(self.k_proj_ctx(context), self.kv_heads))
+        v = self._heads(self.v_proj_ctx(context), self.kv_heads)
+        return cache.update_and_fetch(self.rope(k, offset=offset), v)
+
     def __call__(self, x, context, cache):
         # Every query sees the whole block and the same window BEFORE its anchor.
         # Only target context goes into persistent KV; proposals never do.
         offset = cache.offset
-        k = self.k_norm_ctx(self._heads(self.k_proj_ctx(context), self.kv_heads))
-        v = self._heads(self.v_proj_ctx(context), self.kv_heads)
-        k, v = cache.update_and_fetch(self.rope(k, offset=offset), v)
+        k, v = self.append_context(context, cache)
         if isinstance(cache, RotatingKVCache):
             k, v = cache._temporal_order(k), cache._temporal_order(v)
             k, v = k[..., -self.window :, :], v[..., -self.window :, :]
@@ -274,6 +278,21 @@ class InklingDraft(nn.Module):
             mixed = mixed + features[:, :, i] * alpha[i].astype(mx.float32)
         return norm(mixed).astype(hidden.dtype)
 
+    def _layer_context(self, hidden, index, layer, entry):
+        window = layer.self_attn.window
+        if window and hidden.shape[1] > window:
+            # Old rows are never read by this layer. Keep its absolute RoPE offset.
+            skipped = hidden.shape[1] - window
+            hidden = hidden[:, skipped:]
+            entry.offset += skipped
+        return self.mix(hidden, index, layer.dflare_norm)
+
+    def append_context(self, hidden, cache):
+        for index, (layer, entry) in enumerate(zip(self.layers, cache)):
+            layer.self_attn.append_context(
+                self._layer_context(hidden, index, layer, entry), entry
+            )
+
     def draft_block(
         self, last_bonus, hidden, cache, block_size, sampler, token_dtype=mx.int32
     ):
@@ -299,15 +318,8 @@ class InklingDraft(nn.Module):
         )
         x, residual = mx.concatenate([embed, masks], axis=1), None
         for i, (layer, entry) in enumerate(zip(self.layers, cache)):
-            context = hidden
-            window = layer.self_attn.window
-            if window and hidden.shape[1] > window:
-                # Old rows are never read by this layer. Keep its absolute RoPE offset.
-                skipped = hidden.shape[1] - window
-                context = hidden[:, skipped:]
-                entry.offset += skipped
             x, residual = layer(
-                x, residual, self.mix(context, i, layer.dflare_norm), entry
+                x, residual, self._layer_context(hidden, i, layer, entry), entry
             )
         x = self.norm(x.astype(mx.float32) + residual.astype(mx.float32)).astype(
             embed.dtype

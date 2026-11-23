@@ -1,6 +1,7 @@
 """Request-owned native DSpark state for the Inkling batch scheduler."""
 
 from collections import deque
+import json
 import logging
 import time
 
@@ -112,54 +113,57 @@ class InklingServingRun:
         self.draft_checkpoint_tokens = 0
         self._restored_draft_key = None
         self._draft_checkpoint = None
-        windows = [layer.self_attn.window for layer in self.drafter.head.layers]
-        self._draft_context_window = max(windows) if windows and all(windows) else 0
 
     def restore_draft_context(self, store, key, cached_tokens):
-        if not self._draft_context_window:
-            return
-        length = min(cached_tokens, self._draft_context_window)
+        from ..dflash2_session_disk import _unpack
+
         try:
-            payload = store.load(key, lambda path: mx.load(str(path)))
+            payload = store.load(key, lambda path: mx.load(str(path), return_metadata=True))
             if payload is None:
                 return
-            context = payload.get("draft_context")
-            expected_width = len(self.drafter.target_layer_ids) * self.drafter.head.config.hidden_size
-            if (
-                context is None or context.shape != (1, length, expected_width)
-                or context.dtype != mx.bfloat16
-            ):
+            arrays, metadata = payload
+            cache = _unpack(
+                "d", self.drafter.head.make_cache, arrays, json.loads(metadata["layers"])
+            )
+            if cache is None or len(cache) != len(self.drafter.head.layers):
                 return
-            # The local draft windows are empty. Keep the absolute offset
-            # when only the last window was retained beside the target cache.
-            for layer in self.drafter.cache:
-                layer.offset = cached_tokens - length
-            self.drafter._pending.append(context)
-            self.restored_draft_tokens = length
+            for entry, layer in zip(cache, self.drafter.head.layers):
+                attention = layer.self_attn
+                length = min(cached_tokens, attention.window or cached_tokens)
+                expected = (1, attention.kv_heads, length, attention.head_dim)
+                if (
+                    entry.offset != cached_tokens or len(entry.state) != 2
+                    or any(
+                        value is None or value.shape != expected or value.dtype != mx.bfloat16
+                        for value in entry.state
+                    )
+                ):
+                    return
+            self.drafter.cache = cache
+            self.restored_draft_tokens = cached_tokens
             self._restored_draft_key = key
-        except (AttributeError, OSError, RuntimeError, ValueError):
+        except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
             logger.warning("Inkling draft context restore skipped", exc_info=True)
 
     def stage_draft_context(self, key, boundary):
-        if not self._draft_context_window or key == self._restored_draft_key:
-            return
-        chunks = self.drafter._pending
-        origin = self.drafter.ctx_len - sum(chunk.shape[1] for chunk in chunks)
-        start = max(0, boundary - self._draft_context_window)
-        if not chunks or start < origin or not start < boundary <= self.drafter.ctx_len:
-            return
-        context = chunks[0] if len(chunks) == 1 else mx.concatenate(chunks, axis=1)
-        self._draft_checkpoint = key, boundary, context[:, start - origin:boundary - origin]
+        if key != self._restored_draft_key:
+            self._draft_checkpoint = key, boundary
+            self.drafter.checkpoint_cut = boundary
 
     def store_draft_context(self, store):
         checkpoint, self._draft_checkpoint = self._draft_checkpoint, None
-        if checkpoint is None:
+        state, self.drafter.checkpoint = self.drafter.checkpoint, None
+        if checkpoint is None or state is None:
             return
-        key, boundary, context = checkpoint
+        key, boundary = checkpoint
+        arrays, layers = state
         try:
-            context = mx.contiguous(context)
-            mx.eval(context)
-            store.save(key, lambda path: mx.save_safetensors(str(path), {"draft_context": context}))
+            store.save(
+                key,
+                lambda path: mx.save_safetensors(
+                    str(path), arrays, {"layers": json.dumps(layers)}
+                ),
+            )
             self.draft_checkpoint_tokens = boundary
         except (OSError, RuntimeError, ValueError):
             logger.warning("Inkling draft context checkpoint skipped", exc_info=True)
@@ -180,6 +184,7 @@ class InklingServingRun:
 
     def abort(self):
         self._draft_checkpoint = None
+        self.drafter.checkpoint_cut = self.drafter.checkpoint = None
         if self.transaction is not None:
             self.transaction.abort()
         self.transaction = self.features = None

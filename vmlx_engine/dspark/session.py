@@ -63,7 +63,7 @@ def open_inkling_draft_context_ssd(bundle: str, model_key: str):
     return OmniSessionDiskStore(
         root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"],
         model_key=f"{model_key}|{model_identity(bundle, bundle)}",
-        schema="inkling_draft_prompt_context_v1",
+        schema="inkling_projected_draft_context_v1",
     )
 
 

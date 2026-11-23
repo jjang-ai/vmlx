@@ -17,6 +17,8 @@ class InklingDSparkDrafter:
         # sees its complete restored state and decides every committed token.
         self.ctx_len = int(base)
         self._pending = []
+        self.checkpoint_cut = None
+        self.checkpoint = None
 
     def add_context(self, features):
         self.ctx_len += features.shape[1]
@@ -31,6 +33,24 @@ class InklingDSparkDrafter:
             if len(self._pending) == 1
             else mx.concatenate(self._pending, axis=1)
         )
+        cut, self.checkpoint_cut = self.checkpoint_cut, None
+        if cut is not None:
+            start = self.ctx_len - context.shape[1]
+            length = cut - start
+            # Refuse to publish a checkpoint when an older target cache
+            # restored without the matching draft state.
+            if 0 < length < context.shape[1] and all(
+                entry.offset == start for entry in self.cache
+            ):
+                from ..dflash2_session_disk import _detached, _pack
+
+                self.head.append_context(context[:, :length], self.cache)
+                arrays, layers = {}, []
+                _pack("d", self.cache, arrays, layers)
+                frozen = {key: _detached(array) for key, array in arrays.items()}
+                mx.eval(list(frozen.values()))
+                self.checkpoint = frozen, layers
+                context = context[:, length:]
         # Match verification may propose a deterministic token. Ratio
         # verification supplies the actual sampling distribution for each step.
         if draft_pick is None:
