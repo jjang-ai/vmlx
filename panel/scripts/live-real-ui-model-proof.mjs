@@ -5636,9 +5636,21 @@ export function correlateTerminalResponseToCacheExecution({
   const schedulerStats = cacheSnapshot?.scheduler
     || cacheSnapshot?.scheduler_stats
     || {}
-  const execution = schedulerStats.last_cache_execution
+  const scheduled = schedulerStats.last_cache_execution
     || schedulerStats.batch_generator?.last_cache_execution
-    || null
+  const lastRequest = cacheSnapshot?.last_request
+  const dflashTiming = lastRequest?.engine_type === 'simple'
+    && lastRequest.method === 'stream_chat'
+    && lastRequest.speculative?.kind === 'dflash2'
+    && lastRequest.aborted === false
+    && Boolean(lastRequest.finish_reason)
+    && Number.isSafeInteger(lastRequest.prefill?.tokens)
+  const execution = scheduled || (dflashTiming
+    ? { ...lastRequest, prefill_tokens: lastRequest.prefill.tokens }
+    : null)
+  const correlationSource = scheduled
+    ? 'chat_complete_response_id_to_scheduler_last_cache_execution'
+    : 'chat_complete_response_id_to_simple_dflash2_last_request'
   const terminalResponseId = String(terminal?.responseId || '')
   const executionRequestId = String(execution?.request_id || '')
   const messageId = String(terminal?.messageId || '')
@@ -5657,8 +5669,7 @@ export function correlateTerminalResponseToCacheExecution({
         request_id: executionRequestId,
         terminal_response_id: terminalResponseId,
         message_id: expectedAssistantMessageId,
-        correlation_source:
-          'chat_complete_response_id_to_scheduler_last_cache_execution',
+        correlation_source: correlationSource,
       }
     : null
   return {
@@ -5705,8 +5716,18 @@ export function isCacheRequestCorrelationVerified(result) {
       && String(row.userMessageId || '') === String(uiTurn.userMessageId || '')
       && String(observation.message_id || '') === String(uiTurn.assistantMessageId || '')
       && String(observation.proof_request_id || '') === String(uiTurn.proofRequestId || '')
-      && observation.correlation_source
-        === 'chat_complete_response_id_to_scheduler_last_cache_execution'
+      && (
+        observation.correlation_source === 'chat_complete_response_id_to_scheduler_last_cache_execution'
+        || (
+          observation.correlation_source === 'chat_complete_response_id_to_simple_dflash2_last_request'
+          && observation.engine_type === 'simple'
+          && observation.method === 'stream_chat'
+          && observation.speculative?.kind === 'dflash2'
+          && observation.aborted === false
+          && Boolean(observation.finish_reason)
+          && observation.prefill?.tokens === observation.prefill_tokens
+        )
+      )
     )
   })
 }
@@ -5723,7 +5744,7 @@ export function validateRequestCorrelatedCacheEvidence(result) {
   }
   if (!isCacheRequestCorrelationVerified(result)) {
     failures.push(
-      'UI terminal response IDs do not exactly match scheduler.last_cache_execution.request_id for every turn',
+      'UI terminal response IDs do not exactly match the backend cache record for every turn',
     )
   }
   let positiveReuseTurns = 0
@@ -12382,8 +12403,11 @@ async function main() {
         )
         ? 'verified'
         : 'partial',
-      source:
-        'chat:complete.responseId == health.scheduler.last_cache_execution.request_id',
+      source: (rendererResult.cacheRequestEvidence || []).some((row) =>
+        row.serverObservation?.correlation_source === 'chat_complete_response_id_to_simple_dflash2_last_request',
+      )
+        ? 'chat:complete.responseId == health.last_request.request_id'
+        : 'chat:complete.responseId == health.scheduler.last_cache_execution.request_id',
       turns: (rendererResult.cacheRequestEvidence || []).map((row) => ({
         turn: row.turn,
         proofRequestId: row.proofRequestId,

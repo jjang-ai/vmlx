@@ -3318,6 +3318,29 @@ describe("real UI model proof harness", () => {
     expect(validatePairedApiEvidence(result)).toEqual([]);
   });
 
+  it("correlates a terminal DFlash2 chat with the finished SimpleEngine timing record", () => {
+    const terminal = { responseId: "chatcmpl-real", messageId: "assistant-real" };
+    const last = {
+      request_id: "chatcmpl-real", engine_type: "simple", method: "stream_chat",
+      finish_reason: "stop", aborted: false, speculative: { kind: "dflash2" },
+      prefill: { tokens: 64, path: "dflash2" }, prompt_tokens: 256, cached_tokens: 192,
+    };
+    const correlate = (last_request: Record<string, unknown>) =>
+      correlateTerminalResponseToCacheExecution({
+        terminal, cacheSnapshot: { last_request }, turn: 1, proofRequestId: "proof-real",
+        userMessageId: "user-real", assistantMessageId: "assistant-real",
+      });
+    expect(correlate(last)).toMatchObject({
+      correlationStatus: "verified", executionRequestId: "chatcmpl-real",
+      serverObservation: { prefill_tokens: 64, cached_tokens: 192,
+        correlation_source: "chat_complete_response_id_to_simple_dflash2_last_request" },
+    });
+    expect(correlate({ ...last, request_id: "another" }).correlationStatus)
+      .toBe("partial_request_identity_mismatch");
+    expect(correlate({ ...last, aborted: true }).correlationStatus)
+      .toBe("partial_product_support_missing");
+  });
+
   it("binds the terminal response ID to the exact health cache execution", () => {
     const correlated = correlateTerminalResponseToCacheExecution({
       terminal: {

@@ -43,11 +43,12 @@ def _rate(tokens: int, seconds: float) -> Optional[float]:
 
 
 class _Tracker:
-    __slots__ = ("method", "engine_type", "model_type", "start", "first_ts", "first_count", "last_ts", "last_count",
+    __slots__ = ("method", "engine_type", "model_type", "request_id", "start", "first_ts", "first_count", "last_ts", "last_count",
                  "prompt", "cached", "detail", "completion", "prefill", "spec", "finish", "outputs")
 
-    def __init__(self, method: str, engine_type: str, model_type: str):
+    def __init__(self, method: str, engine_type: str, model_type: str, request_id: str | None = None):
         self.method, self.engine_type, self.model_type = method, engine_type, model_type
+        self.request_id = request_id
         self.start = time.perf_counter()
         self.first_ts = self.last_ts = None
         self.first_count = self.last_count = 0
@@ -124,6 +125,8 @@ class _Tracker:
             "speculative": dict(self.spec) if self.spec is not None else None,
             "finished_at": time.time(),
         }
+        if isinstance(self.request_id, str) and self.request_id:
+            record["request_id"] = self.request_id
         global _LAST, _SEQ
         with _LOCK:
             _SEQ += 1
@@ -192,7 +195,7 @@ def instrument(engine: Any) -> Any:
         def make_stream(original=original, name=name):
             @functools.wraps(original)
             async def tracked(*args, **kwargs):
-                tracker = _Tracker(name, engine_type, model_type())
+                tracker = _Tracker(name, engine_type, model_type(), kwargs.get("request_id"))
                 inner = original(*args, **kwargs)
                 finished = False
                 try:
@@ -218,7 +221,7 @@ def instrument(engine: Any) -> Any:
             @functools.wraps(original)
             async def tracked(*args, **kwargs):
                 before = _seq()
-                tracker = _Tracker(name, engine_type, model_type())
+                tracker = _Tracker(name, engine_type, model_type(), kwargs.get("request_id"))
                 output = await original(*args, **kwargs)
                 # SimpleEngine.chat drains its own (instrumented) stream_chat: that record has the timings.
                 if _seq() == before and output is not None:
