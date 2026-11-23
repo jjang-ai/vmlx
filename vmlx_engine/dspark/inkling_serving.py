@@ -1,6 +1,7 @@
 """Request-owned native DSpark state for the Inkling batch scheduler."""
 
 from collections import deque
+import logging
 import time
 
 import mlx.core as mx
@@ -8,6 +9,8 @@ import mlx.core as mx
 from .generate import ARFallback
 from .inkling_drafter import InklingDSparkDrafter
 from .inkling_target import InklingDSparkTarget
+
+logger = logging.getLogger(__name__)
 
 
 class InklingServingPolicy(ARFallback):
@@ -105,6 +108,61 @@ class InklingServingRun:
         self.prefill_tokens = 0
         self.ar_tokens = self.draft_rounds = self.accepted = 0
         self.widths = {}
+        self.restored_draft_tokens = 0
+        self.draft_checkpoint_tokens = 0
+        self._restored_draft_key = None
+        self._draft_checkpoint = None
+        windows = [layer.self_attn.window for layer in self.drafter.head.layers]
+        self._draft_context_window = max(windows) if windows and all(windows) else 0
+
+    def restore_draft_context(self, store, key, cached_tokens):
+        if not self._draft_context_window:
+            return
+        length = min(cached_tokens, self._draft_context_window)
+        try:
+            payload = store.load(key, lambda path: mx.load(str(path)))
+            if payload is None:
+                return
+            context = payload.get("draft_context")
+            expected_width = len(self.drafter.target_layer_ids) * self.drafter.head.config.hidden_size
+            if (
+                context is None or context.shape != (1, length, expected_width)
+                or context.dtype != mx.bfloat16
+            ):
+                return
+            # The local draft windows are empty. Keep the absolute offset
+            # when only the last window was retained beside the target cache.
+            for layer in self.drafter.cache:
+                layer.offset = cached_tokens - length
+            self.drafter._pending.append(context)
+            self.restored_draft_tokens = length
+            self._restored_draft_key = key
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            logger.warning("Inkling draft context restore skipped", exc_info=True)
+
+    def stage_draft_context(self, key, boundary):
+        if not self._draft_context_window or key == self._restored_draft_key:
+            return
+        chunks = self.drafter._pending
+        origin = self.drafter.ctx_len - sum(chunk.shape[1] for chunk in chunks)
+        start = max(0, boundary - self._draft_context_window)
+        if not chunks or start < origin or not start < boundary <= self.drafter.ctx_len:
+            return
+        context = chunks[0] if len(chunks) == 1 else mx.concatenate(chunks, axis=1)
+        self._draft_checkpoint = key, boundary, context[:, start - origin:boundary - origin]
+
+    def store_draft_context(self, store):
+        checkpoint, self._draft_checkpoint = self._draft_checkpoint, None
+        if checkpoint is None:
+            return
+        key, boundary, context = checkpoint
+        try:
+            context = mx.contiguous(context)
+            mx.eval(context)
+            store.save(key, lambda path: mx.save_safetensors(str(path), {"draft_context": context}))
+            self.draft_checkpoint_tokens = boundary
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Inkling draft context checkpoint skipped", exc_info=True)
 
     def add_prefill_features(self, features):
         self.prefill_tokens += features.shape[1]
@@ -121,6 +179,7 @@ class InklingServingRun:
         self.ready.clear()
 
     def abort(self):
+        self._draft_checkpoint = None
         if self.transaction is not None:
             self.transaction.abort()
         self.transaction = self.features = None
@@ -144,6 +203,8 @@ class InklingServingRun:
             "accepted_draft_tokens": self.accepted,
             "verify_rows": dict(self.widths),
             "horizon": self.horizon,
+            "draft_context_restored_tokens": self.restored_draft_tokens,
+            "draft_context_checkpoint_tokens": self.draft_checkpoint_tokens,
             "cost": self.policy.cost_snapshot(),
         }
 

@@ -8998,6 +8998,21 @@ class MLLMBatchGenerator:
             else None
         )
 
+        self._inkling_draft_context_store = None
+        if (
+            getattr(self.model, "_inkling_native_dspark", None) is not None
+            and self._ssm_state_cache is not None
+            and self._ssm_state_cache.disk_enabled
+        ):
+            from .dspark.session import open_inkling_draft_context_ssd
+
+            try:
+                self._inkling_draft_context_store = open_inkling_draft_context_ssd(
+                    self.model.model_name, self._ssm_state_cache.model_key
+                )
+            except (AttributeError, OSError, RuntimeError, ValueError):
+                logger.warning("Inkling draft context SSD unavailable", exc_info=True)
+
         # Async rederive queue for MLLM thinking models. When we capture SSM
         # state post-full-prefill (is_complete=False, gpl-contaminated), we
         # queue a deferred clean-prefill task that runs during idle cycles
@@ -9286,6 +9301,10 @@ class MLLMBatchGenerator:
         from .native_mtp_prompt_priming import drop_parked_context
 
         drop_parked_context(getattr(self, "language_model", None))
+        draft_context = getattr(self, "_inkling_draft_context_store", None)
+        if draft_context is not None:
+            self._inkling_draft_context_store = None
+            draft_context.close()
         if self._old_wired_limit is not None:
             try:
                 if MLLMBatchGenerator._stream is not None:
@@ -16762,11 +16781,24 @@ class MLLMBatchGenerator:
                             and not req.top_k and not req.min_p
                             else None
                         )
+                        cached_tokens = int(getattr(req, "_cached_tokens", 0) or 0)
                         state = InklingServingRun(
-                            self.model, head, int(getattr(req, "_cached_tokens", 0) or 0),
+                            self.model, head, cached_tokens,
                             pick=pick, ratio_temperature=ratio_temp,
                             trace_logits=_mimo_v2_token_trace_enabled(),
                         )
+                        draft_store = self._inkling_draft_context_store
+                        prompt_tokens = getattr(req, "_original_token_ids", None) or input_ids_list[i]
+                        if draft_store is not None and (
+                            getattr(req, "_bypass_prefix_cache", False)
+                            or self._request_has_media_cache_context(req, prompt_tokens)
+                        ):
+                            draft_store = None
+                        if draft_store is not None and 0 < cached_tokens < len(prompt_tokens):
+                            key = self._ssm_state_cache._key(
+                                prompt_tokens, cached_tokens, _ssm_companion_cache_extra_keys(req)
+                            )
+                            state.restore_draft_context(draft_store, key, cached_tokens)
                         with capture_dspark_features(
                             self.language_model, state.drafter.target_layer_ids,
                             state.add_prefill_features,
@@ -16774,6 +16806,14 @@ class MLLMBatchGenerator:
                             logits = self._run_vision_encoding(req, cache=req_cache)
                         if state.prefill_tokens == _prefill_token_count:
                             req._inkling_dspark_state = state
+                            draft_boundary = getattr(req, "_mixed_swa_boundary", None)
+                            if draft_store is not None and draft_boundary is not None:
+                                boundary = int(draft_boundary[0])
+                                if 0 < boundary < len(prompt_tokens):
+                                    key = self._ssm_state_cache._key(
+                                        prompt_tokens, boundary, _ssm_companion_cache_extra_keys(req)
+                                    )
+                                    state.stage_draft_context(key, boundary)
                     else:
                         logits = self._run_vision_encoding(req, cache=req_cache)
                     _diag_state_point("post-forward", req, req_cache, self._hybrid_kv_positions)
@@ -20276,6 +20316,9 @@ class MLLMBatchGenerator:
             if finish_reason is not None:
                 if inkling_state is not None:
                     inkling_state.finish()
+                    draft_store = self._inkling_draft_context_store
+                    if draft_store is not None:
+                        inkling_state.store_draft_context(draft_store)
                     spec_stats = inkling_state.report()
                     logger.info(
                         "Inkling native DSpark summary request=%s %s",

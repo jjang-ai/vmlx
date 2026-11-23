@@ -50,6 +50,23 @@ def configure_defaults(*, root: Optional[str], max_size_bytes: int, enabled: boo
     _DEFAULTS.update(root=root, max_size_bytes=int(max_size_bytes or 0), enabled=bool(enabled))
 
 
+def open_inkling_draft_context_ssd(bundle: str, model_key: str):
+    """Use the target's managed SSD pool for Inkling's exact prompt taps."""
+    if (
+        not reuse_enabled() or not _DEFAULTS["enabled"] or not _DEFAULTS["root"]
+        or os.environ.get("VMLX_DSPARK_SSD", "1").strip().lower() in _OFF
+    ):
+        return None
+    from ..dflash2_session_disk import model_identity
+    from ..utils.omni_session_disk_store import OmniSessionDiskStore
+
+    return OmniSessionDiskStore(
+        root=_DEFAULTS["root"], max_size_bytes=_DEFAULTS["max_size_bytes"],
+        model_key=f"{model_key}|{model_identity(bundle, bundle)}",
+        schema="inkling_draft_prompt_context_v1",
+    )
+
+
 def attach_ssd(target_path: str, drafter_path: str) -> None:
     global SSD
     if not _DEFAULTS["enabled"] or not _DEFAULTS["root"]:
