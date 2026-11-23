@@ -9,6 +9,7 @@ rounding; skip unowned route tiles.
 from functools import lru_cache
 
 import mlx.core as mx
+from mlx_lm.models.switch_layers import QuantizedSwitchLinear
 
 DECODE_BLOCK_SIZE = 8
 
@@ -48,8 +49,7 @@ def _masked_qmv():
 
 def supports_masked_qmv(linear, *, input_alignment=512):
     """Only the native NVFP4 vector layout and scaling tested by this kernel."""
-    from ..quantization.nvfp4 import ScaledQuantizedSwitchLinear
-    from .switch_layers import QuantizedSwitchLinear
+    from .nvfp4 import ScaledQuantizedSwitchLinear
 
     if not isinstance(linear, (QuantizedSwitchLinear, ScaledQuantizedSwitchLinear)):
         return False
@@ -297,8 +297,6 @@ def _paired_mxfp8_qmv():
 
 
 def supports_paired_mxfp8_qmv(linear):
-    from .switch_layers import QuantizedSwitchLinear
-
     return (
         type(linear) is QuantizedSwitchLinear
         and linear.mode == "mxfp8"
