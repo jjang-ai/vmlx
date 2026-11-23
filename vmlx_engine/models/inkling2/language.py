@@ -646,6 +646,12 @@ class AttentionResidual(nn.Module):
         )
 
 
+@mx.compile
+def _blend_message_gates(x, message, gates):
+    forget, gain = mx.split(mx.tanh(gates), 2, axis=-1)
+    return (1 - forget) * x + gain * message
+
+
 class MessageController(nn.Module):
     """Blend a previous pass's message into one sublayer input."""
 
@@ -658,7 +664,9 @@ class MessageController(nn.Module):
         self.eps = config.rms_norm_eps
 
     def __call__(self, x, message):
-        if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
+        verify = _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1
+        packed = getattr(self, "_verify_gate_weights", None)
+        if verify and (packed is None or x.shape[0] != 1):
             # The low-rank reductions are sensitive to the decode dispatch.
             return mx.concatenate([
                 self(x[:, row:row + 1], message[:, row:row + 1])
@@ -667,9 +675,18 @@ class MessageController(nn.Module):
         pair = mx.concatenate(
             [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
         )
-        hidden = (pair.astype(self.down_weight.dtype) @ self.down_weight.T).astype(
-            mx.float32
-        )
+        pair = pair.astype(self.down_weight.dtype)
+        if verify:
+            hidden = _decode_gemv_rows(pair, self.down_weight).astype(mx.float32)
+            # Indexed batched GEMV uses a different reduction for 64-wide
+            # gates. Use one serial-shaped product per position, reading both
+            # gates together, then blend every position in one compiled call.
+            gates = mx.concatenate([
+                hidden[:, row:row + 1] @ packed.T
+                for row in range(hidden.shape[1])
+            ], axis=1)
+            return _blend_message_gates(x, message, gates)
+        hidden = (pair @ self.down_weight.T).astype(mx.float32)
         forget = mx.tanh(hidden @ self.forget_weight.T)
         gain = mx.tanh(hidden @ self.gain_weight.T)
         return (1 - forget) * x + gain * message

@@ -60,7 +60,7 @@ class _AffineAttentionPack:
         return mx.split(output, cuts, axis=-1)
 
 
-def prepare_affine_attention(model):
+def prepare_jangh_decode(model):
     for layer in model.language_model.model.layers:
         attention = layer.self_attn
         modules = (
@@ -69,6 +69,15 @@ def prepare_affine_attention(model):
         )
         if all(is_affine_decode_projection(module) for module in modules):
             attention._affine_decode_pack = _AffineAttentionPack(modules)
+        for controller in getattr(layer, "controllers", {}).values():
+            forget, gain = controller.forget_weight, controller.gain_weight
+            if forget.shape != (2304, 64) or gain.shape != forget.shape or gain.dtype != forget.dtype:
+                continue
+            weights = mx.concatenate([forget, gain], axis=0)
+            mx.eval(weights)
+            controller._verify_gate_weights = weights
+            controller.forget_weight, controller.gain_weight = mx.split(weights, 2, axis=0)
+
 
 def softcapped_experts(switch, x, indices, activation):
     leading_shape = x.shape[:-1]

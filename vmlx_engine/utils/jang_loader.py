@@ -5241,9 +5241,9 @@ def _load_jang_v2_vlm(
                 f"missing={missing[:8]} ({len(missing)} total), "
                 f"unexpected={unexpected[:8]} ({len(unexpected)} total)"
             )
-        from vmlx_engine.models.inkling2.jangh import prepare_affine_attention
+        from vmlx_engine.models.inkling2.jangh import prepare_jangh_decode
 
-        prepare_affine_attention(model)
+        prepare_jangh_decode(model)
 
     if _ternary_packed_modules:
         if _ternary_packed_expanded_count != len(_ternary_packed_modules):
