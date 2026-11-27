@@ -1212,8 +1212,7 @@ _MXFP8_LUT_HEADER = _build_e4m3_lut_header()
 
 _MXFP8_GEMV_4SG_SRC = r"""
   // High-occupancy M5 Ultra/Max MXFP8 GEMV (small N < 2048, K % 4096 == 0):
-  // 1 lane = one 32-elem MXFP8 block; 4 simdgroups (128 threads) = 4096 elems/step; 1 row/TG.
-  // Shares weight loads across ALL T=1..8 verify rows (identical FP32 reduction order for T=1..8!).
+  // Zero register spill: streams 1 uint32 (4 E4M3 weights) at a time across T=1..8 rows!
   const uint sgi  = simdgroup_index_in_threadgroup;
   const uint lane = thread_index_in_simdgroup;
   const uint row  = threadgroup_position_in_grid.x;
@@ -1230,31 +1229,30 @@ _MXFP8_GEMV_4SG_SRC = r"""
   for (uint blk = sgi * 32u + lane; blk < (uint(K) / 32u); blk += 128u) {
     const float sf = as_type<float>(uint(sr[blk]) << 23u);
     const device uint4* wp = (const device uint4*)(wr + blk * 8u);
-    uint4 w0 = wp[0];
-    uint4 w1 = wp[1];
-    uint words[8] = {w0.x, w0.y, w0.z, w0.w, w1.x, w1.y, w1.z, w1.w};
-    float4 wf[8];
+    uint4 p0 = wp[0];
+    uint4 p1 = wp[1];
+    const uint k0 = blk * 32u;
+    float d[ROWS];
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) d[t] = 0.0f;
     #pragma unroll
     for (uint j = 0; j < 8u; j++) {
-      uint u = words[j];
-      wf[j] = float4(
+      uint u = (j == 0u) ? p0.x : (j == 1u) ? p0.y : (j == 2u) ? p0.z : (j == 3u) ? p0.w
+             : (j == 4u) ? p1.x : (j == 5u) ? p1.y : (j == 6u) ? p1.z : p1.w;
+      float4 wf = float4(
         float(E4M3_LUT[u & 255u]),
         float(E4M3_LUT[(u >> 8u) & 255u]),
         float(E4M3_LUT[(u >> 16u) & 255u]),
         float(E4M3_LUT[(u >> 24u) & 255u])
       );
-    }
-    const uint k0 = blk * 32u;
-    #pragma unroll
-    for (uint t = 0; t < uint(ROWS); t++) {
-      const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + size_t(t) * uint(K) + k0);
-      float d = 0.0f;
       #pragma unroll
-      for (uint j = 0; j < 8u; j++) {
-        d += dot(float4(xp[j]), wf[j]);
+      for (uint t = 0; t < uint(ROWS); t++) {
+        const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + size_t(t) * uint(K) + k0 + j * 4u);
+        d[t] += dot(float4(*xp), wf);
       }
-      acc[t] += d * sf;
     }
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) acc[t] += d[t] * sf;
   }
   #pragma unroll
   for (uint t = 0; t < uint(ROWS); t++) {
@@ -1272,93 +1270,57 @@ _MXFP8_GEMV_4SG_SRC = r"""
 
 _MXFP8_GEMV_1SG_SRC = r"""
   // High-throughput barrier-free MXFP8 multi-row GEMV (N >= 2048 or K == 1024, K % 1024 == 0):
-  // 1 simdgroup = 2 output rows (reuses x across 2 rows!), 1 lane = 32-elem MXFP8 block (1024 elems/step!).
-  // 4 simdgroups (128 threads) per TG = 8 output rows/TG -> ZERO TG barriers, flat T=1..8 time!
+  // Zero register spill (~28 regs even at ROWS=8!): 1 row/simdgroup, 4 simdgroups (4 rows)/TG,
+  // streams 1 uint32 (4 E4M3 bytes) at a time and shares weight loads across ALL T=1..8 rows!
   const uint sgi  = simdgroup_index_in_threadgroup;
   const uint lane = thread_index_in_simdgroup;
-  const uint grp  = threadgroup_position_in_grid.y;   // 0 for 2D, 0..G-1 for 3D MultiLinear!
-  const uint row0 = threadgroup_position_in_grid.x * 8u + sgi * 2u;
-  if (row0 >= uint(N)) return;
+  const uint grp  = threadgroup_position_in_grid.y;   // 0 for 2D, 0..G-1 for 3D MultiLinear
+  const uint row  = threadgroup_position_in_grid.x * 4u + sgi;
+  if (row >= uint(N)) return;
 
-  float acc0[ROWS], acc1[ROWS];
+  float acc[ROWS];
   #pragma unroll
-  for (uint t = 0; t < uint(ROWS); t++) { acc0[t] = 0.0f; acc1[t] = 0.0f; }
+  for (uint t = 0; t < uint(ROWS); t++) acc[t] = 0.0f;
 
-  const bool has1 = (row0 + 1u) < uint(N);
   const size_t g_w_off = size_t(grp) * uint(N) * (uint(K) / 4u);
   const size_t g_s_off = size_t(grp) * uint(N) * (uint(K) / 32u);
   const size_t g_x_off = size_t(grp) * uint(ROWS) * uint(K);
-  const device uint32_t* w0r = w + g_w_off + size_t(row0) * (uint(K) / 4u);
-  const device uint32_t* w1r = w0r + (uint(K) / 4u);
-  const device uint8_t*  s0r = scales + g_s_off + size_t(row0) * (uint(K) / 32u);
-  const device uint8_t*  s1r = s0r + (uint(K) / 32u);
+  const device uint32_t* wr = w + g_w_off + size_t(row) * (uint(K) / 4u);
+  const device uint8_t*  sr = scales + g_s_off + size_t(row) * (uint(K) / 32u);
 
   for (uint blk = lane; blk < (uint(K) / 32u); blk += 32u) {
+    const float sf = as_type<float>(uint(sr[blk]) << 23u);
+    const device uint4* wp = (const device uint4*)(wr + blk * 8u);
+    uint4 p0 = wp[0];
+    uint4 p1 = wp[1];
     const uint k0 = blk * 32u;
-    // Load x[t] ONCE and reuse across BOTH output rows (halves x reads)!
-    float4 xv[ROWS][8];
+    float d[ROWS];
     #pragma unroll
-    for (uint t = 0; t < uint(ROWS); t++) {
-      const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + g_x_off + size_t(t) * uint(K) + k0);
-      #pragma unroll
-      for (uint j = 0; j < 8u; j++) xv[t][j] = float4(xp[j]);
-    }
-    // Row 0
-    {
-      const float sf = as_type<float>(uint(s0r[blk]) << 23u);
-      const device uint4* wp = (const device uint4*)(w0r + blk * 8u);
-      uint4 p0 = wp[0], p1 = wp[1];
-      uint words[8] = {p0.x, p0.y, p0.z, p0.w, p1.x, p1.y, p1.z, p1.w};
-      float4 wf[8];
-      #pragma unroll
-      for (uint j = 0; j < 8u; j++) {
-        uint u = words[j];
-        wf[j] = float4(
-          float(E4M3_LUT[u & 255u]), float(E4M3_LUT[(u >> 8u) & 255u]),
-          float(E4M3_LUT[(u >> 16u) & 255u]), float(E4M3_LUT[(u >> 24u) & 255u])
-        );
-      }
+    for (uint t = 0; t < uint(ROWS); t++) d[t] = 0.0f;
+    #pragma unroll
+    for (uint j = 0; j < 8u; j++) {
+      uint u = (j == 0u) ? p0.x : (j == 1u) ? p0.y : (j == 2u) ? p0.z : (j == 3u) ? p0.w
+             : (j == 4u) ? p1.x : (j == 5u) ? p1.y : (j == 6u) ? p1.z : p1.w;
+      float4 wf = float4(
+        float(E4M3_LUT[u & 255u]),
+        float(E4M3_LUT[(u >> 8u) & 255u]),
+        float(E4M3_LUT[(u >> 16u) & 255u]),
+        float(E4M3_LUT[(u >> 24u) & 255u])
+      );
       #pragma unroll
       for (uint t = 0; t < uint(ROWS); t++) {
-        float d = 0.0f;
-        #pragma unroll
-        for (uint j = 0; j < 8u; j++) d += dot(xv[t][j], wf[j]);
-        acc0[t] += d * sf;
+        const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + g_x_off + size_t(t) * uint(K) + k0 + j * 4u);
+        d[t] += dot(float4(*xp), wf);
       }
     }
-    // Row 1
-    if (has1) {
-      const float sf = as_type<float>(uint(s1r[blk]) << 23u);
-      const device uint4* wp = (const device uint4*)(w1r + blk * 8u);
-      uint4 p0 = wp[0], p1 = wp[1];
-      uint words[8] = {p0.x, p0.y, p0.z, p0.w, p1.x, p1.y, p1.z, p1.w};
-      float4 wf[8];
-      #pragma unroll
-      for (uint j = 0; j < 8u; j++) {
-        uint u = words[j];
-        wf[j] = float4(
-          float(E4M3_LUT[u & 255u]), float(E4M3_LUT[(u >> 8u) & 255u]),
-          float(E4M3_LUT[(u >> 16u) & 255u]), float(E4M3_LUT[(u >> 24u) & 255u])
-        );
-      }
-      #pragma unroll
-      for (uint t = 0; t < uint(ROWS); t++) {
-        float d = 0.0f;
-        #pragma unroll
-        for (uint j = 0; j < 8u; j++) d += dot(xv[t][j], wf[j]);
-        acc1[t] += d * sf;
-      }
-    }
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) acc[t] += d[t] * sf;
   }
   const size_t g_o_off = size_t(grp) * uint(ROWS) * uint(N);
   #pragma unroll
   for (uint t = 0; t < uint(ROWS); t++) {
-    float s0 = simd_sum(acc0[t]);
-    float s1 = simd_sum(acc1[t]);
-    if (lane == 0u) {
-      out[g_o_off + size_t(t) * uint(N) + row0] = T(s0);
-      if (has1) out[g_o_off + size_t(t) * uint(N) + row0 + 1u] = T(s1);
-    }
+    float s = simd_sum(acc[t]);
+    if (lane == 0u) out[g_o_off + size_t(t) * uint(N) + row] = T(s);
   }
 """
 
@@ -1366,7 +1328,7 @@ _MXFP8_GEMV_1SG_SRC = r"""
 @lru_cache(maxsize=32)
 def _mxfp8_gemv_4sg_kernel(dt_name: str, rows: int, N: int, K: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_mxfp8_mv4sk_{dt_name}_r{rows}_n{N}_k{K}",
+        name=f"ernie_mxfp8_mv4sk2_{dt_name}_r{rows}_n{N}_k{K}",
         input_names=["x", "w", "scales"],
         output_names=["out"],
         header=_MXFP8_LUT_HEADER,
@@ -1378,7 +1340,7 @@ def _mxfp8_gemv_4sg_kernel(dt_name: str, rows: int, N: int, K: int):
 @lru_cache(maxsize=64)
 def _mxfp8_gemv_1sg_kernel(dt_name: str, rows: int, N: int, K: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_mxfp8_mv1sg_{dt_name}_r{rows}_n{N}_k{K}",
+        name=f"ernie_mxfp8_mv1sg2_{dt_name}_r{rows}_n{N}_k{K}",
         input_names=["x", "w", "scales"],
         output_names=["out"],
         header=_MXFP8_LUT_HEADER,
@@ -1413,7 +1375,7 @@ def mxfp8_linear_fast(linear: Any, x: mx.array) -> mx.array:
                         output_dtypes=[x.dtype],
                     )[0]
                 else:
-                    n_tg = (N + 7) // 8
+                    n_tg = (N + 3) // 4
                     out = _mxfp8_gemv_1sg_kernel(dt_name, T, N, K)(
                         inputs=[x2, linear.weight, linear.scales],
                         template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
@@ -1435,7 +1397,7 @@ def mxfp8_multi_linear_fast(x: mx.array, weight: mx.array, scales: mx.array) -> 
         N = int(weight.shape[1])
         if 1 <= T <= 8 and K % 1024 == 0:
             dt_name = "bf16" if x.dtype == mx.bfloat16 else "f16"
-            n_tg = (N + 7) // 8
+            n_tg = (N + 3) // 4
             out = _mxfp8_gemv_1sg_kernel(dt_name, T, N, K)(
                 inputs=[x[0], weight, scales],
                 template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
