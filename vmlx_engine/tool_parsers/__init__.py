@@ -79,6 +79,7 @@ from .zaya_tool_parser import ZayaToolParser
 from .hunyuan_tool_parser import HunyuanToolParser  # Hy3 / hy_v3
 from .xml_function_tool_parser import XMLFunctionToolParser
 from .dots_tool_parser import DotsToolParser  # dots3_note dots XML dialect
+from .ernie_tool_parser import ErnieToolParser  # ERNIE 5.5 <ernie:tool_call> dialect
 
 __all__ = [
     # Base classes
@@ -111,4 +112,5 @@ __all__ = [
     "HunyuanToolParser",
     "XMLFunctionToolParser",
     "DotsToolParser",
+    "ErnieToolParser",
 ]

@@ -97,6 +97,35 @@ def register_all(registry=None):
             registry.register(config)
             existing.add(config.family_name)
 
+    # ERNIE 5.5 Flash (`ernie5_5_moe`): 43-layer hybrid HCA (local sliding 128
+    # + 128x pooled KV) and sparse MLA-DSA + mHC hyper-connections + LatentMoE.
+    # Uses `<ernie:think>...</ernie:think>` reasoning tags, `<ernie:tool_call>`
+    # invoke/parameter XML tool calls, and optional bundled JANGH3 DSpark.
+    _register(
+        ModelConfig(
+            family_name="ernie5_5",
+            model_types=["ernie5_5_moe"],
+            cache_type="hybrid",
+            cache_subtype="ernie_hca_mla",
+            eos_tokens=["<|ernie:im_end|>", "<|ERNIE_MASK|>"],
+            tool_parser="ernie",
+            reasoning_parser="ernie",
+            think_in_template=False,
+            supports_thinking=True,
+            supports_instruct_mode=True,
+            supported_reasoning_efforts=["low", "medium", "high"],
+            supports_native_tools=True,
+            is_mllm=False,
+            architecture_hints={
+                "default_enable_thinking": True,
+                "default_reasoning_effort": "high",
+                "eos_token_ids": [2, 8],
+                "paged_ram_default": False,
+            },
+            priority=3,
+        )
+    )
+
     # ZAYA (Zyphra) — CCA attention + top-1 MoE.
     #
     # ZAYA is reasoning-capable, and the qwen3 parser extracts generated

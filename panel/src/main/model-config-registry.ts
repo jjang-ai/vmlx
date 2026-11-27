@@ -491,6 +491,10 @@ registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningPar
 // disabled because only the native M3 codec understands the full sparse state.
 registerFamily('minimax_m3', { supportsAdaptiveThinking: true, cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
 
+// ERNIE 5.5 Flash (`ernie5_5_moe`): 43-layer hybrid HCA + sparse MLA-DSA + mHC LatentMoE
+// with `<ernie:think>` reasoning, `<ernie:tool_call>` XML tools, and bundled DSpark.
+registerFamily('ernie5_5', { cacheType: 'hybrid', cacheSubtype: 'ernie_hca_mla', toolParser: 'ernie', reasoningParser: 'ernie', supportsThinking: true, honorsEnableThinking: true, supportsInstructMode: true, supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high', thinkInTemplate: false, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: false, description: 'ERNIE 5.5 Flash (HCA + MLA-DSA + mHC LatentMoE)', priority: 4 })
+
 // openPangu-2.0-Flash: 92B MoE (6B active) MLA + DSA/SWA hybrid + 3 stateful
 // causal convs + mHC hyper-connections. Mirrors the engine registry entry
 // (vmlx_engine/model_configs.py): cache_type kv + openpangu_v2_composite
@@ -704,6 +708,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'minimax_m3': 'minimax_m3',
   'openpangu_v2': 'openpangu_v2',
   'minimax_m3_vl': 'minimax_m3',
+  'ernie5_5_moe': 'ernie5_5',
   // ── Jamba / Mamba / SSM ──
   'jamba': 'jamba',
   'mamba': 'mamba',
@@ -2174,8 +2179,9 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         (typeof parsed.max_position_embeddings === 'number' ? parsed.max_position_embeddings : undefined) ??
         (typeof parsed.max_sequence_length === 'number' ? parsed.max_sequence_length : undefined) ??
         (typeof parsed.seq_length === 'number' ? parsed.seq_length : undefined) ??
-        // Some models nest it in text_config (VL models)
-        (typeof parsed.text_config?.max_position_embeddings === 'number' ? parsed.text_config.max_position_embeddings : undefined)
+        // Some models nest it in text_config (VL models / Inkling-2)
+        (typeof parsed.text_config?.max_position_embeddings === 'number' ? parsed.text_config.max_position_embeddings : undefined) ??
+        (typeof parsed.text_config?.model_max_length === 'number' ? parsed.text_config.model_max_length : undefined)
 
       let familyName: string | undefined = modelType ? MODEL_TYPE_TO_FAMILY[modelType] : undefined
       // JANG Tier-1 fallback: when config.json model_type is not a recognized

@@ -293,14 +293,29 @@ METAL_FUNC void tq_gather_qmm_nax(
 '''
 
 
+def _act_metal_and_tag(act: str, alpha) -> tuple[str, str]:
+    """Return (Metal expression for h(g, u), kernel-name tag). Plain SiLU keeps empty tag and legacy source."""
+    if act == "silu":
+        return "(g / (1.0f + metal::fast::exp(-g))) * u", ""
+    from vmlx_engine.jangt import moe_kernels as MK
+    variant = MK.check_act(act)
+    param = MK.act_param(variant, alpha)
+    return MK.act_value_metal(variant, param, "g", "u"), MK.act_tag(variant, 0.0, param)
+
+
 @functools.lru_cache(maxsize=None)
-def _nax_header() -> str:
+def _nax_header(act: str = "silu", alpha=0.0) -> str:
+    impl = _NAX_IMPL
+    if act != "silu":
+        expr, _ = _act_metal_and_tag(act, alpha)
+        impl = impl.replace("return (g / (1.0f + metal::fast::exp(-g))) * u;", f"return {expr};", 1)
     return (_mlx_headers(["steel/gemm/gemm.h", "steel/gemm/nax.h", "steel/gemm/loader.h", "quantized_nax.h"])
-            + _cb_header() + _LOADER + _NAX_IMPL)
+            + _cb_header() + _LOADER + impl)
 
 
 @functools.lru_cache(maxsize=None)
-def _nax_kernel(bits: int, fused: bool, tname: str):
+def _nax_kernel(bits: int, fused: bool, tname: str, act: str = "silu", alpha=0.0):
+    _, tag = _act_metal_and_tag(act, alpha) if fused else ("", "")
     src = f'''
   constexpr int BK_padded = (64 + 16 / sizeof({tname}));
   threadgroup {tname} Wg[64 * BK_padded];
@@ -310,13 +325,14 @@ def _nax_kernel(bits: int, fused: bool, tname: str):
       threadgroup_position_in_grid, simdgroup_index_in_threadgroup, thread_index_in_simdgroup);
 '''
     return mx.fast.metal_kernel(
-        name=f"jangtq2i_qmm_nax_b{bits}_{'fused' if fused else 'single'}_{tname}",
+        name=f"jangtq2i_qmm_nax_b{bits}_{'fused' if fused else 'single'}_{tname}{tag}",
         input_names=["x", "wg", "sg", "wu", "su", "indices", "meta", "lim"],
-        output_names=["y"], header=_nax_header(), source=src)
+        output_names=["y"], header=_nax_header(act if fused else "silu", alpha if fused else 0.0), source=src)
 
 
 @functools.lru_cache(maxsize=None)
-def _expert_nax_kernel(bits: int, fused: bool, tname: str, h32: bool = False):
+def _expert_nax_kernel(bits: int, fused: bool, tname: str, h32: bool = False, act: str = "silu", alpha=0.0):
+    _, tag = _act_metal_and_tag(act, alpha) if fused else ("", "")
     src = f'''
   constexpr int BK_padded = (64 + 16 / sizeof({tname}));
   threadgroup {tname} Wg[64 * BK_padded];
@@ -327,9 +343,9 @@ def _expert_nax_kernel(bits: int, fused: bool, tname: str, h32: bool = False):
       expert_offsets, tile_offsets, meta[3]{", scale[0]" if h32 else ""});
 '''
     return mx.fast.metal_kernel(
-        name=f"jangh_expert_qmm_nax_b{bits}_{fused}_{tname}" + ("_h32" if h32 else ""),
+        name=f"jangh_expert_qmm_nax_b{bits}_{fused}_{tname}" + ("_h32" if h32 else "") + tag,
         input_names=["x", "wg", "sg", "wu", "su", "indices", "expert_offsets", "tile_offsets", "meta", "lim"] + (["scale"] if h32 else []),
-        output_names=["y"], header=_nax_header(), source=src)
+        output_names=["y"], header=_nax_header(act if fused else "silu", alpha if fused else 0.0), source=src)
 
 
 def expert_tile_plan(idx_sorted, experts):
@@ -345,7 +361,8 @@ def _h32_scale():
     return mx.array([float(1.0 / math.sqrt(32))], dtype=mx.float32)
 
 
-def gather_qmm_expert_sorted(x, packed, scales, idx, bits, plan, *, packed_u=None, scales_u=None, limit=0.0, rotate_output=False):
+def gather_qmm_expert_sorted(x, packed, scales, idx, bits, plan, *, packed_u=None, scales_u=None, limit=0.0,
+                             rotate_output=False, act: str = "silu", alpha=0.0):
     """Internal NAX route, admitted only for qualified geometry by the switch."""
     M, width = x.shape
     experts, columns = packed.shape[:2]
@@ -363,7 +380,13 @@ def gather_qmm_expert_sorted(x, packed, scales, idx, bits, plan, *, packed_u=Non
                 and starts.shape == tiles.shape == (289,)
                 and starts.dtype == tiles.dtype == mx.int32 and nax_available()):
             raise ValueError("JANGH H32 requires qualified BF16 GLM expert tiles")
-    return _expert_nax_kernel(bits, fused, _TNAME[x.dtype], rotate_output)(
+    if fused and act != "silu":
+        from vmlx_engine.jangt import moe_kernels as MK
+        act = MK.check_act(act)
+        alpha = MK.act_param(act, alpha)
+    else:
+        act, alpha = "silu", 0.0
+    return _expert_nax_kernel(bits, fused, _TNAME[x.dtype], rotate_output, act, alpha)(
         inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,
                 idx, starts, tiles, mx.array([M, columns, width, experts], dtype=mx.int32),
                 _consts(float(limit), dtype=mx.float32)] + ([_h32_scale()] if rotate_output else []),
@@ -471,14 +494,21 @@ def _consts(*vals, dtype=None):
     return mx.array(list(vals), dtype=dtype)
 
 
-def gather_qmm_sorted(x, packed, scales, cb_unused, idx_sorted, bits, *, packed_u=None, scales_u=None, limit=0.0):
+def gather_qmm_sorted(x, packed, scales, cb_unused, idx_sorted, bits, *, packed_u=None, scales_u=None, limit=0.0,
+                      act: str = "silu", alpha=0.0):
     """Prefill: x (M, K) rows sorted by expert (idx_sorted (M,) uint32).
-    single: returns x W_e^T (M, N).  fused (packed_u given): returns act(x Wg^T, x Wu^T) with clamped SwiGLU."""
+    single: returns x W_e^T (M, N).  fused (packed_u given): returns act(x Wg^T, x Wu^T)."""
     M, K = x.shape
     N = packed.shape[1]
     if K % BK:
         raise ValueError(f"jangtq2 prefill requires K % {BK} == 0 (K={K})")
     fused = packed_u is not None
+    if fused and act != "silu":
+        from vmlx_engine.jangt import moe_kernels as MK
+        act = MK.check_act(act)
+        alpha = MK.act_param(act, alpha)
+    else:
+        act, alpha = "silu", 0.0
     idx = idx_sorted.astype(mx.uint32).reshape(-1)
     if idx.size < 8:   # MLX custom kernels put inputs with < 8 elements in `constant` space; the impl takes device*
         idx = mx.concatenate([idx, mx.broadcast_to(idx[-1:], (8 - idx.size,))])
@@ -488,10 +518,13 @@ def gather_qmm_sorted(x, packed, scales, cb_unused, idx_sorted, bits, *, packed_
             return g
         u = _gather_qmm_sorted_steel(x, packed_u, scales_u, idx, bits).astype(mx.float32)
         g = g.astype(mx.float32)
+        if act != "silu":
+            from vmlx_engine.jangt import moe_kernels as MK
+            return MK.act_mlx(g, u, act, limit, alpha).astype(x.dtype)
         if limit > 0:
             g = mx.minimum(g, limit); u = mx.clip(u, -limit, limit)
         return (g * mx.sigmoid(g) * u).astype(x.dtype)
-    k = _nax_kernel(bits, fused, _TNAME[x.dtype])
+    k = _nax_kernel(bits, fused, _TNAME[x.dtype], act, alpha)
     return k(inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales, idx,
                      mx.array([M, N, K], dtype=mx.int32), _consts(float(limit), dtype=mx.float32)],
              grid=(((N + BN - 1) // BN) * WM * WN * 32, (M + BM - 1) // BM, 1), threadgroup=(WM * WN * 32, 1, 1),
@@ -771,9 +804,10 @@ def _k_loop(mode: str, rotate: bool, body_al: str, body_gd: str, advance: str) -
 
 
 @functools.lru_cache(maxsize=None)
-def _qmv_kernel(bits: int, fused: bool, xname: str, aligned, rotate: bool = False, yz: bool = False, pair: bool = False):
+def _qmv_kernel(bits: int, fused: bool, xname: str, aligned, rotate: bool = False, yz: bool = False,
+                pair: bool = False, act: str = "silu", alpha=0.0):
     mode = aligned if isinstance(aligned, str) else ("al" if aligned else "gd")
-    return _qmv_kernel_mode(bits, fused, xname, mode, rotate, yz, pair)
+    return _qmv_kernel_mode(bits, fused, xname, mode, rotate, yz, pair, act, alpha)
 
 
 def _qmv_rows(bits: int, fused: bool, guard: str) -> str:
@@ -792,7 +826,8 @@ def _qmv_rows(bits: int, fused: bool, guard: str) -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool = False, yz: bool = False, pair: bool = False):
+def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool = False, yz: bool = False,
+                     pair: bool = False, act: str = "silu", alpha=0.0):
     aligned = mode == "al"
     guard_rows = "if (!active) continue;" if mode == "tl" else "if (row0 + r >= N || !active) continue;"
     loop = _k_loop(mode, rotate, _qmv_rows(bits, fused, ""), _qmv_rows(bits, fused, guard_rows),
@@ -810,6 +845,7 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
         {_qdot(bits, "ur", "b2")}
         accu[r] += b2;'''
     rows += "\n      }"
+    act_expr, act_suffix = _act_metal_and_tag(act, alpha) if (fused and not pair) else ("", "")
     if pair:
         store = f'''
     {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
@@ -829,7 +865,7 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
       if (lane == 0 && row0 + r < N) {{
         g *= float(sg[(size_t)e * N + row0 + r]); u *= float(su[(size_t)e * N + row0 + r]);
         if (L > 0.0f) {{ g = metal::min(g, L); u = metal::clamp(u, -L, L); }}
-        out[(size_t)disp * N + row0 + r] = (g / (1.0f + metal::fast::exp(-g))) * u;
+        out[(size_t)disp * N + row0 + r] = {act_expr};
       }}
     }}'''
     else:
@@ -852,16 +888,17 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
     {store}
 '''
     return mx.fast.metal_kernel(
-        name=f"jangtq2t_qmv_b{bits}_{'pair' if pair else 'fused' if fused else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}",
+        name=f"jangtq2t_qmv_b{bits}_{'pair' if pair else 'fused' if fused else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}{act_suffix}",
         input_names=["x", "wg", "sg", "wu", "su", "idx", "meta", "lim"],
         output_names=["out", "out_up"] if pair else ["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
 
 
 def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool, packed_u=None, scales_u=None, limit=0.0,
-               rotate: bool = False, slot_fastest: bool = False, return_pair: bool = False):
+               rotate: bool = False, slot_fastest: bool = False, return_pair: bool = False,
+               act: str = "silu", alpha=0.0):
     """Decode: x (n_x, K) any float dtype. idx (ndisp,) expert per dispatch.
     x row for dispatch d = d if x_per_dispatch else d // (ndisp // n_x).  Returns float32 (ndisp, N). With return_pair, return both unactivated projections.
-    Single: W_e x.  Fused (packed_u given): act(Wg x, Wu x) with clamped SwiGLU."""
+    Single: W_e x.  Fused (packed_u given): act(Wg x, Wu x)."""
     ndisp = idx.size
     nx, K = x.shape
     N = packed.shape[1]
@@ -875,7 +912,14 @@ def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool,
         or packed_u.shape != packed.shape or scales_u.shape != scales.shape
     ):
         raise ValueError("Paired JANGH projections require matching packed and scale shapes")
-    k = _qmv_kernel(bits, fused, _TNAME[x.dtype], _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0), rotate, yz, return_pair)
+    if fused and not return_pair and act != "silu":
+        from vmlx_engine.jangt import moe_kernels as MK
+        act = MK.check_act(act)
+        alpha = MK.act_param(act, alpha)
+    else:
+        act, alpha = "silu", 0.0
+    k = _qmv_kernel(bits, fused, _TNAME[x.dtype], _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0),
+                    rotate, yz, return_pair, act, alpha)
     tiles = (N + NSG * RPS - 1) // (NSG * RPS)
     count = 2 if return_pair else 1
     outputs = k(inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,

@@ -194,20 +194,13 @@ class JTMixedSwitchGLU(nn.Module):
         from vmlx_engine.jangh import kernels as K
         g, u = self.gate_proj, self.up_proj
         xh, ids = K.h32_rows(x2, mx.float32), idx2.reshape(-1).astype(mx.uint32)
-        if self.act != "silu":
-            # the JANGH kernels' fused epilogue is SiLU only: gate and up unactivated (fp32 out; one paired dispatch
-            # when their shapes match, else two single-weight passes), then the variant in fp32
-            if g.tq2_packed.shape == u.tq2_packed.shape and g.tq2_scales.shape == u.tq2_scales.shape and g.bits == u.bits:
-                hg, hu = K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids, g.bits, x_per_dispatch=False,
-                                      packed_u=u.tq2_packed, scales_u=u.tq2_scales, slot_fastest=x2.shape[0] > 1,
-                                      return_pair=True)
-            else:
-                hg, hu = (K.gather_qmv(xh, p.tq2_packed, p.tq2_scales, p._cb, ids, p.bits, x_per_dispatch=False,
-                                       slot_fastest=x2.shape[0] > 1) for p in (g, u))
-            return MK.act_mlx(hg, hu, self.act, self.limit, self.alpha)
-        return K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids,
-                            g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales, limit=self.limit,
-                            slot_fastest=x2.shape[0] > 1)
+        if g.tq2_packed.shape == u.tq2_packed.shape and g.tq2_scales.shape == u.tq2_scales.shape and g.bits == u.bits:
+            return K.gather_qmv(xh, g.tq2_packed, g.tq2_scales, g._cb, ids,
+                                g.bits, x_per_dispatch=False, packed_u=u.tq2_packed, scales_u=u.tq2_scales,
+                                limit=self.limit, slot_fastest=x2.shape[0] > 1, act=self.act, alpha=self.alpha)
+        hg, hu = (K.gather_qmv(xh, p.tq2_packed, p.tq2_scales, p._cb, ids, p.bits, x_per_dispatch=False,
+                               slot_fastest=x2.shape[0] > 1) for p in (g, u))
+        return MK.act_mlx(hg, hu, self.act, self.limit, self.alpha)
 
     def _decode_down(self, h, idx2, w2, out_dtype, h_rotated: bool = False):
         if self.dn_fmt == "native":
@@ -281,14 +274,24 @@ class JTMixedSwitchGLU(nn.Module):
             from vmlx_engine.jangh import kernels as K
             gp, upr = self.gate_proj, self.up_proj
             xh = K.h32_rows(x2, x2.dtype)[tok]
-            if self.act != "silu":
-                # SiLU-only fused JANGH epilogue: two single-weight passes, the variant in fp32
+            same_shape = (gp.tq2_packed.shape == upr.tq2_packed.shape
+                          and gp.tq2_scales.shape == upr.tq2_scales.shape and gp.bits == upr.bits)
+            if same_shape and plan is not None and K.nax_available():
+                h_s = K.gather_qmm_expert_sorted(
+                    xh, gp.tq2_packed, gp.tq2_scales, idx_s, gp.bits, plan,
+                    packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit,
+                    act=self.act, alpha=self.alpha,
+                ).astype(mx.float32)
+            elif same_shape:
+                h_s = K.gather_qmm_sorted(
+                    xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
+                    packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit,
+                    act=self.act, alpha=self.alpha,
+                ).astype(mx.float32)
+            else:
                 g = K.gather_qmm_sorted(xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits).astype(mx.float32)
                 u = K.gather_qmm_sorted(xh, upr.tq2_packed, upr.tq2_scales, upr._cb, idx_s, upr.bits).astype(mx.float32)
                 h_s = MK.act_mlx(g, u, self.act, self.limit, self.alpha)
-            else:
-                h_s = K.gather_qmm_sorted(xh, gp.tq2_packed, gp.tq2_scales, gp._cb, idx_s, gp.bits,
-                                          packed_u=upr.tq2_packed, scales_u=upr.tq2_scales, limit=self.limit).astype(mx.float32)
         if self.dn_fmt == "native":
             y_s = self.down_proj(h_s.astype(x2.dtype)[:, None, :], idx_s, sorted_indices=True)[:, 0, :]
         elif self.dn_fmt == "jangt":

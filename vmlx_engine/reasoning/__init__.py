@@ -85,6 +85,7 @@ def _register_builtin_parsers():
     from .minimax_m3_parser import MiniMaxM3ReasoningParser
     from .muse_glimmer_parser import MuseGlimmerReasoningParser
     from .inkling_parser import InklingReasoningParser
+    from .ernie_parser import ErnieReasoningParser
 
     register_parser("qwen3", Qwen3ReasoningParser)
     register_parser("deepseek_r1", DeepSeekR1ReasoningParser)
@@ -117,6 +118,9 @@ def _register_builtin_parsers():
     register_parser("gemma4", Gemma4ReasoningParser)
     # MiniMax-M3 uses <mm:think>...</mm:think> plain-XML think blocks
     register_parser("minimax_m3", MiniMaxM3ReasoningParser)
+    # ERNIE 5.5 uses <ernie:think>...</ernie:think> blocks
+    register_parser("ernie", ErnieReasoningParser)
+    register_parser("ernie5_5", ErnieReasoningParser)
     # dots3_note: plain <think>...</think>, thinking ON by default (the model
     # emits <think> itself off a bare assistant header; token 151721).
     # Thinking OFF is a template-side prefilled CLOSED block plus a

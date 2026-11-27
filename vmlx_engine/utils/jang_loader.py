@@ -5859,6 +5859,16 @@ def load_jang_model(
         if is_janght_bundle(read_mimo_v26_contract(path)):
             return load_mimo_v26_janght_text(path)
 
+    # ERNIE 5.5 Flash (ernie5_5_moe): native JANGHT2.4 + MXFP8 trunk + bundled DSpark drafter.
+    if str(hf_config.get("model_type", "")).lower() == "ernie5_5_moe":
+        from ..dspark.runtime import attach_text_lane
+        from ..models.ernie5_5_moe import load_ernie5_5_moe, load_ernie_tokenizer
+
+        model = load_ernie5_5_moe(path)
+        tokenizer = load_ernie_tokenizer(path)
+        attach_text_lane(model, path)
+        return model, tokenizer
+
     def _finalize_loaded_jang(result):
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract
 

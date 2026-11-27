@@ -33,8 +33,9 @@ TARGETS = {
     "minicpmv4_7": ("minicpm_target", "MiniCPMDSparkTarget"),
     "minimax_m3": ("minimax_target", "MiniMaxM3DSparkTarget"),
     "minimax_m3_vl": ("minimax_target", "MiniMaxM3DSparkTarget"),
+    "ernie5_5_moe": ("ernie_target", "ErnieDSparkTarget"),
 }
-TEXT_LANE_MODEL_TYPES = frozenset({"minimax_m3", "minimax_m3_vl"})
+TEXT_LANE_MODEL_TYPES = frozenset({"minimax_m3", "minimax_m3_vl", "ernie5_5_moe"})
 
 
 def config_declares_dspark(cfg: Any) -> bool:
@@ -115,6 +116,39 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
     if spec and str(spec.get("method", "")).lower() not in ("", "dspark"):
         return None
     drafter_dir = root / str(spec.get("drafter_path") or "dspark")
+    # ERNIE 5.5 ships its bundled JANGH3-q4fit DSpark drafter as `dspark/draft-manifest.json`
+    # + `draft-head.safetensors` + `draft-layer-{0..N-1}.safetensors`.
+    if model_type == "ernie5_5_moe":
+        manifest_path = drafter_dir / "draft-manifest.json"
+        if not manifest_path.is_file():
+            return None
+        from ..models.ernie5_5_moe.dspark import ErnieDSparkDrafter
+
+        module_name, class_name = TARGETS[model_type]
+        target_cls = getattr(importlib.import_module(f"{__package__}.{module_name}"), class_name)
+        target = target_cls(model)
+        drafter = ErnieDSparkDrafter(root, model.config)
+        drafter.bind_target(model)
+        max_draft = ladder_top(target, drafter)
+        fixed_width = _env_int("VMLX_DSPARK_WIDTH")
+        if fixed_width is not None and _env_int("VMLX_DSPARK_MAX_DRAFT") is None:
+            max_draft = max(max_draft, fixed_width)
+        grow_draft_ladder = _env_int("VMLX_DSPARK_MAX_DRAFT") is None and fixed_width is None
+        logger.info(
+            "ERNIE 5.5 DSpark drafter loaded from %s: block %d, taps %s, initial ladder 1..%d (%s)",
+            drafter_dir, drafter.block, drafter.target_layer_ids, max_draft,
+            "Adaptive, growable" if grow_draft_ladder else "Adaptive, explicit limit",
+        )
+        return {
+            "target": target,
+            "drafter": drafter,
+            "path": str(drafter_dir),
+            "max_draft": max_draft,
+            "fixed_width": fixed_width,
+            "grow_draft_ladder": grow_draft_ladder,
+            "cost_per_row": float(spec.get("cost_per_row", 0.08)),
+            "model_type": model_type,
+        }
     if not (drafter_dir / "config.json").is_file():
         if spec:
             logger.info("DSpark declared in jang_config but the bundle ships no drafter (%s); serving AR", drafter_dir)

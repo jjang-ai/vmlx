@@ -12,8 +12,10 @@ export function jangtqBitsFromProfile(profile: unknown): number | undefined {
 
 export function formatJangQuantizationLabel(config: {
   format?: unknown
+  format_name?: unknown
   weight_format?: unknown
   profile?: unknown
+  bpw?: { whole_model?: unknown }
   jangt?: { version?: unknown; code?: unknown }
   quantization?: {
     profile?: unknown
@@ -24,6 +26,7 @@ export function formatJangQuantizationLabel(config: {
   }
 }): string | undefined {
   const format = typeof config.format === 'string' ? config.format.toLowerCase() : ''
+  const formatName = typeof config.format_name === 'string' ? config.format_name.trim() : ''
   const weightFormat =
     typeof config.weight_format === 'string' ? config.weight_format.toLowerCase() : ''
   const quant = config.quantization ?? {}
@@ -43,6 +46,10 @@ export function formatJangQuantizationLabel(config: {
   if (format === 'jangtq2' || weightFormat === 'jangtq2') {
     if (profile && /^JANG(?:HT|H|T)/i.test(profile)) {
       return profile
+    }
+    if (/^JANGHT\b/i.test(formatName)) {
+      const wholeBpw = numberOrUndefined(config.bpw?.whole_model)
+      return wholeBpw != null ? `JANGHT${wholeBpw.toFixed(1)}` : 'JANGHT'
     }
     if (config.jangt?.version === 1 && config.jangt?.code === 'v2_halfbits') return 'JANGT'
     return 'JANGH'

@@ -209,8 +209,10 @@ class DSparkTextGenerator(SingleBatchGenerator):
             self.last_dspark_stats = summary
             # Same keys as the MiniCPM DSpark lane's spec_stats (models/mllm.py: the Perf panel's Last-request card
             # reads kind / lane / cycles / emitted_per_cycle / acceptance / ar_tokens / widths).
+            rt_model_type = str((self._dspark or {}).get("model_type") or "")
+            lane_name = "ernie5_5-text" if rt_model_type == "ernie5_5_moe" else "minimax-text"
             self._spec_stats[req.uid] = {
-                "kind": "dspark", "lane": "minimax-text", **summary,
+                "kind": "dspark", "lane": lane_name, **summary,
                 "cycles": summary["rounds"], "emitted_per_cycle": summary["tokens_per_round"],
                 "widths": {str(k): v for k, v in summary["widths"].items()},
                 "generation_tps": summary.get("decode_tok_s"),

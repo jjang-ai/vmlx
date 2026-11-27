@@ -1508,6 +1508,19 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _finalize_loaded_model(_m, _t)
 
+                # ERNIE 5.5 Flash (`ernie5_5_moe`): self-contained HCA+MLA+mHC JANGHT2.4 runtime + bundled DSpark.
+                if _mt == "ernie5_5_moe" or _tc_mt == "ernie5_5_moe":
+                    logger.info(
+                        "ERNIE 5.5 Flash bundle detected — routing through native ernie5_5_moe runtime."
+                    )
+                    from ..dspark.runtime import attach_text_lane
+                    from ..models.ernie5_5_moe import load_ernie5_5_moe, load_ernie_tokenizer
+
+                    _m = load_ernie5_5_moe(local_model_path)
+                    _t = load_ernie_tokenizer(local_model_path)
+                    attach_text_lane(_m, local_model_path)
+                    return _finalize_loaded_model(_m, _t)
+
                 # DeepSeek V4.1-Flash (deepseek_v41): V4-family backbone + Engram
                 # taps + vision + dSpark heads. Routed through the validated
                 # jang_tools.dsv41 runtime wrapped in the engine Model contract.
