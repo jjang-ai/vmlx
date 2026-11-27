@@ -41,6 +41,9 @@ export function formatJangQuantizationLabel(config: {
 
   // Canonical component name for the existing v2 serialized ABI.
   if (format === 'jangtq2' || weightFormat === 'jangtq2') {
+    if (profile && /^JANG(?:HT|H|T)/i.test(profile)) {
+      return profile
+    }
     if (config.jangt?.version === 1 && config.jangt?.code === 'v2_halfbits') return 'JANGT'
     return 'JANGH'
   }

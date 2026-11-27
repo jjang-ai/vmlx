@@ -22,7 +22,9 @@ cast back to the activation dtype).
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+import os
+from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from typing import Any
 
 import mlx.core as mx
@@ -31,6 +33,130 @@ import mlx.nn as nn
 SUPPORTED_BLOCKS = (512, 1024, 2048, 4096)
 CONTRACT = "prism.hadamard.v1"
 TRANSFORM = "normalized-sylvester-walsh-hadamard"
+
+_FWHT_1024_BODY = r"""
+  // Fused FP32 Sylvester-Walsh-Hadamard (B=1024) + signs mul + dtype conversion.
+  // 128 threads (4 simdgroups x 32 lanes) per 1024-element block, ONE barrier.
+  const uint blk = threadgroup_position_in_grid.x;
+  const uint tid = thread_index_in_threadgroup;
+  const uint sg = tid >> 5;
+  const uint lane = tid & 31u;
+  const uint blocks_per_row = params[0];
+  const uint col0 = (blk % blocks_per_row) * 1024u;
+  const size_t blk_base = size_t(blk) * 1024u;
+
+  threadgroup float smem[32 * 33];
+
+  // Phase 1: low 5 bits (stride 1..16) in registers via simd_shuffle_xor
+  #pragma unroll
+  for (uint j = 0; j < 8; j++) {
+    uint hi = sg * 8u + j;
+    uint idx = hi * 32u + lane;
+    float v = float(x[blk_base + idx]);
+    if (!INVERSE) {
+      v *= signs[col0 + idx];
+    }
+    #pragma unroll
+    for (uint s = 1; s < 32; s <<= 1) {
+      float o = simd_shuffle_xor(v, s);
+      v = (lane & s) ? (o - v) : (v + o);
+    }
+    smem[hi * 33u + lane] = v;
+  }
+
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  // Phase 2: high 5 bits (stride 32..512) in registers via simd_shuffle_xor
+  constexpr float INV_SQRT = 0.03125f;
+  #pragma unroll
+  for (uint j = 0; j < 8; j++) {
+    uint lo = sg * 8u + j;
+    float v = smem[lane * 33u + lo];
+    #pragma unroll
+    for (uint s = 1; s < 32; s <<= 1) {
+      float o = simd_shuffle_xor(v, s);
+      v = (lane & s) ? (o - v) : (v + o);
+    }
+    v *= INV_SQRT;
+    uint idx = lane * 32u + lo;
+    if (INVERSE) {
+      v *= signs[col0 + idx];
+    }
+    out[blk_base + idx] = T(v);
+  }
+"""
+
+_FWHT_512_BODY = r"""
+  // Fused FP32 Sylvester-Walsh-Hadamard (B=512 = 16 x 32) + signs + dtype conversion.
+  // 64 threads (2 simdgroups x 32 lanes) per 512-element block, ONE barrier.
+  const uint blk = threadgroup_position_in_grid.x;
+  const uint tid = thread_index_in_threadgroup;
+  const uint sg = tid >> 5;
+  const uint lane = tid & 31u;
+  const uint blocks_per_row = params[0];
+  const uint col0 = (blk % blocks_per_row) * 512u;
+  const size_t blk_base = size_t(blk) * 512u;
+
+  threadgroup float smem[16 * 33];
+
+  #pragma unroll
+  for (uint j = 0; j < 8; j++) {
+    uint hi = sg * 8u + j;
+    uint idx = hi * 32u + lane;
+    float v = float(x[blk_base + idx]);
+    if (!INVERSE) {
+      v *= signs[col0 + idx];
+    }
+    #pragma unroll
+    for (uint s = 1; s < 32; s <<= 1) {
+      float o = simd_shuffle_xor(v, s);
+      v = (lane & s) ? (o - v) : (v + o);
+    }
+    smem[hi * 33u + lane] = v;
+  }
+
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  constexpr float INV_SQRT = 0.04419417382415922f;  // 1 / sqrt(512)
+  const uint hi = lane & 15u;
+  const uint half_sg = lane >> 4;
+  #pragma unroll
+  for (uint j = 0; j < 8; j++) {
+    uint lo = sg * 16u + j * 2u + half_sg;
+    float v = smem[hi * 33u + lo];
+    #pragma unroll
+    for (uint s = 1; s < 16; s <<= 1) {
+      float o = simd_shuffle_xor(v, s);
+      v = (hi & s) ? (o - v) : (v + o);
+    }
+    v *= INV_SQRT;
+    uint idx = hi * 32u + lo;
+    if (INVERSE) {
+      v *= signs[col0 + idx];
+    }
+    out[blk_base + idx] = T(v);
+  }
+"""
+
+
+@lru_cache(maxsize=16)
+def _fused_hadamard_kernel(block: int, inverse: bool, dtype_name: str):
+    if block == 1024:
+        src = _FWHT_1024_BODY
+    elif block == 512:
+        src = _FWHT_512_BODY
+    else:
+        return None
+    return mx.fast.metal_kernel(
+        name=f"vmlx_hadamard_b{block}_{'inv' if inverse else 'fwd'}_{dtype_name}",
+        input_names=["x", "signs", "params"],
+        output_names=["out"],
+        source=src,
+    )
+
+
+def _fused_hadamard_enabled() -> bool:
+    return os.environ.get("VMLX_FUSED_HADAMARD", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 class HadamardSpec:
@@ -107,6 +233,30 @@ def hadamard_activation(x: mx.array, block: int, signs: mx.array, *, inverse: bo
         raise ValueError("Hadamard signs must match the activation width exactly")
     if shape[-1] % block:
         raise ValueError(f"Hadamard block {block} does not divide activation width {shape[-1]}")
+    if (
+        _fused_hadamard_enabled()
+        and compute_dtype == mx.float32
+        and block in (512, 1024)
+        and dtype in (mx.float16, mx.bfloat16, mx.float32)
+        and x.size > 0
+    ):
+        dtype_name = {mx.float16: "f16", mx.bfloat16: "bf16", mx.float32: "f32"}[dtype]
+        kernel = _fused_hadamard_kernel(block, bool(inverse), dtype_name)
+        if kernel is not None:
+            x_c = mx.contiguous(x)
+            s_c = mx.contiguous(signs if signs.dtype == mx.float32 else signs.astype(mx.float32))
+            blocks_per_row = shape[-1] // block
+            num_blocks = x_c.size // block
+            tpg = 128 if block == 1024 else 64
+            (out,) = kernel(
+                inputs=[x_c, s_c, mx.array([blocks_per_row], dtype=mx.uint32)],
+                template=[("T", dtype), ("INVERSE", bool(inverse))],
+                grid=(num_blocks * tpg, 1, 1),
+                threadgroup=(tpg, 1, 1),
+                output_shapes=[shape],
+                output_dtypes=[dtype],
+            )
+            return out
     x = x.astype(compute_dtype)
     s = signs.astype(compute_dtype)
     if not inverse:
@@ -121,12 +271,253 @@ class HadamardQuantizedLinear(nn.QuantizedLinear):
     """QuantizedLinear whose input is rotated into the stored weight basis."""
 
     def __call__(self, x):
+        from vmlx_engine.metal.row_exact_qmv import row_exact_qmv, row_exact_scope_active
+
         activation_dtype = getattr(self, "hadamard_activation_dtype", None)
         if activation_dtype is not None:
             x = x.astype(activation_dtype)
         x = hadamard_activation(x, self.hadamard_block, self.signs, compute_dtype=self.hadamard_compute_dtype)
+        if row_exact_scope_active():
+            exact = row_exact_qmv(
+                x, self.weight, self.scales, getattr(self, "biases", None),
+                group_size=self.group_size, bits=self.bits, mode=self.mode,
+            )
+            if exact is not None:
+                return exact.astype(activation_dtype) if activation_dtype is not None else exact
         out = super().__call__(x)
         return out.astype(activation_dtype) if activation_dtype is not None else out
+
+
+class HadamardProjectionGroup(nn.Module):
+    """Exact sibling group for HadamardQuantizedLinear projections with identical signs.
+
+    Applies ``hadamard_activation`` ONCE to the shared input and runs a single
+    grouped ``mx.quantized_matmul`` (with row-exact decode parity during
+    speculative verify), then splits the packed output along the last axis.
+    """
+
+    def __init__(self, linears: Sequence[HadamardQuantizedLinear]):
+        super().__init__()
+        linears = tuple(linears)
+        reason = hadamard_projection_group_reason(linears)
+        if reason is not None:
+            raise ValueError(reason)
+        first = linears[0]
+        self.group_size = int(first.group_size)
+        self.bits = int(first.bits)
+        self.mode = str(first.mode)
+        self.hadamard_block = int(first.hadamard_block)
+        self.hadamard_width = int(first.hadamard_width)
+        self.hadamard_compute_dtype = first.hadamard_compute_dtype
+        self.hadamard_activation_dtype = getattr(first, "hadamard_activation_dtype", None)
+        self.signs = first.signs
+        self.weight = mx.concatenate([linear.weight for linear in linears], axis=0)
+        self.scales = mx.concatenate([linear.scales for linear in linears], axis=0)
+        self.biases = (
+            mx.concatenate([linear.biases for linear in linears], axis=0)
+            if self.mode == "affine"
+            else None
+        )
+        splits: list[int] = []
+        offset = 0
+        for linear in linears[:-1]:
+            offset += int(linear.weight.shape[0])
+            splits.append(offset)
+        self.output_dims = offset + int(linears[-1].weight.shape[0])
+        self.split_indices = tuple(splits)
+        self.freeze()
+
+    def _rotate(self, x: mx.array) -> mx.array:
+        if self.hadamard_activation_dtype is not None:
+            x = x.astype(self.hadamard_activation_dtype)
+        return hadamard_activation(
+            x, self.hadamard_block, self.signs, compute_dtype=self.hadamard_compute_dtype
+        )
+
+    def __call__(self, x: mx.array) -> tuple[mx.array, ...]:
+        from vmlx_engine.metal.row_exact_qmv import row_exact_qmv, row_exact_scope_active
+
+        x_rot = self._rotate(x)
+        if row_exact_scope_active():
+            exact = row_exact_qmv(
+                x_rot, self.weight, self.scales, self.biases,
+                group_size=self.group_size, bits=self.bits, mode=self.mode,
+            )
+            if exact is not None:
+                if self.hadamard_activation_dtype is not None:
+                    exact = exact.astype(self.hadamard_activation_dtype)
+                return tuple(mx.split(exact, self.split_indices, axis=-1))
+        out = mx.quantized_matmul(
+            x_rot,
+            self.weight,
+            scales=self.scales,
+            biases=self.biases,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+            mode=self.mode,
+        )
+        if self.hadamard_activation_dtype is not None:
+            out = out.astype(self.hadamard_activation_dtype)
+        return tuple(mx.split(out, self.split_indices, axis=-1))
+
+
+def hadamard_projection_group_reason(linears: Sequence[nn.Module]) -> str | None:
+    """Return why Hadamard projections cannot share one exact rotation + QMM."""
+    linears = tuple(linears)
+    if len(linears) < 2:
+        return "need at least two projections"
+    if not all(isinstance(linear, HadamardQuantizedLinear) for linear in linears):
+        return "projection is not HadamardQuantizedLinear"
+    first = linears[0]
+    first_act = getattr(first, "hadamard_activation_dtype", None)
+    for linear in linears[1:]:
+        if int(linear.hadamard_block) != int(first.hadamard_block):
+            return "Hadamard block sizes differ"
+        if int(linear.hadamard_width) != int(first.hadamard_width):
+            return "Hadamard widths differ"
+        if linear.hadamard_compute_dtype != first.hadamard_compute_dtype:
+            return "Hadamard compute dtypes differ"
+        if getattr(linear, "hadamard_activation_dtype", None) != first_act:
+            return "Hadamard activation dtypes differ"
+        if (
+            int(linear.bits) != int(first.bits)
+            or int(linear.group_size) != int(first.group_size)
+            or str(linear.mode) != str(first.mode)
+        ):
+            return "quantization parameters differ"
+        if "bias" in linear or "bias" in first:
+            return "post-matmul bias is unsupported"
+        if (
+            linear.weight.dtype != first.weight.dtype
+            or linear.scales.dtype != first.scales.dtype
+            or (
+                str(first.mode) == "affine"
+                and (
+                    getattr(linear, "biases", None) is None
+                    or getattr(first, "biases", None) is None
+                    or linear.biases.dtype != first.biases.dtype
+                )
+            )
+        ):
+            return "quantized tensor dtypes differ"
+    # Verify exact sign identity across all siblings in one batched check.
+    same_signs = [mx.array_equal(first.signs, linear.signs) for linear in linears[1:]]
+    if not all(bool(x.item()) for x in same_signs):
+        return "Hadamard sign vectors differ"
+    return None
+
+
+def prepare_hadamard_projection_groups(model: nn.Module) -> dict[str, int]:
+    """Group sibling Hadamard projections that share identical signs, replacing originals.
+
+    Also groups unquantized GDN (in_proj_b, in_proj_a) and casts them (plus
+    conv1d.weight) to FP16 when the FP16 activation policy is active, keeping
+    resident memory neutral or lower.
+    """
+    if os.environ.get("VMLX_HADAMARD_PROJECTION_GROUPS", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return {}
+    fp16_policy = getattr(model, "_vmlx_hadamard_activation_precision", "") == "qwen-hadamard-fp16-v1"
+    counts = {"attn_qkv": 0, "mlp_gate_up": 0, "gdn_qkv_z": 0, "gdn_ba": 0, "conv1d_fp16": 0}
+    seen: set[int] = set()
+    to_eval: list[mx.array] = []
+
+    for _, module in model.named_modules():
+        if id(module) in seen:
+            continue
+        seen.add(id(module))
+
+        # Full-attention (q_proj, k_proj, v_proj)
+        if all(hasattr(module, attr) for attr in ("q_proj", "k_proj", "v_proj")):
+            q, k, v = module.q_proj, module.k_proj, module.v_proj
+            if hadamard_projection_group_reason((q, k, v)) is None:
+                group = HadamardProjectionGroup((q, k, v))
+                to_eval.extend(t for t in (group.weight, group.scales, group.biases) if t is not None)
+                module._vmlx_hadamard_qkv_group = group
+                module.q_proj = None
+                module.k_proj = None
+                module.v_proj = None
+                counts["attn_qkv"] += 1
+
+        # Dense MLP (gate_proj, up_proj)
+        if (
+            hasattr(module, "gate_proj")
+            and hasattr(module, "up_proj")
+            and hasattr(module, "down_proj")
+            and not hasattr(module, "switch_mlp")
+        ):
+            g, u = module.gate_proj, module.up_proj
+            if hadamard_projection_group_reason((g, u)) is None:
+                group = HadamardProjectionGroup((g, u))
+                to_eval.extend(t for t in (group.weight, group.scales, group.biases) if t is not None)
+                module._vmlx_hadamard_gate_up_group = group
+                module.gate_proj = None
+                module.up_proj = None
+                counts["mlp_gate_up"] += 1
+
+        # GatedDeltaNet (in_proj_qkv, in_proj_z) + unquantized (in_proj_b, in_proj_a)
+        if all(hasattr(module, attr) for attr in ("in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a")):
+            qkv, z = module.in_proj_qkv, module.in_proj_z
+            if hadamard_projection_group_reason((qkv, z)) is None:
+                group = HadamardProjectionGroup((qkv, z))
+                to_eval.extend(t for t in (group.weight, group.scales, group.biases) if t is not None)
+                module._vmlx_hadamard_qkv_z_group = group
+                module.in_proj_qkv = None
+                module.in_proj_z = None
+                counts["gdn_qkv_z"] += 1
+
+                b_lin, a_lin = module.in_proj_b, module.in_proj_a
+                if (
+                    type(b_lin) is nn.Linear
+                    and type(a_lin) is nn.Linear
+                    and "bias" not in b_lin
+                    and "bias" not in a_lin
+                ):
+                    target_dtype = mx.float16 if fp16_policy else b_lin.weight.dtype
+                    bw = b_lin.weight.astype(target_dtype)
+                    aw = a_lin.weight.astype(target_dtype)
+                    ba_w = mx.concatenate([bw, aw], axis=0)
+                    b_out = int(bw.shape[0])
+                    ba_lin = nn.Linear(int(ba_w.shape[1]), int(ba_w.shape[0]), bias=False)
+                    ba_lin.weight = ba_w
+                    ba_lin.freeze()
+                    to_eval.append(ba_w)
+                    module._vmlx_ba_linear = ba_lin
+                    module._vmlx_ba_split = b_out
+                    module.in_proj_b = None
+                    module.in_proj_a = None
+                    counts["gdn_ba"] += 1
+
+                    # Provide _project_inputs so both vendored and patched GDN paths use it automatically.
+                    def _make_project_inputs(mod):
+                        def _project_inputs(inputs):
+                            qkv_out, z_out = mod._vmlx_hadamard_qkv_z_group(inputs)
+                            ba_in = inputs.astype(mod._vmlx_ba_linear.weight.dtype)
+                            ba_out = mod._vmlx_ba_linear(ba_in)
+                            split = mod._vmlx_ba_split
+                            return qkv_out, z_out, ba_out[..., :split], ba_out[..., split:]
+                        return _project_inputs
+
+                    module._project_inputs = _make_project_inputs(module)
+                else:
+                    def _make_project_inputs_qkv_z(mod):
+                        def _project_inputs(inputs):
+                            qkv_out, z_out = mod._vmlx_hadamard_qkv_z_group(inputs)
+                            return qkv_out, z_out, mod.in_proj_b(inputs), mod.in_proj_a(inputs)
+                        return _project_inputs
+
+                    module._project_inputs = _make_project_inputs_qkv_z(module)
+
+            if fp16_policy and hasattr(module, "conv1d") and hasattr(module.conv1d, "weight"):
+                if module.conv1d.weight.dtype != mx.float16:
+                    module.conv1d.weight = module.conv1d.weight.astype(mx.float16)
+                    to_eval.append(module.conv1d.weight)
+                    counts["conv1d_fp16"] += 1
+
+    if to_eval:
+        mx.eval(*to_eval)
+        mx.clear_cache()
+    return counts
 
 
 class HadamardQuantizedEmbedding(nn.QuantizedEmbedding):
@@ -261,6 +652,7 @@ def verify_hadamard_signs_loaded(model, spec: HadamardSpec) -> int:
     """Fail closed unless every declared module received a +-1 sign vector."""
     checked = 0
     bad: list[str] = []
+    pending: list[tuple[str, mx.array]] = []
     for path in spec.modules:
         _, _, child = _resolve(model, path)
         signs = getattr(child, "signs", None)
@@ -273,11 +665,18 @@ def verify_hadamard_signs_loaded(model, spec: HadamardSpec) -> int:
         if child.scales.shape[-1] * child.group_size != child.hadamard_width:
             bad.append(f"{path}: loaded quantization width changed")
             continue
-        ok = mx.all((signs == 1) | (signs == -1)).item()
-        if not ok:
-            bad.append(f"{path}: signs are not all +-1 (missing from shards?)")
-            continue
-        checked += 1
+        pending.append((path, mx.all((signs == 1) | (signs == -1))))
+    if pending:
+        stacked = mx.stack([flag for _, flag in pending])
+        if bool(mx.all(stacked).item()):
+            checked = len(pending)
+        else:
+            results = stacked.tolist()
+            for (path, _), ok in zip(pending, results):
+                if ok:
+                    checked += 1
+                else:
+                    bad.append(f"{path}: signs are not all +-1 (missing from shards?)")
     if bad:
         raise RuntimeError(
             "JANG Hadamard bundle failed sign verification for "

@@ -457,6 +457,47 @@ def _hook_text_model(qwen3_5: Any) -> None:
             return self.model.embed_tokens.as_linear(h)
         return self.lm_head(h)
 
+    def _post_norm_hidden(self) -> bool:
+        import os
+
+        raw = os.environ.get("VMLX_QWEN35_MTP_HIDDEN", "").strip().lower()
+        if raw in {"pre", "post"}:
+            return raw == "post"
+        cached = getattr(self, "_vmlx_mtp_post_norm_hidden_cached", None)
+        if cached is not None:
+            return bool(cached)
+        if int(getattr(self.args, "num_experts", 0) or 0) > 0:
+            self._vmlx_mtp_post_norm_hidden_cached = True
+            return True
+        try:
+            mtp = getattr(self, "mtp", None)
+            base_norm = getattr(getattr(self.model, "norm", None), "weight", None)
+            mtp_norm = getattr(getattr(mtp, "norm", None), "weight", None)
+            pre_norm = getattr(getattr(mtp, "pre_fc_norm_hidden", None), "weight", None)
+            if (
+                base_norm is not None
+                and mtp_norm is not None
+                and pre_norm is not None
+                and base_norm.ndim == 1
+                and base_norm.shape == mtp_norm.shape == pre_norm.shape
+                and int(base_norm.shape[0]) >= 64
+            ):
+                a = base_norm.astype(mx.float32)
+                b = mtp_norm.astype(mx.float32)
+                c = pre_norm.astype(mx.float32)
+                a0 = a - mx.mean(a)
+                b0 = b - mx.mean(b)
+                c0 = c - mx.mean(c)
+                r_ab = float((mx.sum(a0 * b0) / mx.maximum(mx.sqrt(mx.sum(a0 * a0)) * mx.sqrt(mx.sum(b0 * b0)), 1e-12)).item())
+                r_ac = float((mx.sum(a0 * c0) / mx.maximum(mx.sqrt(mx.sum(a0 * a0)) * mx.sqrt(mx.sum(c0 * c0)), 1e-12)).item())
+                decision = r_ab > 0.7 and r_ac < 0.3
+                self._vmlx_mtp_post_norm_hidden_cached = decision
+                return decision
+        except Exception:
+            pass
+        self._vmlx_mtp_post_norm_hidden_cached = False
+        return False
+
     def __call__(
         self,
         inputs,
@@ -474,15 +515,21 @@ def _hook_text_model(qwen3_5: Any) -> None:
             gdn_sink=gdn_sink,
             n_confirmed=n_confirmed,
         )
+        post_norm_head = _post_norm_hidden(self)
+        normed = None
         # Prompt priming folds an ordinary token prefill into the head history.
         # Seed/verify forwards (return_hidden) and media embeddings never do.
         if not return_hidden and input_embeddings is None and capture_requested(self):
-            capture_prefill(self, inputs, hidden, cache)
+            if post_norm_head:
+                normed = self.model.norm(hidden)
+            capture_prefill(self, inputs, normed if post_norm_head else hidden, cache)
         if not return_logits:
             return hidden
-        logits = vocab_logits(self, self.model.norm(hidden))
+        if normed is None:
+            normed = self.model.norm(hidden)
+        logits = vocab_logits(self, normed)
         if return_hidden:
-            return logits, hidden
+            return logits, (normed if post_norm_head else hidden)
         return logits
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache, return_hidden=False):

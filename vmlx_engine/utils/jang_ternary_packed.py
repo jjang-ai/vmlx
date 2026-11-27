@@ -11,6 +11,7 @@ the output is identical. Only the bytes on disk change (1.75 bits/weight).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 import mlx.core as mx
@@ -19,6 +20,49 @@ STORAGE_NAME = "ternary_packed_26b"
 GROUP = 128
 BYTES_PER_GROUP = 26
 RUNTIME_BITS = 2
+
+_UNPACK_26B_SOURCE = r"""
+  const uint idx = thread_position_in_grid.x;
+  const uint total_groups = params[0];
+  if (idx >= total_groups) return;
+  const device uint8_t* src = packed + size_t(idx) * 26u;
+  device uint32_t* dst = words + size_t(idx) * 8u;
+  uint8_t ok = 1u;
+  uint32_t cur_word = 0u;
+  uint bit_pos = 0u;
+  uint w_idx = 0u;
+  for (uint bi = 0u; bi < 26u; bi++) {
+    uint32_t v = uint32_t(src[bi]);
+    const uint n_trits = (bi < 25u) ? 5u : 3u;
+    if (bi < 25u) {
+      if (v > 242u) ok = 0u;
+    } else {
+      if (v > 26u) ok = 0u;
+    }
+    for (uint k = 0u; k < n_trits; k++) {
+      uint32_t trit = v % 3u;
+      v /= 3u;
+      cur_word |= (trit << bit_pos);
+      bit_pos += 2u;
+      if (bit_pos == 32u) {
+        dst[w_idx++] = cur_word;
+        cur_word = 0u;
+        bit_pos = 0u;
+      }
+    }
+  }
+  valid[idx] = ok;
+"""
+
+
+@lru_cache(maxsize=1)
+def _unpack_26b_kernel():
+    return mx.fast.metal_kernel(
+        name="vmlx_unpack_ternary_26b",
+        input_names=["packed", "params"],
+        output_names=["words", "valid"],
+        source=_UNPACK_26B_SOURCE,
+    )
 
 
 def ternary_packed_modules(jang_config: Mapping[str, Any]) -> frozenset[str]:
@@ -55,37 +99,23 @@ def expand_ternary_packed_mlx(packed, scales):
         raise ValueError(f"scales shape {scales.shape} != {(rows, groups)}")
     if scales.dtype != mx.float16:
         raise ValueError("packed ternary scales must be float16 (no implicit precision conversion)")
-    # Bound the trit intermediate, particularly the vocabulary-sized lm_head.
-    # Eagerly materialize each block so lazy graphs do not retain every expanded
-    # [rows, input_width] temporary until the final concatenation.
-    rows_per_chunk = max(1, (1 << 20) // (groups * GROUP))
-    if rows > rows_per_chunk:
-        chunks = []
-        for start in range(0, rows, rows_per_chunk):
-            words, _, _ = expand_ternary_packed_mlx(
-                packed[start:start + rows_per_chunk], scales[start:start + rows_per_chunk]
-            )
-            mx.eval(words)
-            chunks.append(words)
-        words = mx.concatenate(chunks, axis=0)
-        biases = -scales
-        mx.eval(words, biases)
-        return words, scales, biases
-    b = packed.astype(mx.uint32).reshape(rows, groups, BYTES_PER_GROUP)
-    head = b[:, :, :25]
-    tail = b[:, :, 25:26]
-    if not (mx.all(head <= 242) & mx.all(tail <= 26) & mx.all(mx.isfinite(scales))).item():
+    total_groups = rows * groups
+    packed_c = mx.contiguous(packed)
+    kernel = _unpack_26b_kernel()
+    tpg = 256
+    grid_x = ((total_groups + tpg - 1) // tpg) * tpg
+    words, valid = kernel(
+        inputs=[packed_c, mx.array([total_groups], dtype=mx.uint32)],
+        grid=(grid_x, 1, 1),
+        threadgroup=(tpg, 1, 1),
+        output_shapes=[(rows, groups * (GROUP // 16)), (total_groups,)],
+        output_dtypes=[mx.uint32, mx.uint8],
+    )
+    if not (mx.all(valid == 1) & mx.all(mx.isfinite(scales))).item():
         raise ValueError("invalid packed ternary trits or non-finite scales")
-    head_codes = mx.stack(
-        [mx.remainder(mx.floor_divide(head, 3**k), 3) for k in range(5)], axis=-1
-    ).reshape(rows, groups, 125)
-    tail_codes = mx.stack(
-        [mx.remainder(mx.floor_divide(tail, 3**k), 3) for k in range(3)], axis=-1
-    ).reshape(rows, groups, 3)
-    codes = mx.concatenate([head_codes, tail_codes], axis=-1).reshape(rows, groups * GROUP // 16, 16)
-    shifts = mx.array([2 * lane for lane in range(16)], dtype=mx.uint32)
-    words = mx.sum(mx.left_shift(codes, shifts), axis=-1).astype(mx.uint32)
-    return words, scales, -scales
+    biases = -scales
+    mx.eval(words, biases)
+    return words, scales, biases
 
 
 def expand_ternary_packed_shard_mlx(

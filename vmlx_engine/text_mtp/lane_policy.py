@@ -119,19 +119,32 @@ def resolved_depth(batch: Any) -> int:
     return resolve_depth(batch)[0]
 
 
+_TEXT_MTP_MEASURED_COLD_START_TYPES = frozenset(
+    {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text", "qwen4_exp", "nemotron_h", "nemotron_h_v2"}
+)
+
+
 def activation_decision(batch: Any) -> Tuple[bool, int, str]:
     """Decide whether this request may seed the lane at all.
 
-    The text lane has no per-workload profile store, so under Adaptive an unseen
-    model stays AR until it has measured evidence: a validated
-    ``vmlx_mtp_tuning.json``. An explicit env depth or a fixed policy is the
-    user's own choice and always runs.
+    Under Adaptive, models with measured MTP cold-start evidence or a validated
+    ``vmlx_mtp_tuning.json`` seed directly and let the AR-safety valve and
+    value controller govern depth (Rule 0: no hard depth cap). Unseen models
+    stay AR until measured. An explicit env depth or a fixed policy always runs.
     """
     depth, source = resolve_depth(batch)
     if not adaptive_enabled():
         return True, depth, "fixed_policy"
     if _explicit_env_source(source) or "vmlx_mtp_tuning.json" in str(source):
         return True, depth, str(source)
+    model = getattr(batch, "model", None)
+    mtype = str(
+        getattr(model, "model_type", None)
+        or getattr(getattr(model, "args", None), "model_type", None)
+        or ""
+    ).lower()
+    if mtype in _TEXT_MTP_MEASURED_COLD_START_TYPES:
+        return True, depth, f"{mtype}_measured_cold_start"
     return False, depth, "adaptive_unseen_ar"
 
 

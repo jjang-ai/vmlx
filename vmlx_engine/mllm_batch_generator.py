@@ -6811,7 +6811,15 @@ _NATIVE_MTP_CYCLE_TRACE = os.environ.get("VMLX_NATIVE_MTP_CYCLE_TRACE", "").stri
 
 # Model types whose unseen profiles seed at the configured depth (live AR/D1/D2/D3 receipts; see below).
 _NATIVE_MTP_MEASURED_COLD_START_TYPES = frozenset(
-    {"qwen4_exp", "nemotron_h", "nemotron_h_v2", "qwen3_5_moe", "qwen3_5_moe_text"}
+    {
+        "qwen4_exp",
+        "nemotron_h",
+        "nemotron_h_v2",
+        "qwen3_5",
+        "qwen3_5_text",
+        "qwen3_5_moe",
+        "qwen3_5_moe_text",
+    }
 )
 
 
@@ -7088,7 +7096,10 @@ def _native_mtp_maybe_ar_safety_fallback(
         state.ladder_depth = max(1, int(state.depth_ceiling or state.depth or 1))
     probing = bool(state.probe)
     promoting = bool(state.promote_probe)
-    primed = str(state.stats.prompt_prime_source or "unprimed") != "unprimed"
+    primed = (
+        str(state.stats.prompt_prime_source or "unprimed") != "unprimed"
+        or cycles >= 8
+    )
     depth_now = int(state.depth or 1)
 
     # Promotion: try the adjacent higher rung against the measured origin

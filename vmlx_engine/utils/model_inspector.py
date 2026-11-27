@@ -377,9 +377,21 @@ def inspect_model(model_path: str) -> ModelInfo:
         model_type in NEMOTRON_H_MODEL_TYPES and moe_latent_size is not None
     )
 
-    # Hybrid (Mamba + attention)
+    # Hybrid (Mamba/GDN/HCA + attention)
     hybrid_pattern = config.get("hybrid_override_pattern")
-    is_hybrid = hybrid_pattern is not None
+    layer_types = _cfg("layer_types")
+    compress_ratios = _cfg("compress_ratios")
+    is_hybrid = (
+        hybrid_pattern is not None
+        or (
+            isinstance(layer_types, list)
+            and any(
+                str(lt).lower() in ("linear_attention", "mamba", "mamba2", "gated_delta_net", "sliding_attention")
+                for lt in layer_types
+            )
+        )
+        or (isinstance(compress_ratios, list) and len(set(compress_ratios)) > 1)
+    )
 
     # Multimodal
     is_mllm = "vision_config" in config or "visual" in config
@@ -402,12 +414,22 @@ def inspect_model(model_path: str) -> ModelInfo:
         if jang_cfg_path.exists():
             try:
                 jang_meta = json.loads(jang_cfg_path.read_text())
-                if jang_meta.get("format") in ("jang", "jjqf", "mxq"):
+                fmt_val = str(jang_meta.get("format") or "").lower()
+                profile_val = str(jang_meta.get("profile") or "").upper()
+                if (
+                    fmt_val in ("jang", "jjqf", "mxq", "jangtq", "jangtq2")
+                    or profile_val.startswith("JANG")
+                ):
                     is_jang = True
                     q = jang_meta.get("quantization", {})
-                    jang_target_bits = q.get("target_bits")
-                    jang_actual_bits = q.get("actual_bits")
-                    jang_block_size = q.get("block_size", 64)
+                    qsum = jang_meta.get("quantization_summary", {})
+                    jang_target_bits = q.get("target_bits") or q.get("bits")
+                    jang_actual_bits = (
+                        q.get("actual_bits")
+                        or q.get("effective_bits_per_parameter")
+                        or qsum.get("effective_bpw")
+                    )
+                    jang_block_size = q.get("block_size") or q.get("group_size") or 64
                     is_quantized = True
                     break
             except (json.JSONDecodeError, OSError):

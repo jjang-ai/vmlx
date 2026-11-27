@@ -11,11 +11,14 @@ _PATCHED = False
 
 
 def apply_mlx_vlm_mtp_patch() -> bool:
-    """Install native MTP runtime methods on supported mlx-vlm model copies."""
-    global _PATCHED
-    if _PATCHED:
-        return True
+    """Install native MTP runtime methods on supported mlx-vlm model copies.
 
+    Delegates idempotency to ``qwen35_vl.apply()`` (which tracks patched module
+    identities in ``_PATCHED_MODULES``) so registering the vendored
+    ``qwen3_5_family`` runtime after an earlier patch still patches the new
+    module objects.
+    """
+    global _PATCHED
     from . import qwen35_vl
 
     qwen_ok = qwen35_vl.apply()
@@ -25,8 +28,9 @@ def apply_mlx_vlm_mtp_patch() -> bool:
 
     _patch_load_config_mtp_quant_aliases()
 
-    _PATCHED = True
-    logger.info("mlx-vlm native MTP adapters applied")
+    if not _PATCHED:
+        _PATCHED = True
+        logger.info("mlx-vlm native MTP adapters applied")
     return True
 
 

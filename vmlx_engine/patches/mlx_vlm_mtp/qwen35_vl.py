@@ -56,17 +56,63 @@ def _qwen35_mtp_post_norm_hidden(model: Any) -> bool:
     """Whether the native-MTP head is fed the trunk hidden AFTER the final norm.
 
     Measured on Ornith-1.5-122B JANGH2 (routed-MoE Qwen3.5), teacher-forced greedy acceptance of the bundle's head over
-    1,023 positions: code 71.5 % pre-norm vs 76.6 % post-norm, prose 70.4 vs 73.6 % (the vLLM Qwen3-Next / Qwen3.5
-    drafter also receives the normed stream; the bundle's offline BF16 control scored post 70.1 vs pre 67.4 %). Dense
-    Qwen3.5 heads keep the pre-norm input until measured. ``VMLX_QWEN35_MTP_HIDDEN=pre|post`` overrides. Only the
-    trunk hidden entering the head changes: chained drafts already feed the head's own mtp.norm output, and every
-    draft is verified by the target, so outputs are unchanged."""
+    1,023 positions: code 71.5 % pre-norm vs 76.6 % post-norm, prose 70.4 vs 73.6 %. On dense Qwen3.5 MTP v2 (nextn)
+    heads trained on post-norm trunk hidden (e.g. Bonsai 2.5), the 1-D norm weights show strong positive correlation
+    between ``model.norm.weight`` and ``mtp.norm.weight`` (r > 0.7) while ``mtp.pre_fc_norm_hidden.weight`` diverges
+    from ``model.norm.weight`` (r < 0.3). Detect that directly from the loaded norm weights (no model-name regex).
+    ``VMLX_QWEN35_MTP_HIDDEN=pre|post`` overrides. Only the trunk hidden entering the head changes: chained drafts
+    already feed the head's own mtp.norm output, and every draft is verified by the target, so outputs are unchanged.
+    """
 
     raw = os.environ.get("VMLX_QWEN35_MTP_HIDDEN", "").strip().lower()
     if raw in {"pre", "post"}:
         return raw == "post"
+    cached = getattr(model, "_vmlx_mtp_post_norm_hidden_cached", None)
+    if cached is not None:
+        return bool(cached)
     args = getattr(model, "args", None)
-    return int(getattr(args, "num_experts", 0) or 0) > 0
+    if int(getattr(args, "num_experts", 0) or 0) > 0:
+        model._vmlx_mtp_post_norm_hidden_cached = True
+        return True
+    try:
+        inner = getattr(model, "model", None)
+        mtp = getattr(model, "mtp", None)
+        base_norm = getattr(getattr(inner, "norm", None), "weight", None)
+        mtp_norm = getattr(getattr(mtp, "norm", None), "weight", None)
+        pre_norm = getattr(getattr(mtp, "pre_fc_norm_hidden", None), "weight", None)
+        if (
+            base_norm is not None
+            and mtp_norm is not None
+            and pre_norm is not None
+            and base_norm.ndim == 1
+            and base_norm.shape == mtp_norm.shape == pre_norm.shape
+            and int(base_norm.shape[0]) >= 64
+        ):
+            a = base_norm.astype(mx.float32)
+            b = mtp_norm.astype(mx.float32)
+            c = pre_norm.astype(mx.float32)
+            a0 = a - mx.mean(a)
+            b0 = b - mx.mean(b)
+            c0 = c - mx.mean(c)
+            da = mx.sqrt(mx.sum(a0 * a0))
+            db = mx.sqrt(mx.sum(b0 * b0))
+            dc = mx.sqrt(mx.sum(c0 * c0))
+            r_ab = float((mx.sum(a0 * b0) / mx.maximum(da * db, 1e-12)).item())
+            r_ac = float((mx.sum(a0 * c0) / mx.maximum(da * dc, 1e-12)).item())
+            decision = r_ab > 0.7 and r_ac < 0.3
+            model._vmlx_mtp_post_norm_hidden_cached = decision
+            if decision:
+                logger.info(
+                    "qwen3_5 MTP hidden source auto-selected post-norm "
+                    "(norm_corr=%.4f, pre_fc_corr=%.4f)",
+                    r_ab,
+                    r_ac,
+                )
+            return decision
+    except Exception:
+        pass
+    model._vmlx_mtp_post_norm_hidden_cached = False
+    return False
 
 
 def _qwen35_mtp_draft_head_disabled() -> bool:
@@ -258,6 +304,7 @@ def apply() -> bool:
     _patch_text_config(qcfg)
     _register_mtp_classes(qlang)
     _patch_attention_text_rope(qlang)
+    _patch_mlp_hadamard_group(qlang)
     _patch_gated_delta_net(qlang)
     _patch_decoder_layer(qlang)
     _patch_qwen_model(qlang)
@@ -405,12 +452,16 @@ def _row_exact_attention(self, qlang, x, cache, position_ids, position_embedding
     """
     mx = qlang.mx
     batch_size, seq_len, _ = x.shape
-    q_proj_output = self.q_proj(x)
+    qkv_group = getattr(self, "_vmlx_hadamard_qkv_group", None)
+    if qkv_group is not None:
+        q_proj_output, keys, values = qkv_group(x)
+    else:
+        q_proj_output = self.q_proj(x)
+        keys, values = self.k_proj(x), self.v_proj(x)
     queries, gate = mx.split(
         q_proj_output.reshape(batch_size, seq_len, self.num_attention_heads, -1), 2, axis=-1
     )
     gate = gate.reshape(batch_size, seq_len, -1)
-    keys, values = self.k_proj(x), self.v_proj(x)
     queries = self.q_norm(queries).transpose(0, 2, 1, 3)
     keys = self.k_norm(
         keys.reshape(batch_size, seq_len, self.num_key_value_heads, -1)
@@ -507,15 +558,18 @@ def _patch_attention_text_rope(qlang: Any) -> None:
 
         batch_size, seq_len, _ = x.shape
 
-        q_proj_output = self.q_proj(x)
+        qkv_group = getattr(self, "_vmlx_hadamard_qkv_group", None)
+        if qkv_group is not None:
+            q_proj_output, keys, values = qkv_group(x)
+        else:
+            q_proj_output = self.q_proj(x)
+            keys, values = self.k_proj(x), self.v_proj(x)
         queries, gate = qlang.mx.split(
             q_proj_output.reshape(batch_size, seq_len, self.num_attention_heads, -1),
             2,
             axis=-1,
         )
         gate = gate.reshape(batch_size, seq_len, -1)
-
-        keys, values = self.k_proj(x), self.v_proj(x)
 
         queries = self.q_norm(queries).transpose(0, 2, 1, 3)
         keys = self.k_norm(
@@ -564,14 +618,37 @@ def _patch_attention_text_rope(qlang: Any) -> None:
 
         output = decode_attention(queries, keys, values, self.scale, mask)
         if output is None:
-            output = qlang.scaled_dot_product_attention(
-                queries,
-                keys,
-                values,
-                cache=cache,
-                scale=self.scale,
-                mask=mask,
-            )
+            # Select MLX's fused D=256 NAX split-head prefill kernel for ordinary
+            # KV caches on long prefill chunks (matches qwen3_5_family).
+            _use_forced_fused = False
+            if (
+                os.environ.get("VMLX_QWEN35_FUSED_PREFILL", "1").strip().lower()
+                not in _DISABLE_ENV_VALUES
+                and isinstance(mask, str)
+                and mask == "causal"
+                and int(queries.shape[-2]) > 8
+                and int(keys.shape[-2]) >= 1024
+                and int(queries.shape[-2]) <= int(keys.shape[-2])
+                and int(queries.shape[-1]) == 256
+                and int(values.shape[-1]) == 256
+            ):
+                _raw_cache = getattr(cache, "_inner", cache)
+                _cname = type(_raw_cache).__name__.lower()
+                if not hasattr(_raw_cache, "bits") and "quant" not in _cname:
+                    _use_forced_fused = True
+            if _use_forced_fused:
+                output = qlang.mx.fast.scaled_dot_product_attention(
+                    queries, keys, values, scale=self.scale, mask=mask, force_fused=True,
+                )
+            else:
+                output = qlang.scaled_dot_product_attention(
+                    queries,
+                    keys,
+                    values,
+                    cache=cache,
+                    scale=self.scale,
+                    mask=mask,
+                )
         output = output.transpose(0, 2, 1, 3).reshape(batch_size, seq_len, -1)
 
         return self.o_proj(output * qlang.mx.sigmoid(gate))
@@ -579,6 +656,23 @@ def _patch_attention_text_rope(qlang: Any) -> None:
     cls._vmlx_text_rope = _text_rope
     cls.__call__ = __call__
     cls._vmlx_text_rope_patched = True
+
+
+def _patch_mlp_hadamard_group(qlang: Any) -> None:
+    cls = getattr(qlang, "Qwen3_5MLP", None)
+    if cls is None or "_vmlx_hadamard_mlp_patched" in cls.__dict__:
+        return
+    original_call = cls.__call__
+
+    def __call__(self, x):
+        group = getattr(self, "_vmlx_hadamard_gate_up_group", None)
+        if group is not None:
+            gate, up = group(x)
+            return self.down_proj(qlang.swiglu(gate, up))
+        return original_call(self, x)
+
+    cls.__call__ = __call__
+    cls._vmlx_hadamard_mlp_patched = True
 
 
 def _qk_norm_eps(module: Any, head_dim: int) -> float:

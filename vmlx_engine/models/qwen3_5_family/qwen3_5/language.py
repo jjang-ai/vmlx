@@ -253,13 +253,16 @@ class Qwen3_5Attention(nn.Module):
     ) -> mx.array:
         B, L, D = x.shape
 
-        q_proj_output = self.q_proj(x)
+        qkv_group = getattr(self, "_vmlx_hadamard_qkv_group", None)
+        if qkv_group is not None:
+            q_proj_output, keys, values = qkv_group(x)
+        else:
+            q_proj_output = self.q_proj(x)
+            keys, values = self.k_proj(x), self.v_proj(x)
         queries, gate = mx.split(
             q_proj_output.reshape(B, L, self.num_attention_heads, -1), 2, axis=-1
         )
         gate = gate.reshape(B, L, -1)
-
-        keys, values = self.k_proj(x), self.v_proj(x)
 
         queries = self.q_norm(queries).transpose(0, 2, 1, 3)
         keys = self.k_norm(keys.reshape(B, L, self.num_key_value_heads, -1)).transpose(
@@ -311,6 +314,10 @@ class Qwen3_5MLP(nn.Module):
         self.up_proj = nn.Linear(dim, hidden_dim, bias=False)
 
     def __call__(self, x) -> mx.array:
+        group = getattr(self, "_vmlx_hadamard_gate_up_group", None)
+        if group is not None:
+            gate, up = group(x)
+            return self.down_proj(swiglu(gate, up))
         return self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
 
 
@@ -879,9 +886,16 @@ class LanguageModel(nn.Module):
                 or self._rope_deltas is None
                 or cache is None
             ):
-                # Use cached position_ids when available (pre-computed in get_input_embeddings)
-                if self._position_ids is not None:
-                    seq_length = inputs.shape[1]
+                # Use cached position_ids only when they actually cover the
+                # requested chunk (e.g. pre-computed by get_input_embeddings for
+                # a multimodal prompt). Do not reuse a shorter prior prompt's
+                # cached positions on a new text request at cache_offset == 0.
+                seq_length = inputs.shape[1]
+                if (
+                    self._position_ids is not None
+                    and (inputs_embeds is not None or cache_offset > 0)
+                    and int(self._position_ids.shape[-1]) >= cache_offset + seq_length
+                ):
                     position_ids = self._position_ids[
                         :, :, cache_offset : cache_offset + seq_length
                     ]

@@ -24,16 +24,21 @@ class Model(Qwen3_5Model):
             weights.pop("lm_head.weight", None)
 
         for l in range(self.config.text_config.num_hidden_layers):
-            prefix = f"model.language_model.layers.{l}.mlp"
-            # process gate_up_proj [num_experts, 2 * intermediate_size, hidden_size]
-            gate_up_weight = weights.pop(f"{prefix}.experts.gate_up_proj")
-            gate_weight, up_weights = mx.split(gate_up_weight, 2, axis=-2)
-            weights[f"{prefix}.switch_mlp.gate_proj.weight"] = gate_weight
-            weights[f"{prefix}.switch_mlp.up_proj.weight"] = up_weights
-            # down_proj
-            weights[f"{prefix}.switch_mlp.down_proj.weight"] = weights.pop(
-                f"{prefix}.experts.down_proj"
-            )
+            for prefix in (
+                f"model.language_model.layers.{l}.mlp",
+                f"language_model.model.layers.{l}.mlp",
+            ):
+                fused_key = f"{prefix}.experts.gate_up_proj"
+                if fused_key in weights:
+                    gate_up_weight = weights.pop(fused_key)
+                    gate_weight, up_weights = mx.split(gate_up_weight, 2, axis=-2)
+                    weights[f"{prefix}.switch_mlp.gate_proj.weight"] = gate_weight
+                    weights[f"{prefix}.switch_mlp.up_proj.weight"] = up_weights
+                down_key = f"{prefix}.experts.down_proj"
+                if down_key in weights:
+                    weights[f"{prefix}.switch_mlp.down_proj.weight"] = weights.pop(
+                        down_key
+                    )
 
         norm_keys = (
             ".input_layernorm.weight",

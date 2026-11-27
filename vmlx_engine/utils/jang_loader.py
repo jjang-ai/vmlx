@@ -2815,6 +2815,7 @@ def _load_codebook_vq_model(
     )
 
     _chunked_eval_params(model)
+    model.eval()
 
     elapsed = time.perf_counter() - start
     source_model = _safe_source_model_name(jang_cfg)
@@ -3302,6 +3303,7 @@ def _load_jang_v2(
                 logger.debug(traceback.format_exc())
 
             elapsed = time.perf_counter() - start
+            model.eval()
             actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", 0)
             source_model = _safe_source_model_name(jang_cfg)
             logger.info(
@@ -4216,6 +4218,7 @@ def _load_jang_v2(
             "config": PreTrainedConfig(),
             "trust_remote_code": False,
         }
+    model.eval()
     tokenizer = load_tokenizer(path, **tokenizer_options)
     return model, tokenizer
 
@@ -4438,13 +4441,12 @@ def _load_jang_v2_vlm(
         and _has_media
         and not _is_mxtq
         and not _qwen_vl_block
-        and not _native_mtp_vl_ready
     ):
         # GAP-A fix: the vMLX-owned qwen3_5_family runtime (router gates stay
-        # nn.Linear) plus the mlx_vlm_mtp patch suite (1D text-RoPE via
-        # _patch_attention_text_rope) resolve both original justifications for
-        # the affine text-only fallback (M-RoPE text-logit corruption plus the
-        # gate quant_predicate decode crash originally isolated at 80a62555f).
+        # nn.Linear, packed GDN recurrence, NAX fused prefill, hoisted M-RoPE)
+        # plus the mlx_vlm_mtp patch suite (idempotent per-module via
+        # _PATCHED_MODULES) work together for both regular and native-MTP VL
+        # bundles (including Bonsai 2.5 Ternary/1.75-bit).
         try:
             from ..models.qwen3_5_family import register_qwen3_5_family_runtime
             _vendored_qwen_vl_ready = bool(register_qwen3_5_family_runtime())
@@ -4478,8 +4480,18 @@ def _load_jang_v2_vlm(
     if _is_qwen_hybrid and _has_media and not _is_mxtq and _native_mtp_vl_ready:
         logger.info(
             "  Qwen3.5/3.6 native-MTP VL artifact detected by tensor metadata; "
-            "using the real mlx-vlm loader with vMLX MTP/VL runtime adapters."
+            "using %s with vMLX MTP/VL runtime adapters.",
+            "vMLX-owned qwen3_5_family VLM runtime"
+            if _vendored_qwen_vl_ready
+            else "stock mlx-vlm loader",
         )
+        # Re-apply per-module MTP patch so newly registered qwen3_5_family
+        # classes receive the native MTP head & 1D text-RoPE hooks.
+        try:
+            from ..patches.mlx_vlm_mtp import apply_mlx_vlm_mtp_patch
+            apply_mlx_vlm_mtp_patch()
+        except Exception as _vlpe:
+            logger.warning("qwen native-MTP VL patch apply failed: %s", _vlpe)
     elif (
         _is_qwen_hybrid
         and _has_media
@@ -4618,14 +4630,34 @@ def _load_jang_v2_vlm(
         )
         setattr(_lang_for_rope, "_vmlx_force_text_rope_1d", force_text_rope_1d)
 
-    # Collect all weight keys to determine which layers to quantize
+    # Collect all weight keys without reading multi-GB shard payloads twice:
+    # prefer model.safetensors.index.json, otherwise parse only the 8-byte
+    # safetensors JSON header of each shard.
     weight_files = _get_v2_weight_files(path)
-    all_weight_keys = set()
-    for sf in weight_files:
-        data = mx.load(str(sf))
-        all_weight_keys.update(data.keys())
-        del data
-        gc.collect()
+    all_weight_keys: set[str] = set()
+    _index_file = path / "model.safetensors.index.json"
+    if _index_file.exists():
+        try:
+            _idx_data = json.loads(_index_file.read_text())
+            _wm = _idx_data.get("weight_map")
+            if isinstance(_wm, dict) and _wm:
+                all_weight_keys.update(_wm.keys())
+        except Exception:
+            pass
+    if not all_weight_keys:
+        import struct as _struct
+
+        for sf in weight_files:
+            try:
+                with open(sf, "rb") as _fh:
+                    _hdr_len = _struct.unpack("<Q", _fh.read(8))[0]
+                    _hdr = json.loads(_fh.read(_hdr_len))
+                all_weight_keys.update(k for k in _hdr.keys() if k != "__metadata__")
+            except Exception:
+                data = mx.load(str(sf))
+                all_weight_keys.update(data.keys())
+                del data
+                gc.collect()
 
     # MXTQ detection: check first shard for tq_packed keys (JANGTQ VLM support).
     # JANGTQ emits {"version":2, "weight_format":"mxtq"} and stores weights as
@@ -5359,6 +5391,19 @@ def _load_jang_v2_vlm(
                 precision["signature"], precision["projections"],
                 precision["norms"], precision["convolutions"],
             )
+        from .jang_hadamard import prepare_hadamard_projection_groups
+
+        _hgroups = prepare_hadamard_projection_groups(model)
+        if any(_hgroups.values()):
+            logger.info(
+                "JANG Hadamard sibling groups: attn_qkv=%d mlp_gate_up=%d "
+                "gdn_qkv_z=%d gdn_ba=%d conv1d_fp16=%d",
+                _hgroups.get("attn_qkv", 0),
+                _hgroups.get("mlp_gate_up", 0),
+                _hgroups.get("gdn_qkv_z", 0),
+                _hgroups.get("gdn_ba", 0),
+                _hgroups.get("conv1d_fp16", 0),
+            )
 
     # bfloat16 for MLA models and 512+ expert models
     _model_cfg = json.loads((path / "config.json").read_text())
@@ -5427,6 +5472,8 @@ def _load_jang_v2_vlm(
     except Exception as _audit_err:  # advisory only; never fail a load on the audit itself
         logger.debug("unloaded-parameter audit skipped: %s", _audit_err)
 
+    if hasattr(model, "eval") and callable(model.eval):
+        model.eval()
     return model, _load_jang_vlm_processor(path, model)
 
 
@@ -6031,6 +6078,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
         f"{n_params / 1e9:.1f}B params, {actual_bits:.1f}-bit avg"
     )
 
+    model.eval()
     tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
     return model, tokenizer
 
@@ -6165,6 +6213,8 @@ def _load_jang_v1_vlm(
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s")
 
+    if hasattr(model, "eval") and callable(model.eval):
+        model.eval()
     return model, _load_jang_vlm_processor(path, model)
 
 
