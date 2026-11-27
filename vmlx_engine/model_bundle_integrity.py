@@ -463,8 +463,16 @@ def _scan_bundle(root: Path, *, repair: bool) -> dict[str, Any]:
             for path in shard_paths:
                 current = _read_safetensors_header(path)
                 if current["misaligned"]:
-                    headers[path] = repair_shard_alignment(root, path, current)
-                    repairs.append(path.relative_to(root).as_posix())
+                    rel_parts = path.relative_to(root).parts[:-1]
+                    if "dspark" in rel_parts and (path.parent / "draft-manifest.json").is_file():
+                        warnings.append(
+                            f"Preserved digest-pinned sidecar {path.relative_to(root).as_posix()} "
+                            "without rewriting tensor alignment"
+                        )
+                        headers[path] = current
+                    else:
+                        headers[path] = repair_shard_alignment(root, path, current)
+                        repairs.append(path.relative_to(root).as_posix())
                 else:
                     headers[path] = current
 
