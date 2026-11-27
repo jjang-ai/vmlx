@@ -23,8 +23,6 @@ from .kernels import (
     ernie_mhc_collapse_norm,
     ernie_multi_router_scores,
     fused_situ,
-    mxfp8_linear_fast,
-    mxfp8_multi_linear_fast,
     round_e4m3_per128,
 )
 

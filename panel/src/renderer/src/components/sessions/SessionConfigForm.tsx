@@ -1899,6 +1899,18 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
       'Auto-detected for minimax_m3 / minimax_m3_vl bundles.',
     ]
   },
+  {
+    value: 'ernie', label: 'ERNIE 5.5 — ERNIE XML tool_call', format: '<ernie:tool_call><invoke name="fn"><parameter name="arg">val</parameter></invoke></ernie:tool_call>', models: [
+      'ERNIE 5.5 Flash Preview (JANGHT / native MXFP8)',
+      'Auto-detected for ernie5_5_moe bundles.',
+    ]
+  },
+  {
+    value: 'inkling', label: 'Inkling 2 — Inkling native tool calls', format: '<|content_tool_call|>...<|content_end|>', models: [
+      'Inkling-2-Mini (JANGH2 / JANGHT4.2 / NVFP4)',
+      'Auto-detected for inkling2 / inkling2_loop bundles.',
+    ]
+  },
 ]
 
 const REASONING_PARSER_OPTIONS: ParserOption[] = [
@@ -1971,6 +1983,18 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
     value: 'think_xml', label: 'Think XML — MiMo XML reasoning', format: '<think>...reasoning...</think>content  (XML reasoning blocks)', models: [
       'MiMo V2.5 JANG 2L',
       'Use only when model metadata selects think_xml; MiMo generation quality remains separately gated.',
+    ]
+  },
+  {
+    value: 'ernie', label: 'ERNIE 5.5 — ERNIE think rail', format: '<ernie:think>...reasoning...</ernie:think>content', models: [
+      'ERNIE 5.5 Flash Preview (JANGHT / native MXFP8)',
+      'Auto-detected for ernie5_5_moe bundles.',
+    ]
+  },
+  {
+    value: 'inkling', label: 'Inkling 2 — Inkling thinking channel', format: '<|content_thinking|>...reasoning...<|content_text|>content', models: [
+      'Inkling-2-Mini (JANGH2 / JANGHT4.2 / NVFP4)',
+      'Auto-detected for inkling2 / inkling2_loop bundles.',
     ]
   },
 ]

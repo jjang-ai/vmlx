@@ -27,6 +27,11 @@ const TOOL_PARSER_CANONICAL_ALIASES: Record<string, string> = {
   // deepseek_v41 parser (registered as deepseek_v41 / dsml_v41). The space-less `dsml` parser of the
   // DSV4 family mis-parses it, so V4.1 must launch with the v41 parser.
   dsml_v41: 'deepseek_v41',
+  ernie5_5: 'ernie',
+  ernie_5_5: 'ernie',
+  ernie5_5_moe: 'ernie',
+  inkling2: 'inkling',
+  inkling2_loop: 'inkling',
 }
 
 export const TOOL_PARSERS_FOR_CLI = new Set([
@@ -85,6 +90,8 @@ export const TOOL_PARSERS_FOR_CLI = new Set([
   'poolside_v1',
   'mimo_xml_function',
   'dots',
+  'ernie',
+  'inkling',
 ])
 
 export function canonicalizeToolParserId(

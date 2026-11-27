@@ -158,6 +158,11 @@ def _combine_routes(out, weights):
 
 
 @mx.compile
+def _apply_attn_gate(out, gate):
+    return (out.astype(mx.float32) * mx.sigmoid(gate.astype(mx.float32))).astype(out.dtype)
+
+
+@mx.compile
 def _attention_residual(states, query, normalize_values):
     states = states.astype(mx.float32)
     keys = mx.fast.rms_norm(states, None, 1e-6)
@@ -252,13 +257,33 @@ def _update_conv_cache(cache, index, state, inputs, mask):
 
 
 class ShortConvolution(InklingShortConvolution):
-    def __call__(self, x, cache=None, mask=None):
+    def __call__(self, x, cache=None, mask=None, res=None, res_mode: int = 0):
         # Keep the convolution, residual, and scaling in FP32. The checkpoint
         # stores BF16 taps, but rounding the convolution before adding the
         # residual changes both reference parity and prefill/decode consistency.
         state = cache[self.conv_idx] if cache is not None else None
         if state is None:
             state = mx.zeros((x.shape[0], self.kernel_size - 1, x.shape[-1]))
+        speculating = getattr(cache, "is_speculating", False) if cache is not None else False
+        if (
+            not self.training
+            and mask is None
+            and not speculating
+            and x.dtype == mx.bfloat16
+            and self.kernel_size == 4
+            and x.shape[0] == 1
+            and x.shape[-1] % 128 == 0
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        ):
+            from .kernels import short_convolution_fused
+
+            out, nstate = short_convolution_fused(
+                state, self.conv.weight, x, res=res, res_mode=res_mode
+            )
+            if cache is not None:
+                cache[self.conv_idx] = nstate
+            return out
         if (
             not self.training
             and x.dtype == mx.bfloat16
@@ -275,15 +300,23 @@ class ShortConvolution(InklingShortConvolution):
             # Invalid positions never enter that state. The convolution itself
             # reads masked inputs directly, without materializing a concat.
             _update_conv_cache(cache, self.conv_idx, state, x, mask)
-            return short_convolution(state, self.conv.weight, x, mask, self.kernel_size)
-        xf = x.astype(mx.float32)
-        inputs = xf if mask is None else mx.where(mask[..., None], xf, 0)
-        context = mx.concatenate([state, inputs], axis=1)
-        _update_conv_cache(cache, self.conv_idx, state, inputs, mask)
-        out = mx.conv1d(
-            context, self.conv.weight.astype(mx.float32), groups=x.shape[-1]
-        )
-        return ((out + xf) / math.sqrt(self.kernel_size + 1)).astype(x.dtype)
+            out = short_convolution(state, self.conv.weight, x, mask, self.kernel_size)
+        else:
+            xf = x.astype(mx.float32)
+            inputs = xf if mask is None else mx.where(mask[..., None], xf, 0)
+            context = mx.concatenate([state, inputs], axis=1)
+            _update_conv_cache(cache, self.conv_idx, state, inputs, mask)
+            out = mx.conv1d(
+                context, self.conv.weight.astype(mx.float32), groups=x.shape[-1]
+            )
+            out = ((out + xf) / math.sqrt(self.kernel_size + 1)).astype(x.dtype)
+        if res_mode == 3:
+            return out.astype(mx.float32)
+        if res_mode == 1:
+            return out.astype(mx.float32) + res.astype(mx.float32)
+        if res_mode == 2:
+            return (res + out.astype(mx.float32)).astype(x.dtype)
+        return out
 
 
 class DynamicShortConvolution(nn.Module):
@@ -321,20 +354,31 @@ class DynamicShortConvolution(nn.Module):
 
 
 def _joint_dynamic_kv(k_conv, v_conv, keys, values, key_input, value_input, cache, mask):
-    from .kernels import joint_dynamic_convolution
+    from .kernels import joint_dynamic_convolution, joint_dynamic_convolution_with_state
 
     b, length, channels = keys.shape
+    speculating = getattr(cache, "is_speculating", False) if cache is not None else False
     states, dynamic = [], []
     for module, x, conditioning in ((k_conv, keys, key_input), (v_conv, values, value_input)):
         state = cache[module.conv_idx] if cache is not None else None
         if state is None:
             state = mx.zeros((b, 3, channels), mx.float32)
         states.append(state)
+        projected = _decode_linear(module.weight_proj, conditioning)
+        dynamic.append(projected.astype(mx.float32).reshape(b, length, module.num_heads, 4))
+    if b == 1 and mask is None and not speculating:
+        ko, vo, knstate, vnstate = joint_dynamic_convolution_with_state(
+            keys, values, states, (k_conv.static_weight, v_conv.static_weight),
+            dynamic, k_conv.num_heads,
+        )
+        if cache is not None:
+            cache[k_conv.conv_idx] = knstate
+            cache[v_conv.conv_idx] = vnstate
+        return ko, vo
+    for module, x, state in ((k_conv, keys, states[0]), (v_conv, values, states[1])):
         xf = x.astype(mx.float32)
         inputs = xf if mask is None else mx.where(mask[..., None], xf, 0)
         _update_conv_cache(cache, module.conv_idx, state, inputs, mask)
-        projected = _decode_linear(module.weight_proj, conditioning)
-        dynamic.append(projected.astype(mx.float32).reshape(b, length, module.num_heads, 4))
     return joint_dynamic_convolution(
         keys, values, states, (k_conv.static_weight, v_conv.static_weight),
         dynamic, mask, k_conv.num_heads,
@@ -541,11 +585,15 @@ class Attention(nn.Module):
             k = self.k_sconv(k, conv, conv_mask)
             v = self.v_sconv(v, conv, conv_mask)
         elif (
-            _VERIFY_WITH_DECODE_GEMV.get() and self.sharding_group is None
-            and b == 1 and length >= 4 and k.dtype == v.dtype == mx.bfloat16
-            and k.shape == v.shape and self.k_sconv.kernel_size == self.v_sconv.kernel_size == 4
+            not self.training
+            and self.sharding_group is None
+            and b == 1
+            and k.dtype == v.dtype == mx.bfloat16
+            and k.shape == v.shape
+            and self.k_sconv.kernel_size == self.v_sconv.kernel_size == 4
             and self.k_sconv.num_heads == self.v_sconv.num_heads
-            and mx.metal.is_available() and mx.default_device() == mx.gpu
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
         ):
             k, v = _joint_dynamic_kv(
                 self.k_sconv, self.v_sconv, k, v, key_input, value_input, conv, conv_mask
@@ -553,35 +601,58 @@ class Attention(nn.Module):
         else:
             k = self.k_sconv(k, key_input, conv, conv_mask)
             v = self.v_sconv(v, value_input, conv, conv_mask)
-        q = l2_clip(
-            query.reshape(
-                b, length, self.n_heads, self.head_dim
-            ),
-            cfg.qk_l2_clip_threshold,
-            self.q_scale,
-        )
-        k = l2_clip(
-            k.reshape(b, length, self.n_kv, self.head_dim), cfg.qk_l2_clip_threshold
-        )
-        v = v.reshape(b, length, self.n_kv, self.head_dim)
-        if cfg.use_value_norm_no_gamma:
-            v = mx.fast.rms_norm(v.astype(mx.float32), None, cfg.rms_norm_eps).astype(
-                x.dtype
-            )
-        r = l2_clip(
-            relative.reshape(b, length, self.n_heads, cfg.d_rel),
-            cfg.rel_l2_clip_threshold,
-            self.rel_scale,
-        )
+        tau = None
         if not self.is_sliding and cfg.log_scaling_n_floor is not None:
             offset = kv.offset if kv is not None else 0
             positions = mx.arange(length) + mx.array(offset)[..., None] + 1
             tau = 1 + cfg.log_scaling_alpha * mx.log(
                 mx.maximum(positions / cfg.log_scaling_n_floor, 1)
             )
-            q = (q.astype(mx.float32) * tau[..., None, None]).astype(x.dtype)
-            r = (r.astype(mx.float32) * tau[..., None, None]).astype(x.dtype)
-        q, k, v = (a.transpose(0, 2, 1, 3) for a in (q, k, v))
+        if (
+            not self.training
+            and b == 1
+            and query.dtype == k.dtype == v.dtype == relative.dtype == mx.bfloat16
+            and self.head_dim == 128
+            and cfg.d_rel <= 32
+            and (tau is None or tau.size == length)
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        ):
+            from .kernels import prep_qkrv_fused
+
+            q, k, v, r = prep_qkrv_fused(
+                query, k, v, relative,
+                self.q_scale, self.rel_scale,
+                self.n_heads, self.n_kv, self.head_dim, cfg.d_rel,
+                cfg.qk_l2_clip_threshold, cfg.rel_l2_clip_threshold,
+                cfg.use_value_norm_no_gamma, cfg.rms_norm_eps,
+                tau=tau,
+            )
+        else:
+            q = l2_clip(
+                query.reshape(
+                    b, length, self.n_heads, self.head_dim
+                ),
+                cfg.qk_l2_clip_threshold,
+                self.q_scale,
+            )
+            k = l2_clip(
+                k.reshape(b, length, self.n_kv, self.head_dim), cfg.qk_l2_clip_threshold
+            )
+            v = v.reshape(b, length, self.n_kv, self.head_dim)
+            if cfg.use_value_norm_no_gamma:
+                v = mx.fast.rms_norm(v.astype(mx.float32), None, cfg.rms_norm_eps).astype(
+                    x.dtype
+                )
+            r = l2_clip(
+                relative.reshape(b, length, self.n_heads, cfg.d_rel),
+                cfg.rel_l2_clip_threshold,
+                self.rel_scale,
+            )
+            if tau is not None:
+                q = (q.astype(mx.float32) * tau[..., None, None]).astype(x.dtype)
+                r = (r.astype(mx.float32) * tau[..., None, None]).astype(x.dtype)
+            q, k, v = (a.transpose(0, 2, 1, 3) for a in (q, k, v))
         if kv is not None:
             k, v = kv.update_and_fetch(k, v)
             # Relative logits index backward distance, so ring buffers must be
@@ -591,7 +662,12 @@ class Attention(nn.Module):
             elif isinstance(kv, BatchRotatingKVCache) and kv.rotated:
                 k, v = mx.roll(k, -kv._idx, axis=2), mx.roll(v, -kv._idx, axis=2)
         padding = getattr(kv, "left_padding", None)
-        rel_proj = self.rel_proj.astype(x.dtype)
+        rel_proj = self.rel_proj if self.rel_proj.dtype == x.dtype else self.get("_rel_proj_cast")
+        if rel_proj is None or rel_proj.dtype != x.dtype:
+            rel_proj = self.rel_proj.astype(x.dtype)
+            if not self.training:
+                mx.eval(rel_proj)
+                self._rel_proj_cast = rel_proj
         # Keep the sink projection's complete output width on each rank.
         sinks = _decode_linear(self.sink_proj, x)
         if self.sharding_group is not None:
@@ -615,10 +691,7 @@ class Attention(nn.Module):
         else:
             out = self._attention_with_sink(q, k, v, r, sinks, padding, rel_proj)
         out = out.transpose(0, 2, 1, 3).reshape(b, length, -1)
-        out = (
-            out.astype(mx.float32)
-            * mx.sigmoid(gate.astype(mx.float32))
-        ).astype(x.dtype)
+        out = _apply_attn_gate(out, gate)
         # Every output dot still consumes all heads on one rank. Gather the
         # heads first, project complete output rows, then restore hidden order.
         return self._gather_features(
@@ -726,7 +799,20 @@ class AttentionResidual(nn.Module):
         )
         self.normalize_values = config.attn_res_normalize_values
 
-    def __call__(self, blocks, partial):
+    def __call__(self, blocks, partial, block_buf=None):
+        if (
+            not self.training
+            and block_buf is not None
+            and 1 <= block_buf.shape[2] <= 15
+            and block_buf.shape[-1] in (2304, 4608)
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        ):
+            from .kernels import attention_residual_fused
+
+            return attention_residual_fused(
+                block_buf, partial, self.query, self.normalize_values
+            )
         return _attention_residual(
             mx.stack([*blocks, partial], axis=-2), self.query, self.normalize_values
         )
@@ -774,35 +860,38 @@ class MessageController(nn.Module):
         use_fused = (
             fused is not None and not self.training and x.shape[0] == 1
             and x.shape[-1] == 2304 and message.shape == x.shape
-            and (width == 1 or (verify and width <= 8))
             and x.dtype in (mx.bfloat16, mx.float32)
             and message.dtype in (mx.bfloat16, mx.float32)
+            and mx.metal.is_available()
             and mx.default_device() == mx.gpu
         )
-        packed = getattr(self, "_verify_gate_weights", None)
-        if use_fused:
-            from .kernels import loop_controller_pair
+        if use_fused and width <= 8:
+            from .kernels import loop_controller_norm_down, loop_controller_up_blend
 
             packed, eps = fused
-            pair = loop_controller_pair(x, message, eps, self.down_weight.dtype)
-        elif verify and (packed is None or x.shape[0] != 1):
+            hidden = loop_controller_norm_down(x, message, eps, self.down_weight)
+            return loop_controller_up_blend(hidden, packed, x, message)
+        packed = getattr(self, "_verify_gate_weights", None)
+        if verify and (packed is None or x.shape[0] != 1):
             # The low-rank reductions are sensitive to the decode dispatch.
             return mx.concatenate([
                 self(x[:, row:row + 1], message[:, row:row + 1])
                 for row in range(width)
             ], axis=1)
-        else:
-            pair = mx.concatenate(
-                [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
-            ).astype(self.down_weight.dtype)
-        if verify or use_fused:
+        pair = mx.concatenate(
+            [mx.fast.rms_norm(v, None, self.eps) for v in (x, message)], axis=-1
+        ).astype(self.down_weight.dtype)
+        if verify:
             hidden = _decode_gemv_rows(pair, self.down_weight).astype(mx.float32)
-            # Keep serial reductions for the 64-wide gate projection.
-            gates = hidden @ packed.T if width == 1 else mx.concatenate([
+            gates = mx.concatenate([
                 hidden[:, row:row + 1] @ packed.T for row in range(width)
             ], axis=1)
             return _blend_message_gates(x, message, gates)
         hidden = (pair @ self.down_weight.T).astype(mx.float32)
+        if use_fused:
+            from .kernels import loop_controller_up_blend
+
+            return loop_controller_up_blend(hidden, fused[0], x, message)
         forget = mx.tanh(hidden @ self.forget_weight.T)
         gain = mx.tanh(hidden @ self.gain_weight.T)
         return (1 - forget) * x + gain * message
@@ -840,11 +929,11 @@ class DecoderLayer(nn.Module):
                 name: MessageController(config) for name in ("attn", "k", "v", "mlp")
             }
 
-    def __call__(self, x, blocks, cache=None, messages=None):
+    def __call__(self, x, blocks, cache=None, messages=None, block_buf=None):
         conv = cache[1] if cache is not None else None
         mask = _cache_padding_mask(conv, x.shape[1])
         mixed = (
-            self.attention_input(blocks, x)
+            self.attention_input(blocks, x, block_buf=block_buf)
             if self.attention_input is not None
             else x[..., None, :]
         )
@@ -872,21 +961,24 @@ class DecoderLayer(nn.Module):
             )
             parts = [norm(part).astype(x.dtype) for norm, part in zip(norms, parts)]
             attn = self.self_attn(*parts, cache=cache, conv_mask=mask)
-        residual = self.attn_sconv(attn, conv, mask).astype(mx.float32)
         if self.is_block_boundary:
+            residual = self.attn_sconv(attn, conv, mask, res_mode=3)
             blocks.append(x)
+            block_buf = (
+                x[..., None, :]
+                if block_buf is None
+                else mx.concatenate([block_buf, x[..., None, :]], axis=-2)
+            )
         else:
-            residual = residual + x.astype(mx.float32)
-        hidden = self.mlp_input(blocks, residual)[..., 0, :]
+            residual = self.attn_sconv(attn, conv, mask, res=x, res_mode=1)
+        hidden = self.mlp_input(blocks, residual, block_buf=block_buf)[..., 0, :]
         if messages is not None:
             hidden = self.controllers["mlp"](hidden, messages[..., 3, :])
         hidden = self.mlp(self.post_attention_layernorm(hidden).astype(x.dtype))
-        out = (residual + self.mlp_sconv(hidden, conv, mask).astype(mx.float32)).astype(
-            x.dtype
-        )
+        out = self.mlp_sconv(hidden, conv, mask, res=residual, res_mode=2)
         if conv is not None:
             conv.advance(x.shape[1])
-        return out
+        return out, block_buf
 
 
 class TextModel(nn.Module):
@@ -928,11 +1020,11 @@ class TextModel(nn.Module):
         requested = set(capture_layer_ids or [])
         x = self.embed(inputs) if input_embeddings is None else input_embeddings
         blocks = []
+        block_buf = None
         bank = None
         loop_messages = None
         group_loop_messages = (
-            speculative_verify
-            and not self.training
+            not self.training
             and self.loop is not None
             and x.shape[0] == 1
             and x.dtype == mx.bfloat16
@@ -947,15 +1039,21 @@ class TextModel(nn.Module):
         for visit, index in enumerate(self.layer_indices):
             if self.loop is not None and index == self.loop.core_start:
                 if visit == index:
-                    prelude, prelude_blocks = x, blocks.copy()
+                    prelude, prelude_blocks, prelude_buf = x, blocks.copy(), block_buf
                 else:
                     # The first block appended in the core is the prelude partial.
                     # Only completed core blocks and the last partial supply messages.
                     states = mx.stack([*blocks[len(prelude_blocks) + 1 :], x], axis=-2)
                     bank = _normalize_message_bank(states)
                     if group_loop_messages:
-                        loop_messages = _group_loop_messages(self.message_queries, bank)
-                    x, blocks = prelude, prelude_blocks.copy()
+                        if speculative_verify and bank.shape[1] > 1:
+                            loop_messages = _group_loop_messages(self.message_queries, bank)
+                        else:
+                            q_all = self.message_queries[:, None, None]
+                            b_all = bank[None]
+                            sc = (q_all @ b_all.swapaxes(-1, -2)) * (bank.shape[-1] ** -0.5)
+                            loop_messages = mx.softmax(sc, axis=-1) @ b_all
+                    x, blocks, block_buf = prelude, prelude_blocks.copy(), prelude_buf
             messages = None
             if bank is not None and index < self.loop.core_end:
                 core_index = index - self.loop.core_start
@@ -971,10 +1069,12 @@ class TextModel(nn.Module):
             visit_cache = (
                 None if cache is None else (cache[2 * visit], cache[2 * visit + 1])
             )
-            x = self.layers[index](x, blocks, visit_cache, messages)
+            x, block_buf = self.layers[index](
+                x, blocks, visit_cache, messages, block_buf=block_buf
+            )
             if speculative_verify and (visit + 1) % 4 == 0:
                 mx.async_eval(x)
-        h = self.final_input(blocks, x)[..., 0, :]
+        h = self.final_input(blocks, x, block_buf=block_buf)[..., 0, :]
         normalized = self.norm(h).astype(x.dtype)
         if len(self.layer_indices) in requested:
             captures[len(self.layer_indices)] = normalized
@@ -1140,7 +1240,7 @@ class LanguageModel(nn.Module):
                 if self.config.final_logit_softcapping is not None:
                     cap = self.config.final_logit_softcapping
                     logits = mx.tanh(logits / cap) * cap
-                return logits
+                return logits[..., : self.config.unpadded_vocab_size]
             return mx.concatenate(
                 [self._logits_from_norm(h[:, row:row + 1]) for row in range(h.shape[1])],
                 axis=1,

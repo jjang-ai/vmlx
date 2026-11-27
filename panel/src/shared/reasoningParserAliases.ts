@@ -16,12 +16,15 @@ export const REASONING_PARSERS_FOR_CLI = new Set([
   // dots3_note plain <think> rail; the engine registers 'dots3' on the qwen3
   // think-tag contract.
   'dots3',
+  // ERNIE 5.5 Flash <ernie:think>...</ernie:think> reasoning rail.
+  'ernie',
 ])
 
 export function canonicalizeReasoningParserForCli(parser?: string): string | undefined {
   if (!parser || parser === 'auto' || parser === '') return undefined
   if (parser === 'none') return 'none'
   if (parser === 'minimax' || parser === 'minimax_m2_5') return 'minimax_m2'
+  if (parser === 'ernie5_5' || parser === 'ernie_5_5' || parser === 'ernie5_5_moe') return 'ernie'
   // Poolside/Laguna publishes `poolside_v1` in generation_config.json, while
   // the engine registers it as an exact alias of deepseek_r1. Canonicalize at
   // the panel/argv boundary so the vendor spelling cannot be silently dropped

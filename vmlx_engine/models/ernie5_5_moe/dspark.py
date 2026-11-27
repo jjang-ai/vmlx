@@ -22,7 +22,7 @@ from .janght import (
     keep_fp8_linears,
     prepare_ernie_runtime,
 )
-from .kernels import ernie_dspark_markov_argmax, ernie_lm_head_forward, mxfp8_linear_fast
+from .kernels import ernie_dspark_markov_argmax, ernie_lm_head_forward
 from .language import (
     DecoderLayer,
     ErnieRoPE,
