@@ -376,12 +376,36 @@ def snapshot_ernie_caches(caches: Sequence[Any]) -> List[Any]:
             snaps.append((lc[0].offset, lc[1].offset))
         else:
             local, pool = lc[0], lc[1]
+            # Only materialize a tiny contiguous copy if a 128-boundary or rotating compaction could
+            # overwrite the preallocated buffer during the upcoming verify batch (max verify <= 16).
+            need_local_copy = (
+                local._buf is None
+                or (local._end + 16 > local._cap)
+            )
+            local_snap_k = (
+                (mx.contiguous(local.keys) if local.keys is not None else None)
+                if need_local_copy
+                else None
+            )
+            need_pool_copy = (pool.pending_len + 16 >= pool.compress_ratio)
+            pool_snap_kv = (
+                (mx.contiguous(pool.pending_kv) if pool.pending_kv is not None else None)
+                if need_pool_copy
+                else None
+            )
+            pool_snap_gate = (
+                (mx.contiguous(pool.pending_gate) if pool.pending_gate is not None else None)
+                if need_pool_copy
+                else None
+            )
             snaps.append((
-                local.keys,
+                local_snap_k,
+                local._start,
+                local._end,
                 local.offset,
                 pool.pooled_count,
-                pool.pending_kv,
-                pool.pending_gate,
+                pool_snap_kv,
+                pool_snap_gate,
                 pool.pending_len,
                 pool.offset,
             ))
@@ -394,13 +418,7 @@ def rollback_ernie_caches(
     kept: int,
     block_len: int,
 ) -> None:
-    """Bit-exact rollback of ERNIE HCA/MLA caches keeping `kept` (0 <= kept <= block_len) verified tokens.
-
-    - MLA layers: O(1) offset trim.
-    - HCA local rotating cache: exact chronological tail slice + prepend from snapshot.
-    - HCA pooling cache: O(1) pending slice trim, OR bit-exact restore + kept-slice append using
-      `pool._last_in_kv` / `pool._last_in_gate` when a 128-token boundary fell inside the rejected suffix!
-    """
+    """Bit-exact O(1) rollback of ERNIE HCA/MLA caches keeping `kept` (0 <= kept <= block_len) verified tokens."""
     trim = int(block_len) - int(kept)
     if trim <= 0:
         return
@@ -410,11 +428,23 @@ def rollback_ernie_caches(
             lc[1].trim(trim)
             continue
         local, pool = lc[0], lc[1]
-        prev_k, prev_off, prev_pc, prev_pkv, prev_pgate, prev_plen, prev_poff = snap
+        (
+            prev_k, prev_start, prev_end, prev_off,
+            prev_pc, prev_pkv, prev_pgate, prev_plen, prev_poff,
+        ) = snap
 
-        # 1. Exact rollback of HCA local rotating cache (handles 128-boundary crossings bit-exact!)
-        if kept == 0:
-            local.keys = prev_k
+        # 1. Exact rollback of HCA local rotating cache
+        if prev_k is None and local._buf is not None and local._end == prev_end + block_len:
+            # Fast O(1) pointer rollback inside preallocated buffer (ZERO copies!)
+            local._end = prev_end + kept
+            local._start = max(0, local._end - local.max_size)
+            local.offset = prev_off + kept
+        elif kept == 0:
+            if prev_k is not None:
+                local.keys = prev_k
+            else:
+                local._start = prev_start
+                local._end = prev_end
             local.offset = prev_off
         elif local._last_in_keys is not None:
             kept_new = local._last_in_keys[:, :, :kept, :]
@@ -422,38 +452,27 @@ def rollback_ernie_caches(
                 merged = kept_new
             else:
                 merged = mx.concatenate([prev_k, kept_new], axis=2)
-            if merged.shape[2] > local.max_size:
-                merged = merged[:, :, -local.max_size :, :]
-            local.keys = mx.contiguous(merged)
-            local.offset = prev_off + kept
-        elif local.keys is not None:
-            valid_from_new = local.keys[:, :, :-trim, :]
-            local.keys = mx.contiguous(valid_from_new)
+            local.keys = merged
             local.offset = prev_off + kept
         else:
+            local._end = max(local._start, local._end - trim)
             local.offset = prev_off + kept
 
-        # 2. Exact rollback of HCA pooling cache (handles kept == 0 AND 128-boundary crossings!)
-        if kept == 0:
+        # 2. Exact rollback of HCA pooling cache (O(1) pointer rewind when no 128-boundary crossed!)
+        r = pool.compress_ratio
+        new_total_windows = (prev_poff + kept) // r
+        if pool.pooled_count == new_total_windows and prev_plen + block_len < r:
+            # Fast O(1) pointer rewind inside preallocated buffer (ZERO copies!)
+            pool.pending_len = prev_plen + kept
+            pool.offset = prev_poff + kept
+        elif kept == 0:
             pool.pooled_count = prev_pc
             pool.pending_kv = prev_pkv
             pool.pending_gate = prev_pgate
             pool.pending_len = prev_plen
             pool.offset = prev_poff
-            continue
-
-        r = pool.compress_ratio
-        new_total_windows = (prev_poff + kept) // r
-        if pool.pooled_count == new_total_windows and pool.pending_len >= trim:
-            # Fast path (~96% of rounds): no rejected token completed a new 128-token window.
-            new_plen = pool.pending_len - trim
-            if new_plen > 0:
-                pool.pending_kv = mx.contiguous(pool.pending_kv[:, :new_plen, :])
-                pool.pending_gate = mx.contiguous(pool.pending_gate[:, :new_plen, :])
-            else:
-                pool.pending_kv = None
-                pool.pending_gate = None
-            pool.pending_len = new_plen
+        elif pool.pooled_count == new_total_windows and pool.pending_len >= trim:
+            pool.pending_len = pool.pending_len - trim
             pool.offset = prev_poff + kept
         else:
             # Exact boundary-crossing rollback using the tiny stashed verify input slice!
@@ -462,7 +481,6 @@ def rollback_ernie_caches(
             pool.pooled_count = new_total_windows
             pool.offset = prev_poff + kept
             if in_kv is not None and in_gate is not None:
-                # Reconstruct exact pending tail after `kept` tokens from (prev_pending + in[:kept]).
                 if prev_pkv is not None and prev_plen > 0:
                     full_kv = mx.concatenate([prev_pkv, in_kv[:, :kept, :]], axis=1)
                     full_gate = mx.concatenate([prev_pgate, in_gate[:, :kept, :]], axis=1)
@@ -472,8 +490,8 @@ def rollback_ernie_caches(
                 consumed = (new_total_windows - prev_pc) * r
                 rem = int(full_kv.shape[1]) - consumed
                 if rem > 0:
-                    pool.pending_kv = mx.contiguous(full_kv[:, consumed:, :])
-                    pool.pending_gate = mx.contiguous(full_gate[:, consumed:, :])
+                    pool.pending_kv = full_kv[:, consumed:, :]
+                    pool.pending_gate = full_gate[:, consumed:, :]
                 else:
                     pool.pending_kv = None
                     pool.pending_gate = None

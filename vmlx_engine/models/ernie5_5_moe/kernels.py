@@ -423,11 +423,10 @@ _MHC_SINKHORN_COLLAPSE_NORM_SRC = r"""
 
 
 _MHC_SPLITK_S1_SRC = r"""
-  // Stage 1: Split-K=32 over K = 4 * D (= 16384 -> 512 elements per split).
-  // 256 threads (8 simdgroups) per threadgroup; stages x[512] ONCE into SRAM,
-  // computes partial sum(x^2) AND partial dot(x, fn[0..23]) across all 80 GPU cores!
-  constexpr uint SPLITS = 32u;
-  constexpr uint CHUNK  = uint(K_FLAT) / SPLITS;   // 512 for K_FLAT=16384
+  // Stage 1: Split-K=64 over K = 4 * D (= 16384 -> 256 elements per split).
+  // 256 threads (8 simdgroups) per threadgroup -> 64 TGs saturating M5 Ultra's 80 cores!
+  constexpr uint SPLITS = 64u;
+  constexpr uint CHUNK  = uint(K_FLAT) / SPLITS;   // 256 for K_FLAT=16384
   const uint split = threadgroup_position_in_grid.x;
   const uint row   = threadgroup_position_in_grid.y;
   const uint tid   = thread_position_in_threadgroup.x;
@@ -435,33 +434,94 @@ _MHC_SPLITK_S1_SRC = r"""
   const uint lane  = tid & 31u;
   const uint k0    = split * CHUNK;
 
-  threadgroup float x_smem[512];
+  threadgroup float x_smem[256];
   threadgroup float sq_sg[8];
 
   const device T* x_row = x_in + size_t(row) * uint(K_FLAT) + k0;
-  float v0 = float(x_row[tid * 2u]);
-  float v1 = float(x_row[tid * 2u + 1u]);
-  x_smem[tid * 2u]      = v0;
-  x_smem[tid * 2u + 1u] = v1;
-  float sg_s = simd_sum(v0 * v0 + v1 * v1);
+  float v0 = float(x_row[tid]);
+  x_smem[tid] = v0;
+  float sg_s = simd_sum(v0 * v0);
   if (lane == 0u) sq_sg[sg] = sg_s;
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
   const size_t pbase = (size_t(row) * SPLITS + split) * 25u;
   if (tid == 0u) {
-    float tot = sq_sg[0] + sq_sg[1] + sq_sg[2] + sq_sg[3]
-              + sq_sg[4] + sq_sg[5] + sq_sg[6] + sq_sg[7];
-    partials[pbase + 24u] = tot;
+    partials[pbase + 24u] = sq_sg[0] + sq_sg[1] + sq_sg[2] + sq_sg[3]
+                          + sq_sg[4] + sq_sg[5] + sq_sg[6] + sq_sg[7];
   }
 
-  // Each simdgroup owns 3 rows of fn (8 * 3 = 24 rows total), walking 512 elems in 4x float4 steps.
+  // Each simdgroup owns 3 rows of fn (8 * 3 = 24 rows), walking 256 elems in 2x float4 steps.
   const uint m0 = sg * 3u;
   float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f;
   const device float* f0 = fn + size_t(m0 + 0u) * uint(K_FLAT) + k0;
   const device float* f1 = fn + size_t(m0 + 1u) * uint(K_FLAT) + k0;
   const device float* f2 = fn + size_t(m0 + 2u) * uint(K_FLAT) + k0;
   #pragma unroll
-  for (uint j = 0; j < 4u; j++) {
+  for (uint j = 0; j < 2u; j++) {
+    uint idx = j * 128u + lane * 4u;
+    float4 xv = *(const threadgroup float4*)(x_smem + idx);
+    a0 += dot(xv, *(const device float4*)(f0 + idx));
+    a1 += dot(xv, *(const device float4*)(f1 + idx));
+    a2 += dot(xv, *(const device float4*)(f2 + idx));
+  }
+  float s0 = simd_sum(a0), s1 = simd_sum(a1), s2 = simd_sum(a2);
+  if (lane == 0u) {
+    partials[pbase + m0 + 0u] = s0;
+    partials[pbase + m0 + 1u] = s1;
+    partials[pbase + m0 + 2u] = s2;
+  }
+"""
+
+_MHC_EXP_SPLITK_S1_SRC = r"""
+  // Fused hc_expand + Split-K=64 mHC Stage 1: eliminates 85 separate hc_expand dispatches/tok!
+  // Split s in [0..63] lies completely inside stream h = s >> 4 at d0 = (s & 15) * 256.
+  constexpr uint SPLITS = 64u;
+  constexpr uint CHUNK  = uint(K_FLAT) / SPLITS;   // 256 for K_FLAT=16384
+  const uint split = threadgroup_position_in_grid.x;
+  const uint row   = threadgroup_position_in_grid.y;
+  const uint tid   = thread_position_in_threadgroup.x;
+  const uint sg    = tid >> 5;
+  const uint lane  = tid & 31u;
+  const uint k0    = split * CHUNK;
+  const uint h     = split >> 4;
+  const uint d     = (split & 15u) * 256u + tid;
+
+  threadgroup float x_smem[256];
+  threadgroup float sq_sg[8];
+
+  const size_t p_off = size_t(row) * 4u;
+  const size_t c_off = size_t(row) * 16u;
+  const device T* res_row = res + size_t(row) * uint(K_FLAT);
+  const float s_val = float(sub[size_t(row) * uint(D) + d]);
+  const float r0 = float(res_row[0u * uint(D) + d]);
+  const float r1 = float(res_row[1u * uint(D) + d]);
+  const float r2 = float(res_row[2u * uint(D) + d]);
+  const float r3 = float(res_row[3u * uint(D) + d]);
+  float y = fma(prev_post[p_off + h], s_val,
+            fma(prev_comb[c_off + 0u * 4u + h], r0,
+            fma(prev_comb[c_off + 1u * 4u + h], r1,
+            fma(prev_comb[c_off + 2u * 4u + h], r2, prev_comb[c_off + 3u * 4u + h] * r3))));
+  T yt = T(y);
+  x_out[size_t(row) * uint(K_FLAT) + k0 + tid] = yt;
+  float v0 = float(yt);
+  x_smem[tid] = v0;
+  float sg_s = simd_sum(v0 * v0);
+  if (lane == 0u) sq_sg[sg] = sg_s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  const size_t pbase = (size_t(row) * SPLITS + split) * 25u;
+  if (tid == 0u) {
+    partials[pbase + 24u] = sq_sg[0] + sq_sg[1] + sq_sg[2] + sq_sg[3]
+                          + sq_sg[4] + sq_sg[5] + sq_sg[6] + sq_sg[7];
+  }
+
+  const uint m0 = sg * 3u;
+  float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+  const device float* f0 = fn + size_t(m0 + 0u) * uint(K_FLAT) + k0;
+  const device float* f1 = fn + size_t(m0 + 1u) * uint(K_FLAT) + k0;
+  const device float* f2 = fn + size_t(m0 + 2u) * uint(K_FLAT) + k0;
+  #pragma unroll
+  for (uint j = 0; j < 2u; j++) {
     uint idx = j * 128u + lane * 4u;
     float4 xv = *(const threadgroup float4*)(x_smem + idx);
     a0 += dot(xv, *(const device float4*)(f0 + idx));
@@ -477,16 +537,16 @@ _MHC_SPLITK_S1_SRC = r"""
 """
 
 _MHC_SPLITK_S2_SRC = r"""
-  // Stage 2: Reduce 32 split-K partials -> ERNIE exact RMS div -> 20-iter Sinkhorn
-  // -> 4-stream collapse -> RMSNorm(norm_w, norm_eps). 256 threads per token row.
-  constexpr uint SPLITS = 32u;
+  // Stage 2: Reduce 64 split-K partials -> ERNIE exact RMS div -> 20-iter Sinkhorn
+  // -> 4-stream collapse -> RMSNorm(norm_w, NORM_EPS). 256 threads per token row.
+  constexpr uint SPLITS = 64u;
   constexpr int BASE_OFF = 8;
   const uint tid  = thread_position_in_threadgroup.x;
   const uint row  = threadgroup_position_in_grid.x;
   const uint lane = tid & 31u;
   const uint sg   = tid >> 5;
-  const float hc_eps = eps_params[0];
-  const float norm_eps = eps_params[1];
+  const float hc_eps = __HC_EPS__;
+  const float norm_eps = __NORM_EPS__;
 
   threadgroup float mix_s[24];
   threadgroup float inv_rms_x_sh;
@@ -494,19 +554,21 @@ _MHC_SPLITK_S2_SRC = r"""
   threadgroup float sg_sq[8];
 
   const size_t rbase = size_t(row) * SPLITS * 25u;
-  // All 8 simdgroups reduce 3 mix rows each in parallel (32 lanes = 32 splits!)
+  // All 8 simdgroups reduce 3 mix rows each in parallel across 64 splits (2 splits/lane!)
   const uint m0 = sg * 3u;
-  float p0_v = partials[rbase + size_t(lane) * 25u + m0 + 0u];
-  float p1_v = partials[rbase + size_t(lane) * 25u + m0 + 1u];
-  float p2_v = partials[rbase + size_t(lane) * 25u + m0 + 2u];
-  float d0 = simd_sum(p0_v), d1 = simd_sum(p1_v), d2 = simd_sum(p2_v);
+  const size_t p_lo = rbase + size_t(lane) * 25u + m0;
+  const size_t p_hi = rbase + size_t(lane + 32u) * 25u + m0;
+  float d0 = simd_sum(partials[p_lo + 0u] + partials[p_hi + 0u]);
+  float d1 = simd_sum(partials[p_lo + 1u] + partials[p_hi + 1u]);
+  float d2 = simd_sum(partials[p_lo + 2u] + partials[p_hi + 2u]);
   if (lane == 0u) {
     mix_s[m0 + 0u] = d0;
     mix_s[m0 + 1u] = d1;
     mix_s[m0 + 2u] = d2;
   }
   if (sg == 0u) {
-    float sq_part = partials[rbase + size_t(lane) * 25u + 24u];
+    float sq_part = partials[rbase + size_t(lane) * 25u + 24u]
+                  + partials[rbase + size_t(lane + 32u) * 25u + 24u];
     float tot_sq = simd_sum(sq_part);
     if (lane == 0u) {
       inv_rms_x_sh = 1.0f / (metal::sqrt(tot_sq * (1.0f / float(4u * uint(D)))) + norm_eps);
@@ -597,7 +659,7 @@ _MHC_SPLITK_S2_SRC = r"""
 @lru_cache(maxsize=4)
 def _mhc_splitk_s1_kernel(dtype_name: str, K_flat: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_mhc_sk1_{dtype_name}_k{K_flat}",
+        name=f"ernie_mhc_sk64_1_{dtype_name}_k{K_flat}",
         input_names=["x_in", "fn"],
         output_names=["partials"],
         source=_MHC_SPLITK_S1_SRC,
@@ -606,12 +668,24 @@ def _mhc_splitk_s1_kernel(dtype_name: str, K_flat: int):
 
 
 @lru_cache(maxsize=4)
-def _mhc_splitk_s2_kernel(dtype_name: str, D: int, iters: int):
+def _mhc_exp_splitk_s1_kernel(dtype_name: str, D: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_mhc_sk2_{dtype_name}_d{D}_i{iters}",
-        input_names=["x_in", "partials", "scale", "base", "norm_w", "eps_params"],
+        name=f"ernie_mhc_expsk64_1_{dtype_name}_d{D}",
+        input_names=["sub", "res", "prev_post", "prev_comb", "fn"],
+        output_names=["x_out", "partials"],
+        source=_MHC_EXP_SPLITK_S1_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+@lru_cache(maxsize=8)
+def _mhc_splitk_s2_kernel(dtype_name: str, D: int, iters: int, hc_eps: float, norm_eps: float):
+    src = _MHC_SPLITK_S2_SRC.replace("__HC_EPS__", f"{float(hc_eps)!r}f").replace("__NORM_EPS__", f"{float(norm_eps)!r}f")
+    return mx.fast.metal_kernel(
+        name=f"ernie_mhc_sk64_2_{dtype_name}_d{D}_i{iters}",
+        input_names=["x_in", "partials", "scale", "base", "norm_w"],
         output_names=["normed_out", "post", "comb"],
-        source=_MHC_SPLITK_S2_SRC,
+        source=src,
         ensure_row_contiguous=True,
     )
 
@@ -641,26 +715,17 @@ def ernie_mhc_collapse_norm(
     B, L, H, D = x.shape
     T = B * L
     dname = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[x.dtype]
-    # For decode & speculative verify (1 <= T <= 16), saturating Split-K=32 avoids
-    # MLX's 3-threadgroup serial FP32 GEMV stall on [T, 16384] @ [16384, 24] (15x faster!).
     if 1 <= T <= 16 and H == 4 and D == 4096 and fn.dtype == mx.float32:
         partials = _mhc_splitk_s1_kernel(dname, H * D)(
             inputs=[x, fn],
             template=[("T", x.dtype), ("K_FLAT", H * D)],
-            grid=(32 * 256, T, 1),
+            grid=(64 * 256, T, 1),
             threadgroup=(256, 1, 1),
-            output_shapes=[(T, 32, 25)],
+            output_shapes=[(T, 64, 25)],
             output_dtypes=[mx.float32],
         )[0]
-        normed, post, comb = _mhc_splitk_s2_kernel(dname, D, hc_iters)(
-            inputs=[
-                x,
-                partials,
-                scale,
-                base,
-                norm_w,
-                mx.array([hc_eps, norm_eps], dtype=mx.float32),
-            ],
+        normed, post, comb = _mhc_splitk_s2_kernel(dname, D, hc_iters, hc_eps, norm_eps)(
+            inputs=[x, partials, scale, base, norm_w],
             template=[("T", x.dtype), ("D", D), ("ITERS", hc_iters)],
             grid=(T * 256, 1, 1),
             threadgroup=(256, 1, 1),
@@ -690,6 +755,200 @@ def ernie_mhc_collapse_norm(
         output_dtypes=[x.dtype, mx.float32, mx.float32],
     )
     return normed, post, comb
+
+
+def ernie_hc_expand_collapse_norm(
+    sub: mx.array,
+    residual: mx.array,
+    prev_post: mx.array,
+    prev_comb: mx.array,
+    fn: mx.array,
+    scale: mx.array,
+    base: mx.array,
+    norm_w: mx.array,
+    hc_iters: int = 20,
+    hc_eps: float = 1e-6,
+    norm_eps: float = 1e-6,
+) -> Tuple[mx.array, mx.array, mx.array, mx.array]:
+    """Fused hc_expand + next mHC collapse_and_norm: eliminates 85 hc_expand dispatches/tok!"""
+    B, L, H, D = residual.shape
+    T = B * L
+    dname = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[residual.dtype]
+    if 1 <= T <= 16 and H == 4 and D == 4096 and fn.dtype == mx.float32:
+        x_new, partials = _mhc_exp_splitk_s1_kernel(dname, D)(
+            inputs=[sub, residual, prev_post, prev_comb, fn],
+            template=[("T", residual.dtype), ("D", D), ("K_FLAT", H * D)],
+            grid=(64 * 256, T, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[residual.shape, (T, 64, 25)],
+            output_dtypes=[residual.dtype, mx.float32],
+        )
+        normed, post, comb = _mhc_splitk_s2_kernel(dname, D, hc_iters, hc_eps, norm_eps)(
+            inputs=[x_new, partials, scale, base, norm_w],
+            template=[("T", residual.dtype), ("D", D), ("ITERS", hc_iters)],
+            grid=(T * 256, 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(B, L, D), (B, L, H), (B, L, H, H)],
+            output_dtypes=[residual.dtype, mx.float32, mx.float32],
+        )
+        return x_new, normed, post, comb
+    x_new = ernie_hc_expand(sub, residual, prev_post, prev_comb)
+    normed, post, comb = ernie_mhc_collapse_norm(
+        x_new, fn, scale, base, norm_w, hc_iters=hc_iters, hc_eps=hc_eps, norm_eps=norm_eps
+    )
+    return x_new, normed, post, comb
+
+
+# ---------------------------------------------------------------------------
+# 3b. Fused Split-K HyperHead (eliminates 0.48 ms 1-TG FP32 GEMV stall on target & DSpark!)
+# ---------------------------------------------------------------------------
+_HC_HEAD_S1_SRC = r"""
+  // Split-K=32 over K_FLAT=16384 -> 512 elements per split, 128 threads (4 simdgroups, 1 row/sg).
+  constexpr uint SPLITS = 32u;
+  constexpr uint CHUNK  = uint(K_FLAT) / SPLITS;   // 512
+  const uint split = threadgroup_position_in_grid.x;
+  const uint row   = threadgroup_position_in_grid.y;
+  const uint tid   = thread_position_in_threadgroup.x;
+  const uint sg    = tid >> 5;
+  const uint lane  = tid & 31u;
+  const uint k0    = split * CHUNK;
+
+  threadgroup float x_smem[512];
+  threadgroup float sq_sg[4];
+
+  const device T* x_row = x_in + size_t(row) * uint(K_FLAT) + k0;
+  float v0 = float(x_row[tid * 4u + 0u]);
+  float v1 = float(x_row[tid * 4u + 1u]);
+  float v2 = float(x_row[tid * 4u + 2u]);
+  float v3 = float(x_row[tid * 4u + 3u]);
+  *(threadgroup float4*)(x_smem + tid * 4u) = float4(v0, v1, v2, v3);
+  float sg_s = simd_sum(v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3);
+  if (lane == 0u) sq_sg[sg] = sg_s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  const size_t pbase = (size_t(row) * SPLITS + split) * 5u;
+  if (tid == 0u) {
+    partials[pbase + 4u] = sq_sg[0] + sq_sg[1] + sq_sg[2] + sq_sg[3];
+  }
+  const device float* fm = fn + size_t(sg) * uint(K_FLAT) + k0;
+  float acc = 0.0f;
+  #pragma unroll
+  for (uint j = 0; j < 4u; j++) {
+    uint idx = j * 128u + lane * 4u;
+    acc += dot(*(const threadgroup float4*)(x_smem + idx), *(const device float4*)(fm + idx));
+  }
+  float s = simd_sum(acc);
+  if (lane == 0u) partials[pbase + sg] = s;
+"""
+
+_HC_HEAD_S2_SRC = r"""
+  // Stage 2: reduce 32 splits -> rsqrt(mean(x^2) + norm_eps) -> sigmoid -> 4-stream collapse!
+  constexpr uint SPLITS = 32u;
+  const uint tid  = thread_position_in_threadgroup.x;
+  const uint row  = threadgroup_position_in_grid.x;
+  const uint lane = tid & 31u;
+  const uint sg   = tid >> 5;
+  const float hc_eps = __HC_EPS__;
+  const float norm_eps = __NORM_EPS__;
+
+  threadgroup float pre_sh[4];
+  threadgroup float inv_rms_sh;
+
+  const size_t rbase = size_t(row) * SPLITS * 5u;
+  if (sg == 0u) {
+    float tot_sq = simd_sum(partials[rbase + size_t(lane) * 5u + 4u]);
+    if (lane == 0u) {
+      inv_rms_sh = metal::rsqrt(tot_sq * (1.0f / float(4u * uint(D))) + norm_eps);
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg < 4u) {
+    float dot_v = simd_sum(partials[rbase + size_t(lane) * 5u + sg]);
+    if (lane == 0u) {
+      float z = (dot_v * inv_rms_sh) * scale[0] + base[sg];
+      pre_sh[sg] = 1.0f / (1.0f + metal::exp(-z)) + hc_eps;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  const float p0 = pre_sh[0], p1 = pre_sh[1], p2 = pre_sh[2], p3 = pre_sh[3];
+  const device T* x_row = x_in + size_t(row) * (4u * uint(D));
+  using T4 = vec<T, 4>;
+  const device T4* x0 = (const device T4*)(x_row + 0u * uint(D));
+  const device T4* x1 = (const device T4*)(x_row + 1u * uint(D));
+  const device T4* x2 = (const device T4*)(x_row + 2u * uint(D));
+  const device T4* x3 = (const device T4*)(x_row + 3u * uint(D));
+  device T4* out4 = (device T4*)(out + size_t(row) * uint(D));
+  constexpr uint D4 = uint(D) / 4u;
+  constexpr uint PER_T = D4 / 256u;
+  #pragma unroll
+  for (uint k = 0; k < PER_T; k++) {
+    uint d4 = tid + k * 256u;
+    float4 c = fma(float4(p0), float4(x0[d4]),
+               fma(float4(p1), float4(x1[d4]),
+               fma(float4(p2), float4(x2[d4]), float4(p3) * float4(x3[d4]))));
+    out4[d4] = T4(c);
+  }
+"""
+
+
+@lru_cache(maxsize=4)
+def _hc_head_s1_kernel(dtype_name: str, K_flat: int):
+    return mx.fast.metal_kernel(
+        name=f"ernie_hchead_s1_{dtype_name}_k{K_flat}",
+        input_names=["x_in", "fn"],
+        output_names=["partials"],
+        source=_HC_HEAD_S1_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+@lru_cache(maxsize=4)
+def _hc_head_s2_kernel(dtype_name: str, D: int, hc_eps: float, norm_eps: float):
+    src = _HC_HEAD_S2_SRC.replace("__HC_EPS__", f"{float(hc_eps)!r}f").replace("__NORM_EPS__", f"{float(norm_eps)!r}f")
+    return mx.fast.metal_kernel(
+        name=f"ernie_hchead_s2_{dtype_name}_d{D}",
+        input_names=["x_in", "partials", "scale", "base"],
+        output_names=["out"],
+        source=src,
+        ensure_row_contiguous=True,
+    )
+
+
+def ernie_hc_head_forward(
+    x: mx.array,
+    fn: mx.array,
+    scale: mx.array,
+    base: mx.array,
+    hc_eps: float = 1e-6,
+    norm_eps: float = 1e-6,
+) -> mx.array:
+    """Split-K=32 fused HyperHead (matches mx.fast.rms_norm eps-inside-sqrt)."""
+    B, L, H, D = x.shape
+    T = B * L
+    if 1 <= T <= 16 and H == 4 and D == 4096 and fn.dtype == mx.float32 and x.dtype in (mx.bfloat16, mx.float16, mx.float32):
+        dname = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[x.dtype]
+        partials = _hc_head_s1_kernel(dname, H * D)(
+            inputs=[x, fn],
+            template=[("T", x.dtype), ("K_FLAT", H * D)],
+            grid=(32 * 128, T, 1),
+            threadgroup=(128, 1, 1),
+            output_shapes=[(T, 32, 5)],
+            output_dtypes=[mx.float32],
+        )[0]
+        return _hc_head_s2_kernel(dname, D, hc_eps, norm_eps)(
+            inputs=[x, partials, scale, base],
+            template=[("T", x.dtype), ("D", D)],
+            grid=(T * 256, 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(B, L, D)],
+            output_dtypes=[x.dtype],
+        )[0]
+    y = x.astype(mx.float32)
+    z = mx.fast.rms_norm(y.flatten(-2), None, norm_eps)
+    mixes = z @ fn.T
+    pre = mx.sigmoid(mixes * scale + base) + hc_eps
+    return (pre[..., None] * y).sum(axis=2).astype(x.dtype)
 
 
 _HC_EXPAND_SRC = r"""
@@ -751,55 +1010,43 @@ def ernie_hc_expand(sub: mx.array, residual: mx.array, post: mx.array, comb: mx.
 
 
 # ---------------------------------------------------------------------------
-# 4. Direct BF16-weight FP32-accum Multi-Row GEMV (Router, HCA Compressor, lm_head)
+# 4. Direct BF16-weight FP32-accum In-TG Split-K GEMV (Router, HCA Compressor)
+#    + High-occupancy M5 Ultra MXFP8 LUT GEMV (qa_kv_fused, shared_fc1/fc2, wo_b)
 # ---------------------------------------------------------------------------
-# Reads BF16 weight [N, K] ONCE for 1..8 activation rows x [T, K] in FP32,
-# eliminating gigabytes of BF16->FP32 weight casts per token!
 _BF16_MATVEC_FP32_SRC = r"""
-  // High-occupancy BF16-read FP32-accum GEMV: 2 output rows per simdgroup (4 rows per 2-sg TG),
-  // 8 elements per lane per step (256 cols/iter, 128-bit coalesced BF16 loads!) -> saturates M5 Ultra!
+  // Single-dispatch 4-simdgroup in-TG Split-K over K (1 output row/TG -> 4,096 sgs for N=1024!).
   const uint sgi = simdgroup_index_in_threadgroup;
   const uint lane = thread_index_in_simdgroup;
-  const uint row0 = threadgroup_position_in_grid.x * 4u + sgi * 2u;
-  if (row0 >= uint(N)) return;
+  const uint row = threadgroup_position_in_grid.x;
+  if (row >= uint(N)) return;
 
-  float acc[ROWS][2];
+  threadgroup float sh[ROWS][4];
+  float acc[ROWS];
   #pragma unroll
-  for (uint t = 0; t < uint(ROWS); t++) { acc[t][0] = 0.0f; acc[t][1] = 0.0f; }
+  for (uint t = 0; t < uint(ROWS); t++) acc[t] = 0.0f;
 
-  const uint r_valid = metal::min(2u, uint(N) - row0);
-  const device bfloat16_t* wbase = w + size_t(row0) * uint(K);
-
-  for (uint k = lane * 8u; k < uint(K); k += 256u) {
-    float4 xv_lo[ROWS], xv_hi[ROWS];
+  const device bfloat16_t* wr = w + size_t(row) * uint(K);
+  for (uint k = sgi * 256u + lane * 8u; k < uint(K); k += 1024u) {
+    float4 w_lo = float4(*(const device vec<bfloat16_t, 4>*)(wr + k));
+    float4 w_hi = float4(*(const device vec<bfloat16_t, 4>*)(wr + k + 4u));
     #pragma unroll
     for (uint t = 0; t < uint(ROWS); t++) {
       const device X_T* xp = x + size_t(t) * uint(K) + k;
-      xv_lo[t] = float4(float(xp[0]), float(xp[1]), float(xp[2]), float(xp[3]));
-      xv_hi[t] = float4(float(xp[4]), float(xp[5]), float(xp[6]), float(xp[7]));
-    }
-    #pragma unroll
-    for (uint r = 0; r < 2u; r++) {
-      if (r < r_valid) {
-        const device bfloat16_t* wp = wbase + size_t(r) * uint(K) + k;
-        float4 w_lo = float4(*(const device vec<bfloat16_t, 4>*)(wp));
-        float4 w_hi = float4(*(const device vec<bfloat16_t, 4>*)(wp + 4u));
-        #pragma unroll
-        for (uint t = 0; t < uint(ROWS); t++) {
-          acc[t][r] += dot(xv_lo[t], w_lo) + dot(xv_hi[t], w_hi);
-        }
-      }
+      float4 xv_lo = float4(float(xp[0]), float(xp[1]), float(xp[2]), float(xp[3]));
+      float4 xv_hi = float4(float(xp[4]), float(xp[5]), float(xp[6]), float(xp[7]));
+      acc[t] += dot(xv_lo, w_lo) + dot(xv_hi, w_hi);
     }
   }
-
   #pragma unroll
   for (uint t = 0; t < uint(ROWS); t++) {
+    float s = simd_sum(acc[t]);
+    if (lane == 0u) sh[t][sgi] = s;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sgi == 0u && lane == 0u) {
     #pragma unroll
-    for (uint r = 0; r < 2u; r++) {
-      float s = simd_sum(acc[t][r]);
-      if (lane == 0u && r < r_valid) {
-        out[size_t(t) * uint(N) + row0 + r] = s;
-      }
+    for (uint t = 0; t < uint(ROWS); t++) {
+      out[size_t(t) * uint(N) + row] = sh[t][0] + sh[t][1] + sh[t][2] + sh[t][3];
     }
   }
 """
@@ -808,7 +1055,7 @@ _BF16_MATVEC_FP32_SRC = r"""
 @lru_cache(maxsize=32)
 def _bf16_matvec_fp32_kernel(xdt_name: str, rows: int, N: int, K: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_bf16_mv2_f32_{xdt_name}_r{rows}_n{N}_k{K}",
+        name=f"ernie_bf16_mv4sk_f32_{xdt_name}_r{rows}_n{N}_k{K}",
         input_names=["x", "w"],
         output_names=["out"],
         source=_BF16_MATVEC_FP32_SRC,
@@ -817,23 +1064,21 @@ def _bf16_matvec_fp32_kernel(xdt_name: str, rows: int, N: int, K: int):
 
 
 def bf16_linear_fp32(x: mx.array, weight_bf16: mx.array) -> mx.array:
-    """Compute x.f32 @ weight_bf16.f32.T without casting BF16 weights to FP32 for T <= 15."""
+    """Compute x.f32 @ weight_bf16.f32.T with 4-sg in-TG Split-K (saturates M5 Ultra)."""
     lead = x.shape[:-1]
     K = x.shape[-1]
     N = weight_bf16.shape[0]
     x2 = x.reshape(-1, K)
     T = x2.shape[0]
-    if 1 <= T <= 15 and K % 256 == 0 and weight_bf16.dtype == mx.bfloat16 and x2.dtype in (mx.bfloat16, mx.float16, mx.float32):
+    if 1 <= T <= 15 and K % 1024 == 0 and weight_bf16.dtype == mx.bfloat16 and x2.dtype in (mx.bfloat16, mx.float16, mx.float32):
         xdt_name = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[x2.dtype]
-        # Chunk into <=8 rows per launch to stay in registers
         if T <= 8:
             kern = _bf16_matvec_fp32_kernel(xdt_name, T, N, K)
-            n_tg = (N + 3) // 4
             out = kern(
                 inputs=[x2, weight_bf16],
                 template=[("X_T", x2.dtype), ("ROWS", T), ("N", N), ("K", K)],
-                grid=(n_tg * 64, 1, 1),
-                threadgroup=(64, 1, 1),
+                grid=(N * 128, 1, 1),
+                threadgroup=(128, 1, 1),
                 output_shapes=[(T, N)],
                 output_dtypes=[mx.float32],
             )[0]
@@ -844,34 +1089,43 @@ def bf16_linear_fp32(x: mx.array, weight_bf16: mx.array) -> mx.array:
 
 
 # ---------------------------------------------------------------------------
-# 5. Fused MultiRouter (reads BF16 w0 & w1 once in FP32 -> sigmoid(d0)+sigmoid(d1))
+# 5. Fused MultiRouter: Single-dispatch 8-simdgroup in-TG Split-K (4,096 sgs for N=512!)
 # ---------------------------------------------------------------------------
 _MULTI_ROUTER_SRC = r"""
-  // High-occupancy MultiRouter: 1 output row per simdgroup (2 rows per 2-sg TG -> 256 TGs for N=512!),
-  // 8 elements per lane per step (256 cols/iter, 128-bit coalesced BF16 loads!).
+  // Single-dispatch 8-simdgroup in-TG Split-K over K=4096 (1 row/TG -> 512 TGs x 8 sg = 4,096 sgs!).
+  // Each simdgroup handles 512 elements (16 elems/lane = 4x bfloat16_t4 coalesced loads!).
   const uint sgi = simdgroup_index_in_threadgroup;
   const uint lane = thread_index_in_simdgroup;
-  const uint row = threadgroup_position_in_grid.x * 2u + sgi;
+  const uint row = threadgroup_position_in_grid.x;
   if (row >= uint(N)) return;
 
+  threadgroup float sh0[ROWS][8];
+  threadgroup float sh1[ROWS][8];
   float a0[ROWS], a1[ROWS];
   #pragma unroll
   for (uint t = 0; t < uint(ROWS); t++) { a0[t] = 0.0f; a1[t] = 0.0f; }
+
   const device bfloat16_t* w0r = w0 + size_t(row) * uint(K);
   const device bfloat16_t* w1r = w1 + size_t(row) * uint(K);
 
-  for (uint k = lane * 8u; k < uint(K); k += 256u) {
-    float4 v0_lo = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k));
-    float4 v0_hi = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k + 4u));
-    float4 v1_lo = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k));
-    float4 v1_hi = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k + 4u));
+  for (uint k = sgi * 512u + lane * 16u; k < uint(K); k += 4096u) {
+    float4 v0_0 = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k + 0u));
+    float4 v0_1 = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k + 4u));
+    float4 v0_2 = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k + 8u));
+    float4 v0_3 = float4(*(const device vec<bfloat16_t, 4>*)(w0r + k + 12u));
+    float4 v1_0 = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k + 0u));
+    float4 v1_1 = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k + 4u));
+    float4 v1_2 = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k + 8u));
+    float4 v1_3 = float4(*(const device vec<bfloat16_t, 4>*)(w1r + k + 12u));
     #pragma unroll
     for (uint t = 0; t < uint(ROWS); t++) {
       const device X_T* xp = x + size_t(t) * uint(K) + k;
-      float4 x_lo = float4(float(xp[0]), float(xp[1]), float(xp[2]), float(xp[3]));
-      float4 x_hi = float4(float(xp[4]), float(xp[5]), float(xp[6]), float(xp[7]));
-      a0[t] += dot(x_lo, v0_lo) + dot(x_hi, v0_hi);
-      a1[t] += dot(x_lo, v1_lo) + dot(x_hi, v1_hi);
+      float4 x0 = float4(float(xp[0]),  float(xp[1]),  float(xp[2]),  float(xp[3]));
+      float4 x1 = float4(float(xp[4]),  float(xp[5]),  float(xp[6]),  float(xp[7]));
+      float4 x2 = float4(float(xp[8]),  float(xp[9]),  float(xp[10]), float(xp[11]));
+      float4 x3 = float4(float(xp[12]), float(xp[13]), float(xp[14]), float(xp[15]));
+      a0[t] += dot(x0, v0_0) + dot(x1, v0_1) + dot(x2, v0_2) + dot(x3, v0_3);
+      a1[t] += dot(x0, v1_0) + dot(x1, v1_1) + dot(x2, v1_2) + dot(x3, v1_3);
     }
   }
   #pragma unroll
@@ -879,7 +1133,19 @@ _MULTI_ROUTER_SRC = r"""
     float s0 = simd_sum(a0[t]);
     float s1 = simd_sum(a1[t]);
     if (lane == 0u) {
-      scores[size_t(t) * uint(N) + row] = (1.0f / (1.0f + metal::exp(-s0))) + (1.0f / (1.0f + metal::exp(-s1)));
+      sh0[t][sgi] = s0;
+      sh1[t][sgi] = s1;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sgi == 0u && lane == 0u) {
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) {
+      float t0 = sh0[t][0] + sh0[t][1] + sh0[t][2] + sh0[t][3]
+               + sh0[t][4] + sh0[t][5] + sh0[t][6] + sh0[t][7];
+      float t1 = sh1[t][0] + sh1[t][1] + sh1[t][2] + sh1[t][3]
+               + sh1[t][4] + sh1[t][5] + sh1[t][6] + sh1[t][7];
+      scores[size_t(t) * uint(N) + row] = (1.0f / (1.0f + metal::exp(-t0))) + (1.0f / (1.0f + metal::exp(-t1)));
     }
   }
 """
@@ -888,7 +1154,7 @@ _MULTI_ROUTER_SRC = r"""
 @lru_cache(maxsize=16)
 def _multi_router_kernel(xdt_name: str, rows: int, N: int, K: int):
     return mx.fast.metal_kernel(
-        name=f"ernie_multi_router2_{xdt_name}_r{rows}_n{N}_k{K}",
+        name=f"ernie_multi_router8sk_{xdt_name}_r{rows}_n{N}_k{K}",
         input_names=["x", "w0", "w1"],
         output_names=["scores"],
         source=_MULTI_ROUTER_SRC,
@@ -897,20 +1163,20 @@ def _multi_router_kernel(xdt_name: str, rows: int, N: int, K: int):
 
 
 def ernie_multi_router_scores(x: mx.array, w0: mx.array, w1: mx.array) -> mx.array:
-    """Compute sigmoid(x @ w0.T) + sigmoid(x @ w1.T) in FP32 directly from BF16 weights."""
+    """Compute sigmoid(x @ w0.T) + sigmoid(x @ w1.T) in FP32 with 8-sg in-TG Split-K."""
     lead = x.shape[:-1]
     K = x.shape[-1]
     N = w0.shape[0]
     x2 = x.reshape(-1, K)
     T = x2.shape[0]
-    if 1 <= T <= 15 and N % 2 == 0 and K % 256 == 0 and w0.dtype == mx.bfloat16 and w1.dtype == mx.bfloat16:
+    if 1 <= T <= 15 and K % 4096 == 0 and w0.dtype == mx.bfloat16 and w1.dtype == mx.bfloat16:
         if T <= 8:
             xdt_name = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[x2.dtype]
             out = _multi_router_kernel(xdt_name, T, N, K)(
                 inputs=[x2, w0, w1],
                 template=[("X_T", x2.dtype), ("ROWS", T), ("N", N), ("K", K)],
-                grid=((N // 2) * 64, 1, 1),
-                threadgroup=(64, 1, 1),
+                grid=(N * 256, 1, 1),
+                threadgroup=(256, 1, 1),
                 output_shapes=[(T, N)],
                 output_dtypes=[mx.float32],
             )[0]
@@ -921,6 +1187,126 @@ def ernie_multi_router_scores(x: mx.array, w0: mx.array, w1: mx.array) -> mx.arr
     s0 = mx.sigmoid((x_bf @ w0.T).astype(mx.float32))
     s1 = mx.sigmoid((x_bf @ w1.T).astype(mx.float32))
     return (s0 + s1).reshape(*lead, N)
+
+
+# ---------------------------------------------------------------------------
+# 5b. High-occupancy M5 Ultra MXFP8 LUT GEMV (1 lane = 32-elem MXFP8 block, 4-sg Split-K)
+# ---------------------------------------------------------------------------
+def _build_e4m3_lut_header() -> str:
+    vals = []
+    for b in range(256):
+        s = -1.0 if (b & 0x80) else 1.0
+        exp = (b >> 3) & 0xF
+        mant = b & 0x7
+        if exp == 0:
+            v = s * (mant / 512.0)
+        elif exp == 15 and mant == 7:
+            v = 0.0
+        else:
+            v = s * (2.0 ** (exp - 7)) * (1.0 + mant / 8.0)
+        vals.append(f"half({v!r})")
+    return "constant half E4M3_LUT[256] = {" + ", ".join(vals) + "};\n"
+
+
+_MXFP8_LUT_HEADER = _build_e4m3_lut_header()
+
+_MXFP8_GEMV_4SG_SRC = r"""
+  // High-occupancy M5 Ultra MXFP8 GEMV: 1 lane = one 32-elem MXFP8 block (8x uint32 + 1 E8M0 scale!).
+  // 4 simdgroups (128 threads) = 4096 elems/step; 1 output row/TG -> saturates all 80 Ultra cores!
+  const uint sgi  = simdgroup_index_in_threadgroup;
+  const uint lane = thread_index_in_simdgroup;
+  const uint row  = threadgroup_position_in_grid.x;
+  if (row >= uint(N)) return;
+
+  threadgroup float sh[ROWS][4];
+  float acc[ROWS];
+  #pragma unroll
+  for (uint t = 0; t < uint(ROWS); t++) acc[t] = 0.0f;
+
+  const device uint32_t* wr = w + size_t(row) * (uint(K) / 4u);
+  const device uint8_t*  sr = scales + size_t(row) * (uint(K) / 32u);
+
+  for (uint blk = sgi * 32u + lane; blk < (uint(K) / 32u); blk += 128u) {
+    const float sf = as_type<float>(uint(sr[blk]) << 23u);
+    const device uint4* wp = (const device uint4*)(wr + blk * 8u);
+    uint4 w0 = wp[0];
+    uint4 w1 = wp[1];
+    uint words[8] = {w0.x, w0.y, w0.z, w0.w, w1.x, w1.y, w1.z, w1.w};
+    float4 wf[8];
+    #pragma unroll
+    for (uint j = 0; j < 8u; j++) {
+      uint u = words[j];
+      wf[j] = float4(
+        float(E4M3_LUT[u & 255u]),
+        float(E4M3_LUT[(u >> 8u) & 255u]),
+        float(E4M3_LUT[(u >> 16u) & 255u]),
+        float(E4M3_LUT[(u >> 24u) & 255u])
+      );
+    }
+    const uint k0 = blk * 32u;
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) {
+      const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + size_t(t) * uint(K) + k0);
+      float d = 0.0f;
+      #pragma unroll
+      for (uint j = 0; j < 8u; j++) {
+        d += dot(float4(xp[j]), wf[j]);
+      }
+      acc[t] += d * sf;
+    }
+  }
+  #pragma unroll
+  for (uint t = 0; t < uint(ROWS); t++) {
+    float s = simd_sum(acc[t]);
+    if (lane == 0u) sh[t][sgi] = s;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sgi == 0u && lane == 0u) {
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) {
+      out[size_t(t) * uint(N) + row] = T(sh[t][0] + sh[t][1] + sh[t][2] + sh[t][3]);
+    }
+  }
+"""
+
+
+@lru_cache(maxsize=32)
+def _mxfp8_gemv_4sg_kernel(dt_name: str, rows: int, N: int, K: int):
+    return mx.fast.metal_kernel(
+        name=f"ernie_mxfp8_mv4sk_{dt_name}_r{rows}_n{N}_k{K}",
+        input_names=["x", "w", "scales"],
+        output_names=["out"],
+        header=_MXFP8_LUT_HEADER,
+        source=_MXFP8_GEMV_4SG_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+def mxfp8_linear_fast(linear: Any, x: mx.array) -> mx.array:
+    """High-occupancy M5 Ultra MXFP8 GEMV for decode/small verify (1 <= T <= 4, K % 4096 == 0, N <= 8192)."""
+    if (
+        getattr(linear, "mode", None) == "mxfp8"
+        and getattr(linear, "bits", None) == 8
+        and getattr(linear, "group_size", None) == 32
+        and x.dtype in (mx.bfloat16, mx.float16)
+    ):
+        K = x.shape[-1]
+        N = int(linear.weight.shape[0])
+        T = x.size // K
+        if 1 <= T <= 4 and K % 4096 == 0 and N <= 8192:
+            lead = x.shape[:-1]
+            x2 = x.reshape(T, K)
+            dt_name = "bf16" if x.dtype == mx.bfloat16 else "f16"
+            out = _mxfp8_gemv_4sg_kernel(dt_name, T, N, K)(
+                inputs=[x2, linear.weight, linear.scales],
+                template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
+                grid=(N * 128, 1, 1),
+                threadgroup=(128, 1, 1),
+                output_shapes=[(T, N)],
+                output_dtypes=[x.dtype],
+            )[0]
+            return out.reshape(*lead, N)
+    return linear(x)
 
 
 # ---------------------------------------------------------------------------

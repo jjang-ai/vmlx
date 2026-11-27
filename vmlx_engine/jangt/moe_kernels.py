@@ -765,12 +765,75 @@ def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float 
     return kern(inputs=ins, grid=grid, threadgroup=(256 if rot_out else 64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
 
 
+@functools.lru_cache(maxsize=None)
+def _down_v3_par(kin: int, N: int, K, L: int, n_out: int, kslots: int, p_sg: int, W: int, hdt: str, guard: bool = True, yz: bool = False):
+    """Parallel-slot weighted down: p_sg simdgroups per TG split kslots across 4 output rows (zero 2nd kernel!)."""
+    mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
+    slots_per_sg = kslots // p_sg
+    dn_body = f"""{_xload3(guard)}
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          half2 ad = half2(0.0h);
+          const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "ad")}
+          d0[r] += float(ad.x) * xi; d1[r] += float(ad.y) * xi;
+        }}"""
+    outl_pre = "" if n_out == 0 else f"""
+      float od[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
+      if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
+        if (c >= 0) {{ float ho = float(h[(size_t)ts * {kin}u + uint(c)]);
+          {_UNROLL} for (uint r = 0; r < 4u; r++) od[r] = ho * float(wout[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }}
+      {_UNROLL} for (uint r = 0; r < 4u; r++) od[r] = simd_sum(od[r]);"""
+    outl = "" if n_out == 0 else " y += od[r];"
+    src = f"""
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * 4u; uint t = threadgroup_position_in_grid.z;
+    const uint lb = lane * {PL}u; const uint sh = lb & 31u; (void)sh;
+    threadgroup float sg_buf[{p_sg}][4];
+    float acc[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    uint sl0 = sgi * {slots_per_sg}u;
+    for (uint j = 0; j < {slots_per_sg}u; j++) {{
+      uint sl = sl0 + j;
+      uint ts = t * {kslots}u + sl; uint e = idx[ts]; float wgt = float(rw[ts]);{outl_pre}
+      const device uint32_t* wp = wd + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
+      const device float* xp = hr + (size_t)ts * {kin}u + lane * 16u;
+      float d0[4], d1[4];
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{ d0[r] = 0.0f; d1[r] = 0.0f; }}
+      float se = 0.0f, so = 0.0f;
+      {_blocks(kin, dn_body, f"wp += {adv}u; xp += 512u;")}
+      float SE = simd_sum(se), SO = simd_sum(so);
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+        float D0 = simd_sum(d0[r]), D1 = simd_sum(d1[r]);
+        float y = ((D0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (D1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sd[(size_t)e * {N}u + row0 + r];{outl}
+        acc[r] = fma(wgt, y, acc[r]);
+      }}
+    }}
+    if (lane == 0u) {{ {_UNROLL} for (uint r = 0; r < 4u; r++) sg_buf[sgi][r] = acc[r]; }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgi == 0u && lane == 0u) {{
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+        float tot = sg_buf[0][r];
+        {_UNROLL} for (uint s = 1u; s < {p_sg}u; s++) tot += sg_buf[s][r];
+        out[(size_t)t * {N}u + row0 + r] = tot;
+      }}
+    }}
+    """
+    ins = ["hr", "h", "idx", "rw", "wd", "sd"] + (["ocol", "wout"] if n_out else [])
+    from vmlx_engine.jangh.kernels import swap_grid_yz
+    return mx.fast.metal_kernel(name=f"jt4_dnp_k{kin}_n{N}_K{_kname(K)}_o{n_out}_s{kslots}_p{p_sg}_w{W}_{hdt}{'' if guard else '_ng'}{'_yz' if yz else ''}",
+                                input_names=ins, output_names=["out"], source=swap_grid_yz(src) if yz else src)
+
+
 def gather_down_weighted_v3(hr, h, idx, rw, U, slot_fastest: bool = False):
     from vmlx_engine.jangh.kernels import slot_fastest_enabled
     T, k = idx.shape; kin = h.shape[1]; N = U["down"]["scale"].shape[1]; n_out = U["down"]["n_out"]; W = int(U["down"]["packed"].shape[-1])
     yz = bool(slot_fastest) and T > 1 and slot_fastest_enabled()
     ins = [hr, h, idx.reshape(-1).astype(mx.uint32), rw.reshape(-1).astype(mx.float32), U["down"]["packed"], U["down"]["scale"]] + \
           ([U["down"]["ocol"], U["down"]["wout"]] if n_out else [])
+    if T <= 4 and k >= 8 and N % 4 == 0 and (k % 5 == 0 or k % 4 == 0):
+        p_sg = 5 if (k % 5 == 0) else 4
+        kern = _down_v3_par(kin, N, U["K_dn"], U["L"], n_out, k, p_sg, W, _dt(h), _fp16_guard(), yz)
+        tg = p_sg * 32
+        return kern(inputs=ins, grid=(tg, T, N // 4) if yz else (tg, N // 4, T), threadgroup=(tg, 1, 1),
+                    output_shapes=[(T, N)], output_dtypes=[mx.float32])[0]
     kern = _down_v3(kin, N, U["K_dn"], U["L"], n_out, k, W, _dt(h), _fp16_guard(), yz)
     return kern(inputs=ins, grid=(64, T, N // 8) if yz else (64, N // 8, T), threadgroup=(64, 1, 1),
                 output_shapes=[(T, N)], output_dtypes=[mx.float32])[0]

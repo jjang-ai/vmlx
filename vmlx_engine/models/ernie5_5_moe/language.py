@@ -17,10 +17,13 @@ from .config import ModelConfig
 from .kernels import (
     bf16_linear_fp32,
     ernie_hc_expand,
+    ernie_hc_expand_collapse_norm,
+    ernie_hc_head_forward,
     ernie_lm_head_forward,
     ernie_mhc_collapse_norm,
     ernie_multi_router_scores,
     fused_situ,
+    mxfp8_linear_fast,
     round_e4m3_per128,
 )
 
@@ -242,7 +245,7 @@ class LatentMoE(nn.Module):
         bias = self.e_score_correction_bias if router_bias is None else router_bias
         ids, weights = self.gate(x, bias)
         if self._shared_fc1_fused is not None:
-            proj = self._shared_fc1_fused(x)
+            proj = mxfp8_linear_fast(self._shared_fc1_fused, x)
             s1, s2 = self._shared_fc1_splits
             sh_gate = proj[..., :s1]
             sh_up = proj[..., s1:s2]
@@ -260,7 +263,7 @@ class LatentMoE(nn.Module):
 
         normed_combined = self.latent_norm(combined)
         if self._shared_fc2_fused is not None and shared_mid is not None:
-            return self._shared_fc2_fused(mx.concatenate([shared_mid, normed_combined], axis=-1))
+            return mxfp8_linear_fast(self._shared_fc2_fused, mx.concatenate([shared_mid, normed_combined], axis=-1))
         shared_out = (
             self.shared_experts.down_proj(shared_mid)
             if shared_mid is not None
@@ -313,11 +316,9 @@ class HyperHead(nn.Module):
         self.scale = mx.ones((1,), dtype=mx.float32)
 
     def __call__(self, x: mx.array) -> mx.array:
-        y = x.astype(mx.float32)
-        z = mx.fast.rms_norm(y.flatten(-2), None, self.norm_eps)
-        mixes = z @ self.fn.T
-        pre = mx.sigmoid(mixes * self.scale + self.base) + self.hc_eps
-        return (pre[..., None] * y).sum(axis=2).astype(x.dtype)
+        return ernie_hc_head_forward(
+            x, self.fn, self.scale, self.base, hc_eps=self.hc_eps, norm_eps=self.norm_eps
+        )
 
 
 class VirtualHeads(nn.Module):
@@ -438,7 +439,7 @@ class HCAAttention(nn.Module):
         offset = int(local.offset) if local is not None else 0
 
         if self._qa_kv_fused is not None:
-            qa_kv = self._qa_kv_fused(x)
+            qa_kv = mxfp8_linear_fast(self._qa_kv_fused, x)
             qr = self.q_norm(qa_kv[..., : self.config.q_lora_rank])
             kv_raw = qa_kv[..., self.config.q_lora_rank :]
         else:
@@ -509,7 +510,7 @@ class HCAAttention(nn.Module):
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
         out = self.wo_a(out).transpose(0, 2, 1, 3).flatten(-2)
-        return self.wo_b(out * mx.sigmoid(ogate))
+        return mxfp8_linear_fast(self.wo_b, out * mx.sigmoid(ogate))
 
 
 class Indexer(nn.Module):
@@ -694,10 +695,37 @@ class DecoderLayer(nn.Module):
     def __call__(self, x: mx.array, cache: Optional[ErnieLayerCache] = None, router_bias: Optional[mx.array] = None) -> mx.array:
         h, post, comb = self.attn_hc.collapse_and_norm(x, self.attn_norm)
         h = self.attn(h, cache)
-        x = ernie_hc_expand(h, x, post, comb)
-        h, post, comb = self.ffn_hc.collapse_and_norm(x, self.ffn_norm)
+        x, h, post, comb = ernie_hc_expand_collapse_norm(
+            h, x, post, comb,
+            self.ffn_hc.fn, self.ffn_hc.scale, self.ffn_hc.base, self.ffn_norm.weight,
+            hc_iters=self.ffn_hc.iters, hc_eps=self.ffn_hc.eps, norm_eps=self.ffn_hc.norm_eps,
+        )
         h = self.ffn(h) if router_bias is None else self.ffn(h, router_bias)
         return ernie_hc_expand(h, x, post, comb)
+
+    def forward_fused(
+        self,
+        x: mx.array,
+        h_attn: mx.array,
+        post_a: mx.array,
+        comb_a: mx.array,
+        cache: Optional[ErnieLayerCache] = None,
+        next_layer: Optional["DecoderLayer"] = None,
+    ):
+        sub_a = self.attn(h_attn, cache)
+        x, h_ffn, post_f, comb_f = ernie_hc_expand_collapse_norm(
+            sub_a, x, post_a, comb_a,
+            self.ffn_hc.fn, self.ffn_hc.scale, self.ffn_hc.base, self.ffn_norm.weight,
+            hc_iters=self.ffn_hc.iters, hc_eps=self.ffn_hc.eps, norm_eps=self.ffn_hc.norm_eps,
+        )
+        sub_f = self.ffn(h_ffn)
+        if next_layer is not None:
+            return ernie_hc_expand_collapse_norm(
+                sub_f, x, post_f, comb_f,
+                next_layer.attn_hc.fn, next_layer.attn_hc.scale, next_layer.attn_hc.base, next_layer.attn_norm.weight,
+                hc_iters=next_layer.attn_hc.iters, hc_eps=next_layer.attn_hc.eps, norm_eps=next_layer.attn_hc.norm_eps,
+            )
+        return ernie_hc_expand(sub_f, x, post_f, comb_f), None, None, None
 
 
 class ErnieModel(nn.Module):
@@ -723,10 +751,16 @@ class ErnieModel(nn.Module):
             cache = [None] * len(self.layers)
         tap_set = set(capture_taps)
         taps: List[mx.array] = []
-        for ordinal, (layer, layer_cache) in enumerate(zip(self.layers, cache), 1):
-            h = layer(h, layer_cache)
-            if ordinal in tap_set:
-                taps.append(mx.mean(h.astype(mx.float32), axis=-2).astype(h.dtype))
+        n_layers = len(self.layers)
+        if n_layers > 0:
+            h_attn, post_a, comb_a = self.layers[0].attn_hc.collapse_and_norm(h, self.layers[0].attn_norm)
+            for idx in range(n_layers):
+                nxt = self.layers[idx + 1] if (idx + 1) < n_layers else None
+                h, h_attn, post_a, comb_a = self.layers[idx].forward_fused(
+                    h, h_attn, post_a, comb_a, cache[idx], next_layer=nxt
+                )
+                if (idx + 1) in tap_set:
+                    taps.append(mx.mean(h.astype(mx.float32), axis=-2).astype(h.dtype))
         if tail_only and h.shape[1] > 1:
             h = h[:, -1:, :, :]
         out = self.norm(self.hc_head(h))

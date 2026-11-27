@@ -1113,6 +1113,54 @@ def _qmv_weighted_down_kernel(bits: int, tname: str, xname: str, aligned, rotate
                                 output_names=["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
 
 
+@functools.lru_cache(maxsize=None)
+def _qmv_weighted_down_par_kernel(bits: int, tname: str, xname: str, mode: str, p_sg: int, rotate: bool = False, yz: bool = False):
+    """Parallel-slot weighted down: p_sg simdgroups per TG split KT across 4 output rows (zero 2nd kernel!)."""
+    wloop = _k_loop(mode, rotate, _wdown_rows(bits, ""),
+                    _wdown_rows(bits, "if (!active) continue;" if mode == "tl" else "if (row0 + r >= N || !active) continue;"),
+                    f"wp += {BLOCK * bits // 8 // _ptype(bits)[1]}u; xp += {BLOCK}u;")
+    src = f'''
+    uint K = meta[0], N = meta[1], KT = meta[2];
+    const uint RB = K * {bits}u / 8u;
+    const uint LB = {2 * bits}u;
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * {RPS}u;
+    uint t = threadgroup_position_in_grid.z;
+    threadgroup float sg_buf[{p_sg}][{RPS}];
+    float out_acc[{RPS}]; {UNROLL} for (uint r = 0; r < {RPS}u; r++) out_acc[r] = 0.0f;
+    uint per_sg = KT / {p_sg}u;
+    uint k_start = sgi * per_sg;
+    for (uint j = 0; j < per_sg; j++) {{
+      uint kk = k_start + j;
+      uint disp = t * KT + kk;
+      uint e = idx[disp];
+      float wk = float(wts[disp]);
+      const device {_ptype(bits)[0]}* wp = {_wptr(bits, "wg", "e")};
+      auto xp = x + (size_t)disp * K + lane * {VPT}u;
+      float acc[{RPS}]; {UNROLL} for (uint r = 0; r < {RPS}u; r++) acc[r] = 0.0f;
+      {wloop}
+      {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
+        float sres = simd_sum(acc[r]);
+        if (row0 + r < N) out_acc[r] += wk * sres * float(sg[(size_t)e * N + row0 + r]);
+      }}
+    }}
+    if (lane == 0u) {{ {UNROLL} for (uint r = 0; r < {RPS}u; r++) sg_buf[sgi][r] = out_acc[r]; }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgi == 0u && lane == 0u) {{
+      {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
+        if (row0 + r < N) {{
+          float tot = sg_buf[0][r];
+          {UNROLL} for (uint s = 1u; s < {p_sg}u; s++) tot += sg_buf[s][r];
+          out[(size_t)t * N + row0 + r] = static_cast<{tname}>(tot);
+        }}
+      }}
+    }}
+'''
+    return mx.fast.metal_kernel(name=f"jangtq2t_qmv_wdownp_b{bits}_{tname}_{xname}_{mode}_p{p_sg}{'_h32' if rotate else ''}{'_yz' if yz else ''}",
+                                input_names=["x", "wg", "sg", "idx", "wts", "meta"],
+                                output_names=["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
+
+
 def gather_qmv_weighted_down(h, packed, scales, cb_unused, idx, weights, bits, out_dtype, rotate: bool = False,
                              slot_fastest: bool = False):
     """Decode: h (T*k, K) activations per dispatch, idx/weights (T, k). Returns (T, N) = sum_k w * (W_e h)."""
@@ -1120,8 +1168,17 @@ def gather_qmv_weighted_down(h, packed, scales, cb_unused, idx, weights, bits, o
     K = h.shape[-1]
     N = packed.shape[1]
     yz = bool(slot_fastest) and T > 1 and slot_fastest_enabled()
-    k = _qmv_weighted_down_kernel(bits, _TNAME[out_dtype], _TNAME[h.dtype],
-                                  _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0), rotate, yz)
+    mode = _tail_mode(K, N) if TAIL_SPLIT else ("al" if (K % BLOCK == 0 and N % (NSG * RPS) == 0) else "gd")
+    if T <= 4 and kt >= 8 and N % RPS == 0 and (kt % 5 == 0 or kt % 4 == 0):
+        p_sg = 5 if (kt % 5 == 0) else 4
+        k = _qmv_weighted_down_par_kernel(bits, _TNAME[out_dtype], _TNAME[h.dtype], mode, p_sg, rotate, yz)
+        tiles = N // RPS
+        tg = p_sg * 32
+        return k(inputs=[h, packed, scales, idx.astype(mx.uint32).reshape(-1), weights.astype(mx.float32).reshape(-1),
+                         _consts(K, N, kt, dtype=mx.uint32)],
+                 grid=(tg, T, tiles) if yz else (tg, tiles, T), threadgroup=(tg, 1, 1),
+                 output_shapes=[(T, N)], output_dtypes=[out_dtype])[0]
+    k = _qmv_weighted_down_kernel(bits, _TNAME[out_dtype], _TNAME[h.dtype], mode, rotate, yz)
     tiles = (N + NSG * RPS - 1) // (NSG * RPS)
     return k(inputs=[h, packed, scales, idx.astype(mx.uint32).reshape(-1), weights.astype(mx.float32).reshape(-1),
                      _consts(K, N, kt, dtype=mx.uint32)],
