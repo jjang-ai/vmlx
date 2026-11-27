@@ -61,10 +61,24 @@ class _ConvolutionCacheTransaction:
             self.abort_speculation(generation)
             return
         if not all(length == self.length for length in lengths):
+            from .cache_kernels import select_temporal_states
+
             accepted = mx.array(lengths, dtype=mx.int32)
             for index, (array, state_width) in self.checkpoints.items():
                 if state_width is None:
-                    self.cache[index] = array[mx.arange(len(lengths)), accepted]
+                    selected = None
+                    if array.shape[1] >= 2:
+                        initial_s = array[:, 0]
+                        final_s = array[:, -1]
+                        middle_s = array[:, 1:-1] if array.shape[1] > 2 else None
+                        if middle_s is not None and middle_s.shape[1] >= self.length - 1:
+                            selected = select_temporal_states(
+                                middle_s, final_s, initial_s, lengths, self.length
+                            )
+                    if selected is not None:
+                        self.cache[index] = selected
+                    else:
+                        self.cache[index] = array[mx.arange(len(lengths)), accepted]
                 else:
                     positions = accepted[:, None] + mx.arange(state_width)[None, :]
                     self.cache[index] = mx.take_along_axis(

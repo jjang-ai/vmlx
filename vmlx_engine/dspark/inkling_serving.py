@@ -44,10 +44,12 @@ class InklingServingPolicy(ARFallback):
         return super().next_is_ar()
 
     def observe_round(self, rows, emitted, seconds):
-        # Draft throughput pays cold compilation and unsuccessful work too.
-        # Per-width forecasts use warmed costs so another width can re-enter.
-        self.record_draft(emitted, seconds, rows=rows if rows in self.warmed_rows else None)
-        self.warmed_rows.add(rows)
+        # First execution of a verify width can include one-time Metal kernel
+        # compilation; warm it before counting it against AR throughput.
+        if rows not in self.warmed_rows:
+            self.warmed_rows.add(rows)
+            return
+        self.record_draft(emitted, seconds, rows=rows)
         loses_to_ar = self.ar_seconds is not None and seconds > emitted * self.ar_seconds
         if loses_to_ar:
             self.probe_every = min(max(self.probe_every * 2, 64), 512)

@@ -224,8 +224,6 @@ class InklingDraft(nn.Module):
             or self.fuse_weight.dtype != mx.bfloat16
             or not mx.metal.is_available()
             or mx.default_device() != mx.gpu
-            or mx.device_info().get("device_name") != "Apple M5 Max"
-            or mx.__version__ not in ("0.32.4", "0.32.5.dev20261101+360078a8")
         ):
             return
 

@@ -204,7 +204,16 @@ def load_janght_inkling2(path: Path, config: dict):
     if unused:
         _fail(f"quantization entries match no module: {unused[:6]} ({len(unused)} total)")
 
-    from .nvfp4 import replace_scaled_quantized_linears
+    from .nvfp4 import SCALE_NAMES, replace_scaled_quantized_linears
+
+    # Fail closed if any native NVFP4 routed bank is missing its outer global scale.
+    for L, unit in contract.items():
+        for group, projections in (("gu", ("gate_proj", "up_proj")), ("dn", ("down_proj",))):
+            if unit[group].get("mode") == "nvfp4":
+                for p in projections:
+                    base = f"language_model.model.layers.{L}.mlp.switch_mlp.{p}"
+                    if not any(f"{base}.{sn}" in weights for sn in SCALE_NAMES):
+                        _fail(f"NVFP4 routed projection {base} is missing its global scale tensor")
 
     replace_scaled_quantized_linears(model, weights)
 
@@ -231,13 +240,18 @@ def load_janght_inkling2(path: Path, config: dict):
     from .fused_nvfp4_experts import prepare_fused_nvfp4_experts
     from .jangh import prepare_jangh_decode
 
-    prepare_jangh_decode(model)                 # packed affine attention decode (same as the JANGH2 bundle)
+    prepare_jangh_decode(model)                 # packed affine attention decode + fused loop controllers
     fused_layers = prepare_fused_nvfp4_experts(model.language_model)
     if fused_layers:
         logger.info("Inkling NVFP4 fused expert decode enabled for %d native layers", fused_layers)
-        for layer in model.language_model.model.layers:
-            for controller in getattr(layer, "controllers", {}).values():
-                controller.prepare_fused_decode()
+    controllers = sum(
+        controller.prepare_fused_decode()
+        for layer in model.language_model.model.layers
+        for controller in getattr(layer, "controllers", {}).values()
+        if controller.get("_fused_decode_pair") is None
+    )
+    if controllers:
+        logger.info("Inkling fused loop decode enabled for %d controllers", controllers)
     model._inkling_janght_units = dict(units)
     logger.info("Inkling JANGHT routed units (gate_up/down): %s", ", ".join(f"{k} x{v}" for k, v in sorted(units.items())))
     return model, Inkling2Processor.from_pretrained(path)

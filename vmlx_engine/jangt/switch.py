@@ -149,8 +149,75 @@ class JTMixedSwitchGLU(nn.Module):
 
     # native groups (MLX quantized switch projections): the per-(row, slot) GEMV route for decode / verify rows (each
     # product is its own M = 1 gather, so a row's result never depends on the other rows), sorted for prefill
+    def _native_nvfp4_gu_consts(self):
+        c = self.__dict__.get("_nvfp4_gu_consts")
+        if c is not None:
+            return c
+        c = False
+        if (
+            self.act == "inkling"
+            and (self.D, self.I) == (2304, 1152)
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        ):
+            from vmlx_engine.models.inkling2.masked_quantized import _global_scale, supports_masked_qmv
+            from vmlx_engine.models.inkling2.nvfp4 import ScaledQuantizedSwitchLinear
+
+            if (
+                type(self.gate_proj) is ScaledQuantizedSwitchLinear
+                and type(self.up_proj) is ScaledQuantizedSwitchLinear
+                and supports_masked_qmv(self.gate_proj, input_alignment=128)
+                and supports_masked_qmv(self.up_proj, input_alignment=128)
+            ):
+                caps = mx.array([float(self.alpha[0]), float(self.alpha[1])], mx.float32)
+                c = (_global_scale(self.gate_proj), _global_scale(self.up_proj), caps)
+                mx.eval(*c)
+        self.__dict__["_nvfp4_gu_consts"] = c
+        return c
+
+    def _native_nvfp4_dn_scale(self):
+        c = self.__dict__.get("_nvfp4_dn_scale")
+        if c is not None:
+            return c
+        c = False
+        if (
+            (self.I, self.D) == (1152, 2304)
+            and mx.metal.is_available()
+            and mx.default_device() == mx.gpu
+        ):
+            from vmlx_engine.models.inkling2.masked_quantized import _global_scale, supports_masked_qmv
+            from vmlx_engine.models.inkling2.nvfp4 import ScaledQuantizedSwitchLinear
+
+            if (
+                type(self.down_proj) is ScaledQuantizedSwitchLinear
+                and supports_masked_qmv(self.down_proj, input_alignment=128)
+            ):
+                c = _global_scale(self.down_proj)
+                mx.eval(c)
+        self.__dict__["_nvfp4_dn_scale"] = c
+        return c
+
     def _native_gate_up(self, x2, idx2):
-        """Unsorted rows: (T*k, I) fp32 activations of every (token, slot)."""
+        """Unsorted rows: (T*k, I) activations of every (token, slot)."""
+        if idx2.shape[1] == 8 and x2.dtype == mx.bfloat16:
+            consts = self._native_nvfp4_gu_consts()
+            if consts:
+                from vmlx_engine.models.inkling2.fused_nvfp4_experts import _gate_up_and_activation
+
+                gs, us, caps = consts
+                gate, up = self.gate_proj, self.up_proj
+                active = _gate_up_and_activation()(
+                    inputs=[
+                        x2, gate.weight, gate.scales, gs,
+                        up.weight, up.scales, us, idx2.astype(mx.uint32), caps,
+                    ],
+                    template=[("T", x2.dtype), ("K", self.D), ("N", self.I), ("R", 8)],
+                    grid=(32, self.I // 4, idx2.size),
+                    threadgroup=(32, 2, 1),
+                    output_shapes=[(idx2.size, self.I)],
+                    output_dtypes=[x2.dtype],
+                )[0]
+                return active.astype(mx.float32) if self.dn_fmt != "native" else active
         xs = x2[:, None, None, :]
         g = self.gate_proj(xs, idx2, sorted_indices=False)
         u = self.up_proj(xs, idx2, sorted_indices=False)
@@ -159,6 +226,25 @@ class JTMixedSwitchGLU(nn.Module):
 
     def _native_down_weighted(self, h, idx2, w2, out_dtype):
         T, k = idx2.shape
+        if k == 8 and out_dtype == mx.bfloat16:
+            ds = self._native_nvfp4_dn_scale()
+            if ds is not False and ds is not None:
+                from vmlx_engine.models.inkling2.fused_nvfp4_experts import _down_and_weighted_sum
+
+                down = self.down_proj
+                h_bf = h if h.dtype == out_dtype else h.astype(out_dtype)
+                return _down_and_weighted_sum()(
+                    inputs=[
+                        h_bf.reshape(T, k, 1, self.I),
+                        down.weight, down.scales, ds,
+                        idx2.astype(mx.uint32), w2.astype(mx.float32),
+                    ],
+                    template=[("T", out_dtype), ("K", self.I), ("N", self.D)],
+                    grid=(32, self.D // 4, idx2.size),
+                    threadgroup=(32, 1, 8),
+                    output_shapes=[(T, self.D)],
+                    output_dtypes=[out_dtype],
+                )[0]
         y = self.down_proj(h.astype(out_dtype).reshape(T, k, 1, self.I), idx2, sorted_indices=False)
         return (y.reshape(T, k, self.D).astype(mx.float32) * w2[..., None]).sum(axis=1).astype(out_dtype)
 

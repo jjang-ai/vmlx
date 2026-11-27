@@ -188,9 +188,13 @@ def replace_scaled_quantized_linears(model: nn.Module, weights: dict) -> None:
             ):
                 raise ValueError(f"Invalid NVFP4 pre-quant scale for {path}")
         if isinstance(module, QuantizedSwitchLinear):
+            if scale.size not in (1, module.weight.shape[0]) or not mx.issubdtype(scale.dtype, mx.floating):
+                raise ValueError(f"Invalid NVFP4 global scale for {path}: shape={scale.shape} dtype={scale.dtype}")
             return ScaledQuantizedSwitchLinear(
                 module, scale, scale_name, pre_quant_scale
             )
+        if scale.size != 1 or not mx.issubdtype(scale.dtype, mx.floating):
+            raise ValueError(f"Invalid NVFP4 global scale for {path}: shape={scale.shape} dtype={scale.dtype}")
         return ScaledQuantizedLinear(module, scale, scale_name, pre_quant_scale)
 
     model.update_modules(

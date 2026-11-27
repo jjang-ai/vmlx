@@ -176,7 +176,7 @@ _MHC_SINKHORN_COLLAPSE_NORM_SRC = r"""
   const float hc_eps = eps_params[0];
   const float norm_eps = eps_params[1];
 
-  const device float* mix = mixes + size_t(row) * MIX;
+  const size_t mix_off    = size_t(row) * MIX;
   device float* post_out  = post + size_t(row) * 4u;
   device float* comb_out  = comb + size_t(row) * 16u;
 
@@ -191,8 +191,8 @@ _MHC_SINKHORN_COLLAPSE_NORM_SRC = r"""
     const float active = (lane < 4u) ? 1.0f : 0.0f;
     const uint llane = metal::min(lane, 3u);
 
-    float pre_z  = mix[llane]      * pre_scale  + base[llane];
-    float post_z = mix[4u + llane] * post_scale + base[4u + llane];
+    float pre_z  = mixes[mix_off + llane]      * pre_scale  + base[llane];
+    float post_z = mixes[mix_off + 4u + llane] * post_scale + base[4u + llane];
     float pre_v  = 1.0f / (1.0f + metal::exp(-pre_z)) + hc_eps;
     float post_v = 2.0f / (1.0f + metal::exp(-post_z));
     if (lane < 4u) {
@@ -200,8 +200,11 @@ _MHC_SINKHORN_COLLAPSE_NORM_SRC = r"""
       post_out[lane]   = post_v;
     }
 
-    float4 v = (*(const device float4*)(mix  + BASE_OFF + llane * 4u) * comb_scale
-              + *(const device float4*)(base + BASE_OFF + llane * 4u)) * active;
+    const uint b4 = BASE_OFF + llane * 4u;
+    float4 mv = float4(mixes[mix_off + b4 + 0u], mixes[mix_off + b4 + 1u],
+                       mixes[mix_off + b4 + 2u], mixes[mix_off + b4 + 3u]);
+    float4 bv = float4(base[b4 + 0u], base[b4 + 1u], base[b4 + 2u], base[b4 + 3u]);
+    float4 v = (mv * comb_scale + bv) * active;
     float row_max = metal::max(metal::max(v.x, v.y), metal::max(v.z, v.w));
     float4 e = metal::exp(v - row_max) * active;
     float4 r = e * (1.0f / (e.x + e.y + e.z + e.w + hc_eps)) + hc_eps * active;
@@ -315,8 +318,8 @@ _HC_EXPAND_SRC = r"""
   if (d4 >= D4) return;
 
   using T4 = vec<T, 4>;
-  const device float* p = post + size_t(row) * 4u;
-  const device float* c = comb + size_t(row) * 16u;
+  const size_t p_off = size_t(row) * 4u;
+  const size_t c_off = size_t(row) * 16u;
   const float4 s = float4(((const device T4*)(sub + size_t(row) * uint(D)))[d4]);
   const device T* res_row = res + size_t(row) * (4u * uint(D));
   const float4 r0 = float4(((const device T4*)(res_row + 0u * uint(D)))[d4]);
@@ -327,11 +330,11 @@ _HC_EXPAND_SRC = r"""
   device T* out_row = out + size_t(row) * (4u * uint(D));
   #pragma unroll
   for (uint h = 0; h < 4u; h++) {
-    // comb^T[h, j] = comb[j, h] = c[j * 4 + h]
-    float4 y = fma(float4(p[h]), s,
-               fma(float4(c[0u * 4u + h]), r0,
-               fma(float4(c[1u * 4u + h]), r1,
-               fma(float4(c[2u * 4u + h]), r2, float4(c[3u * 4u + h]) * r3))));
+    // comb^T[h, j] = comb[j, h] = comb[c_off + j * 4 + h]
+    float4 y = fma(float4(post[p_off + h]), s,
+               fma(float4(comb[c_off + 0u * 4u + h]), r0,
+               fma(float4(comb[c_off + 1u * 4u + h]), r1,
+               fma(float4(comb[c_off + 2u * 4u + h]), r2, float4(comb[c_off + 3u * 4u + h]) * r3))));
     ((device T4*)(out_row + h * uint(D)))[d4] = T4(y);
   }
 """

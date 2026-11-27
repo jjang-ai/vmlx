@@ -120,23 +120,77 @@ def commit_rotating_prefix(cache, original, updates, lengths, length):
     """Fuse chronological ordering, concat and per-row roll for a full window.
 
     Preserve the native cache's physical layout, including invalid padding.
+    Supports both single-request `RotatingKVCache` and `BatchRotatingKVCache`.
     Return False for empty/growing caches, replayed updates, and in-place writes.
     The transaction adapter handles those through its existing replay path.
     """
-    from mlx_lm.models.cache import BatchRotatingKVCache
+    from mlx_lm.models.cache import BatchRotatingKVCache, RotatingKVCache
 
     keep = max(lengths)
     ragged = len(set(lengths)) > 1
     if (
         not _metal_decode(length)
-        or type(cache) is not BatchRotatingKVCache
         or "update_and_fetch" in original
         or len(updates) != 1
         or original.get("keys") is None
-        or original.get("_lengths") is not None
         or not keep
-        or (keep == 1 and not ragged)
         or updates[0][0].shape[2] < keep
+    ):
+        return False
+
+    # Fast single-request RotatingKVCache commit without full-window replay.
+    if type(cache) is RotatingKVCache:
+        if ragged or len(lengths) != 1:
+            return False
+        keys, values = updates[0]
+        old_keys, old_values = original["keys"], original["values"]
+        if any(
+            old.ndim != 4 or new.ndim != 4 or old.dtype != new.dtype
+            or old.shape[:2] != new.shape[:2] or old.shape[3:] != new.shape[3:]
+            for old, new in ((old_keys, keys), (old_values, values))
+        ):
+            return False
+        max_size = cache.max_size
+        orig_keep = original.get("keep", 0)
+        if orig_keep != 0 or original["offset"] < max_size:
+            return False
+        # Rewind RotatingKVCache ring buffer in one chronological splice of size `max_size`.
+        idx = original["_idx"]
+        old_len = old_keys.shape[2]
+        if old_len < max_size:
+            return False
+        trim = max(0, old_len - max_size + keep)
+        old_keep = old_len - trim
+        if old_keep < 0:
+            return False
+        out_len = old_keep + keep
+        shapes = [(*v.shape[:2], out_len, v.shape[-1]) for v in (old_keys, old_values)]
+        if max(map(math.prod, shapes)) >= 2**31:
+            return False
+        retained = mx.array([keep], mx.int32)
+        rotated = (idx != old_len) and (idx != 0)
+        outputs = _rotating_prefix_kernel()(
+            inputs=[
+                old_keys, old_values, keys, values, retained,
+                mx.array([old_keep, trim, idx], mx.int32),
+            ],
+            template=[("KEEP", keep), ("OUTLEN", out_len), ("ROTATED", rotated)],
+            grid=(max(map(math.prod, shapes)), 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=shapes,
+            output_dtypes=[old_keys.dtype, old_values.dtype],
+        )
+        cache.__dict__.clear()
+        cache.__dict__.update(original)
+        cache.keys, cache.values = outputs
+        cache.offset = original["offset"] + keep
+        cache._idx = out_len
+        return True
+
+    if (
+        type(cache) is not BatchRotatingKVCache
+        or original.get("_lengths") is not None
+        or (keep == 1 and not ragged)
     ):
         return False
     keys, values = updates[0]

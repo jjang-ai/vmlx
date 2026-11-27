@@ -10,12 +10,7 @@ from .nvfp4 import ScaledQuantizedSwitchLinear
 
 def prepare_fused_nvfp4_experts(language_model):
     """Prepare small scale vectors once. Packed checkpoint weights stay in place."""
-    if (
-        not mx.metal.is_available()
-        or mx.default_device() != mx.gpu
-        or mx.device_info().get("device_name") != "Apple M5 Max"
-        or mx.__version__ not in ("0.32.4", "0.32.5.dev20261101+360078a8")
-    ):
+    if not mx.metal.is_available() or mx.default_device() != mx.gpu:
         return 0
 
     prepared = 0

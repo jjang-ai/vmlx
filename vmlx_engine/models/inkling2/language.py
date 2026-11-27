@@ -488,6 +488,22 @@ class Attention(nn.Module):
             left_padding=padding,
             shape_ref=k,
         )
+        # For single-query decode / per-row verify (B=1, L=1), each head has a
+        # single scalar sink logit: pass it directly to Metal SDPA `sinks=`
+        # instead of concatenating a zero column onto the entire K/V cache.
+        if (
+            q.shape[0] == 1
+            and q.shape[2] == 1
+            and sinks.shape == (1, self.n_heads, 1, 1)
+        ):
+            return mx.fast.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.head_dim**-0.5,
+                mask=mask,
+                sinks=sinks.reshape(self.n_heads).astype(q.dtype),
+            )
         mask = mx.concatenate([mask, sinks], axis=-1)
         # A query-dependent sink adds a logit without any value payload.
         k = mx.concatenate([k, mx.zeros((*k.shape[:2], 1, k.shape[-1]), k.dtype)], axis=2)
@@ -530,8 +546,6 @@ class Attention(nn.Module):
             and k.shape == v.shape and self.k_sconv.kernel_size == self.v_sconv.kernel_size == 4
             and self.k_sconv.num_heads == self.v_sconv.num_heads
             and mx.metal.is_available() and mx.default_device() == mx.gpu
-            and mx.device_info().get("device_name") == "Apple M5 Max"
-            and mx.__version__ in ("0.32.4", "0.32.5.dev20261101+360078a8")
         ):
             k, v = _joint_dynamic_kv(
                 self.k_sconv, self.v_sconv, k, v, key_input, value_input, conv, conv_mask
@@ -673,9 +687,11 @@ class SparseMoE(nn.Module):
         if getattr(self.switch_mlp, "is_jangh", False):
             if self.sharding_group is not None:
                 raise ValueError("Inkling Mini JANGH expert sharding is unsupported")
-            from .jangh import softcapped_experts
+            from .jangh import softcapped_experts_routed
 
-            out = softcapped_experts(self.switch_mlp, x, indices, self.activation)
+            return softcapped_experts_routed(
+                self.switch_mlp, x, indices, weights, self.activation
+            )
         elif self.sharding_group is None:
             if (
                 not self.training
@@ -923,8 +939,6 @@ class TextModel(nn.Module):
             and self.message_queries.shape == (12, 4, 2304)
             and mx.metal.is_available()
             and mx.default_device() == mx.gpu
-            and mx.device_info().get("device_name") == "Apple M5 Max"
-            and mx.__version__ in ("0.32.4", "0.32.5.dev20261101+360078a8")
         )
         if cache is not None and len(cache) != 2 * len(self.layer_indices):
             raise ValueError(
@@ -1109,6 +1123,24 @@ class LanguageModel(nn.Module):
             and mx.default_device() == mx.gpu
         )
         if verify_rows and not (dense_decode_head and self.sharding_group is None):
+            from .jangh import affine_decode_rows, is_affine_decode_projection
+
+            if (
+                self.sharding_group is None
+                and h.ndim == 3
+                and h.shape[0] == 1
+                and is_affine_decode_projection(self.lm_head)
+                and mx.metal.is_available()
+                and mx.default_device() == mx.gpu
+            ):
+                head_in = h.astype(self.model.embed_norm.weight.dtype)
+                logits = affine_decode_rows(
+                    head_in, self.lm_head.weight, self.lm_head.scales, self.lm_head.biases
+                ).astype(mx.float32)
+                if self.config.final_logit_softcapping is not None:
+                    cap = self.config.final_logit_softcapping
+                    logits = mx.tanh(logits / cap) * cap
+                return logits
             return mx.concatenate(
                 [self._logits_from_norm(h[:, row:row + 1]) for row in range(h.shape[1])],
                 axis=1,
@@ -1119,7 +1151,7 @@ class LanguageModel(nn.Module):
         h = h.astype(self.model.embed_norm.weight.dtype).astype(mx.float32)
         if (
             dense_decode_head and self.sharding_group is None
-            and h.shape[0] == 1 and (h.shape[1] == 1 or (verify_rows and h.shape[1] <= 5))
+            and h.shape[0] == 1 and (h.shape[1] == 1 or (verify_rows and h.shape[1] <= 8))
             and self.model.embed_norm.weight.dtype == mx.bfloat16
             and self.lm_head.weight.dtype == mx.bfloat16
             and self.lm_head.weight.shape == (201024, 2304)

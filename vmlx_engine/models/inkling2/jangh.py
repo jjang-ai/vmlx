@@ -70,6 +70,9 @@ def prepare_jangh_decode(model):
         if all(is_affine_decode_projection(module) for module in modules):
             attention._affine_decode_pack = _AffineAttentionPack(modules)
         for controller in getattr(layer, "controllers", {}).values():
+            if controller.prepare_fused_decode():
+                controller._verify_gate_weights = controller._fused_decode_pair[0]
+                continue
             forget, gain = controller.forget_weight, controller.gain_weight
             if forget.shape != (2304, 64) or gain.shape != forget.shape or gain.dtype != forget.dtype:
                 continue
@@ -77,6 +80,90 @@ def prepare_jangh_decode(model):
             mx.eval(weights)
             controller._verify_gate_weights = weights
             controller.forget_weight, controller.gain_weight = mx.split(weights, 2, axis=0)
+
+
+def softcapped_experts_routed(switch, x, indices, weights, activation):
+    """Fused JANGH routed MoE for Inkling 2: 1-pass gate+up+softcapped-SwiGLU + fused weighted down."""
+    leading_shape = x.shape[:-1]
+    hidden_size = x.shape[-1]
+    top_k = indices.shape[-1]
+    rows = x.reshape(-1, hidden_size)
+    idx2 = indices.reshape(-1, top_k).astype(mx.uint32)
+    w2 = weights.reshape(-1, top_k).astype(mx.float32)
+    routes = idx2.reshape(-1)
+    gate, up, down = switch.gate_proj, switch.up_proj, switch.down_proj
+    caps = (float(activation.gate_cap), float(activation.up_cap))
+    same_gu = (
+        gate.bits == up.bits
+        and gate.tq2_packed.shape == up.tq2_packed.shape
+        and gate.tq2_scales.shape == up.tq2_scales.shape
+    )
+
+    if switch._use_sorted(routes.size, top_k):
+        order = mx.argsort(routes)
+        inverse = mx.argsort(order)
+        sorted_routes = routes[order]
+        inputs = rotate_rows(rows, gate)[order // top_k]
+        use_nax = kernels.nax_available()
+        plan = kernels.expert_tile_plan(sorted_routes, gate.num_experts) if use_nax else None
+        if same_gu and plan is not None:
+            middle = kernels.gather_qmm_expert_sorted(
+                inputs, gate.tq2_packed, gate.tq2_scales, sorted_routes, gate.bits, plan,
+                packed_u=up.tq2_packed, scales_u=up.tq2_scales, act="inkling", alpha=caps,
+            )
+        elif same_gu:
+            middle = kernels.gather_qmm_sorted(
+                inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, sorted_routes, gate.bits,
+                packed_u=up.tq2_packed, scales_u=up.tq2_scales, act="inkling", alpha=caps,
+            )
+        else:
+            gate_values = kernels.gather_qmm_sorted(
+                inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, sorted_routes, gate.bits
+            )
+            up_values = kernels.gather_qmm_sorted(
+                inputs, up.tq2_packed, up.tq2_scales, up._cb, sorted_routes, up.bits
+            )
+            middle = activation(up_values.astype(x.dtype), gate_values.astype(x.dtype))
+        down_in = rotate_rows(middle, down)
+        if plan is not None:
+            down_sorted = kernels.gather_qmm_expert_sorted(
+                down_in, down.tq2_packed, down.tq2_scales, sorted_routes, down.bits, plan
+            )
+        else:
+            down_sorted = kernels.gather_qmm_sorted(
+                down_in, down.tq2_packed, down.tq2_scales, down._cb, sorted_routes, down.bits
+            )
+        fused_out = kernels.weighted_unsort(down_sorted, inverse, w2, x.dtype)
+        if fused_out is not None:
+            return fused_out.reshape(*leading_shape, hidden_size)
+        raw = down_sorted[inverse].reshape(rows.shape[0], top_k, hidden_size)
+        return (raw.astype(mx.float32) * w2[..., None]).sum(axis=1).astype(x.dtype).reshape(*leading_shape, hidden_size)
+
+    slot_fastest = rows.shape[0] > 1
+    # Rotate T token rows ONCE on host instead of T*top_k times inside the kernel.
+    inputs = kernels.h32_rows(rows, mx.float32) if gate.rotated else rows
+    if same_gu:
+        middle = kernels.gather_qmv(
+            inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, routes, gate.bits,
+            x_per_dispatch=False, packed_u=up.tq2_packed, scales_u=up.tq2_scales,
+            rotate=False, slot_fastest=slot_fastest, act="inkling", alpha=caps,
+        )
+    else:
+        gate_values = kernels.gather_qmv(
+            inputs, gate.tq2_packed, gate.tq2_scales, gate._cb, routes, gate.bits,
+            x_per_dispatch=False, rotate=False, slot_fastest=slot_fastest,
+        )
+        up_values = kernels.gather_qmv(
+            inputs, up.tq2_packed, up.tq2_scales, up._cb, routes, up.bits,
+            x_per_dispatch=False, rotate=False, slot_fastest=slot_fastest,
+        )
+        middle = activation(up_values.astype(x.dtype), gate_values.astype(x.dtype))
+    down_in = kernels.h32_rows(middle, mx.float32) if down.rotated else middle
+    out = kernels.gather_qmv_weighted_down(
+        down_in, down.tq2_packed, down.tq2_scales, down._cb, idx2, w2, down.bits,
+        x.dtype, rotate=False, slot_fastest=slot_fastest,
+    )
+    return out.reshape(*leading_shape, hidden_size)
 
 
 def softcapped_experts(switch, x, indices, activation):
