@@ -92,15 +92,17 @@ class ErnieRotatingCache:
         self.max_size = int(max_size)
         self.keys: Optional[mx.array] = None
         self.offset: int = 0
-        # Snapshot buffer for exact speculative rollback without deep-copying full caches
+        # Snapshot buffer + tiny verify-input stash for exact speculative rollback
         self._rollback_keys: Optional[mx.array] = None
         self._rollback_offset: int = 0
+        self._last_in_keys: Optional[mx.array] = None
 
     def update_and_fetch(self, keys: mx.array, values: Optional[mx.array] = None) -> Tuple[mx.array, mx.array]:
         # keys: [B, 1, L, head_dim]; keep chronological tail of length <= max_size + L - 1
         # During decode (L=1), retaining the last max_size chronological tokens matches
         # mlx_vlm's RotatingKVCache semantics exactly while avoiding ring-buffer bugs.
         B, H, L, D = keys.shape
+        self._last_in_keys = keys if L <= 32 else None
         if self.keys is None or self.offset == 0:
             full = keys
         else:

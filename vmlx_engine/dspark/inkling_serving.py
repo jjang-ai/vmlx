@@ -122,7 +122,12 @@ class InklingServingRun:
         from ..dflash2_session_disk import _unpack
 
         try:
-            payload = store.load(key, lambda path: mx.load(str(path), return_metadata=True))
+            inflight = getattr(store, "_vmlx_inflight_draft", None)
+            if isinstance(inflight, dict) and key in inflight:
+                arrays, layers = inflight[key]
+                payload = (arrays, {"layers": json.dumps(layers)})
+            else:
+                payload = store.load(key, lambda path: mx.load(str(path), return_metadata=True))
             if payload is None:
                 return
             arrays, metadata = payload
@@ -163,22 +168,39 @@ class InklingServingRun:
             self.drafter.checkpoint_cut = boundary
 
     def store_draft_context(self, store):
+        import threading
+
         checkpoint, self._draft_checkpoint = self._draft_checkpoint, None
         state, self.drafter.checkpoint = self.drafter.checkpoint, None
         if checkpoint is None or state is None:
             return
         key, boundary = checkpoint
         arrays, layers = state
-        try:
-            store.save(
-                key,
-                lambda path: mx.save_safetensors(
-                    str(path), arrays, {"layers": json.dumps(layers)}
-                ),
-            )
-            self.draft_checkpoint_tokens = boundary
-        except (OSError, RuntimeError, ValueError):
-            logger.warning("Inkling draft context checkpoint skipped", exc_info=True)
+        # Keep 1-slot in-flight RAM carry-over so immediate Turn N+1 hits in 0 ms
+        # while the safetensors SSD write completes asynchronously after [DONE].
+        inflight = getattr(store, "_vmlx_inflight_draft", None)
+        if not isinstance(inflight, dict):
+            inflight = {}
+            store._vmlx_inflight_draft = inflight
+        inflight.clear()
+        inflight[key] = (arrays, layers)
+        self.draft_checkpoint_tokens = boundary
+
+        def _bg_save():
+            try:
+                store.save(
+                    key,
+                    lambda path: mx.save_safetensors(
+                        str(path), arrays, {"layers": json.dumps(layers)}
+                    ),
+                )
+            except (OSError, RuntimeError, ValueError):
+                logger.warning("Inkling draft context checkpoint skipped", exc_info=True)
+            finally:
+                if inflight.get(key) == (arrays, layers):
+                    inflight.pop(key, None)
+
+        threading.Thread(target=_bg_save, name="inkling-draft-ssd", daemon=True).start()
 
     def add_prefill_features(self, features):
         self.prefill_tokens += features.shape[1]

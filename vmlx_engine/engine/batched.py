@@ -2138,6 +2138,10 @@ class BatchedEngine(BaseEngine):
         # first follow-up whenever L2 is near the size ceiling.
         if not messages:
             return []
+        # MLLM scheduler does not consume segment_boundaries; skip re-tokenizing
+        # every message prefix on VLM/omni tool loops.
+        if getattr(self, "_is_mllm", False):
+            return []
         # Skip if no system or non-uniform structure — only valuable when at
         # least one message can be pinned with a role > "assistant" priority.
         roles = {m.get("role") for m in messages}
@@ -2154,9 +2158,21 @@ class BatchedEngine(BaseEngine):
             else:
                 return []
 
+            # Only compute key priority boundaries (leading system block + final
+            # message) in O(1) renders instead of O(N^2) prefix re-renders on
+            # deep multi-turn tool loops.
+            candidate_indices: list[int] = []
+            if messages[0].get("role") == "system":
+                sys_end = 1
+                while sys_end < len(messages) and messages[sys_end].get("role") == "system":
+                    sys_end += 1
+                candidate_indices.append(sys_end)
+            if len(messages) not in candidate_indices:
+                candidate_indices.append(len(messages))
+
             boundaries: list[tuple[int, str]] = []
             prev_count = 0
-            for i in range(1, len(messages) + 1):
+            for i in candidate_indices:
                 try:
                     rendered = self._apply_chat_template(
                         messages[:i],

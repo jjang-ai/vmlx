@@ -462,23 +462,50 @@ class HCAAttention(nn.Module):
             kv, _ = local.update_and_fetch(kv)
 
         S_local = kv.shape[2]
-        mask = _create_sliding_causal_mask(B, L, S_local, self.config.sliding_window)
         pooled = self.compressor(x, pool, offset)
-        if pooled.shape[1] > 0:
-            if pool is not None:
-                pool_mask = pool.make_mask(L, offset)
-            else:
-                pool_mask = mx.arange(pooled.shape[1])[None] < (
-                    mx.arange(1, L + 1)[:, None] // self.compress_ratio
-                )
-            if mask is None and pool_mask is not None:
-                mask = mx.ones((B, 1, L, S_local), dtype=mx.bool_)
-            kv = mx.concatenate((kv, pooled[:, None]), axis=2)
-            mask = _extend_mask(mask, pool_mask, kv.shape[2])
-
-        out = _scaled_dot_product_attention(
-            q, kv, kv, scale=self.scale, mask=mask, sinks=self.attn_sink.astype(q.dtype)
-        )
+        sinks = self.attn_sink.astype(q.dtype)
+        # For long prefill (L >= 512), run HCA attention in 256-token banded strips so
+        # each strip only attends to <= 384 local keys + pooled windows instead of O(L^2).
+        if L >= 512:
+            strip = 256
+            win = self.config.sliding_window
+            has_pool = pooled.shape[1] > 0
+            pool_kv = pooled[:, None] if has_pool else None
+            prefix_local = S_local - L
+            outs = []
+            for s0 in range(0, L, strip):
+                s1 = min(L, s0 + strip)
+                sl = s1 - s0
+                k_start = max(0, prefix_local + s0 - win + 1)
+                k_end = prefix_local + s1
+                qs = q[:, :, s0:s1, :]
+                ks = kv[:, :, k_start:k_end, :]
+                smask = _create_sliding_causal_mask(B, sl, k_end - k_start, win)
+                if has_pool:
+                    if pool is not None:
+                        pm = pool.make_mask(sl, offset + s0)
+                    else:
+                        pm = mx.arange(pooled.shape[1])[None] < (
+                            (offset + s0 + mx.arange(1, sl + 1))[:, None] // self.compress_ratio
+                        )
+                    ks = mx.concatenate((ks, pool_kv), axis=2)
+                    smask = _extend_mask(smask, pm, ks.shape[2])
+                outs.append(_scaled_dot_product_attention(qs, ks, ks, scale=self.scale, mask=smask, sinks=sinks))
+            out = mx.concatenate(outs, axis=2)
+        else:
+            mask = _create_sliding_causal_mask(B, L, S_local, self.config.sliding_window)
+            if pooled.shape[1] > 0:
+                if pool is not None:
+                    pool_mask = pool.make_mask(L, offset)
+                else:
+                    pool_mask = mx.arange(pooled.shape[1])[None] < (
+                        mx.arange(1, L + 1)[:, None] // self.compress_ratio
+                    )
+                if mask is None and pool_mask is not None:
+                    mask = mx.ones((B, 1, L, S_local), dtype=mx.bool_)
+                kv = mx.concatenate((kv, pooled[:, None]), axis=2)
+                mask = _extend_mask(mask, pool_mask, kv.shape[2])
+            out = _scaled_dot_product_attention(q, kv, kv, scale=self.scale, mask=mask, sinks=sinks)
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
         out = self.wo_a(out).transpose(0, 2, 1, 3).flatten(-2)

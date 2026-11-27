@@ -514,13 +514,16 @@ class DSV41DSparkGenerator(SingleBatchGenerator):
             # call happens only after a token whose lookahead pull returned a token (a None lookahead
             # finishes the request below). Never fabricate a token here.
             raise RuntimeError(f"DSV4.1 DSpark stream for request {req.uid} produced no token")
-        # Pull the NEXT token now (one-token lookahead parity with SBG) to know if the stream ended.
-        req.next_token = self._pull(req)
         req.output_tokens.append(current)
         req.context_tokens.append(current)
         req.finish_reason = self._finish_reason_after_token(req, current)
-        if req.finish_reason is None and req.next_token is None:
-            req.finish_reason = "stop"  # stream ended without a stop/length trigger
+        req.next_token = None
+        if req.finish_reason is None:
+            # Pull the NEXT token only when the current token did not terminate the stream,
+            # avoiding a full wasted DSpark round after stop/tool_call EOS.
+            req.next_token = self._pull(req)
+            if req.next_token is None:
+                req.finish_reason = "stop"  # stream ended without a stop/length trigger
         resp = Response(uid=req.uid, token=current, logprobs=None, finish_reason=req.finish_reason,
                         current_state=req.current_state, match_sequence=req.match_sequence,
                         prompt_cache=req.cache, all_tokens=list(req.context_tokens),

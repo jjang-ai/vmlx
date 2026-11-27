@@ -208,6 +208,8 @@ class SSMCompanionDiskStore:
         self._write_seq = 0
         self._last_completed_write = 0
         self._latest_write_by_key: OrderedDict[str, int] = OrderedDict()
+        self._inflight_payloads: OrderedDict[str, Tuple[bytes, bytes]] = OrderedDict()
+        self._inflight_states: OrderedDict[str, Tuple[List[Any], bool]] = OrderedDict()
         self._write_results: OrderedDict[int, bool] = OrderedDict()
         self._write_queue: queue.Queue = queue.Queue(maxsize=256)
         self._stop_event = threading.Event()
@@ -620,6 +622,10 @@ class SSMCompanionDiskStore:
                 self._fsync_directory(data_path.parent)
                 self._enforce_budget()
             else:
+                # Write uniquely-named temp payload files OUTSIDE the global
+                # exclusive lock so Turn N+1 readers never stall behind SSD I/O.
+                self._write_payload_file(tmp_data, data_bytes)
+                self._write_payload_file(tmp_side, sidecar_bytes)
                 with self._global_budget.exclusive_mutation_guard() as locked:
                     if not locked:
                         self._disable_global_budget_writes()
@@ -628,8 +634,6 @@ class SSMCompanionDiskStore:
                         )
                     before = self._paths_size(data_path, side_path)
                     try:
-                        self._write_payload_file(tmp_data, data_bytes)
-                        self._write_payload_file(tmp_side, sidecar_bytes)
                         os.replace(tmp_data, data_path)
                         os.replace(tmp_side, side_path)
                         self._fsync_directory(data_path.parent)
@@ -708,6 +712,9 @@ class SSMCompanionDiskStore:
                 with self._write_condition:
                     self._write_inflight = max(0, self._write_inflight - 1)
                     self._pending_write_jobs = max(0, self._pending_write_jobs - 1)
+                    if self._latest_write_by_key.get(str(key)) == int(job_id):
+                        self._inflight_payloads.pop(str(key), None)
+                        self._inflight_states.pop(str(key), None)
                     self._record_write_result_locked(int(job_id), bool(ok))
                     # Bound per-key completion telemetry as well.  Keeping the
                     # newest 256 keys is sufficient for an in-process waiter;
@@ -1048,6 +1055,14 @@ class SSMCompanionDiskStore:
                     previous_job = self._latest_write_by_key.get(str(key))
                     self._latest_write_by_key[str(key)] = job_id
                     self._latest_write_by_key.move_to_end(str(key))
+                    self._inflight_payloads[str(key)] = (data_bytes, sidecar_bytes)
+                    self._inflight_payloads.move_to_end(str(key))
+                    while len(self._inflight_payloads) > 4:
+                        self._inflight_payloads.popitem(last=False)
+                    self._inflight_states[str(key)] = (states, bool(is_complete))
+                    self._inflight_states.move_to_end(str(key))
+                    while len(self._inflight_states) > 2:
+                        self._inflight_states.popitem(last=False)
                     self._pending_write_jobs += 1
             if rejected_after_freeze:
                 self._release_pending_bytes(reserved)
@@ -1183,6 +1198,18 @@ class SSMCompanionDiskStore:
         }:
             return False
         with self._write_condition:
+            inflight = self._inflight_payloads.get(str(key))
+            if inflight is not None:
+                try:
+                    sc = json.loads(inflight[1].decode("utf-8"))
+                    if (
+                        int(sc.get("version") or 0) == _RECORD_VERSION
+                        and bool(sc.get("is_complete", False))
+                        and sc.get("runtime_cache_fingerprint") == _runtime_cache_fingerprint()
+                    ):
+                        return True
+                except Exception:
+                    pass
             pending_job = self._latest_write_by_key.get(str(key))
             pending = bool(
                 pending_job is not None
@@ -1266,6 +1293,10 @@ class SSMCompanionDiskStore:
                 self._restore_suppressed += 1
             return None
         with self._write_condition:
+            inflight_hit = self._inflight_states.get(str(key))
+            if inflight_hit is not None:
+                self._hits += 1
+                return inflight_hit
             pending_job = self._latest_write_by_key.get(str(key))
             pending = bool(
                 pending_job is not None
@@ -1293,6 +1324,9 @@ class SSMCompanionDiskStore:
     def delete(self, key: str) -> None:
         if self._dir is None:
             return
+        with self._write_condition:
+            self._inflight_payloads.pop(str(key), None)
+            self._inflight_states.pop(str(key), None)
         if not self.wait_for_write(str(key), timeout=5.0):
             return
         data_path, side_path = self._entry_paths(key)
@@ -1320,6 +1354,9 @@ class SSMCompanionDiskStore:
     def clear(self) -> None:
         if self._dir is None:
             return
+        with self._write_condition:
+            self._inflight_payloads.clear()
+            self._inflight_states.clear()
         if not self.wait_for_pending(timeout=5.0):
             logger.warning("SSM disk clear skipped while writes remain pending")
             return

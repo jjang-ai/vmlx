@@ -2403,7 +2403,13 @@ export function registerChatHandlers(
               health: generationHealth,
               toolExchange: requestMessages.slice(currentTurnToolStart),
             }));
-            saveGenerationRecord();
+            // Defer intermediate SQLite record write until after Turn N+1 fetch
+            // is dispatched to the engine so tool-loop round-trips incur zero DB stall.
+            setImmediate(() => {
+              try {
+                saveGenerationRecord();
+              } catch (_) {}
+            });
             return obj;
           };
           if (useResponsesApi) {

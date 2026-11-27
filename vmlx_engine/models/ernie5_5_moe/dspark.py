@@ -412,19 +412,23 @@ def rollback_ernie_caches(
         local, pool = lc[0], lc[1]
         prev_k, prev_off, prev_pc, prev_pkv, prev_pgate, prev_plen, prev_poff = snap
 
-        # 1. Exact rollback of HCA local rotating cache
+        # 1. Exact rollback of HCA local rotating cache (handles 128-boundary crossings bit-exact!)
         if kept == 0:
             local.keys = prev_k
             local.offset = prev_off
+        elif local._last_in_keys is not None:
+            kept_new = local._last_in_keys[:, :, :kept, :]
+            if prev_k is None or prev_off == 0:
+                merged = kept_new
+            else:
+                merged = mx.concatenate([prev_k, kept_new], axis=2)
+            if merged.shape[2] > local.max_size:
+                merged = merged[:, :, -local.max_size :, :]
+            local.keys = mx.contiguous(merged)
+            local.offset = prev_off + kept
         elif local.keys is not None:
             valid_from_new = local.keys[:, :, :-trim, :]
-            target_len = min(prev_off + kept, local.max_size)
-            if prev_k is not None and valid_from_new.shape[2] < target_len:
-                need = target_len - valid_from_new.shape[2]
-                merged = mx.concatenate([prev_k[:, :, -need:, :], valid_from_new], axis=2)
-                local.keys = mx.contiguous(merged[:, :, -local.max_size :, :])
-            else:
-                local.keys = mx.contiguous(valid_from_new)
+            local.keys = mx.contiguous(valid_from_new)
             local.offset = prev_off + kept
         else:
             local.offset = prev_off + kept

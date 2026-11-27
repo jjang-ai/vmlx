@@ -10651,7 +10651,6 @@ class Scheduler:
                 if (
                     self._stores_reply(request, finish_reason)
                     and string_stop_truncate < 0
-                    and not spec_hit_stop
                     and self._terminal_cache_capture_enabled(request, response)
                 ):
                     # The live cache holds the reply (prompt + generated rows): the next turn renders it back.

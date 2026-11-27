@@ -21,7 +21,12 @@ from vmlx_engine.jangt.prefill import gather_gate_up_sorted_jt, gather_qmm_sorte
 from vmlx_engine.jangt.switch import JTSwitchLinear, nax_prefill
 
 from .config import ModelConfig
-from .kernels import fused_situ, round_e4m3_per128
+from .kernels import (
+    fused_situ,
+    round_e4m3_and_h32,
+    round_e4m3_and_rot128,
+    round_e4m3_per128,
+)
 from .language import (
     DecoderLayer,
     HCAAttention,
@@ -332,8 +337,6 @@ class ErnieSwitchGLU(nn.Module):
         top_k = indices.shape[-1]
         T = x.size // K_in
 
-        # Round latent input ONCE per token (mathematically identical to per-expert rounding!)
-        x_q = round_e4m3_per128(x.reshape(T, K_in))
         idx_2d = indices.reshape(T, top_k).astype(mx.uint32)
         rw_2d = route_weights.reshape(T, top_k).astype(mx.float32)
         routes = idx_2d.reshape(-1)
@@ -341,30 +344,32 @@ class ErnieSwitchGLU(nn.Module):
             (not self._gu_is_jt or nax_prefill()) and (not self._dn_is_jt or nax_prefill())
         )
 
+        x2 = x.reshape(T, K_in)
         if use_sorted:
-            return self._forward_prefill(x_q, idx_2d, rw_2d, dtype, lead)
-        return self._forward_decode(x_q, idx_2d, rw_2d, dtype, lead)
+            return self._forward_prefill(x2, idx_2d, rw_2d, dtype, lead)
+        return self._forward_decode(x2, idx_2d, rw_2d, dtype, lead)
 
     def _forward_decode(
-        self, x_q: mx.array, idx_2d: mx.array, rw_2d: mx.array, dtype: mx.Dtype, lead: Tuple[int, ...]
+        self, x2: mx.array, idx_2d: mx.array, rw_2d: mx.array, dtype: mx.Dtype, lead: Tuple[int, ...]
     ) -> mx.array:
-        T, K_in = x_q.shape
+        T, K_in = x2.shape
         top_k = idx_2d.shape[1]
         routes = idx_2d.reshape(-1)
         slot_fastest = T > 1
         act_caps = (self.beta, self.linear_beta)
 
-        # --- Gate + Up + SiTU (SINGLE-PASS FUSED JANGT OR JANGH!) ---
+        # --- Gate + Up + SiTU (FUSED E4M3+ROT + 1-PASS JANGT/JANGH!) ---
         if self._gu_is_jt:
             U = self._jt_gu_bundle
             assert U is not None
             if self._jt_gu_fused_ok and self._jt_gu_layer_su is not None:
-                xr = jt_kernels.rotate_rows(x_q, self._jt_gu_layer_su)
+                x_q, xr = round_e4m3_and_rot128(x2, self._jt_gu_layer_su)
                 mid = jt_kernels.gather_gate_up_swiglu_v3(
                     xr, x_q, idx_2d, U, out_dtype=dtype,
                     slot_fastest=slot_fastest, act="inkling", alpha=act_caps,
                 )
             else:
+                x_q = round_e4m3_per128(x2)
                 x_rep = mx.repeat(x_q, top_k, axis=0)
                 xr_g = jt_kernels.rotate_rows(x_rep, self._jt_g_signs, routes)
                 xr_u = xr_g if self._jt_gu_same_signs else jt_kernels.rotate_rows(x_rep, self._jt_u_signs, routes)
@@ -379,27 +384,24 @@ class ErnieSwitchGLU(nn.Module):
                 mid = fused_situ(u_out, g_out, self.beta, self.linear_beta)
         else:
             gp, up = self.gate_proj, self.up_proj
-            # Rotate T token rows ONCE on host (not T*top_k times in-kernel!)
-            xin = jh_kernels.h32_rows(x_q, mx.float32) if gp.rotated else x_q
+            # Fuse per-128 E4M3 rounding + H32 rotation in ONE dispatch on T token rows!
+            xin = round_e4m3_and_h32(x2, mx.float32) if gp.rotated else round_e4m3_per128(x2)
             mid = jh_kernels.gather_qmv(
                 xin, gp.tq2_packed, gp.tq2_scales, gp._cb, routes, gp.bits,
                 x_per_dispatch=False, packed_u=up.tq2_packed, scales_u=up.tq2_scales,
                 rotate=False, slot_fastest=slot_fastest, act="inkling", alpha=act_caps,
             ).astype(dtype)
 
-        # Round intermediate ONCE before down_proj
-        mid_q = round_e4m3_per128(mid)
-
-        # --- Weighted Down Combine ---
+        # --- Weighted Down Combine (FUSED E4M3+ROT + WEIGHTED DOWN!) ---
         if self._dn_is_jt:
             Ud = self._jt_dn_bundle
             assert Ud is not None
-            hr = jt_kernels.rotate_rows(mid_q, self._jt_dn_signs, routes)
+            mid_q, hr = round_e4m3_and_rot128(mid, self._jt_dn_signs, routes)
             out = jt_kernels.gather_down_weighted_v3(hr, mid_q, idx_2d, rw_2d, Ud, slot_fastest=slot_fastest)
             return out.astype(dtype).reshape(*lead, self.down_proj.output_dims)
         else:
             dp = self.down_proj
-            din = jh_kernels.h32_rows(mid_q, mx.float32) if dp.rotated else mid_q
+            din = round_e4m3_and_h32(mid, mx.float32) if dp.rotated else round_e4m3_per128(mid)
             out = jh_kernels.gather_qmv_weighted_down(
                 din, dp.tq2_packed, dp.tq2_scales, dp._cb, idx_2d, rw_2d, dp.bits,
                 dtype, rotate=False, slot_fastest=slot_fastest,
@@ -407,9 +409,9 @@ class ErnieSwitchGLU(nn.Module):
             return out.reshape(*lead, dp.output_dims)
 
     def _forward_prefill(
-        self, x_q: mx.array, idx_2d: mx.array, rw_2d: mx.array, dtype: mx.Dtype, lead: Tuple[int, ...]
+        self, x2: mx.array, idx_2d: mx.array, rw_2d: mx.array, dtype: mx.Dtype, lead: Tuple[int, ...]
     ) -> mx.array:
-        T, K_in = x_q.shape
+        T, K_in = x2.shape
         top_k = idx_2d.shape[1]
         routes = idx_2d.reshape(-1)
         order = mx.argsort(routes)
@@ -420,13 +422,13 @@ class ErnieSwitchGLU(nn.Module):
         use_nax = jh_kernels.nax_available()
         plan = jh_kernels.expert_tile_plan(s_routes, self.gate_proj.num_experts) if use_nax else None
 
-        # --- Gate + Up + SiTU (FUSED EXPERT-ALIGNED NAX PREFILL!) ---
+        # --- Gate + Up + SiTU (FUSED E4M3+ROT + EXPERT-ALIGNED NAX PREFILL!) ---
         if self._gu_is_jt:
             U = self._jt_gu_bundle
             assert U is not None
             if self._jt_gu_fused_ok and self._jt_gu_layer_su is not None:
-                xr_tok = jt_kernels.rotate_rows(x_q, self._jt_gu_layer_su).astype(mx.bfloat16)
-                xr_s = xr_tok[tok_idx]
+                x_q, xr_f32 = round_e4m3_and_rot128(x2, self._jt_gu_layer_su)
+                xr_s = xr_f32.astype(mx.bfloat16)[tok_idx]
                 if U["gate"]["n_out"] > 0 and self._jt_gu_cols is not None:
                     xo = x_q[:, self._jt_gu_cols].astype(mx.float32)[tok_idx]
                     mid = gather_gate_up_sorted_jt(
@@ -444,6 +446,7 @@ class ErnieSwitchGLU(nn.Module):
                     u_out = self._jt_sorted_proj(xr_s, x_sorted, U["up"], s_routes, plan=plan).astype(dtype)
                     mid = fused_situ(u_out, g_out, self.beta, self.linear_beta)
             else:
+                x_q = round_e4m3_per128(x2)
                 x_sorted = x_q[tok_idx]
                 xr_g = jt_kernels.rotate_rows(x_sorted, self._jt_g_signs, s_routes).astype(mx.bfloat16)
                 g_out = self._jt_sorted_proj(xr_g, x_sorted, U["gate"], s_routes, plan=plan).astype(dtype)
@@ -452,7 +455,7 @@ class ErnieSwitchGLU(nn.Module):
                 mid = fused_situ(u_out, g_out, self.beta, self.linear_beta)
         else:
             gp, up = self.gate_proj, self.up_proj
-            x_rot = (jh_kernels.h32_rows(x_q, dtype) if gp.rotated else x_q)[tok_idx]
+            x_rot = (round_e4m3_and_h32(x2, dtype) if gp.rotated else round_e4m3_per128(x2))[tok_idx]
             if plan is not None:
                 mid = jh_kernels.gather_qmm_expert_sorted(
                     x_rot, gp.tq2_packed, gp.tq2_scales, s_routes, gp.bits, plan,
@@ -466,17 +469,15 @@ class ErnieSwitchGLU(nn.Module):
                     act="inkling", alpha=act_caps,
                 ).astype(dtype)
 
-        mid_q = round_e4m3_per128(mid)
-
-        # --- Down (EXPERT-ALIGNED NAX PREFILL!) ---
+        # --- Down (FUSED E4M3+ROT + EXPERT-ALIGNED NAX PREFILL!) ---
         if self._dn_is_jt:
             Ud = self._jt_dn_bundle
             assert Ud is not None
-            hr = jt_kernels.rotate_rows(mid_q, self._jt_dn_signs, s_routes).astype(mx.bfloat16)
-            dn_sorted = self._jt_sorted_proj(hr, mid_q, Ud["down"], s_routes, plan=plan).astype(dtype)
+            mid_q, hr_f32 = round_e4m3_and_rot128(mid, self._jt_dn_signs, s_routes)
+            dn_sorted = self._jt_sorted_proj(hr_f32.astype(mx.bfloat16), mid_q, Ud["down"], s_routes, plan=plan).astype(dtype)
         else:
             dp = self.down_proj
-            din = jh_kernels.h32_rows(mid_q, dtype) if dp.rotated else mid_q
+            din = round_e4m3_and_h32(mid, dtype) if dp.rotated else round_e4m3_per128(mid)
             if plan is not None:
                 dn_sorted = jh_kernels.gather_qmm_expert_sorted(din, dp.tq2_packed, dp.tq2_scales, s_routes, dp.bits, plan)
             else:

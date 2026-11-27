@@ -20558,7 +20558,10 @@ class MLLMBatchGenerator:
                     self._drain_tight_memory_allocator("after_batch_finish")
                 else:
                     try:
-                        mx.clear_cache()
+                        # Avoid a synchronous Metal allocator purge between
+                        # back-to-back tool-call turns when cache memory is modest.
+                        if mx.get_cache_memory() >= 2 * 1024 * 1024 * 1024:
+                            mx.clear_cache()
                     except Exception:
                         pass
 
