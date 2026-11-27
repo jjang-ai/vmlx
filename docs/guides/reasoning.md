@@ -109,11 +109,13 @@ vmlx-engine serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-par
 
 ### Auto-Detection
 
-When you pass `--reasoning-parser auto`, vmlx-engine uses its model config registry to match the model name against known patterns and select the appropriate parser:
+When you pass `--reasoning-parser auto`, vmlx-engine inspects bundle metadata (`config.json`, `generation_config.json`, `chat_template.jinja`) to select the appropriate parser:
 
-| Model Pattern | Parser Selected |
-|---------------|----------------|
-| Qwen3 (all variants) | `qwen3` |
+| Model Family / Bundle Metadata | Parser Selected |
+|--------------------------------|----------------|
+| Qwen3 / Qwen3.5 / Bonsai 2.5 / Holo4 | `qwen3` |
+| ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | DeepSeek-R1, DeepSeek-V3 | `deepseek_r1` |
 | GLM-4.7 Flash, GPT-OSS | `openai_gptoss` |
 | GLM-4.7, GLM-Z1 | `deepseek_r1` |

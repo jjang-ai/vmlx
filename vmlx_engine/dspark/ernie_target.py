@@ -49,9 +49,11 @@ class ErnieDSparkTarget:
             chunk = ids[:, pos:end]
             if taps:
                 _, f = self.model.model(chunk, cache=cache, capture_taps=taps, tail_only=True)
+                mx.eval(f)
                 feats.append(f)
             else:
-                self.model.model(chunk, cache=cache, tail_only=True)
+                h = self.model.model(chunk, cache=cache, tail_only=True)
+                mx.eval(h)
             pos = end
         if not feats:
             return None

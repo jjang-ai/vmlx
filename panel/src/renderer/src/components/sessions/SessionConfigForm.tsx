@@ -266,7 +266,7 @@ export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
   'nemotron', 'nemotron_h', 'cohere', 'granite', 'granitemoehybrid', 'lfm2',
   'minimax', 'minicpm', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
   'hy_v3', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
-  'openpangu_v2',
+  'openpangu_v2', 'ernie5_5', 'inkling2_loop',
 ]
 
 

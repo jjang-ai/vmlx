@@ -18,6 +18,10 @@ Browse thousands of pre-optimized models at: **https://huggingface.co/mlx-commun
 | Phi-3 | 3.8B, 14B | 4-bit |
 | Granite 3.x, 4.x | Various | 4-bit |
 | Nemotron | 3 Nano 30B | 6-bit |
+| ERNIE 5.5 Flash (`ernie5_5_moe`) | JANGHT / MXFP8 | Native MXFP8 + JANGHT + bundled DSpark + HCA/MLA SSD cache |
+| Bonsai 2.5 (`qwen3_5`) | 27B | 1.75-bit / Ternary JANG + Adaptive Native MTP |
+| Holo4 (`qwen3_5` / `qwen3_5_moe`) | 27B, 35B-A3B | JANG / JANGH2 (text + vision) |
+| Inkling 2 (`inkling2_loop`) | Mini | JANGH2 / JANGHT / NVFP4 + looping architecture + bundled DSpark |
 
 ### Recommended Models
 
@@ -77,15 +81,20 @@ vmlx-engine auto-detects model capabilities by name patterns:
 - Contains "MedGemma", "Gemma-3" (vision variants)
 
 ### Reasoning Parser Auto-Detection (`--reasoning-parser auto`)
-| Model Pattern | Parser |
-|---------------|--------|
-| Qwen3 (all variants including Coder-Next, VL, MoE) | `qwen3` |
+| Model Family / Bundle Metadata | Parser |
+|--------------------------------|--------|
+| Qwen3 / Qwen3.5 / Bonsai 2.5 / Holo4 | `qwen3` |
+| ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | DeepSeek-R1 | `deepseek_r1` |
 
 ### Tool Parser Auto-Detection (`--enable-auto-tool-choice`)
-| Model Pattern | Parser |
-|---------------|--------|
+| Model Family / Bundle Metadata | Parser |
+|--------------------------------|--------|
 | Qwen / Qwen2 / Qwen3 | `qwen` |
+| Qwen3.5 / Bonsai 2.5 / Holo4 | `xml_function` (`qwen3_coder`) |
+| ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | Mistral / Devstral | `mistral` |
 | Llama | `llama` |
 | DeepSeek (non-R1) | `deepseek` |

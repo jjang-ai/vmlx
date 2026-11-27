@@ -32,7 +32,7 @@ def read_tool_message(text, start):
     return payload, end + len(MESSAGE_END)
 
 
-@ToolParserManager.register_module("inkling")
+@ToolParserManager.register_module(["inkling", "inkling2", "inkling2_loop"])
 class InklingToolParser(ToolParser):
     NATIVE_MARKERS = (TOOL_CHANNEL,)
     SUPPORTS_NATIVE_TOOL_FORMAT = True

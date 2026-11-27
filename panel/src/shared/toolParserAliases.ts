@@ -28,7 +28,6 @@ const TOOL_PARSER_CANONICAL_ALIASES: Record<string, string> = {
   // DSV4 family mis-parses it, so V4.1 must launch with the v41 parser.
   dsml_v41: 'deepseek_v41',
   ernie5_5: 'ernie',
-  ernie_5_5: 'ernie',
   ernie5_5_moe: 'ernie',
   inkling2: 'inkling',
   inkling2_loop: 'inkling',

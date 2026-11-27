@@ -68,6 +68,9 @@ Use `--tool-call-parser` to select a parser for your model family:
 | `xlam` | | Salesforce xLAM | JSON with `tool_calls` array |
 | `functionary` | `meetkai` | MeetKai Functionary | Multiple function blocks |
 | `glm47` | `glm4` | GLM-4.7, GLM-4.7-Flash | `<tool_call>` with `<arg_key>`/`<arg_value>` XML |
+| `xml_function` | `qwen3_coder` | Qwen3.5 / Bonsai 2.5 / Holo4 | `<tool_call><function=name><parameter=key>` XML |
+| `ernie` | `ernie5_5`, `ernie5_5_moe` | ERNIE 5.5 Flash | `<ernie:tool_call><invoke name=...><parameter name=...>` XML |
+| `inkling` | `inkling2`, `inkling2_loop` | Inkling 2 | `<\|content_tool_call\|>...<\|content_end\|>` |
 
 ## Model Examples
 

@@ -470,7 +470,7 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.kvCacheQuantization = 'auto'
         changed = true
       }
-    } else if (detectedFamily === 'openpangu_v2') {
+    } else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5') {
       // openPangu-2.0-Flash: exact typed N-1 prompt snapshots preserve MLA KV,
       // DSA indexer, rotating-SWA metadata and all causal-conv states. Memory
       // prefix + prompt L2 are safe; generic paged/block reuse and legacy
@@ -1351,6 +1351,7 @@ function applyLegacyCacheStackMigrations(config: Partial<ServerConfig>, modelPat
   const staleV10NonPagedPromptL2 =
     Number(config.cacheStackStartupDefaultsVersion || 0) === 10 &&
     migrationDetectedFamily !== 'openpangu_v2' &&
+    migrationDetectedFamily !== 'ernie5_5' &&
     !migrationDsv4Active &&
     migrationDetectedUsePaged !== true &&
     config.continuousBatching === true &&
@@ -3122,8 +3123,8 @@ export class SessionManager extends EventEmitter {
             if (glmChanged) {
               this.pushLog(sessionId, '[INFO] GLM-5.3 detected; exact full-precision typed KDA/MLA/DSA prefix + prompt-L2 cache enabled, generic paged/block/TurboQuant cache codecs disabled')
             }
-          } else if (freshFamily === 'openpangu_v2') {
-            const panguChanged =
+          } else if (freshFamily === 'openpangu_v2' || freshFamily === 'ernie5_5') {
+            const exactTypedChanged =
               config.enablePrefixCache !== true ||
               config.usePagedCache !== false ||
               config.enableDiskCache !== true ||
@@ -3138,8 +3139,9 @@ export class SessionManager extends EventEmitter {
             config.noMemoryAwareCache = false
             config.kvCacheQuantization = 'auto'
             config.enableJit = false
-            if (panguChanged) {
-              this.pushLog(sessionId, '[INFO] openPangu detected; exact full-precision typed prefix + prompt-L2 cache enabled, generic paged/block/TurboQuant KV codecs disabled')
+            if (exactTypedChanged) {
+              const label = freshFamily === 'ernie5_5' ? 'ERNIE 5.5 Flash' : 'openPangu'
+              this.pushLog(sessionId, `[INFO] ${label} detected; exact full-precision typed prefix + prompt-L2 cache enabled, generic paged/block/TurboQuant KV codecs disabled`)
             }
           }
           // Repeat the all-family production normalization after detection so

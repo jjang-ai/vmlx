@@ -4,6 +4,16 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+- Add native ERNIE 5.5 Flash (`ernie5_5_moe`) serving for JANGHT and native MXFP8 bundles, including fused Metal mHC/HyperHead/MultiRouter/HCA-compressor kernels, banded HCA prefill, 512-strip chunked MLA prefill for bounded long-context memory, `<ernie:think>` reasoning and `<ernie:tool_call>` tool parsers, bundled Adaptive DSpark drafting, and typed `ErnieLayerCache` RAM/SSD prefix persistence.
+- Improve Inkling 2 (`inkling2_loop`) looping-architecture prefill, decode, and DSpark verification with fused Metal attention-residual, short-convolution/state, joint dynamic KV convolution, loop-controller, and Q/K/V/R preparation kernels, and fix verification logit slicing to `unpadded_vocab_size`.
+- Improve Bonsai 2.5 27B 1.75-bit and Ternary JANG cold load, prefill, and Adaptive Native MTP serving via single-pass Metal 26-bit unpacking, fused Metal FWHT and `HadamardProjectionGroup`, missing `model.eval()` restoration on JANG loaders, and zero-regex post-norm MTP selection.
+- Fix already-split `experts.gate_up_proj` loading for Holo4 35B-A3B JANG bundles and verify Holo4 27B / 35B-A3B JANG and JANGH2 text, vision, reasoning, and tool calling.
+- Add `ARFallback` cold-compile outlier protection so first-time Metal shader compilation on newly observed verify widths does not poison adaptive speculative fallback rates.
+- Reduce per-tool-call terminal wait and keep RAM flat across SSD-backed tool continuations by moving SSM companion temporary payload writes outside the mutation lock, persisting Inkling draft checkpoints asynchronously with immediate carry-over, avoiding blocking intermediate chat SQLite writes, and skipping synchronous `mx.clear_cache()` under 2 GiB.
+- Wire `ernie` and `inkling` reasoning and tool-call parsers through MLX Studio's CLI alias allowlists and session configuration parser selectors.
+
 ## [1.6.84] - 2026-11-06
 
 - Add Ripple-65B serving with adaptive DFlash2 for compatible JANGH2 and JANG affine bundles, including mixed sliding/full attention and native RAM/SSD session reuse.

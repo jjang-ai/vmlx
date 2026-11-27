@@ -96,6 +96,8 @@ class ErnieToolParser(ToolParser):
         cleaned = re.sub(
             r"<ernie:think>.*?</ernie:think>", "", model_output, flags=re.DOTALL
         )
+        if "</ernie:think>" in cleaned and "<ernie:think>" not in cleaned:
+            cleaned = cleaned.split("</ernie:think>", 1)[1]
         cleaned = self.strip_think_tags(cleaned)
         if "<ernie:tool_call>" not in cleaned:
             return ExtractedToolCallInformation(

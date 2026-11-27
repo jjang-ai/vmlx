@@ -5979,6 +5979,9 @@ _TOOL_CALL_MARKERS = [
     # MiniMax M2/M2.5 declare their closing tag as native control
     # (MiniMaxToolParser.NATIVE_MARKERS); an orphan close must not stream as prose.
     "</minimax:tool_call>",
+    "<ernie:tool_call>",
+    "<ernie:tool_call",
+    "</ernie:tool_call>",
     "]<]minimax[>[",  # MiniMax-M3 namespace separator before native XML elements
     "<dots_function_call>",  # dots3_note dots XML dialect wrapper
     "<dots_function_call",  # split-delta opener before '>' flushes
@@ -6546,12 +6549,20 @@ def _content_forms_raw_json_tool_call(text: str) -> bool:
 
 
 def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
-    """Return whether a rendered assistant prefix leaves ``<think>`` open."""
+    """Return whether a rendered assistant prefix leaves a think tag open."""
     after_user = str(rendered).rsplit(marker, 1)[-1]
-    # A closed sentinel (`<think></think>`) means "thinking produced
-    # nothing; visible answer starts now", not "parser starts in reasoning".
-    cleaned = re.sub(r"<think>\s*</think>", "", after_user)
-    return "<think>" in cleaned and "</think>" not in cleaned.split("<think>", 1)[1]
+    # A closed sentinel (`<think></think>` or `<ernie:think></ernie:think>`)
+    # means "thinking produced nothing; visible answer starts now", not
+    # "parser starts in reasoning".
+    for start_tag, end_tag in (("<think>", "</think>"), ("<ernie:think>", "</ernie:think>")):
+        cleaned = re.sub(
+            re.escape(start_tag) + r"\s*" + re.escape(end_tag),
+            "",
+            after_user,
+        )
+        if start_tag in cleaned and end_tag not in cleaned.split(start_tag, 1)[1]:
+            return True
+    return False
 
 
 def _chat_template_renderers(tokenizer) -> list:
@@ -6629,12 +6640,12 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         # that inject an open <think> without immediate </think> (those truly
         # ignore the flag and the model will reason regardless).
         after_user = rendered.rsplit("__test__", 1)[-1]
-        has_think = "<think>" in after_user
+        has_think = "<think>" in after_user or "<ernie:think>" in after_user
         # Strip empty closed think blocks such as <think></think> and
-        # <think>\n</think>\n\n. Those are proper "no thinking" sentinels,
+        # <ernie:think></ernie:think>. Those are proper "no thinking" sentinels,
         # not evidence that the template ignores enable_thinking=False.
-        cleaned = re.sub(r"<think>\s*</think>", "", after_user)
-        result = "<think>" in cleaned  # still has an unclosed <think>?
+        cleaned = re.sub(r"<(?:ernie:)?think>\s*</(?:ernie:)?think>", "", after_user)
+        result = "<think>" in cleaned or "<ernie:think>" in cleaned
         if result:
             logger.info(
                 f"Template for {model_name} always injects <think> "
@@ -6851,9 +6862,9 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
                 add_generation_prompt=True,
                 tokenize=False,
             )
-        # Check if generation prompt ends with </think> (+ optional whitespace)
+        # Check if generation prompt ends with </think> or </ernie:think> (+ optional whitespace)
         # This means thinking is completed in the prompt, model outputs plain text
-        if re.search(r"</think>\s*$", rendered):
+        if re.search(r"</(?:ernie:)?think>\s*$", rendered):
             result = True
             logger.info(
                 f"Template for {model_name} completes thinking in prompt "
@@ -13217,6 +13228,55 @@ def _native_cache_status(
                 "block_disk_l2": False,
             }
         )
+
+    if (
+        family_name == "ernie5_5"
+        or scheduler_family in {"ernie5_5", "ernie5_5_moe"}
+        or cache_subtype == "ernie_hca_mla"
+    ):
+        prefix_configured = bool(
+            getattr(
+                scheduler,
+                "_prefix_cache_requested",
+                getattr(getattr(scheduler, "config", None), "enable_prefix_cache", False),
+            )
+        )
+        return _with_runtime_layout({
+            "family": "ernie5_5",
+            "schema": "ernie_hca_mla_v1",
+            "cache_type": "native_exact_hca_mla",
+            "cache_subtype": "ernie_hca_mla",
+            "components": [
+                "hca_local_rotating_kv",
+                "hca_pooled_kv",
+                "mla_latent_kv",
+                "dsa_indexer_k",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": False,
+                "reason": "native_hca_mla_compressed_state",
+            },
+            "cache_store_policy": {
+                "prompt_boundary_snapshot": "exact_typed_n_minus_1",
+                "state_roundtrip": "hca_local_pooled_mla_latent_and_dsa_indexer",
+                "generic_paged_blocks": "unsupported",
+                "prompt_disk_l2": "exact_typed_full_precision",
+                "reuse": "exact_or_forward_prefix_from_typed_boundary",
+            },
+            "prefix_configured": prefix_configured,
+            "prefix": bool(
+                getattr(scheduler, "memory_aware_cache", None) is not None
+            ),
+            "paged": False,
+            "prompt_disk_l2_configured": bool(
+                getattr(scheduler, "_prompt_disk_cache_requested", disk_cache is not None)
+            ),
+            "block_disk_l2_configured": bool(
+                getattr(scheduler, "_block_disk_cache_requested", block_disk_store is not None)
+            ),
+            "prompt_disk_l2": bool(disk_cache is not None),
+            "block_disk_l2": False,
+        })
 
     if (
         family_name == "openpangu_v2"

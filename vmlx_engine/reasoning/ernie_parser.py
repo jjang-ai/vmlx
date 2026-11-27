@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 from .base import DeltaMessage
-from .think_parser import delta_safe_reasoning_marker_view
-from .think_xml_parser import ThinkXmlReasoningParser
+from .think_parser import BaseThinkingReasoningParser
 
 
-class ErnieReasoningParser(ThinkXmlReasoningParser):
+class ErnieReasoningParser(BaseThinkingReasoningParser):
     """Reasoning parser for ERNIE 5.5 ``<ernie:think>...</ernie:think>`` blocks."""
 
     supports_end_only_reasoning = True
@@ -29,14 +28,6 @@ class ErnieReasoningParser(ThinkXmlReasoningParser):
         *,
         finished: bool = False,
     ) -> DeltaMessage | None:
-        markers = (self.start_token, self.end_token)
-        previous_text, current_text, delta_text = delta_safe_reasoning_marker_view(
-            previous_text,
-            current_text,
-            markers,
-        )
-        if not delta_text:
-            return None
         return super().extract_reasoning_streaming(
             previous_text,
             current_text,

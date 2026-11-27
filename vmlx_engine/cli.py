@@ -34,6 +34,7 @@ _SLOW_FAMILY_TIMEOUTS = {
     "deepseek_v4_1": DSV4_DEFAULT_TIMEOUT_SECONDS,
     "minimax_m3": 900,
     "openpangu_v2": 900,
+    "ernie5_5": 900,
     # Hybrid SSM+attention families chunk their prefill, so a long prompt takes
     # minutes before the first token. FOUND LIVE IN THE APP, not by API testing:
     # a 101,502-token prompt to Qwen3.6-27B rendered "Message failed — Request
@@ -1267,6 +1268,7 @@ _PAGED_INCOMPATIBLE_FAMILIES = {
     "minimax_m3",
     "minimax_m3_vl",
     "openpangu_v2",
+    "ernie5_5",
 }
 
 # MLLM loads normally skip the generic paged default, but gemma4's typed
@@ -1469,14 +1471,22 @@ def serve_command(args):
             if str(_op_c.get("model_type", "")).lower() == "ernie5_5_moe":
                 from .models.ernie5_5_moe.cache import register_ernie_cache_class
                 register_ernie_cache_class()
+                if (
+                    getattr(args, "enable_block_disk_cache", False)
+                    and not getattr(args, "enable_disk_cache", False)
+                    and getattr(args, "enable_prefix_cache", True)
+                    and not getattr(args, "disable_prefix_cache", False)
+                ):
+                    args.enable_disk_cache = True
                 _apply_openpangu_cache_policy(args, logger)
                 args.enable_jit = False
                 if getattr(args, "is_mllm", False):
                     args.is_mllm = False
                 logger.info(
                     "ERNIE 5.5 Flash AUTODETECTED (ernie5_5_moe) -> auto-settings: "
-                    "cache=exact-typed HCA+MLA (~8.7 KB/tok) RAM+SSD, tq_kv=OFF, "
+                    "cache=exact-typed HCA+MLA (~8.7 KB/tok) RAM+SSD(prompt_l2=%s), tq_kv=OFF, "
                     "tool_parser=%s, reasoning_parser=%s, dspark=auto",
+                    "ON" if getattr(args, "enable_disk_cache", False) else "off",
                     getattr(args, "tool_call_parser", None) or "ernie(auto)",
                     getattr(args, "reasoning_parser", None) or "ernie(auto)",
                 )
@@ -2393,10 +2403,11 @@ def serve_command(args):
                         # for DSV4/M3, but be defensive: never default-on for them).
                         _excluded_family = _mc.family_name in {
                             "deepseek_v4", "deepseek_v4_1", "minimax_m3", "minimax_m3_vl",
-                            # openpangu_v2: dynamic DSA top-k + growing conv
-                            # states — same mx.compile hazard class as M3 MSA
+                            # openpangu_v2 & ernie5_5: dynamic DSA top-k —
+                            # same mx.compile hazard class as M3 MSA
                             # (autodetect block above also forces JIT off).
                             "openpangu_v2",
+                            "ernie5_5",
                         }
                         # mx.compile-safety gate: the runtime refuses to
                         # compile MLLM (mlx-vlm streaming path) and hybrid

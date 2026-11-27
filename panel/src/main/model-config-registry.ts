@@ -493,7 +493,7 @@ registerFamily('minimax_m3', { supportsAdaptiveThinking: true, cacheType: 'kv', 
 
 // ERNIE 5.5 Flash (`ernie5_5_moe`): 43-layer hybrid HCA + sparse MLA-DSA + mHC LatentMoE
 // with `<ernie:think>` reasoning, `<ernie:tool_call>` XML tools, and bundled DSpark.
-registerFamily('ernie5_5', { cacheType: 'hybrid', cacheSubtype: 'ernie_hca_mla', toolParser: 'ernie', reasoningParser: 'ernie', supportsThinking: true, honorsEnableThinking: true, supportsInstructMode: true, supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high', thinkInTemplate: false, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: false, description: 'ERNIE 5.5 Flash (HCA + MLA-DSA + mHC LatentMoE)', priority: 4 })
+registerFamily('ernie5_5', { cacheType: 'kv', cacheSubtype: 'ernie_hca_mla', toolParser: 'ernie', reasoningParser: 'ernie', supportsThinking: true, honorsEnableThinking: true, supportsInstructMode: true, supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high', thinkInTemplate: true, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: false, description: 'ERNIE 5.5 Flash (HCA + MLA-DSA + mHC LatentMoE)', priority: 4 })
 
 // openPangu-2.0-Flash: 92B MoE (6B active) MLA + DSA/SWA hybrid + 3 stateful
 // causal convs + mHC hyper-connections. Mirrors the engine registry entry

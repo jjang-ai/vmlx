@@ -45,6 +45,11 @@ def build_chat_template_kwargs(
         "add_generation_prompt": add_generation_prompt,
     }
 
+    if model_type and model_type.lower() == "ernie5_5_moe":
+        # ERNIE 5.5 ships a Python renderer (ErnieChatTokenizer.apply_chat_template)
+        # that strictly validates kwargs and rejects the generic `thinking` alias.
+        include_thinking_alias = False
+
     if enable_thinking is not None:
         thinking_value = bool(enable_thinking)
         kwargs["enable_thinking"] = thinking_value

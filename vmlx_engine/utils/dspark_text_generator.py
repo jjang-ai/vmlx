@@ -128,6 +128,22 @@ class DSparkTextGenerator(SingleBatchGenerator):
         req._dspark_policy = policy
         req._dspark_session = session
         req._dspark_queue = []
+        uses_ernie55 = self._cache_uses_ernie55(req.cache)
+        ernie_n_minus_1_snapshot = None
+        snapshot_cuts: tuple[int, ...] = ()
+        on_snapshot = None
+        if uses_ernie55:
+            target_cut = len(prompt_ids) - 1
+            if target_cut > cached:
+                snapshot_cuts = (target_cut,)
+
+                def _on_ernie_snapshot(_cut, live_cache, _draft_caches):
+                    nonlocal ernie_n_minus_1_snapshot
+                    ernie_n_minus_1_snapshot = self._clone_admissible_prompt_cache_snapshot(live_cache)
+
+                on_snapshot = _on_ernie_snapshot
+            elif target_cut == cached and cached > 0:
+                ernie_n_minus_1_snapshot = self._clone_admissible_prompt_cache_snapshot(req.cache)
         req._dspark_iter = iter_dspark(
             rt["target"], rt["drafter"], prompt_ids, max(1, int(req.max_tokens)), eos,
             prefill_step=self.prefill_step_size, sampler=draft_sampler, max_draft=rt["max_draft"],
@@ -135,6 +151,7 @@ class DSparkTextGenerator(SingleBatchGenerator):
             grow_draft_ladder=rt.get("grow_draft_ladder", False),
             ar_fallback=policy, resume=resume, session=session, pick=pick,
             prefill_plan=getattr(req, "m3_plan", None),
+            snapshot_cuts=snapshot_cuts, on_snapshot=on_snapshot,
         )
         req._dspark_on = True
         req.next_token = self._pull(req)          # the prefill and the first token
@@ -145,8 +162,13 @@ class DSparkTextGenerator(SingleBatchGenerator):
         }
         req.prefill_started = None
         req.context_tokens.extend(req.prompt_tokens)
-        # The cache now holds exactly the prompt (no round has run): the plain M3 path's prompt snapshot.
-        req.prompt_cache_snapshot = self._clone_admissible_prompt_cache_snapshot(req.cache)
+        # ERNIE 5.5 stores an exact N-1 typed snapshot for prompt-L2 SSD reuse (path-dependent HCA pooling);
+        # other DSpark targets keep their prompt-end snapshot.
+        req.prompt_cache_snapshot = (
+            ernie_n_minus_1_snapshot
+            if uses_ernie55
+            else self._clone_admissible_prompt_cache_snapshot(req.cache)
+        )
         logger.info("DSpark text request %s: prompt %d tokens (%d restored, drafter context %s)", req.uid,
                     len(prompt_ids), cached, "carried over" if resume.get("draft_cache") is not None else
                     ("from the prompt" if not cached else f"from position {cached}"))

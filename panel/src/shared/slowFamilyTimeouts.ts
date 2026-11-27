@@ -48,6 +48,7 @@ export const SLOW_FAMILY_TIMEOUTS: Readonly<Record<string, number>> = Object.fre
   'deepseek-v4': SLOW_FAMILY_TIMEOUT_SECONDS,
   minimax_m3: SLOW_FAMILY_TIMEOUT_SECONDS,
   openpangu_v2: SLOW_FAMILY_TIMEOUT_SECONDS,
+  ernie5_5: SLOW_FAMILY_TIMEOUT_SECONDS,
   'qwen3.5': SLOW_FAMILY_TIMEOUT_SECONDS,
   'qwen3.5-moe': SLOW_FAMILY_TIMEOUT_SECONDS,
   'qwen3-next': SLOW_FAMILY_TIMEOUT_SECONDS,
