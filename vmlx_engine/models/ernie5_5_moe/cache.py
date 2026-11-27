@@ -241,6 +241,51 @@ class ErniePoolingCache:
             )
         return full_kv[:, :usable, :], full_gate[:, :usable, :], pool_base
 
+    def accumulate_windows_fast(
+        self, kv: mx.array, gate: mx.array, offset: int
+    ) -> Tuple[Optional[mx.array], Optional[mx.array], int]:
+        """Same as accumulate_windows, returning (None, None, pool_base) on non-boundary steps to avoid zero-allocs."""
+        _, L, _ = kv.shape
+        if L <= 32:
+            self._last_in_kv = kv
+            self._last_in_gate = gate
+        else:
+            self._last_in_kv = None
+            self._last_in_gate = None
+        if self.pending_kv is not None and self.pending_len > 0:
+            full_kv = mx.concatenate([self.pending_kv, kv], axis=1)
+            full_gate = mx.concatenate([self.pending_gate, gate], axis=1)
+            pool_base = int(offset) - self.pending_len
+        else:
+            full_kv = kv
+            full_gate = gate
+            pool_base = int(offset)
+
+        total = full_kv.shape[1]
+        n_windows = total // self.compress_ratio
+        usable = n_windows * self.compress_ratio
+        rem = total - usable
+
+        if rem > 0:
+            self.pending_kv = mx.contiguous(full_kv[:, usable:, :])
+            self.pending_gate = mx.contiguous(full_gate[:, usable:, :])
+            self.pending_len = rem
+        else:
+            self.pending_kv = None
+            self.pending_gate = None
+            self.pending_len = 0
+
+        self.offset = int(offset) + L
+        if usable == 0:
+            return None, None, pool_base
+        return full_kv[:, :usable, :], full_gate[:, :usable, :], pool_base
+
+    def fetch_pooled(self) -> Optional[mx.array]:
+        """Return currently materialized pooled KV slice, or None if no complete window exists yet."""
+        if self.pooled is None or self.pooled_count == 0:
+            return None
+        return self.pooled[:, : self.pooled_count, :]
+
     def update_and_fetch(self, new_pooled: mx.array) -> mx.array:
         B, n_new, D = new_pooled.shape
         if n_new > 0:

@@ -828,24 +828,60 @@ def _qmv_rows(bits: int, fused: bool, guard: str) -> str:
 @functools.lru_cache(maxsize=None)
 def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool = False, yz: bool = False,
                      pair: bool = False, act: str = "silu", alpha=0.0):
-    aligned = mode == "al"
     guard_rows = "if (!active) continue;" if mode == "tl" else "if (row0 + r >= N || !active) continue;"
+    act_expr, act_suffix = _act_metal_and_tag(act, alpha) if (fused and not pair) else ("", "")
+    if fused and not pair:
+        # Split-simdgroup fused gate+up: sg0 decodes gate (RPS rows) and sg1 decodes up (same RPS rows),
+        # passing gate via 16-byte threadgroup memory. Halves live accumulators and prevents register spills
+        # under multi-row verify occupancy while staying bit-identical to the single-sg loop.
+        pt, psz = _ptype(bits)
+        cast = "" if pt == "uint32_t" else f"(const device {pt}*)"
+        loop = _k_loop(mode, rotate, _qmv_rows(bits, False, ""), _qmv_rows(bits, False, guard_rows),
+                       f"wp += {BLOCK * bits // 8 // psz}u; xp += {BLOCK}u;")
+        src = f'''
+    uint K = meta[0], N = meta[1], xdiv = meta[2];
+    const uint RB = K * {bits}u / 8u;
+    const uint LB = {2 * bits}u;
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * {RPS}u;
+    uint disp = threadgroup_position_in_grid.z;
+    uint e = idx[disp];
+    const device {pt}* wp = (sgi == 0u ? {cast}wg : {cast}wu) + ((size_t)e * N + row0) * (RB / {psz}u) + lane * (LB / {psz}u);
+    auto xp = x + (size_t)(disp / xdiv) * K + lane * {VPT}u;
+    threadgroup float g_sh[{RPS}];
+    float accg[{RPS}];
+    {UNROLL} for (uint r = 0; r < {RPS}u; r++) accg[r] = 0.0f;
+    {loop}
+    float val[{RPS}];
+    {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
+      float s = simd_sum(accg[r]);
+      if (lane == 0 && row0 + r < N) {{
+        float sc = (sgi == 0u) ? float(sg[(size_t)e * N + row0 + r]) : float(su[(size_t)e * N + row0 + r]);
+        val[r] = s * sc;
+      }}
+    }}
+    if (sgi == 0u && lane == 0) {{
+      {UNROLL} for (uint r = 0; r < {RPS}u; r++) g_sh[r] = val[r];
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgi == 1u && lane == 0) {{
+      float L = lim[0];
+      {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
+        if (row0 + r < N) {{
+          float g = g_sh[r], u = val[r];
+          if (L > 0.0f) {{ g = metal::min(g, L); u = metal::clamp(u, -L, L); }}
+          out[(size_t)disp * N + row0 + r] = {act_expr};
+        }}
+      }}
+    }}
+'''
+        return mx.fast.metal_kernel(
+            name=f"jangtq2t_qmv_b{bits}_fusedsg_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}{act_suffix}",
+            input_names=["x", "wg", "sg", "wu", "su", "idx", "meta", "lim"],
+            output_names=["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
+
     loop = _k_loop(mode, rotate, _qmv_rows(bits, fused, ""), _qmv_rows(bits, fused, guard_rows),
                    f"wp += {BLOCK * bits // 8 // _ptype(bits)[1]}u; up += {BLOCK * bits // 8 // _ptype(bits)[1]}u; xp += {BLOCK}u;")
-    guard = "" if aligned else "if (row0 + r >= N || !active) continue;"
-    rows = f'''
-      {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
-        {guard}
-        const device {_ptype(bits)[0]}* wr = wp + r * (RB / {_ptype(bits)[1]}u); float a = 0.0f;
-        {_qdot(bits, "wr", "a")}
-        accg[r] += a;'''
-    if fused:
-        rows += f'''
-        const device {_ptype(bits)[0]}* ur = up + r * (RB / {_ptype(bits)[1]}u); float b2 = 0.0f;
-        {_qdot(bits, "ur", "b2")}
-        accu[r] += b2;'''
-    rows += "\n      }"
-    act_expr, act_suffix = _act_metal_and_tag(act, alpha) if (fused and not pair) else ("", "")
     if pair:
         store = f'''
     {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
@@ -855,17 +891,6 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
         size_t scale = (size_t)e * N + row0 + r;
         out[output] = g * float(sg[scale]);
         out_up[output] = u * float(su[scale]);
-      }}
-    }}'''
-    elif fused:
-        store = f'''
-    float L = lim[0];
-    {UNROLL} for (uint r = 0; r < {RPS}u; r++) {{
-      float g = simd_sum(accg[r]); float u = simd_sum(accu[r]);
-      if (lane == 0 && row0 + r < N) {{
-        g *= float(sg[(size_t)e * N + row0 + r]); u *= float(su[(size_t)e * N + row0 + r]);
-        if (L > 0.0f) {{ g = metal::min(g, L); u = metal::clamp(u, -L, L); }}
-        out[(size_t)disp * N + row0 + r] = {act_expr};
       }}
     }}'''
     else:
@@ -888,7 +913,7 @@ def _qmv_kernel_mode(bits: int, fused: bool, xname: str, mode: str, rotate: bool
     {store}
 '''
     return mx.fast.metal_kernel(
-        name=f"jangtq2t_qmv_b{bits}_{'pair' if pair else 'fused' if fused else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}{act_suffix}",
+        name=f"jangtq2t_qmv_b{bits}_{'pair' if pair else 'single'}_{xname}_{mode}{'_h32' if rotate else ''}{'_yz' if yz else ''}{act_suffix}",
         input_names=["x", "wg", "sg", "wu", "su", "idx", "meta", "lim"],
         output_names=["out", "out_up"] if pair else ["out"], header=_cb_header(), source=swap_grid_yz(src) if yz else src)
 
@@ -920,7 +945,8 @@ def gather_qmv(x, packed, scales, cb_unused, idx, bits, *, x_per_dispatch: bool,
         act, alpha = "silu", 0.0
     k = _qmv_kernel(bits, fused, _TNAME[x.dtype], _tail_mode(K, N) if TAIL_SPLIT else (K % BLOCK == 0 and N % (NSG * RPS) == 0),
                     rotate, yz, return_pair, act, alpha)
-    tiles = (N + NSG * RPS - 1) // (NSG * RPS)
+    split_sg = fused and not return_pair
+    tiles = (N + RPS - 1) // RPS if split_sg else (N + NSG * RPS - 1) // (NSG * RPS)
     count = 2 if return_pair else 1
     outputs = k(inputs=[x, packed, scales, packed_u if fused else packed, scales_u if fused else scales,
                      idx.astype(mx.uint32).reshape(-1), _consts(K, N, xdiv, dtype=mx.uint32),

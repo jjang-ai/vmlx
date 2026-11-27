@@ -1190,6 +1190,214 @@ def ernie_multi_router_scores(x: mx.array, w0: mx.array, w1: mx.array) -> mx.arr
 
 
 # ---------------------------------------------------------------------------
+# 5b. Fused MultiRouter Top-K + Normalize + Expert Scale (replaces 7 ops x 42 layers!)
+# ---------------------------------------------------------------------------
+_MULTI_ROUTER_TOPK_SRC = r"""
+  // Exact top-K selection over N=512 experts + optional L1 normalize + routed_scaling_factor_param[id].
+  // 256 threads (8 simdgroups) per token row; each thread holds 2 experts in registers!
+  const uint tid  = thread_position_in_threadgroup.x;
+  const uint sg   = tid >> 5;
+  const uint lane = tid & 31u;
+  const uint row  = threadgroup_position_in_grid.y;
+
+  const device float* s_row = scores + size_t(row) * 512u;
+  float r0 = s_row[tid];
+  float r1 = s_row[tid + 256u];
+  float v0 = r0 + bias[tid];
+  float v1 = r1 + bias[tid + 256u];
+
+  threadgroup float sg_val[8];
+  threadgroup uint  sg_idx[8];
+  threadgroup uint  win_idx_sh;
+  threadgroup uint  picked_idx[TOPK];
+  threadgroup float picked_raw[TOPK];
+
+  for (uint k = 0u; k < uint(TOPK); k++) {
+    float bv = (v0 >= v1) ? v0 : v1;
+    uint  bi = (v0 >= v1) ? tid : (tid + 256u);
+    float sm = simd_max(bv);
+    uint  si = simd_min((bv == sm) ? bi : 0xFFFFFFFFu);
+    if (lane == 0u) {
+      sg_val[sg] = sm;
+      sg_idx[sg] = si;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0u) {
+      float best_v = sg_val[0];
+      uint  best_i = sg_idx[0];
+      for (uint s = 1u; s < 8u; s++) {
+        if (sg_val[s] > best_v || (sg_val[s] == best_v && sg_idx[s] < best_i)) {
+          best_v = sg_val[s];
+          best_i = sg_idx[s];
+        }
+      }
+      win_idx_sh = best_i;
+      picked_idx[k] = best_i;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint w = win_idx_sh;
+    if (tid == w) {
+      picked_raw[k] = r0;
+      v0 = -INFINITY;
+    } else if (tid + 256u == w) {
+      picked_raw[k] = r1;
+      v1 = -INFINITY;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg == 0u) {
+    float raw = (lane < uint(TOPK)) ? picked_raw[lane] : 0.0f;
+    float denom = metal::max(simd_sum(raw), 1e-20f);
+    if (lane < uint(TOPK)) {
+      uint id = picked_idx[lane];
+      float w = NORM ? (raw / denom) : raw;
+      out_ids[size_t(row) * uint(TOPK) + lane] = id;
+      out_w[size_t(row) * uint(TOPK) + lane] = w * scale_param[id];
+    }
+  }
+"""
+
+
+@lru_cache(maxsize=8)
+def _multi_router_topk_kernel(top_k: int, normalize: bool):
+    return mx.fast.metal_kernel(
+        name=f"ernie_multi_router_topk_k{top_k}_n{int(normalize)}",
+        input_names=["scores", "bias", "scale_param"],
+        output_names=["out_ids", "out_w"],
+        source=_MULTI_ROUTER_TOPK_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+def ernie_multi_router_topk(
+    scores: mx.array,
+    bias: mx.array,
+    scale_param: mx.array,
+    top_k: int = 10,
+    normalize: bool = True,
+) -> Tuple[mx.array, mx.array]:
+    """Single-dispatch exact top-K + optional L1 normalize + routed scaling factor."""
+    lead = scores.shape[:-1]
+    N = scores.shape[-1]
+    s2 = scores.reshape(-1, N)
+    T = s2.shape[0]
+    if N == 512 and 1 <= top_k <= 32 and 1 <= T <= 65535 and s2.dtype == mx.float32:
+        ids, weights = _multi_router_topk_kernel(int(top_k), bool(normalize))(
+            inputs=[s2, bias.astype(mx.float32), scale_param.astype(mx.float32)],
+            template=[("TOPK", int(top_k)), ("NORM", bool(normalize))],
+            grid=(256, T, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(T, int(top_k)), (T, int(top_k))],
+            output_dtypes=[mx.uint32, mx.float32],
+        )
+        return ids.reshape(*lead, int(top_k)), weights.reshape(*lead, int(top_k))
+    ids = mx.argpartition(-(scores + bias), kth=top_k - 1, axis=-1)[..., :top_k]
+    ids = mx.stop_gradient(ids)
+    weights = mx.take_along_axis(scores, ids, axis=-1)
+    if normalize:
+        weights = weights / mx.maximum(weights.sum(axis=-1, keepdims=True), 1e-20)
+    return ids, weights * scale_param[ids]
+
+
+# ---------------------------------------------------------------------------
+# 5c. Fused LatentMoE: Shared SiTU(proj) + Latent RMSNorm(combined) + Concat
+#     Eliminates 2 strided contiguous copies + 3 dispatches across 42 MoE layers!
+# ---------------------------------------------------------------------------
+_SHARED_SITU_LATENT_NORM_CONCAT_SRC = r"""
+  const uint tid  = thread_position_in_threadgroup.x;
+  const uint sg   = tid >> 5;
+  const uint lane = tid & 31u;
+  const uint row  = threadgroup_position_in_grid.y;
+
+  const float beta = floats[0];
+  const float lbeta = floats[1];
+  const float norm_eps = floats[2];
+
+  const device T* p_row = proj + size_t(row) * uint(P_DIM);
+  const device T* c_row = comb + size_t(row) * uint(L_DIM);
+  device T* o_row = out + size_t(row) * uint(S_DIM + L_DIM);
+
+  for (uint i = tid; i < uint(S_DIM); i += 256u) {
+    float g = float(p_row[i]);
+    float u = float(p_row[uint(S_DIM) + i]);
+    float sig = 1.0f / (1.0f + metal::exp(-g));
+    float g_act = beta * metal::precise::tanh(g / beta) * sig;
+    float u_act = lbeta * metal::precise::tanh(u / lbeta);
+    o_row[i] = T(g_act * u_act);
+  }
+
+  threadgroup float sg_sq[8];
+  float sq = 0.0f;
+  for (uint j = tid; j < uint(L_DIM); j += 256u) {
+    float v = float(c_row[j]);
+    sq += v * v;
+  }
+  float sg_s = simd_sum(sq);
+  if (lane == 0u) sg_sq[sg] = sg_s;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total_sq = sg_sq[0] + sg_sq[1] + sg_sq[2] + sg_sq[3]
+                 + sg_sq[4] + sg_sq[5] + sg_sq[6] + sg_sq[7];
+  float inv_rms = metal::rsqrt(total_sq / float(L_DIM) + norm_eps);
+  for (uint j = tid; j < uint(L_DIM); j += 256u) {
+    float v = float(c_row[j]);
+    o_row[uint(S_DIM) + j] = T(v * inv_rms * float(norm_w[j]));
+  }
+"""
+
+
+@lru_cache(maxsize=12)
+def _shared_situ_latent_norm_concat_kernel(dtype_name: str, p_dim: int, s_dim: int, l_dim: int):
+    return mx.fast.metal_kernel(
+        name=f"ernie_situ_ln_cat_{dtype_name}_p{p_dim}_s{s_dim}_l{l_dim}",
+        input_names=["proj", "comb", "norm_w", "floats"],
+        output_names=["out"],
+        source=_SHARED_SITU_LATENT_NORM_CONCAT_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+def ernie_shared_situ_latent_norm_concat(
+    proj: mx.array,
+    combined: mx.array,
+    norm_w: mx.array,
+    s_dim: int,
+    beta: float = 4.0,
+    linear_beta: float = 25.0,
+    norm_eps: float = 1e-6,
+) -> mx.array:
+    """Single-dispatch SiTU(proj[..., :s], proj[..., s:2s]) + RMSNorm(combined) + concat."""
+    lead = combined.shape[:-1]
+    p_dim = proj.shape[-1]
+    l_dim = combined.shape[-1]
+    T = combined.size // l_dim
+    if (
+        1 <= T <= 65535
+        and p_dim >= 2 * s_dim
+        and proj.dtype == combined.dtype
+        and combined.dtype in (mx.bfloat16, mx.float16, mx.float32)
+    ):
+        dname = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[combined.dtype]
+        nw = norm_w if norm_w.dtype == combined.dtype else norm_w.astype(combined.dtype)
+        out = _shared_situ_latent_norm_concat_kernel(dname, int(p_dim), int(s_dim), int(l_dim))(
+            inputs=[
+                proj.reshape(T, p_dim),
+                combined.reshape(T, l_dim),
+                nw,
+                mx.array([float(beta), float(linear_beta), float(norm_eps)], dtype=mx.float32),
+            ],
+            template=[("T", combined.dtype), ("P_DIM", int(p_dim)), ("S_DIM", int(s_dim)), ("L_DIM", int(l_dim))],
+            grid=(256, T, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(T, int(s_dim) + int(l_dim))],
+            output_dtypes=[combined.dtype],
+        )[0]
+        return out.reshape(*lead, int(s_dim) + int(l_dim))
+    shared_mid = fused_situ(proj[..., s_dim : 2 * s_dim], proj[..., :s_dim], beta, linear_beta)
+    normed_combined = mx.fast.rms_norm(combined, norm_w, norm_eps)
+    return mx.concatenate([shared_mid, normed_combined], axis=-1)
+
+
+# ---------------------------------------------------------------------------
 # 6. Fused BF16-weight FP32-accum lm_head + optional MultiMax epilogue (T = 1..8)
 # ---------------------------------------------------------------------------
 _LM_HEAD_MULTIMAX_SRC = r"""

@@ -16415,7 +16415,7 @@ def test_scoped_prepackage_accepts_complete_chat_wire_and_rejects_partial(tmp_pa
     assert not runner._is_completed_chat_stream(chunk("another", {"content": "complete"}) + done)
 
 
-@pytest.mark.parametrize("campaign", ["runtime", "ripple", "inkling"])
+@pytest.mark.parametrize("campaign", ["runtime", "ripple", "inkling", "v1686"])
 def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp_path, monkeypatch, campaign):
     runner, root, path, data, provenance = _scoped_prepackage_fixture(tmp_path, monkeypatch)
     scopes = {
@@ -16425,6 +16425,7 @@ def test_scoped_runtime_campaign_retains_each_model_and_rejects_failed_turns(tmp
         ),
         "ripple": (runner.SCOPED_RIPPLE_SCHEMA, runner.SCOPED_RIPPLE_MODELS, runner.SCOPED_RIPPLE_RECEIPTS),
         "inkling": (runner.SCOPED_INKLING_SCHEMA, runner.SCOPED_INKLING_MODELS, runner.SCOPED_INKLING_RECEIPTS),
+        "v1686": (runner.SCOPED_V1686_SCHEMA, runner.SCOPED_V1686_MODELS, runner.SCOPED_V1686_RECEIPTS),
     }
     schema, models, required = scopes[campaign]
     data.update(schema=schema, models=sorted(models))

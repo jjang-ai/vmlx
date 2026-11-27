@@ -465,6 +465,11 @@ SCOPED_INKLING_MODELS = {
     "flash-next-native-mtp", "qwen27b-dflash2-jangh2",
     "minimax-m31-janght", "minicpm4-05b-bf16", "minicpm4-05b-jang6m",
 }
+SCOPED_V1686_SCHEMA = "vmlx-scoped-prepackage-v9"
+SCOPED_V1686_MODELS = {
+    "bonsai25-27b-ternary-jang", "holo4-27b-jangh2",
+    "inkling2-mini-janght42", "ernie55-flash-janght24",
+}
 # Keep the checkpoint's native runtime, transport, UI and resource owners explicit.
 # The wider DFlash/MTP campaign remains available as v5.
 SCOPED_RUNTIME_SCHEMA = "vmlx-scoped-prepackage-v5"
@@ -483,6 +488,9 @@ SCOPED_REQUIRED_RECEIPTS = {
 SCOPED_INKLING_RECEIPTS = SCOPED_REQUIRED_RECEIPTS | SCOPED_DFLASH_RECEIPTS | {
     "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
     "QUALITY_LIMITS",
+}
+SCOPED_V1686_RECEIPTS = SCOPED_REQUIRED_RECEIPTS | {
+    "DSPARK_DEFAULTS", "DSPARK_CACHE", "DSPARK_API", "DSPARK_NONREGRESSION",
 }
 SCOPED_HISTORICAL_EXCLUSIONS = {
     "historical-qwen36-physical-artifacts", "historical-zaya-physical-artifacts",
@@ -665,14 +673,15 @@ def validate_scoped_prepackage(
         if not isinstance(data, dict) or data.get("schema") not in {
             SCOPED_PREPACKAGE_SCHEMA, SCOPED_DFLASH_SCHEMA, SCOPED_DSPARK_SCHEMA,
             SCOPED_DSV41_SCHEMA, SCOPED_RUNTIME_SCHEMA, SCOPED_CHECKPOINT_SCHEMA,
-            SCOPED_RIPPLE_SCHEMA, SCOPED_INKLING_SCHEMA,
+            SCOPED_RIPPLE_SCHEMA, SCOPED_INKLING_SCHEMA, SCOPED_V1686_SCHEMA,
         }:
             raise ValueError("unsupported scoped prepackage schema")
         dsv41 = data["schema"] == SCOPED_DSV41_SCHEMA
         checkpoint = data["schema"] == SCOPED_CHECKPOINT_SCHEMA
         ripple = data["schema"] == SCOPED_RIPPLE_SCHEMA
         inkling = data["schema"] == SCOPED_INKLING_SCHEMA
-        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint or ripple or inkling
+        v1686 = data["schema"] == SCOPED_V1686_SCHEMA
+        runtime = data["schema"] == SCOPED_RUNTIME_SCHEMA or checkpoint or ripple or inkling or v1686
         dspark = data["schema"] == SCOPED_DSPARK_SCHEMA
         expanded = dspark or data["schema"] == SCOPED_DFLASH_SCHEMA
         required_models = SCOPED_DSPARK_MODELS if dspark else (SCOPED_DFLASH_MODELS if expanded else SCOPED_MODELS)
@@ -689,6 +698,8 @@ def validate_scoped_prepackage(
             required_models, required_receipts = SCOPED_RIPPLE_MODELS, SCOPED_RIPPLE_RECEIPTS
         if inkling:
             required_models, required_receipts = SCOPED_INKLING_MODELS, SCOPED_INKLING_RECEIPTS
+        if v1686:
+            required_models, required_receipts = SCOPED_V1686_MODELS, SCOPED_V1686_RECEIPTS
         if data.get("phase") != "prepackage" or data.get("version") != expected_version:
             raise ValueError("scoped phase/version mismatch")
         if set(data.get("models", [])) != required_models:
@@ -729,7 +740,7 @@ def validate_scoped_prepackage(
             result["quality_limits"] = _validate_dsv41_scope(scope, bound_file)
             result["retained_stream_capture_limits"] = scope["retained_stream_capture_limits"]
         if runtime:
-            _validate_runtime_scope(scope, bound_file, required_models, allow_chat_sse=inkling)
+            _validate_runtime_scope(scope, bound_file, required_models, allow_chat_sse=(inkling or v1686))
         if checkpoint:
             if scope.get("checkpoint_focus") != "deepseek-minimax-text-tools-cache-adaptive":
                 raise ValueError("checkpoint requires explicit text/tool/cache/adaptive scope")

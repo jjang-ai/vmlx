@@ -36,6 +36,7 @@
  */
 const ENGINE_FAMILY_TO_REGISTRY: Readonly<Record<string, string>> = Object.freeze({
   deepseek_v4: 'deepseek-v4',
+  deepseek_v4_1: 'deepseek-v4',
   zaya1_vl: 'zaya1-vl',
   bailing_hybrid: 'ling',
   qwen3_5: 'qwen3.5',

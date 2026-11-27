@@ -319,3 +319,72 @@ def test_inkling2_fused_looping_kernels_fp64_parity():
         mx.eval(q_r, k_r, v_r, r_r, q_g, k_g, v_g, r_g)
         for a, b in ((q_r, q_g), (k_r, k_g), (v_r, v_g), (r_r, r_g)):
             assert float(mx.max(mx.abs(a.astype(mx.float32) - b.astype(mx.float32))).item()) < 5e-2
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="Metal GPU required")
+def test_ernie55_phase2_fused_kernels_parity():
+    from vmlx_engine.models.ernie5_5_moe.kernels import (
+        ernie_multi_router_topk,
+        ernie_shared_situ_latent_norm_concat,
+        fused_situ,
+    )
+
+    mx.random.seed(2026)
+
+    # 1. ernie_multi_router_topk vs reference argpartition + normalize + scale
+    for norm in (True, False):
+        sc = mx.random.uniform(0.0, 2.0, (2, 7, 512), dtype=mx.float32)
+        bi = mx.random.normal((512,), dtype=mx.float32) * 0.25
+        sp = mx.random.uniform(0.5, 2.0, (512,), dtype=mx.float32)
+        ids_k, w_k = ernie_multi_router_topk(sc, bi, sp, top_k=10, normalize=norm)
+        ids_r = mx.argpartition(-(sc + bi), kth=9, axis=-1)[..., :10]
+        w_r = mx.take_along_axis(sc, ids_r, axis=-1)
+        if norm:
+            w_r = w_r / mx.maximum(w_r.sum(axis=-1, keepdims=True), 1e-20)
+        w_r = w_r * sp[ids_r]
+        mx.eval(ids_k, w_k, ids_r, w_r)
+        assert ids_k.shape == (2, 7, 10) and w_k.shape == (2, 7, 10)
+        for b in range(2):
+            for t in range(7):
+                sk = set(ids_k[b, t].tolist())
+                sr = set(ids_r[b, t].tolist())
+                assert sk == sr
+                mk = dict(zip(ids_k[b, t].tolist(), w_k[b, t].tolist()))
+                mr = dict(zip(ids_r[b, t].tolist(), w_r[b, t].tolist()))
+                assert max(abs(mk[e] - mr[e]) for e in sk) < 1e-6
+
+    # 2. ernie_shared_situ_latent_norm_concat vs reference fused_situ + rms_norm + concat
+    proj = mx.random.normal((1, 6, 5120)).astype(mx.bfloat16)
+    comb = mx.random.normal((1, 6, 1024)).astype(mx.bfloat16)
+    nw = mx.random.normal((1024,)).astype(mx.bfloat16)
+    got = ernie_shared_situ_latent_norm_concat(proj, comb, nw, 2048, 4.0, 25.0, 1e-6)
+    ref = mx.concatenate(
+        [fused_situ(proj[..., 2048:4096], proj[..., :2048], 4.0, 25.0), mx.fast.rms_norm(comb, nw, 1e-6)],
+        axis=-1,
+    )
+    mx.eval(got, ref)
+    assert got.shape == ref.shape == (1, 6, 3072)
+    assert float(mx.max(mx.abs(got.astype(mx.float32) - ref.astype(mx.float32))).item()) < 5e-2
+
+    # 3. Split-simdgroup JANGH gather_qmv (fused=True) exact bit-parity vs separate single projections
+    from vmlx_engine.jangh import kernels as JK
+    from vmlx_engine.jangt import moe_kernels as MK
+
+    for bits in (2, 3, 4):
+        E, N, K = 4, 36, 512  # N=36 tests both aligned tiles and tail-guarded rows
+        wg = mx.random.randint(0, 2**31 - 1, (E, N, K * bits // 32)).astype(mx.uint32)
+        wu = mx.random.randint(0, 2**31 - 1, (E, N, K * bits // 32)).astype(mx.uint32)
+        sg = (mx.random.normal((E, N)) * 0.1).astype(mx.float16)
+        su = (mx.random.normal((E, N)) * 0.1).astype(mx.float16)
+        xh = mx.random.normal((6, K)).astype(mx.float32)
+        idx = mx.array([0, 1, 2, 3, 1, 2, 0, 3, 2, 1, 0, 3], dtype=mx.uint32)
+        for yz in (False, True):
+            got_gu = JK.gather_qmv(
+                xh, wg, sg, None, idx, bits, x_per_dispatch=False,
+                packed_u=wu, scales_u=su, slot_fastest=yz, act="inkling", alpha=(4.0, 25.0),
+            )
+            g_s = JK.gather_qmv(xh, wg, sg, None, idx, bits, x_per_dispatch=False, slot_fastest=yz)
+            u_s = JK.gather_qmv(xh, wu, su, None, idx, bits, x_per_dispatch=False, slot_fastest=yz)
+            ref_gu = MK.act_mlx(g_s, u_s, "inkling", 0.0, (4.0, 25.0))
+            mx.eval(got_gu, ref_gu)
+            assert float(mx.max(mx.abs(got_gu - ref_gu)).item()) < 1e-5

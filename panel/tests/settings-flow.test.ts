@@ -2963,7 +2963,7 @@ describe('Default IP and New Settings', () => {
 
     it('openPangu defaults to exact typed memory plus prompt L2 while keeping unsafe paged/block lanes off', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
-        const familyStart = source.indexOf("} else if (detectedFamily === 'openpangu_v2')")
+        const familyStart = source.indexOf("} else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5')")
         const familyBlock = source.slice(familyStart, source.indexOf('return changed', familyStart))
         const launchStart = source.lastIndexOf('const exactTypedPromptDiskCache = usesExactTypedPromptDiskCache(detectedFamily, nativeGlmSsd)')
         expect(launchStart).toBeGreaterThanOrEqual(0)

@@ -90,6 +90,7 @@ class DraftAttention(nn.Module):
             config.max_position_embeddings,
         )
         self._qb_ogate_fused: Optional[nn.Module] = None
+        self._attn_sink_bf16: Optional[mx.array] = None
 
     def context_kv(self, context: mx.array, offset: int) -> mx.array:
         return self.rope(self.kv_norm(self.wkv(context))[:, None], offset)
@@ -113,8 +114,13 @@ class DraftAttention(nn.Module):
         queries = offset + mx.arange(L)
         keys = offset - context_kv.shape[2] + mx.arange(kv.shape[2])
         mask = keys[None] >= (queries[:, None] - self.config.sliding_window + 1)
+        sinks = (
+            self._attn_sink_bf16
+            if (self._attn_sink_bf16 is not None and q.dtype == mx.bfloat16)
+            else self.attn_sink.astype(q.dtype)
+        )
         out = mx.fast.scaled_dot_product_attention(
-            q, kv, kv, scale=self.scale, mask=mask, sinks=self.attn_sink.astype(q.dtype)
+            q, kv, kv, scale=self.scale, mask=mask, sinks=sinks
         )
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
@@ -301,8 +307,14 @@ class ErnieDSparkDrafter:
         query = mx.concatenate([anchor_arr.reshape(1, 1).astype(mx.int32), mask_tail], axis=1)
         hidden = target.model.embed_tokens(query)
         hidden = mx.broadcast_to(hidden[:, :, None], (*hidden.shape[:2], self.config.hc_mult, hidden.shape[-1]))
-        for block, kv in zip(self.layers, ctx_slices):
-            hidden = block(hidden, (kv, offset))
+        n_draft = len(self.layers)
+        if n_draft > 0:
+            h_attn, post_a, comb_a = self.layers[0].attn_hc.collapse_and_norm(hidden, self.layers[0].attn_norm)
+            for idx in range(n_draft):
+                nxt = self.layers[idx + 1] if (idx + 1) < n_draft else None
+                hidden, h_attn, post_a, comb_a = self.layers[idx].forward_fused(
+                    hidden, h_attn, post_a, comb_a, (ctx_slices[idx], offset), next_layer=nxt
+                )
         hidden = self.head(hidden)[:, :k, :]
         normed = mx.fast.rms_norm(hidden, self.norm, self.config.rms_norm_eps)
         base = ernie_lm_head_forward(

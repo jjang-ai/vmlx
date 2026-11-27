@@ -1072,7 +1072,7 @@ class TextModel(nn.Module):
             x, block_buf = self.layers[index](
                 x, blocks, visit_cache, messages, block_buf=block_buf
             )
-            if speculative_verify and (visit + 1) % 4 == 0:
+            if (visit + 1) % 4 == 0 and (speculative_verify or (not self.training and x.shape[1] <= 16)):
                 mx.async_eval(x)
         h = self.final_input(blocks, x, block_buf=block_buf)[..., 0, :]
         normalized = self.norm(h).astype(x.dtype)

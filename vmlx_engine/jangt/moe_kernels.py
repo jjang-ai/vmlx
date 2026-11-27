@@ -637,6 +637,70 @@ def _blocks(kin: int, body: str, advance: str) -> str:
 def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, limit: float = 0.0, rot_out: bool = False,
            guard: bool = True, yz: bool = False, act: str = "silu", alpha: float = 0.0):
     mu, isd = VL.code_stats(L, K); PL, adv, _ = _lane_geom(K, L)
+    # SwiGLU variant (act_value_metal): plain / clamped SiLU (GLM-5.3: silu(min(g, L)) * clip(u, -L, L), the JANGH tq_act
+    # rule; limit 0 = plain SwiGLU, N0.5) or SwiGLU-OAI (MiniMax-M3) or ERNIE/Inkling SiTU ("inkling").
+    clamp = act_clamp_metal(limit)
+    hval = act_value_metal(act, alpha)
+    ins = ["xr", "x", "idx", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
+    lim = act_tag(act, limit, alpha)
+    from vmlx_engine.jangh.kernels import swap_grid_yz
+
+    if not rot_out:
+        # Split-simdgroup fused gate+up: sg0 decodes gate (4 rows) and sg1 decodes up (same 4 rows),
+        # passing gate via 16-byte threadgroup memory. Halves live accumulators (8 vs 16 floats) and
+        # outlier registers, eliminating multi-row verify register spills while remaining bit-exact.
+        sg_body = f"""{_xload3(guard)}
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+        half2 aa = half2(0.0h);
+        const device uint32_t* wr = wp + r * {W}u; {_tdot3(K, L, "wr", "aa")}
+        a0[r] += float(aa.x) * xi; a1[r] += float(aa.y) * xi;
+      }}"""
+        outl_split_pre = "" if n_out == 0 else f"""
+    float oo[4] = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    if (lane < {n_out}u) {{ int c = ocol[(size_t)e * {n_out}u + lane];
+      if (c >= 0) {{ float xo = float(x[(size_t)t * {kin}u + uint(c)]);
+        {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+          float wov = (sgi == 0u) ? float(woutg[((size_t)e * {N}u + row0 + r) * {n_out}u + lane])
+                                  : float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]);
+          oo[r] = xo * wov; }} }} }}
+    {_UNROLL} for (uint r = 0; r < 4u; r++) oo[r] = simd_sum(oo[r]);"""
+        outl_split = "" if n_out == 0 else " v += oo[r];"
+        src = f"""
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    uint row0 = threadgroup_position_in_grid.y * 4u; uint ts = threadgroup_position_in_grid.z;
+    uint t = ts / kslots[0]; uint e = idx[ts];{outl_split_pre}
+    const uint lb = lane * {PL}u; const uint sh = lb & 31u; (void)sh;
+    const device uint32_t* wp = (sgi == 0u ? wg : wu) + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
+    const device float* xp = xr + (size_t)t * {kin}u + lane * 16u;
+    float a0[4], a1[4];
+    {_UNROLL} for (uint r = 0; r < 4u; r++) {{ a0[r] = 0.0f; a1[r] = 0.0f; }}
+    float se = 0.0f, so = 0.0f;
+    {_blocks(kin, sg_body, f"wp += {adv}u; xp += 512u;")}
+    float SE = simd_sum(se), SO = simd_sum(so);
+    threadgroup float g_sh[4];
+    float val[4];
+    {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+      float A0 = simd_sum(a0[r]), A1 = simd_sum(a1[r]);
+      if (lane == 0u) {{
+        float sc = (sgi == 0u) ? float(sg[(size_t)e * {N}u + row0 + r]) : float(su_[(size_t)e * {N}u + row0 + r]);
+        float v = ((A0 - {float(mu[0])}f * SE) * {float(isd[0])}f + (A1 - {float(mu[1])}f * SO) * {float(isd[1])}f) * sc;{outl_split}
+        val[r] = v;
+      }}
+    }}
+    if (sgi == 0u && lane == 0u) {{
+      {_UNROLL} for (uint r = 0; r < 4u; r++) g_sh[r] = val[r];
+    }}
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgi == 1u && lane == 0u) {{
+      {_UNROLL} for (uint r = 0; r < 4u; r++) {{
+        float g = g_sh[r], u = val[r];{clamp}
+        out[(size_t)ts * {N}u + row0 + r] = {odt}({hval});
+      }}
+    }}
+    """
+        return mx.fast.metal_kernel(name=f"jt4_gusg_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{'' if guard else '_ng'}{'_yz' if yz else ''}",
+                                    input_names=ins, output_names=["out"], source=swap_grid_yz(src) if yz else src)
+
     gu_body = f"""{_xload3(guard)}
       {_UNROLL} for (uint r = 0; r < 4u; r++) {{
         half2 ag = half2(0.0h), au = half2(0.0h);
@@ -654,28 +718,21 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
                                                    ou[r] = xo * float(woutu[((size_t)e * {N}u + row0 + r) * {n_out}u + lane]); }} }} }}
     {_UNROLL} for (uint r = 0; r < 4u; r++) {{ og[r] = simd_sum(og[r]); ou[r] = simd_sum(ou[r]); }}"""
     outl = "" if n_out == 0 else " g += og[r]; u += ou[r];"
-    # SwiGLU variant (act_value_metal): plain / clamped SiLU (GLM-5.3: silu(min(g, L)) * clip(u, -L, L), the JANGH tq_act
-    # rule; limit 0 = plain SwiGLU, N0.5) or SwiGLU-OAI (MiniMax-M3)
-    clamp = act_clamp_metal(limit)
-    hval = act_value_metal(act, alpha)
     # rot_out (2026-10-10): 8 simdgroups x 4 rows = 32 rows = one Hadamard-32 block per threadgroup; the activations are
     # rotated in the epilogue (the JANGH down unit's input basis), removing the separate h32_rows dispatch per MoE layer.
     # Same butterfly as jangh.kernels.h32_rows (5 shuffle stages, 1/sqrt(32)).
-    if rot_out:
-        store = f"hb[sgi * 4u + r] = {hval};"
-        epi = f"""
+    store = f"hb[sgi * 4u + r] = {hval};"
+    epi = f"""
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (sgi == 0u) {{
       float v = hb[lane];
       for (ushort hh = 1; hh < 32; hh <<= 1) {{ float o = simd_shuffle_xor(v, hh); v = (lane & hh) ? (o - v) : (v + o); }}
       out[(size_t)ts * {N}u + threadgroup_position_in_grid.y * 32u + lane] = {odt}(v * 0.17677669529663687f);
     }}"""
-    else:
-        store = f"out[(size_t)ts * {N}u + row0 + r] = {odt}({hval});"
-        epi = ""
     src = f"""
-    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;{"" if not rot_out else chr(10) + "    threadgroup float hb[32];"}
-    uint row0 = threadgroup_position_in_grid.y * {32 if rot_out else 8}u + sgi * 4u; uint ts = threadgroup_position_in_grid.z;
+    uint sgi = simdgroup_index_in_threadgroup, lane = thread_index_in_simdgroup;
+    threadgroup float hb[32];
+    uint row0 = threadgroup_position_in_grid.y * 32u + sgi * 4u; uint ts = threadgroup_position_in_grid.z;
     uint t = ts / kslots[0]; uint e = idx[ts];{outl_pre}
     const uint lb = lane * {PL}u; const uint sh = lb & 31u; (void)sh;
     const device uint32_t* wp = wg + ((size_t)e * {N}u + row0) * {W}u + (lb >> 5);
@@ -695,11 +752,7 @@ def _gu_v3(kin: int, N: int, K, L: int, n_out: int, W: int, xdt: str, odt: str, 
       }}
     }}{epi}
     """
-    ins = ["xr", "x", "idx", "kslots", "wg", "sg", "wu", "su_"] + (["ocol", "woutg", "woutu"] if n_out else [])
-    lim = act_tag(act, limit, alpha)
-    ro = "_ro" if rot_out else ""
-    from vmlx_engine.jangh.kernels import swap_grid_yz
-    return mx.fast.metal_kernel(name=f"jt4_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}{ro}{'' if guard else '_ng'}{'_yz' if yz else ''}",
+    return mx.fast.metal_kernel(name=f"jt4_gu_k{kin}_n{N}_K{_kname(K)}_o{n_out}_w{W}_{xdt}_{odt}{lim}_ro{'' if guard else '_ng'}{'_yz' if yz else ''}",
                                 input_names=ins, output_names=["out"], source=swap_grid_yz(src) if yz else src)
 
 
@@ -760,7 +813,7 @@ def gather_gate_up_swiglu_v3(xr, x, idx, U, out_dtype=mx.bfloat16, limit: float 
            U["up"]["packed"], U["up"]["scale"]] + ([U["gate"]["ocol"], U["gate"]["wout"], U["up"]["wout"]] if n_out else [])
     kern = _gu_v3(kin, N, U["K"], U["L"], n_out, W, _dt(x), {mx.bfloat16: "bfloat16_t", mx.float16: "half", mx.float32: "float"}[out_dtype], float(limit), rot_out,
                    _fp16_guard(), yz, check_act(act), act_param(act, alpha))
-    tiles = N // 32 if rot_out else N // 8
+    tiles = N // 32 if rot_out else N // 4
     grid = (256 if rot_out else 64, T * k, tiles) if yz else (256 if rot_out else 64, tiles, T * k)
     return kern(inputs=ins, grid=grid, threadgroup=(256 if rot_out else 64, 1, 1), output_shapes=[(T * k, N)], output_dtypes=[out_dtype])[0]
 

@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.6.85"
+__version__ = "1.6.86"
 
 # Shared text/VLM expert matmul correctness. Installation is allocation-free;
 # hardware qualification happens only on the worker's first affected call.

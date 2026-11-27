@@ -22,6 +22,8 @@ from .kernels import (
     ernie_lm_head_forward,
     ernie_mhc_collapse_norm,
     ernie_multi_router_scores,
+    ernie_multi_router_topk,
+    ernie_shared_situ_latent_norm_concat,
     fused_situ,
     round_e4m3_per128,
 )
@@ -217,12 +219,10 @@ class MultiRouter(nn.Module):
 
     def __call__(self, x: mx.array, bias: mx.array) -> Tuple[mx.array, mx.array]:
         scores = ernie_multi_router_scores(x, self.weight, self.weight_1)
-        ids = mx.argpartition(-(scores + bias), kth=self.top_k - 1, axis=-1)[..., : self.top_k]
-        ids = mx.stop_gradient(ids)
-        weights = mx.take_along_axis(scores, ids, axis=-1)
-        if self.normalize:
-            weights = weights / mx.maximum(weights.sum(axis=-1, keepdims=True), 1e-20)
-        return ids, weights * self.routed_scaling_factor_param[ids]
+        return ernie_multi_router_topk(
+            scores, bias, self.routed_scaling_factor_param,
+            top_k=self.top_k, normalize=self.normalize,
+        )
 
 
 class LatentMoE(nn.Module):
@@ -243,13 +243,14 @@ class LatentMoE(nn.Module):
     def __call__(self, x: mx.array, router_bias: Optional[mx.array] = None) -> mx.array:
         bias = self.e_score_correction_bias if router_bias is None else router_bias
         ids, weights = self.gate(x, bias)
+        proj = None
         if self._shared_fc1_fused is not None:
             proj = self._shared_fc1_fused(x)
             s1, s2 = self._shared_fc1_splits
-            sh_gate = proj[..., :s1]
-            sh_up = proj[..., s1:s2]
             latent = proj[..., s2:]
-            shared_mid = self.shared_experts.activation(sh_up, sh_gate)
+            shared_mid = None if self._shared_fc2_fused is not None else self.shared_experts.activation(
+                proj[..., s1:s2], proj[..., :s1]
+            )
         else:
             latent = self.fc1_latent_proj(x)
             shared_mid = None
@@ -260,9 +261,21 @@ class LatentMoE(nn.Module):
             outputs = self.switch_mlp(latent, ids)
             combined = (outputs.astype(mx.float32) * weights[..., None]).sum(axis=-2).astype(x.dtype)
 
-        normed_combined = self.latent_norm(combined)
-        if self._shared_fc2_fused is not None and shared_mid is not None:
+        if self._shared_fc2_fused is not None and proj is not None:
+            s1, s2 = self._shared_fc1_splits
+            if s2 == 2 * s1:
+                fc2_in = ernie_shared_situ_latent_norm_concat(
+                    proj, combined, self.latent_norm.weight, s1,
+                    beta=self.shared_experts.activation.beta,
+                    linear_beta=self.shared_experts.activation.linear_beta,
+                    norm_eps=self.latent_norm.eps,
+                )
+                return self._shared_fc2_fused(fc2_in)
+            shared_mid = self.shared_experts.activation(proj[..., s1:s2], proj[..., :s1])
+            normed_combined = self.latent_norm(combined)
             return self._shared_fc2_fused(mx.concatenate([shared_mid, normed_combined], axis=-1))
+
+        normed_combined = self.latent_norm(combined)
         shared_out = (
             self.shared_experts.down_proj(shared_mid)
             if shared_mid is not None
@@ -367,7 +380,7 @@ class HCACompressor(nn.Module):
             self.wkv = None
             self.wgate = None
 
-    def __call__(self, x: mx.array, pool_cache: Optional[ErniePoolingCache], offset: int) -> mx.array:
+    def __call__(self, x: mx.array, pool_cache: Optional[ErniePoolingCache], offset: int) -> Optional[mx.array]:
         B = x.shape[0]
         if self._w_cat is not None:
             both = bf16_linear_fp32(x, self._w_cat)
@@ -379,18 +392,19 @@ class HCACompressor(nn.Module):
 
         if pool_cache is None:
             usable = (kv.shape[1] // self.compress_ratio) * self.compress_ratio
+            if usable == 0:
+                return None
             kv, gate, base = kv[:, :usable], gate[:, :usable], offset
         else:
-            kv, gate, base = pool_cache.accumulate_windows(kv, gate, offset)
+            kv, gate, base = pool_cache.accumulate_windows_fast(kv, gate, offset)
+            if kv is None:
+                return pool_cache.fetch_pooled()
 
-        if kv.shape[1] == 0:
-            pooled = mx.zeros((B, 0, self.head_dim), dtype=x.dtype)
-        else:
-            kv = kv.reshape(B, -1, self.compress_ratio, self.head_dim)
-            gate = gate.reshape(B, -1, self.compress_ratio, self.head_dim)
-            weights = mx.softmax(gate + self.ape.astype(mx.float32), axis=-2, precise=True)
-            pooled = self.norm((kv * weights).sum(axis=-2))
-            pooled = self.rope(pooled[:, None], offset=base).squeeze(1).astype(x.dtype)
+        kv = kv.reshape(B, -1, self.compress_ratio, self.head_dim)
+        gate = gate.reshape(B, -1, self.compress_ratio, self.head_dim)
+        weights = mx.softmax(gate + self.ape.astype(mx.float32), axis=-2, precise=True)
+        pooled = self.norm((kv * weights).sum(axis=-2))
+        pooled = self.rope(pooled[:, None], offset=base).squeeze(1).astype(x.dtype)
         return pool_cache.update_and_fetch(pooled) if pool_cache is not None else pooled
 
 
@@ -427,9 +441,10 @@ class HCAAttention(nn.Module):
             config.max_position_embeddings,
         )
         self.compressor = HCACompressor(config, self.compress_ratio, self.head_dim)
-        # Fused sibling MXFP8 projections installed by prepare_runtime()
+        # Fused sibling MXFP8 projections & pre-cast BF16 sinks installed by prepare_runtime()
         self._qa_kv_fused: Optional[nn.Module] = None
         self._qb_ogate_fused: Optional[nn.Module] = None
+        self._attn_sink_bf16: Optional[mx.array] = None
 
     def __call__(self, x: mx.array, cache: Optional[ErnieLayerCache] = None) -> mx.array:
         B, L, _ = x.shape
@@ -463,13 +478,17 @@ class HCAAttention(nn.Module):
 
         S_local = kv.shape[2]
         pooled = self.compressor(x, pool, offset)
-        sinks = self.attn_sink.astype(q.dtype)
-        # For long prefill (L >= 512), run HCA attention in 256-token banded strips so
-        # each strip only attends to <= 384 local keys + pooled windows instead of O(L^2).
+        has_pool = pooled is not None and pooled.shape[1] > 0
+        sinks = (
+            self._attn_sink_bf16
+            if (self._attn_sink_bf16 is not None and q.dtype == mx.bfloat16)
+            else self.attn_sink.astype(q.dtype)
+        )
+        # For long prefill (L >= 512), run HCA attention in 192-token banded strips so
+        # each strip only attends to <= 320 local keys + pooled windows instead of O(L^2).
         if L >= 512:
-            strip = 256
+            strip = 192
             win = self.config.sliding_window
-            has_pool = pooled.shape[1] > 0
             pool_kv = pooled[:, None] if has_pool else None
             prefix_local = S_local - L
             outs = []
@@ -494,7 +513,7 @@ class HCAAttention(nn.Module):
             out = mx.concatenate(outs, axis=2)
         else:
             mask = _create_sliding_causal_mask(B, L, S_local, self.config.sliding_window)
-            if pooled.shape[1] > 0:
+            if has_pool:
                 if pool is not None:
                     pool_mask = pool.make_mask(L, offset)
                 else:
@@ -601,9 +620,10 @@ class MLAAttention(nn.Module):
         self.indexer = Indexer(config)
         self.attn_sink = mx.zeros((self.heads,), dtype=mx.float32)
         self.rope = nn.RoPE(self.rope_dim, traditional=True, base=config.rope_theta)
-        # Fused sibling MXFP8 projections installed by prepare_runtime()
+        # Fused sibling MXFP8 projections & pre-cast BF16 sinks installed by prepare_runtime()
         self._qa_kva_fused: Optional[nn.Module] = None
         self._qb_og_idx_fused: Optional[nn.Module] = None
+        self._attn_sink_bf16: Optional[mx.array] = None
 
     def __call__(self, x: mx.array, cache: Optional[ErnieLayerCache] = None) -> mx.array:
         B, L, _ = x.shape
@@ -650,7 +670,11 @@ class MLAAttention(nn.Module):
             k_pe = mx.take_along_axis(k_pe, take, axis=2)
             mask = mx.take_along_axis(mask, indices, axis=-1)
 
-        sinks = self.attn_sink.astype(q_nope.dtype)
+        sinks = (
+            self._attn_sink_bf16
+            if (self._attn_sink_bf16 is not None and q_nope.dtype == mx.bfloat16)
+            else self.attn_sink.astype(q_nope.dtype)
+        )
         # Keep absorbed latent MLA for decode (L == 1) and DSpark verify (1 < L <= 16).
         # For long prefill (L >= 512), strip queries in 512-token chunks so `pe_scores`
         # never materializes an O(L*S) [64, L, S] tensor (8x-16x lower RAM + 2x faster!).
@@ -787,6 +811,8 @@ class ErnieModel(nn.Module):
                 )
                 if (idx + 1) in tap_set:
                     taps.append(mx.mean(h.astype(mx.float32), axis=-2).astype(h.dtype))
+                if (idx + 1) % 4 == 0 and nxt is not None and h.shape[1] <= 16:
+                    mx.async_eval(h, h_attn, post_a, comb_a)
         if tail_only and h.shape[1] > 1:
             h = h[:, -1:, :, :]
         out = self.norm(self.hc_head(h))
