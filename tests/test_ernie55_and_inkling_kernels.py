@@ -388,3 +388,19 @@ def test_ernie55_phase2_fused_kernels_parity():
             ref_gu = MK.act_mlx(g_s, u_s, "inkling", 0.0, (4.0, 25.0))
             mx.eval(got_gu, ref_gu)
             assert float(mx.max(mx.abs(got_gu - ref_gu)).item()) < 1e-5
+
+
+def test_attach_text_lane_idempotent(monkeypatch):
+    """Multi-stage loaders (tokenizer + BatchedEngine) must never double-load multi-GB DSpark weights."""
+    from types import SimpleNamespace
+    from vmlx_engine.dspark import runtime as dspark_rt
+
+    sentinel = {"drafter": object(), "target": object(), "model_type": "ernie5_5_moe"}
+    model = SimpleNamespace(_vmlx_dspark_runtime=sentinel)
+    called = []
+    monkeypatch.setattr(dspark_rt, "load_dspark_runtime", lambda *a, **kw: called.append((a, kw)) or {"drafter": object()})
+
+    got = dspark_rt.attach_text_lane(model, "/nonexistent/ernie")
+    assert got is sentinel
+    assert called == []
+

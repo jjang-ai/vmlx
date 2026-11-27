@@ -598,6 +598,8 @@ def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) 
 
     model.eval()
     prep = prepare_ernie_runtime(model.layers)
+    gc.collect()
+    mx.clear_cache()
     logger.info(
         "ERNIE 5.5 Flash loaded: mxfp8_linears=%d saved=%.2f GiB prep=%s active=%.2f GiB",
         total_mxfp8, total_saved / 2**30, prep, mx.get_active_memory() / 2**30,

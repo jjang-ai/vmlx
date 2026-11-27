@@ -224,6 +224,10 @@ class ErnieDSparkDrafter:
             self.head.parameters(), self.feature_affine, self.feature_norm,
             self.norm, self.markov_embedding, self.markov_head, self.confidence,
         )
+        del head
+        import gc
+        gc.collect()
+        mx.clear_cache()
         # Per-session sliding context KV buffers ([1, 1, S_ctx, 512] per draft layer)
         self._ctx_kv: List[Optional[mx.array]] = [None] * len(self.layers)
         self._ctx_offset: int = 0

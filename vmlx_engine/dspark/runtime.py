@@ -200,9 +200,13 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
 
 
 def attach_text_lane(model: Any, model_name: str | Path) -> dict | None:
-    """Attach the DSpark runtime of a text-lane bundle (MiniMax-M3 / M3.1 shipping ``dspark/``) to the loaded model as
-    ``model._vmlx_dspark_runtime`` (outside the module's parameter tree), where the scheduler picks the DSpark text
-    generator from. A missing or unusable drafter leaves the model on plain decoding (logged, never an error)."""
+    """Attach the DSpark runtime of a text-lane bundle (MiniMax-M3 / M3.1 / ERNIE 5.5 shipping ``dspark/``) to the
+    loaded model as ``model._vmlx_dspark_runtime`` (outside the module's parameter tree), where the scheduler picks the
+    DSpark text generator from. Idempotent if a drafter is already attached so multi-stage loaders never double-load
+    multi-GB drafter weights. A missing or unusable drafter leaves the model on plain decoding (logged, never an error)."""
+    existing = getattr(model, "_vmlx_dspark_runtime", None)
+    if isinstance(existing, dict) and existing.get("drafter") is not None:
+        return existing
     try:
         from ..utils.model_inspector import resolve_model_path
 
