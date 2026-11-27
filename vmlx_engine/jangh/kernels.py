@@ -1169,7 +1169,7 @@ def gather_qmv_weighted_down(h, packed, scales, cb_unused, idx, weights, bits, o
     N = packed.shape[1]
     yz = bool(slot_fastest) and T > 1 and slot_fastest_enabled()
     mode = _tail_mode(K, N) if TAIL_SPLIT else ("al" if (K % BLOCK == 0 and N % (NSG * RPS) == 0) else "gd")
-    if T <= 4 and kt >= 8 and N % RPS == 0 and (kt % 5 == 0 or kt % 4 == 0):
+    if T <= 8 and kt >= 8 and N % RPS == 0 and (kt % 5 == 0 or kt % 4 == 0):
         p_sg = 5 if (kt % 5 == 0) else 4
         k = _qmv_weighted_down_par_kernel(bits, _TNAME[out_dtype], _TNAME[h.dtype], mode, p_sg, rotate, yz)
         tiles = N // RPS

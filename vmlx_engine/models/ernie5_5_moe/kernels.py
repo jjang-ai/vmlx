@@ -1211,8 +1211,9 @@ def _build_e4m3_lut_header() -> str:
 _MXFP8_LUT_HEADER = _build_e4m3_lut_header()
 
 _MXFP8_GEMV_4SG_SRC = r"""
-  // High-occupancy M5 Ultra MXFP8 GEMV: 1 lane = one 32-elem MXFP8 block (8x uint32 + 1 E8M0 scale!).
-  // 4 simdgroups (128 threads) = 4096 elems/step; 1 output row/TG -> saturates all 80 Ultra cores!
+  // High-occupancy M5 Ultra/Max MXFP8 GEMV (small N < 2048, K % 4096 == 0):
+  // 1 lane = one 32-elem MXFP8 block; 4 simdgroups (128 threads) = 4096 elems/step; 1 row/TG.
+  // Shares weight loads across ALL T=1..8 verify rows (identical FP32 reduction order for T=1..8!).
   const uint sgi  = simdgroup_index_in_threadgroup;
   const uint lane = thread_index_in_simdgroup;
   const uint row  = threadgroup_position_in_grid.x;
@@ -1269,6 +1270,98 @@ _MXFP8_GEMV_4SG_SRC = r"""
   }
 """
 
+_MXFP8_GEMV_1SG_SRC = r"""
+  // High-throughput barrier-free MXFP8 multi-row GEMV (N >= 2048 or K == 1024, K % 1024 == 0):
+  // 1 simdgroup = 2 output rows (reuses x across 2 rows!), 1 lane = 32-elem MXFP8 block (1024 elems/step!).
+  // 4 simdgroups (128 threads) per TG = 8 output rows/TG -> ZERO TG barriers, flat T=1..8 time!
+  const uint sgi  = simdgroup_index_in_threadgroup;
+  const uint lane = thread_index_in_simdgroup;
+  const uint grp  = threadgroup_position_in_grid.y;   // 0 for 2D, 0..G-1 for 3D MultiLinear!
+  const uint row0 = threadgroup_position_in_grid.x * 8u + sgi * 2u;
+  if (row0 >= uint(N)) return;
+
+  float acc0[ROWS], acc1[ROWS];
+  #pragma unroll
+  for (uint t = 0; t < uint(ROWS); t++) { acc0[t] = 0.0f; acc1[t] = 0.0f; }
+
+  const bool has1 = (row0 + 1u) < uint(N);
+  const size_t g_w_off = size_t(grp) * uint(N) * (uint(K) / 4u);
+  const size_t g_s_off = size_t(grp) * uint(N) * (uint(K) / 32u);
+  const size_t g_x_off = size_t(grp) * uint(ROWS) * uint(K);
+  const device uint32_t* w0r = w + g_w_off + size_t(row0) * (uint(K) / 4u);
+  const device uint32_t* w1r = w0r + (uint(K) / 4u);
+  const device uint8_t*  s0r = scales + g_s_off + size_t(row0) * (uint(K) / 32u);
+  const device uint8_t*  s1r = s0r + (uint(K) / 32u);
+
+  for (uint blk = lane; blk < (uint(K) / 32u); blk += 32u) {
+    const uint k0 = blk * 32u;
+    // Load x[t] ONCE and reuse across BOTH output rows (halves x reads)!
+    float4 xv[ROWS][8];
+    #pragma unroll
+    for (uint t = 0; t < uint(ROWS); t++) {
+      const device vec<T, 4>* xp = (const device vec<T, 4>*)(x + g_x_off + size_t(t) * uint(K) + k0);
+      #pragma unroll
+      for (uint j = 0; j < 8u; j++) xv[t][j] = float4(xp[j]);
+    }
+    // Row 0
+    {
+      const float sf = as_type<float>(uint(s0r[blk]) << 23u);
+      const device uint4* wp = (const device uint4*)(w0r + blk * 8u);
+      uint4 p0 = wp[0], p1 = wp[1];
+      uint words[8] = {p0.x, p0.y, p0.z, p0.w, p1.x, p1.y, p1.z, p1.w};
+      float4 wf[8];
+      #pragma unroll
+      for (uint j = 0; j < 8u; j++) {
+        uint u = words[j];
+        wf[j] = float4(
+          float(E4M3_LUT[u & 255u]), float(E4M3_LUT[(u >> 8u) & 255u]),
+          float(E4M3_LUT[(u >> 16u) & 255u]), float(E4M3_LUT[(u >> 24u) & 255u])
+        );
+      }
+      #pragma unroll
+      for (uint t = 0; t < uint(ROWS); t++) {
+        float d = 0.0f;
+        #pragma unroll
+        for (uint j = 0; j < 8u; j++) d += dot(xv[t][j], wf[j]);
+        acc0[t] += d * sf;
+      }
+    }
+    // Row 1
+    if (has1) {
+      const float sf = as_type<float>(uint(s1r[blk]) << 23u);
+      const device uint4* wp = (const device uint4*)(w1r + blk * 8u);
+      uint4 p0 = wp[0], p1 = wp[1];
+      uint words[8] = {p0.x, p0.y, p0.z, p0.w, p1.x, p1.y, p1.z, p1.w};
+      float4 wf[8];
+      #pragma unroll
+      for (uint j = 0; j < 8u; j++) {
+        uint u = words[j];
+        wf[j] = float4(
+          float(E4M3_LUT[u & 255u]), float(E4M3_LUT[(u >> 8u) & 255u]),
+          float(E4M3_LUT[(u >> 16u) & 255u]), float(E4M3_LUT[(u >> 24u) & 255u])
+        );
+      }
+      #pragma unroll
+      for (uint t = 0; t < uint(ROWS); t++) {
+        float d = 0.0f;
+        #pragma unroll
+        for (uint j = 0; j < 8u; j++) d += dot(xv[t][j], wf[j]);
+        acc1[t] += d * sf;
+      }
+    }
+  }
+  const size_t g_o_off = size_t(grp) * uint(ROWS) * uint(N);
+  #pragma unroll
+  for (uint t = 0; t < uint(ROWS); t++) {
+    float s0 = simd_sum(acc0[t]);
+    float s1 = simd_sum(acc1[t]);
+    if (lane == 0u) {
+      out[g_o_off + size_t(t) * uint(N) + row0] = T(s0);
+      if (has1) out[g_o_off + size_t(t) * uint(N) + row0 + 1u] = T(s1);
+    }
+  }
+"""
+
 
 @lru_cache(maxsize=32)
 def _mxfp8_gemv_4sg_kernel(dt_name: str, rows: int, N: int, K: int):
@@ -1282,8 +1375,20 @@ def _mxfp8_gemv_4sg_kernel(dt_name: str, rows: int, N: int, K: int):
     )
 
 
+@lru_cache(maxsize=64)
+def _mxfp8_gemv_1sg_kernel(dt_name: str, rows: int, N: int, K: int):
+    return mx.fast.metal_kernel(
+        name=f"ernie_mxfp8_mv1sg_{dt_name}_r{rows}_n{N}_k{K}",
+        input_names=["x", "w", "scales"],
+        output_names=["out"],
+        header=_MXFP8_LUT_HEADER,
+        source=_MXFP8_GEMV_1SG_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
 def mxfp8_linear_fast(linear: Any, x: mx.array) -> mx.array:
-    """High-occupancy M5 Ultra MXFP8 GEMV for decode/small verify (1 <= T <= 4, K % 4096 == 0, N <= 8192)."""
+    """High-occupancy multi-row MXFP8 GEMV (shares weight loads across T=1..8 verify rows!)."""
     if (
         getattr(linear, "mode", None) == "mxfp8"
         and getattr(linear, "bits", None) == 8
@@ -1293,20 +1398,56 @@ def mxfp8_linear_fast(linear: Any, x: mx.array) -> mx.array:
         K = x.shape[-1]
         N = int(linear.weight.shape[0])
         T = x.size // K
-        if 1 <= T <= 4 and K % 4096 == 0 and N <= 8192:
+        if 1 <= T <= 15 and K % 1024 == 0:
             lead = x.shape[:-1]
             x2 = x.reshape(T, K)
             dt_name = "bf16" if x.dtype == mx.bfloat16 else "f16"
-            out = _mxfp8_gemv_4sg_kernel(dt_name, T, N, K)(
-                inputs=[x2, linear.weight, linear.scales],
+            if T <= 8:
+                if N < 2048 and K % 4096 == 0:
+                    out = _mxfp8_gemv_4sg_kernel(dt_name, T, N, K)(
+                        inputs=[x2, linear.weight, linear.scales],
+                        template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
+                        grid=(N * 128, 1, 1),
+                        threadgroup=(128, 1, 1),
+                        output_shapes=[(T, N)],
+                        output_dtypes=[x.dtype],
+                    )[0]
+                else:
+                    n_tg = (N + 7) // 8
+                    out = _mxfp8_gemv_1sg_kernel(dt_name, T, N, K)(
+                        inputs=[x2, linear.weight, linear.scales],
+                        template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
+                        grid=(n_tg * 128, 1, 1),
+                        threadgroup=(128, 1, 1),
+                        output_shapes=[(T, N)],
+                        output_dtypes=[x.dtype],
+                    )[0]
+                return out.reshape(*lead, N)
+            parts = [mxfp8_linear_fast(linear, x2[i : i + 8]) for i in range(0, T, 8)]
+            return mx.concatenate(parts, axis=0).reshape(*lead, N)
+    return linear(x)
+
+
+def mxfp8_multi_linear_fast(x: mx.array, weight: mx.array, scales: mx.array) -> mx.array:
+    """3-D grouped MXFP8 multi-row GEMV (`wo_a`: [B=1, G, T, K] @ [G, N, K/4]) sharing weights for T=1..8."""
+    if x.ndim == 4 and x.shape[0] == 1 and x.dtype in (mx.bfloat16, mx.float16):
+        _, G, T, K = x.shape
+        N = int(weight.shape[1])
+        if 1 <= T <= 8 and K % 1024 == 0:
+            dt_name = "bf16" if x.dtype == mx.bfloat16 else "f16"
+            n_tg = (N + 7) // 8
+            out = _mxfp8_gemv_1sg_kernel(dt_name, T, N, K)(
+                inputs=[x[0], weight, scales],
                 template=[("T", x.dtype), ("ROWS", T), ("N", N), ("K", K)],
-                grid=(N * 128, 1, 1),
+                grid=(n_tg * 128, G, 1),
                 threadgroup=(128, 1, 1),
-                output_shapes=[(T, N)],
+                output_shapes=[(G, T, N)],
                 output_dtypes=[x.dtype],
             )[0]
-            return out.reshape(*lead, N)
-    return linear(x)
+            return out[None]
+    return mx.quantized_matmul(
+        x, weight, scales=scales, transpose=True, group_size=32, bits=8, mode="mxfp8"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from .kernels import (
     ernie_multi_router_scores,
     fused_situ,
     mxfp8_linear_fast,
+    mxfp8_multi_linear_fast,
     round_e4m3_per128,
 )
 
@@ -105,10 +106,7 @@ class MXFP8MultiLinear(nn.Module):
         self.freeze()
 
     def __call__(self, x: mx.array) -> mx.array:
-        return mx.quantized_matmul(
-            x, self.weight, scales=self.scales,
-            transpose=True, group_size=32, bits=8, mode="mxfp8",
-        )
+        return mxfp8_multi_linear_fast(x, self.weight, self.scales)
 
 
 class ErnieRoPE(nn.Module):
@@ -447,7 +445,7 @@ class HCAAttention(nn.Module):
             kv_raw = self.wkv(x)
 
         if self._qb_ogate_fused is not None:
-            qb_og = self._qb_ogate_fused(qr)
+            qb_og = mxfp8_linear_fast(self._qb_ogate_fused, qr)
             q_flat = qb_og[..., : self.n_heads * self.head_dim]
             ogate = qb_og[..., self.n_heads * self.head_dim :]
         else:
@@ -613,7 +611,7 @@ class MLAAttention(nn.Module):
         offset = int(latent_cache.offset) if latent_cache is not None else 0
 
         if self._qa_kva_fused is not None:
-            qkva = self._qa_kva_fused(x)
+            qkva = mxfp8_linear_fast(self._qa_kva_fused, x)
             q_rank = self.q_a_layernorm.weight.shape[0]
             qr = self.q_a_layernorm(qkva[..., :q_rank])
             kva = qkva[..., q_rank:]
@@ -622,7 +620,7 @@ class MLAAttention(nn.Module):
             kva = self.kv_a_proj_with_mqa(x)
 
         if self._qb_og_idx_fused is not None:
-            qoi = self._qb_og_idx_fused(qr)
+            qoi = mxfp8_linear_fast(self._qb_og_idx_fused, qr)
             s_qb = self.heads * (self.nope + self.rope_dim)
             s_og = self.heads * self.value_dim
             q_raw = qoi[..., :s_qb]
@@ -671,7 +669,7 @@ class MLAAttention(nn.Module):
         if use_absorbed:
             out = self.unembed_out(out)
         out = self.vha(out.transpose(0, 2, 1, 3)).flatten(-2)
-        return self.wo_b(out * mx.sigmoid(ogate))
+        return mxfp8_linear_fast(self.wo_b, out * mx.sigmoid(ogate))
 
 
 class DecoderLayer(nn.Module):

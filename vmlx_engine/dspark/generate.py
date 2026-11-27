@@ -230,12 +230,17 @@ class ARFallback:
         return k
 
     def record_draft(self, tokens: int, seconds: float, rows: Optional[int] = None) -> None:
-        if rows is not None:
-            prev = self.width_seconds.get(rows)
-            self.width_seconds[rows] = seconds if prev is None else prev + self.alpha * (seconds - prev)
         self.rounds += 1
         self.rounds_since_ar += 1
         self.since_probe = 0
+        expected = self.round_seconds(rows) if rows is not None else (
+            self.ar_seconds * (1.0 + self.prior_fixed) if self.ar_seconds is not None else None
+        )
+        if expected is not None and seconds > max(0.25, self.ar_outlier_ratio * expected):
+            return
+        if rows is not None:
+            prev = self.width_seconds.get(rows)
+            self.width_seconds[rows] = seconds if prev is None else prev + self.alpha * (seconds - prev)
         rate = tokens / max(seconds, 1e-9)
         self.draft_rate = rate if self.draft_rate is None else self.draft_rate + self.alpha * (rate - self.draft_rate)
 
@@ -271,6 +276,14 @@ class ARFallback:
         reprobe, self._reprobe = self._reprobe, False
         if self.ar_seconds is None:
             self.ar_seconds = per_step
+            # If Round 1 paid cold Metal shader JIT compilation before AR was seeded,
+            # discard that poisoned cold sample so the next round measures warm drafting.
+            if self.rounds == 1 and len(self.width_seconds) == 1:
+                r0, s0 = next(iter(self.width_seconds.items()))
+                est0 = per_step * (1.0 + self.prior_fixed + self.prior_per_row * max(r0 - 1, 1))
+                if s0 > max(0.25, self.ar_outlier_ratio * est0):
+                    self.width_seconds.clear()
+                    self.draft_rate = None
         elif reprobe:
             self.ar_seconds = 0.3 * self.ar_seconds + 0.7 * per_step
         elif self.ar_outlier_ratio > 0 and per_step > self.ar_outlier_ratio * self.ar_seconds:

@@ -828,7 +828,7 @@ def gather_down_weighted_v3(hr, h, idx, rw, U, slot_fastest: bool = False):
     yz = bool(slot_fastest) and T > 1 and slot_fastest_enabled()
     ins = [hr, h, idx.reshape(-1).astype(mx.uint32), rw.reshape(-1).astype(mx.float32), U["down"]["packed"], U["down"]["scale"]] + \
           ([U["down"]["ocol"], U["down"]["wout"]] if n_out else [])
-    if T <= 4 and k >= 8 and N % 4 == 0 and (k % 5 == 0 or k % 4 == 0):
+    if T <= 8 and k >= 8 and N % 4 == 0 and (k % 5 == 0 or k % 4 == 0):
         p_sg = 5 if (k % 5 == 0) else 4
         kern = _down_v3_par(kin, N, U["K_dn"], U["L"], n_out, k, p_sg, W, _dt(h), _fp16_guard(), yz)
         tg = p_sg * 32

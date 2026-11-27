@@ -146,7 +146,7 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
             "max_draft": max_draft,
             "fixed_width": fixed_width,
             "grow_draft_ladder": grow_draft_ladder,
-            "cost_per_row": float(spec.get("cost_per_row", 0.08)),
+            "cost_per_row": float(spec.get("cost_per_row", 0.12)),
             "model_type": model_type,
         }
     if not (drafter_dir / "config.json").is_file():
