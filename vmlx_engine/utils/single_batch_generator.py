@@ -512,6 +512,16 @@ class SingleBatchGenerator:
                 )
             except Exception:
                 return None
+        if type(cache_obj).__name__ == "ErnieLayerCache":
+            try:
+                from ..models.ernie5_5_moe.cache import clone_ernie_layer_cache
+
+                return clone_ernie_layer_cache(
+                    cache_obj,
+                    copy_fn=cls._clone_array,
+                )
+            except Exception:
+                return None
         if type(cache_obj).__name__ in {"Glm5KDACache", "Glm5MLACache"}:
             try:
                 from ..models.glm5_next.glm5_next import (
@@ -560,6 +570,7 @@ class SingleBatchGenerator:
         return type(cache_obj).__name__ in {
             "DeepseekV4Cache",
             "DeepseekV41Cache",
+            "ErnieLayerCache",
             "Glm5KDACache",
             "Glm5MLACache",
             "MiniMaxM3SparseCache",

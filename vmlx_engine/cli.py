@@ -1466,7 +1466,21 @@ def serve_command(args):
         _op_cfgp = _op_os.path.join(getattr(args, "model", "") or "", "config.json")
         if _op_os.path.isfile(_op_cfgp):
             _op_c = _op_json.load(open(_op_cfgp))
-            if str(_op_c.get("model_type", "")).lower() == "openpangu_v2":
+            if str(_op_c.get("model_type", "")).lower() == "ernie5_5_moe":
+                from .models.ernie5_5_moe.cache import register_ernie_cache_class
+                register_ernie_cache_class()
+                _apply_openpangu_cache_policy(args, logger)
+                args.enable_jit = False
+                if getattr(args, "is_mllm", False):
+                    args.is_mllm = False
+                logger.info(
+                    "ERNIE 5.5 Flash AUTODETECTED (ernie5_5_moe) -> auto-settings: "
+                    "cache=exact-typed HCA+MLA (~8.7 KB/tok) RAM+SSD, tq_kv=OFF, "
+                    "tool_parser=%s, reasoning_parser=%s, dspark=auto",
+                    getattr(args, "tool_call_parser", None) or "ernie(auto)",
+                    getattr(args, "reasoning_parser", None) or "ernie(auto)",
+                )
+            elif str(_op_c.get("model_type", "")).lower() == "openpangu_v2":
                 _apply_openpangu_cache_policy(args, logger)
                 _op_jit_forced_off = bool(getattr(args, "enable_jit", False))
                 if _op_jit_forced_off:

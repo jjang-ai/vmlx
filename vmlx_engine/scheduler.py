@@ -862,6 +862,7 @@ class Scheduler:
 
         self._model_type_for_runtime = self._detect_model_type_for_runtime(model)
         self._uses_openpangu_cache = self._model_type_for_runtime == "openpangu_v2"
+        self._uses_ernie55_cache = self._model_type_for_runtime == "ernie5_5_moe"
         self._uses_glm5_next_cache = (
             self._model_type_for_runtime in ("glm5_next", "glm5_next_text")
         )
@@ -888,6 +889,25 @@ class Scheduler:
                 logger.info(
                     "glm5_next exact typed prefix cache enabled: N-1 "
                     "snapshots round-trip KDA conv/recurrent and MLA/DSA state"
+                )
+        if self._uses_ernie55_cache:
+            # ERNIE 5.5 Flash uses native HCA (128-local + 128x compressed pool) + MLA/DSA
+            # caches (~8.7 KB/tok = ~8.7 GB at 1M context). Generic paged/block splitting
+            # cannot reconstruct path-dependent HCA pooling windows; use exact typed RAM/SSD
+            # prompt-cache persistence with detached CPU-copy saves (keeping Metal RAM flat).
+            if self.config.use_paged_cache or self.config.enable_block_disk_cache:
+                logger.warning(
+                    "ernie5_5_moe native HCA/MLA cache does not support generic "
+                    "paged/block reuse; disabling paged and block-disk while "
+                    "preserving exact typed memory/prompt-disk SSD reuse"
+                )
+            self.config.use_paged_cache = False
+            self.config.enable_block_disk_cache = False
+            self.config.use_memory_aware_cache = True
+            if self.config.enable_prefix_cache:
+                logger.info(
+                    "ernie5_5_moe exact typed prefix cache enabled: snapshots "
+                    "round-trip HCA rotating/pooling and MLA/DSA state to RAM and SSD"
                 )
         if self._uses_openpangu_cache:
             # OpenPanguV2LayerCache contains path-dependent convolution state in
@@ -1044,7 +1064,7 @@ class Scheduler:
         # BatchKVCache offsets are arrays and fail mx.arange during prefill.
         _single_batch_native_family = (
             self._model_type_for_runtime
-            in {"glm5_next", "glm5_next_text", "openpangu_v2", "zaya", "naive_n05_flash"}
+            in {"ernie5_5_moe", "glm5_next", "glm5_next_text", "openpangu_v2", "zaya", "naive_n05_flash"}
             or self._uses_zaya_cache
             or self._uses_m3_msa_cache
         )
@@ -1431,14 +1451,14 @@ class Scheduler:
         _allow_mla_kvq = _mla_kvq_env in ("1", "true", "True", "yes", "on")
         _is_dsv4_composite = self._uses_dsv4_cache
         if (
-            (self._uses_openpangu_cache or self._uses_glm5_next_cache)
+            (self._uses_openpangu_cache or self._uses_glm5_next_cache or self._uses_ernie55_cache)
             and self.config.kv_cache_quantization != "none"
         ):
             logger.info(
                 "%s native mixed cache detected — forcing generic KV cache "
-                "quantization off (was: %s). MLA latents and path-dependent conv "
-                "state must round-trip through the typed full-precision codec.",
-                "glm5_next" if self._uses_glm5_next_cache else "openPangu",
+                "quantization off (was: %s). MLA/HCA state must round-trip "
+                "through the typed native codec.",
+                "ernie5_5_moe" if self._uses_ernie55_cache else ("glm5_next" if self._uses_glm5_next_cache else "openPangu"),
                 self.config.kv_cache_quantization,
             )
             self.config.kv_cache_quantization = "none"
@@ -1953,7 +1973,9 @@ class Scheduler:
                 # multi-hundred-GB metal::malloc.
                 expected_num_layers=int(n_layers) if n_layers else None,
                 required_cache_class=(
-                    "OpenPanguV2LayerCache"
+                    "ErnieLayerCache"
+                    if self._uses_ernie55_cache
+                    else "OpenPanguV2LayerCache"
                     if self._uses_openpangu_cache
                     else "MiniMaxM3SparseCache"
                     if self._uses_m3_msa_cache
@@ -2274,6 +2296,7 @@ class Scheduler:
             # silently forces paged cache and advertises an inapplicable async
             # SSM-rederive contract.
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
+                "ErnieLayerCache",
                 "Glm5KDACache",
                 "Glm5MLACache",
             }:
@@ -3368,6 +3391,8 @@ class Scheduler:
             return "bailing_hybrid"
         if "glm5_next" in joined:
             return "glm5_next"
+        if "ernie5_5" in joined:
+            return "ernie5_5_moe"
         return ""
 
     def _canonicalize_tags(self, text: str) -> str:
@@ -6903,6 +6928,7 @@ class Scheduler:
         return not (
             getattr(self, "_mixed_attention_cache_model", False)
             or getattr(self, "_uses_openpangu_cache", False)
+            or getattr(self, "_uses_ernie55_cache", False)
             or getattr(self, "_uses_glm5_next_cache", False)
             or _GEN_PROMPT_STRIP_DISABLED
         )
@@ -7670,6 +7696,7 @@ class Scheduler:
             _gpl = getattr(request, "_gen_prompt_len", 0) or 0
             if (
                 getattr(self, "_uses_openpangu_cache", False)
+                or getattr(self, "_uses_ernie55_cache", False)
                 or getattr(self, "_uses_glm5_next_cache", False)
             ):
                 # The typed snapshot is the exact full effective prompt's N-1
@@ -7828,6 +7855,7 @@ class Scheduler:
                         self.memory_aware_cache is not None
                         and not _disk_needs_worker_dequant
                         and not getattr(self, "_uses_openpangu_cache", False)
+                        and not getattr(self, "_uses_ernie55_cache", False)
                         and not getattr(self, "_uses_glm5_next_cache", False)
                     ):
                         try:
@@ -11419,14 +11447,13 @@ class Scheduler:
                                         request._extracted_cache = None
                                 elif (
                                     getattr(self, "_uses_openpangu_cache", False)
+                                    or getattr(self, "_uses_ernie55_cache", False)
                                     or getattr(self, "_uses_glm5_next_cache", False)
                                 ):
-                                    # SingleBatchGenerator captured this exact
-                                    # N-1 typed boundary before consuming the
-                                    # final prompt token. Never fall back to the
-                                    # live post-decode path-dependent state.
                                     _typed_family = (
-                                        "glm5_next"
+                                        "ernie5_5_moe"
+                                        if getattr(self, "_uses_ernie55_cache", False)
+                                        else "glm5_next"
                                         if getattr(
                                             self, "_uses_glm5_next_cache", False
                                         )
@@ -11434,13 +11461,24 @@ class Scheduler:
                                     )
                                     if snapshot_cache is not None:
                                         request._extracted_cache = snapshot_cache
-                                        request._extracted_cache_key_tokens = list(
-                                            request.prompt_token_ids[:-1]
-                                        )
+                                        if getattr(self, "_uses_ernie55_cache", False):
+                                            _snap_off = int(getattr(snapshot_cache[0], "offset", 0) or 0)
+                                            _snap_len = (
+                                                _snap_off
+                                                if 0 < _snap_off <= len(request.prompt_token_ids)
+                                                else max(0, len(request.prompt_token_ids) - 1)
+                                            )
+                                            request._extracted_cache_key_tokens = list(
+                                                request.prompt_token_ids[:_snap_len]
+                                            )
+                                        else:
+                                            request._extracted_cache_key_tokens = list(
+                                                request.prompt_token_ids[:-1]
+                                            )
                                         request._extracted_cache_from_prompt_snapshot = True
                                         logger.info(
                                             "%s prefix store using exact typed "
-                                            "N-1 prompt snapshot (%d layers, %d key tokens)",
+                                            "prompt snapshot (%d layers, %d key tokens)",
                                             _typed_family,
                                             len(snapshot_cache),
                                             len(request._extracted_cache_key_tokens),
@@ -12834,6 +12872,7 @@ class Scheduler:
                             _gpl_store = getattr(request, "_gen_prompt_len", 0) or 0
                             if (
                                 getattr(self, "_uses_openpangu_cache", False)
+                                or getattr(self, "_uses_ernie55_cache", False)
                                 or getattr(self, "_uses_glm5_next_cache", False)
                             ):
                                 _gpl_store = 0
@@ -12987,12 +13026,15 @@ class Scheduler:
                                 if stored:
                                     if (
                                         getattr(self, "_uses_openpangu_cache", False)
+                                        or getattr(self, "_uses_ernie55_cache", False)
                                         or getattr(
                                             self, "_uses_glm5_next_cache", False
                                         )
                                     ):
                                         _typed_family = (
-                                            "glm5_next"
+                                            "ernie5_5_moe"
+                                            if getattr(self, "_uses_ernie55_cache", False)
+                                            else "glm5_next"
                                             if getattr(
                                                 self,
                                                 "_uses_glm5_next_cache",

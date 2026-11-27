@@ -99,7 +99,7 @@ class DraftAttention(nn.Module):
         B, L, _ = x.shape
         qr = self.q_norm(self.wq_a(x))
         if self._qb_ogate_fused is not None:
-            qb_og = mxfp8_linear_fast(self._qb_ogate_fused, qr)
+            qb_og = self._qb_ogate_fused(qr)
             q_flat = qb_og[..., : self.n_heads * self.head_dim]
             ogate = qb_og[..., self.n_heads * self.head_dim :]
         else:
@@ -119,7 +119,7 @@ class DraftAttention(nn.Module):
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
         out = self.wo_a(out).transpose(0, 2, 1, 3).flatten(-2)
-        return mxfp8_linear_fast(self.wo_b, out * mx.sigmoid(ogate))
+        return self.wo_b(out * mx.sigmoid(ogate))
 
 
 class ErnieDSparkDrafter:

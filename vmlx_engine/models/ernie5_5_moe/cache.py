@@ -343,12 +343,25 @@ class ErniePoolingCache:
         return c
 
 
+_SENTINEL_SHAPE = (1, 0, 1)
+
+
+def _serializable(a: Optional[mx.array]) -> mx.array:
+    return a if a is not None else mx.zeros(_SENTINEL_SHAPE, dtype=mx.float32)
+
+
+def _nullable(a: Optional[mx.array]) -> Optional[mx.array]:
+    if a is None or (a.ndim == 3 and a.shape[1] == 0):
+        return None
+    return a
+
+
 class ErnieLayerCache:
-    """Two-lane per-layer cache (local+pool for HCA, latent+indexer for MLA)."""
+    """Two-lane per-layer cache (local+pool for HCA, latent+indexer for MLA) with typed RAM/SSD codec."""
 
     def __init__(self, first: Any, second: Any, is_mla: bool = False) -> None:
         self.caches = [first, second]
-        self.is_mla = is_mla
+        self.is_mla = bool(is_mla)
 
     def __getitem__(self, idx: int) -> Any:
         return self.caches[idx]
@@ -357,28 +370,170 @@ class ErnieLayerCache:
     def offset(self) -> int:
         return int(self.caches[0].offset)
 
+    def size(self) -> int:
+        return int(self.offset)
+
+    def empty(self) -> bool:
+        return int(self.offset) == 0
+
     @property
     def nbytes(self) -> int:
         return sum(int(getattr(c, "nbytes", 0)) for c in self.caches)
 
     def is_trimmable(self) -> bool:
-        return self.is_mla
+        # HCA pooling windows are path-dependent; exact typed boundaries only.
+        return False
 
     def trim(self, n: int) -> int:
-        if self.is_mla:
-            r0 = self.caches[0].trim(n)
-            self.caches[1].trim(n)
-            return r0
         return 0
 
+    def filter(self, batch_indices) -> None:
+        keep = list(batch_indices) if isinstance(batch_indices, (list, tuple)) else [batch_indices]
+        if keep != [0]:
+            raise NotImplementedError("ErnieLayerCache.filter() only supports single-sequence serving.")
+
+    def extract(self, idx: int) -> "ErnieLayerCache":
+        if idx != 0:
+            raise IndexError(f"ErnieLayerCache.extract({idx}) is invalid for single-sequence serving")
+        return self
+
+    def prepare(self, *args, **kwargs) -> None:
+        right_padding = kwargs.get("right_padding")
+        if right_padding is not None and any(int(x) != 0 for x in right_padding):
+            raise NotImplementedError("ErnieLayerCache.prepare() does not support right-padding.")
+
+    def finalize(self) -> None:
+        return None
+
     @property
-    def state(self):
-        return [c.state for c in self.caches]
+    def state(self) -> List[mx.array]:
+        if self.is_mla:
+            lat, idx = self.caches[0], self.caches[1]
+            lk, lv = lat.state
+            ik, _ = idx.state
+            return [_serializable(lk), _serializable(lv), _serializable(ik)]
+        local, pool = self.caches[0], self.caches[1]
+        p_arr = (
+            mx.contiguous(pool.pooled[:, : pool.pooled_count, :])
+            if (pool.pooled is not None and pool.pooled_count > 0)
+            else None
+        )
+        return [
+            _serializable(mx.contiguous(local.keys) if local.keys is not None else None),
+            _serializable(p_arr),
+            _serializable(mx.contiguous(pool.pending_kv) if pool.pending_kv is not None else None),
+            _serializable(mx.contiguous(pool.pending_gate) if pool.pending_gate is not None else None),
+        ]
 
     @state.setter
     def state(self, v) -> None:
-        for c, sv in zip(self.caches, v):
-            c.state = sv
+        arrs = list(v)
+        if self.is_mla:
+            if len(arrs) != 3:
+                raise ValueError(f"ErnieLayerCache MLA state expects 3 arrays, got {len(arrs)}")
+            lk, lv, ik = _nullable(arrs[0]), _nullable(arrs[1]), _nullable(arrs[2])
+            self.caches[0].state = (lk, lv) if lk is not None else (None, None)
+            if ik is not None:
+                empty_v = mx.zeros((ik.shape[0], ik.shape[1], ik.shape[2], 0), dtype=ik.dtype)
+                self.caches[1].state = (ik, empty_v)
+            else:
+                self.caches[1].state = (None, None)
+        else:
+            if len(arrs) != 4:
+                raise ValueError(f"ErnieLayerCache HCA state expects 4 arrays, got {len(arrs)}")
+            local_k = _nullable(arrs[0])
+            pooled = _nullable(arrs[1])
+            pkv = _nullable(arrs[2])
+            pgate = _nullable(arrs[3])
+            self.caches[0].keys = local_k
+            self.caches[1].pooled = pooled
+            self.caches[1].pooled_count = int(pooled.shape[1]) if pooled is not None else 0
+            self.caches[1].pending_kv = pkv
+            self.caches[1].pending_gate = pgate
+            self.caches[1].pending_len = int(pkv.shape[1]) if pkv is not None else 0
+
+    @property
+    def meta_state(self) -> Tuple[str, ...]:
+        if self.is_mla:
+            return (
+                "ernie5_5_cache_v1",
+                "mla",
+                str(self.offset),
+                "0",
+                "0",
+                "0",
+                "0",
+            )
+        local, pool = self.caches[0], self.caches[1]
+        return (
+            "ernie5_5_cache_v1",
+            "hca",
+            str(local.offset),
+            str(local.max_size),
+            str(pool.compress_ratio),
+            str(pool.pooled_count),
+            str(pool.pending_len),
+        )
+
+    @meta_state.setter
+    def meta_state(self, value) -> None:
+        meta = tuple(value or ())
+        if len(meta) != 7 or meta[0] != "ernie5_5_cache_v1":
+            raise ValueError("Invalid ErnieLayerCache meta_state")
+        off = int(meta[2])
+        if self.is_mla:
+            self.caches[0].offset = off
+            self.caches[1].offset = off
+        else:
+            self.caches[0].offset = off
+            self.caches[0].max_size = int(meta[3])
+            self.caches[1].compress_ratio = int(meta[4])
+            self.caches[1].pooled_count = int(meta[5])
+            self.caches[1].pending_len = int(meta[6])
+            self.caches[1].offset = off
+
+    @classmethod
+    def from_state(cls, state, meta_state) -> "ErnieLayerCache":
+        meta = tuple(meta_state or ())
+        if len(meta) != 7 or meta[0] != "ernie5_5_cache_v1":
+            raise ValueError("ErnieLayerCache metadata missing ernie5_5_cache_v1 header")
+        mode = str(meta[1])
+        if mode == "mla":
+            rebuilt = cls(ErnieKVCache(), ErnieKVCache(), is_mla=True)
+        elif mode == "hca":
+            rebuilt = cls(ErnieRotatingCache(max_size=int(meta[3])), ErniePoolingCache(compress_ratio=int(meta[4])), is_mla=False)
+        else:
+            raise ValueError(f"Invalid ErnieLayerCache mode: {mode!r}")
+        rebuilt.state = state
+        rebuilt.meta_state = meta
+        return rebuilt
 
     def copy(self) -> "ErnieLayerCache":
         return ErnieLayerCache(self.caches[0].copy(), self.caches[1].copy(), is_mla=self.is_mla)
+
+
+def clone_ernie_layer_cache(
+    source: ErnieLayerCache,
+    *,
+    copy_fn: Any = None,
+) -> ErnieLayerCache:
+    """Return a non-aliasing exact-boundary copy of one ERNIE 5.5 layer cache."""
+    if type(source).__name__ != "ErnieLayerCache":
+        raise TypeError(f"unexpected cache class: {type(source).__name__}")
+    if copy_fn is None:
+        return source.copy()
+    copied_state = [copy_fn(arr) for arr in source.state]
+    return ErnieLayerCache.from_state(copied_state, source.meta_state)
+
+
+def register_ernie_cache_class() -> None:
+    """Register ErnieLayerCache on mlx_lm.models.cache for typed SSD prompt-cache round-trip."""
+    try:
+        import mlx_lm.models.cache as mlx_cache
+
+        setattr(mlx_cache, "ErnieLayerCache", ErnieLayerCache)
+    except Exception:
+        pass
+
+
+register_ernie_cache_class()

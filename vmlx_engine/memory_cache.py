@@ -590,7 +590,7 @@ class MemoryAwarePrefixCache:
             # openPangu exact-boundary composite: safe only because
             # _truncate_cache has a dedicated full-length clone that preserves
             # inner KV, DSA indexer, rotating metadata, and all conv states.
-            if type(layer).__name__ == "OpenPanguV2LayerCache":
+            if type(layer).__name__ in {"OpenPanguV2LayerCache", "ErnieLayerCache"}:
                 return True
             # MiniMax-M3 MSA cache (KVCache subclass + idx_keys lane): _truncate_cache
             # now rebuilds it AS a fresh isolated MiniMaxM3SparseCache with
@@ -732,6 +732,11 @@ class MemoryAwarePrefixCache:
         arrays: list[Any] = []
 
         def _collect(obj) -> None:
+            if type(obj).__name__ == "ErnieLayerCache":
+                for arr in getattr(obj, "state", ()):
+                    if isinstance(arr, mx.array):
+                        arrays.append(arr)
+                return
             if type(obj).__name__ == "OpenPanguV2LayerCache":
                 _collect(getattr(obj, "kv", None))
                 indexer = getattr(obj, "indexer_kv", None)
@@ -924,6 +929,22 @@ class MemoryAwarePrefixCache:
                         "GLM typed cache clone failed (%s); forcing miss",
                         exc,
                     )
+                    return None
+                truncated.append(cloned)
+                continue
+            if type(layer_cache).__name__ == "ErnieLayerCache":
+                current_len = int(getattr(layer_cache, "offset", 0) or 0)
+                if not allow_cumulative_clone or target_len != current_len:
+                    return None
+                try:
+                    from .models.ernie5_5_moe.cache import clone_ernie_layer_cache
+
+                    cloned = clone_ernie_layer_cache(
+                        layer_cache,
+                        copy_fn=_copy_positional_slice,
+                    )
+                except Exception as exc:
+                    logger.warning("ERNIE 5.5 typed cache clone failed (%s); forcing miss", exc)
                     return None
                 truncated.append(cloned)
                 continue

@@ -1463,10 +1463,10 @@ class DiskCacheManager:
             # accepts older widened files through their dtype metadata.
             # GLM keeps its one-array-at-a-time detachment below because its
             # expanded MLA state can exhaust the remaining Metal headroom.
-            glm_typed_payload = {
-                "Glm5KDACache",
-                "Glm5MLACache",
-            }.issubset(set(cache_classes))
+            glm_typed_payload = (
+                {"Glm5KDACache", "Glm5MLACache"}.issubset(set(cache_classes))
+                or "ErnieLayerCache" in cache_classes
+            )
             bitcast_dtypes = {
                 key: "bfloat16"
                 for key, value in cache_data_flat.items()
