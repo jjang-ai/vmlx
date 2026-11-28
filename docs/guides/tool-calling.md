@@ -70,6 +70,7 @@ Use `--tool-call-parser` to select a parser for your model family:
 | `glm47` | `glm4` | GLM-4.7, GLM-4.7-Flash | `<tool_call>` with `<arg_key>`/`<arg_value>` XML |
 | `xml_function` | `qwen3_coder` | Qwen3.5 / Bonsai 2.5 / Holo4 | `<tool_call><function=name><parameter=key>` XML |
 | `ernie` | `ernie5_5`, `ernie5_5_moe` | ERNIE 5.5 Flash | `<ernie:tool_call><invoke name=...><parameter name=...>` XML |
+| `hunyuan` | `hy_v4_flash`, `hy4` | Hy4-flash / HY3 | `<tool_calls:opensource><tool_call:opensource>...<arg_key:opensource>/<arg_value:opensource>` (per-tool-call streaming) |
 | `inkling` | `inkling2`, `inkling2_loop` | Inkling 2 | `<\|content_tool_call\|>...<\|content_end\|>` |
 
 ## Model Examples

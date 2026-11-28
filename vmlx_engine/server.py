@@ -18154,7 +18154,7 @@ async def model_capabilities(model_id: str) -> dict:
         elif configured_reasoning_efforts is not None:
             reasoning_efforts = list(configured_reasoning_efforts)
             cfg_default_effort = (
-                getattr(cfg, "extra_metadata", None) or {}
+                getattr(cfg, "architecture_hints", None) or {}
             ).get("default_reasoning_effort")
             if cfg_default_effort in reasoning_efforts:
                 default_reasoning_effort = cfg_default_effort

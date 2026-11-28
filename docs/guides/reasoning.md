@@ -115,6 +115,7 @@ When you pass `--reasoning-parser auto`, vmlx-engine inspects bundle metadata (`
 |--------------------------------|----------------|
 | Qwen3 / Qwen3.5 / Bonsai 2.5 / Holo4 | `qwen3` |
 | ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Hy4-flash (`hy_v4_flash`) | `hy4` (`no_think` / `high`) |
 | Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | DeepSeek-R1, DeepSeek-V3 | `deepseek_r1` |
 | GLM-4.7 Flash, GPT-OSS | `openai_gptoss` |

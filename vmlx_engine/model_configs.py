@@ -1910,7 +1910,11 @@ def register_all(registry=None):
             supports_instruct_mode=True,
             supported_reasoning_efforts=["high"],
             supports_native_tools=True,
-            extra_metadata={"default_reasoning_effort": "high"},
+            architecture_hints={
+                "default_enable_thinking": True,
+                "default_reasoning_effort": "high",
+                "paged_ram_default": False,
+            },
             priority=15,
         )
     )
