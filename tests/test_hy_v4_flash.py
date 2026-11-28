@@ -333,6 +333,31 @@ def test_hy4_reasoning_and_tool_parsers():
     assert r2 == "Thinking..."
     assert c2 == "Done."
 
+    # Streaming with canonicalized </think> mid-delta (as emitted by scheduler._canonicalize_tags)
+    rp_s = get_parser("hy4")()
+    rp_s.reset_state(think_in_prompt=True)
+    stream_deltas = [
+        "We need to call ",
+        "both tools.",
+        "</thi",
+        "nk>I'll call both.<tool_calls><tool_call>get_weather</tool_call></tool_calls>",
+    ]
+    prev = ""
+    r_chunks, c_chunks = [], []
+    for d in stream_deltas:
+        cur = prev + d
+        dm = rp_s.extract_reasoning_streaming(prev, cur, d)
+        prev = cur
+        if dm and dm.reasoning:
+            r_chunks.append(dm.reasoning)
+        if dm and dm.content:
+            c_chunks.append(dm.content)
+    r_out = "".join(r_chunks)
+    c_out = "".join(c_chunks)
+    assert "</think>" not in r_out and "<tool_calls>" not in r_out
+    assert r_out == "We need to call both tools."
+    assert c_out == "I'll call both.<tool_calls><tool_call>get_weather</tool_call></tool_calls>"
+
     # Hy4 tool format (no <tool_sep:opensource>) AND Hy3 tool format (with <tool_sep:opensource>)
     tp = ToolParserManager.get_tool_parser("hy_v4_flash")()
     out_hy4 = (

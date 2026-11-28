@@ -25,12 +25,13 @@ class Hy4ReasoningParser(BaseThinkingReasoningParser):
     def end_token(self) -> str:
         return "</think:opensource>"
 
+    @property
+    def alternate_reasoning_marker_pairs(self) -> tuple[tuple[str, str], ...]:
+        """Accept canonicalized ``<think>...</think>`` (from tag canonicalizer) and ``<thinking>``."""
+        return (("<think>", "</think>"), ("<thinking>", "</thinking>"))
+
     def extract_reasoning(self, model_output: str) -> tuple[str | None, str | None]:
-        if "<think:opensource>" not in model_output and "</think:opensource>" not in model_output:
-            if "<think>" in model_output or "</think>" in model_output:
-                normalized = model_output.replace("<think>", self.start_token).replace("</think>", self.end_token)
-                return super().extract_reasoning(normalized)
-        return super().extract_reasoning(model_output)
+        return super().extract_reasoning(self._normalize_reasoning_markers(model_output))
 
     def extract_reasoning_streaming(
         self,
