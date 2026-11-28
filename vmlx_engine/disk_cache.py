@@ -1466,6 +1466,7 @@ class DiskCacheManager:
             glm_typed_payload = (
                 {"Glm5KDACache", "Glm5MLACache"}.issubset(set(cache_classes))
                 or "ErnieLayerCache" in cache_classes
+                or "HyV4LayerCache" in cache_classes
             )
             bitcast_dtypes = {
                 key: "bfloat16"

@@ -1907,7 +1907,10 @@ def register_all(registry=None):
             reasoning_parser="hy4",
             think_in_template=True,
             supports_thinking=True,
+            supports_instruct_mode=True,
+            supported_reasoning_efforts=["high"],
             supports_native_tools=True,
+            extra_metadata={"default_reasoning_effort": "high"},
             priority=15,
         )
     )

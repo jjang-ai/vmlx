@@ -1195,7 +1195,11 @@ class Scheduler:
         # truncation/reconstruction is implemented.
         self._mixed_attention_cache_model = False
         try:
-            self._mixed_attention_cache_model = self._model_has_mixed_attention(model)
+            self._mixed_attention_cache_model = (
+                False
+                if getattr(self, "_uses_hy4_cache", False)
+                else self._model_has_mixed_attention(model)
+            )
             if self._mixed_attention_cache_model:
                 logger.info(
                     "LLM mixed-attention model detected (e.g. Gemma 4 sliding+full). "

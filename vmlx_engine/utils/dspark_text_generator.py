@@ -161,7 +161,12 @@ class DSparkTextGenerator(SingleBatchGenerator):
         snapshot_cuts: tuple[int, ...] = ()
         on_snapshot = None
         if uses_n_minus_1:
-            target_cut = len(prompt_ids) - 1
+            gpl = int(getattr(req, "gen_prompt_len", 0) or 0)
+            target_cut = (
+                len(prompt_ids) - gpl - 1
+                if 0 < gpl < len(prompt_ids) - 1
+                else len(prompt_ids) - 1
+            )
             if target_cut > cached:
                 snapshot_cuts = (target_cut,)
 
