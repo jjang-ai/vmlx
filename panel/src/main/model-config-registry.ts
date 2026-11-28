@@ -525,6 +525,7 @@ registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', supportsTh
 // reasoning_effort=no_think|low|high, so Python normalizes the UI thinking
 // toggle into Hy3's effort field before render.
 registerFamily('hy3', { cacheType: 'kv', toolParser: 'hunyuan', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Tencent Hy3-preview', priority: 4 })
+registerFamily('hy4-flash', { cacheType: 'kv', cacheSubtype: 'hy4_hybrid_dsa_swa', toolParser: 'hunyuan', reasoningParser: 'hy4', supportsThinking: true, honorsEnableThinking: true, thinkInTemplate: true, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: false, description: 'Hy4-flash (Engram + IndexPool DSA/SWA MLA + DFly2)', priority: 4 })
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
@@ -661,8 +662,9 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'bailing_moe_v2_5': 'ling',
   'bailing_moe_linear': 'ling',
   'bailing_moe': 'ling',
-  // ── Tencent Hy3 ──
+  // ── Tencent Hy3 / Hy4-flash ──
   'hy_v3': 'hy3',
+  'hy_v4_flash': 'hy4-flash',
   // ── GLM family ──
   'chatglm': 'glm4',
   'glm_moe_dsa': 'glm5',

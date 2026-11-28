@@ -235,13 +235,33 @@ class OpenPanguV2Indexer(nn.Module):
                 self.n_heads,
             )
             self._logged_sparse_activation = True
-        scores = q @ k.swapaxes(-1, -2)
-        scores = mx.maximum(scores, 0)
-        weights = self.weights_proj(x) * (self.n_heads**-0.5 * self.softmax_scale)
-        weights = weights.swapaxes(-1, -2)[..., None]
-        scores = (scores * weights).sum(axis=1, keepdims=True)
+        weights_raw = self.weights_proj(x).astype(mx.float32) * (
+            self.n_heads**-0.5 * self.softmax_scale
+        )
+        scores = None
+        if b == 1 and k.shape[2] >= 32:
+            if s == 1:
+                from vmlx_engine.metal.dsa_index_scores import dsa_decode_index_scores
+                scores = dsa_decode_index_scores(q.swapaxes(1, 2), k[:, 0], weights_raw, scale=1.0)
+            else:
+                from vmlx_engine.metal.dsa_index_scores import dsa_pool_index_scores
+                scores = dsa_pool_index_scores(
+                    q.swapaxes(1, 2), k[:, 0], weights_raw, scale=1.0, bf16_operands=(q.dtype == mx.bfloat16)
+                )
+            if scores is not None:
+                scores = scores[:, None, :, :]
+        if scores is None:
+            scores = q @ k.swapaxes(-1, -2)
+            scores = mx.maximum(scores, 0)
+            weights = weights_raw.astype(scores.dtype).swapaxes(-1, -2)[..., None]
+            scores = (scores * weights).sum(axis=1, keepdims=True)
         if mask is not None:
             scores = mx.where(mask, scores, mx.array(-float("inf"), scores.dtype))
+        if scores.dtype == mx.float32:
+            from vmlx_engine.metal.sparse_topk import metal_radix_topk
+            sel = metal_radix_topk(scores, self.index_topk)
+            if sel is not None:
+                return sel.astype(mx.int32)
         return mx.argpartition(scores, kth=-self.index_topk, axis=-1)[
             ..., -self.index_topk :
         ]

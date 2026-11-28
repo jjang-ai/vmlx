@@ -51,11 +51,19 @@ from .abstract_tool_parser import (
 )
 
 
-@ToolParserManager.register_module(["hunyuan", "hy_v3", "tencent"])
+@ToolParserManager.register_module(["hunyuan", "hy_v3", "hy_v4_flash", "hy4", "tencent"])
 class HunyuanToolParser(ToolParser):
-    """Hunyuan/Tencent Hy3 tool-call XML parser."""
+    """Hunyuan/Tencent Hy3 & Hy4-flash tool-call XML parser."""
 
-    NATIVE_MARKERS = ("<tool_calls>", "<tool_sep>", "<arg_key>", "<arg_value>")
+    NATIVE_MARKERS = (
+        "<tool_calls>",
+        "<tool_calls:opensource>",
+        "<tool_sep>",
+        "<arg_key>",
+        "<arg_key:opensource>",
+        "<arg_value>",
+        "<arg_value:opensource>",
+    )
 
     SUPPORTS_NATIVE_TOOL_FORMAT = True
 
@@ -113,9 +121,19 @@ class HunyuanToolParser(ToolParser):
         for envelope in self.TOOL_CALLS_PATTERN.findall(model_output):
             for raw_call in self.TOOL_CALL_PATTERN.findall(envelope):
                 parts = self.TOOL_SEP_PATTERN.split(raw_call, maxsplit=1)
-                if len(parts) != 2:
-                    continue
-                name, args_blob = parts
+                if len(parts) == 2:
+                    name, args_blob = parts
+                else:
+                    # Hy4-flash format omits <tool_sep>: `<tool_call:opensource>NAME<arg_key:opensource>...`
+                    first_arg = self.ARG_KEY_PATTERN.search(raw_call)
+                    if first_arg is not None:
+                        name = raw_call[: first_arg.start()]
+                        args_blob = raw_call[first_arg.start() :]
+                    else:
+                        name = raw_call.strip()
+                        args_blob = ""
+                    if not name.strip():
+                        continue
                 # Pair keys with values positionally — order matters in the
                 # template emission, both lists should be the same length.
                 keys = self.ARG_KEY_PATTERN.findall(args_blob)

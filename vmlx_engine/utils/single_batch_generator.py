@@ -522,6 +522,16 @@ class SingleBatchGenerator:
                 )
             except Exception:
                 return None
+        if type(cache_obj).__name__ == "HyV4LayerCache":
+            try:
+                from ..models.hy_v4_flash.cache import clone_hy4_layer_cache
+
+                return clone_hy4_layer_cache(
+                    cache_obj,
+                    copy_fn=cls._clone_array,
+                )
+            except Exception:
+                return None
         if type(cache_obj).__name__ in {"Glm5KDACache", "Glm5MLACache"}:
             try:
                 from ..models.glm5_next.glm5_next import (
@@ -592,6 +602,14 @@ class SingleBatchGenerator:
         if isinstance(cache_obj, (list, tuple)):
             return any(cls._cache_uses_ernie55(c) for c in cache_obj)
         return type(cache_obj).__name__ == "ErnieLayerCache"
+
+    @classmethod
+    def _cache_uses_hy4(cls, cache_obj) -> bool:
+        if isinstance(cache_obj, mlx_cache.CacheList):
+            return any(cls._cache_uses_hy4(c) for c in cache_obj.caches)
+        if isinstance(cache_obj, (list, tuple)):
+            return any(cls._cache_uses_hy4(c) for c in cache_obj)
+        return type(cache_obj).__name__ == "HyV4LayerCache"
 
     @classmethod
     def _cache_uses_glm5_next(cls, cache_obj) -> bool:
@@ -1763,9 +1781,10 @@ class SingleBatchGenerator:
                 req.mixed_swa_boundary = self._capture_mixed_swa_boundary(req)
         uses_openpangu = self._cache_uses_openpangu(req.cache)
         uses_ernie55 = self._cache_uses_ernie55(req.cache)
+        uses_hy4 = self._cache_uses_hy4(req.cache)
         uses_glm5_next = self._cache_uses_glm5_next(req.cache)
         uses_dsv41 = self._cache_uses_dsv41(req.cache)
-        # openPangu, ERNIE 5.5, and GLM each own a path-dependent native state unit.
+        # openPangu, ERNIE 5.5, Hy4-flash, and GLM each own a path-dependent native state unit.
         # Capture the immutable N-1 boundary BEFORE the final prompt token is consumed;
         # post-decode convolution/pooling/recurrent/indexer state cannot be rewound.
         _phase_trace = _naive_prefill_phase_trace_enabled(self.model)
@@ -1783,7 +1802,7 @@ class SingleBatchGenerator:
                 snapshot_ms=(_snapshot_done - _snapshot_t0) * 1000,
                 snapshot_available=typed_prompt_snapshot is not None,
             )
-        if (uses_openpangu or uses_ernie55) and any(
+        if (uses_openpangu or uses_ernie55 or uses_hy4) and any(
             int(getattr(layer, "offset", 0) or 0) > 0 for layer in req.cache
         ):
             typed_prompt_snapshot = self._clone_admissible_prompt_cache_snapshot(
@@ -1810,7 +1829,7 @@ class SingleBatchGenerator:
         req.context_tokens.append(last_token)
         prompt_cache_snapshot = (
             typed_prompt_snapshot
-            if uses_openpangu or uses_ernie55 or uses_glm5_next or uses_dsv41 or typed_prompt_snapshot is not None
+            if uses_openpangu or uses_ernie55 or uses_hy4 or uses_glm5_next or uses_dsv41 or typed_prompt_snapshot is not None
             else self._clone_admissible_prompt_cache_snapshot(req.cache)
         )
         req.prompt_cache_snapshot = prompt_cache_snapshot

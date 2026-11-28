@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import json
 import logging
+import os
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -83,14 +84,22 @@ def keep_fp8_linears(prefix: str, tensors: Dict[str, mx.array]) -> None:
         key = prefix + name
         scale_key = key + "_scale_inv"
         if key in tensors and scale_key in tensors:
-            codes, scales = mxfp8_view(tensors[key], tensors.pop(scale_key))
+            try:
+                codes, scales = mxfp8_view(tensors[key], tensors[scale_key])
+            except ValueError:
+                continue
+            tensors.pop(scale_key)
             tensors[key] = codes
             tensors[key.removesuffix("weight") + "scales"] = scales
     # Also convert 3-D grouped HCA output projection `self_attn.linear_o_group_proj` (1.242 GB!)
     wo_key = prefix + "self_attn.linear_o_group_proj"
     wo_skey = wo_key + "_scale_inv"
     if wo_key in tensors and wo_skey in tensors:
-        codes, scales = mxfp8_view(tensors[wo_key], tensors.pop(wo_skey))
+        try:
+            codes, scales = mxfp8_view(tensors[wo_key], tensors[wo_skey])
+        except ValueError:
+            return
+        tensors.pop(wo_skey)
         tensors[wo_key] = codes
         tensors[wo_key + ".scales"] = scales
 
@@ -161,9 +170,17 @@ def _concat_mxfp8_cols(linears: Sequence[nn.QuantizedLinear]) -> Optional[nn.Qua
 
 
 def prepare_ernie_runtime(layers: Sequence[DecoderLayer]) -> Dict[str, int]:
-    """Fuse sibling MXFP8 projections, fold VirtualHeads, and fuse HCA compressors (replacing originals)."""
-    counts = {"vha_folded": 0, "hca_comp": 0, "attn_fused": 0, "moe_fused": 0, "dense_mlp_fused": 0}
+    """Fuse sibling MXFP8 projections, fold VirtualHeads, cast mHC fn to BF16, and fuse HCA compressors."""
+    counts = {"vha_folded": 0, "hca_comp": 0, "attn_fused": 0, "moe_fused": 0, "dense_mlp_fused": 0, "mhc_bf16": 0}
+    mhc_bf16 = os.environ.get("VMLX_ERNIE_MHC_BF16", "1") != "0"
     for layer in layers:
+        if mhc_bf16:
+            for hc in (getattr(layer, "attn_hc", None), getattr(layer, "ffn_hc", None)):
+                if hc is not None and getattr(hc, "fn", None) is not None and hc.fn.dtype == mx.float32:
+                    fn_b = hc.fn.astype(mx.bfloat16)
+                    mx.eval(fn_b)
+                    hc.fn = fn_b
+                    counts["mhc_bf16"] += 1
         attn = layer.attn
         if hasattr(attn, "vha"):
             attn.vha.fold()
@@ -497,6 +514,153 @@ class ErnieSwitchGLU(nn.Module):
         return out
 
 
+# ---------------------------------------------------------------------------
+# Native Full MXFP4 SwitchGLU for ERNIE 5.5 Flash (M5 Ultra / 256 GB+)
+# Fuses gate_proj (w1) + up_proj (w3) into ONE MXFP4 gather_qmm dispatch!
+# ---------------------------------------------------------------------------
+class ErnieMXFP4SwitchGLU(nn.Module):
+    """Native MXFP4 (bits=4, group_size=32, UE8M0) routed SwitchGLU for ERNIE 5.5 Flash."""
+
+    accepts_route_weights = True
+    SORT_THRESHOLD = 160
+
+    def __init__(
+        self,
+        num_experts: int,
+        input_dims: int,
+        hidden_dims: int,
+        *,
+        beta: float = 4.0,
+        linear_beta: float = 25.0,
+    ) -> None:
+        super().__init__()
+        self.num_experts = int(num_experts)
+        self.input_dims = int(input_dims)
+        self.hidden_dims = int(hidden_dims)
+        self.beta = float(beta)
+        self.linear_beta = float(linear_beta)
+        self.gu_weight = mx.zeros((num_experts, 2 * hidden_dims, input_dims // 8), dtype=mx.uint32)
+        self.gu_scales = mx.zeros((num_experts, 2 * hidden_dims, input_dims // 32), dtype=mx.uint8)
+        self.down_weight = mx.zeros((num_experts, input_dims, hidden_dims // 8), dtype=mx.uint32)
+        self.down_scales = mx.zeros((num_experts, input_dims, hidden_dims // 32), dtype=mx.uint8)
+        self.freeze()
+
+    def __call__(self, x: mx.array, indices: mx.array, route_weights: mx.array) -> mx.array:
+        dtype = x.dtype
+        lead = x.shape[:-1]
+        K_in = x.shape[-1]
+        top_k = indices.shape[-1]
+        T = x.size // K_in
+        H = self.hidden_dims
+
+        x2 = x.reshape(T, K_in)
+        idx_2d = indices.reshape(T, top_k).astype(mx.uint32)
+        rw_2d = route_weights.reshape(T, top_k).astype(mx.float32)
+
+        if T * top_k >= self.SORT_THRESHOLD:
+            routes = idx_2d.reshape(-1)
+            order = mx.argsort(routes)
+            inv = mx.argsort(order)
+            s_routes = routes[order]
+            tok_idx = order // top_k
+
+            gu = mx.gather_qmm(
+                x2[tok_idx][:, None, :],
+                self.gu_weight,
+                self.gu_scales,
+                None,
+                rhs_indices=s_routes,
+                transpose=True,
+                group_size=32,
+                bits=4,
+                mode="mxfp4",
+                sorted_indices=True,
+            )[:, 0, :]
+            mid = fused_situ(gu[:, H:], gu[:, :H], self.beta, self.linear_beta)
+            dn_sorted = mx.gather_qmm(
+                mid[:, None, :],
+                self.down_weight,
+                self.down_scales,
+                None,
+                rhs_indices=s_routes,
+                transpose=True,
+                group_size=32,
+                bits=4,
+                mode="mxfp4",
+                sorted_indices=True,
+            )[:, 0, :]
+            fused_out = jh_kernels.weighted_unsort(dn_sorted, inv, rw_2d, dtype)
+            if fused_out is not None:
+                return fused_out.reshape(*lead, K_in)
+            raw = dn_sorted[inv].reshape(T, top_k, K_in)
+            return (raw.astype(mx.float32) * rw_2d[..., None]).sum(axis=1).astype(dtype).reshape(*lead, K_in)
+
+        gu = mx.gather_qmm(
+            x2[:, None, None, :],
+            self.gu_weight,
+            self.gu_scales,
+            None,
+            rhs_indices=idx_2d,
+            transpose=True,
+            group_size=32,
+            bits=4,
+            mode="mxfp4",
+        )[:, :, 0, :]
+        mid = fused_situ(gu[..., H:], gu[..., :H], self.beta, self.linear_beta)
+        dn = mx.gather_qmm(
+            mid[:, :, None, :],
+            self.down_weight,
+            self.down_scales,
+            None,
+            rhs_indices=idx_2d,
+            transpose=True,
+            group_size=32,
+            bits=4,
+            mode="mxfp4",
+        )[:, :, 0, :]
+        out = (dn.astype(mx.float32) * rw_2d[..., None]).sum(axis=1)
+        return out.astype(dtype).reshape(*lead, K_in)
+
+
+def pack_mxfp4_experts(
+    expert_tensors: Dict[str, mx.array],
+    expert_prefix: str,
+    num_experts: int,
+    input_dims: int,
+    hidden_dims: int,
+    *,
+    beta: float = 4.0,
+    linear_beta: float = 25.0,
+) -> ErnieMXFP4SwitchGLU:
+    """Stack 512 per-expert MXFP4 (I8 weight + UE8M0 scale) tensors into fused ErnieMXFP4SwitchGLU."""
+    gu_w_list: List[mx.array] = []
+    gu_s_list: List[mx.array] = []
+    dn_w_list: List[mx.array] = []
+    dn_s_list: List[mx.array] = []
+    for e in range(num_experts):
+        ep = f"{expert_prefix}{e}."
+        w1 = mx.contiguous(expert_tensors.pop(ep + "w1.weight")).view(mx.uint32)
+        s1 = mx.contiguous(expert_tensors.pop(ep + "w1.weight_scale_inv")).view(mx.uint8)
+        w3 = mx.contiguous(expert_tensors.pop(ep + "w3.weight")).view(mx.uint32)
+        s3 = mx.contiguous(expert_tensors.pop(ep + "w3.weight_scale_inv")).view(mx.uint8)
+        w2 = mx.contiguous(expert_tensors.pop(ep + "w2.weight")).view(mx.uint32)
+        s2 = mx.contiguous(expert_tensors.pop(ep + "w2.weight_scale_inv")).view(mx.uint8)
+        gu_w_list.append(mx.concatenate([w1, w3], axis=0))
+        gu_s_list.append(mx.concatenate([s1, s3], axis=0))
+        dn_w_list.append(w2)
+        dn_s_list.append(s2)
+
+    mod = ErnieMXFP4SwitchGLU(
+        num_experts, input_dims, hidden_dims, beta=beta, linear_beta=linear_beta
+    )
+    mod.gu_weight = mx.stack(gu_w_list, axis=0)
+    mod.gu_scales = mx.stack(gu_s_list, axis=0)
+    mod.down_weight = mx.stack(dn_w_list, axis=0)
+    mod.down_scales = mx.stack(dn_s_list, axis=0)
+    mx.eval(mod.gu_weight, mod.gu_scales, mod.down_weight, mod.down_scales)
+    return mod
+
+
 def _read_tensors(root: Path, weight_map: Dict[str, str], names: Sequence[str]) -> Dict[str, mx.array]:
     requested: Dict[str, List[str]] = defaultdict(list)
     for name in names:
@@ -507,8 +671,13 @@ def _read_tensors(root: Path, weight_map: Dict[str, str], names: Sequence[str]) 
     out: Dict[str, mx.array] = {}
     for sf, keys in requested.items():
         arrays = mx.load(str(root / sf))
-        for k in keys:
-            out[k] = arrays[k]
+        picked = {k: arrays[k] for k in keys}
+        # Materialize raw safetensors on the CPU Load stream before queuing any
+        # downstream GPU transforms so slow external-SSD reads never trigger
+        # Metal's command-buffer watchdog timeout.
+        if picked:
+            mx.eval(*picked.values())
+        out.update(picked)
     return out
 
 
@@ -531,18 +700,27 @@ def _make_expert_proj(
 
 
 def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) -> LanguageModel:
-    """Load an ERNIE 5.5 Flash JANGHT2.4 bundle with exact MXFP8 trunk and fused kernels."""
+    """Load an ERNIE 5.5 Flash bundle (JANGHT2.4 OR native MXFP4) with exact MXFP8 trunk and fused kernels."""
     root = Path(model_path)
     settings = json.loads((root / "config.json").read_text())
     config = ModelConfig.from_dict(settings)
     weight_map = json.loads((root / "model.safetensors.index.json").read_text())["weight_map"]
     declared = settings.get("quantization") or {}
     trellis = settings.get("jangt")
+    qcfg = settings.get("quantization_config") or {}
+    is_mxfp4 = (
+        str(qcfg.get("expert_dtype", "")).lower() == "mxfp4"
+        or "model.layers.1.block_sparse_moe.experts.0.w1.weight" in weight_map
+    )
 
     model = LanguageModel(config)
 
     # 1. Load global parameters (embed_tokens, hc_head, norm, lm_head, multimax)
-    global_keys = [k for k in weight_map if not k.startswith("model.layers.")]
+    # Exclude both decoder layers and inline `model.mtp.*` DSpark drafter weights.
+    global_keys = [
+        k for k in weight_map
+        if not k.startswith("model.layers.") and not k.startswith("model.mtp.")
+    ]
     global_mapped = LanguageModel.sanitize_dict(config, _read_tensors(root, weight_map, global_keys))
     model.load_weights(list(global_mapped.items()), strict=False)
     mx.eval(*global_mapped.values())
@@ -554,10 +732,17 @@ def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) 
     for num, block in enumerate(model.layers):
         prefix = f"model.layers.{num}."
         packed_prefix = prefix + "mlp.switch_mlp."
+        mxfp4_expert_prefix = prefix + "block_sparse_moe.experts."
         layer_keys = [k for k in weight_map if k.startswith(prefix)]
         raw = _read_tensors(root, weight_map, layer_keys)
-        packed = {k: v for k, v in raw.items() if k.startswith(packed_prefix)}
-        trunk = {k: v for k, v in raw.items() if k not in packed}
+        if is_mxfp4:
+            expert_raw = {k: v for k, v in raw.items() if k.startswith(mxfp4_expert_prefix)}
+            packed = {}
+            trunk = {k: v for k, v in raw.items() if k not in expert_raw}
+        else:
+            expert_raw = {}
+            packed = {k: v for k, v in raw.items() if k.startswith(packed_prefix)}
+            trunk = {k: v for k, v in raw.items() if k not in packed}
         del raw
 
         switch_glu: Optional[ErnieSwitchGLU] = None
@@ -565,13 +750,25 @@ def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) 
             n_lat = config.moe_latent_size
             n_int = config.moe_intermediate_size
             n_exp = config.n_routed_experts
-            gp = _make_expert_proj(n_lat, n_int, n_exp, packed_prefix + "gate_proj", declared[packed_prefix + "gate_proj"], packed, trellis)
-            up = _make_expert_proj(n_lat, n_int, n_exp, packed_prefix + "up_proj", declared[packed_prefix + "up_proj"], packed, trellis)
-            dp = _make_expert_proj(n_int, n_lat, n_exp, packed_prefix + "down_proj", declared[packed_prefix + "down_proj"], packed, trellis)
-            switch_glu = ErnieSwitchGLU(
-                gp, up, dp, beta=config.activation_situ_beta, linear_beta=config.activation_situ_linear_beta
-            )
-            block.ffn.switch_mlp = switch_glu
+            if is_mxfp4:
+                block.ffn.switch_mlp = pack_mxfp4_experts(
+                    expert_raw,
+                    mxfp4_expert_prefix,
+                    n_exp,
+                    n_lat,
+                    n_int,
+                    beta=config.activation_situ_beta,
+                    linear_beta=config.activation_situ_linear_beta,
+                )
+                del expert_raw
+            else:
+                gp = _make_expert_proj(n_lat, n_int, n_exp, packed_prefix + "gate_proj", declared[packed_prefix + "gate_proj"], packed, trellis)
+                up = _make_expert_proj(n_lat, n_int, n_exp, packed_prefix + "up_proj", declared[packed_prefix + "up_proj"], packed, trellis)
+                dp = _make_expert_proj(n_int, n_lat, n_exp, packed_prefix + "down_proj", declared[packed_prefix + "down_proj"], packed, trellis)
+                switch_glu = ErnieSwitchGLU(
+                    gp, up, dp, beta=config.activation_situ_beta, linear_beta=config.activation_situ_linear_beta
+                )
+                block.ffn.switch_mlp = switch_glu
 
         if keep_exact_mxfp8:
             keep_fp8_linears(prefix, trunk)
@@ -588,7 +785,7 @@ def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) 
             layer_weights[k.replace(packed_prefix, "ffn.switch_mlp.", 1)] = v
         del packed
 
-        block.load_weights(list(layer_weights.items()), strict=True)
+        block.load_weights(list(layer_weights.items()), strict=not is_mxfp4)
         mx.eval(block.parameters())
         if switch_glu is not None:
             switch_glu.prepare()
@@ -598,10 +795,18 @@ def load_ernie5_5_moe(model_path: str | Path, *, keep_exact_mxfp8: bool = True) 
 
     model.eval()
     prep = prepare_ernie_runtime(model.layers)
+    if os.environ.get("VMLX_ERNIE_MHC_BF16", "1") != "0":
+        hc_head = getattr(model.model, "hc_head", None)
+        if hc_head is not None and getattr(hc_head, "fn", None) is not None and hc_head.fn.dtype == mx.float32:
+            fn_b = hc_head.fn.astype(mx.bfloat16)
+            mx.eval(fn_b)
+            hc_head.fn = fn_b
+            prep["mhc_bf16"] = prep.get("mhc_bf16", 0) + 1
     gc.collect()
     mx.clear_cache()
     logger.info(
-        "ERNIE 5.5 Flash loaded: mxfp8_linears=%d saved=%.2f GiB prep=%s active=%.2f GiB",
+        "ERNIE 5.5 Flash (%s) loaded: mxfp8_linears=%d saved=%.2f GiB prep=%s active=%.2f GiB",
+        "MXFP4" if is_mxfp4 else "JANGHT",
         total_mxfp8, total_saved / 2**30, prep, mx.get_active_memory() / 2**30,
     )
     return model

@@ -13279,6 +13279,55 @@ def _native_cache_status(
         })
 
     if (
+        family_name == "hy_v4_flash"
+        or scheduler_family in {"hy_v4_flash", "hy4"}
+        or cache_subtype == "hy4_swa_dsa_engram"
+    ):
+        prefix_configured = bool(
+            getattr(
+                scheduler,
+                "_prefix_cache_requested",
+                getattr(getattr(scheduler, "config", None), "enable_prefix_cache", False),
+            )
+        )
+        return _with_runtime_layout({
+            "family": "hy_v4_flash",
+            "schema": "hy4_swa_dsa_engram_v1",
+            "cache_type": "native_exact_swa_dsa_engram",
+            "cache_subtype": "hy4_swa_dsa_engram",
+            "components": [
+                "swa_rotating_mla_kv",
+                "dsa_growing_mla_kv",
+                "indexpool_4tok_compressed_keys",
+                "engram_ngram_tail",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": False,
+                "reason": "native_swa_dsa_engram_compressed_state",
+            },
+            "cache_store_policy": {
+                "prompt_boundary_snapshot": "exact_typed_n_minus_1",
+                "state_roundtrip": "swa_dsa_indexpool_and_engram_tail",
+                "generic_paged_blocks": "unsupported",
+                "prompt_disk_l2": "exact_typed_full_precision",
+                "reuse": "exact_or_forward_prefix_from_typed_boundary",
+            },
+            "prefix_configured": prefix_configured,
+            "prefix": bool(
+                getattr(scheduler, "memory_aware_cache", None) is not None
+            ),
+            "paged": False,
+            "prompt_disk_l2_configured": bool(
+                getattr(scheduler, "_prompt_disk_cache_requested", disk_cache is not None)
+            ),
+            "block_disk_l2_configured": bool(
+                getattr(scheduler, "_block_disk_cache_requested", block_disk_store is not None)
+            ),
+            "prompt_disk_l2": bool(disk_cache is not None),
+            "block_disk_l2": False,
+        })
+
+    if (
         family_name == "openpangu_v2"
         or scheduler_family == "openpangu_v2"
         or cache_subtype == "openpangu_v2_composite"

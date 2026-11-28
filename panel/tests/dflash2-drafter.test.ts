@@ -149,4 +149,68 @@ describe('bundled draft weight admission', () => {
       expect(findBundledDflash2Drafter(root)).toBeNull()
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
+
+  it('admits bundled dflash2 with virtual-visit taps on looped inkling2_loop targets and detects hy4/ernie inline drafters', async () => {
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs')
+    const { tmpdir } = await import('os')
+    const { findBundledDflash2Drafter } = await import('../src/main/dflash2Bundle')
+    const { findBundledDsparkDrafter, dsparkUsesTextLane } = await import('../src/main/dsparkBundle')
+    const { canonicalizeReasoningParserForCli } = await import('../src/shared/reasoningParserAliases')
+    const root = mkdtempSync(join(tmpdir(), 'phase3-draft-admission-'))
+    try {
+      // 1. Looped Inkling-2 target (24 physical -> 48 virtual visits, taps [5, 23, 41, 48])
+      const ink = join(root, 'inkling')
+      mkdirSync(join(ink, 'dflash2'), { recursive: true })
+      writeFileSync(join(ink, 'config.json'), JSON.stringify({
+        model_type: 'inkling2_loop',
+        text_config: {
+          hidden_size: 32,
+          vocab_size: 64,
+          num_hidden_layers: 24,
+          loop_config: { core_start: 8, core_end: 20, num_passes: 3 },
+        },
+      }))
+      writeFileSync(join(ink, 'dflash2', 'config.json'), JSON.stringify({
+        architectures: ['DFlash2DraftModel'],
+        hidden_size: 32,
+        vocab_size: 64,
+        num_hidden_layers: 1,
+        num_target_layers: 48,
+        dflash_config: { target_layer_ids: [5, 23, 41, 48] },
+      }))
+      const header = Buffer.from(JSON.stringify({
+        'fc.weight': { dtype: 'F16', shape: [32, 128], data_offsets: [0, 8192] },
+        'layers.0.self_attn.q_proj.weight': { dtype: 'F16', shape: [32, 32], data_offsets: [8192, 10240] },
+      }))
+      const len = Buffer.alloc(8)
+      len.writeBigUInt64LE(BigInt(header.length))
+      writeFileSync(join(ink, 'dflash2', 'model.safetensors'), Buffer.concat([len, header, Buffer.alloc(10240)]))
+      expect(findBundledDflash2Drafter(ink)).toBe(join(ink, 'dflash2'))
+
+      // 2. Hy4-flash inline DFly2 + hy4 reasoning parser alias
+      const hy4 = join(root, 'hy4')
+      mkdirSync(hy4, { recursive: true })
+      writeFileSync(join(hy4, 'config.json'), JSON.stringify({ model_type: 'hy_v4_flash', dfly_num_hidden_layers: 5 }))
+      writeFileSync(join(hy4, 'model.safetensors.index.json'), JSON.stringify({
+        weight_map: { 'model.dfly_layers.0.input_layernorm.weight': 'model-001.safetensors' },
+      }))
+      expect(findBundledDsparkDrafter(hy4)).toBe(hy4)
+      expect(dsparkUsesTextLane(hy4)).toBe(true)
+      expect(canonicalizeReasoningParserForCli('hy4')).toBe('hy4')
+      expect(canonicalizeReasoningParserForCli('hy_v4_flash')).toBe('hy4')
+
+      // 3. ERNIE-5.5 inline MXFP4 DSpark (model.mtp.0.*)
+      const ernie = join(root, 'ernie')
+      mkdirSync(ernie, { recursive: true })
+      writeFileSync(join(ernie, 'config.json'), JSON.stringify({
+        model_type: 'ernie5_5_moe',
+        dspark_target_layer_ids: [1, 16, 32, 47],
+      }))
+      writeFileSync(join(ernie, 'model.safetensors.index.json'), JSON.stringify({
+        weight_map: { 'model.mtp.0.fc.weight': 'model-001.safetensors' },
+      }))
+      expect(findBundledDsparkDrafter(ernie)).toBe(ernie)
+      expect(dsparkUsesTextLane(ernie)).toBe(true)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
 })

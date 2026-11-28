@@ -1439,6 +1439,30 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _m, _t = load_zaya_model(local_model_path)
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _finalize_loaded_model(_m, _t)
+            if _mt_arch == "ernie5_5_moe" or _tc_mt_arch == "ernie5_5_moe":
+                logger.info(
+                    "ERNIE 5.5 Flash bundle detected (early route) — native ernie5_5_moe runtime."
+                )
+                from ..dspark.runtime import attach_text_lane
+                from ..models.ernie5_5_moe import load_ernie5_5_moe, load_ernie_tokenizer
+
+                _m = load_ernie5_5_moe(local_model_path)
+                _t = load_ernie_tokenizer(local_model_path)
+                attach_text_lane(_m, local_model_path)
+                return _finalize_loaded_model(_m, _t)
+            if _mt_arch == "hy_v4_flash" or _tc_mt_arch == "hy_v4_flash":
+                logger.info(
+                    "Hy4-flash bundle detected (early route) — native hy_v4_flash runtime (disk Engram + DFly2)."
+                )
+                from mlx_lm.tokenizer_utils import load as _mlx_load_tok
+                from ..dspark.runtime import attach_text_lane
+                from ..models.hy_v4_flash import load_hy_v4_flash
+
+                _m = load_hy_v4_flash(local_model_path)
+                _t = _mlx_load_tok(Path(local_model_path))
+                _inject_chat_template_if_missing(_t, local_model_path)
+                attach_text_lane(_m, local_model_path)
+                return _finalize_loaded_model(_m, _t)
             if _mt_arch == "laguna" or _tc_mt_arch == "laguna":
                 logger.info(
                     "Laguna bundle detected (early route) — load_laguna_model"

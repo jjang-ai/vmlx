@@ -97,6 +97,8 @@ class ARFallback:
     margin = 0.05
     burst = 8
     probe_every = 24
+    probe_burst = 1
+    ar_switch_streak = 1
 
     # Width choice from MEASURED round costs (opt-in VMLX_DSPARK_MEASURED_WIDTH=1; default the static choose_width model). The static
     # model prices a round at 1 + 0.12 * (T - 1) decode steps and ignores the drafter; measured on the 35B-A3B (600-token
@@ -106,7 +108,28 @@ class ARFallback:
     prior_fixed = 0.5        # drafter, in AR-step units, until rounds are measured
     prior_per_row = 0.3      # each verify row after the first, in AR-step units
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        alpha: Optional[float] = None,
+        margin: Optional[float] = None,
+        burst: Optional[int] = None,
+        probe_every: Optional[int] = None,
+        probe_burst: Optional[int] = None,
+        ar_switch_streak: Optional[int] = None,
+    ):
+        if alpha is not None:
+            self.alpha = float(alpha)
+        if margin is not None:
+            self.margin = float(margin)
+        if burst is not None:
+            self.burst = int(burst)
+        if probe_every is not None:
+            self.probe_every = int(probe_every)
+        if probe_burst is not None:
+            self.probe_burst = max(1, int(probe_burst))
+        if ar_switch_streak is not None:
+            self.ar_switch_streak = max(1, int(ar_switch_streak))
         self.draft_rate: Optional[float] = None     # committed tokens per second of draft rounds (EMA)
         self.width_seconds: dict = {}                # verify rows T -> round seconds (EMA)
         self.position_accept: list = []              # P(draft j accepted | drafts < j accepted), EMA per position
@@ -114,7 +137,8 @@ class ARFallback:
         self.ar_left = 0
         self.since_probe = 0
         self.rounds = 0
-        self.probe = False                           # the next action must be a draft round
+        self.probe_left = 0                          # remaining consecutive probe draft rounds out of AR
+        self.ar_loss_streak = 0                      # consecutive draft rounds losing to AR (hysteresis)
         # AR-cost hygiene (cross-lane port of glm_dflash2.AdaptiveSpec d6d64762 / 3dec394f, 2026-10-17): once draft
         # rounds win, nothing re-measured the AR step for the rest of the request (a 20-30k-token reasoning answer
         # kept a one-step seed or one stalled burst); every ar_reprobe_rounds rounds an AR burst re-measures it and
@@ -126,9 +150,17 @@ class ARFallback:
         self.rounds_since_ar = 0
         self._reprobe = False
 
+    @property
+    def probe(self) -> bool:
+        return self.probe_left > 0
+
+    @probe.setter
+    def probe(self, value: bool) -> None:
+        self.probe_left = self.probe_burst if value else 0
+
     def next_is_ar(self) -> bool:
-        if self.probe:
-            self.probe = False
+        if self.probe_left > 0:
+            self.probe_left -= 1
             return False
         if self.ar_left > 0:
             return True
@@ -140,8 +172,12 @@ class ARFallback:
             self._reprobe = True
             self.ar_left = self.burst                # re-measure a possibly stale AR cost
             return True
-        if self.draft_rate is not None and self.ar_seconds is not None \
-                and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin):
+        if (
+            self.draft_rate is not None
+            and self.ar_seconds is not None
+            and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin)
+            and self.ar_loss_streak >= self.ar_switch_streak
+        ):
             self.ar_left = self.burst
             return True
         return False
@@ -243,6 +279,12 @@ class ARFallback:
             self.width_seconds[rows] = seconds if prev is None else prev + self.alpha * (seconds - prev)
         rate = tokens / max(seconds, 1e-9)
         self.draft_rate = rate if self.draft_rate is None else self.draft_rate + self.alpha * (rate - self.draft_rate)
+        if self.ar_seconds is not None:
+            ar_rate = 1.0 / self.ar_seconds
+            if ar_rate > self.draft_rate * (1.0 + self.margin) and ar_rate > rate * (1.0 + self.margin):
+                self.ar_loss_streak += 1
+            else:
+                self.ar_loss_streak = 0
 
     def record_ar(self, seconds: float) -> None:
         self.record_ar_burst(1, seconds)
@@ -263,8 +305,12 @@ class ARFallback:
             return False                             # a draft probe is due
         if self.ar_left - steps > 0:
             return True
-        return (self.draft_rate is not None and self.ar_seconds is not None
-                and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin))
+        return (
+            self.draft_rate is not None
+            and self.ar_seconds is not None
+            and 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin)
+            and self.ar_loss_streak >= self.ar_switch_streak
+        )
 
     def burst_size(self) -> int:
         """AR steps to run now: the rest of the current burst, cut at the next draft probe."""
@@ -290,11 +336,17 @@ class ARFallback:
             self.ar_outliers_skipped += 1            # one stalled burst must not freeze the policy on drafting
         else:
             self.ar_seconds = self.ar_seconds + self.alpha * (per_step - self.ar_seconds)
+        if self.draft_rate is not None and self.ar_seconds is not None:
+            if 1.0 / self.ar_seconds > self.draft_rate * (1.0 + self.margin):
+                self.ar_loss_streak = max(self.ar_loss_streak, 1)
+            else:
+                self.ar_loss_streak = 0
         self.ar_left = max(0, self.ar_left - steps)
         self.since_probe += steps
         if self.since_probe >= self.probe_every:
             self.ar_left = 0
-            self.probe = True                        # one draft round re-measures the text
+            self.probe_left = self.probe_burst       # re-measure drafting across probe_burst rounds
+            self.ar_loss_streak = 0                  # fresh hysteresis slate for the probe burst
 
 
 def _pick(logits: mx.array, sampler: Optional[Callable]) -> mx.array:

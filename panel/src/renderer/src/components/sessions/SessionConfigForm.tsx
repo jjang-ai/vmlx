@@ -1987,8 +1987,14 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
   },
   {
     value: 'ernie', label: 'ERNIE 5.5 — ERNIE think rail', format: '<ernie:think>...reasoning...</ernie:think>content', models: [
-      'ERNIE 5.5 Flash Preview (JANGHT / native MXFP8)',
+      'ERNIE 5.5 Flash Preview (JANGHT / native MXFP4 / MXFP8)',
       'Auto-detected for ernie5_5_moe bundles.',
+    ]
+  },
+  {
+    value: 'hy4', label: 'Hy4-flash — opensource think rail', format: '<think:opensource>...reasoning...</think:opensource>content', models: [
+      'Hy4-flash (MXFP4 / FP8 with disk-backed Engram + DFly2)',
+      'Auto-detected for hy_v4_flash bundles.',
     ]
   },
   {

@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import json
 import logging
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -18,11 +19,20 @@ from vmlx_engine.jangh.switch import TQSwitchLinear
 from .config import ModelConfig
 from .janght import (
     ErnieSwitchGLU,
+    _read_tensors,
     install_direct_mxfp8_linears,
     keep_fp8_linears,
+    mxfp8_view,
+    pack_mxfp4_experts,
     prepare_ernie_runtime,
 )
-from .kernels import ernie_dspark_markov_argmax, ernie_lm_head_forward
+from .kernels import (
+    bf16_linear_fp32,
+    ernie_dspark_markov_argmax,
+    ernie_dspark_markov_topk_chain,
+    ernie_lm_head_forward,
+    ernie_mxfp8_linear,
+)
 from .language import (
     DecoderLayer,
     ErnieRoPE,
@@ -30,6 +40,7 @@ from .language import (
     LanguageModel,
     MultiLinear,
     VirtualHeads,
+    _dequantize_fp8_128,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,19 +104,19 @@ class DraftAttention(nn.Module):
         self._attn_sink_bf16: Optional[mx.array] = None
 
     def context_kv(self, context: mx.array, offset: int) -> mx.array:
-        return self.rope(self.kv_norm(self.wkv(context))[:, None], offset)
+        return self.rope(self.kv_norm(ernie_mxfp8_linear(self.wkv, context))[:, None], offset)
 
     def __call__(self, x: mx.array, attention_state: Tuple[mx.array, int]) -> mx.array:
         context_kv, offset = attention_state
         B, L, _ = x.shape
-        qr = self.q_norm(self.wq_a(x))
+        qr = self.q_norm(ernie_mxfp8_linear(self.wq_a, x))
         if self._qb_ogate_fused is not None:
-            qb_og = self._qb_ogate_fused(qr)
+            qb_og = ernie_mxfp8_linear(self._qb_ogate_fused, qr)
             q_flat = qb_og[..., : self.n_heads * self.head_dim]
             ogate = qb_og[..., self.n_heads * self.head_dim :]
         else:
-            q_flat = self.wq_b(qr)
-            ogate = self.o_gate(qr)
+            q_flat = ernie_mxfp8_linear(self.wq_b, qr)
+            ogate = ernie_mxfp8_linear(self.o_gate, qr)
 
         q = q_flat.reshape(B, L, self.n_heads, self.head_dim)
         q = mx.fast.rms_norm(q, None, self.config.rms_norm_eps).transpose(0, 2, 1, 3)
@@ -125,28 +136,66 @@ class DraftAttention(nn.Module):
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
         out = self.wo_a(out).transpose(0, 2, 1, 3).flatten(-2)
-        return self.wo_b(out * mx.sigmoid(ogate))
+        return ernie_mxfp8_linear(self.wo_b, out * mx.sigmoid(ogate))
 
 
 class ErnieDSparkDrafter:
-    """Bundled ERNIE 5.5 DSpark JANGH3-q4fit non-causal drafter (iter_dspark compatible)."""
+    """Bundled ERNIE 5.5 DSpark drafter — supports both JANGH3-q4fit (`dspark/`) and inline MXFP4 (`model.mtp.*`)."""
 
     def __init__(self, bundle_root: str | Path, target_config: ModelConfig) -> None:
         self.root = Path(bundle_root)
         self.dspark_dir = self.root / "dspark"
         manifest_path = self.dspark_dir / "draft-manifest.json"
-        if not manifest_path.is_file():
-            raise FileNotFoundError(f"ERNIE DSpark manifest missing: {manifest_path}")
-        manifest = json.loads(manifest_path.read_text())
-        self.manifest = manifest
-        self.block_size = int(manifest["block_size"])
+        self.feature_affine: Optional[Dict[str, mx.array]] = None
+        self.feature_proj_linear: Optional[nn.Module] = None
+
+        if manifest_path.is_file():
+            self._init_jangh_dspark(manifest_path, target_config)
+        else:
+            self._init_inline_mxfp4_dspark(target_config)
+
+        # Per-session sliding context KV buffers ([1, 1, S_ctx, 512] per draft layer)
+        self._ctx_kv: List[Optional[mx.array]] = [None] * len(self.layers)
+        self._ctx_offset: int = 0
+        self._ctx_base: int = 0
+        logger.info(
+            "ERNIE 5.5 DSpark drafter loaded: layers=%d block=%d taps=%s mode=%s active=%.2f GiB",
+            len(self.layers),
+            self.block_size,
+            self.taps,
+            "inline-mxfp4" if self.feature_proj_linear is not None else "jangh3",
+            mx.get_active_memory() / 2**30,
+        )
+
+    def _init_inline_mxfp4_dspark(self, target_config: ModelConfig) -> None:
+        raw_cfg = json.loads((self.root / "config.json").read_text())
+        weight_map = json.loads((self.root / "model.safetensors.index.json").read_text())["weight_map"]
+        mtp_keys = [k for k in weight_map if k.startswith("model.mtp.")]
+        if not mtp_keys or not raw_cfg.get("dspark_target_layer_ids"):
+            raise FileNotFoundError(f"ERNIE DSpark drafter missing (no dspark/ or inline model.mtp.*) in {self.root}")
+
+        layer_nums = sorted({
+            int(k.split(".")[2])
+            for k in mtp_keys
+            if len(k.split(".")) > 3 and k.split(".")[2].isdigit()
+        })
+        n_layers = len(layer_nums)
+        if n_layers == 0:
+            raise FileNotFoundError(f"ERNIE inline model.mtp.* has no draft layers in {self.root}")
+
+        self.manifest = {
+            "mode": "inline_mxfp4",
+            "layers": n_layers,
+            "block_size": int(raw_cfg.get("dspark_block_size", 7)),
+            "mask_token": int(raw_cfg.get("dspark_noise_token_id", 1024)),
+            "features": list(raw_cfg["dspark_target_layer_ids"]),
+        }
+        self.block_size = int(self.manifest["block_size"])
         self.block = self.block_size
-        self.mask_id = int(manifest["mask_token"])
+        self.mask_id = int(self.manifest["mask_token"])
         self.mask_token_id = self.mask_id
-        # ERNIE draft-manifest.json lists 1-based decoder layer ordinals (e.g. [10, 22, 34])
-        self.taps: Tuple[int, ...] = tuple(int(x) for x in manifest["features"])
+        self.taps: Tuple[int, ...] = tuple(int(x) for x in self.manifest["features"])
         self.target_layer_ids: List[int] = list(self.taps)
-        n_layers = int(manifest["layers"])
         self.config = replace(
             target_config,
             num_hidden_layers=n_layers,
@@ -162,10 +211,135 @@ class ErnieDSparkDrafter:
         }
         self._target: Optional[LanguageModel] = None
         self.layers: List[DecoderLayer] = []
+
+        n_lat = self.config.moe_latent_size
+        n_int = self.config.moe_intermediate_size
+        n_exp = self.config.n_routed_experts
+
+        for idx in range(n_layers):
+            block = DecoderLayer(self.config, idx)
+            block.attn = DraftAttention(self.config, idx)
+            mtp_prefix = f"model.mtp.{idx}."
+            layer_prefix = f"model.layers.{idx}."
+            exp_prefix = mtp_prefix + "block_sparse_moe.experts."
+            keys_i = [k for k in mtp_keys if k.startswith(mtp_prefix)]
+            raw = _read_tensors(self.root, weight_map, keys_i)
+            expert_raw = {k: v for k, v in raw.items() if k.startswith(exp_prefix)}
+            trunk = {
+                layer_prefix + k.removeprefix(mtp_prefix): v
+                for k, v in raw.items()
+                if not k.startswith(exp_prefix)
+            }
+            del raw
+
+            block.ffn.switch_mlp = pack_mxfp4_experts(
+                expert_raw,
+                exp_prefix,
+                n_exp,
+                n_lat,
+                n_int,
+                beta=self.config.activation_situ_beta,
+                linear_beta=self.config.activation_situ_linear_beta,
+            )
+            del expert_raw
+
+            keep_fp8_linears(layer_prefix, trunk)
+            mapped = LanguageModel.sanitize_dict(self.config, trunk)
+            layer_w = {k.removeprefix(layer_prefix): v for k, v in mapped.items()}
+            del trunk, mapped
+
+            install_direct_mxfp8_linears(block, layer_w)
+            block.load_weights(list(layer_w.items()), strict=False)
+            mx.eval(block.parameters())
+            block.eval()
+            self.layers.append(block)
+            del layer_w
+            gc.collect()
+            mx.clear_cache()
+
+        prepare_ernie_runtime(self.layers)
+
+        head_keys = [k for k in mtp_keys if not (len(k.split(".")) > 3 and k.split(".")[2].isdigit())]
+        head = _read_tensors(self.root, weight_map, head_keys)
+        self.head = HyperHead(self.config)
+        self.head.load_weights([
+            (
+                name,
+                head[f"model.mtp.mhc_contract.hc_head_{name}"].T
+                if name == "fn"
+                else head[f"model.mtp.mhc_contract.hc_head_{name}"],
+            )
+            for name in ("fn", "base", "scale")
+        ])
+        self.feature_norm = head["model.mtp.feature_norm.weight"]
+        self.norm = head["model.mtp.norm.weight"]
+        self.markov_embedding = mx.contiguous(head["model.mtp.markov_head.markov_w1.weight"].T)
+        self.markov_head = head["model.mtp.markov_head.markov_w2.weight"]
+        self.confidence = head["model.mtp.confidence_head.projection.weight"]
+
+        fp_w = head["model.mtp.feature_projection.weight"]
+        fp_s = head.get("model.mtp.feature_projection.weight_scale_inv")
+        if fp_s is not None and fp_w.dtype == mx.uint8:
+            try:
+                codes, scales = mxfp8_view(fp_w, fp_s)
+                out_d, in_d = int(fp_w.shape[0]), int(fp_w.shape[1])
+                proj = nn.QuantizedLinear(in_d, out_d, bias=False, group_size=32, bits=8, mode="mxfp8")
+                proj.weight = codes
+                proj.scales = scales
+                proj.freeze()
+                self.feature_proj_linear = proj
+            except ValueError:
+                deq = _dequantize_fp8_128(fp_w, fp_s).astype(mx.bfloat16)
+                proj = nn.Linear(int(deq.shape[1]), int(deq.shape[0]), bias=False)
+                proj.weight = deq
+                self.feature_proj_linear = proj
+        else:
+            proj = nn.Linear(int(fp_w.shape[1]), int(fp_w.shape[0]), bias=False)
+            proj.weight = fp_w
+            self.feature_proj_linear = proj
+
+        if os.environ.get("VMLX_ERNIE_MHC_BF16", "1") != "0" and self.head.fn.dtype == mx.float32:
+            self.head.fn = self.head.fn.astype(mx.bfloat16)
+        mx.eval(
+            self.head.parameters(), self.feature_proj_linear.parameters(),
+            self.feature_norm, self.norm, self.markov_embedding, self.markov_head, self.confidence,
+        )
+        del head
+        gc.collect()
+        mx.clear_cache()
+
+    def _init_jangh_dspark(self, manifest_path: Path, target_config: ModelConfig) -> None:
+        manifest = json.loads(manifest_path.read_text())
+        self.manifest = manifest
+        self.block_size = int(manifest["block_size"])
+        self.block = self.block_size
+        self.mask_id = int(manifest["mask_token"])
+        self.mask_token_id = self.mask_id
+        # ERNIE draft-manifest.json lists 1-based decoder layer ordinals (e.g. [40, 41, 42])
+        self.taps = tuple(int(x) for x in manifest["features"])
+        self.target_layer_ids = list(self.taps)
+        n_layers = int(manifest["layers"])
+        self.config = replace(
+            target_config,
+            num_hidden_layers=n_layers,
+            first_k_dense_replace=0,
+            compress_ratios=[128] * n_layers,
+        )
+        self.sliding_window = int(self.config.sliding_window)
+        self.cfg = {
+            "hidden_size": int(target_config.hidden_size),
+            "vocab_size": int(target_config.vocab_size),
+            "block_size": self.block_size,
+            "num_hidden_layers": n_layers,
+        }
+        self._target = None
+        self.layers = []
         for idx in range(n_layers):
             block = DecoderLayer(self.config, idx)
             block.attn = DraftAttention(self.config, idx)
             raw = mx.load(str(self.dspark_dir / f"draft-layer-{idx}.safetensors"))
+            if raw:
+                mx.eval(*raw.values())
             prefix = f"model.layers.{idx}."
             switched = prefix + "ffn.switch_mlp."
             expert = {k: raw.pop(k) for k in tuple(raw) if k.startswith(switched)}
@@ -205,6 +379,8 @@ class ErnieDSparkDrafter:
         prepare_ernie_runtime(self.layers)
 
         head = mx.load(str(self.dspark_dir / "draft-head.safetensors"))
+        if head:
+            mx.eval(*head.values())
         self.head = HyperHead(self.config)
         self.head.load_weights([
             (name, head[f"mhc_contract.hc_head_{name}"].T if name == "fn" else head[f"mhc_contract.hc_head_{name}"])
@@ -220,22 +396,15 @@ class ErnieDSparkDrafter:
             for k, v in head.items()
             if k.startswith("feature_affine4.")
         }
+        if os.environ.get("VMLX_ERNIE_MHC_BF16", "1") != "0" and self.head.fn.dtype == mx.float32:
+            self.head.fn = self.head.fn.astype(mx.bfloat16)
         mx.eval(
             self.head.parameters(), self.feature_affine, self.feature_norm,
             self.norm, self.markov_embedding, self.markov_head, self.confidence,
         )
         del head
-        import gc
         gc.collect()
         mx.clear_cache()
-        # Per-session sliding context KV buffers ([1, 1, S_ctx, 512] per draft layer)
-        self._ctx_kv: List[Optional[mx.array]] = [None] * len(self.layers)
-        self._ctx_offset: int = 0
-        self._ctx_base: int = 0
-        logger.info(
-            "ERNIE 5.5 DSpark drafter loaded: layers=%d block=%d taps=%s active=%.2f GiB",
-            n_layers, self.block_size, self.taps, mx.get_active_memory() / 2**30,
-        )
 
     def bind_target(self, target: LanguageModel) -> None:
         self._target = target
@@ -276,12 +445,16 @@ class ErnieDSparkDrafter:
         """Project target tap features [1, T, 12288] -> context KV and keep last sliding_window entries."""
         if features is None or features.shape[1] == 0:
             return
-        aff = self.feature_affine
-        scaled = (features.astype(mx.float32) / aff["input_scale"]).astype(features.dtype)
-        ctx = mx.quantized_matmul(
-            scaled, aff["weight"], aff["scales"], aff["biases"],
-            group_size=64, bits=4, mode="affine",
-        )
+        if self.feature_proj_linear is not None:
+            ctx = self.feature_proj_linear(features)
+        else:
+            aff = self.feature_affine
+            assert aff is not None
+            scaled = (features.astype(mx.float32) / aff["input_scale"]).astype(features.dtype)
+            ctx = mx.quantized_matmul(
+                scaled, aff["weight"], aff["scales"], aff["biases"],
+                group_size=64, bits=4, mode="affine",
+            )
         ctx = mx.fast.rms_norm(ctx, self.feature_norm, self.config.rms_norm_eps)
         win = self.config.sliding_window
         off = self._ctx_offset
@@ -343,13 +516,19 @@ class ErnieDSparkDrafter:
         token = anchor.reshape(()).astype(mx.int32)
         ranges = target.multimax.multimax_ranges
         ts = target.multimax.multimax_ts
+        if sampler is None:
+            fast = ernie_dspark_markov_topk_chain(
+                base, self.markov_embedding, self.markov_head, token, ranges, ts
+            )
+            if fast is not None:
+                return fast
         ids: List[mx.array] = []
         for i in range(k):
             transition = self.markov_embedding[token]
             if sampler is None:
                 token = ernie_dspark_markov_argmax(base[i], self.markov_head, transition, ranges, ts)
             else:
-                logits = base[i] + (self.markov_head.astype(mx.float32) @ transition.astype(mx.float32))
+                logits = base[i] + (self.markov_head @ transition.astype(self.markov_head.dtype)).astype(mx.float32)
                 logits = target.multimax(logits[None, :])[0]
                 lp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
                 token = sampler(lp[None, :]).reshape(()).astype(mx.int32)

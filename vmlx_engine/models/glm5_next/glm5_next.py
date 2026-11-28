@@ -1601,6 +1601,11 @@ class Glm5NextIndexer(nn.Module):
                 sel = glm5_dsa_select(
                     -pool_scores, k=select_k, enabled=True,
                 )
+            if sel is None and pool_scores.dtype == mx.float32 and n_pools > select_k:
+                from vmlx_engine.metal.sparse_topk import metal_radix_topk
+                sel = metal_radix_topk(pool_scores, select_k)
+                if sel is not None:
+                    sel = sel.astype(mx.int32)
             if sel is None:
                 sel = mx.argpartition(-pool_scores, kth=select_k - 1, axis=-1)[..., :select_k]
             sel_visible = mx.take_along_axis(visible.astype(mx.bool_)

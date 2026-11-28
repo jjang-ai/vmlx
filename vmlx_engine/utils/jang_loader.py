@@ -5869,6 +5869,17 @@ def load_jang_model(
         attach_text_lane(model, path)
         return model, tokenizer
 
+    # Hy4-flash (`hy_v4_flash`): native disk-backed Engram + MXFP4 LatentMoE + inline Adaptive DFly2.
+    if str(hf_config.get("model_type", "")).lower() == "hy_v4_flash":
+        from mlx_lm.tokenizer_utils import load as _mlx_load_tok
+        from ..dspark.runtime import attach_text_lane
+        from ..models.hy_v4_flash import load_hy_v4_flash
+
+        model = load_hy_v4_flash(path)
+        tokenizer = _mlx_load_tok(Path(path))
+        attach_text_lane(model, path)
+        return model, tokenizer
+
     def _finalize_loaded_jang(result):
         from .nanbeige_runtime import validate_nanbeige_loop_cache_contract
 

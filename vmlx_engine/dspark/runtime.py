@@ -34,8 +34,9 @@ TARGETS = {
     "minimax_m3": ("minimax_target", "MiniMaxM3DSparkTarget"),
     "minimax_m3_vl": ("minimax_target", "MiniMaxM3DSparkTarget"),
     "ernie5_5_moe": ("ernie_target", "ErnieDSparkTarget"),
+    "hy_v4_flash": ("hy_v4_flash", "HyV4DFly2Target"),
 }
-TEXT_LANE_MODEL_TYPES = frozenset({"minimax_m3", "minimax_m3_vl", "ernie5_5_moe"})
+TEXT_LANE_MODEL_TYPES = frozenset({"minimax_m3", "minimax_m3_vl", "ernie5_5_moe", "hy_v4_flash"})
 
 
 def config_declares_dspark(cfg: Any) -> bool:
@@ -116,11 +117,56 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
     if spec and str(spec.get("method", "")).lower() not in ("", "dspark"):
         return None
     drafter_dir = root / str(spec.get("drafter_path") or "dspark")
-    # ERNIE 5.5 ships its bundled JANGH3-q4fit DSpark drafter as `dspark/draft-manifest.json`
-    # + `draft-head.safetensors` + `draft-layer-{0..N-1}.safetensors`.
+    # Hy4-flash (`hy_v4_flash`) ships inline 5-layer DFly2 (`model.dfly_layers.*`) attached directly
+    # to the loaded model by `load_hy_v4_flash` (zero extra KV cache, Adaptive Rule-0 width ladder).
+    if model_type == "hy_v4_flash":
+        if os.environ.get("VMLX_DFLY2", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return None
+        drafter = getattr(model, "_dfly_drafter", None)
+        if drafter is None:
+            return None
+        from ..models.hy_v4_flash.dfly2 import HyV4DFly2Target
+
+        target = HyV4DFly2Target(model)
+        start_k = max(1, int(getattr(drafter, "block_size", 6)) - 1)
+        pinned_max = _env_int("VMLX_DFLY2_MAX_DRAFT")
+        max_draft = pinned_max if pinned_max is not None else max(start_k * 2, 10)
+        fixed_width = _env_int("VMLX_DFLY2_WIDTH")
+        if fixed_width is not None and pinned_max is None:
+            max_draft = max(max_draft, fixed_width)
+        grow_draft_ladder = pinned_max is None and fixed_width is None
+        logger.info(
+            "Hy4-flash inline DFly2 drafter active: %d layers, reuse KV=%s, initial ladder 1..%d (%s)",
+            drafter.num_layers, drafter.target_kv_layers, max_draft,
+            "Adaptive, growable" if grow_draft_ladder else "Adaptive, explicit limit",
+        )
+        return {
+            "kind": "dfly2",
+            "target": target,
+            "model": model,
+            "drafter": drafter,
+            "path": str(root),
+            "max_draft": max_draft,
+            "fixed_width": fixed_width,
+            "grow_draft_ladder": grow_draft_ladder,
+            "cost_per_row": float(spec.get("cost_per_row", 0.12)),
+            "model_type": model_type,
+        }
+    # ERNIE 5.5 ships either an external JANGH3-q4fit DSpark drafter (`dspark/draft-manifest.json`)
+    # OR an inline MXFP4 DSpark drafter inside `model.safetensors.index.json` (`model.mtp.0.*` +
+    # `dspark_target_layer_ids` in config.json).
     if model_type == "ernie5_5_moe":
         manifest_path = drafter_dir / "draft-manifest.json"
-        if not manifest_path.is_file():
+        has_inline_mtp = False
+        if not manifest_path.is_file() and cfg.get("dspark_target_layer_ids"):
+            idx_path = root / "model.safetensors.index.json"
+            if idx_path.is_file():
+                try:
+                    wmap = json.loads(idx_path.read_text()).get("weight_map") or {}
+                    has_inline_mtp = any(k.startswith("model.mtp.0.") for k in wmap)
+                except Exception:
+                    has_inline_mtp = False
+        if not manifest_path.is_file() and not has_inline_mtp:
             return None
         from ..models.ernie5_5_moe.dspark import ErnieDSparkDrafter
 
@@ -134,15 +180,16 @@ def load_dspark_runtime(model: Any, model_path: str | Path, *, model_types=None)
         if fixed_width is not None and _env_int("VMLX_DSPARK_MAX_DRAFT") is None:
             max_draft = max(max_draft, fixed_width)
         grow_draft_ladder = _env_int("VMLX_DSPARK_MAX_DRAFT") is None and fixed_width is None
+        src_desc = drafter_dir if manifest_path.is_file() else root
         logger.info(
             "ERNIE 5.5 DSpark drafter loaded from %s: block %d, taps %s, initial ladder 1..%d (%s)",
-            drafter_dir, drafter.block, drafter.target_layer_ids, max_draft,
+            src_desc, drafter.block, drafter.target_layer_ids, max_draft,
             "Adaptive, growable" if grow_draft_ladder else "Adaptive, explicit limit",
         )
         return {
             "target": target,
             "drafter": drafter,
-            "path": str(drafter_dir),
+            "path": str(src_desc),
             "max_draft": max_draft,
             "fixed_width": fixed_width,
             "grow_draft_ladder": grow_draft_ladder,

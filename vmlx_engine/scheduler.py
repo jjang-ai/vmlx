@@ -863,6 +863,7 @@ class Scheduler:
         self._model_type_for_runtime = self._detect_model_type_for_runtime(model)
         self._uses_openpangu_cache = self._model_type_for_runtime == "openpangu_v2"
         self._uses_ernie55_cache = self._model_type_for_runtime == "ernie5_5_moe"
+        self._uses_hy4_cache = self._model_type_for_runtime == "hy_v4_flash"
         self._uses_glm5_next_cache = (
             self._model_type_for_runtime in ("glm5_next", "glm5_next_text")
         )
@@ -908,6 +909,24 @@ class Scheduler:
                 logger.info(
                     "ernie5_5_moe exact typed prefix cache enabled: snapshots "
                     "round-trip HCA rotating/pooling and MLA/DSA state to RAM and SSD"
+                )
+        if self._uses_hy4_cache:
+            # Hy4-flash uses native SWA (512-window) + DSA/IndexPool (4-token compressed groups)
+            # + Engram 2-token rolling history. Generic paged/block splitting cannot reconstruct
+            # path-dependent IndexPool/Engram boundaries; use exact typed RAM/SSD prompt-cache.
+            if self.config.use_paged_cache or self.config.enable_block_disk_cache:
+                logger.warning(
+                    "hy_v4_flash native SWA/DSA/Engram cache does not support generic "
+                    "paged/block reuse; disabling paged and block-disk while "
+                    "preserving exact typed memory/prompt-disk SSD reuse"
+                )
+            self.config.use_paged_cache = False
+            self.config.enable_block_disk_cache = False
+            self.config.use_memory_aware_cache = True
+            if self.config.enable_prefix_cache:
+                logger.info(
+                    "hy_v4_flash exact typed prefix cache enabled: snapshots "
+                    "round-trip SWA/DSA/IndexPool and Engram state to RAM and SSD"
                 )
         if self._uses_openpangu_cache:
             # OpenPanguV2LayerCache contains path-dependent convolution state in
@@ -1064,7 +1083,7 @@ class Scheduler:
         # BatchKVCache offsets are arrays and fail mx.arange during prefill.
         _single_batch_native_family = (
             self._model_type_for_runtime
-            in {"ernie5_5_moe", "glm5_next", "glm5_next_text", "openpangu_v2", "zaya", "naive_n05_flash"}
+            in {"ernie5_5_moe", "hy_v4_flash", "glm5_next", "glm5_next_text", "openpangu_v2", "zaya", "naive_n05_flash"}
             or self._uses_zaya_cache
             or self._uses_m3_msa_cache
         )
@@ -1451,14 +1470,19 @@ class Scheduler:
         _allow_mla_kvq = _mla_kvq_env in ("1", "true", "True", "yes", "on")
         _is_dsv4_composite = self._uses_dsv4_cache
         if (
-            (self._uses_openpangu_cache or self._uses_glm5_next_cache or self._uses_ernie55_cache)
+            (
+                self._uses_openpangu_cache
+                or self._uses_glm5_next_cache
+                or self._uses_ernie55_cache
+                or self._uses_hy4_cache
+            )
             and self.config.kv_cache_quantization != "none"
         ):
             logger.info(
                 "%s native mixed cache detected — forcing generic KV cache "
                 "quantization off (was: %s). MLA/HCA state must round-trip "
                 "through the typed native codec.",
-                "ernie5_5_moe" if self._uses_ernie55_cache else ("glm5_next" if self._uses_glm5_next_cache else "openPangu"),
+                "hy_v4_flash" if self._uses_hy4_cache else ("ernie5_5_moe" if self._uses_ernie55_cache else ("glm5_next" if self._uses_glm5_next_cache else "openPangu")),
                 self.config.kv_cache_quantization,
             )
             self.config.kv_cache_quantization = "none"
@@ -3393,6 +3417,8 @@ class Scheduler:
             return "glm5_next"
         if "ernie5_5" in joined:
             return "ernie5_5_moe"
+        if "hy_v4_flash" in joined or "hyv4flash" in joined:
+            return "hy_v4_flash"
         return ""
 
     def _canonicalize_tags(self, text: str) -> str:
@@ -11448,10 +11474,13 @@ class Scheduler:
                                 elif (
                                     getattr(self, "_uses_openpangu_cache", False)
                                     or getattr(self, "_uses_ernie55_cache", False)
+                                    or getattr(self, "_uses_hy4_cache", False)
                                     or getattr(self, "_uses_glm5_next_cache", False)
                                 ):
                                     _typed_family = (
-                                        "ernie5_5_moe"
+                                        "hy_v4_flash"
+                                        if getattr(self, "_uses_hy4_cache", False)
+                                        else "ernie5_5_moe"
                                         if getattr(self, "_uses_ernie55_cache", False)
                                         else "glm5_next"
                                         if getattr(
@@ -11461,7 +11490,7 @@ class Scheduler:
                                     )
                                     if snapshot_cache is not None:
                                         request._extracted_cache = snapshot_cache
-                                        if getattr(self, "_uses_ernie55_cache", False):
+                                        if getattr(self, "_uses_ernie55_cache", False) or getattr(self, "_uses_hy4_cache", False):
                                             _snap_off = int(getattr(snapshot_cache[0], "offset", 0) or 0)
                                             _snap_len = (
                                                 _snap_off
@@ -13027,12 +13056,15 @@ class Scheduler:
                                     if (
                                         getattr(self, "_uses_openpangu_cache", False)
                                         or getattr(self, "_uses_ernie55_cache", False)
+                                        or getattr(self, "_uses_hy4_cache", False)
                                         or getattr(
                                             self, "_uses_glm5_next_cache", False
                                         )
                                     ):
                                         _typed_family = (
-                                            "ernie5_5_moe"
+                                            "hy_v4_flash"
+                                            if getattr(self, "_uses_hy4_cache", False)
+                                            else "ernie5_5_moe"
                                             if getattr(self, "_uses_ernie55_cache", False)
                                             else "glm5_next"
                                             if getattr(

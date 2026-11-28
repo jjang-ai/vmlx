@@ -86,6 +86,7 @@ def _register_builtin_parsers():
     from .muse_glimmer_parser import MuseGlimmerReasoningParser
     from .inkling_parser import InklingReasoningParser
     from .ernie_parser import ErnieReasoningParser
+    from .hy4_parser import Hy4ReasoningParser
 
     register_parser("qwen3", Qwen3ReasoningParser)
     register_parser("deepseek_r1", DeepSeekR1ReasoningParser)
@@ -121,6 +122,9 @@ def _register_builtin_parsers():
     # ERNIE 5.5 uses <ernie:think>...</ernie:think> blocks
     register_parser("ernie", ErnieReasoningParser)
     register_parser("ernie5_5", ErnieReasoningParser)
+    # Hy4-flash uses <think:opensource>...</think:opensource> blocks (prefilled on high effort)
+    register_parser("hy4", Hy4ReasoningParser)
+    register_parser("hy_v4_flash", Hy4ReasoningParser)
     # dots3_note: plain <think>...</think>, thinking ON by default (the model
     # emits <think> itself off a bare assistant header; token 151721).
     # Thinking OFF is a template-side prefilled CLOSED block plus a

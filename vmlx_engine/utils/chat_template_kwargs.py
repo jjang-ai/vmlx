@@ -50,6 +50,19 @@ def build_chat_template_kwargs(
         # that strictly validates kwargs and rejects the generic `thinking` alias.
         include_thinking_alias = False
 
+    if model_type and model_type.lower() == "hy_v4_flash":
+        # Hy4-flash chat_template.jinja strictly validates `reasoning_effort in ['no_think', 'high']`
+        # and does not inspect `enable_thinking`/`thinking`. Map canonical vMLX flags cleanly.
+        include_thinking_alias = False
+        raw_effort = (extra or {}).get("reasoning_effort") if extra else None
+        if enable_thinking is False:
+            kwargs["reasoning_effort"] = "no_think"
+        elif enable_thinking is True:
+            kwargs["reasoning_effort"] = "high"
+        elif raw_effort is not None:
+            eff_s = str(raw_effort).strip().lower()
+            kwargs["reasoning_effort"] = "no_think" if eff_s in {"none", "off", "false", "0", "no_think"} else "high"
+
     if enable_thinking is not None:
         thinking_value = bool(enable_thinking)
         kwargs["enable_thinking"] = thinking_value
@@ -61,6 +74,8 @@ def build_chat_template_kwargs(
             if key in RESERVED_CHAT_TEMPLATE_KWARGS:
                 continue
             if enable_thinking is not None and key in ("enable_thinking", "thinking"):
+                continue
+            if model_type and model_type.lower() == "hy_v4_flash" and key == "reasoning_effort":
                 continue
             kwargs[key] = value
 

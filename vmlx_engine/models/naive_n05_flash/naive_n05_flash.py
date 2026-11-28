@@ -274,7 +274,12 @@ class Attention(nn.Module):
             if Lk <= topk:
                 o = self._full_sdpa(q, k, v, mask, sinks)
             elif L == 1:
-                sel = mx.argpartition(-sc, kth=topk - 1, axis=-1)[..., :topk]    # (B,1,topk)
+                from vmlx_engine.metal.sparse_topk import metal_radix_topk
+                sel = metal_radix_topk(sc, topk) if sc.dtype == mx.float32 else None
+                if sel is None:
+                    sel = mx.argpartition(-sc, kth=topk - 1, axis=-1)[..., :topk]    # (B,1,topk)
+                else:
+                    sel = sel.astype(mx.int32)
                 gi = sel[:, :, :, None]                                         # (B,1,topk,1)
                 ks = mx.take_along_axis(k, mx.broadcast_to(gi, (B, k.shape[1], topk, k.shape[3])), axis=2)
                 vs = mx.take_along_axis(v, mx.broadcast_to(gi, (B, v.shape[1], topk, v.shape[3])), axis=2)
@@ -283,7 +288,12 @@ class Attention(nn.Module):
                 qpos = mx.arange(off, off + L)[:, None]; kpos = mx.arange(Lk)[None, :]
                 causal = qpos >= kpos
                 sc = mx.where(causal[None], sc, -mx.inf)
-                sel = mx.argpartition(-sc, kth=topk - 1, axis=-1)[..., :topk]
+                from vmlx_engine.metal.sparse_topk import metal_radix_topk
+                sel = metal_radix_topk(sc, topk) if sc.dtype == mx.float32 else None
+                if sel is None:
+                    sel = mx.argpartition(-sc, kth=topk - 1, axis=-1)[..., :topk]
+                else:
+                    sel = sel.astype(mx.int32)
                 if (sinks is None and Lk >= DSA_SPARSE_MIN_LK and naive_dsa_sparse_kernel()
                         and q.dtype == mx.bfloat16 and topk % 32 == 0):
                     # per-query sparse kernel: O(L x top_k) instead of dense masked O(L x Lk); ~30 ms per 2048-query

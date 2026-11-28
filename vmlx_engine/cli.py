@@ -1490,6 +1490,28 @@ def serve_command(args):
                     getattr(args, "tool_call_parser", None) or "ernie(auto)",
                     getattr(args, "reasoning_parser", None) or "ernie(auto)",
                 )
+            elif str(_op_c.get("model_type", "")).lower() == "hy_v4_flash":
+                from .models.hy_v4_flash.cache import register_hy4_cache_class
+                register_hy4_cache_class()
+                if (
+                    getattr(args, "enable_block_disk_cache", False)
+                    and not getattr(args, "enable_disk_cache", False)
+                    and getattr(args, "enable_prefix_cache", True)
+                    and not getattr(args, "disable_prefix_cache", False)
+                ):
+                    args.enable_disk_cache = True
+                _apply_openpangu_cache_policy(args, logger)
+                args.enable_jit = False
+                if getattr(args, "is_mllm", False):
+                    args.is_mllm = False
+                logger.info(
+                    "Hy4-flash AUTODETECTED (hy_v4_flash) -> auto-settings: "
+                    "cache=exact-typed SWA+DSA+IndexPool+Engram RAM+SSD(prompt_l2=%s), tq_kv=OFF, "
+                    "tool_parser=%s, reasoning_parser=%s, dfly2=auto",
+                    "ON" if getattr(args, "enable_disk_cache", False) else "off",
+                    getattr(args, "tool_call_parser", None) or "hy_v4_flash(auto)",
+                    getattr(args, "reasoning_parser", None) or "hy4(auto)",
+                )
             elif str(_op_c.get("model_type", "")).lower() == "openpangu_v2":
                 _apply_openpangu_cache_policy(args, logger)
                 _op_jit_forced_off = bool(getattr(args, "enable_jit", False))

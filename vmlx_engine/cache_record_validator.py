@@ -1417,6 +1417,13 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
                 ErnieLayerCache.from_state(state, meta)
             except (TypeError, ValueError) as exc:
                 return False, f"layer {layer_idx}.meta: {exc}", total
+        elif cls_name == "HyV4LayerCache":
+            try:
+                from .models.hy_v4_flash.cache import HyV4LayerCache
+
+                HyV4LayerCache.from_state(state, meta)
+            except (TypeError, ValueError) as exc:
+                return False, f"layer {layer_idx}.meta: {exc}", total
         elif cls_name in {"Glm5KDACache", "Glm5MLACache"}:
             ok, reason = _validate_glm5_typed_state(
                 cls_name,

@@ -122,17 +122,32 @@ class DSparkTextGenerator(SingleBatchGenerator):
         resume.update(self._drafter_resume(prompt_ids[:cached] if cached else []))
         stats = DSparkStats()
         session: dict = {}
-        policy = None if _off("VMLX_DSPARK_AR_FALLBACK") else ARFallback()
+        is_dfly2 = rt.get("kind") == "dfly2"
+        uses_ernie55 = self._cache_uses_ernie55(req.cache)
+        uses_hy4 = self._cache_uses_hy4(req.cache)
+        uses_n_minus_1 = uses_ernie55 or uses_hy4
+        if _off("VMLX_DSPARK_AR_FALLBACK"):
+            policy = None
+        elif uses_n_minus_1 or draft_sampler is not None:
+            # Smoothed EMA (alpha=0.15), 2-step probe burst out of AR, and 2-step
+            # hysteresis (ar_switch_streak=2, margin=0.03) prevent false AR fallback
+            # from single-round sampled variance while keeping 0% regression vs AR.
+            policy = ARFallback(
+                alpha=0.15,
+                margin=0.03,
+                probe_burst=2,
+                ar_switch_streak=2,
+            )
+        else:
+            policy = ARFallback()
         eos = {t for t in self.stop_tokens if isinstance(t, int)}
-        req._dspark_stats = stats
         req._dspark_policy = policy
         req._dspark_session = session
         req._dspark_queue = []
-        uses_ernie55 = self._cache_uses_ernie55(req.cache)
         ernie_n_minus_1_snapshot = None
         snapshot_cuts: tuple[int, ...] = ()
         on_snapshot = None
-        if uses_ernie55:
+        if uses_n_minus_1:
             target_cut = len(prompt_ids) - 1
             if target_cut > cached:
                 snapshot_cuts = (target_cut,)
@@ -144,15 +159,40 @@ class DSparkTextGenerator(SingleBatchGenerator):
                 on_snapshot = _on_ernie_snapshot
             elif target_cut == cached and cached > 0:
                 ernie_n_minus_1_snapshot = self._clone_admissible_prompt_cache_snapshot(req.cache)
-        req._dspark_iter = iter_dspark(
-            rt["target"], rt["drafter"], prompt_ids, max(1, int(req.max_tokens)), eos,
-            prefill_step=self.prefill_step_size, sampler=draft_sampler, max_draft=rt["max_draft"],
-            cost_per_row=rt["cost_per_row"], fixed_width=rt.get("fixed_width"), stats=stats,
-            grow_draft_ladder=rt.get("grow_draft_ladder", False),
-            ar_fallback=policy, resume=resume, session=session, pick=pick,
-            prefill_plan=getattr(req, "m3_plan", None),
-            snapshot_cuts=snapshot_cuts, on_snapshot=on_snapshot,
-        )
+        if is_dfly2:
+            from ..models.hy_v4_flash.dfly2 import DFly2Stats, iter_hy4_dfly2
+
+            dfly_stats = DFly2Stats()
+            req._dspark_stats = dfly_stats
+            req._dspark_iter = iter_hy4_dfly2(
+                rt["model"],
+                rt["drafter"],
+                prompt_ids,
+                max(1, int(req.max_tokens)),
+                eos,
+                prefill_step=self.prefill_step_size,
+                stats=dfly_stats,
+                ar_fallback=policy,
+                fixed_width=rt.get("fixed_width"),
+                cost_per_row=rt["cost_per_row"],
+                max_draft=rt["max_draft"],
+                sampler=draft_sampler,
+                pick=pick,
+                resume=resume,
+                snapshot_cuts=snapshot_cuts,
+                on_snapshot=on_snapshot,
+            )
+        else:
+            req._dspark_stats = stats
+            req._dspark_iter = iter_dspark(
+                rt["target"], rt["drafter"], prompt_ids, max(1, int(req.max_tokens)), eos,
+                prefill_step=self.prefill_step_size, sampler=draft_sampler, max_draft=rt["max_draft"],
+                cost_per_row=rt["cost_per_row"], fixed_width=rt.get("fixed_width"), stats=stats,
+                grow_draft_ladder=rt.get("grow_draft_ladder", False),
+                ar_fallback=policy, resume=resume, session=session, pick=pick,
+                prefill_plan=getattr(req, "m3_plan", None),
+                snapshot_cuts=snapshot_cuts, on_snapshot=on_snapshot,
+            )
         req._dspark_on = True
         req.next_token = self._pull(req)          # the prefill and the first token
         req.prefill_usage = {
@@ -162,11 +202,11 @@ class DSparkTextGenerator(SingleBatchGenerator):
         }
         req.prefill_started = None
         req.context_tokens.extend(req.prompt_tokens)
-        # ERNIE 5.5 stores an exact N-1 typed snapshot for prompt-L2 SSD reuse (path-dependent HCA pooling);
+        # ERNIE 5.5 and Hy4-flash store an exact N-1 typed snapshot for prompt-L2 SSD reuse;
         # other DSpark targets keep their prompt-end snapshot.
         req.prompt_cache_snapshot = (
             ernie_n_minus_1_snapshot
-            if uses_ernie55
+            if uses_n_minus_1
             else self._clone_admissible_prompt_cache_snapshot(req.cache)
         )
         logger.info("DSpark text request %s: prompt %d tokens (%d restored, drafter context %s)", req.uid,
@@ -232,9 +272,15 @@ class DSparkTextGenerator(SingleBatchGenerator):
             # Same keys as the MiniCPM DSpark lane's spec_stats (models/mllm.py: the Perf panel's Last-request card
             # reads kind / lane / cycles / emitted_per_cycle / acceptance / ar_tokens / widths).
             rt_model_type = str((self._dspark or {}).get("model_type") or "")
-            lane_name = "ernie5_5-text" if rt_model_type == "ernie5_5_moe" else "minimax-text"
+            rt_kind = str((self._dspark or {}).get("kind") or "dspark")
+            if rt_model_type == "hy_v4_flash":
+                lane_name = "hy_v4_flash-text"
+            elif rt_model_type == "ernie5_5_moe":
+                lane_name = "ernie5_5-text"
+            else:
+                lane_name = "minimax-text"
             self._spec_stats[req.uid] = {
-                "kind": "dspark", "lane": lane_name, **summary,
+                "kind": rt_kind, "lane": lane_name, **summary,
                 "cycles": summary["rounds"], "emitted_per_cycle": summary["tokens_per_round"],
                 "widths": {str(k): v for k, v in summary["widths"].items()},
                 "generation_tps": summary.get("decode_tok_s"),

@@ -530,9 +530,33 @@ class Dots3Indexer(nn.Module):
             * self.n_heads ** -0.5
         )
 
-        keys_f = keys.astype(mx.float32)  # [B, total, D]
         k_positions = mx.arange(total)[None, None, :]
         topk = min(self.index_topk, total)
+
+        # Fast zero-intermediate fused path (B == 1, total >= 32):
+        # avoids materializing [s_chunk, 64, total] FP32 scores & O(S log S) argpartition.
+        if B == 1 and total >= 32:
+            combined = None
+            if S == 1:
+                from vmlx_engine.metal.dsa_index_scores import dsa_decode_index_scores
+                q_in = query.astype(keys.dtype) if keys.dtype in (mx.bfloat16, mx.float16) else query
+                combined = dsa_decode_index_scores(q_in, keys, weights, scale=1.0)
+            else:
+                from vmlx_engine.metal.dsa_index_scores import dsa_pool_index_scores
+                use_bf16 = keys.dtype == mx.bfloat16
+                q_in = query.astype(mx.bfloat16) if use_bf16 else query
+                k_in = keys if use_bf16 else keys.astype(mx.float32)
+                combined = dsa_pool_index_scores(q_in, k_in, weights, scale=1.0, bf16_operands=use_bf16)
+            if combined is not None:
+                from vmlx_engine.metal.sparse_topk import metal_radix_topk
+                q_pos = (past + mx.arange(S))[None, :, None]
+                combined = mx.where(k_positions > q_pos, -mx.inf, combined)
+                idx = metal_radix_topk(combined, topk)
+                if idx is None:
+                    idx = mx.argpartition(-combined, kth=topk - 1, axis=-1)[..., :topk]
+                return idx.astype(mx.int32)
+
+        keys_f = keys.astype(mx.float32)  # [B, total, D]
         # Per-head scores materialize [s_chunk, n_heads, total] in fp32 —
         # bound the transient to ~2 GB by shrinking the query chunk as the
         # key stream grows (64-head, 100K-key scoring at chunk 1024 would

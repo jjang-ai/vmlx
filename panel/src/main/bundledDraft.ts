@@ -97,6 +97,21 @@ function fcFits(tensors: Record<string, any>, quant: any, hidden: number, width:
   return JSON.stringify(fc.shape) === JSON.stringify([hidden, width])
 }
 
+/** Effective layer-visit count of a target model (accounts for looped transformers like Inkling-2). */
+function targetVirtualLayers(text: any): { virtualLayers: number; isLooped: boolean } {
+  const layers = Number(text?.num_hidden_layers)
+  const loop = text?.loop_config
+  if (loop && typeof loop === 'object') {
+    const coreStart = Number(loop.core_start ?? 0)
+    const coreEnd = Number(loop.core_end ?? 0)
+    const numPasses = Number(loop.num_passes ?? loop.num_loops ?? 1)
+    if (Number.isSafeInteger(coreStart) && Number.isSafeInteger(coreEnd) && Number.isSafeInteger(numPasses) && coreEnd > coreStart && numPasses > 1) {
+      return { virtualLayers: layers + (coreEnd - coreStart) * (numPasses - 1), isLooped: true }
+    }
+  }
+  return { virtualLayers: layers, isLooped: false }
+}
+
 /** Mirrors engine bundled_draft admission, including stored affine / MXFP8 fc geometry and the MiniMax layout. */
 export function bundledDraftFits(draft: string, target: string): boolean {
   try {
@@ -105,11 +120,13 @@ export function bundledDraftFits(draft: string, target: string): boolean {
     const text = root.text_config || root
     const { hidden_size: hidden, vocab_size: vocab, num_hidden_layers: layers } = text
     if (![hidden, vocab, layers].every(n => Number.isSafeInteger(n) && n > 0)) return false
+    const { virtualLayers, isLooped } = targetVirtualLayers(text)
     const geo = draftGeometry(cfg)
     if (geo.hidden !== hidden || !(geo.vocab > 0 && geo.vocab <= vocab)) return false
     const taps = geo.taps
-    if (!Array.isArray(taps) || !taps.length || taps.some(i => !Number.isInteger(i) || i < 0 || i >= layers)) return false
-    if (geo.numTargetLayers !== undefined && geo.numTargetLayers !== null && geo.numTargetLayers !== layers) return false
+    const maxTap = isLooped ? virtualLayers : (virtualLayers - 1)
+    if (!Array.isArray(taps) || !taps.length || taps.some(i => !Number.isInteger(i) || i < 0 || i > maxTap)) return false
+    if (geo.numTargetLayers !== undefined && geo.numTargetLayers !== null && geo.numTargetLayers !== layers && geo.numTargetLayers !== virtualLayers) return false
     const rename = geo.minimax ? minimaxTensorName : (name: string) => name
     const files = readdirSync(draft)
     const shards = files.filter(f => f.endsWith('.safetensors') && !f.startsWith('._'))

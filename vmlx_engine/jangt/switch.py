@@ -412,7 +412,8 @@ class JTMixedSwitchGLU(nn.Module):
     def routed(self, x, indices, scores):
         lead, kk = x.shape[:-1], indices.shape[-1]
         x2 = x.reshape(-1, self.D); idx2 = indices.reshape(-1, kk).astype(mx.int32); w2 = scores.reshape(-1, kk).astype(mx.float32)
-        if idx2.size < SORT_THRESHOLD or not nax_prefill():
+        sort_thresh = 136 if self.act == "inkling" else SORT_THRESHOLD
+        if idx2.size < sort_thresh or not nax_prefill():
             if self.gu_fmt == "jangt" and self.dn_fmt == "jangt":
                 from vmlx_engine.jangt import fast_decode as FD
 

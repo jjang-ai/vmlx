@@ -193,3 +193,200 @@ def dsa_pool_index_scores(q: mx.array, pool_keys: mx.array, head_w: mx.array, sc
                       H=H, L=TM, D=D, Lk=P, qs_layout=True, k_axis=1, scale=scale, fi=fi)
         return out[:, :S]
     return _launch(q, pool_keys, head_w, H=H, L=S, D=D, Lk=P, qs_layout=True, k_axis=1, scale=scale, fi=fi)
+
+
+# ---------------------------------------------------------------------------
+# Fused decode DSA indexer scores (L = 1..8, BF16/FP32):
+# Reads K once from DRAM while keeping Q[H, D] in threadgroup memory (for L==1
+# BF16) or L2 cache — eliminates the [1, H, L, S] intermediate completely!
+# ---------------------------------------------------------------------------
+_DECODE_SCORE_TGQ_SRC = r"""
+    // L == 1 fast path with Q[H, D] staged once in threadgroup memory!
+    // 256 threads (8 simdgroups) per TG; each simdgroup processes K_PER_SG keys.
+    const uint tid = thread_position_in_threadgroup.x;
+    const uint sg = tid >> 5;
+    const uint lane = tid & 31u;
+    const uint tg = threadgroup_position_in_grid.x;
+    const uint S = uint(k_shape[1]);
+    const float sc = scale[0];
+
+    threadgroup T q_sh[H * D];
+    threadgroup float w_sh[H];
+    for (uint i = tid; i < uint(H * D); i += 256u) {
+        q_sh[i] = q[i];
+    }
+    if (tid < uint(H)) {
+        w_sh[tid] = w[tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    constexpr uint D4 = uint(D) / 4u;    // 32 for D=128, 16 for D=64
+    constexpr uint K_PER_SG = 4u;
+    const uint k_base = tg * (8u * K_PER_SG) + sg * K_PER_SG;
+
+    for (uint ki = 0u; ki < K_PER_SG; ++ki) {
+        const uint s = k_base + ki;
+        if (s >= S) break;
+        const device T* k_ptr = k + size_t(s) * uint(D);
+        float total = 0.0f;
+        if (D == 128) {
+            float4 kv = float4(*(const device vec<T, 4>*)(k_ptr + lane * 4u));
+            for (uint h = 0u; h < uint(H); ++h) {
+                float4 qv = float4(*(const threadgroup vec<T, 4>*)(q_sh + h * 128u + lane * 4u));
+                float d = simd_sum(dot(qv, kv));
+                if (HAS_SCALE) d *= sc;
+                total += metal::max(d, 0.0f) * w_sh[h];
+            }
+        } else {
+            // General D multiple of 32 (e.g. D=64 -> 2 elems/lane)
+            float kv0 = (lane < D4) ? float(k_ptr[lane * 4u + 0u]) : 0.0f;
+            float kv1 = (lane < D4) ? float(k_ptr[lane * 4u + 1u]) : 0.0f;
+            float kv2 = (lane < D4) ? float(k_ptr[lane * 4u + 2u]) : 0.0f;
+            float kv3 = (lane < D4) ? float(k_ptr[lane * 4u + 3u]) : 0.0f;
+            for (uint h = 0u; h < uint(H); ++h) {
+                float d = 0.0f;
+                if (lane < D4) {
+                    const threadgroup T* qp = q_sh + h * uint(D) + lane * 4u;
+                    d = float(qp[0]) * kv0 + float(qp[1]) * kv1 + float(qp[2]) * kv2 + float(qp[3]) * kv3;
+                }
+                d = simd_sum(d);
+                if (HAS_SCALE) d *= sc;
+                total += metal::max(d, 0.0f) * w_sh[h];
+            }
+        }
+        if (lane == 0u) {
+            out[s] = total;
+        }
+    }
+"""
+
+_DECODE_SCORE_DIRECT_SRC = r"""
+    // General L >= 1 vectorized path reading Q from L2 cache and K once per key.
+    const uint tid = thread_position_in_threadgroup.x;
+    const uint sg = tid >> 5;
+    const uint lane = tid & 31u;
+    const uint tg = threadgroup_position_in_grid.x;
+    const uint l = threadgroup_position_in_grid.y;
+    const uint S = uint(k_shape[1]);
+    const float sc = scale[0];
+
+    const uint s = tg * 8u + sg;
+    if (s >= S) return;
+
+    const device T* q_l = q + size_t(l) * uint(H * D);
+    const device float* w_l = w + size_t(l) * uint(H);
+    const device T* k_ptr = k + size_t(s) * uint(D);
+
+    float total = 0.0f;
+    if (D == 128) {
+        float4 kv = float4(*(const device vec<T, 4>*)(k_ptr + lane * 4u));
+        for (uint h = 0u; h < uint(H); ++h) {
+            float4 qv = float4(*(const device vec<T, 4>*)(q_l + h * 128u + lane * 4u));
+            float d = simd_sum(dot(qv, kv));
+            if (HAS_SCALE) d *= sc;
+            total += metal::max(d, 0.0f) * w_l[h];
+        }
+    } else {
+        for (uint h = 0u; h < uint(H); ++h) {
+            float d = 0.0f;
+            const device T* qp = q_l + h * uint(D);
+            for (uint i = lane; i < uint(D); i += 32u) {
+                d += float(qp[i]) * float(k_ptr[i]);
+            }
+            d = simd_sum(d);
+            if (HAS_SCALE) d *= sc;
+            total += metal::max(d, 0.0f) * w_l[h];
+        }
+    }
+    if (lane == 0u) {
+        out[size_t(l) * size_t(S) + s] = total;
+    }
+"""
+
+
+@lru_cache(maxsize=16)
+def _decode_score_tgq_kernel(dtype_name: str, H: int, D: int, has_scale: bool):
+    return mx.fast.metal_kernel(
+        name=f"vmlx_dsa_decode_tgq_{dtype_name}_h{H}_d{D}_s{int(has_scale)}",
+        input_names=["q", "k", "w", "scale"],
+        output_names=["out"],
+        header="#include <metal_stdlib>\nusing namespace metal;\n",
+        source=_DECODE_SCORE_TGQ_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+@lru_cache(maxsize=16)
+def _decode_score_direct_kernel(dtype_name: str, H: int, D: int, has_scale: bool):
+    return mx.fast.metal_kernel(
+        name=f"vmlx_dsa_decode_dir_{dtype_name}_h{H}_d{D}_s{int(has_scale)}",
+        input_names=["q", "k", "w", "scale"],
+        output_names=["out"],
+        header="#include <metal_stdlib>\nusing namespace metal;\n",
+        source=_DECODE_SCORE_DIRECT_SRC,
+        ensure_row_contiguous=True,
+    )
+
+
+def dsa_decode_index_scores(
+    q: mx.array,
+    k: mx.array,
+    w: mx.array,
+    scale: float = 1.0,
+    *,
+    enabled: bool = True,
+) -> mx.array | None:
+    """Fused decode DSA indexer scores: q (1, L, H, D), k (1, S, D), w (1, L, H) -> (1, L, S) fp32.
+
+    Supports bfloat16, float16, and float32 operands without materializing (1, H, L, S).
+    Returns None when not admitted.
+    """
+    if not enabled or not dsa_index_scores_requested():
+        return None
+    if mx.default_device() != mx.gpu or not mx.metal.is_available():
+        return None
+    if q.ndim != 4 or k.ndim != 3 or w.ndim != 3:
+        return None
+    B, L, H, D = (int(d) for d in q.shape)
+    if B != 1 or k.shape[0] != 1 or int(k.shape[2]) != D or tuple(w.shape) != (1, L, H):
+        return None
+    S = int(k.shape[1])
+    if L < 1 or S < 1 or q.dtype != k.dtype or q.dtype not in (mx.bfloat16, mx.float16, mx.float32):
+        return None
+    if D % 32 != 0 or D > 256 or H < 1 or H > 256:
+        return None
+
+    # M5 MPP zero-padding decode path (tiles H x 128 on hardware matrix units!)
+    if L == 1 and q.dtype in (mx.bfloat16, mx.float16) and S >= 128 and H % 16 == 0:
+        from .dsa_index_scores_mpp import dsa_decode_index_scores_mpp
+        out = dsa_decode_index_scores_mpp(q, k, w, float(scale))
+        if out is not None:
+            return out
+
+    wf = w if w.dtype == mx.float32 else w.astype(mx.float32)
+    sc = mx.array([float(scale)], dtype=mx.float32)
+    has_scale = float(scale) != 1.0
+    dname = {mx.bfloat16: "bf16", mx.float16: "f16", mx.float32: "f32"}[q.dtype]
+    elem_bytes = 2 if q.dtype in (mx.bfloat16, mx.float16) else 4
+
+    # L == 1 with Q fitting comfortably in 20 KB threadgroup memory (e.g. H=64, D=128 BF16 = 16 KB)
+    if L == 1 and H * D * elem_bytes <= 20480 and D <= 128:
+        n_tg = (S + 31) // 32
+        return _decode_score_tgq_kernel(dname, H, D, has_scale)(
+            inputs=[q, k, wf, sc],
+            template=[("T", q.dtype), ("H", H), ("D", D), ("HAS_SCALE", int(has_scale))],
+            grid=(n_tg * 256, 1, 1),
+            threadgroup=(256, 1, 1),
+            output_shapes=[(1, 1, S)],
+            output_dtypes=[mx.float32],
+        )[0]
+
+    n_tg = (S + 7) // 8
+    return _decode_score_direct_kernel(dname, H, D, has_scale)(
+        inputs=[q, k, wf, sc],
+        template=[("T", q.dtype), ("H", H), ("D", D), ("HAS_SCALE", int(has_scale))],
+        grid=(n_tg * 256, L, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(1, L, S)],
+        output_dtypes=[mx.float32],
+    )[0]

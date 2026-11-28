@@ -18,6 +18,8 @@ export const REASONING_PARSERS_FOR_CLI = new Set([
   'dots3',
   // ERNIE 5.5 Flash <ernie:think>...</ernie:think> reasoning rail.
   'ernie',
+  // Hy4-flash <think:opensource>...</think:opensource> reasoning rail.
+  'hy4',
 ])
 
 export function canonicalizeReasoningParserForCli(parser?: string): string | undefined {
@@ -25,6 +27,7 @@ export function canonicalizeReasoningParserForCli(parser?: string): string | und
   if (parser === 'none') return 'none'
   if (parser === 'minimax' || parser === 'minimax_m2_5') return 'minimax_m2'
   if (parser === 'ernie5_5' || parser === 'ernie_5_5' || parser === 'ernie5_5_moe') return 'ernie'
+  if (parser === 'hy4_flash' || parser === 'hy_v4_flash') return 'hy4'
   // Poolside/Laguna publishes `poolside_v1` in generation_config.json, while
   // the engine registers it as an exact alias of deepseek_r1. Canonicalize at
   // the panel/argv boundary so the vendor spelling cannot be silently dropped

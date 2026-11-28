@@ -75,15 +75,16 @@ def _decode_gemv_rows(x, weight):
 
 
 def _decode_linear(module, x):
-    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
-        if type(module) is nn.Linear:
-            result = _decode_gemv_rows(x, module.weight)
-            return result + module.bias if "bias" in module else result
-        if type(module) is nn.QuantizedLinear and x.shape[0] == 1:
+    if x.shape[0] == 1 and 1 <= x.shape[1] <= 16:
+        if type(module) is nn.QuantizedLinear:
             from .jangh import affine_decode_rows, is_affine_decode_projection
 
             if is_affine_decode_projection(module):
                 return affine_decode_rows(x, module.weight, module.scales, module.biases)
+    if _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1:
+        if type(module) is nn.Linear:
+            result = _decode_gemv_rows(x, module.weight)
+            return result + module.bias if "bias" in module else result
     return module(x)
 
 
@@ -221,7 +222,7 @@ def _conv_state_history(state, inputs, mask):
     width = state.shape[1]
     if (
         width > 0
-        and length <= 8
+        and length <= 16
         and mx.metal.is_available()
         and mx.default_device() == mx.gpu
     ):
@@ -289,7 +290,7 @@ class ShortConvolution(InklingShortConvolution):
             and x.dtype == mx.bfloat16
             and self.kernel_size == 4
             and x.shape[0] <= 4
-            and x.shape[1] <= 8
+            and x.shape[1] <= 16
             and x.shape[-1] % 128 == 0
             and mx.metal.is_available()
             and mx.default_device() == mx.gpu
@@ -520,12 +521,81 @@ class Attention(nn.Module):
         weight = mx.pad(projection.weight, ((start, width - start), (0, 0)))
         return (x @ weight.T)[..., start : start + width]
 
+    def _rel_proj_transposed(self, rel_proj):
+        cached = self.get("_rel_proj_t_cache")
+        if cached is not None and cached[0] is rel_proj:
+            return cached[1]
+        rt = mx.contiguous(rel_proj.T)
+        if not self.training:
+            mx.eval(rt)
+            self._rel_proj_t_cache = (rel_proj, rt)
+        return rt
+
     def _attention_with_sink(self, q, k, v, relative, sinks, padding, rel_proj):
         size = k.shape[2]
+        lq = q.shape[2]
+        # Zero-mask tiled M5 MPP FlashAttention prefill (eliminates O(LQ*S) mask + K/V zero-token copy!)
+        # and Zero-mask Split-K FlashDecode (eliminates O(S) mask at long full-attention decode!).
+        if (
+            padding is None
+            and q.shape[0] == 1
+            and self.head_dim == 128
+            and relative.shape[-1] == 16
+            and q.dtype == k.dtype == v.dtype == mx.bfloat16
+            and mx.default_device() == mx.gpu
+            and mx.metal.is_available()
+        ):
+            if lq >= 2 and size >= 64:
+                if lq <= 10 and (size >= 1024 if self.sliding == 0 else min(size, self.sliding) >= 1024):
+                    from .kernels import inkling_gqa_mpp_attention
+
+                    rel_proj_t = self._rel_proj_transposed(rel_proj)
+                    fused = inkling_gqa_mpp_attention(
+                        q, k, v, relative, rel_proj_t, sinks,
+                        scale=self.head_dim**-0.5,
+                        sliding=self.sliding,
+                        rel_extent=self.rel_extent,
+                    )
+                    if fused is not None:
+                        return fused
+                from .kernels import inkling_flash_attention_prefill
+
+                rel_proj_t = self._rel_proj_transposed(rel_proj)
+                fused = inkling_flash_attention_prefill(
+                    q, k, v, relative, rel_proj_t, sinks,
+                    scale=self.head_dim**-0.5,
+                    sliding=self.sliding,
+                    rel_extent=self.rel_extent,
+                )
+                if fused is not None:
+                    return fused
+            elif lq == 1 and self.sliding == 0 and size >= 2048:
+                rel_proj_t = self._rel_proj_transposed(rel_proj)
+                if size >= 8192:
+                    from .kernels import inkling_gqa_mpp_attention
+
+                    fused = inkling_gqa_mpp_attention(
+                        q, k, v, relative, rel_proj_t, sinks,
+                        scale=self.head_dim**-0.5,
+                        sliding=0,
+                        rel_extent=self.rel_extent,
+                    )
+                    if fused is not None:
+                        return fused
+                from .kernels import inkling_flash_decode
+
+                fused = inkling_flash_decode(
+                    q, k, v, relative, rel_proj_t, sinks,
+                    scale=self.head_dim**-0.5,
+                    rel_extent=self.rel_extent,
+                )
+                if fused is not None:
+                    return fused
+
         mask = banded_additive_mask(
             relative,
             rel_proj,
-            size - q.shape[2],
+            size - lq,
             size,
             self.sliding,
             self.rel_extent,
@@ -537,7 +607,7 @@ class Attention(nn.Module):
         # instead of concatenating a zero column onto the entire K/V cache.
         if (
             q.shape[0] == 1
-            and q.shape[2] == 1
+            and lq == 1
             and sinks.shape == (1, self.n_heads, 1, 1)
         ):
             return mx.fast.scaled_dot_product_attention(
@@ -674,20 +744,66 @@ class Attention(nn.Module):
             sinks = sinks[..., self.head_start : self.head_start + self.n_heads]
         sinks = sinks.transpose(0, 2, 1)[..., None]
         if _VERIFY_WITH_DECODE_GEMV.get() and length > 1:
-            # A multi-row SDPA uses different reduction geometry and rounds
-            # some BF16 coordinates differently from the serving decoder.
-            # Preserve the true chronological window of each query.
-            outputs = []
-            prefix = k.shape[2] - length
-            for row in range(length):
-                end = prefix + row + 1
-                start = max(0, end - self.sliding) if self.sliding else 0
-                outputs.append(self._attention_with_sink(
-                    q[:, :, row:row + 1], k[:, :, start:end], v[:, :, start:end],
-                    r[:, row:row + 1], sinks[:, :, row:row + 1],
-                    padding - start if padding is not None else None, rel_proj,
-                ))
-            out = mx.concatenate(outputs, axis=2)
+            # Fast multi-row zero-mask Split-K verify attention: reads K & V ONCE for all
+            # LQ rows instead of LQ sequential dispatches (zero mask bytes up to 1M!).
+            if (
+                padding is None
+                and b == 1
+                and self.head_dim == 128
+                and r.shape[-1] == 16
+                and q.dtype == k.dtype == v.dtype == mx.bfloat16
+                and 2 <= length <= 16
+                and mx.metal.is_available()
+                and mx.default_device() == mx.gpu
+            ):
+                rel_proj_t = self._rel_proj_transposed(rel_proj)
+                fused_v = None
+                if length <= 10 and (
+                    k.shape[2] >= 1024 if self.sliding == 0 else min(k.shape[2], self.sliding) >= 1024
+                ):
+                    from .kernels import inkling_gqa_mpp_attention
+
+                    fused_v = inkling_gqa_mpp_attention(
+                        q, k, v, r, rel_proj_t, sinks,
+                        scale=self.head_dim**-0.5,
+                        sliding=self.sliding,
+                        rel_extent=self.rel_extent,
+                    )
+                if fused_v is None:
+                    from .kernels import inkling_verify_attention
+
+                    fused_v = inkling_verify_attention(
+                        q, k, v, r, rel_proj_t, sinks,
+                        scale=self.head_dim**-0.5,
+                        sliding=self.sliding,
+                        rel_extent=self.rel_extent,
+                    )
+                if fused_v is not None:
+                    out = fused_v
+                else:
+                    outputs = []
+                    prefix = k.shape[2] - length
+                    for row in range(length):
+                        end = prefix + row + 1
+                        start = max(0, end - self.sliding) if self.sliding else 0
+                        outputs.append(self._attention_with_sink(
+                            q[:, :, row:row + 1], k[:, :, start:end], v[:, :, start:end],
+                            r[:, row:row + 1], sinks[:, :, row:row + 1],
+                            None, rel_proj,
+                        ))
+                    out = mx.concatenate(outputs, axis=2)
+            else:
+                outputs = []
+                prefix = k.shape[2] - length
+                for row in range(length):
+                    end = prefix + row + 1
+                    start = max(0, end - self.sliding) if self.sliding else 0
+                    outputs.append(self._attention_with_sink(
+                        q[:, :, row:row + 1], k[:, :, start:end], v[:, :, start:end],
+                        r[:, row:row + 1], sinks[:, :, row:row + 1],
+                        padding - start if padding is not None else None, rel_proj,
+                    ))
+                out = mx.concatenate(outputs, axis=2)
         else:
             out = self._attention_with_sink(q, k, v, r, sinks, padding, rel_proj)
         out = out.transpose(0, 2, 1, 3).reshape(b, length, -1)
@@ -729,14 +845,24 @@ class SparseMoE(nn.Module):
 
     def __call__(self, x):
         verifying = _VERIFY_WITH_DECODE_GEMV.get() and x.shape[1] > 1
-        indices, weights = _route(
-            x,
-            self.gate_weight,
-            self.e_score_correction_bias,
-            self.top_k,
-            self.route_scale,
-            verifying,
-        )
+        routed = None
+        if not self.training and x.shape[0] == 1 and 1 <= x.shape[1] <= 16:
+            from .kernels import inkling_router_topk
+
+            routed = inkling_router_topk(
+                x, self.gate_weight, self.e_score_correction_bias, self.top_k, self.route_scale
+            )
+        if routed is not None:
+            indices, weights = routed
+        else:
+            indices, weights = _route(
+                x,
+                self.gate_weight,
+                self.e_score_correction_bias,
+                self.top_k,
+                self.route_scale,
+                verifying,
+            )
         fused_constants = self.get("_fused_nvfp4_constants")
         if (
             fused_constants is not None
@@ -744,7 +870,7 @@ class SparseMoE(nn.Module):
             and not self.training
             and x.shape[0] == 1
             and x.dtype == mx.bfloat16
-            and (x.shape[1] == 1 or (verifying and x.shape[1] <= DECODE_BLOCK_SIZE))
+            and 1 <= x.shape[1] <= 16
             and mx.default_device() == mx.gpu
         ):
             from .fused_nvfp4_experts import fused_nvfp4_experts
@@ -865,7 +991,7 @@ class MessageController(nn.Module):
             and mx.metal.is_available()
             and mx.default_device() == mx.gpu
         )
-        if use_fused and width <= 8:
+        if use_fused and width <= 16:
             from .kernels import loop_controller_norm_down, loop_controller_up_blend
 
             packed, eps = fused
@@ -1222,6 +1348,20 @@ class LanguageModel(nn.Module):
             and mx.metal.is_available()
             and mx.default_device() == mx.gpu
         )
+        if not self.training and self.sharding_group is None and h.ndim == 3 and h.shape[0] == 1 and 1 <= h.shape[1] <= 16:
+            from .jangh import is_affine_decode_projection
+
+            if is_affine_decode_projection(self.lm_head) and mx.metal.is_available() and mx.default_device() == mx.gpu:
+                from .kernels import affine8_g64_multi_gemv
+
+                head_in = h.astype(self.model.embed_norm.weight.dtype)
+                cap = float(self.config.final_logit_softcapping or 0.0)
+                fused_lg = affine8_g64_multi_gemv(
+                    head_in, self.lm_head.weight, self.lm_head.scales, self.lm_head.biases,
+                    out_dtype=mx.float32, softcap=cap, out_cols=int(self.config.unpadded_vocab_size),
+                )
+                if fused_lg is not None:
+                    return fused_lg
         if verify_rows and not (dense_decode_head and self.sharding_group is None):
             from .jangh import affine_decode_rows, is_affine_decode_projection
 

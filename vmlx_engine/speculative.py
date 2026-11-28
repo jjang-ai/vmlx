@@ -215,7 +215,7 @@ def external_speculative_incompatibility_reason(
 
 
 # Drafter bits the engine declares at load for a target family, over the bundle's own declaration.
-DFLASH2_DRAFT_BITS_BY_TARGET = {"ricursive": 8}
+DFLASH2_DRAFT_BITS_BY_TARGET = {"ricursive": 8, "inkling2": 8, "inkling2_loop": 8}
 
 
 DFLASH2_DRAFT_LANE_TARGETS = frozenset({"ricursive"})
@@ -319,11 +319,11 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
             from .patches.mlx_vlm_mtp import apply_mlx_vlm_mtp_patch
 
             target_type, draft_bits = _bundled_dflash2_target(resolved_draft)
-            if target_type != "glm5_next":
+            if target_type not in ("glm5_next", "inkling2", "inkling2_loop"):
                 # DFlash2 reuses the Qwen text-RoPE and hybrid rollback hooks from
                 # the native-MTP adapter even though its own external draft wins.
-                # (glm5_next has its own adapter, vmlx_engine/glm_dflash2.py; activating MTP there would make the
-                # target build an MTP head its bundle does not ship.)
+                # (glm5_next and inkling2 have their own adapters; activating Qwen MTP
+                # there would make the target build a head its bundle does not ship.)
                 set_draft_head_loading(True)
                 apply_mlx_vlm_mtp_patch()
 
@@ -369,7 +369,7 @@ def load_draft_model(config: SpeculativeConfig) -> tuple[Any, Any]:
                 logger.info("DFlash2 drafter %s (target %s)",
                             "kept bf16" if draft_bits not in (4, 8) else "quantized at load: affine %d-bit g64" % draft_bits,
                             target_type or "unknown")
-            if target_type != "glm5_next":
+            if target_type not in ("glm5_next", "inkling2", "inkling2_loop"):
                 from .dflash2_runtime import draft_vocab_segments, install_draft_vocab_cut
 
                 _segs = draft_vocab_segments(int(getattr(draft_model.config, "vocab_size", 0) or 0))

@@ -61,6 +61,21 @@ class _ConvolutionCacheTransaction:
             self.abort_speculation(generation)
             return
         if not all(length == self.length for length in lengths):
+            if len(lengths) == 1:
+                keep = lengths[0]
+                for index, (array, state_width) in self.checkpoints.items():
+                    if state_width is None:
+                        self.cache[index] = array[:, keep]
+                    else:
+                        self.cache[index] = array[:, keep : keep + state_width]
+                if self.padding:
+                    accepted = mx.array(lengths, dtype=mx.int32)
+                    for name, value in self.padding.items():
+                        setattr(self.cache, name, value - accepted if value is not None else None)
+                self.is_speculating = False
+                self.checkpoints.clear()
+                return
+
             from .cache_kernels import select_temporal_states
 
             accepted = mx.array(lengths, dtype=mx.int32)
@@ -146,6 +161,33 @@ class _RotatingCacheTransaction:
             else:
                 del cache.update_and_fetch
         else:
+            # Fast O(1) zero-copy slice for single-request RotatingKVCache with keep >= 1:
+            # _update_concat already placed the cache in chronological order with the `length`
+            # new tokens appended at the tail, so committing `keep` tokens is an exact view slice!
+            if (
+                type(cache) is RotatingKVCache
+                and len(lengths) == 1
+                and 1 <= lengths[0] < length
+                and len(self.updates) == 1
+                and self.updates[0][0].shape[2] == length
+                and self.original.get("keep", 0) == 0
+                and "update_and_fetch" not in self.original
+                and cache.keys is not None
+                and cache.values is not None
+                and cache._idx == cache.keys.shape[2]
+                and cache.keys.shape[2] >= length
+            ):
+                keep = lengths[0]
+                kept_old = cache.keys.shape[2] - length
+                end = kept_old + keep
+                cache.keys = cache.keys[..., :end, :]
+                cache.values = cache.values[..., :end, :]
+                cache.offset = self.original["offset"] + keep
+                cache._idx = end
+                del cache.update_and_fetch
+                self.updates.clear()
+                return
+
             from .cache_kernels import commit_rotating_prefix
 
             if commit_rotating_prefix(

@@ -2229,6 +2229,10 @@ def prewarm_dflash2_target(model: Any, draft: Any, *, rounds: int = 3) -> Option
     the requests and keep moving with what they measure (context length, clock). Advisory: a failure only logs."""
     import mlx.core as mx
     import dflash.model_mlx as runtime
+    from .inkling_dflash2 import is_inkling2
+
+    if is_inkling2(model):
+        return None
 
     adapter = _adapter_for(model)
     widths: tuple = ()
@@ -2329,8 +2333,33 @@ def stream_dflash2_generate(
     import dflash.model_mlx as runtime
 
     from .glm_dflash2 import is_glm5_next, stream_glm_dflash2
+    from .inkling_dflash2 import is_inkling2, stream_inkling_dflash2
     from .utils.prefill_step import prefill_step_size
     from .mimo_dflash import is_mimo_v2, stream_mimo_dflash
+
+    if is_inkling2(model):
+        controls = None
+        if min_p or logit_bias or repetition_penalty != 1.0 or frequency_penalty or presence_penalty:
+            from .dflash2_sampling import DFlash2SamplingControls
+            controls = DFlash2SamplingControls(
+                min_p=min_p, logit_bias=logit_bias, repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty, presence_penalty=presence_penalty,
+            )
+        lm = getattr(model, "language_model", model)
+        with runtime.wired_limit(lm, [runtime.generation_stream]):
+            yield from stream_inkling_dflash2(
+                model, tokenizer, draft, prompt,
+                max_tokens=int(max_tokens),
+                temperature=float(temperature),
+                top_p=float(top_p),
+                top_k=int(top_k),
+                stop=stop,
+                prompt_tokens=prompt_tokens,
+                media=media,
+                sampling_controls=controls,
+                use_cache=use_cache,
+            )
+        return
 
     if is_mimo_v2(model) and isinstance(draft, tuple):
         # MiMo-V2.6: its native DFlash drafter (vmlx_engine/mimo_dflash.py; layer-output taps, SWA/full rollback).

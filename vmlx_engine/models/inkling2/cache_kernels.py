@@ -8,7 +8,7 @@ import mlx.core as mx
 
 def _metal_decode(length):
     return (
-        1 <= length <= 8 and mx.metal.is_available() and mx.default_device() == mx.gpu
+        1 <= length <= 16 and mx.metal.is_available() and mx.default_device() == mx.gpu
     )
 
 

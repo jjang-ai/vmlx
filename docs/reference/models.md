@@ -18,10 +18,11 @@ Browse thousands of pre-optimized models at: **https://huggingface.co/mlx-commun
 | Phi-3 | 3.8B, 14B | 4-bit |
 | Granite 3.x, 4.x | Various | 4-bit |
 | Nemotron | 3 Nano 30B | 6-bit |
-| ERNIE 5.5 Flash (`ernie5_5_moe`) | JANGHT / MXFP8 | Native MXFP8 + JANGHT + bundled DSpark + HCA/MLA SSD cache |
+| ERNIE 5.5 Flash (`ernie5_5_moe`) | JANGHT / MXFP8 / MXFP4 | Native MXFP8/MXFP4 + JANGHT + external/inline DSpark + HCA/MLA SSD cache |
+| Hy4-flash (`hy_v4_flash`) | 220B (MXFP4 / FP8 / BF16) | Disk-backed NVMe Engram (`0 GiB` GPU RAM) + IndexPool DSA/SWA MLA + inline Adaptive DFly2 |
 | Bonsai 2.5 (`qwen3_5`) | 27B | 1.75-bit / Ternary JANG + Adaptive Native MTP |
 | Holo4 (`qwen3_5` / `qwen3_5_moe`) | 27B, 35B-A3B | JANG / JANGH2 (text + vision) |
-| Inkling 2 (`inkling2_loop`) | Mini | JANGH2 / JANGHT / NVFP4 + looping architecture + bundled DSpark |
+| Inkling 2 (`inkling2_loop`) | Mini | JANGH2 / JANGHT / NVFP4 + looping architecture + auto-detected bundled DFlash2 / DSpark |
 
 ### Recommended Models
 
@@ -85,6 +86,7 @@ vmlx-engine auto-detects model capabilities by name patterns:
 |--------------------------------|--------|
 | Qwen3 / Qwen3.5 / Bonsai 2.5 / Holo4 | `qwen3` |
 | ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Hy4-flash (`hy_v4_flash`) | `hy4` |
 | Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | DeepSeek-R1 | `deepseek_r1` |
 
@@ -94,6 +96,7 @@ vmlx-engine auto-detects model capabilities by name patterns:
 | Qwen / Qwen2 / Qwen3 | `qwen` |
 | Qwen3.5 / Bonsai 2.5 / Holo4 | `xml_function` (`qwen3_coder`) |
 | ERNIE 5.5 Flash (`ernie5_5_moe`) | `ernie` |
+| Hy4-flash (`hy_v4_flash`) | `hunyuan` (`hy_v4_flash`) |
 | Inkling 2 (`inkling2` / `inkling2_loop`) | `inkling` |
 | Mistral / Devstral | `mistral` |
 | Llama | `llama` |

@@ -1437,7 +1437,8 @@ class BatchedEngine(BaseEngine):
             from pathlib import Path
 
             self._model._inkling_native_dspark_bundle = str(Path(self._model_name).resolve())
-        if is_inkling and dspark_mode not in {"0", "false", "off"}:
+        from ..speculative import is_dflash2_enabled
+        if is_inkling and dspark_mode not in {"0", "false", "off"} and not is_dflash2_enabled():
             from ..models.inkling2.dspark_loader import load_inkling_dspark
 
             def load_native_inkling_head():

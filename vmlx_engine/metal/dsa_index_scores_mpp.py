@@ -180,3 +180,108 @@ def dsa_pool_index_scores_mpp(q: mx.array, pool_keys: mx.array, head_w: mx.array
         kk = mx.pad(pool_keys, [(0, 0), (0, pad_p), (0, 0)]) if pad_p else pool_keys
         return _launch(qq, kk, ww, float(scale))[:, :S, :P]
     return _launch(q, pool_keys, head_w, float(scale))
+
+
+# ---------------------------------------------------------------------------
+# L == 1 Decode MPP kernel: runs Q[H, D] @ K[TK, D]^T directly on the M5 matrix
+# units with ZERO query padding (tiles H x TK instead of 16-padded-queries x TK)!
+# Eliminates the [1, H, 1, S] intermediate completely and runs at ~500 GB/s DRAM!
+# ---------------------------------------------------------------------------
+_DECODE_MPP_SOURCE = r"""
+  const int S = int(k_shape[1]);
+  const int c0 = min(int(threadgroup_position_in_grid.x) * TK, S - TK);
+  const uint tid = thread_position_in_threadgroup.x;
+  const float sc = scale[0];
+
+  threadgroup float w_sh[H];
+  if (tid < uint(H)) w_sh[tid] = float(w[tid]);
+  threadgroup float tile[TH * TK];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  constexpr auto desc = matmul2d_descriptor(TH, TK, D, false, true, false, matmul2d_descriptor::mode::multiply);
+  matmul2d<desc, execution_simdgroups<NSG>> op;
+
+  tensor<device elem_t, dextents<int32_t, 2>, tensor_inline> tK(
+      (device elem_t*)k + (size_t)c0 * D, dextents<int32_t, 2>(D, TK));
+  auto b = tK.slice<D, TK>(0, 0);
+
+  float my_sum = 0.0f;
+  for (int h0 = 0; h0 < H; h0 += TH) {
+    tensor<device elem_t, dextents<int32_t, 2>, tensor_inline> tQ(
+        (device elem_t*)q + (size_t)h0 * D, dextents<int32_t, 2>(D, TH));
+    auto a = tQ.slice<D, TH>(0, 0);
+    auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();
+    op.run(a, b, P);
+    #pragma unroll
+    for (uint16_t i = 0; i < P.get_capacity(); ++i) {
+      if (P.is_valid_element(i)) {
+        const auto idx = P.get_multidimensional_index(i);
+        const float s = HAS_SCALE ? P[i] * sc : P[i];
+        tile[idx[1] * TK + idx[0]] = metal::max(s, 0.0f) * w_sh[h0 + idx[1]];
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // 128 threads each own 1 key column (TK == 128)
+    for (int h = 0; h < TH; ++h) {
+      my_sum += tile[h * TK + tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  out[c0 + tid] = my_sum;
+"""
+
+_DECODE_COMPILED: dict = {}
+
+
+def _decode_mpp_kernel(elem: str, H: int, D: int, TH: int, has_scale: bool):
+    key = (elem, H, D, TH, has_scale)
+    run = _DECODE_COMPILED.get(key)
+    if run is None:
+        consts = (
+            f"  using elem_t = {elem};\n"
+            + "".join(
+                f"  constexpr int {n} = {int(v)};\n"
+                for n, v in (("H", H), ("D", D), ("TH", TH), ("TK", 128), ("NSG", 4), ("HAS_SCALE", int(has_scale)))
+            )
+        )
+        source = consts + _DECODE_MPP_SOURCE
+        name = f"vmlx_dsa_mpp_decode_{hashlib.sha256((_HEADER + source).encode()).hexdigest()[:16]}"
+        run = _DECODE_COMPILED[key] = mx.fast.metal_kernel(
+            name=name, input_names=["q", "k", "w", "scale"], output_names=["out"], source=source, header=_HEADER,
+            ensure_row_contiguous=True,
+        )
+    return run
+
+
+def dsa_decode_index_scores_mpp(
+    q: mx.array,
+    pool_keys: mx.array,
+    head_w: mx.array,
+    scale: float = 1.0,
+    *,
+    enabled: bool = True,
+):
+    """L == 1 zero-padding M5 MPP decode indexer: q (1, 1, H, D), k (1, S, D), w (1, 1, H) -> (1, 1, S) fp32."""
+    if not enabled or not mpp_index_requested():
+        return None
+    if q.ndim != 4 or pool_keys.ndim != 3 or head_w.ndim != 3:
+        return None
+    B, L, H, D = (int(d) for d in q.shape)
+    if B != 1 or L != 1 or pool_keys.shape[0] != 1 or int(pool_keys.shape[2]) != D or tuple(head_w.shape) != (1, 1, H):
+        return None
+    S = int(pool_keys.shape[1])
+    if q.dtype not in _ELEM or pool_keys.dtype != q.dtype or head_w.dtype not in (mx.float32, mx.bfloat16, mx.float16):
+        return None
+    if D % 32 or D > 512 or H < 16 or H % 16 != 0 or H > 256 or S < 128 or not float(scale) > 0.0:
+        return None
+    if not available():
+        return None
+    TH = 32 if (H % 32 == 0) else 16
+    run = _decode_mpp_kernel(_ELEM[q.dtype], H, D, TH, float(scale) != 1.0)
+    return run(
+        inputs=[q, pool_keys, head_w, mx.array([float(scale)], dtype=mx.float32)],
+        grid=(-(-S // 128) * 128, 1, 1),
+        threadgroup=(128, 1, 1),
+        output_shapes=[(1, 1, S)],
+        output_dtypes=[mx.float32],
+    )[0]

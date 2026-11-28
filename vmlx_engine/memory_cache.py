@@ -948,6 +948,22 @@ class MemoryAwarePrefixCache:
                     return None
                 truncated.append(cloned)
                 continue
+            if type(layer_cache).__name__ == "HyV4LayerCache":
+                current_len = int(getattr(layer_cache, "offset", 0) or 0)
+                if not allow_cumulative_clone or target_len != current_len:
+                    return None
+                try:
+                    from .models.hy_v4_flash.cache import clone_hy4_layer_cache
+
+                    cloned = clone_hy4_layer_cache(
+                        layer_cache,
+                        copy_fn=_copy_positional_slice,
+                    )
+                except Exception as exc:
+                    logger.warning("Hy4-flash typed cache clone failed (%s); forcing miss", exc)
+                    return None
+                truncated.append(cloned)
+                continue
             if type(layer_cache).__name__ == "OpenPanguV2LayerCache":
                 # This class is cumulative/path-dependent.  Only a faithful copy
                 # at the stored logical boundary is valid; reverse-prefix

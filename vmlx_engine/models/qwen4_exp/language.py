@@ -1812,6 +1812,11 @@ class QSAIndexer(nn.Module):
         top_idx = None
         if self._merge_select:
             top_idx = sparse_merge_topk(-masked_scores, k=k_sel, enabled=True)
+        if top_idx is None and masked_scores.dtype == mx.float32 and num_blocks > k_sel:
+            from vmlx_engine.metal.sparse_topk import metal_radix_topk
+            top_idx = metal_radix_topk(masked_scores, k_sel)
+            if top_idx is not None:
+                top_idx = top_idx.astype(mx.int32)
         if top_idx is None:
             top_idx = mx.argpartition(-masked_scores, kth=k_sel - 1, axis=-1)[
                 ..., :k_sel

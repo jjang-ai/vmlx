@@ -20,9 +20,21 @@ def is_affine_decode_projection(module):
 
 
 def affine_decode_rows(x, weight, scales, biases):
-    """Indexed one-row GEMV preserves the affine reduction at every position."""
-    options = {"transpose": True, "group_size": 64, "bits": 8, "mode": "affine"}
+    """Multi-row affine 8-bit g=64 GEMV: reads weights ONCE with identical per-row reduction."""
     length = x.shape[1]
+    if (
+        1 <= length <= 16
+        and x.shape[0] == 1
+        and x.shape[-1] % 256 == 0
+        and mx.metal.is_available()
+        and mx.default_device() == mx.gpu
+    ):
+        from .kernels import affine8_g64_multi_gemv
+
+        fused = affine8_g64_multi_gemv(x, weight, scales, biases, out_dtype=x.dtype)
+        if fused is not None:
+            return fused
+    options = {"transpose": True, "group_size": 64, "bits": 8, "mode": "affine"}
     if length == 1:
         return mx.quantized_matmul(x, weight, scales, biases, **options)
     positions = mx.arange(length, dtype=mx.uint32)
@@ -99,7 +111,12 @@ def softcapped_experts_routed(switch, x, indices, weights, activation):
         and gate.tq2_scales.shape == up.tq2_scales.shape
     )
 
-    if switch._use_sorted(routes.size, top_k):
+    # Keep T=1..16 speculative verify (<= 128 routes, top_k=8) on row-exact QMV decode kernels:
+    # on Inkling-2-Mini JANGH2, QMV is 2.0x faster than NAX sorted at verify widths (0.55 vs 1.13 ms/layer!)
+    # AND guarantees bit-exact greedy parity between AR (L=1) and verify (L=2..16)!
+    use_sorted = routes.size > 128 and switch._use_sorted(routes.size, top_k)
+
+    if use_sorted:
         order = mx.argsort(routes)
         inverse = mx.argsort(order)
         sorted_routes = routes[order]

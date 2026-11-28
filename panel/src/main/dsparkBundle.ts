@@ -31,7 +31,7 @@ export function bundledDsparkDefault(modelPath: string | undefined | null): bool
 // --max-num-seqs 1 with continuous batching and its own cache stack: like the text lane, the choice only selects
 // --dspark.
 const DSPARK_SINGLE_REQUEST_MODEL_TYPES = new Set(['minicpmv4_7'])
-const DSPARK_TEXT_LANE_MODEL_TYPES = new Set(['minimax_m3', 'minimax_m3_vl', 'ernie5_5_moe'])
+const DSPARK_TEXT_LANE_MODEL_TYPES = new Set(['minimax_m3', 'minimax_m3_vl', 'ernie5_5_moe', 'hy_v4_flash'])
 const DSPARK_INKLING_MODEL_TYPES = new Set(['inkling2', 'inkling2_loop'])
 const DSPARK_DSV41_MODEL_TYPES = new Set(['deepseek_v41'])
 
@@ -117,7 +117,7 @@ export function dsparkUsesTextLane(modelPath: string | undefined | null): boolea
     DSPARK_INKLING_MODEL_TYPES.has(modelType)
 }
 
-function findErnieDraft(root: string): string | null {
+function findErnieDraft(root: string, cfg: any): string | null {
   const drafter = join(root, 'dspark')
   if (
     existsSync(join(drafter, 'draft-manifest.json')) &&
@@ -126,13 +126,38 @@ function findErnieDraft(root: string): string | null {
   ) {
     return resolve(drafter)
   }
+  if (Array.isArray(cfg?.dspark_target_layer_ids) && cfg.dspark_target_layer_ids.length > 0) {
+    try {
+      const map = JSON.parse(readFileSync(join(root, 'model.safetensors.index.json'), 'utf8')).weight_map || {}
+      if (Object.keys(map).some(k => k.startsWith('model.mtp.0.'))) {
+        return resolve(root)
+      }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function findHy4Draft(root: string, cfg: any): string | null {
+  const numLayers = Number(cfg?.dfly_num_hidden_layers ?? 0)
+  if (!Number.isSafeInteger(numLayers) || numLayers <= 0) return null
+  try {
+    const map = JSON.parse(readFileSync(join(root, 'model.safetensors.index.json'), 'utf8')).weight_map || {}
+    if (Object.keys(map).some(k => k.startsWith('model.dfly_layers.'))) {
+      return resolve(root)
+    }
+  } catch {
+    return null
+  }
   return null
 }
 
 /**
  * Follow vmlx_engine/dspark/runtime.load_dspark_runtime: a target family with a DSpark runtime (MiniCPM-V-4.7,
- * MiniMax-M3 / M3.1, ERNIE 5.5 Flash), using the declared drafter_path or <bundle>/dspark; DeepSeek-V4.1 follows
- * its own loader (findDsv41Draft). Finding a different sidecar must not select a serving lane the engine will not actually use.
+ * MiniMax-M3 / M3.1, ERNIE 5.5 Flash, Hy4-flash inline DFly2), using the declared drafter_path or <bundle>/dspark;
+ * DeepSeek-V4.1 follows its own loader (findDsv41Draft). Finding a different sidecar must not select a serving lane
+ * the engine will not actually use.
  */
 export function findBundledDsparkDrafter(modelPath: string | undefined | null): string | null {
   const root = String(modelPath || '').trim()
@@ -141,7 +166,8 @@ export function findBundledDsparkDrafter(modelPath: string | undefined | null): 
   const modelType = cfg ? String(cfg.model_type || '').toLowerCase() : null
   if (modelType && DSPARK_INKLING_MODEL_TYPES.has(modelType)) return findInklingDraft(root, cfg)
   if (modelType && DSPARK_DSV41_MODEL_TYPES.has(modelType)) return findDsv41Draft(root, cfg)
-  if (modelType === 'ernie5_5_moe') return findErnieDraft(root)
+  if (modelType === 'ernie5_5_moe') return findErnieDraft(root, cfg)
+  if (modelType === 'hy_v4_flash') return findHy4Draft(root, cfg)
   if (!modelType || !(DSPARK_SINGLE_REQUEST_MODEL_TYPES.has(modelType) || DSPARK_TEXT_LANE_MODEL_TYPES.has(modelType))) return null
   let spec: any = {}
   try {

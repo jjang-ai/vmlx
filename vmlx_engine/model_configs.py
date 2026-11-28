@@ -1891,6 +1891,27 @@ def register_all(registry=None):
         )
     )
 
+    # ── Hunyuan / Tencent Hy4-flash (model_type=hy_v4_flash) ──
+    # 220B total / 12B active LatentMoE + disk-backed Engram (63.4B) + 12 DSA IndexPool
+    # + 30 SWA Gated MLA + 4-stream iHC + inline 5-layer Adaptive DFly2.
+    _register(
+        ModelConfig(
+            family_name="hy_v4_flash",
+            model_types=["hy_v4_flash"],
+            cache_type="kv",
+            eos_tokens=[
+                "<｜hy_end:opensource｜>",
+                "<｜hy_end｜>",
+            ],
+            tool_parser="hunyuan",
+            reasoning_parser="hy4",
+            think_in_template=True,
+            supports_thinking=True,
+            supports_native_tools=True,
+            priority=15,
+        )
+    )
+
     # ── Others ──
 
     _register(

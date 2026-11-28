@@ -23,7 +23,10 @@ from .kernels import (
     ernie_mhc_collapse_norm,
     ernie_multi_router_scores,
     ernie_multi_router_topk,
+    ernie_mxfp8_linear,
+    ernie_mxfp8_multi_gemv,
     ernie_shared_situ_latent_norm_concat,
+    ernie_sparse_mla_prefill,
     fused_situ,
     round_e4m3_per128,
 )
@@ -106,6 +109,9 @@ class MXFP8MultiLinear(nn.Module):
         self.freeze()
 
     def __call__(self, x: mx.array) -> mx.array:
+        y = ernie_mxfp8_multi_gemv(x, self.weight, self.scales, grouped=True)
+        if y is not None:
+            return y
         return mx.quantized_matmul(
             x, self.weight, scales=self.scales,
             transpose=True, group_size=32, bits=8, mode="mxfp8",
@@ -200,10 +206,13 @@ class MLP(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         if self._gate_up_fused is not None:
-            gu = self._gate_up_fused(x)
+            gu = ernie_mxfp8_linear(self._gate_up_fused, x)
             half = gu.shape[-1] // 2
-            return self.down_proj(self.activation(gu[..., half:], gu[..., :half]))
-        return self.down_proj(self.activation(self.up_proj(x), self.gate_proj(x)))
+            return ernie_mxfp8_linear(self.down_proj, self.activation(gu[..., half:], gu[..., :half]))
+        return ernie_mxfp8_linear(
+            self.down_proj,
+            self.activation(ernie_mxfp8_linear(self.up_proj, x), ernie_mxfp8_linear(self.gate_proj, x)),
+        )
 
 
 class MultiRouter(nn.Module):
@@ -245,14 +254,14 @@ class LatentMoE(nn.Module):
         ids, weights = self.gate(x, bias)
         proj = None
         if self._shared_fc1_fused is not None:
-            proj = self._shared_fc1_fused(x)
+            proj = ernie_mxfp8_linear(self._shared_fc1_fused, x)
             s1, s2 = self._shared_fc1_splits
             latent = proj[..., s2:]
             shared_mid = None if self._shared_fc2_fused is not None else self.shared_experts.activation(
                 proj[..., s1:s2], proj[..., :s1]
             )
         else:
-            latent = self.fc1_latent_proj(x)
+            latent = ernie_mxfp8_linear(self.fc1_latent_proj, x)
             shared_mid = None
 
         if getattr(self.switch_mlp, "accepts_route_weights", False):
@@ -270,10 +279,10 @@ class LatentMoE(nn.Module):
                     linear_beta=self.shared_experts.activation.linear_beta,
                     norm_eps=self.latent_norm.eps,
                 )
-                return self._shared_fc2_fused(fc2_in)
+                return ernie_mxfp8_linear(self._shared_fc2_fused, fc2_in)
             shared_mid = self.shared_experts.activation(proj[..., s1:s2], proj[..., :s1])
             normed_combined = self.latent_norm(combined)
-            return self._shared_fc2_fused(mx.concatenate([shared_mid, normed_combined], axis=-1))
+            return ernie_mxfp8_linear(self._shared_fc2_fused, mx.concatenate([shared_mid, normed_combined], axis=-1))
 
         normed_combined = self.latent_norm(combined)
         shared_out = (
@@ -453,20 +462,20 @@ class HCAAttention(nn.Module):
         offset = int(local.offset) if local is not None else 0
 
         if self._qa_kv_fused is not None:
-            qa_kv = self._qa_kv_fused(x)
+            qa_kv = ernie_mxfp8_linear(self._qa_kv_fused, x)
             qr = self.q_norm(qa_kv[..., : self.config.q_lora_rank])
             kv_raw = qa_kv[..., self.config.q_lora_rank :]
         else:
-            qr = self.q_norm(self.wq_a(x))
-            kv_raw = self.wkv(x)
+            qr = self.q_norm(ernie_mxfp8_linear(self.wq_a, x))
+            kv_raw = ernie_mxfp8_linear(self.wkv, x)
 
         if self._qb_ogate_fused is not None:
-            qb_og = self._qb_ogate_fused(qr)
+            qb_og = ernie_mxfp8_linear(self._qb_ogate_fused, qr)
             q_flat = qb_og[..., : self.n_heads * self.head_dim]
             ogate = qb_og[..., self.n_heads * self.head_dim :]
         else:
-            q_flat = self.wq_b(qr)
-            ogate = self.o_gate(qr)
+            q_flat = ernie_mxfp8_linear(self.wq_b, qr)
+            ogate = ernie_mxfp8_linear(self.o_gate, qr)
 
         q = q_flat.reshape(B, L, self.n_heads, self.head_dim)
         q = mx.fast.rms_norm(q, None, self.config.rms_norm_eps).transpose(0, 2, 1, 3)
@@ -514,21 +523,26 @@ class HCAAttention(nn.Module):
         else:
             mask = _create_sliding_causal_mask(B, L, S_local, self.config.sliding_window)
             if has_pool:
-                if pool is not None:
-                    pool_mask = pool.make_mask(L, offset)
+                if L == 1 and pool is not None:
+                    # At L == 1, every completed pooled window satisfies (w + 1) * R <= offset + 1,
+                    # so all local + pooled keys are visible: pass mask=None for MLX zero-mask FlashDecode!
+                    kv = mx.concatenate((kv, pooled[:, None]), axis=2)
                 else:
-                    pool_mask = mx.arange(pooled.shape[1])[None] < (
-                        mx.arange(1, L + 1)[:, None] // self.compress_ratio
-                    )
-                if mask is None and pool_mask is not None:
-                    mask = mx.ones((B, 1, L, S_local), dtype=mx.bool_)
-                kv = mx.concatenate((kv, pooled[:, None]), axis=2)
-                mask = _extend_mask(mask, pool_mask, kv.shape[2])
+                    if pool is not None:
+                        pool_mask = pool.make_mask(L, offset)
+                    else:
+                        pool_mask = mx.arange(pooled.shape[1])[None] < (
+                            mx.arange(1, L + 1)[:, None] // self.compress_ratio
+                        )
+                    if mask is None and pool_mask is not None:
+                        mask = mx.ones((B, 1, L, S_local), dtype=mx.bool_)
+                    kv = mx.concatenate((kv, pooled[:, None]), axis=2)
+                    mask = _extend_mask(mask, pool_mask, kv.shape[2])
             out = _scaled_dot_product_attention(q, kv, kv, scale=self.scale, mask=mask, sinks=sinks)
         out = self.rope(out, offset, inverse=True).transpose(0, 2, 1, 3)
         out = self.vha(out).reshape(B, L, self.o_groups, -1).transpose(0, 2, 1, 3)
         out = self.wo_a(out).transpose(0, 2, 1, 3).flatten(-2)
-        return self.wo_b(out * mx.sigmoid(ogate))
+        return ernie_mxfp8_linear(self.wo_b, out * mx.sigmoid(ogate))
 
 
 class Indexer(nn.Module):
@@ -565,26 +579,44 @@ class Indexer(nn.Module):
         if S <= self.topk + self.window:
             return mask, None
 
+        # Compute ReLU(q @ k^T) weighted across heads in FP32 without materializing
+        # the [1, 64, L, S] intermediate (saves 26-262 GB at 100K-1M context!).
+        weights = self.weights_proj(x).astype(mx.float32) * ((self.heads * self.dim) ** -0.5)
+
+        # Fast zero-mask path (B == 1, causal or no extra mask):
+        # 1) Fused Metal indexer score (decode TG-Q for L==1, M5 MPP for L>=2)
+        # 2) Exact linear-time Metal radix Top-K + fused recent sliding window append
+        # Returns (None, indices [1, L, topk + window] uint32) — ZERO [1, 1, L, S] bool mask!
+        if B == 1 and S >= 32:
+            scores = None
+            if L == 1:
+                from vmlx_engine.metal.dsa_index_scores import dsa_decode_index_scores
+                scores = dsa_decode_index_scores(q.transpose(0, 2, 1, 3), k[:, 0], weights, scale=1.0)
+            else:
+                from vmlx_engine.metal.dsa_index_scores import dsa_pool_index_scores
+                scores = dsa_pool_index_scores(
+                    q.transpose(0, 2, 1, 3), k[:, 0], weights, scale=1.0, bf16_operands=True
+                )
+            if scores is not None:
+                from vmlx_engine.metal.sparse_topk import metal_radix_topk
+                q_end = mx.arange(S - L + 1, S + 1, dtype=mx.uint32)
+                older_end = mx.maximum(q_end.astype(mx.int32) - self.window, 0).astype(mx.uint32)
+                sel = metal_radix_topk(
+                    scores,
+                    self.topk,
+                    valid_end=older_end,
+                    recent_window=self.window,
+                    recent_end=q_end,
+                )
+                if sel is not None:
+                    return None, sel
+
         delta = mx.arange(S)[None, :] - mx.arange(S - L, S)[:, None]
         recent = (delta <= 0) & (delta > -self.window)
         older = delta <= -self.window
         valid = older if mask is None else (older & mask)
-
-        # Compute ReLU(q @ k^T) weighted across heads in FP32
-        # For prefill (B == 1, L >= 2, S >= 32), dispatch to vMLX's M5 MPP matrix-unit
-        # DSA indexer kernel (avoids materializing the [1, 32, L, S] FP32 tensor!).
-        weights = self.weights_proj(x).astype(mx.float32) * ((self.heads * self.dim) ** -0.5)
-        scores = None
-        if B == 1 and L >= 2 and S >= 32:
-            from vmlx_engine.metal.dsa_index_scores import dsa_pool_index_scores
-            scores = dsa_pool_index_scores(
-                q.transpose(0, 2, 1, 3), k[:, 0], weights, scale=1.0, bf16_operands=True
-            )
-            if scores is not None:
-                scores = scores[:, None, :, :]
-        if scores is None:
-            scores = mx.maximum(q @ k.swapaxes(-1, -2), 0).astype(mx.float32)
-            scores = (scores * weights.transpose(0, 2, 1)[..., None]).sum(axis=1, keepdims=True)
+        scores = mx.maximum(q @ k.swapaxes(-1, -2), 0).astype(mx.float32)
+        scores = (scores * weights.transpose(0, 2, 1)[..., None]).sum(axis=1, keepdims=True)
         scores = mx.where(valid, scores, -mx.inf)
         ids = mx.argpartition(-scores, kth=self.topk - 1, axis=-1)[..., : self.topk]
         sparse = mx.put_along_axis(mx.zeros(scores.shape, dtype=mx.bool_), ids, mx.array(True), axis=-1)
@@ -632,24 +664,24 @@ class MLAAttention(nn.Module):
         offset = int(latent_cache.offset) if latent_cache is not None else 0
 
         if self._qa_kva_fused is not None:
-            qkva = self._qa_kva_fused(x)
+            qkva = ernie_mxfp8_linear(self._qa_kva_fused, x)
             q_rank = self.q_a_layernorm.weight.shape[0]
             qr = self.q_a_layernorm(qkva[..., :q_rank])
             kva = qkva[..., q_rank:]
         else:
-            qr = self.q_a_layernorm(self.q_a_proj(x))
-            kva = self.kv_a_proj_with_mqa(x)
+            qr = self.q_a_layernorm(ernie_mxfp8_linear(self.q_a_proj, x))
+            kva = ernie_mxfp8_linear(self.kv_a_proj_with_mqa, x)
 
         if self._qb_og_idx_fused is not None:
-            qoi = self._qb_og_idx_fused(qr)
+            qoi = ernie_mxfp8_linear(self._qb_og_idx_fused, qr)
             s_qb = self.heads * (self.nope + self.rope_dim)
             s_og = self.heads * self.value_dim
             q_raw = qoi[..., :s_qb]
             ogate = qoi[..., s_qb : s_qb + s_og]
             q_idx_pre = qoi[..., s_qb + s_og :]
         else:
-            q_raw = self.q_b_proj(qr)
-            ogate = self.o_gate(qr)
+            q_raw = ernie_mxfp8_linear(self.q_b_proj, qr)
+            ogate = ernie_mxfp8_linear(self.o_gate, qr)
             q_idx_pre = None
 
         q = q_raw.reshape(B, L, self.heads, -1).transpose(0, 2, 1, 3)
@@ -664,17 +696,40 @@ class MLAAttention(nn.Module):
         S = kv.shape[2]
         mask = None if L == 1 else (mx.arange(S)[None, :] <= mx.arange(S - L, S)[:, None])[None, None]
         mask, indices = self.indexer(x, qr, mask, index_cache, q_idx_pre=q_idx_pre)
-        if indices is not None:
-            take = indices[:, :, 0, :, None]
-            kv = mx.take_along_axis(kv, take, axis=2)
-            k_pe = mx.take_along_axis(k_pe, take, axis=2)
-            mask = mx.take_along_axis(mask, indices, axis=-1)
 
         sinks = (
             self._attn_sink_bf16
             if (self._attn_sink_bf16 is not None and q_nope.dtype == mx.bfloat16)
             else self.attn_sink.astype(q_nope.dtype)
         )
+
+        # Fast fused sparse absorbed MLA path (constant O(topK + window) memory & FLOPs up to 1M!):
+        # Handles decode (L == 1), DSpark verify (L == 2..16), AND long-context prefill (L > 16)
+        # without ever expanding k_full/v_full over S or materializing [64, L, S] pe_scores!
+        if indices is not None and indices.ndim == 3 and B == 1:
+            q_abs = self.embed_q(q_nope)
+            if L == 1 and S >= self.indexer.topk + self.indexer.window:
+                # L == 1 decode: all (topk + window) indices are valid (< S); compare direct gather+SDPA vs fused
+                take = indices[:, None, 0, :, None]
+                kv_s = mx.take_along_axis(kv, take, axis=2)
+                kpe_s = mx.take_along_axis(k_pe, take, axis=2)
+                pe_scores = (q_pe * self.scale) @ kpe_s.swapaxes(-1, -2)
+                out = _scaled_dot_product_attention(
+                    q_abs, kv_s, kv_s, scale=self.scale, mask=pe_scores, sinks=sinks
+                )
+            else:
+                out = ernie_sparse_mla_prefill(
+                    q_abs, q_pe, kv, k_pe, indices, self.attn_sink, self.scale
+                )
+            out = self.unembed_out(out)
+            out = self.vha(out.transpose(0, 2, 1, 3)).flatten(-2)
+            return ernie_mxfp8_linear(self.wo_b, out * mx.sigmoid(ogate))
+
+        if indices is not None:
+            take = indices[:, :, 0, :, None]
+            kv = mx.take_along_axis(kv, take, axis=2)
+            k_pe = mx.take_along_axis(k_pe, take, axis=2)
+            mask = mx.take_along_axis(mask, indices, axis=-1) if mask is not None else None
         # Keep absorbed latent MLA for decode (L == 1) and DSpark verify (1 < L <= 16).
         # For long prefill (L >= 512), strip queries in 512-token chunks so `pe_scores`
         # never materializes an O(L*S) [64, L, S] tensor (8x-16x lower RAM + 2x faster!).
@@ -721,7 +776,7 @@ class MLAAttention(nn.Module):
                 q_nope, k, v, scale=self.scale, mask=pe_scores, sinks=sinks
             )
         out = self.vha(out.transpose(0, 2, 1, 3)).flatten(-2)
-        return self.wo_b(out * mx.sigmoid(ogate))
+        return ernie_mxfp8_linear(self.wo_b, out * mx.sigmoid(ogate))
 
 
 class DecoderLayer(nn.Module):

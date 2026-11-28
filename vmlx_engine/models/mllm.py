@@ -579,6 +579,8 @@ def _dflash_target_lane_qmm(dflash2_enabled: bool, lm_type: str, is_mimo_v2: boo
         return False, "VMLX_LANE_QMM=0"
     if lm_type == "glm5_next":
         return False, "glm5_next keeps its native kernels"
+    if lm_type in {"inkling2", "inkling2_loop", "inkling2_loop_text"}:
+        return False, "inkling2 keeps its native packed affine multi-GEMV kernels"
     if lm_type in {"qwen3_5_moe", "qwen3_5_moe_text"} and os.environ.get(
         "VMLX_QWEN_MOE_LANE_QMM", "0"
     ).strip().lower() not in ("1", "on", "true", "yes"):
@@ -7006,9 +7008,10 @@ class MLXMultimodalLM:
         import numpy as np
 
         from ..glm_dflash2 import is_glm5_next
+        from ..inkling_dflash2 import is_inkling2
 
         language_model = getattr(self.model, "language_model", None)
-        glm = is_glm5_next(self.model)
+        glm = is_glm5_next(self.model) or is_inkling2(self.model)
         if glm and (language_model is None or not hasattr(self.model, "get_input_embeddings")):
             return None
         if not glm and (
@@ -7881,6 +7884,11 @@ class MLXMultimodalLM:
                 _is_glm_dflash2 = bool(_is_glm5_next(self.model))
             except Exception:
                 _is_glm_dflash2 = False
+            try:
+                from ..inkling_dflash2 import is_inkling2 as _is_inkling2
+                _is_inkling_dflash2 = bool(_is_inkling2(self.model))
+            except Exception:
+                _is_inkling_dflash2 = False
             logger.info(
                 "DFlash2 %s chat active for %s",
                 "media (VLM prefill, %d image(s)/frame(s))" % len(all_images) if _df2_media else "text",
@@ -7950,7 +7958,7 @@ class MLXMultimodalLM:
                     stats_logged = True
                     _spec_stats = {
                         "kind": "dflash2",
-                        "lane": "glm" if _is_glm_dflash2 else "qwen",
+                        "lane": "glm" if _is_glm_dflash2 else ("inkling2" if _is_inkling_dflash2 else "qwen"),
                         "cycles": cycles,
                         "emitted_per_cycle": round(mean_emitted, 3),
                         "drafted": proposed_draft,

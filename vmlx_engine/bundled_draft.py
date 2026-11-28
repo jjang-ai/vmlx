@@ -70,6 +70,19 @@ def _check_fc(tensors: dict, quant: dict, hidden: int, width: int) -> None:
         raise ValueError("Bundled draft projection does not fit target taps")
 
 
+def _target_virtual_layers(text: dict) -> tuple[int, bool]:
+    """Effective layer-visit count of a target model (accounts for looped transformers like Inkling-2)."""
+    layers = int(text["num_hidden_layers"])
+    loop = text.get("loop_config")
+    if isinstance(loop, dict):
+        core_start = int(loop.get("core_start", 0))
+        core_end = int(loop.get("core_end", 0))
+        num_passes = int(loop.get("num_passes", loop.get("num_loops", 1)))
+        if core_end > core_start and num_passes > 1:
+            return layers + (core_end - core_start) * (num_passes - 1), True
+    return layers, False
+
+
 def validate_bundled_draft(draft_path, target_path) -> None:
     """Reject missing/corrupt weights and incompatible target geometry.
 
@@ -81,15 +94,18 @@ def validate_bundled_draft(draft_path, target_path) -> None:
     target_cfg = json.loads((target / "config.json").read_text())
     text = target_cfg.get("text_config") or target_cfg
     hidden, vocab, layers = (int(text[k]) for k in ("hidden_size", "vocab_size", "num_hidden_layers"))
+    virtual_layers, is_looped = _target_virtual_layers(text)
     if min(hidden, vocab, layers) <= 0:
         raise ValueError("Invalid target geometry")
     geo = _draft_geometry(cfg)
     if int(geo["hidden"]) != hidden or not 0 < int(geo["vocab"]) <= vocab:
         raise ValueError("Bundled drafter hidden size or vocabulary does not fit target")
     taps = geo["taps"]
-    if not isinstance(taps, list) or not taps or any(type(i) is not int or not 0 <= i < layers for i in taps):
+    # Looped models (Inkling-2) can tap virtual visits [0..virtual_layers], where virtual_layers is post-final-norm.
+    max_tap = virtual_layers if is_looped else (virtual_layers - 1)
+    if not isinstance(taps, list) or not taps or any(type(i) is not int or not 0 <= i <= max_tap for i in taps):
         raise ValueError("Bundled drafter target layers do not fit target")
-    if geo["num_target_layers"] is not None and int(geo["num_target_layers"]) != layers:
+    if geo["num_target_layers"] is not None and int(geo["num_target_layers"]) not in (layers, virtual_layers):
         raise ValueError("Bundled drafter target layer count does not match target")
     tensors, owners = {}, {}
     shards = sorted(p for p in draft.glob("*.safetensors") if not p.name.startswith("._"))
