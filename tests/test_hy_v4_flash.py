@@ -363,3 +363,182 @@ def test_hy4_reasoning_and_tool_parsers():
     assert info3.tools_called is True
     assert info3.tool_calls[0]["name"] == "search"
     assert json.loads(info3.tool_calls[0]["arguments"]) == {"q": "mlx"}
+
+
+def test_hunyuan_tool_parser_per_tool_call_streaming_no_leak():
+    """Verify per-tool-call streaming emits Call 0 before Call 1 completes and never leaks partial tags."""
+    from vmlx_engine.tool_parsers import ToolParserManager
+
+    tp = ToolParserManager.get_tool_parser("hy_v4_flash")()
+    chunks = [
+        "Checking ",
+        "both now. <tool_",
+        "calls:opensource><tool_call:opensource>get_weather",
+        "<arg_key:opensource>city</arg_key:opensource>",
+        "<arg_value:opensource>Tokyo</arg_value:opensource>",
+        "</tool_call:opensource>",
+        "<tool_call:opensource>get_time",
+        "<arg_key:opensource>tz</arg_key:opensource>",
+        "<arg_value:opensource>JST</arg_value:opensource>",
+        "</tool_call:opensource></tool_calls:opensource>",
+    ]
+    prev = ""
+    emitted_content = []
+    emitted_calls = []
+    call0_emitted_at = None
+    call1_emitted_at = None
+    for idx, delta in enumerate(chunks):
+        cur = prev + delta
+        res = tp.extract_tool_calls_streaming(prev, cur, delta)
+        prev = cur
+        if not res:
+            continue
+        if res.get("content"):
+            emitted_content.append(res["content"])
+        if res.get("tool_calls"):
+            for tc in res["tool_calls"]:
+                emitted_calls.append(tc)
+                if tc["index"] == 0 and call0_emitted_at is None:
+                    call0_emitted_at = idx
+                if tc["index"] == 1 and call1_emitted_at is None:
+                    call1_emitted_at = idx
+
+    full_text = "".join(emitted_content)
+    assert full_text == "Checking both now. "
+    assert "<tool_" not in full_text
+    assert len(emitted_calls) == 2
+    assert emitted_calls[0]["function"]["name"] == "get_weather"
+    assert json.loads(emitted_calls[0]["function"]["arguments"]) == {"city": "Tokyo"}
+    assert emitted_calls[1]["function"]["name"] == "get_time"
+    assert json.loads(emitted_calls[1]["function"]["arguments"]) == {"tz": "JST"}
+    # Per-tool-call streaming: Call 0 MUST emit on chunk 5 (its own </tool_call:opensource>)
+    # BEFORE Call 1 closes on chunk 9!
+    assert call0_emitted_at == 5
+    assert call1_emitted_at == 9
+
+
+def test_hy4_reasoning_effort_and_template_policy():
+    from vmlx_engine.server import (
+        _normalize_hy4_reasoning_effort,
+        _rendered_prompt_starts_in_reasoning,
+        _template_completes_thinking,
+    )
+    from vmlx_engine.utils.chat_template_kwargs import build_chat_template_kwargs
+
+    assert _normalize_hy4_reasoning_effort("none", enable_thinking=None) == "no_think"
+    assert _normalize_hy4_reasoning_effort("off", enable_thinking=None) == "no_think"
+    assert _normalize_hy4_reasoning_effort("no_think", enable_thinking=None) == "no_think"
+    assert _normalize_hy4_reasoning_effort("low", enable_thinking=None) == "high"
+    assert _normalize_hy4_reasoning_effort("medium", enable_thinking=None) == "high"
+    assert _normalize_hy4_reasoning_effort("high", enable_thinking=None) == "high"
+    assert _normalize_hy4_reasoning_effort(None, enable_thinking=False) == "no_think"
+    assert _normalize_hy4_reasoning_effort(None, enable_thinking=True) == "high"
+    assert _normalize_hy4_reasoning_effort(None, enable_thinking=None) is None
+
+    assert _rendered_prompt_starts_in_reasoning("<｜hy_Assistant:opensource｜><think:opensource>\n") is True
+    assert _rendered_prompt_starts_in_reasoning("<｜hy_Assistant:opensource｜><think:opensource></think:opensource>") is False
+    class _FakeTok:
+        def apply_chat_template(self, msgs, **kwargs):
+            return "<｜hy_Assistant:opensource｜><think:opensource></think:opensource>"
+
+    assert _template_completes_thinking(_FakeTok(), "hy_v4_flash_unit_test_no_think") is True
+
+    kw_off = build_chat_template_kwargs(model_type="hy_v4_flash", enable_thinking=False)
+    assert kw_off.get("reasoning_effort") == "no_think"
+    kw_on = build_chat_template_kwargs(model_type="hy_v4_flash", enable_thinking=True)
+    assert kw_on.get("reasoning_effort") == "high"
+
+
+@pytest.mark.skipif(not mx.metal.is_available(), reason="Metal GPU required")
+def test_hy4_vision_tower_mrope_and_dfly2_vl():
+    """Verify HyV4VisionModel + 3D M-RoPE + rope_delta SSD round-trip + VL DFly2 decode parity."""
+    from vmlx_engine.models.hy_v4_flash.vision import (
+        HyV4VisionModel,
+        compute_hy4_mrope_positions,
+    )
+
+    mx.random.seed(7)
+    cfg = _make_mini_hy4_config()
+    cfg.vision_config = {
+        "hidden_size": 64,
+        "intermediate_size": 128,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "patch_size": 8,
+        "spatial_merge_size": 2,
+        "out_hidden_size": cfg.hidden_size,
+        "rms_norm_eps": 1e-5,
+        "rope_2d_theta": 10000.0,
+        "rope_2d_percent": 1.0,
+        "max_position_embeddings": 16,  # 4x4 grid + 1 CLS
+    }
+    model = HyV4FlashForCausalLM(cfg, mxfp4=False)
+    model.vision_tower = HyV4VisionModel(cfg.vision_config)
+    for layer in model.layers:
+        sa = layer.self_attn
+        sa.set_kv_b_weight(
+            (mx.random.normal((sa.n_heads * (sa.qk_nope + sa.v_head_dim), sa.kv_lora_rank)) * 0.02).astype(mx.bfloat16)
+        )
+        sa._sinks_bf16 = sa.learnable_sink_param.astype(mx.bfloat16)
+    lookup = np.arange(cfg.vocab_size, dtype=np.int32) % 80
+    lookup[cfg.engram_pad_id] = 79
+    model.model.set_engram_hasher(HyV4EngramHasher(cfg, lookup))
+    total_rows = sum(sum(r) for r in cfg.engram_layer_head_vocab_sizes["2"])
+    head_dim = cfg.engram_n_embed_per_ngram // cfg.engram_n_head_per_ngram
+    model.layers[1].engram_layer.bind_table(
+        HyV4InMemoryEngramTable((mx.random.normal((total_rows, head_dim)) * 0.05).astype(mx.bfloat16))
+    )
+    model.layers[1].engram_layer.prepare_runtime()
+
+    drafter = HyV4DFly2Drafter(cfg, intermediate_size=128, has_confidence_head=True)
+    for dl in drafter.layers:
+        sa = dl.self_attn
+        sa.set_kv_b_weight(
+            (mx.random.normal((sa.n_heads * (sa.qk_nope + sa.v_head_dim), sa.kv_lora_rank)) * 0.02).astype(mx.bfloat16)
+        )
+        sa._sinks_bf16 = sa.learnable_sink_param.astype(mx.bfloat16)
+    mx.eval(model.parameters(), drafter.parameters())
+
+    # 1 image of grid (1, 4, 4) -> merged (2, 2) + newline per row = 2 * (2 + 1) = 6 visual tokens
+    grid = mx.array([[1, 4, 4]], dtype=mx.int32)
+    pv = (mx.random.normal((16, 8, 8, 3)) * 0.5).astype(mx.bfloat16)
+    prompt = [10, 11, cfg.image_token_id, cfg.image_token_id, cfg.image_token_id,
+              cfg.image_token_id, cfg.image_token_id, cfg.image_token_id, 12, 13, 14]
+    pos3d, rope_delta = compute_hy4_mrope_positions(prompt, grid, image_token_id=cfg.image_token_id, merge_size=2)
+    assert tuple(pos3d.shape) == (3, 1, len(prompt))
+    # 6 image tokens span spatial max=3 -> saves 3 positions vs 1D (rope_delta == -3)
+    assert rope_delta == -3
+
+    embeds, pos3d_b, rd_b = model.build_vl_inputs(mx.array([prompt], dtype=mx.int32), pv, grid)
+    assert tuple(embeds.shape) == (1, len(prompt), cfg.hidden_size)
+    assert rd_b == rope_delta
+
+    # Plain VL AR reference
+    c_ar = model.make_cache()
+    lg = model(mx.array([prompt], dtype=mx.int32), cache=c_ar, inputs_embeds=embeds, position_ids_3d=pos3d_b, prefill_last_logits_only=True)
+    for lc in c_ar:
+        lc.rope_delta = rd_b
+    tk = int(mx.argmax(lg[0, -1], axis=-1).item())
+    ar_toks = [tk]
+    for _ in range(9):
+        lg = model(mx.array([[tk]], dtype=mx.int32), cache=c_ar)
+        tk = int(mx.argmax(lg[0, -1], axis=-1).item())
+        ar_toks.append(tk)
+
+    # VL + Adaptive DFly2 MUST match plain VL AR token-for-token!
+    st = DFly2Stats()
+    dfly_toks = []
+    for chunk in iter_hy4_dfly2(
+        model, drafter, prompt, 10, eos={999999}, temperature=0.0, stats=st,
+        inputs_embeds=embeds, position_ids_3d=pos3d_b, rope_delta=rd_b,
+    ):
+        dfly_toks.extend(chunk)
+    assert dfly_toks == ar_toks, f"VL DFly2 diverged from VL AR: {dfly_toks} vs {ar_toks}"
+
+    # HyV4LayerCache SSD round-trip preserves rope_delta!
+    c_rebuilt = [HyV4LayerCache.from_state(lc.state, lc.meta_state) for lc in c_ar]
+    assert all(lc.rope_delta == rd_b for lc in c_rebuilt)
+    lg_orig = model(mx.array([[ar_toks[-1]]], dtype=mx.int32), cache=c_ar)
+    lg_rebuilt = model(mx.array([[ar_toks[-1]]], dtype=mx.int32), cache=c_rebuilt)
+    mx.eval(lg_orig, lg_rebuilt)
+    assert float(mx.max(mx.abs(lg_orig - lg_rebuilt)).item()) == 0.0

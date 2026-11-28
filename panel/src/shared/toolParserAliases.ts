@@ -1,6 +1,8 @@
 const TOOL_PARSER_CANONICAL_ALIASES: Record<string, string> = {
   deepseek_v4: 'dsml',
   hy_v3: 'hunyuan',
+  hy_v4_flash: 'hunyuan',
+  hy4: 'hunyuan',
   // Muse Glimmer's parser registers under all three names in the engine
   // (atem_tool_parser.py: register_module(["atem", "muse_glimmer", "muse"])).
   muse: 'atem',

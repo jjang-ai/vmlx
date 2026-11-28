@@ -3346,6 +3346,35 @@ def _is_hy3_model(model_key: str) -> bool:
         return False
 
 
+def _is_hy4_model(model_key: str) -> bool:
+    """Return True when the current registry contract resolves to Hy4-flash."""
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(_registry_model_key(model_key))
+        return getattr(cfg, "family_name", None) == "hy_v4_flash"
+    except Exception:
+        return False
+
+
+def _normalize_hy4_reasoning_effort(
+    effort: str | None,
+    *,
+    enable_thinking: bool | None,
+) -> str | None:
+    """Map public thinking / effort controls to Hy4-flash's strict ``['no_think', 'high']`` vocabulary."""
+    if enable_thinking is False:
+        return "no_think"
+    if effort is not None:
+        raw = str(effort).strip().lower()
+        if raw in {"", "none", "off", "false", "0", "instruct", "chat", "no_think"}:
+            return "no_think"
+        return "high"
+    if enable_thinking is True:
+        return "high"
+    return None
+
+
 def _normalize_hy3_reasoning_effort(
     effort: str | None,
     *,
@@ -3399,13 +3428,15 @@ def _apply_hy3_reasoning_policy(
     model_key: str,
     enable_thinking: bool | None,
 ) -> None:
-    """Inject Hy3's request-level ``reasoning_effort`` when needed."""
-    if not _is_hy3_model(model_key):
+    """Inject Hy3 / Hy4-flash request-level ``reasoning_effort`` when needed."""
+    is_hy4 = _is_hy4_model(model_key)
+    if not is_hy4 and not _is_hy3_model(model_key):
         return
     requested = chat_kwargs.get("reasoning_effort") or ct_kwargs.get("reasoning_effort")
-    normalized = _normalize_hy3_reasoning_effort(
-        requested,
-        enable_thinking=enable_thinking,
+    normalized = (
+        _normalize_hy4_reasoning_effort(requested, enable_thinking=enable_thinking)
+        if is_hy4
+        else _normalize_hy3_reasoning_effort(requested, enable_thinking=enable_thinking)
     )
     if normalized is None:
         return
@@ -3439,7 +3470,7 @@ def _apply_stamped_effort_policy(
     )
     if not isinstance(requested, str) or not requested.strip():
         return
-    if _is_hy3_model(model_key):
+    if _is_hy3_model(model_key) or _is_hy4_model(model_key):
         return
     if _model_family_for_defaults(model_key) == "deepseek_v4":
         return
@@ -3919,8 +3950,16 @@ def _hy3_prompt_starts_in_reasoning(
     enable_thinking: bool | None,
     ct_kwargs: dict,
 ) -> bool:
-    """Hy3 opens ``<think>`` only for low/high reasoning effort."""
-    if enable_thinking is False or not _is_hy3_model(model_key):
+    """Hy3 opens ``<think>`` for low/high; Hy4-flash opens ``<think:opensource>`` unless ``no_think``."""
+    if enable_thinking is False:
+        return False
+    if _is_hy4_model(model_key):
+        effort = _normalize_hy4_reasoning_effort(
+            ct_kwargs.get("reasoning_effort"),
+            enable_thinking=enable_thinking,
+        )
+        return effort != "no_think"
+    if not _is_hy3_model(model_key):
         return False
     effort = _normalize_hy3_reasoning_effort(
         ct_kwargs.get("reasoning_effort"),
@@ -4436,6 +4475,20 @@ def _dsv41_vl_media_ok(engine) -> bool:
     return is_dsv41_vl_model(model)
 
 
+def _hy4_vl_media_ok(engine) -> bool:
+    """True iff a loaded Hy4-flash (`hy_v4_flash`) model carries its native BF16 vision tower."""
+    try:
+        from .models.hy_v4_flash.vision import hy4_vl_enabled, is_hy4_vl_model
+    except Exception:
+        return False
+    if not hy4_vl_enabled():
+        return False
+    model = getattr(engine, "_model", None)
+    if model is None:
+        return False
+    return is_hy4_vl_model(model)
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -4538,8 +4591,8 @@ def _responses_modalities_unsupported_after_m3_vl_carveout(
     engine,
     modalities: set[str],
 ) -> set[str]:
-    if modalities and _dsv41_vl_media_ok(engine):
-        # DeepSeek-V4.1 VL: images only, served on the text route (same gate as /v1/chat/completions).
+    if modalities and (_dsv41_vl_media_ok(engine) or _hy4_vl_media_ok(engine)):
+        # DeepSeek-V4.1 / Hy4-flash VL: images served on the text route (same gate as /v1/chat/completions).
         return {m for m in modalities if str(m).lower() not in ("image", "vision")}
     if not modalities or not _m3_vl_media_ok(engine):
         return set(modalities or set())
@@ -5134,7 +5187,7 @@ def _loaded_runtime_modalities() -> list[str]:
     # DeepSeek-V4.1 runs its in-bundle vision tower on the text route (not an MLLM engine), so the MLLM check
     # below never saw it: /capabilities said ["text"] and the panel refused image attachments although
     # /v1/chat/completions serves them (_dsv41_vl_media_ok gates the same requests). Image-only (no video config).
-    if _dsv41_vl_media_ok(_engine):
+    if _dsv41_vl_media_ok(_engine) or _hy4_vl_media_ok(_engine):
         return ["text", "vision"]
     modalities = _loaded_mllm_modalities()
     if modalities is not None:
@@ -5962,10 +6015,14 @@ _template_starts_reasoning_cache: dict[tuple[str, bool], bool] = {}
 _TOOL_CALL_MARKERS = [
     "<tool_call",
     "<tool_calls>",
+    "<tool_calls:opensource>",
     "<tool_call>",
+    "<tool_call:opensource>",
     "<tool_sep>",
     "<arg_key>",
+    "<arg_key:opensource>",
     "<arg_value>",
+    "<arg_value:opensource>",
     "<zyphra_tool_call",
     "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
@@ -6554,7 +6611,11 @@ def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__"
     # A closed sentinel (`<think></think>` or `<ernie:think></ernie:think>`)
     # means "thinking produced nothing; visible answer starts now", not
     # "parser starts in reasoning".
-    for start_tag, end_tag in (("<think>", "</think>"), ("<ernie:think>", "</ernie:think>")):
+    for start_tag, end_tag in (
+        ("<think>", "</think>"),
+        ("<ernie:think>", "</ernie:think>"),
+        ("<think:opensource>", "</think:opensource>"),
+    ):
         cleaned = re.sub(
             re.escape(start_tag) + r"\s*" + re.escape(end_tag),
             "",
@@ -6640,12 +6701,24 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         # that inject an open <think> without immediate </think> (those truly
         # ignore the flag and the model will reason regardless).
         after_user = rendered.rsplit("__test__", 1)[-1]
-        has_think = "<think>" in after_user or "<ernie:think>" in after_user
-        # Strip empty closed think blocks such as <think></think> and
-        # <ernie:think></ernie:think>. Those are proper "no thinking" sentinels,
+        has_think = (
+            "<think>" in after_user
+            or "<ernie:think>" in after_user
+            or "<think:opensource>" in after_user
+        )
+        # Strip empty closed think blocks such as <think></think>, <ernie:think></ernie:think>,
+        # and <think:opensource></think:opensource>. Those are proper "no thinking" sentinels,
         # not evidence that the template ignores enable_thinking=False.
-        cleaned = re.sub(r"<(?:ernie:)?think>\s*</(?:ernie:)?think>", "", after_user)
-        result = "<think>" in cleaned or "<ernie:think>" in cleaned
+        cleaned = re.sub(
+            r"<(?:ernie:)?think(?::opensource)?>\s*</(?:ernie:)?think(?::opensource)?>",
+            "",
+            after_user,
+        )
+        result = (
+            "<think>" in cleaned
+            or "<ernie:think>" in cleaned
+            or "<think:opensource>" in cleaned
+        )
         if result:
             logger.info(
                 f"Template for {model_name} always injects <think> "
@@ -6758,13 +6831,15 @@ def _engine_prompt_starts_in_reasoning(
     if not renderers:
         return False
     renderer = renderers[0]
-    _seed_kwargs = {"enable_thinking": bool(enable_thinking)}
+    _seed_kwargs: dict[str, Any] = {"enable_thinking": bool(enable_thinking)}
     if str(family_name or "").lower() == "openpangu_v2":
         # openPangu's template keys on `thinking` and silently ignores
         # enable_thinking (jinja swallows unknown kwargs — no TypeError).
         # Render the seed probe with the SAME native kwarg the real prompt
         # gets, or thinking-off requests are misclassified as reasoning.
         _seed_kwargs["thinking"] = bool(enable_thinking)
+    elif str(family_name or "").lower() == "hy_v4_flash":
+        _seed_kwargs["reasoning_effort"] = "high" if enable_thinking else "no_think"
     try:
         rendered = renderer.apply_chat_template(
             test_msgs,
@@ -6862,9 +6937,9 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
                 add_generation_prompt=True,
                 tokenize=False,
             )
-        # Check if generation prompt ends with </think> or </ernie:think> (+ optional whitespace)
+        # Check if generation prompt ends with </think>, </ernie:think>, or </think:opensource> (+ optional whitespace)
         # This means thinking is completed in the prompt, model outputs plain text
-        if re.search(r"</(?:ernie:)?think>\s*$", rendered):
+        if re.search(r"</(?:ernie:)?think(?::opensource)?>\s*$", rendered):
             result = True
             logger.info(
                 f"Template for {model_name} completes thinking in prompt "
@@ -14665,10 +14740,13 @@ def _text_lane_dspark_health_status(engine) -> dict | None:
     if not isinstance(runtime, dict) or runtime.get("drafter") is None or runtime.get("target") is None:
         return None
     growable = bool(runtime.get("grow_draft_ladder") and runtime.get("fixed_width") is None)
+    method = str(runtime.get("kind") or "dspark")
+    rt_model_type = str(runtime.get("model_type") or "")
+    lane = "hy_v4_flash-text" if rt_model_type == "hy_v4_flash" else "text"
     return {
         "enabled": True,
-        "method": "dspark",
-        "lane": "text",
+        "method": method,
+        "lane": lane,
         "draft_model_loaded": True,
         "num_draft_tokens": None if growable else runtime.get("max_draft"),
         **({"initial_draft_tokens": runtime.get("max_draft"), "adaptive_ceiling": None,
@@ -18443,6 +18521,7 @@ async def create_anthropic_message(
         and not engine.is_mllm
         and not _m3_vl_media_ok(engine)
         and not _dsv41_vl_media_ok(engine)
+        and not _hy4_vl_media_ok(engine)
     ):
         _reject_unsupported_multimodal("/v1/messages")
 
@@ -19418,6 +19497,7 @@ async def ollama_chat(fastapi_request: Request):
         and not engine.is_mllm
         and not _m3_vl_media_ok(engine)
         and not _dsv41_vl_media_ok(engine)
+        and not _hy4_vl_media_ok(engine)
     ):
         _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
@@ -19618,7 +19698,7 @@ async def ollama_chat(fastapi_request: Request):
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm or (
-        (_m3_vl_media_ok(engine) or _dsv41_vl_media_ok(engine))
+        (_m3_vl_media_ok(engine) or _dsv41_vl_media_ok(engine) or _hy4_vl_media_ok(engine))
         and _messages_have_multimodal(chat_req.messages)
     ):
         messages = []
@@ -21767,8 +21847,8 @@ async def create_chat_completion(
             m for m in _chat_requested_modalities
             if str(m).lower() not in ("image", "vision", "video")
         }
-    elif _chat_requested_modalities and _dsv41_vl_media_ok(engine):
-        # DeepSeek-V4.1-Flash VL (image-only) is served by the text-routed path.
+    elif _chat_requested_modalities and (_dsv41_vl_media_ok(engine) or _hy4_vl_media_ok(engine)):
+        # DeepSeek-V4.1-Flash / Hy4-flash VL (images) served by the text-routed path.
         _chat_requested_modalities = {
             m for m in _chat_requested_modalities
             if str(m).lower() not in ("image", "vision")
@@ -21843,6 +21923,7 @@ async def create_chat_completion(
         and not engine.is_mllm
         and not _m3_vl_media_ok(engine)
         and not _dsv41_vl_media_ok(engine)
+        and not _hy4_vl_media_ok(engine)
     ):
         _reject_unsupported_multimodal("/v1/chat/completions")
 
@@ -22094,7 +22175,7 @@ async def create_chat_completion(
             images
             and not engine.is_mllm
             and hasattr(engine, "_dsv41_vl_preprocess")  # the engine that pops this kwarg
-            and _dsv41_vl_media_ok(engine)
+            and (_dsv41_vl_media_ok(engine) or _hy4_vl_media_ok(engine))
         ):
             # DeepSeek-V4.1 VL renders images in their ORIGINAL turns; the text route above
             # stripped them out of `messages`, so hand the engine the client's placement.
@@ -25270,7 +25351,7 @@ async def create_response(
     _dsv41_resp_vl = bool(
         _responses_has_media
         and not engine.is_mllm
-        and _dsv41_vl_media_ok(engine)
+        and (_dsv41_vl_media_ok(engine) or _hy4_vl_media_ok(engine))
         and _normalize_modality_set(_responses_input_requested_modalities(request.input)) <= {"image", "vision"}
     )
     if (

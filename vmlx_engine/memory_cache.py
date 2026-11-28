@@ -590,7 +590,7 @@ class MemoryAwarePrefixCache:
             # openPangu exact-boundary composite: safe only because
             # _truncate_cache has a dedicated full-length clone that preserves
             # inner KV, DSA indexer, rotating metadata, and all conv states.
-            if type(layer).__name__ in {"OpenPanguV2LayerCache", "ErnieLayerCache"}:
+            if type(layer).__name__ in {"OpenPanguV2LayerCache", "ErnieLayerCache", "HyV4LayerCache"}:
                 return True
             # MiniMax-M3 MSA cache (KVCache subclass + idx_keys lane): _truncate_cache
             # now rebuilds it AS a fresh isolated MiniMaxM3SparseCache with
@@ -732,7 +732,7 @@ class MemoryAwarePrefixCache:
         arrays: list[Any] = []
 
         def _collect(obj) -> None:
-            if type(obj).__name__ == "ErnieLayerCache":
+            if type(obj).__name__ in {"ErnieLayerCache", "HyV4LayerCache"}:
                 for arr in getattr(obj, "state", ()):
                     if isinstance(arr, mx.array):
                         arrays.append(arr)

@@ -510,14 +510,68 @@ def load_hy_v4_flash(
     if load_dfly2 and os.environ.get("VMLX_DFLY2", "1") != "0":
         model._dfly_drafter = _load_inline_dfly2(root, weight_map, config, keep_exact_mxfp8=keep_exact_mxfp8)
 
+    # 4. Auto-attach native BF16 Vision Tower (`vit.*`) when present in checkpoint
+    vit_keys = [k for k in weight_map if k.startswith("vit.")]
+    if vit_keys and config.vision_config and os.environ.get("VMLX_HY4_VL", "1").strip().lower() not in {"0", "false", "off", "no"}:
+        model.vision_tower = _load_vision_tower(root, weight_map, vit_keys, config.vision_config)
+
     model.eval()
     gc.collect()
     mx.clear_cache()
     logger.info(
-        "Hy4-flash (%s) loaded: resident_gpu=%.2f GiB | disk_engram_mmap=%.2f GiB | inline_dfly2=%s",
+        "Hy4-flash (%s) loaded: resident_gpu=%.2f GiB | disk_engram_mmap=%.2f GiB | inline_dfly2=%s | vision=%s",
         "MXFP4" if is_mxfp4 else "FP8/BF16",
         mx.get_active_memory() / 2**30,
         disk_engram_bytes / 2**30,
         model._dfly_drafter is not None,
+        model.vision_tower is not None,
     )
     return model
+
+
+def _load_vision_tower(
+    root: Path,
+    weight_map: Dict[str, str],
+    vit_keys: Sequence[str],
+    vision_config: Dict[str, Any],
+):
+    """Load `vit.*` weights into `HyV4VisionModel` (transposing PyTorch Conv2d to MLX NHWC layout)."""
+    from .vision import HyV4VisionModel
+
+    raw = _read_tensors(root, weight_map, vit_keys)
+    vt = HyV4VisionModel(vision_config)
+
+    def _conv_w(w: mx.array) -> mx.array:
+        # PyTorch Conv2d [O, I, kH, kW] -> MLX Conv2d [O, kH, kW, I]
+        return mx.contiguous(w.transpose(0, 2, 3, 1)).astype(mx.bfloat16)
+
+    vt.embeddings.patch_embedding.weight = _conv_w(raw["vit.embeddings.patch_embedding.weight"])
+    vt.embeddings.patch_embedding.bias = raw["vit.embeddings.patch_embedding.bias"].astype(mx.bfloat16)
+    vt.embeddings.position_embedding.weight = raw["vit.embeddings.position_embedding.weight"].astype(mx.bfloat16)
+
+    for idx, blk in enumerate(vt.layers):
+        p = f"vit.layers.{idx}."
+        blk.input_layernorm.weight = raw[p + "input_layernorm.weight"].astype(mx.bfloat16)
+        blk.input_layernorm.bias = raw[p + "input_layernorm.bias"].astype(mx.bfloat16)
+        blk.post_attention_layernorm.weight = raw[p + "post_attention_layernorm.weight"].astype(mx.bfloat16)
+        blk.post_attention_layernorm.bias = raw[p + "post_attention_layernorm.bias"].astype(mx.bfloat16)
+        for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            mod = getattr(blk.self_attn, proj)
+            mod.weight = raw[p + f"self_attn.{proj}.weight"].astype(mx.bfloat16)
+            mod.bias = raw[p + f"self_attn.{proj}.bias"].astype(mx.bfloat16)
+        for proj in ("dense_h_to_4h", "dense_4h_to_h"):
+            mod = getattr(blk.mlp, proj)
+            mod.weight = raw[p + f"mlp.{proj}.weight"].astype(mx.bfloat16)
+            mod.bias = raw[p + f"mlp.{proj}.bias"].astype(mx.bfloat16)
+
+    if "vit.perceive.norm.weight" in raw:
+        vt.perceive.norm.weight = raw["vit.perceive.norm.weight"].astype(mx.bfloat16)
+    vt.perceive.proj_0.weight = _conv_w(raw["vit.perceive.proj.0.weight"])
+    vt.perceive.proj_0.bias = raw["vit.perceive.proj.0.bias"].astype(mx.bfloat16)
+    vt.perceive.proj_2.weight = _conv_w(raw["vit.perceive.proj.2.weight"])
+    vt.perceive.proj_2.bias = raw["vit.perceive.proj.2.bias"].astype(mx.bfloat16)
+    vt.perceive.image_newline = raw["vit.perceive.image_newline"].astype(mx.bfloat16)
+
+    mx.eval(vt.parameters())
+    del raw
+    return vt

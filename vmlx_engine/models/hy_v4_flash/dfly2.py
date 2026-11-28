@@ -307,7 +307,8 @@ class HyV4DFly2Drafter(nn.Module):
             `(draft_ids [k] int32, draft_probs [k, V] or None, confidences [k] float32 or None)`
         """
         k = max(1, int(k))
-        anchor_pos = int(target_caches[self.target_kv_layers[0]].offset)
+        lc0 = target_caches[self.target_kv_layers[0]]
+        anchor_pos = max(0, int(lc0.offset) + int(getattr(lc0, "rope_delta", 0) or 0))
 
         # 1. Construct parallel query block [bonus_token, mask, ..., mask] (width W = k + 1)
         b_tok = bonus_token.reshape(1, 1).astype(mx.int32)
@@ -381,6 +382,9 @@ class HyV4DFly2Target:
         start_pos: int = 0,
         snapshot_cuts: Sequence[int] = (),
         on_snapshot: Optional[Callable[[int, List[HyV4LayerCache], Any], None]] = None,
+        inputs_embeds: Optional[mx.array] = None,
+        position_ids_3d: Optional[mx.array] = None,
+        rope_delta: Optional[int] = None,
     ) -> Tuple[mx.array, mx.array]:
         """Chunked prefill returning `(last_logits [V], last_post_norm_hidden [1, 1, D])`."""
         ids = mx.array([list(prompt_ids)], dtype=mx.int32)
@@ -396,17 +400,37 @@ class HyV4DFly2Target:
                     end = c
                     break
             chunk = ids[:, pos:end]
+            emb_chunk = inputs_embeds[:, pos:end, :] if inputs_embeds is not None else None
+            pos3d_chunk = position_ids_3d[:, :, pos:end] if position_ids_3d is not None else None
             is_last = end >= total
             if is_last:
-                logits, h_all = self.model.forward_with_hidden(chunk, cache, tail_only=True)
+                logits, h_all = self.model.forward_with_hidden(
+                    chunk,
+                    cache,
+                    tail_only=True,
+                    inputs_embeds=emb_chunk,
+                    position_ids_3d=pos3d_chunk,
+                )
                 last_h = h_all[:, -1:, :]
                 mx.eval(logits, last_h)
             else:
-                h_mid = self.model.model(chunk, cache=cache, tail_only=True)
+                h_mid = self.model.model(
+                    chunk,
+                    cache=cache,
+                    inputs_embeds=emb_chunk,
+                    position_ids_3d=pos3d_chunk,
+                    tail_only=True,
+                )
                 mx.eval(h_mid)
             pos = end
             if on_snapshot is not None and pos in cuts:
+                if rope_delta is not None:
+                    for lc in cache:
+                        lc.rope_delta = int(rope_delta)
                 on_snapshot(pos, cache, None)
+        if rope_delta is not None:
+            for lc in cache:
+                lc.rope_delta = int(rope_delta)
         assert logits is not None and last_h is not None
         return logits[0, -1], last_h
 
@@ -471,6 +495,9 @@ def iter_hy4_dfly2(
     resume: Optional[dict] = None,
     snapshot_cuts: Sequence[int] = (),
     on_snapshot: Optional[Callable[[int, List[HyV4LayerCache], Any], None]] = None,
+    inputs_embeds: Optional[mx.array] = None,
+    position_ids_3d: Optional[mx.array] = None,
+    rope_delta: Optional[int] = None,
 ) -> Iterator[List[int]]:
     """Adaptive Rule-0 DFly2 speculative decoding loop for Hy4-flash.
 
@@ -516,6 +543,9 @@ def iter_hy4_dfly2(
         start_pos=cache_len,
         snapshot_cuts=snapshot_cuts,
         on_snapshot=on_snapshot,
+        inputs_embeds=inputs_embeds,
+        position_ids_3d=position_ids_3d,
+        rope_delta=rope_delta,
     )
     st.prefill_tokens = len(prompt_ids) - cache_len
     st.prefill_s = time.perf_counter() - t0

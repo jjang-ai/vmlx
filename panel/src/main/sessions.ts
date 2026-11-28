@@ -118,7 +118,7 @@ import {
 import { buildNativeMtpLaunchArgs, buildNativeMtpLaunchEnvironment, nativeMtpSessionChoice, resolveNativeMtpStartupMode } from '../shared/nativeMtpLaunchArgs'
 import { planSessionConfigSave } from '../shared/sessionConfigLifecycle'
 import { findBundledDflash2Drafter, isDflash2DrafterSelection } from './dflash2Bundle'
-import { bundledDsparkDefault, dsparkUsesTextLane, findBundledDsparkDrafter } from './dsparkBundle'
+import { bundledDsparkDefault, bundledDsparkMethod, dsparkUsesTextLane, findBundledDsparkDrafter } from './dsparkBundle'
 
 
 
@@ -470,7 +470,7 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.kvCacheQuantization = 'auto'
         changed = true
       }
-    } else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5') {
+    } else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5' || detectedFamily === 'hy4-flash') {
       // openPangu-2.0-Flash: exact typed N-1 prompt snapshots preserve MLA KV,
       // DSA indexer, rotating-SWA metadata and all causal-conv states. Memory
       // prefix + prompt L2 are safe; generic paged/block reuse and legacy
@@ -1352,6 +1352,7 @@ function applyLegacyCacheStackMigrations(config: Partial<ServerConfig>, modelPat
     Number(config.cacheStackStartupDefaultsVersion || 0) === 10 &&
     migrationDetectedFamily !== 'openpangu_v2' &&
     migrationDetectedFamily !== 'ernie5_5' &&
+    migrationDetectedFamily !== 'hy4-flash' &&
     !migrationDsv4Active &&
     migrationDetectedUsePaged !== true &&
     config.continuousBatching === true &&
@@ -3123,7 +3124,7 @@ export class SessionManager extends EventEmitter {
             if (glmChanged) {
               this.pushLog(sessionId, '[INFO] GLM-5.3 detected; exact full-precision typed KDA/MLA/DSA prefix + prompt-L2 cache enabled, generic paged/block/TurboQuant cache codecs disabled')
             }
-          } else if (freshFamily === 'openpangu_v2' || freshFamily === 'ernie5_5') {
+          } else if (freshFamily === 'openpangu_v2' || freshFamily === 'ernie5_5' || freshFamily === 'hy4-flash') {
             const exactTypedChanged =
               config.enablePrefixCache !== true ||
               config.usePagedCache !== false ||
@@ -3140,7 +3141,7 @@ export class SessionManager extends EventEmitter {
             config.kvCacheQuantization = 'auto'
             config.enableJit = false
             if (exactTypedChanged) {
-              const label = freshFamily === 'ernie5_5' ? 'ERNIE 5.5 Flash' : 'openPangu'
+              const label = freshFamily === 'hy4-flash' ? 'Hy4-flash' : (freshFamily === 'ernie5_5' ? 'ERNIE 5.5 Flash' : 'openPangu')
               this.pushLog(sessionId, `[INFO] ${label} detected; exact full-precision typed prefix + prompt-L2 cache enabled, generic paged/block/TurboQuant KV codecs disabled`)
             }
           }
@@ -5546,7 +5547,10 @@ export class SessionManager extends EventEmitter {
       // The user's choice when set; otherwise auto (the engine uses a shipped drafter), which is what the lane above
       // followed.
       args.push('--dspark', dsparkOverridden ? 'off' : dsparkChoice === undefined ? 'auto' : dsparkActive ? 'on' : 'off')
-      if (dsparkActive) console.log(`[SESSION] Using the DSpark drafter bundled with the model: ${bundledDsparkDrafter}`)
+      if (dsparkActive) {
+        const draftLabel = bundledDsparkMethod(config.modelPath) === 'dfly2' ? 'DFly2' : 'DSpark'
+        console.log(`[SESSION] Using the ${draftLabel} drafter bundled with the model: ${bundledDsparkDrafter}`)
+      }
     }
     if (compatibleExternalSpeculative) {
       args.push('--speculative-model', externalSpeculativeModel)

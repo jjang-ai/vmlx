@@ -653,6 +653,47 @@ class BatchedEngine(BaseEngine):
             source_messages=source_messages,
         )
 
+    def _hy4_vl_active(self, images: list | None) -> bool:
+        """True iff a hy_v4_flash model with loaded vision_tower is serving an image request."""
+        if not images:
+            return False
+        try:
+            from ..models.hy_v4_flash.vision import hy4_vl_enabled, is_hy4_vl_model
+        except Exception:
+            return False
+        if not hy4_vl_enabled():
+            return False
+        return is_hy4_vl_model(self._model)
+
+    def _hy4_vl_preprocess(
+        self,
+        messages: list[dict],
+        images: list | None,
+        *,
+        enable_thinking: bool | None = None,
+        reasoning_effort: Any = None,
+        tools: list | None = None,
+        chat_template_kwargs: dict | None = None,
+        source_messages: list | None = None,
+    ):
+        """Return (expanded_ids, pixel_values, image_grid_thw) for Hy4-flash VL, or None."""
+        from ..models.hy_v4_flash.vision import preprocess_hy4_vl
+
+        model_path = (
+            getattr(self._scheduler_config, "model_path", None) or self._model_name
+        )
+        src_msgs = source_messages if source_messages is not None else messages
+        return preprocess_hy4_vl(
+            model_path,
+            self._tokenizer,
+            self._normalize_tool_call_arguments_for_template(src_msgs),
+            images or [],
+            enable_thinking=enable_thinking,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+            chat_template_kwargs=chat_template_kwargs,
+        )
+
     def _use_simple_mllm_media_fallback(
         self,
         *,
@@ -3305,6 +3346,22 @@ class BatchedEngine(BaseEngine):
                 kwargs["_dsv41vl_images"] = _d_imgs
                 kwargs["_dsv41vl_token_types"] = _d_ttypes
 
+        if self._hy4_vl_active(all_images):
+            _hy4 = self._hy4_vl_preprocess(
+                messages,
+                all_images,
+                enable_thinking=thinking_enabled,
+                reasoning_effort=(extra_tpl or {}).get("reasoning_effort", reasoning_effort),
+                tools=template_tools,
+                chat_template_kwargs=extra_tpl,
+                source_messages=_dsv41_vl_source_messages,
+            )
+            if _hy4 is not None:
+                _h_ids, _h_pv, _h_grid = _hy4
+                kwargs["_m3vl_prompt_token_ids"] = _h_ids
+                kwargs["_m3vl_pixel_values"] = _h_pv
+                kwargs["_m3vl_image_grid_thw"] = _h_grid
+
         return await self.generate(
             prompt=prompt,
             max_tokens=max_tokens,
@@ -3509,6 +3566,22 @@ class BatchedEngine(BaseEngine):
                 kwargs["_dsv41vl_prompt_token_ids"] = _d_ids
                 kwargs["_dsv41vl_images"] = _d_imgs
                 kwargs["_dsv41vl_token_types"] = _d_ttypes
+
+        if self._hy4_vl_active(all_images):
+            _hy4 = self._hy4_vl_preprocess(
+                messages,
+                all_images,
+                enable_thinking=thinking_enabled,
+                reasoning_effort=(extra_tpl or {}).get("reasoning_effort", reasoning_effort),
+                tools=template_tools,
+                chat_template_kwargs=extra_tpl,
+                source_messages=_dsv41_vl_source_messages,
+            )
+            if _hy4 is not None:
+                _h_ids, _h_pv, _h_grid = _hy4
+                kwargs["_m3vl_prompt_token_ids"] = _h_ids
+                kwargs["_m3vl_pixel_values"] = _h_pv
+                kwargs["_m3vl_image_grid_thw"] = _h_grid
 
         async for output in self.stream_generate(
             prompt=prompt,

@@ -231,9 +231,9 @@ def _m3_vl_cached_prefix_covers_media_tokens(model: Any, request: Any) -> bool:
     config = getattr(model, "args", None) or getattr(model, "config", None)
     media_token_ids: set[int] = set()
     if getattr(request, "pixel_values", None) is not None:
-        media_token_ids.add(int(getattr(config, "image_token_index", 200025)))
+        media_token_ids.add(int(getattr(config, "image_token_index", getattr(config, "image_token_id", 200025))))
     if getattr(request, "pixel_values_videos", None) is not None:
-        media_token_ids.add(int(getattr(config, "video_token_index", 200026)))
+        media_token_ids.add(int(getattr(config, "video_token_index", getattr(config, "video_token_id", 200026))))
     if not media_token_ids:
         return False
 
@@ -1999,6 +1999,8 @@ class Scheduler:
                 required_cache_class=(
                     "ErnieLayerCache"
                     if self._uses_ernie55_cache
+                    else "HyV4LayerCache"
+                    if self._uses_hy4_cache
                     else "OpenPanguV2LayerCache"
                     if self._uses_openpangu_cache
                     else "MiniMaxM3SparseCache"
@@ -2321,6 +2323,7 @@ class Scheduler:
             # SSM-rederive contract.
             if "OpenPanguV2LayerCache" in cache_types or cache_types & {
                 "ErnieLayerCache",
+                "HyV4LayerCache",
                 "Glm5KDACache",
                 "Glm5MLACache",
             }:

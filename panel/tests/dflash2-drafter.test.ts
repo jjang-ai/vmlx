@@ -187,15 +187,23 @@ describe('bundled draft weight admission', () => {
       writeFileSync(join(ink, 'dflash2', 'model.safetensors'), Buffer.concat([len, header, Buffer.alloc(10240)]))
       expect(findBundledDflash2Drafter(ink)).toBe(join(ink, 'dflash2'))
 
-      // 2. Hy4-flash inline DFly2 + hy4 reasoning parser alias
+      // 2. Hy4-flash inline DFly2 + hy4 reasoning parser alias + exact-typed SSD cache + slow timeout
       const hy4 = join(root, 'hy4')
       mkdirSync(hy4, { recursive: true })
       writeFileSync(join(hy4, 'config.json'), JSON.stringify({ model_type: 'hy_v4_flash', dfly_num_hidden_layers: 5 }))
       writeFileSync(join(hy4, 'model.safetensors.index.json'), JSON.stringify({
         weight_map: { 'model.dfly_layers.0.input_layernorm.weight': 'model-001.safetensors' },
       }))
+      const { bundledDsparkMethod } = await import('../src/main/dsparkBundle')
+      const { usesExactTypedPromptDiskCache, normalizeDetectedFamilyName } = await import('../src/shared/detectedFamilyNames')
+      const { SLOW_FAMILY_TIMEOUTS } = await import('../src/shared/slowFamilyTimeouts')
       expect(findBundledDsparkDrafter(hy4)).toBe(hy4)
       expect(dsparkUsesTextLane(hy4)).toBe(true)
+      expect(bundledDsparkMethod(hy4)).toBe('dfly2')
+      expect(normalizeDetectedFamilyName('hy_v4_flash')).toBe('hy4-flash')
+      expect(usesExactTypedPromptDiskCache('hy4-flash')).toBe(true)
+      expect(usesExactTypedPromptDiskCache('hy_v4_flash')).toBe(true)
+      expect(SLOW_FAMILY_TIMEOUTS['hy4-flash']).toBe(900)
       expect(canonicalizeReasoningParserForCli('hy4')).toBe('hy4')
       expect(canonicalizeReasoningParserForCli('hy_v4_flash')).toBe('hy4')
 

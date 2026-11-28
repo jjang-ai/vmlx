@@ -130,18 +130,18 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
               ? detected.dsv4PoolQuantDefault
               : undefined)
           : prev.dsv4PoolQuant,
-        enablePrefixCache: detected?.family === 'openpangu_v2' || detected?.family === 'ernie5_5' || detected?.family === 'deepseek-v4' ? true : prev.enablePrefixCache,
+        enablePrefixCache: detected?.family === 'openpangu_v2' || detected?.family === 'ernie5_5' || detected?.family === 'hy4-flash' || detected?.family === 'deepseek-v4' ? true : prev.enablePrefixCache,
         // Paged RAM is retired product-wide. Detection remains informational;
         // it must not materialize a stale per-family capability into the form.
         usePagedCache: false,
-        enableDiskCache: detected?.family === 'openpangu_v2' || detected?.family === 'ernie5_5',
-        enableBlockDiskCache: detected?.family !== 'openpangu_v2' && detected?.family !== 'ernie5_5',
+        enableDiskCache: detected?.family === 'openpangu_v2' || detected?.family === 'ernie5_5' || detected?.family === 'hy4-flash',
+        enableBlockDiskCache: detected?.family !== 'openpangu_v2' && detected?.family !== 'ernie5_5' && detected?.family !== 'hy4-flash',
         kvCacheQuantization: 'auto',
         pagedCacheBlockSize: detected?.family === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : prev.pagedCacheBlockSize,
         maxCacheBlocks: detected?.family === 'deepseek-v4' ? DSV4_MAX_CACHE_BLOCKS : prev.maxCacheBlocks,
         // Mirror the main-process family timeout bump (sessions.ts normalizer)
         // so the form displays the value launch will actually use.
-        timeout: ['deepseek-v4', 'minimax_m3', 'openpangu_v2', 'ernie5_5'].includes(detected?.family) &&
+        timeout: ['deepseek-v4', 'minimax_m3', 'openpangu_v2', 'ernie5_5', 'hy4-flash'].includes(detected?.family) &&
           (prev.timeout == null || prev.timeout === 300)
           ? 900
           : prev.timeout,
@@ -265,7 +265,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         if (detected && detected.family !== 'unknown') {
           base.nativeMtpMode = resolveNativeMtpStartupMode(detected.family, undefined, detected.nativeMtp?.defaultMode)
           base.enableAutoToolChoice = undefined
-          if (['deepseek-v4', 'minimax_m3', 'openpangu_v2', 'ernie5_5'].includes(detected.family)) {
+          if (['deepseek-v4', 'minimax_m3', 'openpangu_v2', 'ernie5_5', 'hy4-flash'].includes(detected.family)) {
             base.timeout = 900
           }
           if (typeof detected.recommendedPrefillStepSize === 'number') {

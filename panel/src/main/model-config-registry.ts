@@ -525,7 +525,7 @@ registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', supportsTh
 // reasoning_effort=no_think|low|high, so Python normalizes the UI thinking
 // toggle into Hy3's effort field before render.
 registerFamily('hy3', { cacheType: 'kv', toolParser: 'hunyuan', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Tencent Hy3-preview', priority: 4 })
-registerFamily('hy4-flash', { cacheType: 'kv', cacheSubtype: 'hy4_hybrid_dsa_swa', toolParser: 'hunyuan', reasoningParser: 'hy4', supportsThinking: true, honorsEnableThinking: true, thinkInTemplate: true, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: false, description: 'Hy4-flash (Engram + IndexPool DSA/SWA MLA + DFly2)', priority: 4 })
+registerFamily('hy4-flash', { cacheType: 'kv', cacheSubtype: 'hy4_hybrid_dsa_swa', toolParser: 'hunyuan', reasoningParser: 'hy4', supportsThinking: true, honorsEnableThinking: true, supportsInstructMode: true, supportedReasoningEfforts: ['high'], defaultReasoningEffort: 'high', thinkInTemplate: true, usePagedCache: false, enableAutoToolChoice: true, isMultimodal: true, description: 'Hy4-flash (Engram + IndexPool DSA/SWA MLA + DFly2)', priority: 4 })
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })

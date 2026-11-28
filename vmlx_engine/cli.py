@@ -35,6 +35,7 @@ _SLOW_FAMILY_TIMEOUTS = {
     "minimax_m3": 900,
     "openpangu_v2": 900,
     "ernie5_5": 900,
+    "hy_v4_flash": 900,
     # Hybrid SSM+attention families chunk their prefill, so a long prompt takes
     # minutes before the first token. FOUND LIVE IN THE APP, not by API testing:
     # a 101,502-token prompt to Qwen3.6-27B rendered "Message failed — Request

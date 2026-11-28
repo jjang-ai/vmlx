@@ -265,7 +265,7 @@ export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
   'phi4', 'phi4_reasoning', 'phi4_multimodal', 'phi3',
   'nemotron', 'nemotron_h', 'cohere', 'granite', 'granitemoehybrid', 'lfm2',
   'minimax', 'minicpm', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
-  'hy_v3', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
+  'hy_v3', 'hy_v4_flash', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
   'openpangu_v2', 'ernie5_5', 'inkling2_loop',
 ]
 
@@ -455,7 +455,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   // DSpark drafter shipped inside the bundle (<bundle>/dspark: MiniCPM-V-4.7, Naive N0.5, MiniMax-M3.1, DeepSeek-V4.1);
   // `default` is on whenever the bundle ships one, used until the user sets the checkbox; `textLane`: MiniMax-M3 /
   // M3.1 and DeepSeek-V4.1.
-  const [bundledDspark, setBundledDspark] = useState<{ name: string; path: string; default: boolean; textLane?: boolean } | null>(null)
+  const [bundledDspark, setBundledDspark] = useState<{ name: string; path: string; default: boolean; textLane?: boolean; method?: 'dspark' | 'dfly2' } | null>(null)
   useEffect(() => {
     setBundledDspark(null)
     if (isImage || !bundlePath) return
@@ -463,7 +463,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     const api = (window as any).api?.models
     if (typeof api?.dsparkDrafter !== 'function') return
     api.dsparkDrafter(bundlePath)
-      .then((found: unknown) => { if (alive) setBundledDspark((found as { name: string; path: string; default: boolean; textLane?: boolean } | null) || null) })
+      .then((found: unknown) => { if (alive) setBundledDspark((found as { name: string; path: string; default: boolean; textLane?: boolean; method?: 'dspark' | 'dfly2' } | null) || null) })
       .catch(() => { /* advisory only */ })
     return () => { alive = false }
   }, [bundlePath, isImage])
@@ -731,6 +731,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text={bundledDflash2Active
             ? t('sessions.config.bundledDflash2Active', { name: bundledDflash2.name })
             : t('sessions.config.bundledDflash2Available', { name: bundledDflash2.name })} />
+        </div>
+      )}
+      {bundledDspark?.method === 'dfly2' && !bundledDflash2 && (
+        <div data-vmlx-section="bundled-dfly2-notice">
+          <InfoNote text={dsparkActive
+            ? t('sessions.config.bundledDfly2Active', { name: bundledDspark.name })
+            : t('sessions.config.bundledDfly2Available', { name: bundledDspark.name })} />
         </div>
       )}
       {qwen38Dense27b && !bundledDflash2 && !dflash2Speculative && (
@@ -1556,10 +1563,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={dsv4Active || (!multimodalActive && config.continuousBatching)} />
         </Field>
         {bundledDspark && (
-          <div data-vmlx-control="use-bundled-dspark">
+          <div data-vmlx-control={bundledDspark.method === 'dfly2' ? 'use-bundled-dfly2' : 'use-bundled-dspark'}>
             <CheckField
-              label={t('sessions.config.useBundledDspark', { name: bundledDspark.name })}
-              tooltip={t(bundledDspark.textLane ? 'sessions.config.useBundledDsparkTextLaneTooltip' : 'sessions.config.useBundledDsparkTooltip')}
+              label={t(
+                bundledDspark.method === 'dfly2' ? 'sessions.config.useBundledDfly2' : 'sessions.config.useBundledDspark',
+                { name: bundledDspark.name },
+              )}
+              tooltip={t(
+                bundledDspark.method === 'dfly2'
+                  ? 'sessions.config.useBundledDfly2TextLaneTooltip'
+                  : (bundledDspark.textLane ? 'sessions.config.useBundledDsparkTextLaneTooltip' : 'sessions.config.useBundledDsparkTooltip'),
+              )}
               checked={dsparkActive}
               disabled={dsparkOverridden}
               onChange={v => onChange('useBundledDspark', v)}

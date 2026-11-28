@@ -1108,12 +1108,12 @@ describe('KV Cache Quantization', () => {
         expect(perfPanel).toContain('vl_runtime_available')
         expect(perfPanel).toContain('mtp_tensor_count')
         expect(perfPanel).toContain('vision_tensor_count')
-        expect(perfPanel).toContain("t('sessions.performance.mtpScope')")
+        expect(perfPanel).toContain("'sessions.performance.mtpScope'")
         expect(panelCopy).toContain('MTP Scope')
         expect(perfPanel).toContain("t('sessions.performance.mtpTensors')")
         expect(panelCopy).toContain('MTP Tensors')
         expect(perfPanel).toContain('last_native_mtp')
-        expect(perfPanel).toContain("t('sessions.performance.mtpAccept')")
+        expect(perfPanel).toContain("'sessions.performance.mtpAccept'")
         expect(panelCopy).toContain('MTP Accept')
         expect(perfPanel).toContain("t('sessions.performance.mtpDepthRates')")
         expect(panelCopy).toContain('MTP Depth Rates')
@@ -2963,7 +2963,7 @@ describe('Default IP and New Settings', () => {
 
     it('openPangu defaults to exact typed memory plus prompt L2 while keeping unsafe paged/block lanes off', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
-        const familyStart = source.indexOf("} else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5')")
+        const familyStart = source.indexOf("} else if (detectedFamily === 'openpangu_v2' || detectedFamily === 'ernie5_5' || detectedFamily === 'hy4-flash')")
         const familyBlock = source.slice(familyStart, source.indexOf('return changed', familyStart))
         const launchStart = source.lastIndexOf('const exactTypedPromptDiskCache = usesExactTypedPromptDiskCache(detectedFamily, nativeGlmSsd)')
         expect(launchStart).toBeGreaterThanOrEqual(0)

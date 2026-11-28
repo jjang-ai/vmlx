@@ -581,6 +581,7 @@ class SingleBatchGenerator:
             "DeepseekV4Cache",
             "DeepseekV41Cache",
             "ErnieLayerCache",
+            "HyV4LayerCache",
             "Glm5KDACache",
             "Glm5MLACache",
             "MiniMaxM3SparseCache",

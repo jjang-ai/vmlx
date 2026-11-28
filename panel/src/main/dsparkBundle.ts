@@ -117,6 +117,14 @@ export function dsparkUsesTextLane(modelPath: string | undefined | null): boolea
     DSPARK_INKLING_MODEL_TYPES.has(modelType)
 }
 
+/** Speculative method label for a detected inline/bundled non-DFlash2 drafter (`'dfly2'` for Hy4-flash, else `'dspark'`). */
+export function bundledDsparkMethod(modelPath: string | undefined | null): 'dfly2' | 'dspark' | null {
+  if (!findBundledDsparkDrafter(modelPath)) return null
+  const root = String(modelPath || '').trim()
+  const modelType = root ? bundleModelType(root) || '' : ''
+  return modelType === 'hy_v4_flash' ? 'dfly2' : 'dspark'
+}
+
 function findErnieDraft(root: string, cfg: any): string | null {
   const drafter = join(root, 'dspark')
   if (

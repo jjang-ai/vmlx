@@ -46,6 +46,7 @@ const ENGINE_FAMILY_TO_REGISTRY: Readonly<Record<string, string>> = Object.freez
   nemotron_h: 'nemotron-h',
   glm5_next: 'glm5-next',
   glm5_next_text: 'glm5-next',
+  hy_v4_flash: 'hy4-flash',
 })
 
 export function normalizeDetectedFamilyName(family?: string): string | undefined {
@@ -122,5 +123,5 @@ export function usesExactTypedPromptDiskCache(family?: string, nativeGlmSsd = fa
   // Native MLLM GLM checkpoints use the aggregate pool, not the separate
   // text-scheduler prompt-L2 budget. Callers pass the effective route, never
   // infer it just from the family or a persisted experimental flag.
-  return normalized === 'openpangu_v2' || normalized === 'ernie5_5' || (normalized === 'glm5-next' && !nativeGlmSsd)
+  return normalized === 'openpangu_v2' || normalized === 'ernie5_5' || normalized === 'hy4-flash' || (normalized === 'glm5-next' && !nativeGlmSsd)
 }

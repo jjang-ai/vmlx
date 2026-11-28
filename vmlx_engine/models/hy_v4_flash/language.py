@@ -375,6 +375,7 @@ class HyV4MLAAttention(nn.Module):
         B, L, _ = x.shape
         inner = cache.inner if cache is not None else None
         offset = int(inner.offset) if inner is not None else 0
+        rope_offset = max(0, offset + int(getattr(cache, "rope_delta", 0) or 0))
 
         q_c = self.q_a_layernorm(self.q_a_proj(x))
         q = self.q_b_proj(q_c).reshape(B, L, self.n_heads, self.qk_head_dim).transpose(0, 2, 1, 3)
@@ -386,11 +387,11 @@ class HyV4MLAAttention(nn.Module):
         k_pe = k_pe[:, None, :, :]  # [B, 1, L, 64]
 
         q_pe = _apply_interleaved_rope(
-            q_pe, self.qk_rope, self.rope_theta, offset,
+            q_pe, self.qk_rope, self.rope_theta, rope_offset,
             position_ids_3d=position_ids_3d, mrope_section=self.mrope_section,
         )
         k_pe = _apply_interleaved_rope(
-            k_pe, self.qk_rope, self.rope_theta, offset,
+            k_pe, self.qk_rope, self.rope_theta, rope_offset,
             position_ids_3d=position_ids_3d, mrope_section=self.mrope_section,
         )
 
@@ -683,6 +684,43 @@ class HyV4FlashForCausalLM(nn.Module):
         self.model = HyV4FlashModel(config, mxfp4=mxfp4)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self._dfly_drafter: Optional[Any] = None
+        self.vision_tower: Optional[Any] = None
+
+    def build_vl_inputs(
+        self,
+        input_ids: mx.array,
+        pixel_values: mx.array,
+        image_grid_thw: mx.array,
+    ) -> Tuple[mx.array, mx.array, int]:
+        """Encode images via `vision_tower` and scatter visual embeddings + 3D M-RoPE positions."""
+        if self.vision_tower is None:
+            raise RuntimeError("Hy4-flash vision_tower is not loaded on this model instance")
+        from .vision import compute_hy4_mrope_positions
+
+        vis_feats = self.vision_tower(pixel_values, image_grid_thw)  # [1, N_vis, D]
+        inputs_embeds = self.model.embed_tokens(input_ids)  # [1, L, D]
+        vis_feats = vis_feats.astype(inputs_embeds.dtype)
+
+        ids_list = input_ids[0].tolist()
+        img_tok = int(self.config.image_token_id)
+        vis_positions = [i for i, t in enumerate(ids_list) if int(t) == img_tok]
+        if len(vis_positions) != int(vis_feats.shape[1]):
+            raise ValueError(
+                f"Hy4-flash VL placeholder mismatch: {len(vis_positions)} placeholders vs {int(vis_feats.shape[1])} vision tokens"
+            )
+        if vis_positions:
+            idx_mx = mx.array(vis_positions, dtype=mx.int32)
+            # Materialize a contiguous copy and splice visual features in one vectorized scatter
+            emb_0 = mx.array(inputs_embeds[0])
+            emb_0[idx_mx] = vis_feats[0]
+            inputs_embeds = emb_0[None, :, :]
+
+        merge_sz = int((self.config.vision_config or {}).get("spatial_merge_size", 2))
+        grids = image_grid_thw.tolist() if isinstance(image_grid_thw, mx.array) else list(image_grid_thw)
+        pos_3d, rope_delta = compute_hy4_mrope_positions(
+            ids_list, grids, image_token_id=img_tok, merge_size=merge_sz
+        )
+        return inputs_embeds, pos_3d, rope_delta
 
     @property
     def layers(self):
@@ -729,6 +767,13 @@ class HyV4FlashForCausalLM(nn.Module):
     ) -> mx.array:
         prefill_last_only = bool(kwargs.pop("prefill_last_logits_only", False))
         pos_3d = kwargs.pop("position_ids_3d", None)
+        pixel_values = kwargs.pop("pixel_values", None)
+        image_grid_thw = kwargs.pop("image_grid_thw", None)
+        if pixel_values is not None and image_grid_thw is not None and inputs_embeds is None and self.vision_tower is not None:
+            inputs_embeds, pos_3d, rope_delta = self.build_vl_inputs(inputs, pixel_values, image_grid_thw)
+            if cache is not None:
+                for lc in cache:
+                    lc.rope_delta = rope_delta
         h = self.model(
             inputs,
             cache=cache,
@@ -744,12 +789,14 @@ class HyV4FlashForCausalLM(nn.Module):
         cache: Optional[Sequence[HyV4LayerCache]],
         *,
         tail_only: bool = False,
+        inputs_embeds: Optional[mx.array] = None,
         position_ids_3d: Optional[mx.array] = None,
     ) -> Tuple[mx.array, mx.array]:
         """Run target forward and return `(logits, post_norm_hidden)` for DFly2 MTPFusion."""
         h_logits, h_all = self.model(
             inputs,
             cache=cache,
+            inputs_embeds=inputs_embeds,
             position_ids_3d=position_ids_3d,
             tail_only=tail_only,
             return_last_hidden=True,

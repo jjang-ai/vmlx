@@ -282,6 +282,7 @@ class HyV4LayerCache:
         self.inner = inner
         self.is_dsa = bool(is_dsa)
         self.engram_tail: Optional[np.ndarray] = None  # stored on layer 0 only
+        self.rope_delta: int = 0  # 3D M-RoPE offset delta after VL prefill (0 for text-only)
 
     @property
     def offset(self) -> int:
@@ -342,7 +343,7 @@ class HyV4LayerCache:
     def meta_state(self) -> Tuple[str, ...]:
         if self.is_dsa:
             assert isinstance(self.inner, HyV4GrowingMLACache)
-            return (
+            base = (
                 "hy_v4_flash_cache_v1",
                 "dsa",
                 str(self.inner.offset),
@@ -351,8 +352,9 @@ class HyV4LayerCache:
                 str(self.inner.tail_len),
                 str(self.inner.tail_base_pos),
             )
+            return base + (str(self.rope_delta),) if self.rope_delta else base
         assert isinstance(self.inner, HyV4RotatingMLACache)
-        return (
+        base = (
             "hy_v4_flash_cache_v1",
             "swa",
             str(self.inner.offset),
@@ -361,13 +363,15 @@ class HyV4LayerCache:
             "0",
             "0",
         )
+        return base + (str(self.rope_delta),) if self.rope_delta else base
 
     @meta_state.setter
     def meta_state(self, value) -> None:
         meta = tuple(value or ())
-        if len(meta) != 7 or meta[0] != "hy_v4_flash_cache_v1":
+        if len(meta) not in (7, 8) or meta[0] != "hy_v4_flash_cache_v1":
             raise ValueError("Invalid HyV4LayerCache meta_state")
         off = int(meta[2])
+        self.rope_delta = int(meta[7]) if len(meta) == 8 else 0
         if self.is_dsa:
             assert isinstance(self.inner, HyV4GrowingMLACache)
             self.inner.offset = off
@@ -383,7 +387,7 @@ class HyV4LayerCache:
     @classmethod
     def from_state(cls, state, meta_state) -> "HyV4LayerCache":
         meta = tuple(meta_state or ())
-        if len(meta) != 7 or meta[0] != "hy_v4_flash_cache_v1":
+        if len(meta) not in (7, 8) or meta[0] != "hy_v4_flash_cache_v1":
             raise ValueError("HyV4LayerCache metadata missing hy_v4_flash_cache_v1 header")
         mode = str(meta[1])
         if mode == "dsa":
@@ -399,6 +403,7 @@ class HyV4LayerCache:
     def copy(self) -> "HyV4LayerCache":
         c = HyV4LayerCache(self.inner.copy(), is_dsa=self.is_dsa)
         c.engram_tail = self.engram_tail.copy() if self.engram_tail is not None else None
+        c.rope_delta = int(self.rope_delta)
         return c
 
 

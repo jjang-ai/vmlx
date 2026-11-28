@@ -91,6 +91,70 @@ class HunyuanToolParser(ToolParser):
     # Cheap pre-checks that mirror the full patterns' tag spelling.
     TOOL_CALLS_OPEN = re.compile(rf"<tool_calls{_V}>")
     TOOL_CALLS_CLOSE = re.compile(rf"</tool_calls{_V}>")
+    _OPEN_PREFIXES = ("<tool_calls:opensource>", "<tool_calls>", "<tool_call:opensource>", "<tool_call>")
+
+    @classmethod
+    def _trailing_open_prefix_len(cls, text: str) -> int:
+        """Length of any trailing partial `<tool_calls...>` opener at the end of `text`."""
+        last_lt = text.rfind("<")
+        if last_lt < 0:
+            return 0
+        tail = text[last_lt:]
+        if ">" in tail:
+            return 0
+        for pfx in cls._OPEN_PREFIXES:
+            if pfx.startswith(tail):
+                return len(tail)
+        return 0
+
+    def _parse_single_call(
+        self,
+        raw_call: str,
+        request: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        parts = self.TOOL_SEP_PATTERN.split(raw_call, maxsplit=1)
+        if len(parts) == 2:
+            name, args_blob = parts
+        else:
+            # Hy4-flash format omits <tool_sep>: `<tool_call:opensource>NAME<arg_key:opensource>...`
+            first_arg = self.ARG_KEY_PATTERN.search(raw_call)
+            if first_arg is not None:
+                name = raw_call[: first_arg.start()]
+                args_blob = raw_call[first_arg.start() :]
+            else:
+                name = raw_call.strip()
+                args_blob = ""
+            if not name.strip():
+                return None
+        keys = self.ARG_KEY_PATTERN.findall(args_blob)
+        values = self.ARG_VALUE_PATTERN.findall(args_blob)
+        properties = self._argument_properties(request, name.strip())
+        arguments: dict[str, Any] = {}
+        for key, value in zip(keys, values):
+            key = key.strip()
+            arguments[key] = self._coerce(value, properties.get(key))
+        return {
+            "id": generate_tool_id(),
+            "name": name.strip(),
+            "arguments": json.dumps(arguments, ensure_ascii=False),
+        }
+
+    def _extract_completed_calls_prefix(
+        self,
+        text: str,
+        request: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Extract all completed `<tool_call...>...</tool_call...>` blocks inside open `<tool_calls...>`."""
+        m_open = self.TOOL_CALLS_OPEN.search(text)
+        if m_open is None:
+            return []
+        body = text[m_open.end() :]
+        calls: list[dict[str, Any]] = []
+        for raw_call in self.TOOL_CALL_PATTERN.findall(body):
+            parsed = self._parse_single_call(raw_call, request=request)
+            if parsed is not None:
+                calls.append(parsed)
+        return calls
 
     @classmethod
     def _coerce(cls, value: str, schema: Any = None) -> Any:
@@ -120,36 +184,9 @@ class HunyuanToolParser(ToolParser):
         tool_calls: list[dict[str, Any]] = []
         for envelope in self.TOOL_CALLS_PATTERN.findall(model_output):
             for raw_call in self.TOOL_CALL_PATTERN.findall(envelope):
-                parts = self.TOOL_SEP_PATTERN.split(raw_call, maxsplit=1)
-                if len(parts) == 2:
-                    name, args_blob = parts
-                else:
-                    # Hy4-flash format omits <tool_sep>: `<tool_call:opensource>NAME<arg_key:opensource>...`
-                    first_arg = self.ARG_KEY_PATTERN.search(raw_call)
-                    if first_arg is not None:
-                        name = raw_call[: first_arg.start()]
-                        args_blob = raw_call[first_arg.start() :]
-                    else:
-                        name = raw_call.strip()
-                        args_blob = ""
-                    if not name.strip():
-                        continue
-                # Pair keys with values positionally — order matters in the
-                # template emission, both lists should be the same length.
-                keys = self.ARG_KEY_PATTERN.findall(args_blob)
-                values = self.ARG_VALUE_PATTERN.findall(args_blob)
-                properties = self._argument_properties(request, name.strip())
-                arguments: dict[str, Any] = {}
-                for key, value in zip(keys, values):
-                    key = key.strip()
-                    arguments[key] = self._coerce(value, properties.get(key))
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": name.strip(),
-                        "arguments": json.dumps(arguments, ensure_ascii=False),
-                    }
-                )
+                parsed = self._parse_single_call(raw_call, request=request)
+                if parsed is not None:
+                    tool_calls.append(parsed)
 
         cleaned_text = self.TOOL_CALLS_PATTERN.sub("", model_output).strip()
         if tool_calls:
@@ -172,28 +209,40 @@ class HunyuanToolParser(ToolParser):
         delta_token_ids: Sequence[int] | None = None,
         request: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        # Stream visible content until we see the envelope close, then
-        # extract the full block (mirrors zaya_tool_parser.py's approach).
-        if not self.TOOL_CALLS_OPEN.search(current_text):
-            return {"content": delta_text}
-        if self.TOOL_CALLS_CLOSE.search(current_text):
-            result = self.extract_tool_calls(current_text, request=request)
-            previous = self.extract_tool_calls(previous_text, request=request)
-            completed_count = len(previous.tool_calls)
-            new_calls = result.tool_calls[completed_count:]
-            if new_calls:
-                return {
-                    "tool_calls": [
-                        {
-                            "index": i,
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                        for i, tc in enumerate(new_calls, start=completed_count)
-                    ]
+        # Per-tool-call streaming without leaking partial `<tool_calls...>` tags:
+        # 1. Before `<tool_calls...>` opens, hold back any trailing partial `<tool_...` prefix.
+        # 2. Emit any remaining prose before `<tool_calls...>` when the opener lands mid-delta.
+        # 3. Inside `<tool_calls...>`, emit each `<tool_call...>...</tool_call...>` immediately
+        #    as soon as its closing tag arrives (without waiting for `</tool_calls...>`).
+        cur_open = self.TOOL_CALLS_OPEN.search(current_text)
+        prev_open = self.TOOL_CALLS_OPEN.search(previous_text)
+
+        if cur_open is None:
+            prev_safe = len(previous_text) - self._trailing_open_prefix_len(previous_text)
+            cur_safe = len(current_text) - self._trailing_open_prefix_len(current_text)
+            emit = current_text[prev_safe:cur_safe]
+            return {"content": emit} if emit else None
+
+        out: dict[str, Any] = {}
+        if prev_open is None:
+            prev_safe = len(previous_text) - self._trailing_open_prefix_len(previous_text)
+            prefix_prose = current_text[prev_safe : cur_open.start()]
+            if prefix_prose:
+                out["content"] = prefix_prose
+
+        prev_calls = self._extract_completed_calls_prefix(previous_text, request=request) if prev_open else []
+        cur_calls = self._extract_completed_calls_prefix(current_text, request=request)
+        if len(cur_calls) > len(prev_calls):
+            out["tool_calls"] = [
+                {
+                    "index": i,
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                    },
                 }
-        return None
+                for i, tc in enumerate(cur_calls[len(prev_calls) :], start=len(prev_calls))
+            ]
+        return out if out else None

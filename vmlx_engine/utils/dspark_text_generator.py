@@ -64,8 +64,21 @@ class DSparkTextGenerator(SingleBatchGenerator):
 
     def _decode_pick(self, req):
         """(pick, drafter sampler) for an eligible request, or None (plain decode path)."""
-        if self._dspark is None or self._is_media(req) or req.logits_processors or self._logprobs_required(req):
+        if self._dspark is None or req.logits_processors or self._logprobs_required(req):
             return None
+        if self._is_media(req):
+            # Hy4-flash inline DFly2 supports VL prefill (pixel_values + image_grid_thw) + DFly2 decode!
+            can_hy4_vl = (
+                self._dspark.get("kind") == "dfly2"
+                and getattr(req, "pixel_values", None) is not None
+                and getattr(req, "image_grid_thw", None) is not None
+                and getattr(req, "pixel_values_videos", None) is None
+                and getattr(req, "dsv41_vl_images", None) is None
+                and hasattr(self._dspark.get("model"), "build_vl_inputs")
+                and getattr(self._dspark.get("model"), "vision_tower", None) is not None
+            )
+            if not can_hy4_vl:
+                return None
         sampler = req.sampler or self.sampler
         greedy = bool(getattr(sampler, "_vmlx_is_greedy", False) or getattr(sampler, "_vmlx_greedy", False)
                       or getattr(sampler, "temp", None) == 0.0)
@@ -162,6 +175,21 @@ class DSparkTextGenerator(SingleBatchGenerator):
         if is_dfly2:
             from ..models.hy_v4_flash.dfly2 import DFly2Stats, iter_hy4_dfly2
 
+            vl_embeds = None
+            vl_pos3d = None
+            vl_rope_delta = None
+            if getattr(req, "pixel_values", None) is not None and getattr(req, "image_grid_thw", None) is not None:
+                pv = self._rehome_on_stream(req.pixel_values)
+                grid = self._rehome_on_stream(req.image_grid_thw)
+                req.pixel_values = None
+                req.image_grid_thw = None
+                with self._stream_context():
+                    vl_embeds, vl_pos3d, vl_rope_delta = rt["model"].build_vl_inputs(
+                        mx.array([prompt_ids], dtype=mx.int32), pv, grid
+                    )
+                    mx.eval(vl_embeds, vl_pos3d)
+                req._dfly2_had_media = True
+
             dfly_stats = DFly2Stats()
             req._dspark_stats = dfly_stats
             req._dspark_iter = iter_hy4_dfly2(
@@ -181,6 +209,9 @@ class DSparkTextGenerator(SingleBatchGenerator):
                 resume=resume,
                 snapshot_cuts=snapshot_cuts,
                 on_snapshot=on_snapshot,
+                inputs_embeds=vl_embeds,
+                position_ids_3d=vl_pos3d,
+                rope_delta=vl_rope_delta,
             )
         else:
             req._dspark_stats = stats
@@ -274,7 +305,7 @@ class DSparkTextGenerator(SingleBatchGenerator):
             rt_model_type = str((self._dspark or {}).get("model_type") or "")
             rt_kind = str((self._dspark or {}).get("kind") or "dspark")
             if rt_model_type == "hy_v4_flash":
-                lane_name = "hy_v4_flash-text"
+                lane_name = "hy_v4_flash-media" if getattr(req, "_dfly2_had_media", False) else "hy_v4_flash-text"
             elif rt_model_type == "ernie5_5_moe":
                 lane_name = "ernie5_5-text"
             else:
